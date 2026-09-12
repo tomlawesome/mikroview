@@ -22,6 +22,11 @@
   // Fleet page (frontend/src/components/Fleet.svelte) in place of
   // Entities and Settings -- reused rather than duplicated: it is the
   // same component the phone-width bottom bar has always reached.
+  //
+  // #1134 added Log every rule as the edit tier's eighth card. It used
+  // to render outside the deck, which meant it had no navigation on it
+  // at all -- the owner's ruling is the same shell as every other page,
+  // and this is that shell.
   import { SvelteSet } from 'svelte/reactivity'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -39,6 +44,7 @@
   import Entities from './Entities.svelte'
   import EngineRoom from './EngineRoom.svelte'
   import Fleet from './Fleet.svelte'
+  import LogEveryRule from './LogEveryRule.svelte'
 
   // The card table lives in lib/deckCards.ts, shared with the Settings
   // shelf; the order is the operator's own (#633 rounds 23-25, drag to
@@ -275,6 +281,8 @@
                 <EngineRoom />
               {:else if card.key === 'fleet'}
                 <Fleet />
+              {:else if card.key === 'log-every-rule'}
+                <LogEveryRule />
               {/if}
             </div>
           {/if}

@@ -42,8 +42,9 @@ beforeEach(() => {
 describe('journeyState', () => {
   it('derives the card count from the deck itself, admin or not', () => {
     authState.role = 'admin'
-    // fall, topography, metrics, live, docket, entities, engineroom (#647).
-    expect(journeyState.cards.length).toBe(7)
+    // fall, topography, metrics, live, docket, entities, engineroom
+    // (#647), log-every-rule (#1134).
+    expect(journeyState.cards.length).toBe(8)
 
     authState.role = 'user'
     // Entities keeps its own admin gate -- absent, not present-and-broken.

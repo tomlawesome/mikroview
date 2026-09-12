@@ -112,7 +112,7 @@ export function downloadEventsCsv(events: FirewallEvent[]): void {
 }
 
 // downloadText (#435) is the same blob-a-link-click idiom above, pulled
-// out generic: Tune logging's annotated export is plain text, not a
+// out generic: Log every rule's annotated export is plain text, not a
 // table of events, and is the second caller of the pattern rather than
 // a reason to bend eventsToCsv/downloadEventsCsv around a second shape.
 export function downloadText(filename: string, text: string): void {

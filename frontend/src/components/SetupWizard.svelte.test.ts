@@ -246,6 +246,56 @@ describe('SetupWizard', () => {
     expect(wizardState.pane).toBe(2)
   })
 
+  // #1132: a partial step says what arrived in the arrived line and
+  // what it is still short of in a second box beside it, in the warning
+  // colour rather than the reject red -- the shortfall is not a fault
+  // on mikroview's side, and it is not good news either.
+  it('puts a partial step’s shortfall in its own warning box, under the arrived line', () => {
+    wizardState.pane = 4
+    wizardState.status = status({
+      devices: [
+        {
+          device: 'r1',
+          configured: true,
+          sourceIp: '192.0.2.1',
+          events: 10,
+          decodedActions: 10,
+          pushedKinds: { 'filter-rule': '2026-08-23T09:00:00Z' },
+        },
+      ],
+    })
+    const { container } = render(SetupWizard)
+
+    const boxes = [...container.querySelectorAll('.observation')]
+    expect(boxes.length).toBe(2)
+    expect(boxes[0].classList.contains('arrived')).toBe(true)
+    expect(boxes[0].textContent?.trim()).toBe('Arrived: filter-rule.')
+    expect(boxes[0].textContent).not.toContain('missing')
+    // The shortfall is the second box, and it is not green.
+    expect(boxes[1].classList.contains('shortfall')).toBe(true)
+    expect(boxes[1].classList.contains('arrived')).toBe(false)
+    expect(boxes[1].textContent?.trim()).toBe('Still missing: arp.')
+  })
+
+  it('shows one observation box, and no shortfall, once everything has arrived', () => {
+    wizardState.pane = 4
+    wizardState.status = status({
+      devices: [
+        {
+          device: 'r1',
+          configured: true,
+          sourceIp: '192.0.2.1',
+          events: 10,
+          decodedActions: 10,
+          pushedKinds: { 'filter-rule': '2026-08-23T09:00:00Z', arp: '2026-08-23T09:00:00Z' },
+        },
+      ],
+    })
+    const { container } = render(SetupWizard)
+    expect(container.querySelectorAll('.observation').length).toBe(1)
+    expect(container.querySelector('.observation.shortfall')).toBeNull()
+  })
+
   // #442: a router declared under one address whose logs arrive from
   // another. Step 2 reads it as partial -- evidence arrived, composed
   // wrongly -- states both facts, and prints the remedy with the
@@ -282,10 +332,16 @@ describe('SetupWizard', () => {
 
     const observation = container.querySelector('.observation')
     expect(observation?.textContent?.trim()).toBe(
-      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, which you declared in config.yaml, has sent nothing.",
+      "Connected — but from 10.0.20.1, an address you haven't declared.",
     )
     // Partial reads in the arrived voice, never attention.
     expect(observation?.classList.contains('attention')).toBe(false)
+    // And what is silent is the shortfall beside it, not part of the
+    // green line (#1132).
+    const shortfall = container.querySelector('.observation.shortfall')
+    expect(shortfall?.textContent?.trim()).toBe(
+      '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+    )
 
     const body = container.querySelector('.split')?.textContent?.replace(/\s+/g, ' ') ?? ''
     expect(body).toContain("MikroView can't tell whether these are the same router")
@@ -372,6 +428,45 @@ describe('SetupWizard', () => {
 
     expect(container.querySelector('.headline')).toBeTruthy()
     expect(container.querySelectorAll('.readback li').length).toBe(6)
+    // #1166: the readback and the rail say the same thing the same way
+    // about a step that has seen nothing.
+    expect(container.textContent).not.toContain('nothing arrived')
+  })
+
+  // #1184: step 5 was the only step with no Copy button, and its sample
+  // named the router after the very address the step exists to replace,
+  // so pasting it changed nothing.
+  it('offers Copy on step 5, on a stanza that does not name the router after its own address', async () => {
+    wizardState.pane = 5
+    // An undeclared router's name is its own address -- that is what
+    // this step exists to replace.
+    wizardState.devices = [
+      {
+        id: '172.23.0.1',
+        name: '172.23.0.1',
+        sourceIp: '172.23.0.1',
+        configured: false,
+        firstSeen: '2026-08-23T09:00:00Z',
+        lastSeen: '2026-09-02T09:00:00Z',
+        eventCount: 10,
+        status: 'live',
+      } as never,
+    ]
+    const { container } = render(SetupWizard)
+
+    const stanza = container.querySelector('pre')?.textContent ?? ''
+    expect(stanza).toContain('sourceIp: "172.23.0.1"')
+    expect(stanza).not.toContain('name: "172.23.0.1"')
+    expect(stanza).toContain('name: "my-router"')
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
+
+  // #1166: the footer hint named "Next" beside a button labelled Finish.
+  it('names the button it is describing in the last step\'s footer hint', async () => {
+    wizardState.pane = 6
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.hint')).toBeTruthy())
+    expect(container.querySelector('.hint')?.textContent).toBe('Finish checks what has arrived')
   })
 
   // #646: the wizard ends by taking the operator back to the fall,
@@ -528,6 +623,73 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
   })
 })
 
+// #1131: step 4 showed a token it never printed, and handed over two
+// boxes -- the script, then a `source="<paste the script above>"` line
+// the operator was expected to fill in from the first clipboard.
+describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () => {
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  beforeEach(() => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+  })
+
+  it('shows the minted token in its own copy box', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
+    await waitFor(() => expect(container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
+    expect(screen.getByRole('button', { name: 'Copy token' })).toBeTruthy()
+    // #1166: the step's lead used to make the same two claims about the
+    // token as this note, in different words. The note carries them now
+    // and the lead only points at it.
+    expect(container.textContent).toContain('This token is shown once, and is already in the script below.')
+    expect(container.textContent).not.toContain('minted for one router')
+  })
+
+  it('hands over one block, not a script plus a line to paste it into', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('SCRIPT_ADD_WITH_THE_BODY_IN_IT'))
+    // Two boxes on the step, and both are things to copy on their own:
+    // the token, and the block. The bare script body is not one of them.
+    const pres = [...container.querySelectorAll('.body pre')].map((p) => p.textContent)
+    expect(pres).toEqual(['mvt-shown-once', 'SCRIPT_ADD_WITH_THE_BODY_IN_IT'])
+    expect(container.textContent).not.toContain('Then save it and run it once')
+  })
+})
+
 // #394, round 45: the wizard's sixth step, "Back up the router".
 describe('SetupWizard -- step 6, back up the router (#394)', () => {
   function rb5009(): Device {
@@ -549,9 +711,99 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
-    expect(container.querySelector('.wzpre-dim')).toBeTruthy()
+    expect(container.querySelector('pre.script')).toBeNull()
     expect(container.querySelector('.mint')).toBeNull()
-    expect(screen.getByRole('link', { name: 'how to mount one' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'more on mounting a key' })).toBeTruthy()
+  })
+
+  // --- #1133: the step mints the key, in the UI ------------------------
+  // The old pane said the same sentence twice -- and said it wrongly,
+  // about "a key it does not hold" -- over an empty dimmed box. It now
+  // hands the operator a key and the steps to put it in place.
+
+  async function noKeyPane() {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
+    wizardState.pane = 6
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(false))
+    await tick()
+    return rendered
+  }
+
+  function keyField(container: HTMLElement): HTMLInputElement {
+    return container.querySelector('#history-key') as HTMLInputElement
+  }
+
+  it('offers a freshly generated key, in the shape the key file wants', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    expect(field).toBeTruthy()
+    // 32 bytes, base64 -- docs/configuration.md's `head -c 32
+    // /dev/urandom | base64`, which is what retention.LoadKey accepts.
+    expect(field.value).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+  })
+
+  it('rerolls to a different key, so the button is not decoration', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    const first = field.value
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await tick()
+    expect(keyField(container).value).not.toBe(first)
+    expect(keyField(container).value).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+  })
+
+  it('takes a key the operator types or pastes in instead', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    await fireEvent.input(field, { target: { value: 'a-key-of-my-own-that-i-already-had' } })
+    await tick()
+    expect(keyField(container).value).toBe('a-key-of-my-own-that-i-already-had')
+  })
+
+  it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
+    const { container } = await noKeyPane()
+
+    const caveat = (container.querySelector('.wzcaveat')?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(caveat).toContain('Save this now')
+    expect(caveat).toContain('never receives this value')
+  })
+
+  it('prints the steps to put it in place, each one copyable', async () => {
+    const { container } = await noKeyPane()
+
+    const blocks = [...container.querySelectorAll('.body pre')].map((p) => p.textContent ?? '')
+    expect(blocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key'))).toBe(true)
+    expect(blocks.some((b) => b.includes('/run/secrets/mikroview-history.key:ro'))).toBe(true)
+    expect(blocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key'))).toBe(true)
+    expect(blocks.some((b) => b.includes('docker compose up -d'))).toBe(true)
+    expect(container.querySelectorAll('.body button.copy').length).toBe(blocks.length)
+    // No block quotes the key: it goes in on standard input, which is
+    // what keeps it out of the operator's shell history too.
+    const key = keyField(container).value
+    expect(blocks.some((b) => b.includes(key))).toBe(false)
+  })
+
+  it('says the model once, correctly -- mikroview holds this key and seals more than backups with it', async () => {
+    const { container } = await noKeyPane()
+
+    const lead = container.querySelector('.lead')?.textContent ?? ''
+    expect(lead).toContain('under the key file you mount')
+    expect(lead).toContain('the state store')
+    expect(container.textContent).not.toContain('a key it does not hold')
+    // Once, not twice: the observation line underneath no longer repeats
+    // the lead's sentence back.
+    const observation = container.querySelector('.observation')?.textContent ?? ''
+    expect(observation).not.toContain('under the key file you mount')
+  })
+
+  it('leaves the RouterOS version picker out until there is a script to pick for', async () => {
+    const { container } = await noKeyPane()
+
+    expect(container.querySelector('.routeros-version')).toBeNull()
   })
 
   // With exactly one router known, the same auto-mint convenience step

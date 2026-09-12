@@ -63,6 +63,16 @@ func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
 	}
 }
 
+// #1173: the block the wizard hands the operator dropped
+// remote-log-format=syslog, which docs/routeros-setup.md has carried
+// since #614 -- without it a burst of lines can be read as one.
+func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	if !strings.Contains(cmd, "remote-log-format=syslog") {
+		t.Errorf("syslogCommands omitted remote-log-format=syslog: %s", cmd)
+	}
+}
+
 func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
 	if !strings.Contains(cmd, "remote=192.0.2.10") {
@@ -93,7 +103,7 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		`"connectionState"=($v->"connection-state")`,
 		`"inInterface"=($v->"in-interface")`,
 		`"outInterface"=($v->"out-interface")`,
-		// #435's rule counters -- the cost the tune-logging helper shows
+		// #435's rule counters -- the cost the Log every rule helper shows
 		// beside a tick-box before any logging is switched on.
 		`"packets"=($v->"packets")`,
 		`"bytes"=($v->"bytes")`,
@@ -188,13 +198,140 @@ func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	}
 }
 
+// unescapeRouterOS reads a `source="..."` value back the way RouterOS
+// does: a backslash escapes the character after it, and the three
+// escapes scriptSource emits -- \\, \" and \$ -- are the only ones it
+// is ever handed. Anything else is a backslash this package produced by
+// accident, which is a failure rather than something to read past.
+//
+// It is deliberately the inverse written independently of scriptSource,
+// so a test that round-trips through both is checking the escaping
+// rather than agreeing with itself.
+func unescapeRouterOS(t *testing.T, s string) string {
+	t.Helper()
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			b.WriteByte(s[i])
+			continue
+		}
+		if i+1 >= len(s) {
+			t.Errorf("escaped source ends on a lone backslash: %q", s)
+			break
+		}
+		switch s[i+1] {
+		case '\\', '"', '$':
+			b.WriteByte(s[i+1])
+		default:
+			t.Errorf("escaped source carries \\%c, which RouterOS reads as something else: %q", s[i+1], s)
+			b.WriteByte(s[i+1])
+		}
+		i++
+	}
+	return b.String()
+}
+
+// scriptAddSource takes the source="..." value back out of a block
+// scriptAdd built: everything between the opening quote and the closing
+// one that ends the add, which is the quote immediately before the
+// scheduler line.
+func scriptAddSource(t *testing.T, block string) (string, bool) {
+	t.Helper()
+	const open = `source="`
+	i := strings.Index(block, open)
+	if i == -1 {
+		t.Errorf("no source=\" in the block:\n%s", block)
+		return "", false
+	}
+	rest := block[i+len(open):]
+	j := strings.Index(rest, "\"\n/system scheduler")
+	if j == -1 {
+		t.Errorf("the script add is not closed before the scheduler line:\n%s", block)
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// TestScriptSourceRoundTrips is the escaping's real contract: whatever
+// body goes in, RouterOS's own un-escaping takes back out. The fixture
+// carries every character the rule is about -- a quote, a backslash, a
+// dollar, and newlines, which pass through as themselves because a
+// saved script keeps its own lines (#394's proven multi-line form).
+func TestScriptSourceRoundTrips(t *testing.T) {
+	bodies := []string{
+		":local v \"quoted\"\n:put $v",
+		`a backslash \ and an escaped quote \" already in the body`,
+		":set x ($x . \"\\\\\")\n:put \"$x$y\"",
+		"",
+		"$",
+		`"`,
+		`\`,
+		PushScript("192.0.2.10:8080", "tok", []string{"filter-rule", "address-list", "dhcp-lease", "arp", "ip-address"}, "a"),
+		BackupPushScript("192.0.2.10:8080", "tok", "a"),
+	}
+	for _, body := range bodies {
+		got := unescapeRouterOS(t, scriptSource(body))
+		if got != body {
+			t.Errorf("scriptSource did not round-trip:\n got %q\nwant %q", got, body)
+		}
+	}
+}
+
+// TestScriptSourceLeavesNoBareVariableOrQuote is the failure the round
+// trip above cannot see on its own: a body could round-trip through a
+// rule that escapes nothing at all if the inverse were equally wrong.
+// These are the three characters that end a source="..." early or get
+// expanded inside it.
+func TestScriptSourceLeavesNoBareVariableOrQuote(t *testing.T) {
+	escaped := scriptSource(`"$v" \ done`)
+	want := `\"\$v\" \\ done`
+	if escaped != want {
+		t.Errorf("scriptSource = %q, want %q", escaped, want)
+	}
+}
+
+// TestScheduleCommands pins step 4's whole hand-over (#1131): the body
+// saved as mv-push, the scheduler entry, and the run that makes the
+// first push happen now -- one block, no placeholder, nothing for the
+// operator to paste into anything.
 func TestScheduleCommands(t *testing.T) {
-	cmd := ScheduleCommands("a")
-	want := "/system script add name=mv-push policy=read,test source=\"<paste the script above>\"\n" +
+	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
+	want := "/system script add name=mv-push policy=read,test source=\":local recs [:toarray \\\"\\\"]\n" +
+		":set recs (\\$recs, 1)\"\n" +
 		"/system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\"\n" +
 		"/system script run mv-push"
 	if cmd != want {
 		t.Errorf("scheduleCommands =\n%s\nwant\n%s", cmd, want)
+	}
+	if strings.Contains(cmd, "paste the script") {
+		t.Errorf("scheduleCommands still asks the operator to paste a script into it: %s", cmd)
+	}
+}
+
+// TestScheduleCommandsCarriesTheWholePushScript is the same claim at
+// full size: whatever PushScript produced comes out inside the saved
+// script, not alongside it, and its RouterOS variables survive the
+// wrapping as variables.
+func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
+	body := PushScript("192.0.2.10:8080", "tok", []string{"filter-rule", "arp"}, "a")
+	got := ScheduleCommands(body, "a")
+	if !strings.HasPrefix(got, `/system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("ScheduleCommands did not open with the script add:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "\n/system script run mv-push") {
+		t.Errorf("ScheduleCommands did not end by running it once:\n%s", got)
+	}
+	// The body is in there, escaped -- which is the whole point, so it
+	// is checked by un-escaping rather than by substring.
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
+	}
+	if unescapeRouterOS(t, source) != body {
+		t.Errorf("the saved source does not un-escape back to the push script:\n%s", source)
+	}
+	if !strings.Contains(source, `\$ruleRecs`) {
+		t.Errorf("RouterOS variables reached the source unescaped, so the router would expand them away:\n%s", source)
 	}
 }
 
@@ -304,20 +441,35 @@ func TestBackupPushScriptGivesEachFileItsOwnVariables(t *testing.T) {
 }
 
 // TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom pins
-// BackupPushScheduleCommands' shape: ScheduleCommands' two-step "paste
-// the script above" form (BackupPushScript is not self-contained, see
-// its own doc comment), a name distinct from the SFTP script's
-// mv-backup so both can coexist, and the same nightly 03:00 interval
-// BackupScheduleCommands uses.
+// BackupPushScheduleCommands' shape: ScheduleCommands' one-block form
+// since #1131 -- the body saved, scheduled and run once, with no
+// placeholder for the operator to fill in -- a name distinct from the
+// SFTP script's mv-backup so both can coexist, and the same nightly
+// 03:00 interval BackupScheduleCommands uses.
 func TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom(t *testing.T) {
-	got := BackupPushScheduleCommands("a")
-	want := "/system script add name=mv-backup-https policy=read,write,test,sensitive source=\"<paste the script above>\"\n" +
+	body := BackupPushScript("192.0.2.10:8080", "tok", "a")
+	got := BackupPushScheduleCommands(body, "a")
+	want := "/system script add name=mv-backup-https policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\"\n" +
 		"/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\"\n" +
 		"/system script run mv-backup-https"
 	if got != want {
 		t.Errorf("BackupPushScheduleCommands =\n%s\nwant\n%s", got, want)
 	}
-	if strings.Contains(got, "name=mv-backup ") || strings.Contains(got, "name=mv-backup\"") {
+	if strings.Contains(got, "paste the script") {
+		t.Errorf("BackupPushScheduleCommands still asks the operator to paste a script into it: %s", got)
+	}
+	// The body it saves is the script itself, un-escaped by RouterOS's
+	// own rules -- the same round trip TestScriptSourceRoundTrips makes,
+	// checked here on the block an operator actually pastes.
+	source, ok := scriptAddSource(t, got)
+	if ok && unescapeRouterOS(t, source) != body {
+		t.Errorf("the saved source does not un-escape back to the HTTPS backup script:\n%s", source)
+	}
+	// The name check is on what is being added, not on the body: the
+	// saved source legitimately contains `/system backup save
+	// name=mv-backup`, which is a file stem on the router and not the
+	// script object this could collide with.
+	if strings.Contains(got, "add name=mv-backup ") || strings.Contains(got, "add name=mv-backup\"") {
 		t.Errorf("BackupPushScheduleCommands collided with the SFTP script's mv-backup name: %s", got)
 	}
 }

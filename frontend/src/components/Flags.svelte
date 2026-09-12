@@ -1078,9 +1078,13 @@
           47): the detector's own 0-100, beside the type, only where a
           detector scored the flag -- the baseline family
           (internal/engine/baseline.go's emaConfidence). The other
-          types carry nothing here: no dash, no word. --><span
-          class="conf"
-          title="scored {f.confidence} of 100 by the detector">{f.confidence}</span
+          types carry nothing here: no dash, no word.
+          #1167: with the word "scored" in front of it, as the drawer's
+          own line already has. Bare, it read as an unlabelled tally of
+          the type beside it -- "CRITICAL-PORT ATTEMPTS 0" -- rather
+          than as a score, and the title was the only thing saying
+          otherwise. --><span class="conf" title="scored {f.confidence} of 100 by the detector"
+          ><i>scored</i> {f.confidence}</span
         >{/if}{#if provisional}<span class="ptag">provisional</span>{/if}</td
     >
     <td class="k">
@@ -1282,9 +1286,12 @@
                  episode once it's fetched, the flag's
                  firstSeen/lastSeen before then). See
                  episodeShape.ts. -->
+            <!-- #1157: the separator is an expression, not literal
+                 whitespace. Written as a space before the "·" at the
+                 head of the block, Svelte trims it and the line reads
+                 "still arriving· scored 40". -->
             <span class="span"
-              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}
-                · scored {f.confidence}{/if}</span
+              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}{' · '}scored {f.confidence}{/if}</span
             >
             {#if ep === 'loading'}
               <p class="ep-note">fetching the events…</p>
@@ -1624,11 +1631,25 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* CALL IT (#780): right-aligned like the record's `.panel td.vc` --
-     the trio/stamp and caret hug the row's own right edge. */
+  /* CALL IT (#780): the trio/stamp and caret hug the row's own right
+     edge, like the record's `.panel td.vc`.
+     #1154: the head does not follow them there. Right-aligned it landed
+     over the ▸ caret, a column's width away from the verdict chips it
+     names, so it read as a label for the expander. Left-aligned it
+     starts where the chips start. It also spells out the head
+     typography the sort buttons carry in this table and .shelf-heads th
+     carries in the other one -- without it this was the one head
+     rendering as a plain bold `th`. */
   .ftable thead th.vc,
   .shelf-heads th.vc {
-    text-align: right;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    white-space: nowrap;
   }
 
   .ftable tbody td.vc {
@@ -1705,6 +1726,16 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0;
     margin-left: 10px;
+  }
+
+  /* #1167's word in front of it: the label, not the figure, so it reads
+     a step down and dim while the number keeps the treatment above. */
+  .fmark .conf i {
+    font-style: normal;
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
   }
 
   .frow.fdone .fmark .conf {

@@ -44,6 +44,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-watchlist-manage: the fenced button never reads "learn again"
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
+- 2026-09-11 · c3bcb56f (dev, after !1031) · pipeline 996, gate:scenarios 4/4 · `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs:208`: Playwright reported the button "outside of the viewport" then "detached from the DOM" on every retry, so the drawer replaced the button's node under the click. Pipeline 997 ran the same commit as !1032's MR pipeline and passed. Same button as the sighting above, one check earlier. Job retried (11971).
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 

@@ -175,34 +175,36 @@ describe('The settings shelf (#633)', () => {
       expect(screen.getByText(name)).toBeTruthy()
     }
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings', 'Log every rule']) {
       expect(within(shelf).getByText(card)).toBeTruthy()
     }
     // #735: the "seven cards, in the order you keep them" caption is
     // gone -- its purpose (the owner: "obvious") was redundant with the
-    // cards' own drag handle and position aria-label. Seven cards for
-    // an admin is now checked by counting them directly.
-    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    // cards' own drag handle and position aria-label. The count is
+    // checked directly instead -- eight since #1134 put Log every rule
+    // on the deck.
+    expect(within(shelf).getAllByRole('button')).toHaveLength(8)
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
 
   // #657: Entities carries `edit: true` (#653's widening to the user
   // tier), and this page is itself gated to the same tier -- so a
-  // `user` who reaches Settings at all sees the same seven cards an
+  // `user` who reaches Settings at all sees the same eight cards an
   // admin does. Named for the role it actually renders, unlike the
   // pre-#657 version of this test, which called that tier "viewer"
   // when only `user` and `admin` can ever reach this page.
-  it("a user's shelf carries all seven cards, same as an admin's", async () => {
+  it("a user's shelf carries all eight cards, same as an admin's", async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
     await settle()
 
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    expect(within(shelf).getAllByRole('button')).toHaveLength(8)
     expect(within(shelf).getByText('Entities')).toBeTruthy()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
+    expect(within(shelf).getByText('Log every rule')).toBeTruthy()
   })
 
   it('reordering a card moves the landing with it', async () => {
@@ -295,6 +297,10 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByText(/this is you/)).toBeTruthy()
     expect(screen.getByText('console-only')).toBeTruthy()
     expect(screen.getByText('kai')).toBeTruthy()
+    // #1171: every tier's row says what that account may do. kai is the
+    // user tier, which used to be the only one with no pill at all.
+    expect(screen.getByText('admin')).toBeTruthy()
+    expect(screen.getByText('can change things')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
   })
@@ -699,5 +705,29 @@ describe('The settings shelf (#633)', () => {
 
     expect(signOutEverywhere).toHaveBeenCalled()
     expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
+  })
+
+  // #1142: the door labels were clipped mid-word ("6514 · TLS · listenir")
+  // because they start at x=396 and ran past a 520-wide viewBox. jsdom does
+  // not lay text out, so the check is arithmetic: a monospace glyph at the
+  // labels' font size is ~0.6em wide, so the label must fit in what is left
+  // of the viewBox.
+  it('the ingest diagram is wide enough for its two door labels', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const svg = document.querySelector<SVGSVGElement>('#engineroom-ingest .stpath')!
+    const boxWidth = Number(svg.getAttribute('viewBox')!.split(' ')[2])
+    const labels = [...svg.querySelectorAll<SVGTextElement>('text.sp-k, text.sp-n')].filter(
+      (t) => Number(t.getAttribute('x')) > 300,
+    )
+    expect(labels.length).toBe(2)
+    for (const label of labels) {
+      const fontSize = label.classList.contains('sp-k') ? 10 : 9.5
+      const width = (label.textContent ?? '').trim().length * fontSize * 0.6
+      expect(Number(label.getAttribute('x')) + width).toBeLessThanOrEqual(boxWidth)
+    }
   })
 })

@@ -1,7 +1,7 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open **Admin ▸ Run setup…**. It generates every
+> an admin and open **your account menu ▸ Run setup…**. It generates every
 > command below with your own address, port and a token it mints for you
 > — nothing to fill in — and tells you as each step lands, because each
 > one ends with your router arriving at MikroView.
@@ -10,12 +10,15 @@
 > if you prefer working from documentation, if you are scripting a fleet,
 > or when you want the reasoning behind a step.
 
-MikroView never talks to RouterOS's API and needs no credentials on the
-router. Instead, RouterOS pushes to MikroView: firewall log lines over
-syslog (steps 1–3, required), optionally a copy of its own config for
-host names and rule lookups (step 4), and optionally a nightly config
-backup MikroView keeps encrypted (step 7, issue #394). Either way, the
-router always initiates; MikroView never connects to it. This is a
+MikroView never talks to RouterOS's API and never holds a RouterOS
+credential. Instead, RouterOS pushes to MikroView: firewall log lines
+over syslog (steps 1–3, required), optionally a copy of its own config
+for host names and rule lookups (step 4), and optionally a nightly config
+backup MikroView keeps encrypted (step 7, issue #394). The optional
+pushes carry an ingest token MikroView mints for that device — a
+MikroView credential on the router, never a router credential in
+MikroView. Either way, the router always initiates; MikroView never
+connects to it. This is a
 one-time configuration on each router you want to monitor.
 
 ## 1. Point RouterOS at the container over TLS
@@ -282,7 +285,7 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open **Admin ▸ The engine room**,
+In MikroView, sign in as an admin, open **Settings**,
 find "Which machines may speak" among the side doors, set the kind
 dropdown to **Ingest**, and pick the device the token speaks
 for — this is what scopes it. The list offers every router MikroView
@@ -322,7 +325,13 @@ pushes follow that identity, so nothing has to be reissued:
 The alternative is changing `sourceIp` to the arriving address and
 restarting — then reissue any token minted for the old identity.
 
-Or via the API:
+Or via the API. Minting a token is an admin action, so the call has to
+carry an admin's browser session: `<your session cookie>` is the
+`mikroview_session=…` cookie `POST /api/auth/login` sets (see the
+[API reference](configuration.md#api-reference)). Copy it from your
+browser's developer tools, or sign in with curl first and let it keep
+the cookie for you — `curl -k -c jar -X POST …/api/auth/login -d …`,
+then `-b jar` on the call below in place of the placeholder.
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
@@ -386,9 +395,9 @@ the array RouterOS sends or as a comma-joined string, so
 `($v->"connection-state")` can go straight in with no conversion.
 
 `packets` and `bytes` were added for issue #435: RouterOS keeps a
-per-rule hit counter whether or not the rule logs, so the "Tune logging"
-helper can show a rule's real cost — "fired 41,000 times in the last
-day" — beside its tick-box before you switch logging on for it. Same
+per-rule hit counter whether or not the rule logs, so the "Log every
+rule" helper can show a rule's real cost — "fired 41,000 times in the
+last day" — beside its tick-box before you switch logging on for it. Same
 shape as every other RouterOS integer here: `:serialize to=json` emits
 them as a float, which MikroView's decoder already expects.
 
@@ -567,9 +576,19 @@ failing (say, a momentary network blip) doesn't stop the others in the
 same run.
 
 ```
-/system script add name=mv-push policy=read,test source="<the filter-rule block from 4c, then the dhcp-lease and arp blocks from 4c-ii, each with your host and token filled in>"
+/system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
 /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"
+/system script run mv-push
 ```
+
+The escaping is not optional: inside `source="…"` RouterOS reads `$v`
+as a variable to substitute, so an unescaped script is saved with its
+variables already replaced by nothing. If you would rather not do it
+by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**, step 4)
+prints these three lines as one block with your host, your token and
+the escaping already in it — copy, paste, done. WinBox's script dialog
+is the other way out: its **Source** field takes the script body as
+written in 4c, unescaped, because there is no enclosing string there.
 
 `policy=read,test` only — no `write`, no `sensitive`. The scheduler
 entry stores no credential of its own; the only secret involved is the
@@ -874,10 +893,16 @@ step:
 ```
 
 ```
-/system script add name=mv-backup-https policy=read,write,test,sensitive source="<paste the script above>"
+/system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
 /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https"
 /system script run mv-backup-https
 ```
+
+Same escaping rule as step 4e, and for the same reason — this script
+is nothing but `$bakSize`, `$rscSlice` and their kin, and an
+unescaped `source="…"` would save it with every one of them expanded
+away. WinBox's **Source** field takes the script as printed above,
+unescaped.
 
 Same binary/export pair as 7c (unencrypted restore copy, secret-free
 export), just carried by `/tool fetch` POSTs instead of an SFTP upload:

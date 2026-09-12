@@ -111,8 +111,8 @@ budget on a machine that genuinely has the memory is a legitimate choice,
 and the warning only makes sure you're making it with the real cost in
 front of you.
 
-**Settings' memory control can override the config file.** Admin ▸
-Settings' memory group carries a slider under the hours bar; dragging it
+**Settings' memory control can override the config file.** Settings'
+memory group carries a slider under the hours bar; dragging it
 only proposes a figure, and nothing changes until you press apply. Once
 you do, mikroview stores that figure and resizes the running buffer
 immediately — growing it keeps every event already held, shrinking it
@@ -257,7 +257,11 @@ back to the file's figures, delete the settings document
 (`store.settingsStorePath`), exactly as for `store.maxMemory` above.
 `history.keyFile` and `history.dir` are **not** editable from the app and
 never will be: one names a mounted secret and the other a filesystem
-path, and neither belongs in the blast radius of a browser session.
+path, and neither belongs in the blast radius of a browser session. The
+setup wizard's backup step will *generate* a key for you when none is
+mounted, but it mints it in the browser and never sends it here (#1133):
+mikroview first sees that value in the file you mount, which is also why
+the wizard says it can never show it to you again.
 
 - `history.enabled` — the switch, and the initial position of the one in
   Settings. **Turning it off deletes what was already retained** — off
@@ -274,6 +278,12 @@ path, and neither belongs in the blast radius of a browser session.
   The file must hold at least 32 bytes. This is a path, never the key
   itself — there is deliberately no environment variable carrying key
   material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+
+  Or let the app generate it: with no key mounted, the setup wizard's
+  step 6 hands you a key of exactly this shape, with the commands to
+  write it to a file, mount it and point mikroview at it. It is generated
+  in your browser and never sent to the server, so save it when it is
+  shown — nothing can reprint it.
 
   **It must be mounted outside the data directory.** A key kept beside
   the files it protects is decoration: whoever copies the directory
@@ -352,6 +362,10 @@ to the rest of mikroview's state. With no key configured, the drop box
 refuses every login outright rather than accepting a push it has
 nowhere safe to keep; Settings' `router backups` group says so plainly.
 There is no separate key for this feature and no unencrypted fallback.
+The wizard's step 6 is the shortest way out of that state: with no key
+mounted it generates one in the browser and prints the steps to put it in
+place (see [`history.keyFile`](#on-disk-event-history-optional-off-by-default)
+above), then prints the router script once it is.
 
 **Login is the device, not a new credential.** Username is the router's
 device name, password is that device's ingest token — the very token
@@ -2645,9 +2659,9 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **The watchers station** -- part of the engine room, in the navigation
-  rail's Admin group -- lets an admin override that starting point. Any
-  signed-in user can open the engine room and see the watchers station,
+- **The watchers station** -- part of Settings -- lets an admin override
+  that starting point. Any signed-in user can open Settings and see the
+  watchers station,
   with a READ-ONLY marker in the header; the on/off switches and scope
   fields simply aren't there unless you're the admin. A change persists
   to the definitions store (`engine.definitionsStorePath`) and is what
@@ -2948,16 +2962,16 @@ match. A failure at any point leaves the source untouched.
 
 ### Adding and removing people
 
-Open the engine room (Admin group in the navigation rail) and its
+Open **Settings** and its
 **"who may look in"** door. Only the admin sees this door -- it's
 absent entirely for anyone else, not shown read-only.
 
-![The engine room's people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
+![Settings' people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
 
 Press **+ Let someone in**, type a username and password, press **Let
 them in**, and the account appears in the list. Everyone added here gets an ordinary account: admin-only
 pages are simply absent from their navigation, with one exception --
-they can open the engine room and read it, but every control there is
+they can open Settings and read it, but every control there is
 missing rather than greyed out, so they still can't change settings,
 manage accounts, or create API tokens.
 
@@ -3151,8 +3165,8 @@ no browser involved -- e.g. a companion OpenCanary-dashboard project
 cross-referencing incidents against mikroview's event/flag history -- a
 session cookie doesn't work: there's no login flow to hold one. API
 tokens are a long-lived bearer credential for exactly that case,
-admin-created from the engine room's **"which machines may speak"**
-door (Admin group in the navigation rail), or directly via the API
+admin-created from Settings' **"which machines may speak"**
+door, or directly via the API
 below.
 
 **Scope is deliberately narrow: read-only, five endpoints, nothing
@@ -4033,7 +4047,7 @@ exits, rather than starting the server. See
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what mikroview has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
-| `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435, "Tune logging"). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
+| `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |

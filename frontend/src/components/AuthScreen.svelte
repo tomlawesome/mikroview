@@ -68,6 +68,25 @@
     e.preventDefault()
     error = null
 
+    // #1187: the form carries novalidate, so an empty field is answered
+    // here rather than by the browser's own bubble -- that bubble was
+    // worded by the engine, in the browser's language rather than the
+    // app's, and pointed at a field the error line below already covers.
+    // The `required` attributes stay: they are what tells assistive tech
+    // the fields are not optional, and they no longer trigger the bubble.
+    if (!username) {
+      error = 'Enter your account name.'
+      return
+    }
+    if (!password) {
+      error = 'Enter your password.'
+      return
+    }
+    if (confirmPassword && !passwordConfirm) {
+      error = 'Type the password a second time to confirm it.'
+      return
+    }
+
     if (confirmPassword && password !== passwordConfirm) {
       error = 'Passwords do not match.'
       return
@@ -141,7 +160,7 @@
           <p class="error">{authState.ssoError}</p>
         {/if}
 
-        <form class="form-body" onsubmit={handleSubmit}>
+        <form class="form-body" onsubmit={handleSubmit} novalidate>
           <!-- No heading on the door itself: the framed wordmark is the
                title (the round-29 scene carries none). Setup still
                passes one -- that form explains itself. -->

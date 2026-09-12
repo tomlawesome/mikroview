@@ -80,7 +80,7 @@
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
-  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr, type ParsedCidr } from '../lib/addressMatch'
@@ -2238,16 +2238,16 @@
     if (ok) closeBoundary()
   }
 
-  // Tune logging's other way in (#435 decision 2): a dark connection in
+  // Log every rule's other way in (#435 decision 2): a dark connection in
   // this same card is the thing prompting it. primaryDevice stands in
   // for "which router" -- the map has no per-edge device attribution
   // (policyState aggregates every device's pushed table), the same
   // approximation waistSub above already makes for the rule count.
   // This is the card's `rules ▸`: the rules for this very boundary,
   // which is where the round-49 mockup's `rules #31 ▸` leads.
-  function openTuneLoggingFromDark() {
+  function openLogEveryRuleFromDark() {
     if (!boundaryCard || !primaryDevice) return
-    tuneLoggingNavState.request(primaryDevice.id, boundaryCard.key)
+    logEveryRuleNavState.request(primaryDevice.id, boundaryCard.key)
     appState.view = 'tune-logging'
     closeBoundary()
   }
@@ -5529,8 +5529,8 @@
                     e.stopPropagation()
                     wizardState.launch()
                   }
-                }}>Run setup… ▸</tspan
-              > adds it</text
+                }}>Run setup ▸</tspan
+              > adds the address table</text
             >
           {/if}
         </g>
@@ -5693,6 +5693,16 @@
               <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally" class:filter-tally={!!tally}
                 >{tally ?? hostTally(row)}</text
               >
+            {:else if !filterOn}
+              <!-- #1165: a zone the router named but whose addresses
+                   resolved to nothing left this band blank, which reads
+                   as a card that failed to draw. It says the fact
+                   instead, in the tally's own slot. Under a filter it
+                   stays silent: #1056 ruled that a lane with no known
+                   host says nothing rather than `0 of 0`, and "no hosts
+                   seen yet" would be answering a question about the
+                   port that this lane cannot answer either. -->
+              <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally">no hosts seen yet</text>
             {/if}
             <!-- Round 49: the card says `name · subnet` and stops.
                  LOGGED / DARK / COVERED are gone from it -- the ribs
@@ -5708,7 +5718,10 @@
                  this line, and the two facts are both the card's own
                  sub-text, so they stack. -->
             {#if !policyState.anyPushed}
-              <text x={-cardHalf + cardPad} y={row.dots.length > 0 ? 96 : 74} class="n-sub no-table">no rule table pushed</text>
+              <!-- Always under the tally line now that an empty lane
+                   prints one of its own (#1165), rather than moving up
+                   into the slot that line occupies. -->
+              <text x={-cardHalf + cardPad} y="96" class="n-sub no-table">no rule table pushed</text>
             {/if}
             <!-- Round 30's zone card carries name, subnet, hosts and the
                  coverage badge, and stops there (the-whole.html:1002-1008).
@@ -6871,11 +6884,11 @@
         {:else if isAdmin && !cardPinned}
           <button onclick={pinBoundary}>declare quiet on purpose ▸</button>
         {/if}
-        <!-- Tune logging (#435): the other remedy for a dark pair --
+        <!-- Log every rule (#435): the other remedy for a dark pair --
              switch logging on for what actually crosses it, rather than
              declaring the silence a choice. -->
         {#if isAdmin}
-          <button disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>rules ▸</button>
+          <button disabled={!primaryDevice} onclick={openLogEveryRuleFromDark}>rules ▸</button>
         {/if}
         <button class="dim" onclick={openStreamFromCard}>stream ▸</button>
       </div>

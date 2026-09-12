@@ -103,3 +103,37 @@ describe('column visibility (#729)', () => {
     expect(trackCount(columnState.gridTemplate)).toBe(PINNED_COLUMNS.size)
   })
 })
+
+describe('column headers and default widths (#1149)', () => {
+  function labelOf(key: string): string {
+    return COLUMNS.find((c) => c.key === key)?.label as string
+  }
+
+  it('gives every column a label no other column shares', () => {
+    const labels = COLUMNS.map((c) => c.label)
+    expect(new Set(labels).size).toBe(labels.length)
+  })
+
+  it('says which side each half of a repeated pair belongs to', () => {
+    expect(labelOf('srcAddr')).toBe('Src address')
+    expect(labelOf('dstAddr')).toBe('Dst address')
+    expect(labelOf('srcPort')).toBe('Src port')
+    expect(labelOf('port')).toBe('Dst port')
+  })
+
+  // The measure the review took off the rendered table: a 17-character
+  // MAC needs ~163px and a 13-character bare IPv4 ~129px at the row's
+  // 14px mono, padding included. Both columns sat under that (150 and
+  // 104), so every MAC and every long address was cut with nothing to
+  // hover.
+  it('sizes MAC and the address columns above the content they hold', () => {
+    columnState.reset()
+    const widthOf = (key: string) => columnState.widths[COLUMNS.findIndex((c) => c.key === key)]
+
+    expect(widthOf('mac')).toBeGreaterThanOrEqual(163)
+    expect(widthOf('srcAddr')).toBeGreaterThanOrEqual(129)
+    expect(widthOf('srcAddr')).toBe(widthOf('dstAddr'))
+
+    localStorage.removeItem('mikroview-column-widths-v6')
+  })
+})

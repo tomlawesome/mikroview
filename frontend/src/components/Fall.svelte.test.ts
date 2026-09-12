@@ -390,6 +390,19 @@ describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #
     expect(container.textContent).toContain('✱ NEW DEVICE')
     expect(container.textContent).not.toContain('ALARM FIRED')
   })
+
+  it('explains NOT IN A PUSHED TABLE on the caption itself, not only in aria (#1164)', async () => {
+    // An event on a boundary no pushed rule names makes the "other
+    // traffic" band; the three words on its caption meant nothing
+    // without a screen reader.
+    const events = [makeEvent({ chain: 'forward', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const caption = [...container.querySelectorAll('.band-caption')].find((n) => n.textContent?.includes('NOT IN A PUSHED TABLE'))
+    expect(caption?.querySelector('title')?.textContent).toBe('events whose boundary is not in a pushed rule table yet')
+    // The same words, not a second wording of them.
+    const head = caption?.closest('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain('events whose boundary is not in a pushed rule table yet')
+  })
 })
 
 describe('the flag badge never blocks the carrier it names (#1026)', () => {

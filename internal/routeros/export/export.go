@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package export parses the text RouterOS's `/export hide-sensitive`
-// produces, for #435's "Tune logging" helper and, per that issue's own
-// decision record, #895's later scheduled-config-backup reader -- one
-// parser, built once, shared by both rather than each growing its own.
+// produces, for #435's Log every rule helper ("Tune logging" until #1134
+// renamed the page) and, per that issue's own decision record, #895's
+// later scheduled-config-backup reader -- one parser, built once, shared
+// by both rather than each growing its own.
 //
 // Every source line is kept verbatim (Export.Lines); only the
 // /ip firewall filter section's `add` lines are decoded into
@@ -117,7 +118,7 @@ func (e *Export) Text() string {
 
 // LoggingOnlyDiff reports whether after differs from before only in
 // filter rules' log and log-prefix attributes. This is the mechanical
-// guarantee behind Tune logging (#435): the lines outside the filter
+// guarantee behind Log every rule (#435): the lines outside the filter
 // rules must be the same lines in the same order, the rule count must
 // match, and each rule's other tokens must match key by key and byte by
 // byte in their original order. A rule's own physical layout is not

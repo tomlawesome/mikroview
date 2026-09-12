@@ -33,7 +33,7 @@
   import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
-  import { suggestState } from '../lib/suggest.svelte'
+  import { dedupeSuggestions, suggestState } from '../lib/suggest.svelte'
   import { matchesState } from '../lib/matches.svelte'
   import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
@@ -977,8 +977,16 @@
   // which derive from watchlistState.entries alone -- leave this body
   // alone by construction, as the drawing requires. A suggested row
   // sorts and filters with nothing: it is not a watch.
-  const openSuggestions = $derived(suggestState.candidates.filter((c) => c.status === 'off'))
-  const asideSuggestions = $derived(suggestState.candidates.filter((c) => c.status === 'hide'))
+  // #1160: deduped per list (see dedupeSuggestions). Two candidates with
+  // the same status that would draw the same row are one row here; the
+  // two lists are deduped separately, so setting one aside never hides
+  // an open candidate that happens to read like it.
+  const openSuggestions = $derived(
+    dedupeSuggestions(suggestState.candidates.filter((c) => c.status === 'off')),
+  )
+  const asideSuggestions = $derived(
+    dedupeSuggestions(suggestState.candidates.filter((c) => c.status === 'hide')),
+  )
   // Shown rows: the open ones, and the set-aside ones after `show them`.
   const suggestionRows = $derived(showAside ? [...openSuggestions, ...asideSuggestions] : openSuggestions)
 
@@ -1742,7 +1750,10 @@
         <tbody id="sugg">
           <tr class="sdiv">
             <td colspan="6">
-              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0} · <b>{openSuggestions.length}</b>{/if}</span>
+              <!-- #1157: `{' · '}` rather than a literal space before the
+                   "·" -- inside the block Svelte trims the leading
+                   whitespace, and the heading read "…PUSHED· 15". -->
+              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0}{' · '}<b>{openSuggestions.length}</b>{/if}</span>
               <span class="sdr">
                 {#if asideSuggestions.length > 0}
                   <button

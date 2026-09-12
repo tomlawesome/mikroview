@@ -149,7 +149,7 @@ export const DETECTORS: Partial<Record<string, DetectorInfo>> = {
   device_silence: {
     label: 'Device gone quiet',
     explanation:
-      "Checks every configured router's last-seen time on a fixed interval, flagging one that hasn't sent any syslog in at least the configured staleness threshold (15 minutes by default). Unlike every other detector here, this isn't a pattern in the traffic -- it's the absence of it, so it's the one way mikroview notices a router that's stopped talking entirely (crashed, rebooted, lost network, or had its syslog config wiped) rather than a router that's merely quiet right now. A device that's never sent anything at all doesn't count -- see the Fleet view for that state instead.",
+      "Checks every configured router's last-seen time on a fixed interval, flagging one that hasn't sent any syslog in at least the configured staleness threshold (15 minutes by default). Unlike every other detector here, this isn't a pattern in the traffic -- it's the absence of it, so it's the one way mikroview notices a router that's stopped talking entirely (crashed, rebooted, lost network, or had its syslog config wiped) rather than a router that's merely quiet right now. A device that's never sent anything at all doesn't count -- see the routers section of Entities for that state instead.",
   },
 }
 
@@ -265,7 +265,7 @@ function nearestPhrase(floor: LearningFloor, observedForSeconds: number, samples
   if (minDurationSeconds > 0) {
     const haveDays = Math.floor(observedForSeconds / SECONDS_PER_DAY)
     const needDays = Math.ceil(minDurationSeconds / SECONDS_PER_DAY)
-    parts.push(`${haveDays} of ${needDays} days`)
+    parts.push(`${haveDays} of ${needDays} ${needDays === 1 ? 'day' : 'days'}`)
   }
   if (minSamples > 0) {
     parts.push(`${samples} of ${minSamples} samples`)

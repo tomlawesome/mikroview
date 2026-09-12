@@ -97,7 +97,11 @@ func TestEmittedCommandsUseKnownMenus(t *testing.T) {
 		"CaTrustCommands":     CaTrustCommands(address, dialect),
 		"SyslogCommands":      SyslogCommands(address, syslog, dialect),
 		"RuleTaggingCommands": RuleTaggingCommands(dialect),
-		"ScheduleCommands":    ScheduleCommands(dialect),
+		// ScheduleCommands carries the push script itself since #1131,
+		// so the menus inside the saved source are checked here too --
+		// they are the same console paths the router runs when the
+		// scheduler fires.
+		"ScheduleCommands": ScheduleCommands(PushScript(address, "tok", []string{"filter-rule"}, dialect), dialect),
 	}
 
 	checked := 0

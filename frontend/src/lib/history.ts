@@ -445,3 +445,28 @@ export function stateRow(info: PersistenceInfo | null): string | null {
 /** The link to the setup guide's own section on mounting a key. */
 export const HOW_TO_MOUNT_URL =
   'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-optional-off-by-default'
+
+/** Where the wizard suggests the key file lives: a secret path, outside
+ *  the data directory, exactly as docs/configuration.md requires. */
+export const KEY_FILE_PATH = '/run/secrets/mikroview-history.key'
+
+/**
+ * newHistoryKey mints a `history.keyFile` value in the browser: 32
+ * random bytes, base64 -- the same shape as the setup guide's
+ * `head -c 32 /dev/urandom | base64`, and comfortably past the 32-byte
+ * floor retention.LoadKey enforces.
+ *
+ * In the browser, and only there (#1133). `history.keyFile` is not
+ * editable from the app and never will be (#853), so there is no
+ * endpoint that would accept a key and nothing here posts one: the
+ * value exists in this tab until the operator saves it, and mikroview
+ * first sees it in the file they mount. That is also why the wizard
+ * cannot show it again.
+ */
+export function newHistoryKey(): string {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary)
+}

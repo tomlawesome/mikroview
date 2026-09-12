@@ -292,7 +292,16 @@ check(
 // sr-only region, not the deck's per-scene clipping.
 feedSyslog(60, 'live-scroll-position-689')
 await page.setViewportSize({ width: 1280, height: 720 })
-for (const label of ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+for (const label of [
+  'The fall',
+  'Topography',
+  'Metrics',
+  'Stream',
+  'The docket',
+  'Entities',
+  'Settings',
+  'Log every rule',
+]) {
   await goTo(page, label)
   const doc = await page.evaluate(() => ({
     scrollHeight: document.scrollingElement.scrollHeight,

@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  announceStep,
   backupReceipt,
   backupReceiptForDevice,
   backupStep,
@@ -20,6 +21,7 @@ import {
   silenceExplanation,
   sourceSplitObservation,
   sourceSplitReceipt,
+  sourceSplitShortfall,
   sourceSplits,
   srcAddressCommand,
   syslogReceipt,
@@ -133,7 +135,8 @@ describe('step status', () => {
       status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 40, decodedActions: 0 }] }),
     )
     expect(s.state).toBe('partial')
-    expect(s.detail).toContain('log-prefix')
+    expect(s.detail).toBe('Events are arriving.')
+    expect(s.shortfall).toContain('log-prefix')
   })
 
   it('reports partial tagging honestly', () => {
@@ -141,7 +144,8 @@ describe('step status', () => {
       status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 4 }] }),
     )
     expect(s.state).toBe('partial')
-    expect(s.detail).toContain('4 of 10')
+    expect(s.detail).toBe('4 of 10 events carry an action.')
+    expect(s.shortfall).toBe('The other 6 do not — some rules are still untagged.')
   })
 
   it('names which push blocks are missing rather than just "incomplete"', () => {
@@ -160,8 +164,88 @@ describe('step status', () => {
       }),
     )
     expect(s.state).toBe('partial')
-    expect(s.detail).toContain('address-list')
-    expect(s.detail).toContain('dhcp-lease')
+    expect(s.shortfall).toContain('address-list')
+    expect(s.shortfall).toContain('dhcp-lease')
+  })
+})
+
+// --- A partial step's shortfall (#1132) --------------------------------
+//
+// Owner ruling: what arrived and what is still missing are two
+// statements, not one sentence -- the shortfall gets its own warning
+// box, so the green arrived line never carries the bad news. The rules
+// module's part of that is producing the two strings separately; the
+// wizard's is rendering them as two boxes.
+
+describe('a partial step states its shortfall apart from its arrival', () => {
+  it('splits the push step into what arrived and what is still missing', () => {
+    const s = pushStep(
+      status({
+        devices: [
+          {
+            device: 'r',
+            configured: true,
+            sourceIp: '1.2.3.4',
+            events: 1,
+            decodedActions: 1,
+            pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z', arp: '2026-08-13T00:00:00Z' },
+          },
+        ],
+      }),
+    )
+    expect(s.state).toBe('partial')
+    expect(s.detail).toBe('Arrived: arp, filter-rule.')
+    expect(s.shortfall).toBe('Still missing: address-list, dhcp-lease.')
+    // The arrived line never carries the shortfall, in any wording: it
+    // is rendered green, and a green box saying what is missing is the
+    // fault this split exists to fix.
+    expect(s.detail).not.toContain('missing')
+  })
+
+  it('leaves the shortfall unset on every state that is not partial', () => {
+    const everything = status({
+      devices: [
+        {
+          device: 'r',
+          configured: true,
+          sourceIp: '1.2.3.4',
+          events: 4,
+          decodedActions: 4,
+          pushedKinds: {
+            'filter-rule': '2026-08-13T00:00:00Z',
+            'address-list': '2026-08-13T00:00:00Z',
+            'dhcp-lease': '2026-08-13T00:00:00Z',
+            arp: '2026-08-13T00:00:00Z',
+          },
+        },
+      ],
+    })
+    expect(pushStep(everything).shortfall).toBeUndefined()
+    expect(pushStep(status()).shortfall).toBeUndefined()
+    expect(rulesStep(everything).shortfall).toBeUndefined()
+    expect(caStep(status(), '192.0.2.99:8080').shortfall).toBeUndefined()
+  })
+
+  // The announcement is the same two statements in the same order, so a
+  // screen reader is not told a step arrived and left to assume the
+  // rest.
+  it('speaks the shortfall with the arrival', () => {
+    const partial = status({
+      devices: [
+        {
+          device: 'r',
+          configured: true,
+          sourceIp: '1.2.3.4',
+          events: 1,
+          decodedActions: 1,
+          pushedKinds: { 'filter-rule': '2026-08-13T00:00:00Z' },
+        },
+      ],
+    })
+    const ledger = buildLedger(partial, [], 'h')
+    expect(announceStep(ledger[3])).toBe(
+      'Step 4 of 6 — Push router state — Arrived: filter-rule. Still missing: address-list, dhcp-lease, arp.',
+    )
   })
 })
 
@@ -205,13 +289,14 @@ describe('the source-address split', () => {
   const arriving = device({ id: '10.0.20.1', name: '10.0.20.1', sourceIp: '10.0.20.1' })
   const connected = status({ sources: [{ source: '10.0.20.1', syslogFirstSeenAt: '2026-08-13T00:00:00Z' }] })
 
+  // Two statements, two boxes (#1132): what arrived reads in the
+  // arrived voice, and the declared address that is silent is the
+  // shortfall beside it -- still both facts, still no diagnosis.
   it('reads as partial, in the voice of evidence composed wrongly, never blocked', () => {
     const s = syslogStep(connected, [declared, arriving])
     expect(s.state).toBe('partial')
-    expect(s.detail).toBe(
-      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, " +
-        'which you declared in config.yaml, has sent nothing.',
-    )
+    expect(s.detail).toBe("Connected — but from 10.0.20.1, an address you haven't declared.")
+    expect(s.shortfall).toBe('192.168.88.1, which you declared in config.yaml, has sent nothing.')
   })
 
   it('carries the split into the step list receipt', () => {
@@ -237,8 +322,10 @@ describe('the source-address split', () => {
     const two = device({ ...declared, multihomedCandidates: ['10.0.20.1', '10.0.30.1'] })
     const splits = sourceSplits([two])
     expect(sourceSplitObservation(splits)).toBe(
-      "Connected — but from 10.0.20.1 and 10.0.30.1, addresses you haven't declared, while " +
-        '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+      "Connected — but from 10.0.20.1 and 10.0.30.1, addresses you haven't declared.",
+    )
+    expect(sourceSplitShortfall(splits)).toBe(
+      '192.168.88.1, which you declared in config.yaml, has sent nothing.',
     )
     expect(sourceSplitReceipt(splits)).toBe('syslog from 10.0.20.1, 10.0.30.1 · declared 192.168.88.1 silent')
   })
@@ -365,7 +452,20 @@ describe('backupStep', () => {
   it('is blocked, in the disabled-step voice, once the server actually says no key is mounted', () => {
     const s = backupStep(backups({ enabled: false }))
     expect(s.state).toBe('blocked')
-    expect(s.detail).toContain('none is mounted')
+    expect(s.detail).toContain('No key file is mounted')
+    expect(s.detail).toContain('a push would be refused')
+  })
+
+  // #1133: the observation line says what was observed and what to do
+  // about it; the model -- that mikroview holds this key and seals the
+  // history and the state store with it too -- is the lead's job, said
+  // once. The old detail was the lead's sentence repeated, and wrong
+  // about the model ("a key it does not hold" is the vault passphrase).
+  it('leaves the explanation to the lead rather than repeating it, and never says mikroview does not hold the key', () => {
+    const s = backupStep(backups({ enabled: false }))
+    expect(s.detail).not.toContain('does not hold')
+    // "above": the observation line sits under the key field it points at.
+    expect(s.detail).toMatch(/Put the key above in place/)
   })
 
   it('waits once a key is mounted but nothing has pushed yet', () => {
@@ -500,8 +600,11 @@ describe('the finish', () => {
     )
     const headline = finishHeadline(ledger)
     expect(headline).toContain('Logs are flowing.')
-    expect(headline).toContain('three steps stand on evidence')
+    expect(headline).toContain('Three steps stand on evidence')
     expect(headline).toContain('one was skipped')
+    // #1166: the tally is a sentence of its own, so it starts like one
+    // -- "Logs are flowing. three steps stand on evidence." did not.
+    expect(headline).toBe('Logs are flowing. Three steps stand on evidence; one was skipped.')
   })
 
   it('does not claim anything is flowing when nothing has arrived', () => {

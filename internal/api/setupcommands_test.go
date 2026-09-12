@@ -202,6 +202,24 @@ func TestHandleSetupCommandsPushRendersOnlyWithTokenAndKinds(t *testing.T) {
 	if !strings.Contains(both.Steps.Push.Commands, "Bearer tok-123") {
 		t.Errorf("push commands = %q, want the token embedded", both.Steps.Push.Commands)
 	}
+
+	// Schedule carries the script itself since #1131, so it follows
+	// Push exactly: blank when there is nothing to save, and the whole
+	// pastable block when there is.
+	if tokenOnly.Steps.Schedule.Commands != "" || kindsOnly.Steps.Schedule.Commands != "" {
+		t.Errorf("schedule commands rendered with nothing to schedule: %q / %q",
+			tokenOnly.Steps.Schedule.Commands, kindsOnly.Steps.Schedule.Commands)
+	}
+	schedule := both.Steps.Schedule.Commands
+	if !strings.HasPrefix(schedule, `/system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("schedule commands = %q, want the script add that saves the push script", schedule)
+	}
+	if !strings.Contains(schedule, "Bearer tok-123") || !strings.HasSuffix(schedule, "\n/system script run mv-push") {
+		t.Errorf("schedule commands = %q, want the push script inside it and one run now", schedule)
+	}
+	if strings.Contains(schedule, "paste the script") {
+		t.Errorf("schedule commands still ask the operator to paste a script in: %q", schedule)
+	}
 }
 
 // TestHandleSetupCommandsBackupRendersOnlyWhenReady covers #394's

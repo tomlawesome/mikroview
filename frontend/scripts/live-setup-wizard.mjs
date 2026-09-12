@@ -41,6 +41,17 @@ page.on('response', (r) => {
     .catch(() => {})
 })
 
+// Every request this page makes, and every websocket frame it sends,
+// recorded from before the modal is ever opened. The no-key section at
+// the end needs it to prove a negative: a key minted in the browser
+// (#1133) must never appear in a URL or a body, and the only way to show
+// that is to have watched everything that left.
+const requestsSeen = []
+page.on('request', (r) => requestsSeen.push({ url: r.url(), body: r.postData() ?? '' }))
+page.on('websocket', (ws) =>
+  ws.on('framesent', (f) => requestsSeen.push({ url: ws.url(), body: String(f.payload ?? '') })),
+)
+
 const modal = page.locator('.setup-wizard')
 if (await modal.count()) {
   await page.keyboard.press('Escape')
@@ -97,7 +108,9 @@ for (let step = 1; step <= 5; step++) {
 }
 check(seen.length > 0, 'the wizard renders command blocks')
 
-const withPlaceholders = seen.filter((b) => /<[a-z-]+>/.test(b) && !b.includes('<paste the script above>'))
+// No exemption for "<paste the script above>" any more: #1131 retired
+// the placeholder along with the second box it belonged to.
+const withPlaceholders = seen.filter((b) => /<[a-z-]+>/.test(b))
 check(
   withPlaceholders.length === 0,
   `no block still contains a placeholder (${withPlaceholders.length} did)`,
@@ -259,8 +272,13 @@ check(
 // settledObservation polls past three of the wizard's own intervals and
 // then returns whatever it settled at, so check() below still reports
 // the class it actually saw rather than throwing on a timeout.
+//
+// `:not(.shortfall)` because a partial step renders two observation
+// boxes (#1132) -- the arrived line and the shortfall under it -- and
+// an unqualified locator would match both and fail Playwright's strict
+// mode rather than read the line this is asking about.
 async function settledObservation(want, { timeoutMs = 16000 } = {}) {
-  const read = async () => (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+  const read = async () => (await page.locator('.setup-wizard .observation:not(.shortfall)').getAttribute('class')) ?? ''
   const deadline = Date.now() + timeoutMs
   let seen = await read()
   while (!want(seen) && Date.now() < deadline) {
@@ -304,7 +322,8 @@ check(
 // Step 1 is the CA fetch. No router fetches /ca.crt on this harness, so
 // it is genuinely waiting -- the exact state the heavy warning is for.
 await page.locator('.setup-wizard .steps li:nth-child(1) .step-row').click()
-const stepOneObservation = (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+const stepOneObservation =
+  (await page.locator('.setup-wizard .observation:not(.shortfall)').getAttribute('class')) ?? ''
 if (stepOneObservation.includes('waiting')) {
   await page.click('.setup-wizard footer button.primary')
   const heavy = page.locator('.setup-wizard .heavy')
@@ -397,16 +416,47 @@ if (await page.locator('.setup-wizard .mint select').count()) {
 await page.locator('.setup-wizard pre.script').waitFor({ state: 'visible' })
 const script = (await page.textContent('.setup-wizard pre.script')) ?? ''
 
+// #1131: the token is shown, in its own box above the script, rather
+// than only claimed to be "in the script below".
+const shownToken = ((await page.textContent('.setup-wizard pre.token')) ?? '').trim()
+check(shownToken.length > 0, 'the minted token is shown in its own box')
+check(
+  (await page.locator('.setup-wizard button.copy:has-text("Copy token")').count()) === 1,
+  'and has its own Copy control',
+)
+
+// One block, pastable as it stands: the /system script add that carries
+// the whole push script, the scheduler entry, and the run that makes
+// the first push happen now. No second box, and nothing asking the
+// operator to paste one clipboard inside another.
+check(
+  script.startsWith('/system script add name=mv-push policy=read,test source="'),
+  `the block saves the script itself (${script.slice(0, 60)})`,
+)
+check(!script.includes('<paste the script above>'), 'no placeholder is left for the operator to fill in')
+check(
+  script.includes('/system scheduler add name=mv-push') && script.trimEnd().endsWith('/system script run mv-push'),
+  'the same block schedules it and runs it once',
+)
+check(
+  (await page.locator('.setup-wizard .body pre').count()) === 2,
+  'step 4 hands over exactly two boxes — the token, and the one block',
+)
+
 // Stop at the closing quote: \S+ swallows it, and a token with a
 // trailing " authenticates as nothing (401) -- which looked like a
-// product bug on first run and was this line.
-const tokenMatch = script.match(/Bearer ([^"\s)]+)/)
+// product bug on first run and was this line. The quote is escaped
+// (\") inside the source="..." wrapper since #1131, so the backslash
+// has to be excluded too, for the same reason.
+const tokenMatch = script.match(/Bearer ([^"\s)\\]+)/)
 check(!!tokenMatch, 'the generated script embeds a bearer token')
 const token = tokenMatch?.[1] ?? ''
+check(token === shownToken, 'the token shown is the token the script carries')
 
-// Every kind the server declares must appear in the script.
+// Every kind the server declares must appear in the script -- with its
+// quotes escaped, since the script now sits inside source="...".
 for (const kind of status.pushKinds) {
-  check(script.includes(`"kind"="${kind}"`), `the script pushes ${kind}`)
+  check(script.includes(`\\"kind\\"=\\"${kind}\\"`), `the script pushes ${kind}`)
 }
 
 // The proof: the token the wizard minted, used the way the script uses
@@ -440,6 +490,67 @@ const pushReceipt =
   ((await page.textContent('.setup-wizard .steps li:nth-child(4) .step-receipt')) ?? '').trim()
 check(true, `the push step records this push on its own once the table arrives (${pushReceipt})`)
 
+// --- A partial step's shortfall is its own box (#1132) -----------------
+// One table has arrived and the others have not, so step 4 is partial:
+// the arrived line says what came, and what is still missing is a
+// second box under it, in the warning register rather than the green
+// one. Derived from what the server says has arrived, never assumed --
+// the same rule the observation checks above follow.
+const afterPush = await page.request.get(`${URL_BASE}/api/setup/status`).then((r) => r.json())
+const arrivedKinds = new Set(
+  afterPush.devices.flatMap((d) => Object.keys(d.pushedKinds ?? {})),
+)
+const missingKinds = (afterPush.pushKinds ?? []).filter((k) => !arrivedKinds.has(k))
+const arrivedLine = page.locator('.setup-wizard .observation:not(.shortfall)')
+const shortfallBox = page.locator('.setup-wizard .observation.shortfall')
+if (missingKinds.length > 0) {
+  await shortfallBox.waitFor({ state: 'visible', timeout: 20000 })
+  const arrivedText = ((await arrivedLine.textContent()) ?? '').replace(/\s+/g, ' ').trim()
+  const shortfallText = ((await shortfallBox.textContent()) ?? '').replace(/\s+/g, ' ').trim()
+  check(
+    arrivedText === `Arrived: ${[...arrivedKinds].sort().join(', ')}.`,
+    `the arrived line says only what arrived (${arrivedText})`,
+  )
+  check(
+    !/missing/.test(arrivedText),
+    'the green line never carries the shortfall — that is the whole split',
+  )
+  check(
+    shortfallText === `Still missing: ${missingKinds.join(', ')}.`,
+    `the shortfall is its own box, naming what has not come (${shortfallText})`,
+  )
+  check(
+    await arrivedLine.evaluate((el) => el.classList.contains('arrived')),
+    'what arrived still reads in the arrived voice',
+  )
+  check(
+    (await page.locator('.setup-wizard .observation.shortfall.attention').count()) === 0,
+    'and the shortfall is a warning, never the reject red a mikroview-side fault uses',
+  )
+  // The colour itself, not just the class: the ruling is specifically
+  // --warn and specifically not --reject, and a stylesheet is the one
+  // place that can be wrong without any of the above noticing.
+  const colours = await shortfallBox.evaluate((el) => {
+    const probe = document.createElement('span')
+    document.body.appendChild(probe)
+    probe.style.color = 'var(--warn)'
+    const warn = getComputedStyle(probe).color
+    probe.style.color = 'var(--reject)'
+    const reject = getComputedStyle(probe).color
+    probe.remove()
+    return { got: getComputedStyle(el).color, warn, reject }
+  })
+  check(
+    colours.got === colours.warn && colours.got !== colours.reject,
+    `the shortfall box is drawn in --warn (${JSON.stringify(colours)})`,
+  )
+} else {
+  check(
+    (await shortfallBox.count()) === 0,
+    'every table has arrived on this instance, so there is no shortfall box to show',
+  )
+}
+
 // --- The finish reads the ledger back ---------------------------------
 // The finish row is the li *after* the ledger's six steps -- #394 made
 // that nth-child(7), not nth-child(6) -- and the readback lists all six
@@ -464,6 +575,104 @@ const reopened =
 check(
   reopened.includes('done'),
   `reopening shows the ledger as it stands — evidence that arrived is already green (${reopened})`,
+)
+
+// --- With no key mounted, step 6 mints one (#1133) ----------------------
+// The live instance always has a key (scripts/live-env.sh mounts one), so
+// the no-key branch is reached by answering the wizard's own read of
+// GET /api/router-backups with enabled:false -- the same page.route
+// stand-in live-setup-wizard-tls-off-cert-mismatch.mjs uses for a state
+// the harness cannot be put into. Nothing under test here is server-side:
+// the key is minted in the browser and must stay there.
+await page.route('**/api/router-backups', (route) =>
+  route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ enabled: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0 }),
+  }),
+)
+
+// Reopened rather than waited out: the modal refetches on open, so this
+// does not hang on the 5-second poll landing at the right moment.
+await page.keyboard.press('Escape')
+await modal.waitFor({ state: 'detached' })
+await goTo(page, 'Run setup…')
+await modal.waitFor({ state: 'visible' })
+await page.locator('.setup-wizard .steps li:nth-child(6) .step-row').click()
+
+const keyField = page.locator('#history-key')
+await keyField.waitFor({ state: 'visible' })
+// 32 bytes, base64 -- docs/configuration.md's `head -c 32 /dev/urandom |
+// base64`, the shape retention.LoadKey accepts.
+const KEY_SHAPE = /^[A-Za-z0-9+/]{43}=$/
+const mintedKey = await keyField.inputValue()
+check(KEY_SHAPE.test(mintedKey), `the field arrives pre-filled with a generated key (${mintedKey.length} chars)`)
+
+await page.click('.setup-wizard .keymint button:has-text("Reroll")')
+const rerolledKey = await keyField.inputValue()
+check(
+  rerolledKey !== mintedKey && KEY_SHAPE.test(rerolledKey),
+  'Reroll mints a different key, rather than redrawing the same one',
+)
+
+// The operator's own key, pasted over the top, is taken as it stands --
+// this is a field, not a read-only display.
+const pastedKey = 'PastedKeyPastedKeyPastedKeyPastedKeyPastedK='
+await keyField.fill(pastedKey)
+check((await keyField.inputValue()) === pastedKey, 'a key pasted into the field is kept as typed')
+
+await page.click('.setup-wizard .keymint button:has-text("Reroll")')
+const copiedKey = await keyField.inputValue()
+
+// Clipboard permissions granted explicitly, so this proves what landed on
+// the clipboard rather than only that a toast appeared (live-token-copy's
+// own reasoning).
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await page.click('.setup-wizard .keymint .copy-btn')
+await page.waitForSelector('.toast[role="status"]', { timeout: 3000 })
+const clipboardKey = await page.evaluate(() => navigator.clipboard.readText())
+check(clipboardKey === copiedKey, 'the copy control puts the key itself on the clipboard')
+
+const caveat = ((await page.textContent('.setup-wizard .wzcaveat')) ?? '').replace(/\s+/g, ' ')
+check(
+  /Save this now/.test(caveat) && /never receives this value/.test(caveat),
+  `the warning says save it now, and why nothing can reprint it (${caveat})`,
+)
+
+const keyBlocks = await page.$$eval('.setup-wizard .body pre', (els) => els.map((e) => e.textContent ?? ''))
+check(
+  keyBlocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key')),
+  'the steps say how to write the key to a file outside the data directory',
+)
+check(
+  keyBlocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key')),
+  'and how to point mikroview at it',
+)
+check(
+  keyBlocks.every((b) => !b.includes(copiedKey)),
+  'no printed command quotes the key -- it goes in on standard input, not as an argument',
+)
+
+const noKeyLead = ((await page.textContent('.setup-wizard .lead')) ?? '').replace(/\s+/g, ' ')
+check(
+  /under the key file you mount/.test(noKeyLead) && !/does not hold/.test(noKeyLead),
+  `the step says the model once, and says it correctly (${noKeyLead})`,
+)
+check(
+  (await page.locator('.setup-wizard .routeros-version').count()) === 0,
+  'no RouterOS version picker on a pane with no RouterOS command on it',
+)
+
+// The point of the whole design: mikroview never receives this value.
+// Raw and percent-encoded, since a leak through a query string would
+// arrive escaped.
+const mintedKeys = [mintedKey, rerolledKey, pastedKey, copiedKey]
+const needles = mintedKeys.flatMap((k) => [k, encodeURIComponent(k)])
+const leaked = requestsSeen.filter((r) => needles.some((n) => r.url.includes(n) || r.body.includes(n)))
+check(
+  leaked.length === 0,
+  `no request carries the key, in a URL or a body (${requestsSeen.length} inspected, ${leaked.length} leaked` +
+    `${leaked.length ? `: ${leaked.map((r) => r.url).join(', ')}` : ''})`,
 )
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
