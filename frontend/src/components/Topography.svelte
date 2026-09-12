@@ -3125,9 +3125,16 @@
   // through watchlistState.
   const ghostWatchers = $derived(ghostLanes.filter((g) => g.watch !== null).length)
   const ghostWatchersBroken = $derived(ghostLanes.filter((g) => g.watch !== null && g.state === 'broken').length)
-  const watcherTotal = $derived(watchlistState.entries.length + ghostWatchers)
+  // #1156: the dial counts what the scene bar's eye counts. The healthy
+  // arc is watchlistState.heldCount itself -- enabled and not ring-broken
+  // -- rather than a number this file works out for itself, which is how
+  // the two came to disagree: the dial used entries.length, so a watch
+  // the operator had switched off still counted as a watcher and the
+  // dial read 6 where the eye read 5 on the same session. A paused watch
+  // is not watching, so it is on neither surface now.
+  const watcherHealthy = $derived(watchlistState.heldCount + (ghostWatchers - ghostWatchersBroken))
   const watcherBroken = $derived(watchlistState.brokenCount + ghostWatchersBroken)
-  const watcherHealthy = $derived(watcherTotal - watcherBroken)
+  const watcherTotal = $derived(watcherHealthy + watcherBroken)
 
   const DIAL_R = 20
   const DIAL_CIRC = 2 * Math.PI * DIAL_R
