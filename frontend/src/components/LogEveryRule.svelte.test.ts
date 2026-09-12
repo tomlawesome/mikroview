@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Tune logging (#435) -- these exercise the real component markup
+// Log every rule (#435; "Tune logging" until #1134) -- these exercise
+// the real component markup
 // against a mocked network boundary, the same convention
 // SetupWizard.svelte.test.ts uses: only fetch is faked, so what is
 // tested here is what the operator can and cannot see and do.
@@ -31,9 +32,9 @@ import { downloadText } from '../lib/export'
 import { appState } from '../lib/state.svelte'
 import { policyState } from '../lib/policy.svelte'
 import { coverageState } from '../lib/coverage.svelte'
-import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
 import type { Device, TuneLoggingAnalyseResponse, TuneLoggingRenderResponse } from '../lib/types'
-import TuneLogging from './TuneLogging.svelte'
+import LogEveryRule from './LogEveryRule.svelte'
 
 function device(over: Partial<Device> = {}): Device {
   return {
@@ -109,9 +110,43 @@ function renderResponse(over: Partial<TuneLoggingRenderResponse> = {}): TuneLogg
   }
 }
 
-async function typeExport(container: HTMLElement, text = 'the export text') {
-  const textarea = container.querySelector('#tl-export') as HTMLTextAreaElement
-  await fireEvent.input(textarea, { target: { value: text } })
+// A miniature export with two `add` lines under /ip firewall filter --
+// enough for the zone's own rule count to be a number worth asserting.
+const EXPORT_TEXT = [
+  '# 2026/09/01 10:00:00 by RouterOS 7.24.1',
+  '/ip firewall filter',
+  'add action=accept chain=forward comment="lan to wan"',
+  'add action=drop chain=forward comment="block guest to lan"',
+  '',
+].join('\n')
+
+// ClipboardEvent and DataTransfer are not in jsdom, so both are built
+// by hand here rather than through fireEvent.paste/fireEvent.drop --
+// the component only ever reads `clipboardData.getData` and
+// `dataTransfer.files`, which is exactly what these carry.
+function zoneOf(container: HTMLElement): HTMLElement {
+  return container.querySelector('.drop') as HTMLElement
+}
+
+async function pasteExport(container: HTMLElement, text = EXPORT_TEXT) {
+  const evt = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(evt, 'clipboardData', { value: { getData: () => text } })
+  await fireEvent(zoneOf(container), evt)
+}
+
+async function dropFile(container: HTMLElement, name = 'edge-1.rsc', text = EXPORT_TEXT) {
+  const evt = new Event('drop', { bubbles: true, cancelable: true })
+  const file = new File([text], name, { type: 'text/plain' })
+  Object.defineProperty(evt, 'dataTransfer', { value: { files: [file], getData: () => '' } })
+  await fireEvent(zoneOf(container), evt)
+}
+
+// The tests below that are about something other than the intake keep
+// using a paste, since #1134 left the page no other way to put an
+// export into it.
+async function typeExport(container: HTMLElement, text = EXPORT_TEXT) {
+  await pasteExport(container, text)
+  await waitFor(() => expect(zoneOf(container).classList.contains('filled')).toBe(true))
 }
 
 async function clickAnalyse() {
@@ -133,24 +168,95 @@ beforeEach(() => {
   policyState.byDevice = {}
   policyState.anyPushed = false
   coverageState.declarations = []
-  tuneLoggingNavState.pending = null
+  logEveryRuleNavState.pending = null
 })
 
-describe('TuneLogging ephemerality', () => {
+describe('LogEveryRule ephemerality', () => {
   it('states the issue\'s own ephemerality sentence, verbatim', () => {
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     expect(container.textContent).toContain(
       'Your config is never stored — it runs through memory, and once you leave this page it is gone.',
     )
   })
 })
 
-describe('TuneLogging under 24 hours (#435 decision 5)', () => {
+describe('LogEveryRule says what it is for (#1134)', () => {
+  it('leads with the ruling\'s own sentence, before any control', () => {
+    const { container } = render(LogEveryRule)
+    const lead = container.querySelector('.lead') as HTMLElement
+    expect(lead.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      "Drop in your router's export (/export hide-sensitive). You get it back with logging switched on for every " +
+        'firewall rule that is not logging yet, ready to paste into the router. Nothing you paste is stored.',
+    )
+    // First on the page, and ahead of the drop zone it describes.
+    expect(lead.compareDocumentPosition(zoneOf(container)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('names the page "log every rule", not "tune logging"', () => {
+    const { container } = render(LogEveryRule)
+    expect(container.querySelector('.og h3')?.textContent).toBe('log every rule')
+  })
+})
+
+describe('LogEveryRule drop zone (#1134)', () => {
+  it('is one control, with the browser\'s own file input kept but never shown', () => {
+    const { container } = render(LogEveryRule)
+    // The raw "Browse… No file selected" control the owner rejected is
+    // still there -- it is the only way to open a file chooser -- but
+    // it is out of the page's own reading and tab order.
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    expect(input.classList.contains('sr-only')).toBe(true)
+    expect(input.getAttribute('aria-hidden')).toBe('true')
+    expect(input.tabIndex).toBe(-1)
+    expect(container.querySelector('textarea')).toBeNull()
+  })
+
+  it('takes a dropped file, and says its name and how many rules are in it', async () => {
+    const { container } = render(LogEveryRule)
+    await dropFile(container, 'edge-1.rsc')
+
+    await waitFor(() => expect(container.querySelector('.drop-picked')?.textContent).toBe('edge-1.rsc'))
+    expect(container.querySelector('.drop-sub')?.textContent).toContain('2 firewall rules in it')
+    expect(zoneOf(container).classList.contains('filled')).toBe(true)
+  })
+
+  it('takes a paste, which has no file name of its own to show', async () => {
+    const { container } = render(LogEveryRule)
+    await pasteExport(container)
+
+    await waitFor(() => expect(container.querySelector('.drop-picked')?.textContent).toBe('pasted export'))
+    expect(container.querySelector('.drop-sub')?.textContent).toContain('2 firewall rules in it')
+  })
+
+  it('sends what was dropped to analyse, so the zone really is the input', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    const { container } = render(LogEveryRule)
+    await dropFile(container)
+    await waitFor(() => expect(zoneOf(container).classList.contains('filled')).toBe(true))
+    await clickAnalyse()
+
+    await waitFor(() => expect(fetchTuneLoggingAnalyse).toHaveBeenCalled())
+    expect(vi.mocked(fetchTuneLoggingAnalyse).mock.calls[0][0].export).toBe(EXPORT_TEXT)
+  })
+
+  it('leaves a paste aimed at a real field alone', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    const { container } = render(LogEveryRule)
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    const evt = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(evt, 'clipboardData', { value: { getData: () => 'not an export' } })
+    await fireEvent(select, evt)
+
+    expect(zoneOf(container).classList.contains('filled')).toBe(false)
+  })
+})
+
+describe('LogEveryRule under 24 hours (#435 decision 5)', () => {
   it('shows the waiting message and no rule list', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(
       analyseResponse({ ready: false, rules: [], observing: { since: '2026-09-02T12:00:00Z', hours: 9 } }),
     )
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
 
@@ -160,12 +266,12 @@ describe('TuneLogging under 24 hours (#435 decision 5)', () => {
   })
 })
 
-describe('TuneLogging rejected export (#435 §5)', () => {
+describe('LogEveryRule rejected export (#435 §5)', () => {
   it('shows the rejection reason and no rule list', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(
       analyseResponse({ rejected: { reason: 'a value for "password" was found on line 12 -- not hide-sensitive' } }),
     )
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
 
@@ -176,10 +282,10 @@ describe('TuneLogging rejected export (#435 §5)', () => {
   })
 })
 
-describe('TuneLogging rule selection defaults (#435 decision 3)', () => {
+describe('LogEveryRule rule selection defaults (#435 decision 3)', () => {
   it('ticks every crosses-dark rule and shows it open; the rest stay collapsed and unticked', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
 
@@ -196,7 +302,7 @@ describe('TuneLogging rule selection defaults (#435 decision 3)', () => {
 
   it('renders counters as "fired N times / M bytes since <date>" only when countersKnown', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
 
@@ -212,11 +318,11 @@ describe('TuneLogging rule selection defaults (#435 decision 3)', () => {
   })
 })
 
-describe('TuneLogging render (#435 §4/§6)', () => {
+describe('LogEveryRule render (#435 §4/§6)', () => {
   async function renderToResult() {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
     vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
     await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBe(1))
@@ -248,7 +354,7 @@ describe('TuneLogging render (#435 §4/§6)', () => {
   })
 })
 
-describe('TuneLogging beforeunload guard', () => {
+describe('LogEveryRule beforeunload guard', () => {
   function dispatchBeforeUnload(): Event {
     const evt = new Event('beforeunload', { cancelable: true })
     window.dispatchEvent(evt)
@@ -257,14 +363,14 @@ describe('TuneLogging beforeunload guard', () => {
 
   it('is set only while a rendered result exists that was neither downloaded nor copied', async () => {
     // No result yet: nothing to guard.
-    render(TuneLogging)
+    render(LogEveryRule)
     expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
   })
 
   it('is set once a render lands, and cleared by downloading it', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
     vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
     await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBe(1))
@@ -280,7 +386,7 @@ describe('TuneLogging beforeunload guard', () => {
   it('is also cleared by copying instead of downloading', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
     vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
-    const { container } = render(TuneLogging)
+    const { container } = render(LogEveryRule)
     await typeExport(container)
     await clickAnalyse()
     await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBe(1))
@@ -293,11 +399,11 @@ describe('TuneLogging beforeunload guard', () => {
   })
 })
 
-describe('TuneLogging device pick', () => {
+describe('LogEveryRule device pick', () => {
   it('auto-picks the only known device, with no picker shown', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
-    const { container } = render(TuneLogging)
-    expect(container.querySelector('#tl-device')).toBeNull()
+    const { container } = render(LogEveryRule)
+    expect(container.querySelector('#ler-device')).toBeNull()
     await typeExport(container)
     await clickAnalyse()
     await waitFor(() => expect(fetchTuneLoggingAnalyse).toHaveBeenCalled())
@@ -306,10 +412,10 @@ describe('TuneLogging device pick', () => {
 
   it('shows a picker, pre-selected from the topography\'s dark-pair handoff', async () => {
     appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
-    tuneLoggingNavState.request('edge-2', 'bridge|ether1')
-    const { container } = render(TuneLogging)
-    await waitFor(() => expect(container.querySelector('#tl-device')).toBeTruthy())
-    const select = container.querySelector('#tl-device') as HTMLSelectElement
+    logEveryRuleNavState.request('edge-2', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
     expect(select.value).toBe('edge-2')
   })
 })

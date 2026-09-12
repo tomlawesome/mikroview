@@ -619,7 +619,9 @@ func (s *Server) apiRoutes() []route {
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
 
-		// "Tune logging" (#435): upload a RouterOS export, get back the
+		// "Log every rule" (#435, named "Tune logging" until #1134,
+		// which left these two paths alone): upload a RouterOS export,
+		// get back the
 		// filter rules that cross a dark boundary with their pushed
 		// counters as the cost of watching them, then render logging
 		// switched on for whichever the operator picks. Same tier as the

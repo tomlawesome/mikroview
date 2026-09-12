@@ -59,19 +59,21 @@ export const navGroups: NavGroup[] = [
       // The Map slot un-reserves (#627): topography exists now.
       { label: 'Topography', view: 'topography', icon: 'map', title: 'The map of the place: internet above, router at the waist, your lanes below' },
       { label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' },
-      // Tune logging (#435): upload your router's export, get it back
-      // with logging switched on for every rule that crosses a dark
-      // connection. Gated `edit` (the user tier and above), matching the
-      // two endpoints it calls (`callerIsUser`, contract §3-4) -- not
-      // admin-only, per the issue's decision 2. Grouped with Topography
-      // rather than a group of its own: it exists because of what the
-      // coverage lens shows there.
+      // Log every rule (#435; "Tune logging" until #1134 renamed it --
+      // the old label never said what the page gave you back): drop in
+      // your router's export, get it back with logging switched on for
+      // every rule that crosses a dark connection. Gated `edit` (the
+      // user tier and above), matching the two endpoints it calls
+      // (`callerIsUser`, contract §3-4) -- not admin-only, per the
+      // issue's decision 2. Grouped with Topography rather than a group
+      // of its own: it exists because of what the coverage lens shows
+      // there. The view key keeps the endpoints' spelling.
       {
-        label: 'Tune logging',
+        label: 'Log every rule',
         view: 'tune-logging',
         edit: true,
         icon: 'setup',
-        title: "Upload your router's export and get it back with coverage-complete logging attached",
+        title: "Drop in your router's export and get it back with logging switched on for every rule that is dark",
       },
     ],
   },

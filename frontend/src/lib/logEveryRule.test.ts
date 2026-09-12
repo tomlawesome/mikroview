@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest'
-import { counterText, darkBoundaryKeys, groupRules, initialSelection, waitingMessage } from './tuneLogging'
+import {
+  countFilterRules,
+  counterText,
+  darkBoundaryKeys,
+  groupRules,
+  initialSelection,
+  waitingMessage,
+} from './logEveryRule'
 import type { PolicyEdge } from './policy.svelte'
 import type { TuneLoggingRule } from './types'
 
@@ -100,5 +107,38 @@ describe('counterText', () => {
   it('singularises one fired time', () => {
     const r = rule({ packets: 1, countersKnown: true })
     expect(counterText(r, '2026-09-01T10:00:00Z')).toContain('fired 1 time /')
+  })
+})
+
+describe('countFilterRules (#1134)', () => {
+  // A real export's shape in miniature: `add` lines under
+  // /ip firewall filter, one of them wrapped across a continuation
+  // line, and `add` lines in other sections that must not be counted.
+  const fixture = [
+    '# 2026/09/01 10:00:00 by RouterOS 7.24.1',
+    '/interface bridge',
+    'add name=bridge1',
+    '',
+    '/ip firewall filter',
+    'add action=accept chain=input comment="allow established"',
+    'add action=accept chain=forward comment="lan to wan" \\',
+    '    in-interface=bridge1 out-interface=ether1',
+    'add action=drop chain=forward in-interface=ether1',
+    '',
+    '/ip firewall nat',
+    'add action=masquerade chain=srcnat out-interface=ether1',
+  ].join('\n')
+
+  it('counts the add lines in the filter section and nothing else', () => {
+    expect(countFilterRules(fixture)).toBe(3)
+  })
+
+  it('counts a slash-joined section header the same way', () => {
+    expect(countFilterRules('/ip/firewall/filter\nadd action=drop chain=forward\n')).toBe(1)
+  })
+
+  it('is zero for an export with no filter section, and for nothing at all', () => {
+    expect(countFilterRules('/ip firewall nat\nadd action=masquerade chain=srcnat\n')).toBe(0)
+    expect(countFilterRules('')).toBe(0)
   })
 })
