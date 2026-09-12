@@ -15,6 +15,7 @@
   // emptying this component puts the project out of compliance -- if the
   // UI is restructured, the notices move, they don't disappear.
   import { versionState } from '../lib/version.svelte'
+  import { trapFocus } from '../lib/focusTrap'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
 
@@ -48,7 +49,7 @@
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="About MikroView" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="About MikroView" tabindex="-1" use:trapFocus>
       <div class="modal-header">
         <span class="title">About MikroView</span>
         <button type="button" class="close" onclick={close} aria-label="Close">✕</button>
