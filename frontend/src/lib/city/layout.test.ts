@@ -141,6 +141,42 @@ describe('city layout: the ground plan', () => {
     expect(dm(link.pts[link.pts.length - 1], [lan.u, lan.v])).toBeCloseTo(lan.r)
   })
 
+  // #1180: the default camera frames the town, not the water. At 1920
+  // it framed `bounds` -- which reaches the far bank and the end of the
+  // roads fading across it -- so the town sat in the lower-left third
+  // with the top-right of the stage empty.
+  it('frames the town without the far bank, and keeps both boroughs in it', () => {
+    const town = ground.townBounds
+    const all = ground.bounds
+    expect(town.v0).toBeGreaterThan(all.v0)
+    expect(town.u0).toBeGreaterThan(all.u0)
+
+    // Every district and node, with its own radius, is inside it -- a
+    // second borough is part of the town and stays in the fit.
+    for (const d of ground.districts) {
+      expect(d.u - d.r).toBeGreaterThanOrEqual(town.u0)
+      expect(d.u + d.r).toBeLessThanOrEqual(town.u1)
+      expect(d.v - d.r).toBeGreaterThanOrEqual(town.v0)
+      expect(d.v + d.r).toBeLessThanOrEqual(town.v1)
+    }
+    for (const b of ground.boroughs) {
+      expect(b.bounds.v1).toBeLessThanOrEqual(town.v1)
+      expect(b.bounds.v0).toBeGreaterThanOrEqual(town.v0)
+    }
+
+    // The spans that fade away across the river end outside it; the
+    // estate's own bounds still hold them, so the minimap and the pan
+    // clamp are unchanged.
+    const spans = ground.roads.filter((r) => r.fade)
+    expect(spans.length).toBeGreaterThan(0)
+    for (const r of spans) {
+      const end = r.pts[r.pts.length - 1]
+      expect(end[0] < town.u0 || end[1] < town.v0).toBe(true)
+      expect(end[0]).toBeGreaterThanOrEqual(all.u0)
+      expect(end[1]).toBeGreaterThanOrEqual(all.v0)
+    }
+  })
+
   it('keeps the river clear of the town with a bridge per way out', () => {
     expect(ground.river).not.toBeNull()
     const river = ground.river as NonNullable<Ground['river']>

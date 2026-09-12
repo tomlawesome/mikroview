@@ -485,9 +485,16 @@
   let svgEl: SVGSVGElement | undefined = $state()
 
   /** The height a stop's camera moves to: the city stop opens wide
-   * enough to take in the whole estate (#979, cityFitS -- capped so it
-   * never zooms in), every other stop keeps its fixed height. */
-  const stopS = (s: Stop): number => (s === 'city' ? cityFitS(ground.bounds) : STOP_HEIGHT[s])
+   * enough to take in the whole town (#979, cityFitS -- capped so it
+   * never zooms in), every other stop keeps its fixed height.
+   *
+   * The town, not the estate (#1180): fitting `ground.bounds` meant
+   * fitting the far bank and the roads fading across the river too, so
+   * at 1920 the town sat in the lower-left third with the top-right of
+   * the stage empty. The river is scenery and may run off both edges of
+   * the frame; `bounds` still frames the minimap and clamps the pan, so
+   * the water is a pan away. */
+  const stopS = (s: Stop): number => (s === 'city' ? cityFitS(ground.townBounds) : STOP_HEIGHT[s])
 
   const viewCam = $derived(cam(centre[0], centre[1], S))
   const viewTransform = $derived('translate(' + R2(viewCam.ox) + ' ' + R2(viewCam.oy) + ') scale(' + R2(S / Sgeom) + ')')
@@ -511,23 +518,27 @@
     return [(b.u0 + b.u1) / 2, (b.v0 + b.v1) / 2]
   }
 
-  /** Where the camera looks at a stop: the whole estate, the borough,
-   * the district or the building in focus, or the first of each. */
+  /** Where the camera looks at a stop: the whole town, the borough,
+   * the district or the building in focus, or the first of each.
+   *
+   * The town rather than everything (#1180) for the same reason the fit
+   * uses it: centring on bounds that include the far bank pushes the
+   * town off toward one corner. */
   function centreFor(s: Stop, f: Focus): Pt {
     const fd = districtOf(f?.districtId ?? (f?.id ?? null))
     const fb = f && f.districtId ? (fd?.buildings.find((b) => b.id === f.id) ?? null) : null
     const fn = f && !f.districtId ? (ground.nodes.find((n) => n.id === f.id) ?? null) : null
-    if (s === 'city') return boundsCentre(ground.bounds)
+    if (s === 'city') return boundsCentre(ground.townBounds)
     if (s === 'borough') {
       const rid = fd?.routerId ?? fn?.routerId ?? ground.boroughs[0]?.routerId
       const b = ground.boroughs.find((x) => x.routerId === rid) ?? ground.boroughs[0]
-      return b ? boundsCentre(b.bounds) : boundsCentre(ground.bounds)
+      return b ? boundsCentre(b.bounds) : boundsCentre(ground.townBounds)
     }
     if (fb) return [fb.u, fb.v]
     if (fn) return [fn.u, fn.v]
     if (fd) return [fd.u, fd.v]
     const d0 = ground.districts[0]
-    return d0 ? [d0.u, d0.v] : boundsCentre(ground.bounds)
+    return d0 ? [d0.u, d0.v] : boundsCentre(ground.townBounds)
   }
 
   function moveCamera(toS: number, to: Pt) {
@@ -576,7 +587,7 @@
       if (stand) return
       if (!started) {
         started = true
-        S = initialS ?? (s === 'city' ? cityFitS(g.bounds) : STOP_HEIGHT[s])
+        S = initialS ?? (s === 'city' ? cityFitS(g.townBounds) : STOP_HEIGHT[s])
         centre = clampCentre(initialCentre ?? centreFor(s, focus), g.bounds)
         return
       }
