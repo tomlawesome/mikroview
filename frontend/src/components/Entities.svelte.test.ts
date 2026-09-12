@@ -390,7 +390,10 @@ describe('Entities named-things table (#675)', () => {
     expect(named?.classList.contains('unnamed')).toBe(false)
   })
 
-  it('elides a known MAC and reads "private" when none is known', async () => {
+  // #1158: an unknown MAC reads as the table's own em dash. It used to
+  // say "private", which on a row for a public address (1.1.1.1) read as
+  // a claim about the address rather than a value nothing here knows.
+  it('elides a known MAC and falls back to the unknown-value dash', async () => {
     const { fetchDeviceMACs } = await import('../lib/api')
     vi.mocked(fetchDeviceMACs).mockResolvedValue([
       { mac: '2c:f0:5d:11:22:8a', firstSeen: '2025-01-01T00:00:00Z', lastSeen: new Date().toISOString(), lastIp: '10.0.10.2' },
@@ -405,8 +408,10 @@ describe('Entities named-things table (#675)', () => {
     const rows = [...container.querySelectorAll('.etable tbody tr')]
     const named = rows.find((tr) => tr.textContent?.includes('tom-desktop'))
     const guest = rows.find((tr) => tr.textContent?.includes('guest-e8b2'))
-    expect(named?.textContent).toContain('2c:f0:5d:…:8a')
-    expect(guest?.textContent).toContain('private')
+    // name · lane · address · mac · first seen · last seen · marks
+    expect(named?.children[3]?.textContent?.trim()).toBe('2c:f0:5d:…:8a')
+    expect(guest?.children[3]?.textContent?.trim()).toBe('—')
+    expect(container.textContent).not.toContain('private')
   })
 
   it('renames inline: click the name, edit, Enter saves', async () => {
