@@ -45,6 +45,14 @@ dated, sourced) · counting (green, growing) · quiet (plain, "nothing
 to wait for"). The step list at the left carries each step's receipt
 sub-line for the wizard's life.
 
+A **partial** step does not add a fifth flavour (owner ruling, #1132).
+It keeps the arrived (or counting) line, saying only what did arrive,
+and puts what it is still short of — "Still missing: …" — in its own
+box directly underneath, in the warning colour (`--warn`, orange;
+never `--reject`, which is `attention`'s alone: a shortfall is not a
+fault on mikroview's side). Where a partial reading has no arrival to
+word, the warning box stands alone.
+
 Modal geometry (round-1 verdict "use more of the screen"): 940px wide
 (94% cap), 224px step list, roomy type. Header: step x of 5 · title ·
 ✕. Footer: Back · Skip this step · Next (primary), with the hint

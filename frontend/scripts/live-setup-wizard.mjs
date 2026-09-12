@@ -259,8 +259,13 @@ check(
 // settledObservation polls past three of the wizard's own intervals and
 // then returns whatever it settled at, so check() below still reports
 // the class it actually saw rather than throwing on a timeout.
+//
+// `:not(.shortfall)` because a partial step renders two observation
+// boxes (#1132) -- the arrived line and the shortfall under it -- and
+// an unqualified locator would match both and fail Playwright's strict
+// mode rather than read the line this is asking about.
 async function settledObservation(want, { timeoutMs = 16000 } = {}) {
-  const read = async () => (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+  const read = async () => (await page.locator('.setup-wizard .observation:not(.shortfall)').getAttribute('class')) ?? ''
   const deadline = Date.now() + timeoutMs
   let seen = await read()
   while (!want(seen) && Date.now() < deadline) {
@@ -304,7 +309,8 @@ check(
 // Step 1 is the CA fetch. No router fetches /ca.crt on this harness, so
 // it is genuinely waiting -- the exact state the heavy warning is for.
 await page.locator('.setup-wizard .steps li:nth-child(1) .step-row').click()
-const stepOneObservation = (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
+const stepOneObservation =
+  (await page.locator('.setup-wizard .observation:not(.shortfall)').getAttribute('class')) ?? ''
 if (stepOneObservation.includes('waiting')) {
   await page.click('.setup-wizard footer button.primary')
   const heavy = page.locator('.setup-wizard .heavy')
@@ -439,6 +445,67 @@ await page
 const pushReceipt =
   ((await page.textContent('.setup-wizard .steps li:nth-child(4) .step-receipt')) ?? '').trim()
 check(true, `the push step records this push on its own once the table arrives (${pushReceipt})`)
+
+// --- A partial step's shortfall is its own box (#1132) -----------------
+// One table has arrived and the others have not, so step 4 is partial:
+// the arrived line says what came, and what is still missing is a
+// second box under it, in the warning register rather than the green
+// one. Derived from what the server says has arrived, never assumed --
+// the same rule the observation checks above follow.
+const afterPush = await page.request.get(`${URL_BASE}/api/setup/status`).then((r) => r.json())
+const arrivedKinds = new Set(
+  afterPush.devices.flatMap((d) => Object.keys(d.pushedKinds ?? {})),
+)
+const missingKinds = (afterPush.pushKinds ?? []).filter((k) => !arrivedKinds.has(k))
+const arrivedLine = page.locator('.setup-wizard .observation:not(.shortfall)')
+const shortfallBox = page.locator('.setup-wizard .observation.shortfall')
+if (missingKinds.length > 0) {
+  await shortfallBox.waitFor({ state: 'visible', timeout: 20000 })
+  const arrivedText = ((await arrivedLine.textContent()) ?? '').replace(/\s+/g, ' ').trim()
+  const shortfallText = ((await shortfallBox.textContent()) ?? '').replace(/\s+/g, ' ').trim()
+  check(
+    arrivedText === `Arrived: ${[...arrivedKinds].sort().join(', ')}.`,
+    `the arrived line says only what arrived (${arrivedText})`,
+  )
+  check(
+    !/missing/.test(arrivedText),
+    'the green line never carries the shortfall — that is the whole split',
+  )
+  check(
+    shortfallText === `Still missing: ${missingKinds.join(', ')}.`,
+    `the shortfall is its own box, naming what has not come (${shortfallText})`,
+  )
+  check(
+    await arrivedLine.evaluate((el) => el.classList.contains('arrived')),
+    'what arrived still reads in the arrived voice',
+  )
+  check(
+    (await page.locator('.setup-wizard .observation.shortfall.attention').count()) === 0,
+    'and the shortfall is a warning, never the reject red a mikroview-side fault uses',
+  )
+  // The colour itself, not just the class: the ruling is specifically
+  // --warn and specifically not --reject, and a stylesheet is the one
+  // place that can be wrong without any of the above noticing.
+  const colours = await shortfallBox.evaluate((el) => {
+    const probe = document.createElement('span')
+    document.body.appendChild(probe)
+    probe.style.color = 'var(--warn)'
+    const warn = getComputedStyle(probe).color
+    probe.style.color = 'var(--reject)'
+    const reject = getComputedStyle(probe).color
+    probe.remove()
+    return { got: getComputedStyle(el).color, warn, reject }
+  })
+  check(
+    colours.got === colours.warn && colours.got !== colours.reject,
+    `the shortfall box is drawn in --warn (${JSON.stringify(colours)})`,
+  )
+} else {
+  check(
+    (await shortfallBox.count()) === 0,
+    'every table has arrived on this instance, so there is no shortfall box to show',
+  )
+}
 
 // --- The finish reads the ledger back ---------------------------------
 // The finish row is the li *after* the ledger's six steps -- #394 made

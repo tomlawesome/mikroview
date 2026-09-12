@@ -28,6 +28,13 @@ export interface StepStatus {
   // What to show the operator. For 'waiting' this says what is being
   // waited for; for 'blocked' it says what to fix, on MikroView's side.
   detail: string
+  // What a 'partial' step is still short of, kept apart from what
+  // arrived (#1132): the wizard renders it as its own warning box under
+  // the green arrived line, so a shortfall is never coloured as an
+  // arrival. Empty on every other state, and empty `detail` with a
+  // shortfall set means there was no arrival to word -- one warning box
+  // and nothing above it.
+  shortfall?: string
 }
 
 // instanceAddress is the address a router should be pointed at: the one
@@ -123,7 +130,11 @@ export function syslogStep(status: SetupStatus, devices: Device[] = []): StepSta
   // works, which is the whole problem.
   const splits = sourceSplits(devices)
   if (splits.length > 0) {
-    return { state: 'partial', detail: sourceSplitObservation(splits) }
+    return {
+      state: 'partial',
+      detail: sourceSplitObservation(splits),
+      shortfall: sourceSplitShortfall(splits),
+    }
   }
   if (status.sources.some((s) => s.syslogFirstSeenAt)) {
     return { state: 'done', detail: 'A router has an open syslog connection.' }
@@ -145,9 +156,10 @@ export function rulesStep(status: SetupStatus): StepStatus {
   if (undecoded.length === withEvents.length) {
     return {
       state: 'partial',
-      detail:
-        'Events are arriving, but none carry an action from a log-prefix. The rules log ' +
-        'without one, so rows show "unknown". Add the prefixes below.',
+      detail: 'Events are arriving.',
+      shortfall:
+        'None carry an action from a log-prefix. The rules log without one, so rows show ' +
+        '"unknown". Add the prefixes below.',
     }
   }
   const total = withEvents.reduce((n, d) => n + d.events, 0)
@@ -155,7 +167,8 @@ export function rulesStep(status: SetupStatus): StepStatus {
   if (decoded < total) {
     return {
       state: 'partial',
-      detail: `${decoded} of ${total} events carry an action — some rules are still untagged.`,
+      detail: `${decoded} of ${total} events carry an action.`,
+      shortfall: `The other ${total - decoded} do not — some rules are still untagged.`,
     }
   }
   return { state: 'done', detail: `${total} events, all with a decoded action.` }
@@ -173,7 +186,8 @@ export function pushStep(status: SetupStatus): StepStatus {
   if (missing.length > 0) {
     return {
       state: 'partial',
-      detail: `Arrived: ${[...pushed].sort().join(', ')}. Still missing: ${missing.join(', ')}.`,
+      detail: `Arrived: ${[...pushed].sort().join(', ')}.`,
+      shortfall: `Still missing: ${missing.join(', ')}.`,
     }
   }
   return { state: 'done', detail: 'Every table has been pushed.' }
@@ -317,14 +331,21 @@ export function prose(items: string[], joiner: 'and' | 'or' = 'and'): string {
   return `${items.slice(0, -1).join(', ')} ${joiner} ${items[items.length - 1]}`
 }
 
-// sourceSplitObservation is step 2's observation line when the split is
-// on: what you told mikroview, what the router shows, no diagnosis.
+// sourceSplitObservation is step 2's arrived line when the split is on:
+// what the router shows. The other half of #442's sentence -- what you
+// told mikroview, and that it has sent nothing -- is the shortfall
+// below, in its own warning box (#1132). Still no diagnosis in either.
 export function sourceSplitObservation(splits: SourceSplit[]): string {
   const arriving = arrivingAddresses(splits)
-  const declared = splits.map((s) => s.declared)
   const from = `${prose(arriving)}, ${arriving.length === 1 ? 'an address' : 'addresses'} you haven't declared`
-  const silent = `${prose(declared)}, which you declared in config.yaml, ${declared.length === 1 ? 'has' : 'have'} sent nothing`
-  return `Connected — but from ${from}, while ${silent}.`
+  return `Connected — but from ${from}.`
+}
+
+// sourceSplitShortfall is the silent half: the declared identity that
+// the logs are not arriving under.
+export function sourceSplitShortfall(splits: SourceSplit[]): string {
+  const declared = splits.map((s) => s.declared)
+  return `${prose(declared)}, which you declared in config.yaml, ${declared.length === 1 ? 'has' : 'have'} sent nothing.`
 }
 
 // sourceSplitReceipt is the step list's sub-line for the same reading.
@@ -355,6 +376,12 @@ export function sourceSplitReceipt(splits: SourceSplit[]): string {
 // (the certificate cannot cover the address; the syslog listener is
 // off). Kept distinct precisely so it never borrows the patient,
 // nothing-is-wrong voice the waiting flavour is required to use.
+//
+// 'partial' is not a fifth flavour either (owner, #1132): it stays the
+// arrived (or counting) line, saying what did arrive, with the
+// shortfall carried beside it in its own warning box -- warning
+// colour, never the reject red 'attention' uses, because nothing is
+// wrong on mikroview's side.
 export type Flavour = 'waiting' | 'arrived' | 'counting' | 'quiet' | 'attention'
 
 // Outcome is where a step stands in the ledger. 'open' is a step that
@@ -687,5 +714,9 @@ export const SKIP_CONSEQUENCES = [
 // for the first push" -- rather than the step title alone, which would
 // announce a move without announcing what was moved to.
 export function announceStep(step: LedgerStep): string {
-  return `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${step.status.detail}`
+  // A partial step's shortfall is spoken with its arrival, in the order
+  // the two boxes are read on screen: a screen reader told only what
+  // arrived would hear the step as finished (#1132).
+  const observed = [step.status.detail, step.status.shortfall].filter(Boolean).join(' ')
+  return `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${observed}`
 }

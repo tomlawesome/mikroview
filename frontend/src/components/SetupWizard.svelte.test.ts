@@ -246,6 +246,56 @@ describe('SetupWizard', () => {
     expect(wizardState.pane).toBe(2)
   })
 
+  // #1132: a partial step says what arrived in the arrived line and
+  // what it is still short of in a second box beside it, in the warning
+  // colour rather than the reject red -- the shortfall is not a fault
+  // on mikroview's side, and it is not good news either.
+  it('puts a partial step’s shortfall in its own warning box, under the arrived line', () => {
+    wizardState.pane = 4
+    wizardState.status = status({
+      devices: [
+        {
+          device: 'r1',
+          configured: true,
+          sourceIp: '192.0.2.1',
+          events: 10,
+          decodedActions: 10,
+          pushedKinds: { 'filter-rule': '2026-08-23T09:00:00Z' },
+        },
+      ],
+    })
+    const { container } = render(SetupWizard)
+
+    const boxes = [...container.querySelectorAll('.observation')]
+    expect(boxes.length).toBe(2)
+    expect(boxes[0].classList.contains('arrived')).toBe(true)
+    expect(boxes[0].textContent?.trim()).toBe('Arrived: filter-rule.')
+    expect(boxes[0].textContent).not.toContain('missing')
+    // The shortfall is the second box, and it is not green.
+    expect(boxes[1].classList.contains('shortfall')).toBe(true)
+    expect(boxes[1].classList.contains('arrived')).toBe(false)
+    expect(boxes[1].textContent?.trim()).toBe('Still missing: arp.')
+  })
+
+  it('shows one observation box, and no shortfall, once everything has arrived', () => {
+    wizardState.pane = 4
+    wizardState.status = status({
+      devices: [
+        {
+          device: 'r1',
+          configured: true,
+          sourceIp: '192.0.2.1',
+          events: 10,
+          decodedActions: 10,
+          pushedKinds: { 'filter-rule': '2026-08-23T09:00:00Z', arp: '2026-08-23T09:00:00Z' },
+        },
+      ],
+    })
+    const { container } = render(SetupWizard)
+    expect(container.querySelectorAll('.observation').length).toBe(1)
+    expect(container.querySelector('.observation.shortfall')).toBeNull()
+  })
+
   // #442: a router declared under one address whose logs arrive from
   // another. Step 2 reads it as partial -- evidence arrived, composed
   // wrongly -- states both facts, and prints the remedy with the
@@ -282,10 +332,16 @@ describe('SetupWizard', () => {
 
     const observation = container.querySelector('.observation')
     expect(observation?.textContent?.trim()).toBe(
-      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, which you declared in config.yaml, has sent nothing.",
+      "Connected — but from 10.0.20.1, an address you haven't declared.",
     )
     // Partial reads in the arrived voice, never attention.
     expect(observation?.classList.contains('attention')).toBe(false)
+    // And what is silent is the shortfall beside it, not part of the
+    // green line (#1132).
+    const shortfall = container.querySelector('.observation.shortfall')
+    expect(shortfall?.textContent?.trim()).toBe(
+      '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+    )
 
     const body = container.querySelector('.split')?.textContent?.replace(/\s+/g, ' ') ?? ''
     expect(body).toContain("MikroView can't tell whether these are the same router")
