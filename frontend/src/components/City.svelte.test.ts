@@ -929,6 +929,68 @@ describe('standing on a building (#868)', () => {
   })
 })
 
+describe('Escape takes any pinned card down, and the ✕ says what it does (#1177)', () => {
+  const GUEST = 'vlan-guest/10.40.0.10'
+
+  // Standing first, so Escape's lower rung has something to take: the
+  // point of the ladder is that the card goes before the stand does.
+  async function standingWithPinnedHostCard() {
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    await fireEvent.click(container.querySelector('.bcard.hcard .pin') as HTMLElement)
+    flushSync()
+    return container
+  }
+
+  it('takes a pinned host card down, then surfaces on the next press', async () => {
+    // Only the drop card was on this rung; a pinned host, wall or line
+    // card could be let go with its ✕ and nothing else, though
+    // DESIGN.md "Cards" gives Escape to every card.
+    const container = await standingWithPinnedHostCard()
+    expect(container.querySelector('.bcard.hcard.pinned')).not.toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.bcard.hcard')).toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+
+  it('leaves a merely hovered card alone, so that press still surfaces from standing', async () => {
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    expect(container.querySelector('.bcard.hcard')).not.toBeNull()
+    expect(container.querySelector('.bcard.hcard.pinned')).toBeNull()
+
+    // A hovered card goes when the pointer goes, and the composer's own
+    // door sits on one (#1035) -- so this press belongs to the composer
+    // and the stand, which is the sequence live-city-reach.mjs reads.
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+
+  it('names the pin rather than leaving ✕ as the whole of its accessible name', async () => {
+    const container = await standingWithPinnedHostCard()
+    const pin = container.querySelector('.bcard.hcard .pin') as HTMLElement
+    expect(pin.textContent).toBe('✕')
+    expect(pin.getAttribute('aria-label')).toBe('unpin this card')
+    expect(pin.getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
 describe('the host card says each fact once, and only the ones it has (#1165)', () => {
   // An unnamed host the event buffer has seen and the register has not:
   // its name IS its address, and it carries no stamps and no count.
