@@ -780,30 +780,39 @@
                    mikroview-side check logic (#371/#374), not an
                    observation -- see setupsteps.ts. Step 6's lost-router
                    shape reads this one router's own kept count instead
-                   of the ledger's fleet-wide receipt (lostObservationText). -->
-              <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
-                {#if step.n === 6 && wizardState.lostRouterDevice}
-                  {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
-                  {lostObservationText || 'nothing kept for this router yet'}
-                  {#if lostGeneration}
-                    ·
-                    <a
-                      class="olink"
-                      href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
-                    >
-                      download the newest .backup
-                    </a>
-                    to restore the replacement, then run the script above
+                   of the ledger's fleet-wide receipt (lostObservationText).
+                   A partial step is not a fifth flavour: it is this line
+                   saying what arrived, with its shortfall in the warning
+                   box below (#1132), and it renders only when there was
+                   an arrival to word. -->
+              {#if step.status.detail || !step.status.shortfall}
+                <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
+                  {#if step.n === 6 && wizardState.lostRouterDevice}
+                    {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
+                    {lostObservationText || 'nothing kept for this router yet'}
+                    {#if lostGeneration}
+                      ·
+                      <a
+                        class="olink"
+                        href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
+                      >
+                        download the newest .backup
+                      </a>
+                      to restore the replacement, then run the script above
+                    {/if}
+                  {:else}
+                    {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
+                    {step.status.detail}
+                    {#if step.n === 6 && step.status.state === 'done'}
+                      ·
+                      <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
+                    {/if}
                   {/if}
-                {:else}
-                  {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
-                  {step.status.detail}
-                  {#if step.n === 6 && step.status.state === 'done'}
-                    ·
-                    <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
-                  {/if}
-                {/if}
-              </p>
+                </p>
+              {/if}
+              {#if step.status.shortfall}
+                <p class="observation shortfall">{step.status.shortfall}</p>
+              {/if}
               {#if step.n === 2 && step.status.state === 'partial' && splits.length > 0}
                 <!-- The source-address split (#442), under the
                      observation line. The mismatch sentence's shape:
@@ -1354,6 +1363,15 @@
   .observation.attention {
     border-color: var(--reject);
     color: var(--reject);
+  }
+
+  /* A partial step's shortfall (#1132): its own box under the arrived
+     line, in the warning colour. Deliberately --warn and not --reject:
+     nothing is wrong on mikroview's side, something simply has not
+     arrived yet, and the red is spoken for by `attention`. */
+  .observation.shortfall {
+    border-color: var(--warn);
+    color: var(--warn);
   }
 
   .dot {
