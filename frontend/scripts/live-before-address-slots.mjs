@@ -89,7 +89,7 @@ check(
   degLines.length === 2 && degLines[0].trim() === 'no address table pushed — zones from boundaries',
   `the router card names the missing push (${JSON.stringify(degLines)})`,
 )
-check(degLines[1]?.trim() === 'Run setup… ▸ adds it', 'and names what adds it')
+check(degLines[1]?.trim() === 'Run setup ▸ adds the address table', 'and names what adds it')
 
 check(
   (await page.locator(`${topo} .isl.waist`).getAttribute('height')) === '100',

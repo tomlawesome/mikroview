@@ -791,9 +791,19 @@
     // A ladder, top rung first (#1002): a card was opened on purpose, so
     // Escape takes that back before it takes back where you are
     // standing. Two Escapes to do both, and never both at once.
-    if (openDropId) {
+    // #1177: every pinned card, not only the drop card. DESIGN.md
+    // "Cards" says "Escape takes a card down before it surfaces from
+    // standing", and a pinned wall, host or line card could be let go
+    // with its ✕ and nothing else.
+    //
+    // Pinned, not merely hovered: a hovered card follows the pointer and
+    // goes when the pointer does, and the composer's own door sits on a
+    // hovered host card -- consuming the press there would cost the
+    // operator the rung below, which is the sequence live-city-reach.mjs
+    // reads. The drop card keeps the hover state #1002 gave it.
+    if (openDropId || pinnedWall || pinnedHost || pinnedRoad) {
       e.preventDefault()
-      closeDropCard()
+      closeCards()
       return
     }
     // The filter is the outermost thing the operator turned on, so it
@@ -1906,7 +1916,8 @@
         (d.cidr ? ' ' + d.cidr : '') +
         ', ' +
         (d.buildings.length + d.more) +
-        ' hosts' +
+        // #1165: "1 hosts" on a district holding one.
+        (d.buildings.length + d.more === 1 ? ' host' : ' hosts') +
         (!d.rulesPushed
           ? ', no rule table has been pushed yet -- walls show no gates'
           : d.dark
@@ -2903,6 +2914,14 @@
   /** What the card's first line says the host is. */
   const PRESENCE_WORD: Record<string, string> = { live: 'live', quiet: 'quiet', intended: 'quiet on purpose', dismissed: 'dismissed' }
 
+  /** #1165: a host only the event buffer has seen carries no stamps and
+   * no count, so the card said "live" directly above "0 events · last
+   * seen not recorded" and contradicted itself. The feed is all that has
+   * heard it, and that is what the card says -- the register line below
+   * already explains why there is nothing else. One function so the
+   * card's aria-label and its first line cannot disagree. */
+  const hostWord = (h: CityHost): string => (h.presence === 'live' && h.events === 0 && !h.lastSeen ? 'seen in the feed' : PRESENCE_WORD[h.presence])
+
   const stamp = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : 'not recorded')
 
   /** The quiet window, in the card's own words -- the configured figure,
@@ -3340,12 +3359,22 @@
     hoverDrop = id
   }
 
-  /** Escape's first rung (#1002). A card is opened on purpose, so it is
-   * the first thing Escape takes back; surfacing from standing is the
-   * rung below, and `onWindowKeydown` reads them in that order. */
-  function closeDropCard() {
+  /** Escape's first rung (#1002, widened to every card by #1177). A card
+   * is opened on purpose, so it is the first thing Escape takes back;
+   * surfacing from standing is the rung below, and `onWindowKeydown`
+   * reads them in that order. Both halves of each card's state go, pin
+   * and hover alike: the pointer is usually still resting on the card
+   * the press was meant to dismiss, so clearing only the pin would leave
+   * it on screen and read as Escape doing nothing. */
+  function closeCards() {
     pinnedDrop = null
     hoverDrop = null
+    pinnedWall = null
+    hoverWall = null
+    pinnedHost = null
+    hoverHost = null
+    pinnedRoad = null
+    hoverRoad = null
   }
 
   $effect(() => {
@@ -4131,6 +4160,7 @@
           class="pin"
           class:on={wallPinned}
           aria-pressed={wallPinned}
+          aria-label={wallPinned ? 'unpin this card' : 'pin this card'}
           title={wallPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={toggleWallPin}>{wallPinned ? '✕' : '⊙'}</button
         >
@@ -4221,17 +4251,21 @@
       bind:this={hcardEl}
       role="dialog"
       tabindex="-1"
-      aria-label="{c.b.name}: {PRESENCE_WORD[c.h.presence]}"
+      aria-label="{c.b.name}: {hostWord(c.h)}"
       onpointerenter={hostGrace.hold}
       onpointerleave={releaseHostCard}
     >
       <div class="bc-t">
-        <span class="n">{c.b.name}<small>{c.b.ip}</small></span>
+        <!-- #1165: an unnamed host's name is its address, and the card
+             printed it twice side by side. The address is a second fact
+             only where there is a name in front of it. -->
+        <span class="n">{c.b.name}{#if c.b.ip && c.b.ip !== c.b.name}<small>{c.b.ip}</small>{/if}</span>
         <button
           type="button"
           class="pin"
           class:on={hostPinned}
           aria-pressed={hostPinned}
+          aria-label={hostPinned ? 'unpin this card' : 'pin this card'}
           title={hostPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={toggleHostPin}>{hostPinned ? '✕' : '⊙'}</button
         >
@@ -4243,6 +4277,8 @@
         </div>
       {:else if c.h.presence === 'intended'}
         <div class="s quiet"><i class="sw quiet"></i>quiet on purpose</div>
+      {:else if c.h.events === 0 && !c.h.lastSeen}
+        <div class="s quiet"><i class="sw quiet"></i>{hostWord(c.h)}</div>
       {:else}
         <div class="s logged"><i class="sw logged"></i>live</div>
       {/if}
@@ -4378,6 +4414,7 @@
           class="pin"
           class:on={roadPinned}
           aria-pressed={roadPinned}
+          aria-label={roadPinned ? 'unpin this card' : 'pin this card'}
           title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleRoadPin(rc.road.id)}>{roadPinned ? '✕' : '⊙'}</button
         >
@@ -4484,6 +4521,7 @@
           class="pin"
           class:on={roadPinned}
           aria-pressed={roadPinned}
+          aria-label={roadPinned ? 'unpin this card' : 'pin this card'}
           title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleRoadPin(lc.id)}>{roadPinned ? '✕' : '⊙'}</button
         >
@@ -4570,6 +4608,7 @@
           class="pin"
           class:on={dropPinned}
           aria-pressed={dropPinned}
+          aria-label={dropPinned ? 'unpin this card' : 'pin this card'}
           title={dropPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleDropPin(dc.id)}>{dropPinned ? '✕' : '⊙'}</button
         >
