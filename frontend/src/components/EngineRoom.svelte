@@ -716,10 +716,19 @@
             {#if card.key === 'fall' && epsText}
               <span class="lv">{epsText} events/s now</span>
             {:else if card.key === 'docket'}
+              <!-- #1156: the same two counts the scene bar is already
+                   carrying two inches above this card, so the flag
+                   count is the bar's alone now -- printing "⚑ 67" here
+                   as well said the same thing twice on one screen. The
+                   watch count is the bar's own reading too:
+                   `heldCount`, watchers enabled and not ring-broken,
+                   partitioned against `brokenCount` beside it. It used
+                   to be `entries.length`, which counted the broken and
+                   the switched-off ones as well and so read one or two
+                   higher than the eye in the bar. -->
               <span class="lv">
-                {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
-                {#if isAdmin && watchlistState.entries.length > 0}
-                  <b class="wct">◉ {watchlistState.entries.length}</b>
+                {#if isAdmin && (watchlistState.heldCount > 0 || watchlistState.brokenCount > 0)}
+                  <b class="wct">◉ {watchlistState.heldCount}</b>
                   {#if watchlistState.brokenCount > 0}<b class="ct">○{watchlistState.brokenCount}</b>{/if}
                 {/if}
               </span>
