@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
@@ -30,6 +30,9 @@ import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import type { Flag } from '../lib/types'
+// Read as text for the CSS claims below, the same way
+// LiveTable.svelte.test.ts proves its sticky head's supporting rules.
+import flagsSource from './Flags.svelte?raw'
 
 // jsdom has no window.matchMedia -- polyfilled before the dynamic import
 // below (a static import would already have run this file's top-level
@@ -49,6 +52,11 @@ if (!window.matchMedia) {
 }
 
 const { default: Flags } = await import('./Flags.svelte')
+// #1150: the docket's own narrow breakpoint, driven directly rather than
+// through matchMedia -- the polyfill above is a fixed `matches: false`,
+// and this is the width behaviour being tested. Imported after it, like
+// Flags itself: ViewportState calls matchMedia at module-load time.
+const { viewportState } = await import('../lib/viewport.svelte')
 
 function testFlag(overrides: Partial<Flag> = {}): Flag {
   return {
@@ -1445,5 +1453,100 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
     render(Flags)
     flushSync()
     expect(document.querySelector('.bytype')).toBeNull()
+  })
+})
+
+// #1150: at 1100 the docket's verdict buttons and the row's chevron went
+// off-screen -- a flag could be read there but not judged. Below 1300px
+// the trio moves into the row's own drawer; nothing about it changes
+// above that width.
+describe('the docket below 1300px (#1150)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'tom'
+    viewportState.isNarrow = false
+  })
+
+  afterEach(() => {
+    viewportState.isNarrow = false
+  })
+
+  async function openDrawer() {
+    await fireEvent.click(document.querySelector('.openc') as HTMLElement)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('leaves the trio in the row at desktop width', async () => {
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    expect((document.querySelector('td.vc') as HTMLElement).querySelector('.vrow')).toBeTruthy()
+
+    await openDrawer()
+    expect((document.querySelector('.dwr-acts') as HTMLElement).querySelector('.vrow')).toBeNull()
+  })
+
+  it('moves the trio into the row drawer below 1300px, once, with the same three buttons', async () => {
+    viewportState.isNarrow = true
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    // Gone from the crowded cell -- but the chevron that reaches the
+    // drawer is still there, so the verdict is still reachable.
+    expect((document.querySelector('td.vc') as HTMLElement).querySelector('.vrow')).toBeNull()
+    expect(document.querySelector('.openc')).toBeTruthy()
+
+    await openDrawer()
+    const acts = document.querySelector('.dwr-acts') as HTMLElement
+    expect(acts.querySelector('.vrow')).toBeTruthy()
+    expect(within(acts).getByRole('button', { name: /expected/ })).toBeTruthy()
+    expect(within(acts).getByRole('button', { name: /checked/ })).toBeTruthy()
+    expect(within(acts).getByRole('button', { name: /investigate/ })).toBeTruthy()
+    // One set of chips on the page, never two worded differently.
+    expect(document.querySelectorAll('.vrow').length).toBe(1)
+  })
+
+  it('still records the verdict from the drawer', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ id: 's1', cleared: true, verdict: 'expected', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
+    )
+    viewportState.isNarrow = true
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+    await openDrawer()
+
+    const acts = document.querySelector('.dwr-acts') as HTMLElement
+    await fireEvent.click(within(acts).getByRole('button', { name: /expected/ }))
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected')
+  })
+
+  it('floors the COUNT and AGE heads so their words survive, and wraps the by-type chips instead of cutting them', () => {
+    const floor = flagsSource.match(/\.ftable thead th\.num,\n\s*\.ftable thead th\.age,[^}]*\{([^}]*)\}/)
+    expect(floor).toBeTruthy()
+    expect(floor![1]).toMatch(/min-width:/)
+    // Not truncation: a head that cannot be read cannot be sorted by.
+    expect(floor![1]).not.toMatch(/text-overflow/)
+
+    const cells = flagsSource.match(/\n\s*\.btcells\s*\{([^}]*)\}/)
+    expect(cells).toBeTruthy()
+    expect(cells![1]).toMatch(/flex-wrap:\s*wrap/)
+    const chip = flagsSource.match(/\n\s*\.btc\s*\{([^}]*)\}/)
+    // grow, no shrink, a floor wide enough for the longest type word.
+    expect(chip![1]).toMatch(/flex:\s*1 0 \d+px/)
   })
 })

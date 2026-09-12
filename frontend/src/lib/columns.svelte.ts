@@ -196,6 +196,41 @@ type Visibility = Record<string, boolean>
 // touched the chooser sees.
 const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
 
+// #1150: at 1366 the fifteen columns measure 1762px into a 1308px box,
+// so the right-hand end of the table -- Rule included -- fell off the
+// edge. Below the breakpoint MAC and Interfaces start hidden instead,
+// which is the ruling's set; it names "the two MAC columns", but this
+// table has only ever had one (COLUMNS above), and Src MAC is a detail-
+// sheet row rather than a column.
+//
+// Nothing here is silent: the `columns ▸` picker reads isColumnVisible
+// for every checkbox, so these draw unticked, and ticking one back on
+// goes through toggleColumn/persistVisibility like any other choice the
+// picker makes -- one mechanism, not a second one for narrow screens.
+// Above the breakpoint nothing changes at all.
+const NARROW_BREAKPOINT = 1500
+const NARROW_DEFAULT_HIDDEN: readonly string[] = ['mac', 'iface']
+
+// Read once, at module load, and deliberately not tracked: this is where
+// a reader *starts*, not a live layout rule. A column disappearing
+// mid-session because the window was dragged narrower is exactly the
+// silent change the ruling rules out -- and it would fight the reader's
+// own saved choice every time they resized. matchMedia is absent under
+// jsdom, where "wide" is the right answer: the all-fifteen default is
+// what #729 shipped.
+function startsNarrow(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(`(max-width: ${NARROW_BREAKPOINT}px)`).matches
+    : false
+}
+
+// What a reader who has never touched the picker starts with.
+function startingVisibility(): Visibility {
+  const next: Visibility = { ...DEFAULT_VISIBLE }
+  if (startsNarrow()) for (const key of NARROW_DEFAULT_HIDDEN) next[key] = false
+  return next
+}
+
 // Same reader-preference mechanism the widths above already use (a plain
 // localStorage entry, versioned key bumped whenever the shape it was
 // measured against changes) -- not a second mechanism invented for this
@@ -206,6 +241,7 @@ const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key
 const VISIBILITY_STORAGE_KEY = 'mikroview-column-visibility-v1'
 
 function loadInitialVisibility(): Visibility {
+  const starting = startingVisibility()
   try {
     const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY)
     if (raw) {
@@ -218,9 +254,10 @@ function loadInitialVisibility(): Visibility {
           // hidden, or hand-edited storage, either of which would otherwise
           // drop Time or Rule off the table with no way back short of
           // clearing storage. A key missing from an older saved value (one
-          // written before a new column existed) defaults to visible too,
-          // matching "every column defaults to visible".
-          next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? true)
+          // written before a new column existed) falls back to the
+          // starting default for this width, so a column added later
+          // starts where a fresh reader's would.
+          next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? starting[col.key])
         }
         return next
       }
@@ -228,7 +265,7 @@ function loadInitialVisibility(): Visibility {
   } catch {
     // ignore malformed/unavailable storage, fall through to defaults
   }
-  return { ...DEFAULT_VISIBLE }
+  return starting
 }
 
 // Column widths and visibility for the live table. Widths are

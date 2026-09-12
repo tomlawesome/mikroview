@@ -978,13 +978,52 @@
     color: var(--fg-muted);
   }
 
+  /* #1150: below ~1500px the middle columns scroll out of reach and the
+     pinned Rule column went with them, so a row could be read but not
+     attributed to the rule that made it. Rule sticks to the right edge
+     the way the time cell sticks to the left, leaving the row's two
+     pinned facts -- when it happened and which rule matched -- both in
+     view while the middle scrolls between them. Same opaque-paint
+     requirement as .time above, and the same
+     gradient-layer-over-a-color trick for the translucent band, hover
+     and flag washes: a background shorthand only allows a plain color
+     in its last layer, so each wash is wrapped as a same-color-to-
+     itself gradient over an opaque --bg-elevated. Each state needs its
+     own rule at .row.banded .cell's specificity, or that rule wins and
+     the cell goes translucent again. */
+  .row.banded .rule {
+    background:
+      linear-gradient(
+        color-mix(in srgb, var(--bg-hover) 55%, transparent),
+        color-mix(in srgb, var(--bg-hover) 55%, transparent)
+      ),
+      var(--bg-elevated);
+  }
+
+  .row.flagged .rule {
+    background:
+      linear-gradient(
+        color-mix(in srgb, var(--alarm) 5%, transparent),
+        color-mix(in srgb, var(--alarm) 5%, transparent)
+      ),
+      var(--bg-elevated);
+  }
+
+  .row:hover .rule {
+    background: linear-gradient(var(--bg-hover), var(--bg-hover)), var(--bg-elevated);
+  }
+
   /* The rule cell holds the click-to-filter button, its copy button, the
      pencil, and the pushed-table lookup trigger side by side -- same
-     layout the name cells use. */
+     layout the name cells use. Pinned to the right edge per #1150 above. */
   .cell.rule {
     display: flex;
     align-items: center;
     gap: 4px;
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    background: var(--bg-elevated);
   }
 
   .rule-btn {

@@ -426,7 +426,11 @@
          prose the mobile drawer still shows (#683, round 29: "no
          placeholder prose inside the fields") -- the fb-label above
          already names the field there, so the empty state is just the
-         hairline with nothing on it. -->
+         hairline with nothing on it. #1191 is the one ratified
+         exception: the two address queries show their "name, IP or
+         CIDR" hint on desktop as well as on phones, because that field
+         was read as a bare underline with nothing to say what it
+         takes. -->
     <div class="fb-field">
       <span class="fb-label">Device</span>
       <select bind:value={appState.filters.device} aria-label="Device">
@@ -481,26 +485,41 @@
          "source ⇄ destination (scope + country)" -- the free-text query
          stays too (#683: "do not delete working features"), just folded
          into the same compact group rather than dropped. -->
+    <!-- #1191: each of the three controls carries its own caption, in the
+         same .fb-label small-caps the strip already uses for SOURCE and
+         DESTINATION above them. They were three unlabelled controls in a
+         row -- the aria-labels said scope/name-IP-or-CIDR/country all
+         along, so this only makes visible what a screen reader was
+         already told. -->
     <div class="fb-field">
       <span class="fb-label">Source</span>
       <div class="addr-group">
-        <select bind:value={appState.filters.srcScope} aria-label="Source scope" title="Restrict by whether the source is on your LAN">
-          <option value="">{viewportState.isMobile ? 'Any source' : '—'}</option>
-          <option value="internal">Internal</option>
-          <option value="external">External</option>
-        </select>
-        <input
-          type="text"
-          placeholder={viewportState.isMobile ? 'Source — name, IP or CIDR' : ''}
-          bind:value={appState.filters.srcQuery}
-          aria-label="Source — name, IP or CIDR"
-        />
-        <select bind:value={appState.filters.srcCountry} aria-label="Source country">
-          <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
-          {#each appState.srcCountryOptions as opt (opt.value)}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
+        <div class="fb-field">
+          <span class="fb-label">Scope</span>
+          <select bind:value={appState.filters.srcScope} aria-label="Source scope" title="Restrict by whether the source is on your LAN">
+            <option value="">{viewportState.isMobile ? 'Any source' : '—'}</option>
+            <option value="internal">Internal</option>
+            <option value="external">External</option>
+          </select>
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Name, IP or CIDR</span>
+          <input
+            type="text"
+            placeholder={viewportState.isMobile ? 'Source — name, IP or CIDR' : 'name, IP or CIDR'}
+            bind:value={appState.filters.srcQuery}
+            aria-label="Source — name, IP or CIDR"
+          />
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Country</span>
+          <select bind:value={appState.filters.srcCountry} aria-label="Source country">
+            <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
+            {#each appState.srcCountryOptions as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
     </div>
 
@@ -516,23 +535,32 @@
     <div class="fb-field">
       <span class="fb-label">Destination</span>
       <div class="addr-group">
-        <select bind:value={appState.filters.dstScope} aria-label="Destination scope" title="Restrict by whether the destination is on your LAN">
-          <option value="">{viewportState.isMobile ? 'Any destination' : '—'}</option>
-          <option value="internal">Internal</option>
-          <option value="external">External</option>
-        </select>
-        <input
-          type="text"
-          placeholder={viewportState.isMobile ? 'Destination — name, IP or CIDR' : ''}
-          bind:value={appState.filters.dstQuery}
-          aria-label="Destination — name, IP or CIDR"
-        />
-        <select bind:value={appState.filters.dstCountry} aria-label="Destination country">
-          <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
-          {#each appState.dstCountryOptions as opt (opt.value)}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
+        <div class="fb-field">
+          <span class="fb-label">Scope</span>
+          <select bind:value={appState.filters.dstScope} aria-label="Destination scope" title="Restrict by whether the destination is on your LAN">
+            <option value="">{viewportState.isMobile ? 'Any destination' : '—'}</option>
+            <option value="internal">Internal</option>
+            <option value="external">External</option>
+          </select>
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Name, IP or CIDR</span>
+          <input
+            type="text"
+            placeholder={viewportState.isMobile ? 'Destination — name, IP or CIDR' : 'name, IP or CIDR'}
+            bind:value={appState.filters.dstQuery}
+            aria-label="Destination — name, IP or CIDR"
+          />
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Country</span>
+          <select bind:value={appState.filters.dstCountry} aria-label="Destination country">
+            <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
+            {#each appState.dstCountryOptions as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
     </div>
 
@@ -1007,6 +1035,21 @@
     letter-spacing: 0.14em;
     color: var(--fg-dim);
     text-transform: uppercase;
+  }
+
+  /* #1191: the strip used the left 1050px of a 1920px bar and left
+     `fold ▸` marooned alone at the far edge, because every field sat at
+     its natural width and the whole of the slack went to .tf-fold's own
+     margin-left:auto. The fields share that slack out between
+     themselves instead -- the controls inside keep the fixed widths the
+     `.thin input`/`.thin select` rules give them, so this widens the
+     gaps between groups and never the inputs. With no free space left
+     to claim, fold's auto margin resolves to nothing and it sits beside
+     `columns ▸`, which is where round 30 draws the pair. Direct
+     children only: the captioned sub-fields inside an .addr-group must
+     go on hugging their own control. */
+  .bar.thin > .fb-field {
+    flex-grow: 1;
   }
 
   /* Visible on the thin bar only -- the mobile drawer already names each

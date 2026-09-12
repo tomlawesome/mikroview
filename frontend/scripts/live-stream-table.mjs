@@ -16,9 +16,16 @@
 // into a real row's time cell actually opens the sheet -- the same gap
 // live-group-mode.mjs's own comment describes for its own layout check.
 
-import { session, feedSyslog, check, done, waitForStreamRows } from './live-browser.mjs'
+import { session, feedSyslog, check, done, waitForStreamRows, goTo, DESKTOP_VIEWPORT } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session()
+// #717's fifteen are the *desktop* set, and since #1150 that has a width:
+// below 1500px a reader who has never opened the picker starts with MAC
+// and Interfaces off, because at 1366 the fifteen measured 1762px into a
+// 1308px box and the right-hand end of the table ran off the edge.
+// Playwright's own default is 1280, so the width this half is about has
+// to be asked for; the narrow start is asserted on its own terms at the
+// foot of this file.
+const { page, consoleErrors } = await session({ viewport: DESKTOP_VIEWPORT })
 feedSyslog(20, 'live-stream-table')
 await waitForStreamRows(page, 20)
 
@@ -32,7 +39,7 @@ check(
       'Time', 'Device', 'Action', 'Chain', 'Source', 'Src address', 'Src port', 'MAC',
       'Destination', 'Dst address', 'Proto', 'Interfaces', 'Dst port', 'NAT', 'Rule',
     ]),
-  `the stream table shows exactly the fifteen columns, in order -- got ${JSON.stringify(headerLabels)}`,
+  `at desktop width the stream table shows exactly the fifteen columns, in order -- got ${JSON.stringify(headerLabels)}`,
 )
 // The six restored by #717, each named so a regression says which went.
 for (const label of ['Device', 'Chain', 'Src port', 'MAC', 'Interfaces', 'NAT']) {
@@ -83,6 +90,48 @@ check(await sheet.isVisible(), 'clicking a row\'s time cell opens the detail she
 check((await sheet.textContent())?.includes('Chain') ?? false, 'the sheet still carries Chain alongside the row')
 await page.keyboard.press('Escape')
 await sheet.waitFor({ state: 'hidden', timeout: 5000 })
+
+// --- Below 1500px it starts with thirteen, and says so (#1150) ----------
+//
+// Not a second table and not a second mechanism: the width only decides
+// where a reader who has never opened `columns ▸` starts, and it is read
+// once at load -- hence a reload here rather than a bare resize, which
+// would arrive after the decision was made.
+await page.setViewportSize({ width: 1366, height: 900 })
+await page.reload({ waitUntil: 'networkidle' })
+await goTo(page, 'Stream')
+await waitForStreamRows(page, 1)
+
+const narrowLabels = await page.$$eval('.grid .header-cell .label-text', (els) =>
+  els.map((e) => e.textContent.trim()),
+)
+check(
+  JSON.stringify(narrowLabels) === JSON.stringify(headerLabels.filter((l) => l !== 'MAC' && l !== 'Interfaces')),
+  `at 1366 the table starts with the desktop set less MAC and Interfaces, in the same order -- got ${JSON.stringify(narrowLabels)}`,
+)
+
+// Nothing silent about it: the picker draws both unticked, because every
+// checkbox in it reads the same isColumnVisible the table does.
+await page.click('button.tf-columns')
+const macBox = page.locator('.col-panel input[aria-label="Source MAC column"]')
+const ifaceBox = page.locator('.col-panel input[aria-label="Interfaces column"]')
+await macBox.waitFor({ timeout: 5000 })
+check(
+  !(await macBox.isChecked()) && !(await ifaceBox.isChecked()),
+  'the columns ▸ picker draws MAC and Interfaces unticked -- off, not missing',
+)
+
+// And ticking one back on is the ordinary path, not a narrow-screen one.
+await macBox.check()
+await page
+  .waitForFunction(
+    () => [...document.querySelectorAll('.grid .header-cell .label-text')].some((e) => e.textContent.trim() === 'MAC'),
+    undefined,
+    { timeout: 5000 },
+  )
+  .catch(() => {})
+const afterTick = await page.$$eval('.grid .header-cell .label-text', (els) => els.map((e) => e.textContent.trim()))
+check(afterTick.includes('MAC'), `ticking MAC puts its column back on the row -- got ${JSON.stringify(afterTick)}`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()

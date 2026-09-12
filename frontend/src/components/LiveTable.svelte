@@ -392,7 +392,7 @@
       {/if}
     </div>
   {:else}
-    <div class="body scrollbar" bind:this={bodyEl}>
+    <div class="body grid-body scrollbar" bind:this={bodyEl}>
       <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
         <!-- #729: the reader's chosen subset, not the fixed fifteen --
              columnState.visibleColumns already carries Time and Rule
@@ -408,6 +408,7 @@
           <div
             class="header-cell"
             class:sticky-col={col.key === 'time'}
+            class:sticky-col-right={col.key === 'rule'}
             bind:this={headerEls[i]}
             bind:clientHeight={headerHeight}
             title={col.label}
@@ -559,6 +560,21 @@
     -webkit-overflow-scrolling: touch;
   }
 
+  /* #1150: below ~1500px the right-hand columns fell off the edge with
+     no affordance saying they were there -- a 1762px table in a 1308px
+     box at 1366 simply stopped after Destination. The bar is drawn
+     always, not on demand: `overflow-x: auto` hides it exactly when the
+     table has nothing left to say sideways and, on a platform with
+     overlay scrollbars, hides it while it does. Same answer the
+     wizard's script boxes took (SetupWizard.svelte's `pre.script`,
+     #1146) with app.css's own thin `scrollbar` dress, which the markup
+     already carries. Desktop grid only: the mobile card list has
+     nothing to scroll sideways, so a permanent bar there would be a
+     mark with no meaning. */
+  .grid-body {
+    overflow-x: scroll;
+  }
+
   .grid {
     display: grid;
     align-content: start;
@@ -636,6 +652,14 @@
   .sticky-col {
     position: sticky;
     left: 0;
+    z-index: 3;
+  }
+
+  /* The same, at the other end: #1150 pins Rule to the right edge (see
+     EventRow's .cell.rule), so its header has to travel with it. */
+  .sticky-col-right {
+    position: sticky;
+    right: 0;
     z-index: 3;
   }
 
