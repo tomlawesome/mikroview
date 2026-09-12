@@ -70,6 +70,43 @@ export class ApiError extends Error {
   }
 }
 
+// #1162: what the operator reads when a request fails.
+//
+// The throwing functions below used to carry only their own name and a
+// status ("mark as expected: setFlagVerdict: 403", "Could not load the
+// window: fetchEventsWindow: 500") while the server had already sent
+// words for it -- "user role required", "flag not found" -- in the body,
+// which was thrown away. putHostMark has forwarded that body all along;
+// this is the same move, with a fallback in words rather than a bare
+// number for the refusals that carry no body at all (the CSRF gate's
+// 403, a proxy's 502).
+//
+// The body is only forwarded when it reads like a message: mikroview's
+// own handlers answer with one short line (internal/api's httpError),
+// while an HTML error page from something in front of it is not
+// something to paste into a toast.
+function wordsForStatus(status: number): string {
+  if (status === 401) return 'your session has expired — sign in again'
+  if (status === 403) return 'you are not allowed to do that'
+  if (status === 404) return 'the server has no record of that'
+  if (status === 409) return 'something else changed it first — reload and try again'
+  if (status === 429) return 'too many requests just now — try again in a moment'
+  if (status >= 500) return `the server could not do that (${status})`
+  return `the server refused that (${status})`
+}
+
+async function serverSaid(res: Response): Promise<string> {
+  let body = ''
+  try {
+    body = (await res.text()).trim()
+  } catch {
+    // the body was already consumed, or the connection dropped
+    // mid-read: the status still has words of its own below
+  }
+  if (body && body.length <= 200 && !body.startsWith('<')) return body
+  return wordsForStatus(res.status)
+}
+
 // Every mutating request goes through this -- sets the CSRF mitigation
 // header the backend requires once auth is active (internal/api's
 // csrfHeaderName; a no-op while auth is inactive, but always sent since
@@ -234,7 +271,7 @@ export async function fetchEventsWindow(params: {
   if (params.limit) qs.set('limit', String(params.limit))
   const q = qs.toString()
   const res = await fetch(`/api/events${q ? `?${q}` : ''}`)
-  if (!res.ok) throw new ApiError(`fetchEventsWindow: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -375,7 +412,7 @@ export interface RouterFilterRule {
   disabled?: boolean
   // packets/bytes (#435 decision 4, contract §1) are RouterOS's own
   // counters for this rule -- kept whether or not it logs, which is what
-  // lets Tune logging show "fired N times" as the cost of switching
+  // lets Log every rule show "fired N times" as the cost of switching
   // logging on before it is switched on. Optional for the same reason as
   // the fields above: a push predating #435 sends nothing.
   packets?: number
@@ -557,7 +594,7 @@ export async function fetchFlags(): Promise<FlagsResponse> {
 // were actually cleared, so the caller can refresh() rather than guess.
 export async function clearAllFlags(): Promise<number> {
   const res = await postJSON('/api/flags/clear-all')
-  if (!res.ok) throw new ApiError(`clearAllFlags: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
   return body.cleared ?? 0
 }
@@ -585,7 +622,7 @@ export async function clearIngestLoss(): Promise<void> {
 // deferred version of this call lost verdicts silently on a reload.
 export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag> {
   const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict })
-  if (!res.ok) throw new ApiError(`setFlagVerdict: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -600,7 +637,7 @@ export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag
 // pattern more specific.
 export async function deleteFlagVerdict(id: string): Promise<Flag> {
   const res = await deleteJSON(`/api/flags/verdict/${encodeURIComponent(id)}`)
-  if (!res.ok) throw new ApiError(`deleteFlagVerdict: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -611,7 +648,7 @@ export async function deleteFlagVerdict(id: string): Promise<Flag> {
 // it back.
 export async function fetchExpectations(): Promise<Exclusion[]> {
   const res = await fetch('/api/flags/expectations')
-  if (!res.ok) throw new ApiError(`fetchExpectations: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
   return body.expectations ?? []
 }
@@ -1020,7 +1057,7 @@ export async function fetchWatchlistMatches(params: {
   if (params.until) q.set('until', params.until)
   if (params.limit) q.set('limit', String(params.limit))
   const res = await fetch(`/api/matches?${q.toString()}`)
-  if (!res.ok) throw new ApiError(`fetchWatchlistMatches: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
   return body.matches ?? []
 }
@@ -1146,7 +1183,7 @@ export async function revokeToken(id: string): Promise<string | null> {
 // simple, read-only accountability list, not a searchable log viewer.
 export async function fetchAuditLog(): Promise<AuditResult> {
   const res = await fetch('/api/audit')
-  if (!res.ok) throw new ApiError(`fetchAuditLog: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -1471,11 +1508,12 @@ export async function replayDefinition(
 }
 
 // ===========================================================================
-// Tune logging (#435)
+// Log every rule (#435; the page was "Tune logging" until #1134, which
+// left these two endpoint paths and the names that mirror them alone)
 //
 // The upload never leaves this pair of calls: the export text is sent in
 // the request body and nothing else in this file ever holds onto it (see
-// TuneLogging.svelte's own doc comment for how the component honours
+// LogEveryRule.svelte's own doc comment for how the component honours
 // that). Both endpoints share the fixed contract's shape -- a `rejected`
 // reason is a *value* in a normal 200 response body (see the contract's
 // §3 sample, `"rejected": null // or {"reason": "..."}`), not a thrown

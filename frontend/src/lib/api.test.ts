@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildQuery, fetchSetupCommands, replayDefinition } from './api'
+import {
+  buildQuery,
+  clearAllFlags,
+  fetchAuditLog,
+  fetchEventsWindow,
+  fetchSetupCommands,
+  replayDefinition,
+  setFlagVerdict,
+} from './api'
 import { emptyFilters } from './types'
 
 // buildQuery's `ip` forwarding is refetchWithFilters()'s only path back to
@@ -323,5 +331,52 @@ describe('fetchSetupCommands (#436)', () => {
   it('falls back to a status-bearing message when the refusal carries no body', async () => {
     stubFetch(500, '')
     expect(await fetchSetupCommands({ address: 'mv.example.net:8443' })).toBe('fetchSetupCommands: 500')
+  })
+})
+
+// #1162: a failed request used to read as the function that made it and
+// a number -- "mark as expected: setFlagVerdict: 403", "Could not clear
+// all flags: clearAllFlags: 500" -- while the server's own words for it
+// ("user role required", "flag not found") sat unread in the body.
+describe('the message a failed request carries (#1162)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubFetch(status: number, body: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => ({}),
+        text: async () => body,
+      })),
+    )
+  }
+
+  it('forwards what the server said', async () => {
+    stubFetch(403, 'user role required')
+    await expect(setFlagVerdict('f1', 'expected')).rejects.toThrow('user role required')
+  })
+
+  it('keeps the status on the error, which is what a 401 bounce reads', async () => {
+    stubFetch(401, '')
+    await expect(fetchEventsWindow({})).rejects.toMatchObject({ status: 401 })
+  })
+
+  it('answers in words, not a bare number, when the refusal carries no body', async () => {
+    stubFetch(403, '')
+    await expect(clearAllFlags()).rejects.toThrow('you are not allowed to do that')
+
+    stubFetch(500, '   ')
+    await expect(clearAllFlags()).rejects.toThrow('the server could not do that (500)')
+  })
+
+  // Anything in front of mikroview answers in HTML; mikroview's own
+  // handlers answer with one short line (internal/api's httpError).
+  it('does not paste a proxy’s HTML error page into the message', async () => {
+    stubFetch(502, '<!doctype html><html><body>502 Bad Gateway</body></html>')
+    await expect(fetchAuditLog()).rejects.toThrow('the server could not do that (502)')
   })
 })

@@ -116,8 +116,16 @@
           {/each}
         </div>
       {:else}
+        <!-- #1167: the empty state says how one gets here. "save this
+             filter as…" below only appears once something is filtered
+             (see its own comment), so with an empty box this menu was
+             four words and no way forward. -->
         <div class="mg">
-          <p class="fpnone">No saved filters yet.</p>
+          <p class="fpnone">
+            No saved filters yet{appState.hasActiveFilters
+              ? ' — save the filter you have set, below.'
+              : ' — set a filter first, then save it here.'}
+          </p>
         </div>
       {/if}
 

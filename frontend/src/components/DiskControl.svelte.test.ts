@@ -188,5 +188,10 @@ describe('without a key', () => {
     const link = screen.getByRole('link', { name: 'how to mount one' })
     expect(link.getAttribute('href')).toContain('docs/configuration.md#')
     expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    // #1185: it leaves the app, so it is not drawn like the in-place
+    // action links beside it -- .ext carries the ↗ mark (app.css) and
+    // the title says where it goes.
+    expect(link.classList.contains('ext')).toBe(true)
+    expect(link.getAttribute('title')).toContain('github.com')
   })
 })

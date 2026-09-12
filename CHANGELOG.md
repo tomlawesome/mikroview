@@ -16,7 +16,22 @@ rewritten.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **"Tune logging" is now "Log every rule"** (#1134), and the page has
+  been rebuilt around the owner's ruling on three faults in 0.5.1. It
+  used to render outside the deck, so it was the one page in the app
+  with no navigation on it — it is a deck card now, with the same roll
+  rail every other page has. Its input was a raw file-picker beside a
+  bare text box; it is one drop zone now — drop a file on it, click it
+  to choose one, or paste — which names the file and says how many
+  firewall rules are in it. And it now says what it is for before any
+  control: *"Drop in your router's export (`/export hide-sensitive`).
+  You get it back with logging switched on for every firewall rule that
+  is not logging yet, ready to paste into the router. Nothing you paste
+  is stored."* The never-stored promise is unchanged and still printed
+  under the drop zone. The two `/api/tune-logging` endpoints and the
+  tier that may call them are unchanged.
 
 ## [0.5.1] - 2026-09-11
 

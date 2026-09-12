@@ -137,6 +137,28 @@ export function midLabel(min: number, max: number): number | null {
   return ticks[ticks.length - 1]
 }
 
+// One glyph of the labels' 9.5px monospace, in the drawing's own units.
+// The families in --font-mono advance between 0.55em and 0.6em; the
+// narrow end is used deliberately, so midLabelFits only ever calls a
+// collision that happens whichever family the stack lands on.
+const LABEL_GLYPH_W = 9.5 * 0.55
+
+/**
+ * midLabelFits says whether the middle figure has room to be printed
+ * without running into the right-hand caption.
+ *
+ * On a narrow range it does not: a host that can spare 174 MiB above a
+ * 32 MiB floor puts the last doubling mark 82% along the track, and the
+ * centred "128 MiB" there was drawn straight over "174 MiB — all this
+ * host can spare" (#1143). A track that short is legible with a figure
+ * at each end, so the middle one is dropped rather than overprinted.
+ */
+export function midLabelFits(mid: number, min: number, max: number, ceiling: string): boolean {
+  const half = (formatSize(mid).length * LABEL_GLYPH_W) / 2
+  const ceilingLeft = TRACK_X1 - ceiling.length * LABEL_GLYPH_W
+  return trackX(mid, min, max) + half <= ceilingLeft
+}
+
 /**
  * formatSize renders a byte figure the way round 39 writes it: whole
  * MiB below a gigabyte ("120 MiB", "480 MiB"), one decimal of GiB above

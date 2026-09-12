@@ -233,7 +233,9 @@ await viewerPage.waitForSelector('.account .menu', { state: 'detached', timeout:
 // `appState.view` mutation from the UI only, there are no URL routes, so a viewer has no route to Settings at
 // all. Asserted as absence, per #783.
 const viewerRail = await viewerPage.$$eval('.roll-rail button.rail-name', (els) => els.map((e) => e.textContent.trim()))
-for (const absent of ['Settings', 'Entities']) {
+// #1134 put Log every rule on the deck behind the same `edit` gate, so
+// it is absent from a viewer's rail for the same reason.
+for (const absent of ['Settings', 'Entities', 'Log every rule']) {
   check(!viewerRail.includes(absent), `${absent} is absent from a viewer's roll rail (#657), got ${JSON.stringify(viewerRail)}`)
 }
 check(viewerRail.includes('Fleet'), `Fleet stands in for both on a viewer's rail (deckCards.ts), got ${JSON.stringify(viewerRail)}`)

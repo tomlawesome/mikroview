@@ -12,6 +12,7 @@ import {
   formatHours,
   formatSize,
   midLabel,
+  midLabelFits,
   pageStepBytes,
   proposalKind,
   stepBytes,
@@ -50,6 +51,18 @@ describe('round 39 draws these exact figures', () => {
     expect(midLabel(MIN, MAX)).toBe(512 * MIB)
     // And the drawing puts that label at x=302.
     expect(Math.round(trackX(512 * MIB, MIN, MAX))).toBe(302)
+  })
+
+  // #1143: on a host with little to spare the last doubling mark lands
+  // close to the right-hand end, and its centred label was drawn on top
+  // of the ceiling caption.
+  it('drops the middle figure when it would be printed over the ceiling caption', () => {
+    const small = 174 * MIB
+    const tick = midLabel(MIN, small)!
+    expect(tick).toBe(128 * MIB)
+    expect(midLabelFits(tick, MIN, small, ceilingCaption(small, 3584 * MIB))).toBe(false)
+    // The wide track round 39 draws keeps its middle figure.
+    expect(midLabelFits(midLabel(MIN, MAX)!, MIN, MAX, ceilingCaption(MAX, MAX))).toBe(true)
   })
 
   it('writes the sizes the way the drawing writes them', () => {

@@ -45,6 +45,14 @@ dated, sourced) · counting (green, growing) · quiet (plain, "nothing
 to wait for"). The step list at the left carries each step's receipt
 sub-line for the wizard's life.
 
+A **partial** step does not add a fifth flavour (owner ruling, #1132).
+It keeps the arrived (or counting) line, saying only what did arrive,
+and puts what it is still short of — "Still missing: …" — in its own
+box directly underneath, in the warning colour (`--warn`, orange;
+never `--reject`, which is `attention`'s alone: a shortfall is not a
+fault on mikroview's side). Where a partial reading has no arrival to
+word, the warning box stands alone.
+
 Modal geometry (round-1 verdict "use more of the screen"): 940px wide
 (94% cap), 224px step list, roomy type. Header: step x of 5 · title ·
 ✕. Footer: Back · Skip this step · Next (primary), with the hint
@@ -126,6 +134,15 @@ instant.
   that is the done-when's "visibly recorded" clause.
 - Wizard truthfulness fixes #371/#374 are check-logic this design
   inherits; they land before or with it.
+- Step 6 with no key mounted **mints the key** (owner ruling, #1133),
+  superseding round 45's drawing of a dim placeholder and a
+  "how to mount one" link: a pre-filled, editable field with a reroll,
+  a copy control, the warning that nothing can reprint it, and the
+  steps to put it in place. The key is generated in the browser
+  (`crypto.getRandomValues`) and never sent to the server —
+  `history.keyFile` stays not editable from the app (#853). The lead
+  says the model once and correctly: mikroview encrypts backups, the
+  event history and the state store under the key file you mount.
 
 ## Superseded (considered and closed)
 

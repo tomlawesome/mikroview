@@ -24,7 +24,7 @@
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import { newestGeneration } from '../lib/backups'
-  import { HOW_TO_MOUNT_URL } from '../lib/history'
+  import { HOW_TO_MOUNT_URL, KEY_FILE_PATH, newHistoryKey } from '../lib/history'
   import {
     announceStep,
     backupReceiptForDevice,
@@ -42,6 +42,7 @@
     type LedgerStep,
   } from '../lib/setupsteps'
   import type { RouterosStanding } from '../lib/types'
+  import CopyButton from './CopyButton.svelte'
   import MemoryControl from './MemoryControl.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
@@ -266,6 +267,25 @@
     return entries
   })
 
+  // Step 6 with no key mounted mints one here (#1133). The field starts
+  // on a freshly generated key and stays editable, so an operator who
+  // already has a key -- or who would rather generate their own -- can
+  // type or paste it over the top and still get the steps below built
+  // around it. Nothing sends it anywhere: history.keyFile is not
+  // editable from the app (#853), there is no endpoint that accepts key
+  // material, and none of the blocks below quote the value either --
+  // the key goes into the file on standard input, which is what keeps
+  // it out of the operator's shell history as well.
+  let historyKey = $state(newHistoryKey())
+
+  // The steps under the field, one block each, in the order they have to
+  // happen. Constants so the copy buttons, the tests and the scenario
+  // all quote the same text.
+  const KEY_SAVE_COMMAND = `umask 077 && cat > ${KEY_FILE_PATH}`
+  const KEY_MOUNT_COMMAND = `services:\n  mikroview:\n    volumes:\n      - ${KEY_FILE_PATH}:${KEY_FILE_PATH}:ro`
+  const KEY_CONFIG_COMMAND = `history:\n  keyFile: ${KEY_FILE_PATH}`
+  const KEY_RESTART_COMMAND = 'docker compose up -d'
+
   // Step 6's own three departures from every other step's fixed
   // lead/header (#394, round 45): the title gains "<router> is gone" in
   // the lost-router shape, the lead reads one of three ways depending
@@ -287,10 +307,13 @@
         )
       }
       if (step.status.state === 'blocked') {
+        // Said once, and correctly (#1133). The key file is mikroview's
+        // own -- it seals the backups, the event history and the state
+        // store -- so the old "a key it does not hold" was describing
+        // the vault passphrase, a different thing entirely.
         return (
-          'Mikroview keeps a backup only under a key it does not hold, and none is mounted. Mount ' +
-          'one and this step prints the script; until then the drop box is closed and a push would ' +
-          'be refused.'
+          'MikroView encrypts backups — and the event history and the state store — under the key ' +
+          'file you mount. None is mounted, so nothing can be stored yet. Generate one here.'
         )
       }
     }
@@ -367,11 +390,12 @@
     wizardState.close()
   }
 
-  // The finish screen's own door into Tune logging (#435 decision 2):
+  // The finish screen's own door into Log every rule (#435 decision 2;
+  // "Tune logging" until #1134 renamed the page, not the view key):
   // its other way in besides the topography's coverage lens. Closes the
   // modal rather than leaving it open behind the new page, the same way
   // leaveToLanding above does.
-  function openTuneLogging() {
+  function openLogEveryRule() {
     appState.view = 'tune-logging'
     wizardState.close()
   }
@@ -559,7 +583,7 @@
                    choices, no third option and no "are you sure": the
                    amber button quotes the exact record it will write. -->
               <div class="heavy">
-                <h3>Mikroview cannot check the router's side</h3>
+                <h3>MikroView cannot check the router's side</h3>
                 <p>
                   It only sees what arrives here, and {notObserved(step)}. That is not the same as
                   the step having failed — it may simply not have happened yet.
@@ -591,7 +615,11 @@
                 </div>
               {/if}
 
-              {#if step.n <= 4 || step.n === 6}
+              <!-- Not on step 6 with no key mounted (#1133): there is no
+                   RouterOS command on that pane to pick a version for --
+                   the pane is about the key file, and the picker only
+                   stands between the operator and it. -->
+              {#if step.n <= 4 || (step.n === 6 && step.status.state !== 'blocked')}
                 {@render commandsHead()}
               {/if}
 
@@ -666,46 +694,123 @@
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
                 {:else}
+                  <!-- The token is shown, not merely described (#1131):
+                       it is minted once and never shown again, so a
+                       step that says "the token below" and prints only
+                       a script leaves the operator nothing to keep. -->
                   <p class="note token-note">
-                    The token below is shown once and is already in the script. Anyone who can read
-                    the script on the router can read the token, so it is scoped to that one router.
+                    This token is shown once, and is already in the script below. Anyone who can read
+                    the script on the router can read it, so it is scoped to that one router.
                   </p>
-                  <pre class="script">{wizardState.commands?.steps.push.commands ?? ''}</pre>
+                  <pre class="token">{token}</pre>
+                  <button type="button" class="copy" onclick={() => copy(token, 'token')}>
+                    {copied === 'token' ? 'Copied' : 'Copy token'}
+                  </button>
+                  <!-- One block, pasted as it stands: the script saved
+                       under its own name, the scheduler entry, and one
+                       run now. It used to be two boxes, the second
+                       carrying `source="<paste the script above>"` --
+                       which asked the operator to nest one clipboard
+                       inside another and to do RouterOS's escaping by
+                       hand (#1131). -->
+                  <pre class="script">{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.push.commands ?? '', 'script')}
+                    onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'script')}
                   >
                     {copied === 'script' ? 'Copied' : 'Copy script'}
-                  </button>
-                  {#if wizardState.commands?.steps.push.note}
-                    <p class="note">{wizardState.commands.steps.push.note}</p>
-                  {/if}
-                  <p class="note">Then save it and run it once:</p>
-                  <pre>{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
-                  <button
-                    type="button"
-                    class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'sched')}
-                  >
-                    {copied === 'sched' ? 'Copied' : 'Copy'}
                   </button>
                   {#if wizardState.commands?.steps.schedule.note}
                     <p class="note">{wizardState.commands.steps.schedule.note}</p>
                   {/if}
                 {/if}
               {:else if step.n === 5}
+                <!-- The name is left as deviceStanza's placeholder rather
+                     than passing d.name (#1184): an undeclared router's
+                     name *is* its address, so the sample read
+                     name: "172.23.0.1" -- pasting it named the router
+                     after the address this step exists to replace. And
+                     the block gets the same Copy the other steps offer;
+                     step 5 was the only one without one. -->
                 {#each undeclared as d (d.id)}
-                  <pre>{deviceStanza(d.sourceIp, d.name)}</pre>
+                  {@const stanza = deviceStanza(d.sourceIp, '')}
+                  <pre>{stanza}</pre>
+                  <button type="button" class="copy" onclick={() => copy(stanza, `stanza-${d.id}`)}>
+                    {copied === `stanza-${d.id}` ? 'Copied' : 'Copy'}
+                  </button>
                 {/each}
               {:else if step.n === 6}
                 {#if step.status.state === 'blocked'}
-                  <pre class="wzpre-dim">   — the script prints here once a key is mounted —</pre>
+                  <!-- #1133: the step mints the key rather than
+                       describing one twice. 32 random bytes, base64 --
+                       the same shape as the setup guide's `head -c 32
+                       /dev/urandom | base64` -- generated in this tab
+                       and never sent anywhere, which is exactly why the
+                       warning beside it has to be believed: mikroview
+                       cannot reprint what it has never been given. -->
+                  <div class="keymint">
+                    <label for="history-key">Your key</label>
+                    <input
+                      id="history-key"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      bind:value={historyKey}
+                    />
+                    <CopyButton value={historyKey} label="the history key" />
+                    <button type="button" onclick={() => (historyKey = newHistoryKey())}>Reroll</button>
+                  </div>
+                  <p class="wzcaveat">
+                    <b>Save this now.</b> MikroView can never show it again — it never receives this
+                    value and never stores it, it only reads the file you are about to write. Lose
+                    the key and everything kept under it, backups included, is unreadable.
+                  </p>
                   <p class="note">
-                    <a class="olink" href={HOW_TO_MOUNT_URL} target="_blank" rel="noopener noreferrer">
-                      how to mount one
+                    Write it to a secret file, outside the data directory — a key kept beside the
+                    files it protects travels with any copy of them:
+                  </p>
+                  <pre>{KEY_SAVE_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_SAVE_COMMAND, 'keysave')}>
+                    {copied === 'keysave' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">
+                    Paste the key at the prompt, then press Ctrl-D. It goes in on standard input, so
+                    it never reaches your shell history or a process list.
+                  </p>
+                  <p class="note">Mount the file into the container, read-only:</p>
+                  <pre>{KEY_MOUNT_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_MOUNT_COMMAND, 'keymount')}>
+                    {copied === 'keymount' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">Running mikroview directly on the host instead? Skip this one.</p>
+                  <p class="note">Point mikroview at it, in config.yaml:</p>
+                  <pre>{KEY_CONFIG_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_CONFIG_COMMAND, 'keyconfig')}>
+                    {copied === 'keyconfig' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">
+                    Or <code>MIKROVIEW_HISTORY_KEY_FILE={KEY_FILE_PATH}</code> — both name the path,
+                    and no setting anywhere carries the key itself.
+                  </p>
+                  <p class="note">Then restart:</p>
+                  <pre>{KEY_RESTART_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_RESTART_COMMAND, 'keyrestart')}>
+                    {copied === 'keyrestart' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">
+                    The key is read once, at startup. This step notices on its own and prints the
+                    router script ·
+                    <a
+                      class="olink ext"
+                      href={HOW_TO_MOUNT_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Opens the setup guide on github.com, in a new tab"
+                    >
+                      more on mounting a key
                     </a>
-                    · the same key keeps the event history and the state store.
                   </p>
                 {:else if !token}
                   <!-- Round 45 draws no mint form here at all: it
@@ -780,30 +885,39 @@
                    mikroview-side check logic (#371/#374), not an
                    observation -- see setupsteps.ts. Step 6's lost-router
                    shape reads this one router's own kept count instead
-                   of the ledger's fleet-wide receipt (lostObservationText). -->
-              <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
-                {#if step.n === 6 && wizardState.lostRouterDevice}
-                  {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
-                  {lostObservationText || 'nothing kept for this router yet'}
-                  {#if lostGeneration}
-                    ·
-                    <a
-                      class="olink"
-                      href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
-                    >
-                      download the newest .backup
-                    </a>
-                    to restore the replacement, then run the script above
+                   of the ledger's fleet-wide receipt (lostObservationText).
+                   A partial step is not a fifth flavour: it is this line
+                   saying what arrived, with its shortfall in the warning
+                   box below (#1132), and it renders only when there was
+                   an arrival to word. -->
+              {#if step.status.detail || !step.status.shortfall}
+                <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
+                  {#if step.n === 6 && wizardState.lostRouterDevice}
+                    {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
+                    {lostObservationText || 'nothing kept for this router yet'}
+                    {#if lostGeneration}
+                      ·
+                      <a
+                        class="olink"
+                        href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
+                      >
+                        download the newest .backup
+                      </a>
+                      to restore the replacement, then run the script above
+                    {/if}
+                  {:else}
+                    {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
+                    {step.status.detail}
+                    {#if step.n === 6 && step.status.state === 'done'}
+                      ·
+                      <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
+                    {/if}
                   {/if}
-                {:else}
-                  {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
-                  {step.status.detail}
-                  {#if step.n === 6 && step.status.state === 'done'}
-                    ·
-                    <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
-                  {/if}
-                {/if}
-              </p>
+                </p>
+              {/if}
+              {#if step.status.shortfall}
+                <p class="observation shortfall">{step.status.shortfall}</p>
+              {/if}
               {#if step.n === 2 && step.status.state === 'partial' && splits.length > 0}
                 <!-- The source-address split (#442), under the
                      observation line. The mismatch sentence's shape:
@@ -873,7 +987,7 @@
                   <li class={s.outcome}>
                     <span class="rb-title">{s.n}. {s.title}</span>
                     <span class="rb-detail">
-                      {s.receipt || (s.status.state === 'quiet' ? s.status.detail : 'nothing arrived')}
+                      {s.receipt || (s.status.state === 'quiet' ? s.status.detail : 'nothing has arrived yet')}
                     </span>
                   </li>
                 {/each}
@@ -902,9 +1016,9 @@
                   />
                 </div>
               {/if}
-              <p class="note">Run setup… reopens this any time, from the Admin group.</p>
+              <p class="note">Run setup… reopens this any time, from your account menu.</p>
               <p class="note">
-                <button type="button" class="link" onclick={openTuneLogging}>Tune logging…</button>
+                <button type="button" class="link" onclick={openLogEveryRule}>Log every rule…</button>
                 turns a dark connection into a watched one once mikroview has been listening a day.
               </p>
             {/if}
@@ -918,7 +1032,7 @@
         </button>
         <div class="footer-right">
           {#if step && step.hasCheck && step.outcome === 'open' && !warning}
-            <span class="hint">Next checks what has arrived</span>
+            <span class="hint">{step.n === STEP_COUNT ? 'Finish' : 'Next'} checks what has arrived</span>
           {/if}
           {#if step && step.n === 6 && wizardState.lostRouterDevice}
             <!-- Round 45's lost-router footer: no skip (there is
@@ -1197,8 +1311,32 @@
     font-weight: 600;
   }
 
-  .wzpre-dim {
-    color: var(--fg-dim);
+  /* Step 6's key field with no key mounted (#1133): the field, its copy
+     control and Reroll on one line, laid out like the version pick-list
+     above rather than as a new idiom. */
+  .keymint {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .keymint label {
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
+  .keymint input {
+    flex: 1 1 320px;
+    min-width: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
   }
 
   /* The lost-router title (#394, round 45): "<router> is gone" in the
@@ -1269,6 +1407,14 @@
     overflow-y: auto;
   }
 
+  /* The token's own box (#1131): one line, and the one thing on this
+     step that is shown once and never again, so it wraps rather than
+     scrolling out of sight on a narrow modal. */
+  pre.token {
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
   /* Commands come pre-broken to phone width so nothing scrolls sideways;
      Copy matters more here, not less. */
   .modal.sheet pre {
@@ -1305,7 +1451,7 @@
     font-weight: 600;
   }
 
-  /* Tune logging's own door on the finish pane (#435): reads as a link
+  /* Log every rule's own door on the finish pane (#435): reads as a link
      inline with the sentence beside it, not a second boxed button next
      to "Run setup… reopens this". Step 6's "see it in Settings", "mint
      a new one" and "how to mount one"/"download the newest .backup"
@@ -1354,6 +1500,15 @@
   .observation.attention {
     border-color: var(--reject);
     color: var(--reject);
+  }
+
+  /* A partial step's shortfall (#1132): its own box under the arrived
+     line, in the warning colour. Deliberately --warn and not --reject:
+     nothing is wrong on mikroview's side, something simply has not
+     arrived yet, and the red is spoken for by `attention`. */
+  .observation.shortfall {
+    border-color: var(--warn);
+    color: var(--warn);
   }
 
   .dot {

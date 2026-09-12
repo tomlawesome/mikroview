@@ -14,6 +14,7 @@
   // is worth more than either being individually prettier.
   import { authState } from '../lib/auth.svelte'
   import { changePassword } from '../lib/api'
+  import { trapFocus } from '../lib/focusTrap'
 
   let currentPassword = $state('')
   let newPassword = $state('')
@@ -67,7 +68,7 @@
 
 {#if authState.showChangePassword}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Change password" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Change password" tabindex="-1" use:trapFocus>
       <div class="modal-header">
         <span class="title">Change your password</span>
         <button type="button" class="close" onclick={close} aria-label="Close">✕</button>

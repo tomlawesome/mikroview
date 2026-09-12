@@ -1393,8 +1393,13 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
     render(Flags)
     flushSync()
 
-    const confs = Array.from(document.querySelectorAll('tr.frow .fmark .conf')).map((el) => el.textContent)
-    expect(confs).toEqual(['72'])
+    // #1167: the figure carries the word "scored" in the list too, not
+    // only in the drawer -- bare, it read as an unlabelled tally of the
+    // type beside it.
+    const confs = Array.from(document.querySelectorAll('tr.frow .fmark .conf')).map((el) =>
+      el.textContent?.replace(/\s+/g, ' ').trim(),
+    )
+    expect(confs).toEqual(['scored 72'])
     const scored = document.querySelector('tr.frow:has(.conf)') as HTMLElement
     expect(scored.querySelector('td.k')?.textContent?.trim()).toBe('10.0.20.14')
 
@@ -1405,6 +1410,10 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
       "Scored 72. How far this sits from 10.0.20.14's usual, and how much history backs that. The detector's number, not a verdict.",
     )
     expect(drawer.querySelector('.side .span')?.textContent?.replace(/\s+/g, ' ')).toContain('· scored 72')
+    // #1157: unnormalised -- the space before the "·" was literal
+    // whitespace at the head of an {#if}, which Svelte trims, so the
+    // line read "still arriving· scored 72".
+    expect(drawer.querySelector('.side .span')?.textContent).toMatch(/\S · scored 72$/)
   })
 
   it('the strip counts open flags by type, and a click filters the table to that type; again clears it', async () => {

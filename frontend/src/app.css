@@ -291,3 +291,14 @@ select {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--accent) 35%, var(--border)) transparent;
 }
+
+/* "This one leaves the app" (#1185). Without it a link that opens
+   github.com in a new tab is drawn exactly like the in-place action
+   links beside it. Global rather than per-component so every external
+   link wears the same mark and no component needs a :global() escape;
+   the link itself still carries a title saying where it goes. */
+.ext::after {
+  content: ' ↗';
+  font-size: 0.85em;
+  opacity: 0.8;
+}

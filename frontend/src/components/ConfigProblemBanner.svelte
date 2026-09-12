@@ -10,9 +10,19 @@
   // measured clickthrough on browser security warnings is around 70%,
   // so a banner people can make go away forever is a banner that does
   // nothing.
+  import { authState } from '../lib/auth.svelte'
   import { configProblemsState } from '../lib/configProblems.svelte'
 
-  configProblemsState.ensureLoaded()
+  // #1188: GET /api/config/problems is admin-gated server-side, so every
+  // non-admin session used to request it on load purely to be refused,
+  // and both ends logged the 403. Asking is the admin session's to do.
+  // The gate is here rather than in configProblems.svelte.ts, which says
+  // in its own words that the filtering is not that file's job. An
+  // effect, not a bare call, because the role is not known yet on the
+  // first paint after a reload.
+  $effect(() => {
+    if (authState.role === 'admin') configProblemsState.ensureLoaded()
+  })
 </script>
 
 {#if configProblemsState.hasProblems && !configProblemsState.dismissed}

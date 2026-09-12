@@ -30,6 +30,7 @@
     doublingTicks,
     formatSize,
     midLabel,
+    midLabelFits,
     pageStepBytes,
     stepBytes,
     trackX,
@@ -81,7 +82,14 @@
   })
 
   const ticks = $derived(doublingTicks(mem.min, mem.max))
-  const mid = $derived(midLabel(mem.min, mem.max))
+  const midTick = $derived(midLabel(mem.min, mem.max))
+  // null both when there is no middle mark and when its label would be
+  // printed over the right-hand caption (#1143).
+  const mid = $derived(
+    midTick !== null && midLabelFits(midTick, mem.min, mem.max, ceilingCaption(mem.max, mem.hostTotal))
+      ? midTick
+      : null,
+  )
   const handleX = $derived(trackX(shown, mem.min, mem.max))
   const ghostX = $derived(trackX(mem.maxMemory, mem.min, mem.max))
 

@@ -105,14 +105,15 @@ describe('the account chip declares the read-only viewer once (#804)', () => {
   })
 
   // "user" can edit, so calling that tier read-only would be a plain
-  // untruth -- and the drawing gives it no variant of its own.
-  it('claims nothing for a user', () => {
+  // untruth. It is still named, though (#1171): a bare "sam" left the
+  // middle tier the only account that said nothing about itself.
+  it('names the user tier without claiming it is read-only', () => {
     authState.username = 'sam'
     authState.role = 'user'
     render(AccountMenu)
 
     const chip = screen.getByTitle('Account and operate pages').textContent?.replace(/\s+/g, ' ').trim()
-    expect(chip).toBe('sam')
+    expect(chip).toBe('sam (user)')
     expect(chip).not.toContain('read-only')
   })
 })

@@ -63,14 +63,21 @@ await page.locator('.setup-wizard .steps li:nth-child(2) .step-row').click()
 
 // The split reads as partial: evidence arrived, composed wrongly. That
 // is the arrived voice, never attention (nothing on mikroview's side
-// is wrong) and never waiting (something did arrive).
-const observation = page.locator('.setup-wizard .observation')
-await page.locator('.setup-wizard .observation', { hasText: 'you declared in config.yaml' }).waitFor({ state: 'visible', timeout: 15000 })
+// is wrong) and never waiting (something did arrive). Two boxes since
+// #1132 -- what arrived, and the declared address that is silent
+// beside it in the warning register.
+const observation = page.locator('.setup-wizard .observation:not(.shortfall)')
+const shortfall = page.locator('.setup-wizard .observation.shortfall')
+await shortfall.waitFor({ state: 'visible', timeout: 15000 })
 const detail = ((await observation.textContent()) ?? '').replace(/\s+/g, ' ').trim()
+const silent = ((await shortfall.textContent()) ?? '').replace(/\s+/g, ' ').trim()
 check(
-  detail ===
-    "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, which you declared in config.yaml, has sent nothing.",
-  `step 2 states what was declared and what arrived, no diagnosis (${detail})`,
+  detail === "Connected — but from 10.0.20.1, an address you haven't declared.",
+  `step 2 states what arrived, no diagnosis (${detail})`,
+)
+check(
+  silent === '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+  `and what was declared but silent, in its own box (${silent})`,
 )
 check(await observation.evaluate((el) => el.classList.contains('arrived')), 'the split reads in the arrived voice')
 check(

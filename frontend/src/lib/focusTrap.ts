@@ -3,14 +3,16 @@
 // Svelte action that keeps Tab/Shift+Tab cycling inside the node it is
 // attached to, and moves focus into it as soon as it mounts. #550's
 // half-sheet is the first control in this codebase to need a *real*
-// trap -- the existing overlays (AboutOverlay, EventDetailSheet, ...)
-// close on Esc or a backdrop click and otherwise let focus wander, which
-// is fine for a pointer-width dialog that is one of several ways to
-// reach the same page. On a small screen the half-sheet is the only way
-// to reach a group's other pages, so tabbing out of it must not be
-// possible while it is open -- the design record's "focus trap" is a
-// requirement on this control specifically, not decoration shared with
-// every dialog in the app.
+// trap: on a small screen it is the only way to reach a group's other
+// pages, so tabbing out of it must not be possible while it is open.
+//
+// The dialogs that ask for something rather than merely show it need it
+// too (#1182): Change password's two fields were unreachable by
+// keyboard, because focus never moved into the dialog and Tab then
+// walked the page behind it. Where an overlay is one of several ways to
+// reach the same page (EventDetailSheet, ...), letting focus wander is
+// still fine -- the trap goes where not being able to leave is the
+// point, not on every dialog in the app.
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
