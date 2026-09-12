@@ -1037,6 +1037,21 @@
     text-transform: uppercase;
   }
 
+  /* #1191: the strip used the left 1050px of a 1920px bar and left
+     `fold ▸` marooned alone at the far edge, because every field sat at
+     its natural width and the whole of the slack went to .tf-fold's own
+     margin-left:auto. The fields share that slack out between
+     themselves instead -- the controls inside keep the fixed widths the
+     `.thin input`/`.thin select` rules give them, so this widens the
+     gaps between groups and never the inputs. With no free space left
+     to claim, fold's auto margin resolves to nothing and it sits beside
+     `columns ▸`, which is where round 30 draws the pair. Direct
+     children only: the captioned sub-fields inside an .addr-group must
+     go on hugging their own control. */
+  .bar.thin > .fb-field {
+    flex-grow: 1;
+  }
+
   /* Visible on the thin bar only -- the mobile drawer already names each
      field via its placeholder/aria-label, and showing this too would be
      a mobile visual change nothing here asked for. */
