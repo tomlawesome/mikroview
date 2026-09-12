@@ -3,7 +3,7 @@
   // Admin-only audit log (issue #112): a read-only, most-recent-first
   // table of every admin-privileged mutation mikroview has recorded --
   // who created a user, changed a detector setting, upserted/deleted an
-  // entity, created/revoked an API token, or removed a permanent flag
+  // entity, minted/revoked a key, or removed a permanent flag
   // exclusion. See internal/audit.Entry -- nothing here is editable from
   // the UI, mirroring Fleet.svelte's plain read-only table shape rather
   // than Entities.svelte's form-backed CRUD one, since there's nothing
@@ -103,6 +103,26 @@
     return detail ? ` · ${detail}` : ''
   }
 
+  // A shipped detector's id is readable ("port_scan"); anything the
+  // operator makes -- a watch, a detector of their own -- carries a
+  // generated 32-hex one. Leading a row with that pushed the name, the
+  // one part a person recognises, past the middot: "created definition
+  // 3805d355… · nas-shares-watch" (#1161).
+  const OPAQUE_ID = /^[0-9a-f]{32}$/
+
+  // The name goes first and the id follows, for the two actions whose
+  // detail *is* the name (internal/api/definitions.go records e.Name).
+  // The same action is also recorded when a verdict promotes a flag
+  // into an observing entry, and there the detail is a sentence rather
+  // than a name (flags_watchlist.go) -- a single unspaced word is what
+  // tells the two apart, so that row is left exactly as it read.
+  function named(lead: string, e: AuditEntry): What {
+    if (e.detail && !/\s/.test(e.detail) && OPAQUE_ID.test(e.target)) {
+      return { lead, key: e.detail, tail: ` · ${e.target}` }
+    }
+    return { lead, key: e.target, tail: tailOf(e.detail) }
+  }
+
   const KNOWN_ACTIONS: Record<string, (e: AuditEntry) => What> = {
     'flag.clear': (e) => ({
       lead: 'cleared flag ',
@@ -110,6 +130,13 @@
       tail: e.detail ? ` — "${e.detail}"` : '',
     }),
     'flag.clear_all': (e) => ({ lead: 'cleared all flags', key: '', tail: tailOf(e.detail) }),
+    // #1161: both fell through to the humanizing fallback, which prints
+    // the flag id raw -- "flag verdict distributed_brute_force:port 22"
+    // where the docket calls the same flag "DISTRIBUTED BRUTE FORCE ·
+    // port 22". flagKey is that reading, and the other flag rows here
+    // already use it.
+    'flag.verdict': (e) => ({ lead: 'flag verdict ', key: flagKey(e.target), tail: tailOf(e.detail) }),
+    'flag.verdict_undo': (e) => ({ lead: 'undid the verdict on flag ', key: flagKey(e.target), tail: '' }),
     'flag.clear_permanent': (e) => ({ lead: 'permanently cleared flag ', key: flagKey(e.target), tail: '' }),
     'flag.exclusion_remove': (e) => ({ lead: 'removed exclusion for ', key: flagKey(e.target), tail: '' }),
     'user.create': (e) => ({ lead: 'created user ', key: e.target, tail: tailOf(e.detail) }),
@@ -117,16 +144,21 @@
     'account.password_changed': (e) => ({ lead: 'changed password for ', key: e.target, tail: tailOf(e.detail) }),
     'account.sessions_ended': (e) => ({ lead: 'ended all sessions for ', key: e.target, tail: '' }),
     'account.link_sso': (e) => ({ lead: 'linked SSO for ', key: e.target, tail: tailOf(e.detail) }),
-    'token.create': (e) => ({ lead: 'created API token ', key: e.target, tail: tailOf(e.detail) }),
-    'token.revoke': (e) => ({ lead: 'revoked API token ', key: e.target, tail: '' }),
+    // "key", the word Settings uses for the same thing on the screen
+    // that makes them -- "an ingest key lets one router push its
+    // state", "+ mint a key" -- not "API token", which named it a
+    // second way in the one place an operator checks what happened
+    // (#1161).
+    'token.create': (e) => ({ lead: 'minted key ', key: e.target, tail: tailOf(e.detail) }),
+    'token.revoke': (e) => ({ lead: 'revoked key ', key: e.target, tail: '' }),
     'entity.upsert': (e) => ({ lead: 'updated entity ', key: e.target, tail: tailOf(e.detail) }),
     'entity.delete': (e) => ({ lead: 'deleted entity ', key: e.target, tail: '' }),
     'coverage.declare': (e) => ({ lead: 'declared coverage for ', key: e.target, tail: tailOf(e.detail) }),
     'coverage.undeclare': (e) => ({ lead: 'undeclared coverage for ', key: e.target, tail: '' }),
-    'definition.create': (e) => ({ lead: 'created definition ', key: e.target, tail: tailOf(e.detail) }),
+    'definition.create': (e) => named('created definition ', e),
+    'definition.clone': (e) => named('cloned definition ', e),
     'definition.update': (e) => ({ lead: 'updated definition ', key: e.target, tail: tailOf(e.detail) }),
     'definition.delete': (e) => ({ lead: 'deleted definition ', key: e.target, tail: tailOf(e.detail) }),
-    'definition.clone': (e) => ({ lead: 'cloned definition ', key: e.target, tail: tailOf(e.detail) }),
     'definition.reset': (e) => ({ lead: 'reset definition ', key: e.target, tail: '' }),
     'definition.promote': (e) => ({ lead: 'promoted definition ', key: e.target, tail: tailOf(e.detail) }),
     'definition.observing.start': (e) => ({ lead: 'started observing ', key: e.target, tail: '' }),
@@ -225,7 +257,7 @@
   {#if INTRO_ENABLED}
     <p class="intro">
       Every admin-privileged mutation mikroview has recorded -- who created a user, changed a detector setting,
-      upserted/deleted an entity, created or revoked an API token, or removed a permanent flag exclusion. Read-only
+      upserted/deleted an entity, minted or revoked a key, or removed a permanent flag exclusion. Read-only
       actions (viewing pages, listing users) are never logged here, only mutations.
       {#if auditState.hasMore}
         <span class="truncated">Showing the most recent entries only.</span>
