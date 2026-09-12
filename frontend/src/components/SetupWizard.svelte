@@ -713,7 +713,7 @@
                        which asked the operator to nest one clipboard
                        inside another and to do RouterOS's escaping by
                        hand (#1131). -->
-                  <pre class="script">{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
+                  <pre class="script scrollbar">{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
@@ -854,7 +854,7 @@
                       so it is scoped to that one router and to this drop box.
                     </p>
                   {/if}
-                  <pre class="script">{wizardState.commands?.steps.backup.commands ?? ''}</pre>
+                  <pre class="script scrollbar">{wizardState.commands?.steps.backup.commands ?? ''}</pre>
                   <button
                     type="button"
                     class="copy"
@@ -1402,8 +1402,16 @@
     user-select: all;
   }
 
+  /* #1146: a flat 300px left 13.8 lines of a 12.5px/1.6 box visible, so
+     the 14th was sliced through its glyphs and read as a rendering
+     fault rather than as "there is more below". Whole lines instead --
+     14 of them, plus the padding this border-box height includes -- and
+     in `em` so the sheet's smaller type below still lands on a line
+     boundary. The `scrollbar` class in the markup is app.css's own thin
+     always-drawn bar: a script box whose lines run several thousand
+     pixels wide has to say so sideways as well as downwards. */
   pre.script {
-    max-height: 300px;
+    max-height: calc(14 * 1.6em + 24px);
     overflow-y: auto;
   }
 

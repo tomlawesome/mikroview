@@ -688,6 +688,20 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
     expect(pres).toEqual(['mvt-shown-once', 'SCRIPT_ADD_WITH_THE_BODY_IN_IT'])
     expect(container.textContent).not.toContain('Then save it and run it once')
   })
+
+  // #1146: the box was 300px tall for 800px of script, which sliced the
+  // last visible line in half, and its overlay scrollbars stayed hidden
+  // so nothing said the lines ran off to the right either. The height is
+  // a whole number of lines now; the class is what draws the bars, and
+  // is the half of that fix a DOM test can see.
+  it('gives the script box always-drawn scrollbars', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    expect(container.querySelector('pre.script')?.classList.contains('scrollbar')).toBe(true)
+  })
 })
 
 // #394, round 45: the wizard's sixth step, "Back up the router".
