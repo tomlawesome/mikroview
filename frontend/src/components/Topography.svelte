@@ -5232,9 +5232,9 @@
         {/each}
 
         <!-- Every label this lens draws, now that every line above it is
-             down. The click/keydown here duplicate the line's own (the
-             plate is a real, sizeable target and deserves to be one) --
-             see this file's own report on what that costs the tab order. -->
+             down. The click here duplicates the line's own (the plate is
+             a real, sizeable target and deserves to be one); the tab
+             order is the line's alone (#1180). -->
         {#each drawnReality.drawn as d, di (d.r.key)}
           <!-- The escalated pair keeps its slot in trafficBadges so
                every later index still lines up, but the slot carries no
@@ -5244,11 +5244,17 @@
                direction skips its empty label the same way. -->
           {#if d !== worstUnplanned && !silentDir(d.r.key) && !filterOn}
             {@const badge = trafficBadges[di]}
+            <!-- A mouse target only (#1180). The plate is a real,
+                 sizeable thing to click and stays one, but its rib
+                 underneath carries the same action under the same
+                 label and is already in the tab order: two of each
+                 meant a keyboard walk of the map stopped at every
+                 boundary twice, and a screen reader heard it twice. -->
             <g
               class="detail"
               role="button"
-              tabindex="0"
-              aria-label="{realityLabel(d.r)} — open this rib's reach"
+              tabindex="-1"
+              aria-hidden="true"
               onclick={(e) => {
                 e.stopPropagation()
                 descendRib(d.r.from, d.r.to)
