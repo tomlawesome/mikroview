@@ -251,6 +251,37 @@ describe('LogEveryRule drop zone (#1134)', () => {
   })
 })
 
+// #1186: junk pasted in came back as "Watching for 0 hours", which
+// reads as "nothing yet" rather than "that was not an export" -- and
+// the 24-hour gate itself was never mentioned until after the operator
+// had done the work of finding and pasting a config.
+describe('LogEveryRule bad input and the 24-hour gate (#1186)', () => {
+  it('says the pasted text is not an export, and holds Analyse', async () => {
+    const { container } = render(LogEveryRule)
+    await pasteExport(container, 'the quick brown fox jumps over the lazy dog')
+
+    await waitFor(() => expect(container.querySelector('.load-error')).toBeTruthy())
+    expect(container.querySelector('.load-error')?.textContent).toContain('no /ip firewall filter section')
+    expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await clickAnalyse()
+    expect(fetchTuneLoggingAnalyse).not.toHaveBeenCalled()
+  })
+
+  it('says nothing about a real export, and leaves Analyse free', async () => {
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+
+    expect(container.querySelector('.load-error')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('states the 24-hour gate before anything has been pasted', () => {
+    const { container } = render(LogEveryRule)
+    expect(container.textContent).toContain('24 hours of watching the router')
+  })
+})
+
 describe('LogEveryRule under 24 hours (#435 decision 5)', () => {
   it('shows the waiting message and no rule list', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(
