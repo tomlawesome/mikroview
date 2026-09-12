@@ -900,9 +900,14 @@
     return `watch broken -- ${e.name || 'unnamed watch'}: nothing has matched inside its window${since}${nights ? ` (${nights})` : ''}`
   }
 
+  // #1164: the same sentence the band head's aria description carries,
+  // so the caption explains itself to a sighted reader too rather than
+  // only to a screen reader.
+  const UNMATCHED_EXPLANATION = 'events whose boundary is not in a pushed rule table yet'
+
   function bandHeadSummary(b: BandView): string {
     const parts: string[] = [b.label]
-    if (b.key === '__unmatched__') parts.push('events whose boundary is not in a pushed rule table yet')
+    if (b.key === '__unmatched__') parts.push(UNMATCHED_EXPLANATION)
     else if (b.coverage === 'dark') parts.push('dark -- blank because nothing is logged, not because nothing is sent')
     else if (b.coverage === 'unknown') parts.push('coverage unknown -- no router has pushed its rule table yet')
     else if (b.brokenWatches.length > 0) parts.push(watchBrokenSummary(b.brokenWatches[0]))
@@ -1113,7 +1118,9 @@
               <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
               {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
               {#if b.key === '__unmatched__'}
-                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED TABLE</text>
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50"
+                  ><title>{UNMATCHED_EXPLANATION}</title>NOT IN A PUSHED TABLE</text
+                >
               {:else if b.coverage === 'dark'}
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
               {:else if b.coverage === 'unknown'}
