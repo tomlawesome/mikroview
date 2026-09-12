@@ -37,20 +37,24 @@ export interface ColumnDef {
 // the table's width.
 export const PINNED_COLUMNS: ReadonlySet<string> = new Set(['time', 'rule'])
 
+// #1149: each half of a repeated pair says which side it is. Both address
+// columns read "Address" and the port pair read "Src port"/"Port", so the
+// only thing telling a reader which was which was where it sat --
+// EventDetailSheet.svelte has said "Src port"/"Dst port" all along.
 export const COLUMNS: ColumnDef[] = [
   { key: 'time', label: 'Time' },
   { key: 'device', label: 'Device' },
   { key: 'action', label: 'Action' },
   { key: 'chain', label: 'Chain' },
   { key: 'source', label: 'Source' },
-  { key: 'srcAddr', label: 'Address' },
+  { key: 'srcAddr', label: 'Src address' },
   { key: 'srcPort', label: 'Src port' },
   { key: 'mac', label: 'MAC' },
   { key: 'destination', label: 'Destination' },
-  { key: 'dstAddr', label: 'Address' },
+  { key: 'dstAddr', label: 'Dst address' },
   { key: 'proto', label: 'Proto' },
   { key: 'iface', label: 'Interfaces' },
-  { key: 'port', label: 'Port' },
+  { key: 'port', label: 'Dst port' },
   { key: 'nat', label: 'NAT' },
   { key: 'rule', label: 'Rule' },
 ]
@@ -122,7 +126,15 @@ type Width = number | null
 //             bounded like an IPv4 address plus ":" plus up to 5
 //             digits, click-to-filter when the chain says which side
 //             it is (mirrors EventRow's natFilterKey), otherwise plain
-const DEFAULT_WIDTHS: Width[] = [124, 150, 80, 90, 160, 104, 60, 150, 160, 104, 60, 170, 60, 150, null]
+// #1149: MAC 150 -> 168 and the two address columns 104 -> 132. Both were
+// measured under their content: a 17-character MAC needs ~163px at the
+// row's 14px mono, and a 13-character bare IPv4 ~129px, so every one of
+// them was cut short. (#685 sized the address columns for the
+// ten-character IP in the round-29 data; the addresses on a real LAN run
+// to fifteen.) The numbers only move the defaults -- a reader who
+// has dragged a column keeps the width they chose (STORAGE_KEY is not
+// bumped: the stored array's shape has not changed).
+const DEFAULT_WIDTHS: Width[] = [124, 150, 80, 90, 160, 132, 60, 168, 160, 132, 60, 170, 60, 150, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an

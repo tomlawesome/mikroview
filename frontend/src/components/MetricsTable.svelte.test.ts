@@ -87,6 +87,37 @@ describe('MetricsTable top port / top talker columns (#644 round 21)', () => {
   })
 })
 
+// #1169: the table printed "0" under Accept, Log, Drop and the rest for
+// minutes that ended before this process started counting -- the same
+// rows where Top port and Top talker honestly said "—".
+describe('MetricsTable minutes before counting started (#1169)', () => {
+  it('prints an em dash, not a zero, for a minute nobody was watching', () => {
+    const hour = buildHour(traffic, [])
+    render(MetricsTable, { hour, cursor: -1, onselect: () => {}, liveSince: minute(1) })
+
+    const row0 = screen.getByRole('button', { name: formatHM(minute(0)) }).closest('tr')!
+    expect(rowCells(row0).every((c) => c.trim() === '—')).toBe(true)
+  })
+
+  it('leaves the minute counting began in, and everything after it, as figures', () => {
+    const hour = buildHour(traffic, [])
+    render(MetricsTable, { hour, cursor: -1, onselect: () => {}, liveSince: minute(1) })
+
+    const row1 = screen.getByRole('button', { name: formatHM(minute(1)) }).closest('tr')!
+    const cells = rowCells(row1)
+    expect(cells[0]).toBe('410')
+    expect(cells).toContain('88')
+  })
+
+  it('prints every figure when the server sent no counting-since at all', () => {
+    const hour = buildHour(traffic, [])
+    render(MetricsTable, { hour, cursor: -1, onselect: () => {} })
+
+    const row0 = screen.getByRole('button', { name: formatHM(minute(0)) }).closest('tr')!
+    expect(rowCells(row0)[0]).toBe('400')
+  })
+})
+
 // Rounds 36-37 (#803). Round 36 drew the ledger under the minutes; the
 // owner's verdict was "love the ledger but put them at the top not
 // beneath", and round 37 redrew it as the head of the view. Where it
