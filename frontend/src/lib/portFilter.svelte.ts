@@ -113,17 +113,36 @@ class PortFilterState {
     this.answer = EMPTY
   }
 
+  /**
+   * Once there is a selection the pill is its answer, not the picker
+   * that made it (#1178; round 53: "Selected, the pill collapses onto
+   * the answer"). Leaving the bar open with the chosen chip merely lit
+   * left a 34-chip row across the bottom of the map saying nothing
+   * about what it had found. Several ports at once are still reachable
+   * -- the collapsed pill reopens the bar with its chips as they were
+   * -- so the shape says which of the two states the operator is in
+   * rather than showing both at once.
+   *
+   * Emptying the selection leaves the bar open: there is no answer to
+   * collapse onto, and the next pick is what the operator came for.
+   */
+  private settle() {
+    if (this.ports.length > 0) this.open = false
+  }
+
   /** Adds or removes one port; the map re-filters as the set changes. */
   async togglePort(port: number) {
     this.ports = this.ports.includes(port)
       ? this.ports.filter((p) => p !== port)
       : [...this.ports, port].sort((a, b) => a - b)
+    this.settle()
     await this.refresh()
   }
 
   /** Selects exactly the ports typed into the field. */
   async setPorts(ports: number[]) {
     this.ports = [...ports].sort((a, b) => a - b)
+    this.settle()
     await this.refresh()
   }
 

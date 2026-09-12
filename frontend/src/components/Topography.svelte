@@ -4865,12 +4865,21 @@
       {#if portOn}
         <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
       {/if}
-    {:else if portOn}
+    {:else if portFilterState.active}
+      <!-- Collapsed the instant a port is chosen, not once its answer
+           lands (#1178): the pill states what is selected straight away,
+           and the tail joins it when the server has answered. The tail
+           is held back rather than drawn from an unsettled answer --
+           `nothing seen · 0 doors` while a request is still in flight
+           would be a claim about the network made out of a pending
+           fetch, the same reason refresh() does not mark a failed one
+           settled. -->
       <button
         class="pill p on"
         aria-pressed="true"
         title="filtered to {portFilterState.label} — click to change, ✕ to clear"
-        onclick={openPortPicker}>⌕ <b>{portFilterState.label}</b> <em>· {portFilterState.summary}</em></button
+        onclick={openPortPicker}
+        >⌕ <b>{portFilterState.label}</b>{#if portOn}&nbsp;<em>· {portFilterState.summary}</em>{/if}</button
       >
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
