@@ -690,13 +690,20 @@
               {/if}
             </div>
           {:else}
+            <!-- #1168: the resting state says what it is. #718 asked for
+                 no words at all, on the reading that an empty shape in a
+                 row of full cards is affordance enough -- with no routers
+                 registered there is no row of full cards, and what the
+                 operator met on first run was one blank dashed box.
+                 aria-label stays: it is the same name the panel this
+                 opens already carries. -->
             <button
               type="button"
               class="berth-trigger"
               bind:this={berthTrigger}
               onclick={openBerth}
               aria-label="Add a router"
-            ></button>
+            ><span class="berth-label">+ add a router</span></button>
           {/if}
           </div>
         </div>
@@ -1038,20 +1045,31 @@
     border-color: var(--accent);
   }
 
-  /* The whole card is the trigger -- no icon, no "+", no label: the
-     empty shape in a row of full ones is the affordance (#718's
-     "Design: the add-router control", Option 1). The accessible name
-     that a sighted operator never sees is set via aria-label in the
-     markup. */
+  /* The whole card is the trigger (#718's "Design: the add-router
+     control", Option 1), now carrying its own resting label (#1168):
+     the empty shape reads as an affordance beside full cards, and on
+     first run there are none to read it against. */
   .berth-trigger {
     all: unset;
     box-sizing: border-box;
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
     height: 100%;
     min-height: inherit;
     cursor: pointer;
     border-radius: inherit;
+  }
+
+  .berth-label {
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+
+  .fcard.berth:hover .berth-label,
+  .fcard.berth:focus-within .berth-label {
+    color: var(--accent);
   }
 
   .berth-trigger:focus-visible {
