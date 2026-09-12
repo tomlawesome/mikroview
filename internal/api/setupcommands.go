@@ -74,7 +74,13 @@ type setupCommandsSteps struct {
 	Syslog      commandStep `json:"syslog"`
 	RuleTagging commandStep `json:"ruleTagging"`
 	Push        commandStep `json:"push"`
-	Schedule    commandStep `json:"schedule"`
+	// Schedule is step 4's whole hand-over since #1131: the push script
+	// saved, scheduled and run once, in one block the operator pastes
+	// as it stands. Push stays beside it as the bare script body, which
+	// is what the Engine Room's "copy the router lines" re-key affordance
+	// wants -- an existing mv-push script's source, not a second
+	// `/system script add`.
+	Schedule commandStep `json:"schedule"`
 	// Backup/BackupSchedule are step 6's two blocks (#394, round 45):
 	// the script that saves, exports and pushes both files, and the
 	// nightly scheduler entry. Both stay blank when the drop box is not
@@ -178,10 +184,14 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 
 	// A push script only means something with both a token and at least
 	// one kind to push; either missing leaves it blank rather than
-	// rendering an empty or half-formed script.
-	pushCommands := ""
+	// rendering an empty or half-formed script. Schedule follows it:
+	// since #1131 it carries the script body itself, so with nothing to
+	// carry it is a `/system script add` around an empty source, which
+	// is exactly the half-formed block this blankness rule exists for.
+	pushCommands, scheduleCommands := "", ""
 	if req.Token != "" && len(req.Kinds) > 0 {
 		pushCommands = routeros.PushScript(req.Address, req.Token, req.Kinds, dialect)
+		scheduleCommands = routeros.ScheduleCommands(pushCommands, dialect)
 	}
 
 	// The backup script only means something with a device to name, a
@@ -215,7 +225,7 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			Syslog:         commandStep{Commands: routeros.SyslogCommands(req.Address, syslogPort, dialect)},
 			RuleTagging:    commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
 			Push:           commandStep{Commands: pushCommands},
-			Schedule:       commandStep{Commands: routeros.ScheduleCommands(dialect)},
+			Schedule:       commandStep{Commands: scheduleCommands},
 			Backup:         commandStep{Commands: backupCommands},
 			BackupSchedule: commandStep{Commands: backupScheduleCommands},
 		},

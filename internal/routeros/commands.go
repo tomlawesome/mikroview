@@ -32,6 +32,32 @@ func quote(s string) string {
 	return s
 }
 
+// scriptSource escapes a whole script body for the inside of a
+// `source="..."` value: quote()'s backslash-then-quote rule, plus `$`
+// as `\$` because RouterOS expands `$name` inside a double-quoted
+// string and a push script is nothing but `$v`, `$alRecs` and their
+// kin -- unescaped, RouterOS would save a script with every variable
+// already substituted away to nothing.
+//
+// Newlines are left as they are: BackupScript's multi-line
+// source="..." is the proven form, run end to end against a real CHR
+// under #394, so a script body keeps its own line breaks rather than
+// being folded into `\n` escapes.
+func scriptSource(body string) string {
+	return strings.ReplaceAll(quote(body), `$`, `\$`)
+}
+
+// scriptAdd wraps a script body in the `/system script add` that saves
+// it under name, so what the wizard hands over is one block the
+// operator pastes into the terminal as it stands (#1131). The form it
+// replaced printed the body in one box and
+// `source="<paste the script above>"` in another, which asked the
+// operator to nest one clipboard inside another and to do the escaping
+// this function does.
+func scriptAdd(name, policy, body string) string {
+	return fmt.Sprintf(`/system script add name=%s policy=%s source="%s"`, name, policy, scriptSource(body))
+}
+
 // Hostname strips a port. Certificate names never carry one, so this is
 // what tls.hosts is compared against.
 func Hostname(hostPort string) string {
@@ -200,13 +226,22 @@ func PushScript(address, token string, kinds []string, dialect string) string {
 	return strings.Join(blocks, "\n\n")
 }
 
-// ScheduleCommands is step 4's scheduler entry: turn the pasted push
-// script into a script object RouterOS runs on a timer, then run it once
-// immediately so the first push does not wait for the interval to pass.
-func ScheduleCommands(dialect string) string {
+// PushScriptPolicy is the policy mv-push is saved and scheduled under:
+// it reads router state and posts it, and does nothing else. Named
+// rather than repeated so the script and its scheduler entry cannot
+// drift apart, the same reason BackupScriptPolicy exists.
+const PushScriptPolicy = "read,test"
+
+// ScheduleCommands is step 4's whole hand-over: body saved as the
+// mv-push script, the scheduler entry that runs it every 20 minutes,
+// and one run now so the first push does not wait for the interval to
+// pass. One block, pasted into a RouterOS terminal as it stands
+// (#1131) -- body is the push script PushScript built, already escaped
+// for the source="..." it sits inside.
+func ScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
-		`/system script add name=mv-push policy=read,test source="<paste the script above>"`,
-		`/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"`,
+		scriptAdd("mv-push", PushScriptPolicy, body),
+		fmt.Sprintf(`/system scheduler add name=mv-push interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy),
 		`/system script run mv-push`,
 	}, "\n")
 }
@@ -346,14 +381,10 @@ func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
 // no retry) -- the next scheduled run starts over from the beginning;
 // this deliberately builds no resume logic.
 //
-// Unlike BackupScript, this is not wrapped in its own /system script
-// add: the loop and the JSON-building above make BackupScript's
-// single-line, hand-escaped password=\"...\" style impractical at this
-// size and would multiply that escaping across every quoted value
-// here. Instead this returns the bare script body, meant to be pasted
-// into the RouterOS script editor the same way PushScript's output is
-// -- BackupPushScheduleCommands is ScheduleCommands' "<paste the script
-// above>" idiom, not BackupScheduleCommands' self-contained form.
+// Like PushScript, this returns the bare script body: what makes it a
+// saved script is BackupPushScheduleCommands, which wraps it through
+// scriptAdd (#1131) rather than printing it in one box and a
+// `source="<paste the script above>"` line in another.
 //
 // address is mikroview's own host (with port -- the same combined value
 // CaTrustCommands/PushBlock take, not BackupScript's bare-host form);
@@ -377,18 +408,17 @@ func BackupPushScript(address, token, dialect string) string {
 	}, "\n\n")
 }
 
-// BackupPushScheduleCommands is BackupPushScript's scheduler entry --
-// ScheduleCommands' two-step "paste the script above" idiom rather than
-// BackupScheduleCommands' single self-contained /system script add,
-// since BackupPushScript does not add the script itself (see its own
-// doc comment for why). Named mv-backup-https, distinct from the SFTP
-// script's mv-backup, so an operator can have both set up without a
-// name collision. Same nightly 03:00 interval as BackupScheduleCommands
-// and the same run-once-now idiom every scheduler helper in this file
-// uses, so the first push does not wait for the interval to pass.
-func BackupPushScheduleCommands(dialect string) string {
+// BackupPushScheduleCommands is BackupPushScript's whole hand-over,
+// the same shape ScheduleCommands has: body saved as the
+// mv-backup-https script, the nightly scheduler entry, and one run now
+// (#1131). Named mv-backup-https, distinct from the SFTP script's
+// mv-backup, so an operator can have both set up without a name
+// collision. Same nightly 03:00 interval as BackupScheduleCommands and
+// the same run-once-now idiom every scheduler helper in this file uses,
+// so the first push does not wait for the interval to pass.
+func BackupPushScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
-		fmt.Sprintf(`/system script add name=mv-backup-https policy=%s source="<paste the script above>"`, BackupScriptPolicy),
+		scriptAdd("mv-backup-https", BackupScriptPolicy, body),
 		fmt.Sprintf(`/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy),
 		`/system script run mv-backup-https`,
 	}, "\n")
