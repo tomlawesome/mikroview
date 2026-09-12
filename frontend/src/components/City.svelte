@@ -4844,6 +4844,19 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     font: 10.5px var(--font-mono);
     color: var(--fg-muted);
+    /* A card is as tall as what it has to say, up to the stage (#1138):
+       a road with 80 off-baseline lines drew a card 6373px tall, which
+       covered the dials, the borough header and the plaques on the way
+       down and left its own "mark all 80 expected" control off the
+       bottom of the screen with no way to reach it. The content is all
+       still there -- it scrolls inside the card instead. Capped here
+       rather than on the road card alone, so every card in the family
+       is bounded by the same rule; the short ones are unchanged.
+       lib/cardAnchor.ts measures the card it is placing, so the capped
+       height is what the placement fits into the stage. */
+    max-height: calc(100% - 64px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* Placed, the card is positioned from its own top-left, so the
