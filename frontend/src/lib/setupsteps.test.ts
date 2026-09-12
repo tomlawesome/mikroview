@@ -452,7 +452,20 @@ describe('backupStep', () => {
   it('is blocked, in the disabled-step voice, once the server actually says no key is mounted', () => {
     const s = backupStep(backups({ enabled: false }))
     expect(s.state).toBe('blocked')
-    expect(s.detail).toContain('none is mounted')
+    expect(s.detail).toContain('No key file is mounted')
+    expect(s.detail).toContain('a push would be refused')
+  })
+
+  // #1133: the observation line says what was observed and what to do
+  // about it; the model -- that mikroview holds this key and seals the
+  // history and the state store with it too -- is the lead's job, said
+  // once. The old detail was the lead's sentence repeated, and wrong
+  // about the model ("a key it does not hold" is the vault passphrase).
+  it('leaves the explanation to the lead rather than repeating it, and never says mikroview does not hold the key', () => {
+    const s = backupStep(backups({ enabled: false }))
+    expect(s.detail).not.toContain('does not hold')
+    // "above": the observation line sits under the key field it points at.
+    expect(s.detail).toMatch(/Put the key above in place/)
   })
 
   it('waits once a key is mounted but nothing has pushed yet', () => {

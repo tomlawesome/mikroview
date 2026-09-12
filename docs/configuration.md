@@ -257,7 +257,11 @@ back to the file's figures, delete the settings document
 (`store.settingsStorePath`), exactly as for `store.maxMemory` above.
 `history.keyFile` and `history.dir` are **not** editable from the app and
 never will be: one names a mounted secret and the other a filesystem
-path, and neither belongs in the blast radius of a browser session.
+path, and neither belongs in the blast radius of a browser session. The
+setup wizard's backup step will *generate* a key for you when none is
+mounted, but it mints it in the browser and never sends it here (#1133):
+mikroview first sees that value in the file you mount, which is also why
+the wizard says it can never show it to you again.
 
 - `history.enabled` — the switch, and the initial position of the one in
   Settings. **Turning it off deletes what was already retained** — off
@@ -274,6 +278,12 @@ path, and neither belongs in the blast radius of a browser session.
   The file must hold at least 32 bytes. This is a path, never the key
   itself — there is deliberately no environment variable carrying key
   material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+
+  Or let the app generate it: with no key mounted, the setup wizard's
+  step 6 hands you a key of exactly this shape, with the commands to
+  write it to a file, mount it and point mikroview at it. It is generated
+  in your browser and never sent to the server, so save it when it is
+  shown — nothing can reprint it.
 
   **It must be mounted outside the data directory.** A key kept beside
   the files it protects is decoration: whoever copies the directory
@@ -352,6 +362,10 @@ to the rest of mikroview's state. With no key configured, the drop box
 refuses every login outright rather than accepting a push it has
 nowhere safe to keep; Settings' `router backups` group says so plainly.
 There is no separate key for this feature and no unencrypted fallback.
+The wizard's step 6 is the shortest way out of that state: with no key
+mounted it generates one in the browser and prints the steps to put it in
+place (see [`history.keyFile`](#on-disk-event-history-optional-off-by-default)
+above), then prints the router script once it is.
 
 **Login is the device, not a new credential.** Username is the router's
 device name, password is that device's ingest token — the very token

@@ -134,6 +134,15 @@ instant.
   that is the done-when's "visibly recorded" clause.
 - Wizard truthfulness fixes #371/#374 are check-logic this design
   inherits; they land before or with it.
+- Step 6 with no key mounted **mints the key** (owner ruling, #1133),
+  superseding round 45's drawing of a dim placeholder and a
+  "how to mount one" link: a pre-filled, editable field with a reroll,
+  a copy control, the warning that nothing can reprint it, and the
+  steps to put it in place. The key is generated in the browser
+  (`crypto.getRandomValues`) and never sent to the server —
+  `history.keyFile` stays not editable from the app (#853). The lead
+  says the model once and correctly: mikroview encrypts backups, the
+  event history and the state store under the key file you mount.
 
 ## Superseded (considered and closed)
 
