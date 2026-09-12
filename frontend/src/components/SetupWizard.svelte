@@ -726,8 +726,19 @@
                   {/if}
                 {/if}
               {:else if step.n === 5}
+                <!-- The name is left as deviceStanza's placeholder rather
+                     than passing d.name (#1184): an undeclared router's
+                     name *is* its address, so the sample read
+                     name: "172.23.0.1" -- pasting it named the router
+                     after the address this step exists to replace. And
+                     the block gets the same Copy the other steps offer;
+                     step 5 was the only one without one. -->
                 {#each undeclared as d (d.id)}
-                  <pre>{deviceStanza(d.sourceIp, d.name)}</pre>
+                  {@const stanza = deviceStanza(d.sourceIp, '')}
+                  <pre>{stanza}</pre>
+                  <button type="button" class="copy" onclick={() => copy(stanza, `stanza-${d.id}`)}>
+                    {copied === `stanza-${d.id}` ? 'Copied' : 'Copy'}
+                  </button>
                 {/each}
               {:else if step.n === 6}
                 {#if step.status.state === 'blocked'}
