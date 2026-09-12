@@ -520,8 +520,8 @@ const LEADS = [
   "The router has to trust mikroview's certificate authority before it will open a TLS connection. Run this on the router; it fetches the certificate and imports it.",
   'Point the router at this instance. The handshake itself is the evidence — a failed one never counts as arrived.',
   'The letter in the log-prefix is how mikroview knows what a rule did. This tags every existing filter rule by its action, in one pass.',
-  'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. The token below is minted for one router and is already in the script.',
-  'Mikroview does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
+  'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
+  'MikroView does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
   'Every night the router saves itself twice — the binary backup that restores it whole, and the plain export you can read — and drops both into mikroview. Nothing is sent back, and nothing is left on the router. The token below is minted for this one router and is already in the script.',
 ] as const
 
@@ -668,7 +668,12 @@ export function finishHeadline(ledger: LedgerStep[]): string {
   )
   if (skipped > 0) clauses.push(`${count(skipped)} ${skipped === 1 ? 'was' : 'were'} skipped`)
   if (forced > 0) clauses.push(`${count(forced)} ${forced === 1 ? 'was' : 'were'} forced past`)
-  return `${opening} ${clauses.join('; ')}.`
+  // count() spells its numbers in lower case, which read as a broken
+  // sentence directly after the opening one: "Logs are flowing. two
+  // steps stand on evidence." (#1166). It is a sentence, so it starts
+  // like one.
+  const tally = clauses.join('; ')
+  return `${opening} ${tally.charAt(0).toUpperCase()}${tally.slice(1)}.`
 }
 
 // count words small numbers, because "Four steps stand on evidence"

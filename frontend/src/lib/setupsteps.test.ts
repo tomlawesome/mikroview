@@ -600,8 +600,11 @@ describe('the finish', () => {
     )
     const headline = finishHeadline(ledger)
     expect(headline).toContain('Logs are flowing.')
-    expect(headline).toContain('three steps stand on evidence')
+    expect(headline).toContain('Three steps stand on evidence')
     expect(headline).toContain('one was skipped')
+    // #1166: the tally is a sentence of its own, so it starts like one
+    // -- "Logs are flowing. three steps stand on evidence." did not.
+    expect(headline).toBe('Logs are flowing. Three steps stand on evidence; one was skipped.')
   })
 
   it('does not claim anything is flowing when nothing has arrived', () => {
