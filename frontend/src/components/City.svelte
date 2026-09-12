@@ -50,6 +50,7 @@
     cam,
     cityFitS,
     clampCentre,
+    clampRingX,
     clearDropLabels,
     diamond,
     ease,
@@ -3467,6 +3468,16 @@
     return Math.round((a / whole) * 100)
   })
 
+  /**
+   * The borough ring labels, each pulled back inside the stage (#1139).
+   * Held apart from `scene` on purpose: the clamp needs the view camera,
+   * and `scene` is built on geomCam alone so that a pan is a transform
+   * on what is already drawn rather than a redraw of all of it.
+   */
+  const ringLabels = $derived(
+    scene.rings.map((r) => ({ ...r, x: R2(clampRingX(r.x, r.label, viewCam.ox, S / Sgeom)) })),
+  )
+
   const tabbable = (id: string) => (focus ? focus.id === id : ground.districts[0]?.id === id) ? 0 : -1
 </script>
 
@@ -3527,7 +3538,7 @@
             {/each}
           </g>
         {/if}
-        {#each scene.rings as r (r.label)}
+        {#each ringLabels as r (r.label)}
           <path d={r.d} fill="none" stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="2 6" stroke-linejoin="round" />
         {/each}
         {#each scene.plates as p (p.d.id)}
@@ -3856,7 +3867,7 @@
             <text x={cx - 141} y={cy + 35} class="chip-t">{call.detail} · open ▸</text>
           </g>
         {/if}
-        {#each scene.rings as r (r.label)}
+        {#each ringLabels as r (r.label)}
           <text x={r.x} y={r.y} text-anchor="middle" class="boro-t">{r.label}</text>
         {/each}
         {#each scene.bridgeChips as ch (ch.t)}
