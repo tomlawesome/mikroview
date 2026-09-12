@@ -195,8 +195,8 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
     return {
       state: 'blocked',
       detail:
-        'Mikroview keeps a backup only under a key it does not hold, and none is mounted. Mount one ' +
-        'and this step prints the script; until then the drop box is closed and a push would be refused.',
+        'No key file is mounted, so the drop box is closed and a push would be refused. Put the key ' +
+        'above in place and restart, and this step prints the script.',
     }
   }
   const routers = backups?.routers ?? []

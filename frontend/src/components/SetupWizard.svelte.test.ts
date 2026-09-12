@@ -549,9 +549,99 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
-    expect(container.querySelector('.wzpre-dim')).toBeTruthy()
+    expect(container.querySelector('pre.script')).toBeNull()
     expect(container.querySelector('.mint')).toBeNull()
-    expect(screen.getByRole('link', { name: 'how to mount one' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'more on mounting a key' })).toBeTruthy()
+  })
+
+  // --- #1133: the step mints the key, in the UI ------------------------
+  // The old pane said the same sentence twice -- and said it wrongly,
+  // about "a key it does not hold" -- over an empty dimmed box. It now
+  // hands the operator a key and the steps to put it in place.
+
+  async function noKeyPane() {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
+    wizardState.pane = 6
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(false))
+    await tick()
+    return rendered
+  }
+
+  function keyField(container: HTMLElement): HTMLInputElement {
+    return container.querySelector('#history-key') as HTMLInputElement
+  }
+
+  it('offers a freshly generated key, in the shape the key file wants', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    expect(field).toBeTruthy()
+    // 32 bytes, base64 -- docs/configuration.md's `head -c 32
+    // /dev/urandom | base64`, which is what retention.LoadKey accepts.
+    expect(field.value).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+  })
+
+  it('rerolls to a different key, so the button is not decoration', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    const first = field.value
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await tick()
+    expect(keyField(container).value).not.toBe(first)
+    expect(keyField(container).value).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+  })
+
+  it('takes a key the operator types or pastes in instead', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    await fireEvent.input(field, { target: { value: 'a-key-of-my-own-that-i-already-had' } })
+    await tick()
+    expect(keyField(container).value).toBe('a-key-of-my-own-that-i-already-had')
+  })
+
+  it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
+    const { container } = await noKeyPane()
+
+    const caveat = (container.querySelector('.wzcaveat')?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(caveat).toContain('Save this now')
+    expect(caveat).toContain('never receives this value')
+  })
+
+  it('prints the steps to put it in place, each one copyable', async () => {
+    const { container } = await noKeyPane()
+
+    const blocks = [...container.querySelectorAll('.body pre')].map((p) => p.textContent ?? '')
+    expect(blocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key'))).toBe(true)
+    expect(blocks.some((b) => b.includes('/run/secrets/mikroview-history.key:ro'))).toBe(true)
+    expect(blocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key'))).toBe(true)
+    expect(blocks.some((b) => b.includes('docker compose up -d'))).toBe(true)
+    expect(container.querySelectorAll('.body button.copy').length).toBe(blocks.length)
+    // No block quotes the key: it goes in on standard input, which is
+    // what keeps it out of the operator's shell history too.
+    const key = keyField(container).value
+    expect(blocks.some((b) => b.includes(key))).toBe(false)
+  })
+
+  it('says the model once, correctly -- mikroview holds this key and seals more than backups with it', async () => {
+    const { container } = await noKeyPane()
+
+    const lead = container.querySelector('.lead')?.textContent ?? ''
+    expect(lead).toContain('under the key file you mount')
+    expect(lead).toContain('the state store')
+    expect(container.textContent).not.toContain('a key it does not hold')
+    // Once, not twice: the observation line underneath no longer repeats
+    // the lead's sentence back.
+    const observation = container.querySelector('.observation')?.textContent ?? ''
+    expect(observation).not.toContain('under the key file you mount')
+  })
+
+  it('leaves the RouterOS version picker out until there is a script to pick for', async () => {
+    const { container } = await noKeyPane()
+
+    expect(container.querySelector('.routeros-version')).toBeNull()
   })
 
   // With exactly one router known, the same auto-mint convenience step
