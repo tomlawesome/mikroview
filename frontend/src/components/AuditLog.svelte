@@ -365,6 +365,11 @@
 
   tr.filters input {
     width: 100%;
+    /* #1147: When and Who hug their content (see the width:1% rule
+       below), which squeezed the When filter to 41px -- narrow enough to
+       clip its own "filter…" placeholder. The floor is the placeholder
+       plus room to type in; the What column is wide and unaffected. */
+    min-width: 7.5em;
     background: transparent;
     border: 0;
     border-bottom: 1px dashed var(--border);

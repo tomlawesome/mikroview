@@ -1807,9 +1807,14 @@
     flex-wrap: wrap;
   }
 
+  /* #1147: fixed at 220px these clipped their own placeholders mid-word
+     ("name it — birdcage, grafana, th") on a row with hundreds of pixels
+     going spare. They take a share of what the row has left instead,
+     never narrower than the 220px they were. */
   .pform input {
-    width: 220px;
-    flex: none;
+    flex: 1 1 220px;
+    min-width: 220px;
+    max-width: 420px;
   }
 
   .pform .acts {
