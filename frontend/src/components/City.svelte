@@ -35,7 +35,7 @@
   import { markFor, type BuildingMark } from '../lib/city/marks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
   import { cityInputFrom, ghostCityZones } from '../lib/city/input'
-  import { layoutGround } from '../lib/city/layout'
+  import { CIDR_FALLBACK, layoutGround, plaqueWidth } from '../lib/city/layout'
   import {
     IK,
     R2,
@@ -2471,7 +2471,7 @@
     for (const d of g.districts) {
       const x = R2(X(c, d.u))
       const y = R2(Y(c, d.v + d.r) + 5)
-      const w = compact ? d.name.length * 7.2 + 26 : 200
+      const w = compact ? d.name.length * 7.2 + 26 : plaqueWidth(d)
       const h = compact ? 20 : d.rulesPushed ? 28 : 40
       if (!claim(x, y, w, h)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d) })
@@ -3796,7 +3796,7 @@
                 <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} />
               {/if}
               <text x={R2(-p.w / 2 + 22)} y="18" class="p-name" class:gname={gs}>{p.d.name}</text>
-              <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? 'no address pushed'}</text>
+              <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? CIDR_FALLBACK}</text>
               {#if gs}
                 <text x={R2(-p.w / 2 + 13)} y="32" class="p-note" style:fill={GHOST_INK[gs]}
                   >{ghostNote(gs, ghostWatchFor(p.d.id), ghostOfferFor(p.d.id), nowMs)}</text

@@ -103,7 +103,7 @@
     zoomPercent,
     type Placed,
   } from '../lib/topography/cluster'
-  import { layoutGround, plateHalfWidth } from '../lib/city/layout'
+  import { CIDR_FALLBACK, layoutGround, plateHalfWidth } from '../lib/city/layout'
   import { cityInputFrom, ghostCityZones } from '../lib/city/input'
   import { hostMarksFrom } from '../lib/city/presence'
   import {
@@ -6153,7 +6153,7 @@
               stroke={LANE_INKS[fc.d.ink % LANE_INKS.length]}
             />
             <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
-            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
+            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? CIDR_FALLBACK}</text>
             <!-- Round 49: `name · subnet`, and the zones stop's own
                  host count. The DARK word that used to trail the count
                  is gone with every other coverage caption -- the
