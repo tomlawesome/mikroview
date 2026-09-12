@@ -378,8 +378,12 @@ await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
   const text = await openPopover(LOGGED_TRIGGER)
 
   // #1167: the header names the router; the chip below is the one place
-  // the mode is said.
-  check(text.includes(`NAT rule — ${DEVICE_NAME}`), 'the logged header names the router it read')
+  // the mode is said. This one is the desktop popover, whose title is
+  // natTitle(routerLookupState.device) -- the raw id RouterRuleButton
+  // opened it with -- where the sheet's title above is given
+  // LiveTable's friendly deviceName. Same split this file's header
+  // comment records; each check reads the string its own surface draws.
+  check(text.includes(`NAT rule — ${DEVICE}`), 'the logged header names the router it read')
   check(
     (await page.textContent('.popover .chip')).trim() === 'logged',
     'the mode chip reads "logged"',
