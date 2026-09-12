@@ -136,6 +136,34 @@ describe('City', () => {
     }
   })
 
+  it('never prints one minimap name through another (#1140)', () => {
+    const input = mockupEstate()
+    // What the operator zoomed into: several VLANs whose names are long
+    // and nearly identical, in a 264px-wide panel.
+    const names = ['vlan-srv sfp-sfpplus1', 'bridge-workshop', 'vlan-guest sfp-sfpplus2', 'vlan-iot wlan1']
+    input.zones.forEach((z, i) => (z.name = names[i] ?? z.name))
+    const { container } = render(City, { props: { stop: 'city', ground: layoutGround(input) } })
+
+    const boxes = [...container.querySelectorAll('.mini-name')].map((el) => {
+      const x = Number(el.getAttribute('x'))
+      const y = Number(el.getAttribute('y'))
+      const half = ((el.textContent ?? '').length * 4.8 + 5) / 2
+      return { x0: x - half, x1: x + half, y0: y - 8, y1: y + 3 }
+    })
+    expect(boxes.length).toBeGreaterThan(0)
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]
+        const b = boxes[j]
+        expect(a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0).toBe(false)
+      }
+
+    // The estate that already fitted still names every plate: the pass
+    // only ever drops a name that had nowhere of its own to go.
+    const roomy = render(City, { props: { stop: 'city', ground } })
+    expect(roomy.container.querySelectorAll('.mini-name').length).toBe(ground.districts.length)
+  })
+
   it('walks buildings within a district and districts within the map', async () => {
     const { container } = render(City, { props: { stop: 'district', ground } })
     const first = container.querySelector<HTMLElement>('.plate[tabindex="0"]') as HTMLElement
