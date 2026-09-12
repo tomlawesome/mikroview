@@ -136,18 +136,32 @@ for (const absent of ['Watchlist', 'Settings', 'Entities', 'Audit log', 'Run set
 }
 check(viewerNav.disabledRows.length === 0, `no menu row is disabled for a viewer -- got ${JSON.stringify(viewerNav.disabledRows)}`)
 
-// --- 2: a user's navigation adds Watchlist, Settings and Entities -------
+// --- 2: a user's navigation adds the four edit-tier surfaces ------------
 
 const editor = await signIn(EDITOR_USER, EDITOR_PASS)
 const editorNav = await visibleSurfaces(editor.page)
 check(
   JSON.stringify(editorNav.union) ===
     JSON.stringify(
-      sortedSet(['The fall', 'Topography', 'Stream', 'Metrics', 'Flags', 'Watchlist', 'Settings', 'Entities']),
+      sortedSet([
+        'The fall',
+        'Topography',
+        'Stream',
+        'Metrics',
+        'Flags',
+        'Watchlist',
+        'Settings',
+        'Entities',
+        'Log every rule',
+      ]),
     ),
-  `a user's whole navigation adds Watchlist, Settings and Entities -- got ${JSON.stringify(editorNav.union)}`,
+  `a user's whole navigation adds Watchlist, Settings, Entities and Log every rule -- got ${JSON.stringify(editorNav.union)}`,
 )
-for (const added of ['Watchlist', 'Settings', 'Entities']) {
+// Log every rule joined the deck under #1134 (deckCards.ts's
+// `log-every-rule`), behind the same `edit` gate as Watchlist, Settings
+// and Entities -- so it reaches this tier's navigation, and a viewer's
+// set below is unchanged.
+for (const added of ['Watchlist', 'Settings', 'Entities', 'Log every rule']) {
   check(editorNav.union.includes(added), `${added} is present in a user's navigation`)
 }
 // Fleet is the viewer's own stand-in for Entities/Settings (deckCards.ts's
