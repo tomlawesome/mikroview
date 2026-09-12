@@ -270,7 +270,7 @@ describe('Entities router cards (#675)', () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.textContent).not.toContain('Routers push to mikroview')
+    expect(container.textContent).not.toContain('Routers push to MikroView')
     expect(container.querySelector('.paste')).toBeNull()
   })
 
@@ -282,7 +282,7 @@ describe('Entities router cards (#675)', () => {
     await settle()
 
     expect(container.textContent).toContain(':16893')
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
+    expect(container.textContent).toContain('Routers push to MikroView — it never connects to them.')
     expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
 
     const pre = container.querySelector('.paste')
@@ -347,12 +347,12 @@ describe('Entities router cards (#675)', () => {
 })
 
 describe('Entities named-things table (#675)', () => {
-  it('renders name · lane · address · mac · first seen · last seen · marks', async () => {
+  it('renders name · zone · address · mac · first seen · last seen · marks', async () => {
     const { container } = render(Entities)
     await settle()
 
     const headers = [...container.querySelectorAll('.etable th')].map((th) => th.textContent)
-    expect(headers).toEqual(['name', 'lane', 'address', 'mac', 'first seen', 'last seen', 'marks'])
+    expect(headers).toEqual(['name', 'zone', 'address', 'mac', 'first seen', 'last seen', 'marks'])
   })
 
   it('shows a named host entity with its label and address', async () => {
@@ -413,7 +413,7 @@ describe('Entities named-things table (#675)', () => {
     const rows = [...container.querySelectorAll('.etable tbody tr')]
     const named = rows.find((tr) => tr.textContent?.includes('tom-desktop'))
     const guest = rows.find((tr) => tr.textContent?.includes('guest-e8b2'))
-    // name · lane · address · mac · first seen · last seen · marks
+    // name · zone · address · mac · first seen · last seen · marks
     expect(named?.children[3]?.textContent?.trim()).toBe('2c:f0:5d:…:8a')
     expect(guest?.children[3]?.textContent?.trim()).toBe('—')
     expect(container.textContent).not.toContain('private')
@@ -700,7 +700,7 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
+    expect(container.textContent).toContain('Routers push to MikroView — it never connects to them.')
     expect(container.querySelector('.berth-panel')).toBeTruthy()
   })
 
@@ -766,7 +766,7 @@ describe('Entities views (#804, rounds 37-38)', () => {
     await settle()
     expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
       'name',
-      'lane',
+      'zone',
       'address',
       'mac',
       'first seen',

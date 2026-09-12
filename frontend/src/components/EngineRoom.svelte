@@ -754,7 +754,7 @@
             class="stpath"
             viewBox="0 0 560 92"
             role="img"
-            aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
+            aria-label="Routers push their logs one way into MikroView's listening port; nothing travels back"
           >
             {#if routers[0]}
               <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4" />
@@ -793,7 +793,7 @@
               <text x="396" y="57" class="sp-n">{epsText} events/s arriving now</text>
             {/if}
           </svg>
-          <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
+          <p class="oghint">the logs travel one way — MikroView never connects to your router</p>
         </div>
         <div class="wrows">
           {#if status}
@@ -877,7 +877,7 @@
                   done
                 </button>
               </div>
-              <div class="rnote">shown once — mikroview keeps only its fingerprint, so copy it now</div>
+              <div class="rnote">shown once — MikroView keeps only its fingerprint, so copy it now</div>
               {#if jc.kind === 'ingest'}
                 <div class="rnote">
                   the router lines, with this key already in them:

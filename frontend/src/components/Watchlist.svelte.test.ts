@@ -218,7 +218,7 @@ describe('The suggestion body under the watches (#771)', () => {
     await renderWatchlist([])
 
     const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
-    expect(heading.textContent).toBe('mikroview suggests')
+    expect(heading.textContent).toBe('MikroView suggests')
     expect(heading.querySelector('b')).toBeNull()
 
     const empty = watchTable().querySelector('.wt-sugg-empty .empty-row') as HTMLElement
@@ -238,7 +238,7 @@ describe('The suggestion body under the watches (#771)', () => {
     await renderWatchlist([])
 
     const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
-    expect(heading.textContent).toContain('mikroview suggests · from what rb5009 and hap-ax2 pushed')
+    expect(heading.textContent).toContain('MikroView suggests · from what rb5009 and hap-ax2 pushed')
     expect(heading.querySelector('b')?.textContent).toBe('2')
     // #1157: the space before the count's own "·" was written as literal
     // whitespace at the head of an {#if}, which Svelte trims -- the
@@ -778,7 +778,7 @@ describe('The ratified watch table (#676)', () => {
 
     const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
     expect(drawer.textContent).toContain('The ring is broken.')
-    expect(drawer.textContent).toContain('No firewall rule mikroview can see is logging this pathway')
+    expect(drawer.textContent).toContain('No firewall rule MikroView can see is logging this pathway')
   })
 
   it('pause watch calls the enable toggle and refreshes the entry', async () => {
@@ -997,7 +997,7 @@ describe('The watch window and its nightly memory (#680)', () => {
     // The recorded break knows which window closed empty, which is why it
     // is written down at the break rather than worked out on read.
     expect(drawer.textContent).toContain('since 1d ago')
-    expect(drawer.textContent).toContain('Nights mikroview could not watch are not counted against it.')
+    expect(drawer.textContent).toContain('Nights MikroView could not watch are not counted against it.')
   })
 
   // paused > no logging visible > ring broken > watching. A watch no rule

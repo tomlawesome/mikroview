@@ -93,17 +93,17 @@ func (p engineSnapshotPart) Import(raw json.RawMessage, taken, now time.Time) er
 // root, the mode says yes and the write still fails.
 func usableSnapshotDir(log *slog.Logger, dir string) string {
 	if dir == "" {
-		log.Warn("no snapshot directory resolved, so no warm-restart snapshots will be written -- mikroview runs normally and starts cold after the next restart")
+		log.Warn("no snapshot directory resolved, so no warm-restart snapshots will be written -- MikroView runs normally and starts cold after the next restart")
 		return ""
 	}
 	// #nosec G703 -- the snapshot directory from this deployment's own config, not from a request.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Warn(fmt.Sprintf("snapshot directory %s cannot be created (%v) -- mikroview runs normally, but nothing is written and the next restart starts cold", dir, err))
+		log.Warn(fmt.Sprintf("snapshot directory %s cannot be created (%v) -- MikroView runs normally, but nothing is written and the next restart starts cold", dir, err))
 		return ""
 	}
 	probe, err := os.CreateTemp(dir, ".writable-*")
 	if err != nil {
-		log.Warn(fmt.Sprintf("snapshot directory %s is not writable (%v) -- mikroview runs normally, but nothing is written and the next restart starts cold", dir, err))
+		log.Warn(fmt.Sprintf("snapshot directory %s is not writable (%v) -- MikroView runs normally, but nothing is written and the next restart starts cold", dir, err))
 		return ""
 	}
 	name := probe.Name()

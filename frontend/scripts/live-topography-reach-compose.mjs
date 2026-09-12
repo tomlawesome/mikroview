@@ -132,7 +132,7 @@ cmd = await page.textContent('.composer .cmd')
 check(cmd.includes('action=drop') && cmd.includes('named block'), 'the named block drafts the explicit logged drop')
 
 const noteText = await page.textContent('.composer .cmdnote')
-check(noteText.includes('mikroview never touches the router'), 'the invariant is said where the command is')
+check(noteText.includes('MikroView never touches the router'), 'the invariant is said where the command is')
 
 // Esc walks out one level at a time. Round 49 put a card in that stack:
 // the line card is where `draft the rule ▸` lives, and Topography's own

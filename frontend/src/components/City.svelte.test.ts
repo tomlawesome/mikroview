@@ -83,6 +83,15 @@ describe('City', () => {
     expect(container.querySelector('.mini rect.viewport')).not.toBeNull()
   })
 
+  // #1159: the same VLAN was a lane on Entities, a district here and a
+  // zone on the router card. Zone is the plain word now, and the city
+  // keeps district -- so the estate map ties the two together once,
+  // rather than leaving a reader to work it out across three screens.
+  it('ties its own word for a VLAN to the plain one, once (#1159)', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    expect(container.querySelector('.mini .key')?.textContent).toBe('district — a zone (VLAN or bridge)')
+  })
+
   it("says how many zones a router's plate has no room for (#1073)", () => {
     const zone = (id: string) => ({
       id,

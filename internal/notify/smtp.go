@@ -123,7 +123,7 @@ func (n *SMTPNotifier) message(batch []flags.Flag) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", n.cfg.From)
 	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(n.cfg.To, ", "))
-	fmt.Fprintf(&b, "Subject: mikroview: %d new flag%s\r\n", len(batch), plural(len(batch)))
+	fmt.Fprintf(&b, "Subject: MikroView: %d new flag%s\r\n", len(batch), plural(len(batch)))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	b.WriteString("\r\n")
 	for _, f := range batch {

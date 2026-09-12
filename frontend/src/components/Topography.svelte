@@ -1477,7 +1477,7 @@
   // interface where it did not.
   function laneName(i: string): string {
     if (i === zonesState.wanInterface) return 'the internet'
-    if (i === '') return 'any lane'
+    if (i === '') return 'any zone'
     return zones.find((z) => z.id === i)?.name ?? i
   }
 
@@ -4939,7 +4939,7 @@
       viewBox={mapViewBox}
       preserveAspectRatio="xMidYMid meet"
       role="img"
-      aria-label="The network map: internet above, the router at the waist, observed lanes below{undrawnNote}"
+      aria-label="The network map: internet above, the router at the waist, observed zones below{undrawnNote}"
       class="pannable"
       onpointerdown={onMapPointerDown}
       onpointermove={onMapPointerMove}
@@ -6014,7 +6014,7 @@
         <g transform="translate(700 500)">
           <rect class="isl ghost" x="-108" y="0" width="216" height="106" rx="12" />
           <text x="0" y="40" text-anchor="middle" class="n-sub">nothing has arrived yet — waiting for data, not broken</text>
-          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; mikroview never draws a guess</text>
+          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; MikroView never draws a guess</text>
         </g>
       {/if}
 
@@ -6254,7 +6254,7 @@
       <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" bind:this={membraneSvgEl}>
         <circle cx={MX} cy={MY} r={MR} class="membrane" />
         <text x={MX} y="502" text-anchor="middle" class="n-sub">
-          the membrane — lane-mates inside talk freely; every crossing needs a rule, per direction
+          the membrane — zone-mates inside talk freely; every crossing needs a rule, per direction
         </text>
 
         <!-- Nothing is written on a strand (round 49; DESIGN.md "The
@@ -6607,7 +6607,7 @@
         {#if composedCommand}
           <pre class="cmd">{composedCommand}</pre>
           <p class="cmdnote">
-            <b>Paste it in RouterOS yourself — mikroview never touches the router.</b>
+            <b>Paste it in RouterOS yourself — MikroView never touches the router.</b>
             {#if composeMode === 'allow'}
               {composePlaceBefore ? `Placed before ${composePlaceBefore}, logged` : 'Logged'} and named, so the map
               learns it: on the next rule push this strand turns green and the unplanned stamp retires itself.

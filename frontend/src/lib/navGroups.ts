@@ -57,7 +57,7 @@ export const navGroups: NavGroup[] = [
     items: [
       { label: 'The fall', view: 'fall', icon: 'fall', title: 'The live receiver: a band per boundary, live spectrum, and time pouring down' },
       // The Map slot un-reserves (#627): topography exists now.
-      { label: 'Topography', view: 'topography', icon: 'map', title: 'The map of the place: internet above, router at the waist, your lanes below' },
+      { label: 'Topography', view: 'topography', icon: 'map', title: 'The map of the place: internet above, router at the waist, your zones below' },
       { label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' },
       // Log every rule (#435; "Tune logging" until #1134 renamed it --
       // the old label never said what the page gave you back): drop in
@@ -149,7 +149,7 @@ export const navGroups: NavGroup[] = [
         view: 'engineroom',
         edit: true,
         icon: 'engineroom',
-        title: "Mikroview's own signal path, live, with every setting on the station it governs",
+        title: "MikroView's own signal path, live, with every setting on the station it governs",
       },
       {
         label: 'Fleet',

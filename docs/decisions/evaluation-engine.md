@@ -20,7 +20,7 @@ are recorded as they were made.
 
 ## The problem
 
-mikroview evaluates the event stream twice, through two subsystems that
+MikroView evaluates the event stream twice, through two subsystems that
 are the same machine built twice by hand:
 
 - `internal/detect` -- twelve detectors watching for the unexpected,
@@ -114,7 +114,7 @@ definitions, editable and cloneable.
 **Programmatic** -- built-in Go, plugged into the same chassis, wearing
 the same envelope (settings, scope, tuning params, evidence,
 provenance), but whose logic stays code. This kind exists because some
-of what mikroview does *cannot honestly be a form*: statistical
+of what MikroView does *cannot honestly be a form*: statistical
 baselines (host_baseline, global_spike, rule_spike, the EMA confidence
 machinery), absence-of-events detectors (device_silence, stale_rule --
 "nothing arrived" is not a predicate over an event), and
@@ -222,7 +222,7 @@ names the engine contract that retires it.
 ## The open questions, decided (owner, 2026-08-15)
 
 1. **The user-facing noun is "definition".** "Rule" collides fatally
-   with RouterOS firewall rules, which mikroview displays constantly.
+   with RouterOS firewall rules, which MikroView displays constantly.
 2. **Replay's corpus is the in-memory event window for v1** -- and every
    receipt states the window it covers ("would have fired 6 times in
    the last 36h"), so a short corpus can never overclaim.

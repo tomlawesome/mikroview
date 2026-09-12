@@ -6,7 +6,7 @@
 
 ## Decision
 
-Mikroview refuses to enable SSO when `oidc.issuerUrl` points at a
+MikroView refuses to enable SSO when `oidc.issuerUrl` points at a
 multi-tenant provider — Google, Apple, Microsoft's shared
 `/common`, `/organizations` and `/consumers` endpoints, and any other
 issuer whose user population is the general public. The refusal is
@@ -19,7 +19,7 @@ scope logins to one organisation.
 
 ## Why
 
-Mikroview's OIDC support rests on one property: **the issuer URL is
+MikroView's OIDC support rests on one property: **the issuer URL is
 itself the access control.** Every ID token is verified against the
 configured issuer's own signing keys and against the client ID, so
 pointing `issuerUrl` at a directory you run means only accounts in that
@@ -35,7 +35,7 @@ A safe configuration for a public provider does exist — pin a claim that
 identifies the organisation (see the revival section below) — and it was
 built, tested, and shipped. It was then removed on purpose.
 
-The reasoning is about who mikroview is for. This is a tool for home and
+The reasoning is about who MikroView is for. This is a tool for home and
 small self-hosters. Supporting public IdPs means the safety of every such
 deployment depends on an operator understanding the difference between
 "authenticated by Google" and "authenticated as someone I trust", and
@@ -45,7 +45,7 @@ correctly until someone else logs in. A narrower promise that cannot be
 misconfigured is worth more than a broader one that can.
 
 The cost is real and accepted: a small business on Google Workspace or
-Microsoft 365 cannot use SSO with mikroview. They can still use local
+Microsoft 365 cannot use SSO with MikroView. They can still use local
 accounts, or run any self-hosted IdP in front of their existing
 directory.
 

@@ -386,7 +386,7 @@ describe('The settings shelf (#633)', () => {
 
     expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
-    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // A read-only key gets no RouterOS lines.
     expect(screen.queryByText(/copy for RouterOS/)).toBeNull()
 
@@ -576,7 +576,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
-    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // The revealed token does not also render as an ordinary row.
     expect(screen.queryAllByText('nas-read')).toHaveLength(1)
   })

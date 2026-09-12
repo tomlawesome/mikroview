@@ -212,6 +212,6 @@ describe('deviceKindFor: the fallback', () => {
 
   it('gives a reason that reads as a guess, never as a finding', () => {
     expect(deviceKindVerdict({ name: 'cam-porch' }).why).toBe('its name contains a camera word')
-    expect(deviceKindVerdict({}).why).toBe('nothing mikroview saw suggests a type')
+    expect(deviceKindVerdict({}).why).toBe('nothing MikroView saw suggests a type')
   })
 })

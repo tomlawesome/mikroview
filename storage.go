@@ -267,9 +267,9 @@ func (s *storage) reportUnadoptedFile(ctx context.Context, b persist.Backend, fi
 	}
 
 	s.log.Warn(fmt.Sprintf("%s holds data but %s is empty, and this deployment has already adopted Postgres so it will "+
-		"not be migrated. This usually means a first migration was interrupted part-way. mikroview will not adopt it "+
+		"not be migrated. This usually means a first migration was interrupted part-way. MikroView will not adopt it "+
 		"automatically, because it cannot tell that apart from a database restored to an older snapshot -- adopting "+
-		"the wrong one of those brings deleted accounts back. To migrate it deliberately: stop mikroview, remove %s, "+
+		"the wrong one of those brings deleted accounts back. To migrate it deliberately: stop MikroView, remove %s, "+
 		"start once to adopt, and the marker is rewritten",
 		filePath, b.Describe(), markerPath(s.cfg)))
 }
@@ -329,7 +329,7 @@ func markPostgresAdopted(cfg config.Config) error {
 		return fmt.Errorf("postgres: recording the storage choice at %s: %w", path, err)
 	}
 	body := "This deployment stores its state in Postgres.\n\n" +
-		"Moving to Postgres is one-way. mikroview will refuse to start on the JSON\n" +
+		"Moving to Postgres is one-way. MikroView will refuse to start on the JSON\n" +
 		"files while this file exists, because coming back up on months-old local\n" +
 		"accounts -- with a different admin, or none -- is worse than not starting.\n\n" +
 		"Back up the database, not these files. See docs/configuration.md, \"Postgres\".\n"

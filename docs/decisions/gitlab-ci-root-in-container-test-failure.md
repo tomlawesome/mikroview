@@ -1,6 +1,6 @@
-# `test:go` fails on GitLab CI: root-in-container vs. mikroview's own security posture
+# `test:go` fails on GitLab CI: root-in-container vs. MikroView's own security posture
 
-**Status:** Resolved. Confirmed CI-environment-only (mikroview's real container
+**Status:** Resolved. Confirmed CI-environment-only (MikroView's real container
 already runs `USER nonroot:nonroot`, so this wasn't masking a production gap)
 — fixed by running `test:go` as a non-root user inside the container. See the
 "Decision needed" section below for the reasoning; option 1 was applied.
@@ -38,9 +38,9 @@ GitHub's existing `ci.yml` `test` job runs the same test directly on the
 — as an unprivileged user, where the chmod actually takes effect and the test
 has presumably always passed there.
 
-Checked mikroview's actual `Dockerfile`: the real production image is built
+Checked MikroView's actual `Dockerfile`: the real production image is built
 `FROM gcr.io/distroless/static-debian12:nonroot` with `USER nonroot:nonroot`
-(lines 35/38) — production mikroview never runs as root. So this looks like a
+(lines 35/38) — production MikroView never runs as root. So this looks like a
 pure CI-environment artifact from picking a plain root-defaulting build image
 for the GitLab test job, not a hole the test was accidentally covering for in
 a real root deployment.
@@ -60,7 +60,7 @@ Two non-exclusive options:
 
 1. **Fix the CI job**, not the test: make `test:go` in `.gitlab-ci.yml` run as
    a non-root user inside the `golang:1.26` container, matching both GitHub's
-   existing behavior and mikroview's own real production posture. Sketch (not
+   existing behavior and MikroView's own real production posture. Sketch (not
    verified/tested):
    ```yaml
    script:
@@ -78,7 +78,7 @@ Two non-exclusive options:
 2. **Confirm this is purely environmental and stop there** if reading the
    test confirms it's specifically about process-identity permission
    enforcement (not volume/storage-misconfiguration semantics) — in which
-   case fixing the CI job alone is sufficient and no mikroview code changes
+   case fixing the CI job alone is sufficient and no MikroView code changes
    are needed.
 
 Per this repo's own `AGENTS.md` conventions: reproduce/read before acting, and
