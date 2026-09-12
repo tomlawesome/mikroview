@@ -1134,6 +1134,31 @@ describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018
     expect(pills[0].textContent?.trim()).toBe('⌕ port')
     expect(pills[0].getAttribute('aria-pressed')).toBe('false')
   })
+
+  it('shows the collapsed answer, with no picker bar, the moment a port is selected (#1178)', () => {
+    // Selected but not yet answered: the store's own collapse has closed
+    // the picker (portFilter.svelte.ts), and the pill is the answer.
+    portFilterState.ports = [445]
+    portFilterState.proto = 'tcp'
+    portFilterState.open = false
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.pill.p.edit')).toBeNull()
+    const pill = container.querySelector('.pill.p.on')
+    expect(pill?.textContent).toContain('445/tcp')
+    // ...and it claims nothing about the traffic until the answer is in:
+    // "nothing seen · 0 doors" out of a pending fetch would be a
+    // statement about the network nobody has made yet.
+    expect(pill?.textContent).not.toContain('nothing seen')
+    expect(container.querySelector('.pill-x')).not.toBeNull()
+
+    portFilterState.answer = { ...portFilterState.answer, events: 2, lines: 2 }
+    portFilterState.answeredKey = portFilterState.key
+    flushSync()
+    expect(container.querySelector('.pill.p.on')?.textContent).toContain('2 lines seen')
+  })
 })
 
 describe('the watcher dial\'s eye (#682, ported from the scene)', () => {
