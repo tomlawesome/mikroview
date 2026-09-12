@@ -1013,7 +1013,7 @@
              quiet down. -->
         {#if ledgerThin && expectations}
           <p class="shelf-honest">
-            Flags will be noisy until mikroview has learned what is normal here — {expectations.length}
+            Flags will be noisy until MikroView has learned what is normal here — {expectations.length}
             {expectations.length === 1 ? 'expectation' : 'expectations'} recorded so far. Judge each flag and the inbox
             settles.
           </p>
@@ -1045,7 +1045,7 @@
                the issue, not decoration. -->
           <p class="shelf-warm">
             Baselines are still warming. A spike seen now is not thrown away — it appears here as a provisional flag,
-            marked as one mikroview does not yet trust. Nothing has fired during warm-up yet.
+            marked as one MikroView does not yet trust. Nothing has fired during warm-up yet.
           </p>
         {/if}
       </section>
@@ -1245,7 +1245,7 @@
             <!-- The label's meaning, in a sentence (#616:
                  worded, never shape alone). -->
             <p class="pwhy">
-              provisional — its baseline was still warming when this fired, so mikroview does not yet trust
+              provisional — its baseline was still warming when this fired, so MikroView does not yet trust
               the comparison behind it. Not counted as an open flag.
             </p>
           {/if}

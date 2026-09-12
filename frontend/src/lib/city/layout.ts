@@ -438,7 +438,7 @@ export function layoutGround(input: CityInput): Ground {
             existing.ruleCount = Math.max(existing.ruleCount, ruleCount)
             continue
           }
-          seen.set(edgeKey, { label: `${from || 'any lane'} → ${to || 'any lane'}`, edgeKey, coverage, ruleCount })
+          seen.set(edgeKey, { label: `${from || 'any zone'} → ${to || 'any zone'}`, edgeKey, coverage, ruleCount })
         }
       }
       const directions = [...seen.values()].sort((a, b) => (a.edgeKey.startsWith(d.id + '|') ? -1 : b.edgeKey.startsWith(d.id + '|') ? 1 : 0))

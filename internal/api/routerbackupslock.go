@@ -404,7 +404,7 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 	now := time.Now()
 	s.vaultUnlock.claim(sessionID, callerUserID(r), now)
 	s.Audit.Record(auditActor(r), "router_backup.passphrase_set", "vault",
-		"stored backups re-sealed; mikroview can no longer read them unaided")
+		"stored backups re-sealed; MikroView can no longer read them unaided")
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
 }
 

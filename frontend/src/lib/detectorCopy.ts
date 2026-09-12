@@ -126,7 +126,7 @@ export const DETECTORS: Partial<Record<string, DetectorInfo>> = {
   known_bad_ip: {
     label: 'Known bad IP',
     explanation:
-      'Raises the confidence floor of flags already raised for a source address that appears in one of the locally-fetched blocklists (Spamhaus DROP and friends -- fetched at runtime on your own device, never shipped with mikroview). It raises nothing by itself: its whole job is to make an existing judgement about an address more confident when an independent source already considers that address hostile.',
+      'Raises the confidence floor of flags already raised for a source address that appears in one of the locally-fetched blocklists (Spamhaus DROP and friends -- fetched at runtime on your own device, never shipped with MikroView). It raises nothing by itself: its whole job is to make an existing judgement about an address more confident when an independent source already considers that address hostile.',
     scopeNote: 'Hosts restricts which source IPs are looked up at all.',
     example: 'Skip lookups for a range you know is yours: Hosts = 203.0.113.0/24, mode = deny.',
   },
@@ -149,7 +149,7 @@ export const DETECTORS: Partial<Record<string, DetectorInfo>> = {
   device_silence: {
     label: 'Device gone quiet',
     explanation:
-      "Checks every configured router's last-seen time on a fixed interval, flagging one that hasn't sent any syslog in at least the configured staleness threshold (15 minutes by default). Unlike every other detector here, this isn't a pattern in the traffic -- it's the absence of it, so it's the one way mikroview notices a router that's stopped talking entirely (crashed, rebooted, lost network, or had its syslog config wiped) rather than a router that's merely quiet right now. A device that's never sent anything at all doesn't count -- see the routers section of Entities for that state instead.",
+      "Checks every configured router's last-seen time on a fixed interval, flagging one that hasn't sent any syslog in at least the configured staleness threshold (15 minutes by default). Unlike every other detector here, this isn't a pattern in the traffic -- it's the absence of it, so it's the one way MikroView notices a router that's stopped talking entirely (crashed, rebooted, lost network, or had its syslog config wiped) rather than a router that's merely quiet right now. A device that's never sent anything at all doesn't count -- see the routers section of Entities for that state instead.",
   },
 }
 

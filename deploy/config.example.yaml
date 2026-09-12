@@ -7,7 +7,7 @@
 
 listen:
   # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port) --
-  # mikroview's only syslog listener. Confidentiality for log traffic on
+  # MikroView's only syslog listener. Confidentiality for log traffic on
   # the wire, using the same certificate the HTTPS listener below
   # presents when TLS is on, or a self-generated one otherwise -- a
   # certificate is loaded for this even if tls.enabled is false, since
@@ -21,12 +21,12 @@ listen:
   httpRedirect: ":8081"
 
   # Reverse-proxy support. Leave both commented out unless a proxy
-  # fronts mikroview.
+  # fronts MikroView.
   #
-  # Mikroview rate-limits failed logins per source address. Behind a
+  # MikroView rate-limits failed logins per source address. Behind a
   # proxy, every request carries the *proxy's* address, so without
   # trustedProxies all users share one bucket and one attacker's failed
-  # attempts lock everybody out. Setting this makes mikroview read the
+  # attempts lock everybody out. Setting this makes MikroView read the
   # real client address out of the forwarding header instead -- but only
   # for connections that actually came from a listed proxy, since a
   # header from anyone else is just text they chose.
@@ -50,7 +50,7 @@ store:
   maxMemory: 120MiB
   # Where a size set from Settings' memory control is kept. Once
   # somebody moves that slider, the figure stored here is the one that
-  # applies and maxMemory above is ignored -- mikroview says which it
+  # applies and maxMemory above is ignored -- MikroView says which it
   # took at startup. Delete the file to go back to the line above.
   settingsStorePath: /var/lib/mikroview/settings.json
 
@@ -191,7 +191,7 @@ store:
 #         rules: []
 #         rulesMode: ""
 
-# New-device detection: raises a flag the first time mikroview ever sees
+# New-device detection: raises a flag the first time MikroView ever sees
 # a given LAN client MAC address -- deterministic, no threshold to tune.
 # storePath already defaults to /var/lib/mikroview/mac-registry.json
 # (see deploy/docker-compose.yml for the matching volume mount) -- only
@@ -229,7 +229,7 @@ store:
 #   decommissionStorePath: /var/lib/mikroview/decommission.json
 #   decommissionCleanWindow: 6h
 
-# Warm restart (issue #795): every few minutes mikroview writes a small
+# Warm restart (issue #795): every few minutes MikroView writes a small
 # JSON file holding the counters, rolling windows and device first/last
 # seen it has built up, and puts them back on the next boot -- so a
 # restart resumes from a few minutes ago instead of resetting the
@@ -360,7 +360,7 @@ store:
 # (type, key), editable with no restart, taking precedence over
 # ruleNames/hostNames for any key it has a label for. storePath already
 # defaults to /var/lib/mikroview/entities.json; only uncomment this
-# block to move that path. The first time mikroview boots against an
+# block to move that path. The first time MikroView boots against an
 # empty entities store, it imports any existing ruleNames/hostNames as
 # entities automatically -- see docs/configuration.md's "Entities"
 # section.
@@ -433,10 +433,10 @@ store:
 #
 # Uncomment this block to move that path, change sessionTTL, or set
 # secureCookie. secureCookie is the one people come looking for: leaving
-# it false while tls.enabled is true stops mikroview starting (CFG-0021),
+# it false while tls.enabled is true stops MikroView starting (CFG-0021),
 # because the session cookie would go out without the Secure flag.
 #
-# The first time mikroview loads it asks you to create the admin
+# The first time MikroView loads it asks you to create the admin
 # account. That is the only option -- see SECURITY.md and
 # docs/configuration.md's "Authentication" section.
 # auth:
@@ -458,7 +458,7 @@ store:
 #   recoveryKeysPath: /var/lib/mikroview/recovery.json
 #   recoveryPepperPath: /var/lib/mikroview/recovery-pepper
 
-# TLS is on by default and needs no configuration to work -- mikroview
+# TLS is on by default and needs no configuration to work -- MikroView
 # generates its own local CA + certificate on first start, already
 # persisted to /var/lib/mikroview/tls by default. Only uncomment this
 # block to move that path, or point certFile/keyFile at your own cert
@@ -496,7 +496,7 @@ store:
 #     user: ""
 
 # Optional: sign in with your own identity provider instead of (or
-# alongside) mikroview's local account. See docs/configuration.md's
+# alongside) MikroView's local account. See docs/configuration.md's
 # "Single sign-on (OIDC)" section -- publicBaseUrl is the one field
 # people get wrong, and it must match the redirect URI registered with
 # the provider exactly.
@@ -527,7 +527,7 @@ store:
 # postgres:
 #   dsnFile: /run/secrets/mikroview-postgres-dsn
 
-# Devices are matched by the syslog source IP mikroview sees them from.
+# Devices are matched by the syslog source IP MikroView sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
 # labelled with their IP -- add them here once you know which is which.
 devices:

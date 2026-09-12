@@ -637,7 +637,7 @@
                   <b>Only on a network you trust.</b> RouterOS never checks who it is sending a backup to
                   — anyone on the path between the router and {wizardState.address} could read the pair, and
                   the token with it. On a LAN you control that is fine; across the internet it is not, and
-                  mikroview cannot tell the difference from here.
+                  MikroView cannot tell the difference from here.
                 </div>
               {/if}
 
@@ -694,7 +694,7 @@
                   <p class="note">{wizardState.commands.steps.ruleTagging.note}</p>
                 {/if}
                 <p class="note">
-                  The letter is how mikroview knows what a rule did — <code>A</code>ccept,
+                  The letter is how MikroView knows what a rule did — <code>A</code>ccept,
                   <code>D</code>rop, <code>R</code>eject, <code>L</code>og. The trailing
                   <code>|</code> is required.
                 </p>
@@ -825,8 +825,8 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_MOUNT_COMMAND, 'keymount')}>
                     {copied === 'keymount' ? 'Copied' : 'Copy'}
                   </button>
-                  <p class="note">Running mikroview directly on the host instead? Skip this one.</p>
-                  <p class="note">Point mikroview at it, in config.yaml:</p>
+                  <p class="note">Running MikroView directly on the host instead? Skip this one.</p>
+                  <p class="note">Point MikroView at it, in config.yaml:</p>
                   <pre>{KEY_CONFIG_COMMAND}</pre>
                   <button type="button" class="copy" onclick={() => copy(KEY_CONFIG_COMMAND, 'keyconfig')}>
                     {copied === 'keyconfig' ? 'Copied' : 'Copy'}
@@ -1060,7 +1060,7 @@
               <p class="note">Run setup… reopens this any time, from your account menu.</p>
               <p class="note">
                 <button type="button" class="link" onclick={openLogEveryRule}>Log every rule…</button>
-                turns a dark connection into a watched one once mikroview has been listening a day.
+                turns a dark connection into a watched one once MikroView has been listening a day.
               </p>
             {/if}
           </div>

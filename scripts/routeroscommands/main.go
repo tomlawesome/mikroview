@@ -69,7 +69,7 @@ func render(step, dialect, address, syslogPort string) (string, error) {
 
 func main() {
 	dialect := flag.String("dialect", defaultDialect(), "dialect to render (defaults to the table's own default dialect)")
-	address := flag.String("address", "", "mikroview address (host[:port]) the CA-trust and syslog commands should point at")
+	address := flag.String("address", "", "MikroView address (host[:port]) the CA-trust and syslog commands should point at")
 	syslogPort := flag.String("syslog-port", "", "syslog listen address (e.g. \":6514\") or bare port for the syslog step")
 	step := flag.String("step", "all", "catrust, syslog, ruletagging, or all")
 	flag.Parse()

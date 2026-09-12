@@ -59,7 +59,7 @@ export const TOUR_HIGHLIGHTS: Record<string, TourHighlight[]> = {
     { label: 'flags, watchlist and audit — one card, three tabs', selector: '.card[data-card="docket"] span.switch', top: '10%', left: '6%', width: '50%', height: '9%' },
   ],
   entities: [
-    { label: 'routers, named entities, and what mikroview has discovered', selector: '.card[data-card="entities"] .og:first-of-type', top: '10%', left: '6%', width: '55%', height: '9%' },
+    { label: 'routers, named entities, and what MikroView has discovered', selector: '.card[data-card="entities"] .og:first-of-type', top: '10%', left: '6%', width: '55%', height: '9%' },
   ],
   engineroom: [
     { label: 'the shelf — deck order, ingest, detection, memory, account', selector: '.card[data-card="engineroom"] .stshelf', top: '10%', left: '6%', width: '55%', height: '9%' },

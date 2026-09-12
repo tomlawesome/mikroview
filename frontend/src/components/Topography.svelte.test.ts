@@ -4769,7 +4769,7 @@ describe('the reach, drawn to round 49 (#1016)', () => {
       expect(composer).not.toBeNull()
       // The same invariant the strand pill's door carried: a printed
       // line for the operator to paste, and nothing sent to the router.
-      expect(composer!.textContent).toContain('mikroview never touches the router')
+      expect(composer!.textContent).toContain('MikroView never touches the router')
     })
   })
 

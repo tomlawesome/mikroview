@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     ports:
       # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port,
-      # already unprivileged so no remap is needed). Mikroview's only
+      # already unprivileged so no remap is needed). MikroView's only
       # syslog listener -- comment this out (and set
       # MIKROVIEW_LISTEN_SYSLOG_TLS= below) only if you want no syslog
       # ingest at all.
@@ -31,11 +31,11 @@ services:
       # anyway -- this makes that structural instead of incidental.
       - no-new-privileges:true
     cap_drop:
-      # mikroview binds only unprivileged ports (6514/8080/8081 -- see
+      # MikroView binds only unprivileged ports (6514/8080/8081 -- see
       # the mappings above, which is exactly why they aren't 443/80
       # inside the container), so it needs no Linux capabilities at all.
       - ALL
-    # The root filesystem is read-only; every path mikroview actually
+    # The root filesystem is read-only; every path MikroView actually
     # writes to is a mount. /var/lib/mikroview is the named volume
     # below, and the distroless image has no shell or package manager
     # that would need to write anywhere else. Note it does NOT need a
@@ -100,7 +100,7 @@ services:
       # needed if you've removed the "80:8081" port mapping too (e.g.
       # your reverse proxy handles the HTTP->HTTPS redirect itself).
       # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
-      # Disables syslog ingest entirely -- mikroview's only syslog
+      # Disables syslog ingest entirely -- MikroView's only syslog
       # listener is RouterOS remote-protocol=tls, so only set this if
       # you don't want firewall events at all. Remove the "6514:6514/tcp"
       # port mapping above too if you do.
@@ -108,28 +108,28 @@ services:
 
     # No Postgres service here, deliberately -- not even commented out.
     #
-    # mikroview can keep its accounts, flags and settings in Postgres
+    # MikroView can keep its accounts, flags and settings in Postgres
     # instead of JSON files (docs/configuration.md, "Postgres"). The only
     # reason to do that is to get your data OFF this host, so that
-    # compromising the machine running mikroview doesn't hand over the
+    # compromising the machine running MikroView doesn't hand over the
     # accounts store too.
     #
-    # A Postgres container sitting next to mikroview in this file would
+    # A Postgres container sitting next to MikroView in this file would
     # defeat that entirely: same host, same disk, and the connection
     # password right here in the same compose file the attacker already
     # has. That is strictly worse than the JSON files -- identical
     # exposure, more moving parts -- so shipping one as a convenient
     # default would make the documentation a lie.
     #
-    # To use Postgres, point mikroview at a server on a DIFFERENT machine
+    # To use Postgres, point MikroView at a server on a DIFFERENT machine
     # over a restricted network path:
     #
     #   1. Put the connection string in a file (never in this compose
     #      file, and never in config.yaml -- it carries a password):
     #        postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full
-    #   2. Make it readable by the container's user -- mikroview runs as
+    #   2. Make it readable by the container's user -- MikroView runs as
     #      uid 65532, which is not you, so a plain `chmod 600` leaves it
-    #      unreadable inside the container and mikroview refuses to
+    #      unreadable inside the container and MikroView refuses to
     #      start with "permission denied". Keep the tight mode and give
     #      it to that user:
     #        chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
@@ -146,7 +146,7 @@ services:
     #
     # Existing JSON files are migrated automatically on the first boot
     # with Postgres configured. From that moment the deployment is a
-    # Postgres deployment: mikroview records the fact, and removing
+    # Postgres deployment: MikroView records the fact, and removing
     # dsnFile later will NOT bring it back on the JSON files -- it
     # refuses to start instead.
     #
