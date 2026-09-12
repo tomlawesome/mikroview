@@ -755,7 +755,13 @@
                     disabled={renameSaving}
                   />
                 {:else if canRename}
-                  <button type="button" class="rename-btn" onclick={() => startRename('host', row.key, row.label)} title="Click to rename">
+                  <button
+                    type="button"
+                    class="rename-btn"
+                    class:unnamed={!row.label}
+                    onclick={() => startRename('host', row.key, row.label)}
+                    title="Click to rename"
+                  >
                     {row.label || '— click to name —'}
                   </button>
                 {:else}
@@ -1227,6 +1233,14 @@
   .rename-btn:hover {
     border-color: var(--border);
     color: var(--accent);
+  }
+
+  /* #1152: the "— click to name —" placeholder is one phrase, and at
+     1100px wide it broke after "name" and left its closing dash alone on
+     a second line. Only the placeholder -- a real host name may be long
+     enough to want the wrap. */
+  .rename-btn.unnamed {
+    white-space: nowrap;
   }
 
   .dossier-btn {
