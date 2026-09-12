@@ -112,7 +112,7 @@ function nearestPhrase(floor, observedForSeconds, samples) {
   if (minDurationSeconds > 0) {
     const haveDays = Math.floor(observedForSeconds / SECONDS_PER_DAY)
     const needDays = Math.ceil(minDurationSeconds / SECONDS_PER_DAY)
-    parts.push(`${haveDays} of ${needDays} days`)
+    parts.push(`${haveDays} of ${needDays} ${needDays === 1 ? 'day' : 'days'}`)
   }
   if (minSamples > 0) {
     parts.push(`${samples} of ${minSamples} samples`)
