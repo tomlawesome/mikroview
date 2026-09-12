@@ -1012,9 +1012,20 @@
     gap: 4px;
   }
 
-  .iface-btn {
-    flex: none;
+  /* #1148: qualified with .cell-btn so it outranks that rule's
+     `width: 100%` below -- at equal specificity the later rule won, and
+     every in-interface token stretched to the whole cell, pushing the
+     arrow and the out-interface out past the cell's clip. Shrinkable
+     (`0 1 auto`) with its own ellipsis so two long interface names
+     degrade the way the rest of the row's tokens do rather than being
+     cut mid-character. */
+  .cell-btn.iface-btn {
+    flex: 0 1 auto;
     width: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .iface-sep {
