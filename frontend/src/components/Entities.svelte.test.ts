@@ -232,7 +232,7 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  it('draws the empty berth as one more card at the end of the router row, with no visible label (#718)', async () => {
+  it('draws the empty berth as one more card at the end of the router row, saying what it does (#718, #1168)', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },
     ] as unknown as (typeof appState)['devices']
@@ -242,7 +242,9 @@ describe('Entities router cards (#675)', () => {
     const cards = [...container.querySelectorAll('.fcards > .fcard')]
     expect(cards.length).toBe(2) // one router card, one berth
     expect(cards.at(-1)?.className).toContain('berth')
-    expect(cards.at(-1)?.textContent?.trim()).toBe('') // the shape is the affordance, no words
+    // #1168: the shape alone was the affordance under #718; at rest it
+    // now says so in words too, here and on first run.
+    expect(cards.at(-1)?.textContent?.trim()).toBe('+ add a router')
   })
 
   it('is the whole row when there are no routers at all -- the correct first-run state (#718)', async () => {
@@ -254,11 +256,14 @@ describe('Entities router cards (#675)', () => {
     expect(cards[0].className).toContain('berth')
   })
 
-  it('names itself to a screen reader even though the visual carries no words (#718)', async () => {
-    const { getByRole } = render(Entities)
+  it('names itself to a screen reader (#718) and on screen at rest (#1168)', async () => {
+    const { container, getByRole } = render(Entities)
     await settle()
 
     expect(getByRole('button', { name: 'Add a router' })).toBeTruthy()
+    // #1168: #718 left the resting state wordless, so with no routers
+    // registered the operator met one blank dashed box.
+    expect(container.querySelector('.berth-trigger')?.textContent?.trim()).toBe('+ add a router')
   })
 
   it('keeps the add-router explanation and commands off the page until the berth is activated (#718)', async () => {
