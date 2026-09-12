@@ -75,11 +75,22 @@
 </div>
 
 <style>
+  /* The control lives inside the account menu, so its list expands in
+     the menu's own flow rather than floating over the rows below it
+     (#1145): a right-anchored dropdown covered "Change password", "Sign
+     out" and the foot, leaving fragments of them round its edges. The
+     column is the menu's full width so the options line up with the
+     rows they sit among. */
   .theme-menu {
     position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
   }
 
   .trigger {
+    align-self: flex-start;
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -103,10 +114,9 @@
     flex: none;
   }
 
+  /* In flow, not floating: no absolute placement, and no drop shadow,
+     which would be claiming a layer the list no longer occupies. */
   .menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
     min-width: 150px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
@@ -115,8 +125,6 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
-    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.4);
-    z-index: 20;
   }
 
   /* Same viewport-anchored treatment, scrim and z-order as the retired
