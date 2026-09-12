@@ -802,7 +802,13 @@
                   <p class="note">
                     The key is read once, at startup. This step notices on its own and prints the
                     router script ·
-                    <a class="olink" href={HOW_TO_MOUNT_URL} target="_blank" rel="noopener noreferrer">
+                    <a
+                      class="olink ext"
+                      href={HOW_TO_MOUNT_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Opens the setup guide on github.com, in a new tab"
+                    >
                       more on mounting a key
                     </a>
                   </p>
