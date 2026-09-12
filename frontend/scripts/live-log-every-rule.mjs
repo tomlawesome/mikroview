@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Tune logging (#435) against a real running mikroview: the surface as
-// a fresh gate instance actually sees it (well under 24 hours of
-// observation), the ephemerality wording verbatim from the issue body,
-// and the analyse endpoint's under-24h and secret-rejection paths
-// driven the way the browser itself would -- page.request.post, using
-// the session's own cookie.
+// Log every rule (#435; "Tune logging" until #1134 renamed it) against
+// a real running mikroview: the surface as a fresh gate instance
+// actually sees it (well under 24 hours of observation), the
+// ephemerality wording verbatim from the issue body, and the analyse
+// endpoint's under-24h and secret-rejection paths driven the way the
+// browser itself would -- page.request.post, using the session's own
+// cookie.
+//
+// #1134 also put the page on the deck and made its input one drop zone,
+// so what this drives now is the drop itself (a real DragEvent carrying
+// a real File) and the deck's own roll rail as the way off the page.
 //
 // What this deliberately does not cover: the >=24h "ready" path (the
 // rule list, counters, render) -- a fresh instance has been observing
@@ -35,7 +40,7 @@ const fixtureExport = readFileSync(
 const { page, consoleErrors } = await session()
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
-feedSyslog(20, 'live-tune-logging')
+feedSyslog(20, 'live-log-every-rule')
 await waitForStreamRows(page, 20)
 
 // --- Reach the page the way the wizard's finish screen offers it ------
@@ -52,12 +57,45 @@ await modal.waitFor({ state: 'visible' })
 // "Back up the router" as the ledger's sixth step, so the finish row --
 // rendered after the six-item ledger loop -- shifted from position 6.
 await page.locator('.setup-wizard .steps li:nth-child(7) .step-row').click()
+// Still "Tune logging…": #1134 renamed the page, and the wizard's own
+// link has not caught up yet -- SetupWizard.svelte was being changed on
+// another branch when the rename landed.
 const tuneLink = page.locator('.setup-wizard button.link:text-is("Tune logging…")')
 await tuneLink.waitFor({ state: 'visible' })
 await tuneLink.click()
 await modal.waitFor({ state: 'detached' })
 
-await page.waitForSelector('.og h3:has-text("tune logging")')
+await page.waitForSelector('.og h3:has-text("log every rule")')
+
+// --- The page has the app's own navigation on it (#1134, fault 1) -----
+// It used to render outside the deck, which is the app's navigation, so
+// there was no way off it. The card and the roll rail's own entry are
+// what the ruling ("same shell as every other page") means in the DOM.
+check(
+  (await page.locator('.deck .card[data-card="log-every-rule"]').count()) === 1,
+  'the page is a deck card, not a shell of its own',
+)
+const railEntry = page.locator('.roll-rail button.rail-name:text-is("Log every rule")')
+check((await railEntry.count()) === 1, 'the roll rail names it, so there is a way off the page')
+check(
+  (await railEntry.getAttribute('aria-current')) === 'page',
+  'the rail marks it as the card you are on',
+)
+
+// And the way off really works: roll to Topography and back.
+await goTo(page, 'Topography')
+await goTo(page, 'Log every rule')
+await page.waitForSelector('.og h3:has-text("log every rule")')
+
+// --- The lead sentence, verbatim from #1134's ruling ------------------
+// The owner's third fault was that the page never said what it was for.
+const lead = ((await page.textContent('.lead')) ?? '').replace(/\s+/g, ' ').trim()
+check(
+  lead ===
+    "Drop in your router's export (/export hide-sensitive). You get it back with logging switched on for every " +
+      'firewall rule that is not logging yet, ready to paste into the router. Nothing you paste is stored.',
+  `the lead sentence renders verbatim (${JSON.stringify(lead)})`,
+)
 
 // --- The ephemerality sentence, verbatim from the issue body ----------
 // (#435 issue, "Never persisted": "your config is never stored -- it
@@ -69,14 +107,39 @@ check(
 )
 
 // --- Under 24h: the waiting message, and nothing derived ---------------
-// By the time this scenario runs, earlier scenarios (live-setup-wizard,
-// among others) have already pushed at least one device, so the picker
-// (if shown at all) has a real option to choose.
-const deviceSelect = page.locator('#tl-device')
+// The picker is only drawn when there is more than one router to choose
+// between (#1134's layout), so it is taken only if it is there.
+const deviceSelect = page.locator('#ler-device')
 if (await deviceSelect.count()) {
   await deviceSelect.selectOption({ index: 1 })
 }
-await page.fill('#tl-export', fixtureExport)
+
+// --- The drop zone is the input (#1134, fault 2) ----------------------
+// A real drop, not setInputFiles on the hidden control: the drop is the
+// interaction the ruling names first, and it is the one no unit test
+// can prove against a real browser's DataTransfer.
+await page.evaluate((text) => {
+  const transfer = new DataTransfer()
+  transfer.items.add(new File([text], 'edge-1.rsc', { type: 'text/plain' }))
+  document
+    .querySelector('.card[data-card="log-every-rule"] .drop')
+    .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+}, fixtureExport)
+
+const picked = page.locator('.drop.filled .drop-picked')
+await picked.waitFor({ state: 'visible', timeout: 10000 })
+check((await picked.textContent()) === 'edge-1.rsc', 'the zone names the file that was dropped on it')
+check(
+  ((await page.textContent('.drop-sub')) ?? '').includes('7 firewall rules in it'),
+  `the zone counts the fixture's seven filter rules (${JSON.stringify(await page.textContent('.drop-sub'))})`,
+)
+const card = page.locator('.card[data-card="log-every-rule"]')
+check(
+  (await card.locator('input[type="file"]:visible').count()) === 0,
+  "the browser's own file control is never shown",
+)
+check((await card.locator('textarea').count()) === 0, 'and there is no second control beside the zone')
+
 await page.click('button.primary:has-text("Analyse")')
 
 const waiting = page.locator('.observation.waiting')

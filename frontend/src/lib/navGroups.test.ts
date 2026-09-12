@@ -32,13 +32,13 @@ describe('navGroups tier gating (#657)', () => {
   })
 
   it('a user adds the pages they can actually act on', () => {
-    // Settings, Watchlist, Entities and Tune logging are the edit tier.
+    // Settings, Watchlist, Entities and Log every rule are the edit tier.
     // The doors inside Settings are gated separately, within the page.
     expect(labels(false, true)).toEqual([
       'The fall',
       'Topography',
       'Stream',
-      'Tune logging',
+      'Log every rule',
       'Metrics',
       'Flags',
       'Watchlist',
@@ -53,7 +53,7 @@ describe('navGroups tier gating (#657)', () => {
       'The fall',
       'Topography',
       'Stream',
-      'Tune logging',
+      'Log every rule',
       'Metrics',
       'Audit log',
       'Flags',

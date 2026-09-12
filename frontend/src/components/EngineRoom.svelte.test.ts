@@ -175,34 +175,36 @@ describe('The settings shelf (#633)', () => {
       expect(screen.getByText(name)).toBeTruthy()
     }
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings', 'Log every rule']) {
       expect(within(shelf).getByText(card)).toBeTruthy()
     }
     // #735: the "seven cards, in the order you keep them" caption is
     // gone -- its purpose (the owner: "obvious") was redundant with the
-    // cards' own drag handle and position aria-label. Seven cards for
-    // an admin is now checked by counting them directly.
-    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    // cards' own drag handle and position aria-label. The count is
+    // checked directly instead -- eight since #1134 put Log every rule
+    // on the deck.
+    expect(within(shelf).getAllByRole('button')).toHaveLength(8)
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
 
   // #657: Entities carries `edit: true` (#653's widening to the user
   // tier), and this page is itself gated to the same tier -- so a
-  // `user` who reaches Settings at all sees the same seven cards an
+  // `user` who reaches Settings at all sees the same eight cards an
   // admin does. Named for the role it actually renders, unlike the
   // pre-#657 version of this test, which called that tier "viewer"
   // when only `user` and `admin` can ever reach this page.
-  it("a user's shelf carries all seven cards, same as an admin's", async () => {
+  it("a user's shelf carries all eight cards, same as an admin's", async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
     await settle()
 
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    expect(within(shelf).getAllByRole('button')).toHaveLength(8)
     expect(within(shelf).getByText('Entities')).toBeTruthy()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
+    expect(within(shelf).getByText('Log every rule')).toBeTruthy()
   })
 
   it('reordering a card moves the landing with it', async () => {

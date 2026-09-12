@@ -93,7 +93,7 @@ func TestPushBlockRenamesFilterRuleFields(t *testing.T) {
 		`"connectionState"=($v->"connection-state")`,
 		`"inInterface"=($v->"in-interface")`,
 		`"outInterface"=($v->"out-interface")`,
-		// #435's rule counters -- the cost the tune-logging helper shows
+		// #435's rule counters -- the cost the Log every rule helper shows
 		// beside a tick-box before any logging is switched on.
 		`"packets"=($v->"packets")`,
 		`"bytes"=($v->"bytes")`,

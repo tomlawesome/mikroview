@@ -150,7 +150,7 @@ type blockSpec struct {
 // without RouterOS complaining, so it lives in exactly one place.
 var blockSpecs = map[string]blockSpec{
 	// packets/bytes were added for #435: RouterOS keeps a per-rule hit
-	// counter whether or not the rule logs, so the tune-logging helper
+	// counter whether or not the rule logs, so the Log every rule helper
 	// can show a rule's real cost -- "fired 41,000 times in the last
 	// day" -- beside its tick-box before any logging is switched on.
 	"filter-rule": {

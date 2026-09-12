@@ -359,6 +359,9 @@ const SCENES = {
   // (deckCards.ts's `fleet` key) -- the same standalone page the
   // phone-width bottom bar has always reached, now also on the roll rail.
   Fleet: { rail: 'Fleet', card: 'fleet' },
+  // #1134: Log every rule joined the deck for the edit tier, so it is
+  // reached the same way every other page is.
+  'Log every rule': { rail: 'Log every rule', card: 'log-every-rule' },
 }
 
 /**
