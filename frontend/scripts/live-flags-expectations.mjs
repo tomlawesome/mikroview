@@ -38,14 +38,19 @@
 // arriving -- see waitForRowText's doc comment below for why that step
 // waits for the settled size rather than the first sighting.
 
-import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo, DESKTOP_VIEWPORT } from './live-browser.mjs'
 
 // Unused by every other scenario in this directory -- checked against
 // every 198.51.100.* literal already in use here before picking these.
 const EXPECT_IP = '198.51.100.110'
 const RESOLVE_IP = '198.51.100.111'
 
-const { page, consoleErrors } = await session()
+// A desktop docket: this scenario is about what an expected verdict
+// *means*, not where the button for it sits, so it clicks the chips off
+// the row. Below 1300px they live in the row's drawer instead (#1150),
+// and Playwright's default 1280 is below that -- live-verdicts.mjs owns
+// both placements; here the width is just said out loud.
+const { page, consoleErrors } = await session({ viewport: DESKTOP_VIEWPORT })
 
 feedPortScan(20, EXPECT_IP)
 feedPortScan(20, RESOLVE_IP)

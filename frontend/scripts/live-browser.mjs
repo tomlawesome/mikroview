@@ -560,7 +560,25 @@ async function resetInstance(page) {
   return true
 }
 
-export async function session({ dismissSetup = true, landing = 'stream', unfoldFilter = true, keep = false } = {}) {
+/**
+ * A desktop window, wider than every width-dependent rule the app has:
+ * the docket's 1300px narrow breakpoint (lib/viewport.svelte.ts) and the
+ * stream table's 1500px starting-columns one (lib/columns.svelte.ts).
+ *
+ * Playwright's own default is 1280x720, which is below both, so a
+ * scenario about a *desktop* surface has to say so rather than inherit a
+ * width that now means "narrow". Pass it to session() as `viewport`; a
+ * scenario testing the narrow side sets its own instead.
+ */
+export const DESKTOP_VIEWPORT = { width: 1600, height: 900 }
+
+export async function session({
+  dismissSetup = true,
+  landing = 'stream',
+  unfoldFilter = true,
+  keep = false,
+  viewport = undefined,
+} = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -574,7 +592,11 @@ export async function session({ dismissSetup = true, landing = 'stream', unfoldF
   // whether a *router* should trust it is a different question, and one
   // live-routeros.sh's `trust` step covers properly against real
   // RouterOS rather than by waving it through.
-  const page = await browser.newPage({ ignoreHTTPSErrors: true })
+  // The viewport is set on the page rather than after it, because two of
+  // the app's width rules are read once at module load (the stream's
+  // starting column set is the worked example) -- a resize afterwards
+  // would arrive too late to decide them.
+  const page = await browser.newPage({ ignoreHTTPSErrors: true, ...(viewport ? { viewport } : {}) })
   const consoleErrors = []
   const record = (text) => {
     if (isUntrustedCertServiceWorkerError(text)) return
