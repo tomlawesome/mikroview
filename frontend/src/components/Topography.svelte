@@ -7229,6 +7229,18 @@
     z-index: 2;
     display: flex;
     gap: 8px;
+    /* The row stops short of the altitude slider (#1136). Both are
+       absolute on the same bottom line, and the slider is centred on
+       the stage and about 274px wide (CLIENTS + track + STREET), so
+       half of that plus a gutter is what this row may not have. Open,
+       the picker had grown clean across it: the chip bar reached the
+       same width at every viewport, so at 1100 it covered the slider
+       and at 1920 the off-baseline tally printed over CLIENTS.
+       Wrapping rather than clipping keeps that tally readable when the
+       bar takes the whole line -- the row is bottom-anchored, so a
+       second line grows upward, over the map and not off it. */
+    flex-wrap: wrap;
+    max-width: calc(50% - 190px);
   }
 
   /* The off-baseline mark (round-49/index.html:76-77's `.nmk`): the
@@ -9476,6 +9488,11 @@
     border-color: color-mix(in srgb, var(--accent) 55%, transparent);
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     max-width: min(60vw, 640px);
+    /* A flex item will not shrink past its content by default, which
+       would push the tally beside it out of the row the moment the
+       chip strip is long (#1136). Shrinking is what the strip's own
+       `overflow-x: auto` is there for. */
+    min-width: 0;
   }
 
   .pill.p.edit .ports,
