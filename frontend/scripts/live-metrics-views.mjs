@@ -201,22 +201,49 @@ const inks = await page.$$eval('.drum svg line.stroke', (els) =>
 )
 check(inks.length > 0 && inks.length <= 2, `two chart inks only -- got ${JSON.stringify(inks)}`)
 
-// --- The drum: one outer+inner stroke pair per minute on the axis --------
+// --- The drum: one outer+inner stroke pair per minute it counted --------
 //
-// MetricsSeismograph's own MIN_HALF floor means every minute draws
-// something, even a silent one -- so the stroke count is checked against
-// the server's own axis length (GET /api/stats) rather than a guessed
-// number: the suite's shared instance has arbitrary history by the time
-// this scenario runs.
+// MetricsSeismograph's own MIN_HALF floor means a minute it draws leaves
+// a mark even when it was silent -- so the stroke count is checked
+// against the server rather than a guessed number: the suite's shared
+// instance has arbitrary history by the time this scenario runs.
+//
+// It is not the whole axis, though. #1192's ruling: a minute that ended
+// before this process began counting is blank paper, not a stub stroke,
+// because a floor stroke there reads as "nothing happened" when it means
+// "nobody was watching" -- the rule #1169 already applied to the table's
+// dashes. So the pairs to expect are the counted minutes: those at or
+// after `liveSince`, which lib/metricsSeries.ts's beforeCounting decides
+// the same way, to the minute.
 const statsForAxis = await (await page.request.get(apiUrl(page, '/api/stats'))).json()
-const axisLen = statsForAxis.timeSeries?.length ?? 0
+const axis = statsForAxis.timeSeries ?? []
+const axisLen = axis.length
 check(axisLen > 0, `the server reports a non-empty axis -- ${axisLen} minutes`)
+
+const minuteKey = (iso) => Math.floor(new Date(iso).getTime() / 60000)
+// No liveSince (an older server, a fixture) claims no minute predates
+// anything, which is beforeCounting's own answer there -- so every
+// minute is drawn.
+const since = statsForAxis.liveSince ? minuteKey(statsForAxis.liveSince) : null
+const countedLen = since === null ? axisLen : axis.filter((b) => minuteKey(b.time) >= since).length
 
 const outerCount = await page.locator(`${SEISMOGRAPH} line.stroke.outer`).count()
 const innerCount = await page.locator(`${SEISMOGRAPH} line.stroke.inner`).count()
 check(
-  outerCount === axisLen && innerCount === axisLen,
-  `one outer+inner stroke pair per minute on the axis -- outer ${outerCount}, inner ${innerCount}, axis ${axisLen}`,
+  outerCount === countedLen && innerCount === countedLen,
+  `one outer+inner stroke pair per counted minute -- outer ${outerCount}, inner ${innerCount}, counted ${countedLen} of ${axisLen} on the axis`,
+)
+
+// The other half of that ruling: blank paper says nothing on its own, so
+// the note says why it is blank. Drawn exactly when minutes the process
+// cannot answer for sit to the left of the first one it can.
+const blanksBefore = countedLen > 0 && countedLen < axisLen
+const noteText = ((await page.locator(`${SEISMOGRAPH} text.note`).first().textContent().catch(() => null)) ?? '').trim()
+check(
+  blanksBefore ? noteText.startsWith('counting since') : noteText === '',
+  blanksBefore
+    ? `the blank minutes carry the counting-since note -- got ${JSON.stringify(noteText)}`
+    : `an hour counted throughout carries no such note -- got ${JSON.stringify(noteText)}`,
 )
 
 // Geometry, not visibility -- see this file's own header note on SVG
