@@ -1573,12 +1573,12 @@ export interface SetupCommandsRequest {
   device?: string
 }
 
-// --- Tune logging (#435) ----------------------------------------------
+// --- Log every rule (#435) --------------------------------------------
 //
 // Mirrors internal/routeros/export and the two /api/tune-logging
 // handlers (the #435 fixed contract). The upload never leaves this
 // request/response pair -- nothing here is persisted, mirrored by the
-// component that renders it (TuneLogging.svelte) never writing the
+// component that renders it (LogEveryRule.svelte) never writing the
 // export text anywhere but its own component state.
 
 // TuneLoggingObserving is how long mikroview has been watching this

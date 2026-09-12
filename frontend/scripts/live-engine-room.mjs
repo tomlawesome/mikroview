@@ -71,11 +71,21 @@ check(
 // The shelf holds the whole deck, whatever order an earlier scenario
 // left it in, and exactly one card wears the sign-in mark.
 const shelfNames = await page.$$eval('.stshelf .stcard .nm', (els) => els.map((e) => e.textContent.trim()))
-// Seven, not five: #647 (#634 round 23) put Entities and Settings on the
-// deck as its last two cards, and #653 widened both to the user tier
-// (deckCards.ts:34-52 -- `canEdit` carries them, so an admin sees seven).
-// This scenario drives the shelf as an admin, so seven is the whole deck.
-const DECK_CARDS = ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']
+// Eight, not five: #647 (#634 round 23) put Entities and Settings on the
+// deck as its last two cards, #653 widened both to the user tier
+// (deckCards.ts's `canEdit` carries them), and #1134 added Log every
+// rule behind the same gate. This scenario drives the shelf as an
+// admin, so eight is the whole deck.
+const DECK_CARDS = [
+  'The fall',
+  'Topography',
+  'Metrics',
+  'Stream',
+  'The docket',
+  'Entities',
+  'Settings',
+  'Log every rule',
+]
 check(
   shelfNames.length === DECK_CARDS.length && DECK_CARDS.every((n) => shelfNames.includes(n)),
   `the shelf holds all ${DECK_CARDS.length} deck cards -- got ${JSON.stringify(shelfNames)}`,

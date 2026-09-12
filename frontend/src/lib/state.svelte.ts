@@ -88,13 +88,14 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Fall.svelte. It retires #544's interim ("Stream as landing") wholesale:
 // the default view below is 'fall', not 'live', and Stream keeps its own
 // Live-group row rather than being the entry point.
-// 'tune-logging' (#435) is the config-annotation helper -- its own
-// surface, not a wizard step (the issue's decision 2), reached from the
-// wizard's finish screen and from the topography's coverage lens on a
-// dark pair. Deliberately outside the deck (see App.svelte's DECK_VIEWS
-// and its own comment): a workflow you step into and leave, not a
-// dashboard you'd swipe to, the same shape Fleet historically had before
-// #647/#785 folded it in.
+// 'tune-logging' (#435) is Log every rule, the config-annotation helper
+// -- its own surface, not a wizard step (the issue's decision 2),
+// reached from the wizard's finish screen and from the topography's
+// coverage lens on a dark pair. It sat outside the deck until #1134, on
+// the reading that it was a workflow you step into and leave; that left
+// it the one page with no navigation, so it is a deck card now
+// (deckCards.ts's `log-every-rule`). The key keeps the spelling of the
+// two /api/tune-logging endpoints, which #1134 did not rename.
 export type View =
   | 'fall'
   | 'topography'

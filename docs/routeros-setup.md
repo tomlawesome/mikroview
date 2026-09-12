@@ -389,9 +389,9 @@ the array RouterOS sends or as a comma-joined string, so
 `($v->"connection-state")` can go straight in with no conversion.
 
 `packets` and `bytes` were added for issue #435: RouterOS keeps a
-per-rule hit counter whether or not the rule logs, so the "Tune logging"
-helper can show a rule's real cost — "fired 41,000 times in the last
-day" — beside its tick-box before you switch logging on for it. Same
+per-rule hit counter whether or not the rule logs, so the "Log every
+rule" helper can show a rule's real cost — "fired 41,000 times in the
+last day" — beside its tick-box before you switch logging on for it. Same
 shape as every other RouterOS integer here: `:serialize to=json` emits
 them as a float, which MikroView's decoder already expects.
 

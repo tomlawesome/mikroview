@@ -21,7 +21,7 @@
   import { policyState } from '../lib/policy.svelte'
   import { coverageState } from '../lib/coverage.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
-  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { addressInCidr, parseCidr } from '../lib/addressMatch'
   import { realityEdges } from '../lib/reality'
   // The decommission ghost (#460, round 55), on the city's own
@@ -2656,11 +2656,11 @@
   }
 
   /** The same second way in the 2D map's declare panel offers (#435): a
-   * dark boundary is exactly what tune-logging exists to fix. */
+   * dark boundary is exactly what Log every rule exists to fix. */
   function openRulesForBoundary() {
     const c = wallCard
     if (!c || !primaryDevice) return
-    tuneLoggingNavState.request(primaryDevice.id, c.gate.key)
+    logEveryRuleNavState.request(primaryDevice.id, c.gate.key)
     appState.view = 'tune-logging'
   }
 

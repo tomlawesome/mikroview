@@ -80,7 +80,7 @@
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
-  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr, type ParsedCidr } from '../lib/addressMatch'
@@ -2238,16 +2238,16 @@
     if (ok) closeBoundary()
   }
 
-  // Tune logging's other way in (#435 decision 2): a dark connection in
+  // Log every rule's other way in (#435 decision 2): a dark connection in
   // this same card is the thing prompting it. primaryDevice stands in
   // for "which router" -- the map has no per-edge device attribution
   // (policyState aggregates every device's pushed table), the same
   // approximation waistSub above already makes for the rule count.
   // This is the card's `rules ▸`: the rules for this very boundary,
   // which is where the round-49 mockup's `rules #31 ▸` leads.
-  function openTuneLoggingFromDark() {
+  function openLogEveryRuleFromDark() {
     if (!boundaryCard || !primaryDevice) return
-    tuneLoggingNavState.request(primaryDevice.id, boundaryCard.key)
+    logEveryRuleNavState.request(primaryDevice.id, boundaryCard.key)
     appState.view = 'tune-logging'
     closeBoundary()
   }
@@ -6871,11 +6871,11 @@
         {:else if isAdmin && !cardPinned}
           <button onclick={pinBoundary}>declare quiet on purpose ▸</button>
         {/if}
-        <!-- Tune logging (#435): the other remedy for a dark pair --
+        <!-- Log every rule (#435): the other remedy for a dark pair --
              switch logging on for what actually crosses it, rather than
              declaring the silence a choice. -->
         {#if isAdmin}
-          <button disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>rules ▸</button>
+          <button disabled={!primaryDevice} onclick={openLogEveryRuleFromDark}>rules ▸</button>
         {/if}
         <button class="dim" onclick={openStreamFromCard}>stream ▸</button>
       </div>

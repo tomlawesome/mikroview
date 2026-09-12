@@ -152,7 +152,7 @@ type FilterRule struct {
 	// under-counts, and re-pushing corrects it.
 	Disabled bool `json:"disabled"`
 	// Packets and Bytes were added for #435: RouterOS keeps a per-rule
-	// hit counter whether or not the rule logs, so the tune-logging
+	// hit counter whether or not the rule logs, so the Log every rule
 	// helper can show "fired 41,000 times in the last day" beside a
 	// tick-box before any logging is switched on -- cost, from the
 	// router's own evidence, ahead of the decision to watch. Both are
