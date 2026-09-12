@@ -428,6 +428,45 @@ describe('SetupWizard', () => {
 
     expect(container.querySelector('.headline')).toBeTruthy()
     expect(container.querySelectorAll('.readback li').length).toBe(6)
+    // #1166: the readback and the rail say the same thing the same way
+    // about a step that has seen nothing.
+    expect(container.textContent).not.toContain('nothing arrived')
+  })
+
+  // #1184: step 5 was the only step with no Copy button, and its sample
+  // named the router after the very address the step exists to replace,
+  // so pasting it changed nothing.
+  it('offers Copy on step 5, on a stanza that does not name the router after its own address', async () => {
+    wizardState.pane = 5
+    // An undeclared router's name is its own address -- that is what
+    // this step exists to replace.
+    wizardState.devices = [
+      {
+        id: '172.23.0.1',
+        name: '172.23.0.1',
+        sourceIp: '172.23.0.1',
+        configured: false,
+        firstSeen: '2026-08-23T09:00:00Z',
+        lastSeen: '2026-09-02T09:00:00Z',
+        eventCount: 10,
+        status: 'live',
+      } as never,
+    ]
+    const { container } = render(SetupWizard)
+
+    const stanza = container.querySelector('pre')?.textContent ?? ''
+    expect(stanza).toContain('sourceIp: "172.23.0.1"')
+    expect(stanza).not.toContain('name: "172.23.0.1"')
+    expect(stanza).toContain('name: "my-router"')
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
+
+  // #1166: the footer hint named "Next" beside a button labelled Finish.
+  it('names the button it is describing in the last step\'s footer hint', async () => {
+    wizardState.pane = 6
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.hint')).toBeTruthy())
+    expect(container.querySelector('.hint')?.textContent).toBe('Finish checks what has arrived')
   })
 
   // #646: the wizard ends by taking the operator back to the fall,
@@ -630,7 +669,11 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
     await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
     await waitFor(() => expect(container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
     expect(screen.getByRole('button', { name: 'Copy token' })).toBeTruthy()
-    expect(container.textContent).toContain('This token is shown once.')
+    // #1166: the step's lead used to make the same two claims about the
+    // token as this note, in different words. The note carries them now
+    // and the lead only points at it.
+    expect(container.textContent).toContain('This token is shown once, and is already in the script below.')
+    expect(container.textContent).not.toContain('minted for one router')
   })
 
   it('hands over one block, not a script plus a line to paste it into', async () => {

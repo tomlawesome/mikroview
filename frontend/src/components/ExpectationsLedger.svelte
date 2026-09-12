@@ -94,7 +94,7 @@
   {#if loadError}
     <p class="error">{loadError}</p>
   {:else if rows.length === 0}
-    <p class="empty">Nothing yet — every Expected verdict on the Flags card records one here.</p>
+    <p class="empty">Nothing yet — every Expected verdict on the docket's flags tab records one here.</p>
   {:else}
     <ul class="rows">
       {#each rows as e (e.id)}

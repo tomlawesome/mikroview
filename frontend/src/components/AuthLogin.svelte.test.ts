@@ -72,6 +72,23 @@ describe('AuthLogin', () => {
     expect(screen.getByRole('button', { name: /enter/i })).toBeTruthy()
   })
 
+  // #1187: an empty field used to raise the browser's own "Please fill
+  // out this field." bubble -- the engine's words, in the browser's
+  // language, over a form that already has its own error line.
+  it('answers an empty form in its own error line, with the browser kept out of it', async () => {
+    const { container } = render(AuthLogin)
+    expect(container.querySelector('form')?.hasAttribute('novalidate')).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+    expect(await screen.findByText('Enter your account name.')).toBeTruthy()
+    expect(login).not.toHaveBeenCalled()
+
+    await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'tom' } })
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+    expect(await screen.findByText('Enter your password.')).toBeTruthy()
+    expect(login).not.toHaveBeenCalled()
+  })
+
   it('shows the SSO link only when the backend reports SSO is configured', async () => {
     authState.ssoAvailable = true
 

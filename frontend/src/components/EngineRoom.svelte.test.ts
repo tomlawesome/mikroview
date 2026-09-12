@@ -297,6 +297,10 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByText(/this is you/)).toBeTruthy()
     expect(screen.getByText('console-only')).toBeTruthy()
     expect(screen.getByText('kai')).toBeTruthy()
+    // #1171: every tier's row says what that account may do. kai is the
+    // user tier, which used to be the only one with no pill at all.
+    expect(screen.getByText('admin')).toBeTruthy()
+    expect(screen.getByText('can change things')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
   })
@@ -701,5 +705,29 @@ describe('The settings shelf (#633)', () => {
 
     expect(signOutEverywhere).toHaveBeenCalled()
     expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
+  })
+
+  // #1142: the door labels were clipped mid-word ("6514 · TLS · listenir")
+  // because they start at x=396 and ran past a 520-wide viewBox. jsdom does
+  // not lay text out, so the check is arithmetic: a monospace glyph at the
+  // labels' font size is ~0.6em wide, so the label must fit in what is left
+  // of the viewBox.
+  it('the ingest diagram is wide enough for its two door labels', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const svg = document.querySelector<SVGSVGElement>('#engineroom-ingest .stpath')!
+    const boxWidth = Number(svg.getAttribute('viewBox')!.split(' ')[2])
+    const labels = [...svg.querySelectorAll<SVGTextElement>('text.sp-k, text.sp-n')].filter(
+      (t) => Number(t.getAttribute('x')) > 300,
+    )
+    expect(labels.length).toBe(2)
+    for (const label of labels) {
+      const fontSize = label.classList.contains('sp-k') ? 10 : 9.5
+      const width = (label.textContent ?? '').trim().length * fontSize * 0.6
+      expect(Number(label.getAttribute('x')) + width).toBeLessThanOrEqual(boxWidth)
+    }
   })
 })

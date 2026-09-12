@@ -312,7 +312,7 @@
         // store -- so the old "a key it does not hold" was describing
         // the vault passphrase, a different thing entirely.
         return (
-          'Mikroview encrypts backups — and the event history and the state store — under the key ' +
+          'MikroView encrypts backups — and the event history and the state store — under the key ' +
           'file you mount. None is mounted, so nothing can be stored yet. Generate one here.'
         )
       }
@@ -583,7 +583,7 @@
                    choices, no third option and no "are you sure": the
                    amber button quotes the exact record it will write. -->
               <div class="heavy">
-                <h3>Mikroview cannot check the router's side</h3>
+                <h3>MikroView cannot check the router's side</h3>
                 <p>
                   It only sees what arrives here, and {notObserved(step)}. That is not the same as
                   the step having failed — it may simply not have happened yet.
@@ -699,8 +699,8 @@
                        step that says "the token below" and prints only
                        a script leaves the operator nothing to keep. -->
                   <p class="note token-note">
-                    This token is shown once. Anyone who can read the script on the router can read
-                    it, so it is scoped to that one router.
+                    This token is shown once, and is already in the script below. Anyone who can read
+                    the script on the router can read it, so it is scoped to that one router.
                   </p>
                   <pre class="token">{token}</pre>
                   <button type="button" class="copy" onclick={() => copy(token, 'token')}>
@@ -726,8 +726,19 @@
                   {/if}
                 {/if}
               {:else if step.n === 5}
+                <!-- The name is left as deviceStanza's placeholder rather
+                     than passing d.name (#1184): an undeclared router's
+                     name *is* its address, so the sample read
+                     name: "172.23.0.1" -- pasting it named the router
+                     after the address this step exists to replace. And
+                     the block gets the same Copy the other steps offer;
+                     step 5 was the only one without one. -->
                 {#each undeclared as d (d.id)}
-                  <pre>{deviceStanza(d.sourceIp, d.name)}</pre>
+                  {@const stanza = deviceStanza(d.sourceIp, '')}
+                  <pre>{stanza}</pre>
+                  <button type="button" class="copy" onclick={() => copy(stanza, `stanza-${d.id}`)}>
+                    {copied === `stanza-${d.id}` ? 'Copied' : 'Copy'}
+                  </button>
                 {/each}
               {:else if step.n === 6}
                 {#if step.status.state === 'blocked'}
@@ -752,7 +763,7 @@
                     <button type="button" onclick={() => (historyKey = newHistoryKey())}>Reroll</button>
                   </div>
                   <p class="wzcaveat">
-                    <b>Save this now.</b> Mikroview can never show it again — it never receives this
+                    <b>Save this now.</b> MikroView can never show it again — it never receives this
                     value and never stores it, it only reads the file you are about to write. Lose
                     the key and everything kept under it, backups included, is unreadable.
                   </p>
@@ -791,7 +802,13 @@
                   <p class="note">
                     The key is read once, at startup. This step notices on its own and prints the
                     router script ·
-                    <a class="olink" href={HOW_TO_MOUNT_URL} target="_blank" rel="noopener noreferrer">
+                    <a
+                      class="olink ext"
+                      href={HOW_TO_MOUNT_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Opens the setup guide on github.com, in a new tab"
+                    >
                       more on mounting a key
                     </a>
                   </p>
@@ -970,7 +987,7 @@
                   <li class={s.outcome}>
                     <span class="rb-title">{s.n}. {s.title}</span>
                     <span class="rb-detail">
-                      {s.receipt || (s.status.state === 'quiet' ? s.status.detail : 'nothing arrived')}
+                      {s.receipt || (s.status.state === 'quiet' ? s.status.detail : 'nothing has arrived yet')}
                     </span>
                   </li>
                 {/each}
@@ -999,7 +1016,7 @@
                   />
                 </div>
               {/if}
-              <p class="note">Run setup… reopens this any time, from the Admin group.</p>
+              <p class="note">Run setup… reopens this any time, from your account menu.</p>
               <p class="note">
                 <button type="button" class="link" onclick={openLogEveryRule}>Log every rule…</button>
                 turns a dark connection into a watched one once mikroview has been listening a day.
@@ -1015,7 +1032,7 @@
         </button>
         <div class="footer-right">
           {#if step && step.hasCheck && step.outcome === 'open' && !warning}
-            <span class="hint">Next checks what has arrived</span>
+            <span class="hint">{step.n === STEP_COUNT ? 'Finish' : 'Next'} checks what has arrived</span>
           {/if}
           {#if step && step.n === 6 && wizardState.lostRouterDevice}
             <!-- Round 45's lost-router footer: no skip (there is

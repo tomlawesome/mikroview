@@ -12,7 +12,15 @@
   // at zero: the mockup's own "clear all" demo (the-whole.html's
   // cabtn handler) sets ⚑ to "⚑ 0" / "no open flags" as a real,
   // ok-coloured state, not a hidden one.
+  //
+  // The watch marker is the exception, and only for the viewer tier
+  // (#1172). App.svelte polls the watchlist for canEdit and above only,
+  // so a viewer's heldCount is 0 because nothing was ever read, not
+  // because nothing is watched -- and "👁 0" reads as the latter.
+  // Absent, per Settings' ratified absent-not-disabled grammar, rather
+  // than a number the app has no basis for.
   import { appState } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
 </script>
@@ -26,19 +34,21 @@
 >
   ⚑ {flagsState.activeCount}
 </button>
-<button
-  type="button"
-  class="wmk"
-  onclick={() => (appState.view = 'watchlist')}
-  title="{watchlistState.heldCount} watcher{watchlistState.heldCount === 1 ? '' : 's'} held{watchlistState.brokenCount > 0 ? `, ${watchlistState.brokenCount} broken` : ''}"
->
-  <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
-    <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
-    <circle cx="7" cy="5" r="1.8" fill="currentColor" />
-  </svg>
-  {watchlistState.heldCount}
-  {#if watchlistState.brokenCount > 0}<b>○{watchlistState.brokenCount}</b>{/if}
-</button>
+{#if authState.canEdit}
+  <button
+    type="button"
+    class="wmk"
+    onclick={() => (appState.view = 'watchlist')}
+    title="{watchlistState.heldCount} watcher{watchlistState.heldCount === 1 ? '' : 's'} held{watchlistState.brokenCount > 0 ? `, ${watchlistState.brokenCount} broken` : ''}"
+  >
+    <svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true">
+      <path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+      <circle cx="7" cy="5" r="1.8" fill="currentColor" />
+    </svg>
+    {watchlistState.heldCount}
+    {#if watchlistState.brokenCount > 0}<b>○{watchlistState.brokenCount}</b>{/if}
+  </button>
+{/if}
 
 <style>
   .fmk,

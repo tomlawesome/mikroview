@@ -738,9 +738,12 @@
       <div class="stsection wide" id="engineroom-ingest">
         <h3>ingest</h3>
         <div class="wleft">
+          <!-- 560 wide, not 520: the two door labels start at x=396 and the
+               longest of them ("10 events/s arriving now" at 9.5px mono) runs
+               past 520, so it was clipped mid-word (#1142). -->
           <svg
             class="stpath"
-            viewBox="0 0 520 92"
+            viewBox="0 0 560 92"
             role="img"
             aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
           >
@@ -1244,6 +1247,10 @@
             <div class="prow">
               <span class="pn">{user.username}</span>
               {#if user.role === 'admin'}<span class="pr admin">admin</span>{/if}
+              <!-- #1171: the user tier was the only one with no pill, so
+                   a row for it said nothing about what the account may
+                   do. The words are the let-someone-in form's own. -->
+              {#if user.role === 'user'}<span class="pr">can change things</span>{/if}
               {#if user.role === 'viewer'}<span class="pr look">can only look</span>{/if}
               {#if user.sso}<span class="pr">sso</span>{/if}
               <span class="pf">
@@ -1804,9 +1811,14 @@
     flex-wrap: wrap;
   }
 
+  /* #1147: fixed at 220px these clipped their own placeholders mid-word
+     ("name it — birdcage, grafana, th") on a row with hundreds of pixels
+     going spare. They take a share of what the row has left instead,
+     never narrower than the 220px they were. */
   .pform input {
-    width: 220px;
-    flex: none;
+    flex: 1 1 220px;
+    min-width: 220px;
+    max-width: 420px;
   }
 
   .pform .acts {
