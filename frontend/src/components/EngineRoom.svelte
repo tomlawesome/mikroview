@@ -895,7 +895,17 @@
               <span class="pr" class:ingest={tok.kind === 'ingest'}>
                 {tok.kind === 'ingest' ? `ingest · speaks for ${tok.device}` : 'read-only'}
               </span>
+              <!-- #1194: the mint time, so two keys the wizard left with
+                   the same name and the same "never spoke — yet" can be
+                   told apart and the older one revoked with confidence.
+                   Relative, the voice this row already speaks in, with
+                   the exact stamp on hover for two minted in the same
+                   minute. -->
               <span class="pf">
+                <span title={new Date(tok.createdAt).toLocaleString()}
+                  >minted {formatRelative(tok.createdAt, appState.now)}</span
+                >
+                ·
                 {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
               </span>
               <button
