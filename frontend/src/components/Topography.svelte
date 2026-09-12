@@ -1477,7 +1477,7 @@
   // interface where it did not.
   function laneName(i: string): string {
     if (i === zonesState.wanInterface) return 'the internet'
-    if (i === '') return 'any lane'
+    if (i === '') return 'any zone'
     return zones.find((z) => z.id === i)?.name ?? i
   }
 
@@ -4939,7 +4939,7 @@
       viewBox={mapViewBox}
       preserveAspectRatio="xMidYMid meet"
       role="img"
-      aria-label="The network map: internet above, the router at the waist, observed lanes below{undrawnNote}"
+      aria-label="The network map: internet above, the router at the waist, observed zones below{undrawnNote}"
       class="pannable"
       onpointerdown={onMapPointerDown}
       onpointermove={onMapPointerMove}
@@ -6254,7 +6254,7 @@
       <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" bind:this={membraneSvgEl}>
         <circle cx={MX} cy={MY} r={MR} class="membrane" />
         <text x={MX} y="502" text-anchor="middle" class="n-sub">
-          the membrane — lane-mates inside talk freely; every crossing needs a rule, per direction
+          the membrane — zone-mates inside talk freely; every crossing needs a rule, per direction
         </text>
 
         <!-- Nothing is written on a strand (round 49; DESIGN.md "The

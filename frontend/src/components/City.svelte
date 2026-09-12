@@ -4688,6 +4688,12 @@
       </svg>
     </button>
     <div class="mk"><span>viewport ≈ {viewShare}%</span><span>drag · arrows to walk</span></div>
+    <!-- The metaphor, anchored once (#1159). The city keeps its own
+         words -- a district is a place on this map, a borough is a
+         router's territory -- but the same thing is a zone everywhere
+         data is listed, so the estate map says which is which rather
+         than leaving a reader to guess between three screens. -->
+    <div class="key">district — a zone (VLAN or bridge)</div>
   </div>
 </div>
 
@@ -5495,6 +5501,16 @@
     margin-top: 5px;
     display: flex;
     justify-content: space-between;
+  }
+
+  /* The metaphor key (#1159), under the minimap's own footer line and
+     in the same dim mono the panel already uses. */
+  .mini .key {
+    font: 9px var(--font-mono);
+    color: var(--fg-dim);
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--hair-2);
   }
 
   /* District names on the minimap (#978): the app's own 8px legibility

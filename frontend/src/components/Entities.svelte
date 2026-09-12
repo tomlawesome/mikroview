@@ -738,7 +738,7 @@
         <thead>
           <tr>
             <th>name</th>
-            <th>lane</th>
+            <th>zone</th>
             <th>address</th>
             <th>mac</th>
             <th>first seen</th>
