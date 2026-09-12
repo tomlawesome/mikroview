@@ -785,7 +785,12 @@
                   onclick={(e) => dossierState.open(row.key, e.currentTarget)}>{row.key}</button
                 ></td
               >
-              <td class="dim">{row.mac ? elideMac(row.mac.mac) : 'private'}</td>
+              <!-- #1158: an em dash, the marker every other column here
+                   uses for a value nothing knows. It read "private"
+                   before, which on a row for 1.1.1.1 or 8.8.8.8 looked
+                   like a claim about the address rather than a MAC the
+                   router never told us. -->
+              <td class="dim">{row.mac ? elideMac(row.mac.mac) : '—'}</td>
               <td class="dim">{firstSeenOf(row)}</td>
               <td>{lastSeenOf(row)}</td>
               <td>
