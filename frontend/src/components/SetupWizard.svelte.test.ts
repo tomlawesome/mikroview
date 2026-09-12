@@ -433,6 +433,34 @@ describe('SetupWizard', () => {
     expect(container.textContent).not.toContain('nothing arrived')
   })
 
+  // #1184: step 5 was the only step with no Copy button, and its sample
+  // named the router after the very address the step exists to replace,
+  // so pasting it changed nothing.
+  it('offers Copy on step 5, on a stanza that does not name the router after its own address', async () => {
+    wizardState.pane = 5
+    // An undeclared router's name is its own address -- that is what
+    // this step exists to replace.
+    wizardState.devices = [
+      {
+        id: '172.23.0.1',
+        name: '172.23.0.1',
+        sourceIp: '172.23.0.1',
+        configured: false,
+        firstSeen: '2026-08-23T09:00:00Z',
+        lastSeen: '2026-09-02T09:00:00Z',
+        eventCount: 10,
+        status: 'live',
+      } as never,
+    ]
+    const { container } = render(SetupWizard)
+
+    const stanza = container.querySelector('pre')?.textContent ?? ''
+    expect(stanza).toContain('sourceIp: "172.23.0.1"')
+    expect(stanza).not.toContain('name: "172.23.0.1"')
+    expect(stanza).toContain('name: "my-router"')
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
+
   // #1166: the footer hint named "Next" beside a button labelled Finish.
   it('names the button it is describing in the last step\'s footer hint', async () => {
     wizardState.pane = 6
