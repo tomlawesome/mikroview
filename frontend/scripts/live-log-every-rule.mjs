@@ -131,9 +131,29 @@ check(
   `the zone counts the fixture's seven filter rules (${JSON.stringify(await page.textContent('.drop-sub'))})`,
 )
 const card = page.locator('.card[data-card="log-every-rule"]')
+// The native control is kept and never shown (#1134): LogEveryRule's
+// `.sr-only` is the 1px clip-path idiom, deliberately not display:none,
+// so clicking the zone can still open the browser's file chooser and a
+// screen reader still finds the input. `:visible` is the wrong question
+// to ask of that -- Playwright counts a 1x1 clipped box as visible -- so
+// this asserts what the operator actually gets: a control with no area
+// to see or hit, and a zone that is the thing under the pointer.
+const fileInput = card.locator('input[type="file"]')
+check((await fileInput.count()) === 1, 'the native file control is kept, for the click-to-browse path')
+const fileBox = await fileInput.boundingBox()
 check(
-  (await card.locator('input[type="file"]:visible').count()) === 0,
-  "the browser's own file control is never shown",
+  fileBox !== null && fileBox.width <= 1 && fileBox.height <= 1,
+  `the file control occupies at most one pixel (${JSON.stringify(fileBox)})`,
+)
+const atZone = await page.evaluate(() => {
+  const drop = document.querySelector('.card[data-card="log-every-rule"] .drop')
+  const r = drop.getBoundingClientRect()
+  const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+  return { inDrop: !!el?.closest('.drop'), isFileInput: el instanceof HTMLInputElement && el.type === 'file' }
+})
+check(
+  atZone.inDrop && !atZone.isFileInput,
+  `the drop zone is what the pointer lands on, not the file control (${JSON.stringify(atZone)})`,
 )
 check((await card.locator('textarea').count()) === 0, 'and there is no second control beside the zone')
 
