@@ -480,6 +480,13 @@ func main() {
 	configLog := logging.New("config")
 	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
+		// Asking for help is not a broken configuration. The usage --
+		// the flags, then config.OtherCommands' block naming the modes
+		// dispatched above -- has already been printed, so exit on it
+		// rather than printing an ERROR line under the help (#1176).
+		if config.HelpRequested(err) {
+			os.Exit(0)
+		}
 		// The structured report rather than err.Error(): this is the
 		// message that stops the server, so the line telling the
 		// operator what to change should not be the tail of a long
