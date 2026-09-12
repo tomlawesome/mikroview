@@ -250,6 +250,19 @@ describe('the health dials (#648)', () => {
     expect(container.querySelectorAll('.dring.d-rest').length).toBe(1) // watchers still at rest
   })
 
+  // #1156: the scene bar's eye read "5 watchers held" while this dial
+  // read 6 on the same session -- the dial was counting a watch the
+  // operator had switched off. Both now read watchlistState.heldCount.
+  it('leaves a switched-off watch off the dial, as the scene bar does', () => {
+    watchlistState.entries = [watchEntry({ enabled: true }), watchEntry({ enabled: false })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const dnums = [...container.querySelectorAll('.dnum')].map((n) => n.textContent)
+    expect(dnums).toEqual(['0', String(watchlistState.heldCount)])
+    expect(dnums[1]).toBe('1')
+  })
+
   it('splits the watchers ring by healthy/broken', () => {
     watchlistState.entries = [watchEntry({ enabled: true }), watchEntry({ enabled: true })]
     watchlistState.coverage = { [watchlistState.entries[0].id]: 'no-logging' }

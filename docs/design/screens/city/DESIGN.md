@@ -284,7 +284,10 @@ number alone), what the rule does, both directions, and
 declare form — reason (required), `both directions ☑`, `Declare`, and
 who. Quiet card: the reason quoted, who and when, `undeclare ▸`. Host
 card: presence, last and first seen, events, `mark quiet on purpose ▸ ·
-dismiss ▸`. Line card in the reach: the port / proto / accepted /
+dismiss ▸ · dossier ▸ · stream ▸` (the last two added by #410). A host
+the register has not recorded yet says `not in the host register yet ·
+nothing to mark` instead of the two write actions, which would have no
+key to hang on. Line card in the reach: the port / proto / accepted /
 dropped table, the totals, `:22 refused by #17 default drop`, and on a
 refused strand the composer's `draft the rule ▸`. Off-baseline card:
 the lines, first seen, count, and `expected ▸`. Drop card (#1002): the

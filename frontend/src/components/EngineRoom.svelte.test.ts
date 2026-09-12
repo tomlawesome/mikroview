@@ -342,6 +342,27 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
   })
 
+  // #1194: the wizard can leave two keys with the same name, both
+  // "never spoke — yet", and each with its own revoke -- the mint time
+  // is what tells the operator which of the two is the older one.
+  it('says when each key was minted, so two of the same name can be told apart', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.now = Date.parse('2026-08-24T14:10:00Z')
+    const { fetchTokens } = await import('../lib/api')
+    vi.mocked(fetchTokens).mockResolvedValueOnce([
+      { id: 't8', name: 'setup-172.23.0.1', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-24T11:10:00Z' },
+      { id: 't9', name: 'setup-172.23.0.1', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-24T14:05:00Z' },
+    ])
+    render(EngineRoom)
+    await settle()
+    expect(screen.getByText('minted 3h ago')).toBeTruthy()
+    expect(screen.getByText('minted 5m ago')).toBeTruthy()
+    // Both still say nothing has used them -- the mint time is the only
+    // thing separating the two rows.
+    expect(screen.getAllByText(/never spoke — yet/)).toHaveLength(2)
+  })
+
   it('minting a key shows the once-only reveal, and done lets the form close', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
