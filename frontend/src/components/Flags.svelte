@@ -1078,9 +1078,13 @@
           47): the detector's own 0-100, beside the type, only where a
           detector scored the flag -- the baseline family
           (internal/engine/baseline.go's emaConfidence). The other
-          types carry nothing here: no dash, no word. --><span
-          class="conf"
-          title="scored {f.confidence} of 100 by the detector">{f.confidence}</span
+          types carry nothing here: no dash, no word.
+          #1167: with the word "scored" in front of it, as the drawer's
+          own line already has. Bare, it read as an unlabelled tally of
+          the type beside it -- "CRITICAL-PORT ATTEMPTS 0" -- rather
+          than as a score, and the title was the only thing saying
+          otherwise. --><span class="conf" title="scored {f.confidence} of 100 by the detector"
+          ><i>scored</i> {f.confidence}</span
         >{/if}{#if provisional}<span class="ptag">provisional</span>{/if}</td
     >
     <td class="k">
@@ -1722,6 +1726,16 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0;
     margin-left: 10px;
+  }
+
+  /* #1167's word in front of it: the label, not the figure, so it reads
+     a step down and dim while the number keeps the treatment above. */
+  .fmark .conf i {
+    font-style: normal;
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
   }
 
   .frow.fdone .fmark .conf {

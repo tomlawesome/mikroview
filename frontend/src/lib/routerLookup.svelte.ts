@@ -204,8 +204,11 @@ export const routerLookupState = new RouterLookupState()
 // The mode announcement, in one place so the popover and the mobile
 // sheet cannot drift into telling the operator two different things
 // about the same lookup.
+// #1167: the title says which router, never which mode. "NAT rule —
+// logged" sat next to a chip already reading "logged", so the header
+// said the same word twice and neither said whose table it was.
 export function natTitle(device: string, natMode: NatMode): string {
-  return natMode === 'logged' ? 'NAT rule — logged' : `NAT table — ${device}`
+  return natMode === 'logged' ? `NAT rule — ${device}` : `NAT table — ${device}`
 }
 
 export function natChip(natMode: NatMode): string {
