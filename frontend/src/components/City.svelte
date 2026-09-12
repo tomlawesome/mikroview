@@ -791,9 +791,19 @@
     // A ladder, top rung first (#1002): a card was opened on purpose, so
     // Escape takes that back before it takes back where you are
     // standing. Two Escapes to do both, and never both at once.
-    if (openDropId) {
+    // #1177: every pinned card, not only the drop card. DESIGN.md
+    // "Cards" says "Escape takes a card down before it surfaces from
+    // standing", and a pinned wall, host or line card could be let go
+    // with its ✕ and nothing else.
+    //
+    // Pinned, not merely hovered: a hovered card follows the pointer and
+    // goes when the pointer does, and the composer's own door sits on a
+    // hovered host card -- consuming the press there would cost the
+    // operator the rung below, which is the sequence live-city-reach.mjs
+    // reads. The drop card keeps the hover state #1002 gave it.
+    if (openDropId || pinnedWall || pinnedHost || pinnedRoad) {
       e.preventDefault()
-      closeDropCard()
+      closeCards()
       return
     }
     // The filter is the outermost thing the operator turned on, so it
@@ -3349,12 +3359,22 @@
     hoverDrop = id
   }
 
-  /** Escape's first rung (#1002). A card is opened on purpose, so it is
-   * the first thing Escape takes back; surfacing from standing is the
-   * rung below, and `onWindowKeydown` reads them in that order. */
-  function closeDropCard() {
+  /** Escape's first rung (#1002, widened to every card by #1177). A card
+   * is opened on purpose, so it is the first thing Escape takes back;
+   * surfacing from standing is the rung below, and `onWindowKeydown`
+   * reads them in that order. Both halves of each card's state go, pin
+   * and hover alike: the pointer is usually still resting on the card
+   * the press was meant to dismiss, so clearing only the pin would leave
+   * it on screen and read as Escape doing nothing. */
+  function closeCards() {
     pinnedDrop = null
     hoverDrop = null
+    pinnedWall = null
+    hoverWall = null
+    pinnedHost = null
+    hoverHost = null
+    pinnedRoad = null
+    hoverRoad = null
   }
 
   $effect(() => {
@@ -4140,6 +4160,7 @@
           class="pin"
           class:on={wallPinned}
           aria-pressed={wallPinned}
+          aria-label={wallPinned ? 'unpin this card' : 'pin this card'}
           title={wallPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={toggleWallPin}>{wallPinned ? '✕' : '⊙'}</button
         >
@@ -4244,6 +4265,7 @@
           class="pin"
           class:on={hostPinned}
           aria-pressed={hostPinned}
+          aria-label={hostPinned ? 'unpin this card' : 'pin this card'}
           title={hostPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={toggleHostPin}>{hostPinned ? '✕' : '⊙'}</button
         >
@@ -4392,6 +4414,7 @@
           class="pin"
           class:on={roadPinned}
           aria-pressed={roadPinned}
+          aria-label={roadPinned ? 'unpin this card' : 'pin this card'}
           title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleRoadPin(rc.road.id)}>{roadPinned ? '✕' : '⊙'}</button
         >
@@ -4498,6 +4521,7 @@
           class="pin"
           class:on={roadPinned}
           aria-pressed={roadPinned}
+          aria-label={roadPinned ? 'unpin this card' : 'pin this card'}
           title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleRoadPin(lc.id)}>{roadPinned ? '✕' : '⊙'}</button
         >
@@ -4584,6 +4608,7 @@
           class="pin"
           class:on={dropPinned}
           aria-pressed={dropPinned}
+          aria-label={dropPinned ? 'unpin this card' : 'pin this card'}
           title={dropPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleDropPin(dc.id)}>{dropPinned ? '✕' : '⊙'}</button
         >
