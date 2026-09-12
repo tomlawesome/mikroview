@@ -325,7 +325,13 @@ pushes follow that identity, so nothing has to be reissued:
 The alternative is changing `sourceIp` to the arriving address and
 restarting — then reissue any token minted for the old identity.
 
-Or via the API:
+Or via the API. Minting a token is an admin action, so the call has to
+carry an admin's browser session: `<your session cookie>` is the
+`mikroview_session=…` cookie `POST /api/auth/login` sets (see the
+[API reference](configuration.md#api-reference)). Copy it from your
+browser's developer tools, or sign in with curl first and let it keep
+the cookie for you — `curl -k -c jar -X POST …/api/auth/login -d …`,
+then `-b jar` on the call below in place of the placeholder.
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
