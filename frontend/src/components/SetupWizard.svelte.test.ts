@@ -125,6 +125,11 @@ beforeEach(async () => {
   wizardState.pickedVersion = ''
   wizardState.backups = null
   wizardState.lostRouterDevice = null
+  // #1183 moved these onto wizardState so a key outlives the component
+  // -- which means each test has to start without one, the way a fresh
+  // page load does.
+  wizardState.token = ''
+  wizardState.tokenDevice = ''
 })
 
 describe('SetupWizard', () => {
@@ -720,6 +725,40 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
   // so nothing said the lines ran off to the right either. The height is
   // a whole number of lines now; the class is what draws the bars, and
   // is the half of that fix a DOM test can see.
+  // #1183: every visit to the push step used to reach for a key of its
+  // own, so four walks left four rows called "setup-edge-1" in
+  // Settings, each with a revoke control and nothing to tell them
+  // apart. The key belongs to the wizard session now, not to whichever
+  // component instance happened to be showing the step.
+  it('shows the session key again on a second visit rather than minting another', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+
+    const first = render(SetupWizard)
+    await waitFor(() => expect(createToken).toHaveBeenCalledTimes(1))
+    first.unmount()
+
+    const second = render(SetupWizard)
+    await waitFor(() => expect(second.container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
+    expect(createToken).toHaveBeenCalledTimes(1)
+  })
+
+  // The one way past the reuse rule is the operator asking for it --
+  // step 6's "mint a new one" for a router being replaced.
+  it('mints again when the operator asks for a new one', async () => {
+    wizardState.token = 'mvt-from-step-4'
+    wizardState.tokenDevice = 'edge-1'
+    wizardState.lostRouterDevice = 'edge-1'
+    wizardState.pane = 6
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    render(SetupWizard)
+
+    const again = await screen.findByRole('button', { name: 'mint a new one' })
+    await fireEvent.click(again)
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
+  })
+
   it('gives the script box always-drawn scrollbars', async () => {
     wizardState.pane = 4
     wizardState.devices = [edge1()]

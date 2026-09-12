@@ -50,6 +50,23 @@ class WizardState {
   // anywhere, per the owner's "session only".
   pickedVersion = $state('')
 
+  // token is the ingest token step 4 minted, and tokenDevice the router
+  // it is scoped to (#1183). Here rather than in the component for a
+  // stronger reason than pickedVersion's: minting is not free. Every
+  // visit to the push step used to reach for a new key, so four walks
+  // left four rows called "setup-172.23.0.1" in Settings, each with its
+  // own revoke control and nothing to tell them apart. A key is shown
+  // once and never again, so the one this session minted is the one
+  // every later visit has to show -- and the only way to mint another
+  // is to ask (step 6's "mint a new one").
+  //
+  // Module-lifetime and deliberately not persisted: this is a bearer
+  // credential, and web storage is not where one goes. A later page
+  // load therefore still mints afresh, because there is nothing left to
+  // reuse -- the server keeps only the hash.
+  token = $state('')
+  tokenDevice = $state('')
+
   // commands is the last response from POST /api/setup/commands: the
   // rendered command blocks, the dialect table the pick-list lists, and
   // the router-standing warning data. null until the first fetch lands.
@@ -140,9 +157,10 @@ class WizardState {
   // the server (#436), keyed to whatever this session currently knows:
   // the instance address and syslog port, the push kinds, the operator's
   // picked version if any, and -- once step 4 has minted one -- the
-  // token. Callers pass the token explicitly rather than this holding
-  // it, since it lives in the component (created on step 4 entry, never
-  // stored here).
+  // token. Callers still pass the token explicitly, even though #1183
+  // moved it onto this object: the component reads it in the same
+  // derived key that decides when to re-request at all, and a call that
+  // took its own copy from here could disagree with that key.
   async refreshCommands(opts: { token?: string; device?: string } = {}): Promise<void> {
     if (!this.status) return
     const seq = ++this.commandsRequestSeq
