@@ -371,6 +371,25 @@ describe('Entities named-things table (#675)', () => {
     expect(container.textContent).toContain('— click to name —')
   })
 
+  // #1152: the placeholder is one phrase and broke across two lines at
+  // 1100px wide, stranding its closing dash. The nowrap that fixes it
+  // rides on this class so a real host name, which may be long, still
+  // wraps.
+  it('marks the unnamed placeholder so it cannot break mid-phrase, but not a real name', async () => {
+    appState.events = [
+      { srcIp: '10.0.10.9', dstIp: '', time: new Date().toISOString(), receivedAt: Date.now() },
+    ] as unknown as (typeof appState)['events']
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '10.0.10.2', label: 'tom-desktop', tags: [] }])
+    const { container } = render(Entities)
+    await settle()
+
+    const buttons = [...container.querySelectorAll('.etable .rename-btn')]
+    const placeholder = buttons.find((b) => b.textContent?.includes('click to name'))
+    const named = buttons.find((b) => b.textContent?.includes('tom-desktop'))
+    expect(placeholder?.classList.contains('unnamed')).toBe(true)
+    expect(named?.classList.contains('unnamed')).toBe(false)
+  })
+
   it('elides a known MAC and reads "private" when none is known', async () => {
     const { fetchDeviceMACs } = await import('../lib/api')
     vi.mocked(fetchDeviceMACs).mockResolvedValue([
