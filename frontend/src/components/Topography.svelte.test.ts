@@ -1348,6 +1348,31 @@ describe('the round-30 layout (#699)', () => {
     expect(texts.some((t) => /^unjudged — push the rule table/.test(t))).toBe(false)
   })
 
+  it('gives a rib one tab stop, not two (#1180)', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 445, action: 'drop' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    // The rib and its own label plate carried the same action under the
+    // same name, and both were in the tab order, so a keyboard walk of
+    // the map stopped at every boundary twice.
+    const ribs = [...container.querySelectorAll('.edge-g')]
+    expect(ribs.length).toBeGreaterThan(0)
+    for (const r of ribs) expect(r.getAttribute('tabindex')).toBe('0')
+
+    const plates = [...container.querySelectorAll('g.detail')].filter((g) => g.querySelector('.edge-plate'))
+    expect(plates.length).toBeGreaterThan(0)
+    for (const p of plates) {
+      expect(p.getAttribute('tabindex')).toBe('-1')
+      // ...and the screen reader is not told the same rib twice either.
+      expect(p.getAttribute('aria-hidden')).toBe('true')
+    }
+  })
+
   it('puts every edge label on a plate rather than bare on its line', () => {
     zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
     appState.events = [
