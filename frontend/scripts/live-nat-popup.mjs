@@ -60,13 +60,14 @@ const { page, consoleErrors } = await session()
 //
 // Its id and its configured display name are not the same string here
 // (live-env.sh's own devices block: id "live-router", name "Live
-// Router") and the two are used in different places: the sheet/popover
-// body's own copy (RouterNatLookup.svelte) reports routerLookupState's
-// device, which EventDetailSheet.svelte's openNatLookup sets from
-// event.deviceId -- the raw id -- while the header title
-// (natTitle(deviceName, ...)) is given LiveTable.svelte's deviceName(),
-// the friendly name. Both are captured so each check below reads the
-// one the component it targets actually renders.
+// Router") and the two are still used in different places: the
+// sheet/popover body's own copy (RouterNatLookup.svelte) reports
+// routerLookupState's device, which EventDetailSheet.svelte's
+// openNatLookup sets from event.deviceId -- the raw id -- while both
+// header titles (natTitle) now take the friendly name (#1195: the
+// popover used to take the id there, so one router read two ways).
+// Both are captured so each check below reads the one the component it
+// targets actually renders.
 feedSyslog(2, 'mv445-device-probe')
 let DEVICE
 let DEVICE_NAME
@@ -378,12 +379,12 @@ await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
   const text = await openPopover(LOGGED_TRIGGER)
 
   // #1167: the header names the router; the chip below is the one place
-  // the mode is said. This one is the desktop popover, whose title is
-  // natTitle(routerLookupState.device) -- the raw id RouterRuleButton
-  // opened it with -- where the sheet's title above is given
-  // LiveTable's friendly deviceName. Same split this file's header
-  // comment records; each check reads the string its own surface draws.
-  check(text.includes(`NAT rule — ${DEVICE}`), 'the logged header names the router it read')
+  // the mode is said. #1195 closed the split this used to read against:
+  // the popover's title took routerLookupState.device, the raw id it was
+  // opened with, where the sheet's took the friendly name, so the same
+  // router read two ways. Both take routerLookupState.deviceName now, so
+  // both checks assert the same string.
+  check(text.includes(`NAT rule — ${DEVICE_NAME}`), 'the logged header names the router it read')
   check(
     (await page.textContent('.popover .chip')).trim() === 'logged',
     'the mode chip reads "logged"',
