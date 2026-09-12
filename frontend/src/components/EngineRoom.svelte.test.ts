@@ -117,11 +117,12 @@ import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
-import { fetchHistorySettings as fetchHistorySettingsReal } from '../lib/api'
+import { fetchHistorySettings as fetchHistorySettingsReal, fetchRouterBackups as fetchRouterBackupsReal } from '../lib/api'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
+const fetchRouterBackups = vi.mocked(fetchRouterBackupsReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -644,6 +645,43 @@ describe('The settings shelf (#633)', () => {
     expect(fetchHistorySettings).toHaveBeenCalledTimes(2)
     expect(document.getElementById('diskg')?.classList.contains('dfail')).toBe(false)
     expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+  })
+
+  it('router backups stacks its rows until there is a strip to draw beside them (#1153)', async () => {
+    // The left column holds the generation strips; with none drawn the
+    // rows used to sit alone in column two, starting 600px in with the
+    // whole left half blank. No diagram means the group stacks, the
+    // same answer `dnokey`/`dfail` already give the disk group.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    // The mocked default: backups off, no router has pushed a pair.
+    expect(document.getElementById('bakg')?.classList.contains('dnodiagram')).toBe(true)
+    cleanup()
+
+    fetchRouterBackups.mockResolvedValueOnce({
+      enabled: true,
+      port: ':2222',
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+      totalGenerations: 1,
+      totalRouters: 1,
+      totalBytes: 1024,
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(document.getElementById('bakg')?.classList.contains('dnodiagram')).toBe(false)
   })
 
   it('the disk group sits directly after memory, with its statements (#910)', async () => {
