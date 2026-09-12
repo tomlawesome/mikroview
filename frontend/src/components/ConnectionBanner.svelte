@@ -14,7 +14,7 @@
 {#if appState.connState !== 'open'}
   <div class="banner banner-{appState.connState}" role="status">
     {appState.connState === 'connecting'
-      ? 'Connecting to mikroview…'
+      ? 'Connecting to MikroView…'
       : 'Disconnected from server — attempting to reconnect…'}
   </div>
 {:else if appState.refreshError}

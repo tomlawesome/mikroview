@@ -382,7 +382,7 @@ func (p *Pool) Migrate(ctx context.Context) error {
 
 	endVersion := pending[len(pending)-1].version
 	schemaLog.Warn(fmt.Sprintf("database schema updated from version %d to version %d -- "+
-		"an older mikroview image may no longer read this database correctly",
+		"an older MikroView image may no longer read this database correctly",
 		startVersion, endVersion))
 	return nil
 }
@@ -429,7 +429,7 @@ func verifyApplied(applied map[int64]string, migrations []migration, describe st
 		if recorded != m.checksum() {
 			return fmt.Errorf(
 				"persist: %s reports migration %d (%s) as applied, but its recorded checksum does not match the one "+
-					"in this build -- the database schema is not what this version of mikroview expects. That means "+
+					"in this build -- the database schema is not what this version of MikroView expects. That means "+
 					"either the migration file changed after release (it must never change once applied), or "+
 					"schema_version was written to directly. Refusing to start rather than run queries against a "+
 					"schema of unknown shape",

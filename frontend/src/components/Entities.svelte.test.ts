@@ -270,7 +270,7 @@ describe('Entities router cards (#675)', () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.textContent).not.toContain('Routers push to mikroview')
+    expect(container.textContent).not.toContain('Routers push to MikroView')
     expect(container.querySelector('.paste')).toBeNull()
   })
 
@@ -282,7 +282,7 @@ describe('Entities router cards (#675)', () => {
     await settle()
 
     expect(container.textContent).toContain(':16893')
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
+    expect(container.textContent).toContain('Routers push to MikroView — it never connects to them.')
     expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
 
     const pre = container.querySelector('.paste')
@@ -700,7 +700,7 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
+    expect(container.textContent).toContain('Routers push to MikroView — it never connects to them.')
     expect(container.querySelector('.berth-panel')).toBeTruthy()
   })
 

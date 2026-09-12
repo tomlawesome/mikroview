@@ -113,9 +113,9 @@ var excludedFromBackup = map[string]string{
 		"trusted yet), and regenerating it is one restart away, so there is nothing here a restore " +
 		"is actually saving.",
 	"GeoIP.DBPath": "an external MaxMind database file the operator downloads themselves (#372), not " +
-		"a store mikroview writes -- there is nothing here for a restore to reproduce that a fresh " +
+		"a store MikroView writes -- there is nothing here for a restore to reproduce that a fresh " +
 		"download would not already give back.",
-	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not mikroview's own state -- the " +
+	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not MikroView's own state -- the " +
 		"next refresh re-fetches it in seconds, so a restore saves nothing. It is also somebody " +
 		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +
 		"and a backup is a copy that travels: keeping it out means an operator's backup carries " +

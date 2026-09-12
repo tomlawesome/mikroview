@@ -109,7 +109,7 @@ const HEADLINES: Partial<Record<FlagType, (f: Flag) => string>> = {
   low_slow_scan: () => 'A scan paced to stay under the radar.',
   off_hours_activity: () => 'Awake at a time it has no history of.',
   device_silence: () => 'Gone quiet.',
-  new_device: () => 'A device mikroview has never seen before.',
+  new_device: () => 'A device MikroView has never seen before.',
   stale_rule: () => 'A rule that stopped mattering.',
   unexpected_mail_sender: () => "Something that shouldn't send mail, sending mail.",
   known_bad_ip: () => 'A source already known to be bad.',
@@ -165,7 +165,7 @@ const STORIES: Partial<Record<FlagType, (f: Flag) => string>> = {
     return `${f.target} logged ${plural(f.count, 'event')}${stretch ? ` over ${stretch}` : ''} during a stretch of the clock it has no established history of using.`
   },
   device_silence: (f) => `${f.target} has gone quiet -- nothing heard from it since ${formatHM(f.lastSeen)}, longer than its usual check-in gap.`,
-  new_device: (f) => `${f.target} has never been seen on this network before now -- mikroview's device history has no prior record of it.`,
+  new_device: (f) => `${f.target} has never been seen on this network before now -- MikroView's device history has no prior record of it.`,
   stale_rule: (f) => `Rule ${f.target} hasn't fired in a long time -- dead weight, or a hole nobody needs open anymore, either way worth a look.`,
   unexpected_mail_sender: (f) =>
     `${f.target} has no record of ever being tagged a mail sender, and just made ${f.count > 1 ? plural(f.count, 'outbound connection') : 'an outbound connection'} on an SMTP port${durationClause(span(f))}. Quiet devices don't send mail on their own; compromised ones do.`,

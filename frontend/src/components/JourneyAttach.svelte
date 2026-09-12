@@ -53,14 +53,14 @@
   <div class="stack">
     <div class="wm-box"><span class="wm">MIKRO<em>VIEW</em></span></div>
     <p class="account">Signed in as <b>{authState.username}</b> — the account you just made.</p>
-    <p class="lead">Two lines on the router, and mikroview starts hearing it:</p>
+    <p class="lead">Two lines on the router, and MikroView starts hearing it:</p>
     {#if commands}
       <pre class="code">{commands}</pre>
       <button type="button" class="copy" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
     {:else}
       <p class="waiting">Fetching this instance's own address…</p>
     {/if}
-    <p class="note">That is the whole of setup, for now — paste and move on. Mikroview never connects to the router.</p>
+    <p class="note">That is the whole of setup, for now — paste and move on. MikroView never connects to the router.</p>
     <button type="button" class="continue" onclick={() => journeyState.fromAttach()}>Continue</button>
   </div>
 </div>

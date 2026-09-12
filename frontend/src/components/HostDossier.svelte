@@ -329,7 +329,7 @@
                 <CopyButton value={d.suggestedProbe.url} label="suggested probe URL" />
               </p>
             {/if}
-            <p class="from">mikroview never runs this; you would.</p>
+            <p class="from">MikroView never runs this; you would.</p>
             {#if d.suggestedProbe.note}<p class="from">{d.suggestedProbe.note}</p>{/if}
           </section>
         {/if}

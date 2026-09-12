@@ -113,7 +113,7 @@ class AuthState {
     const code = params.get("ssoError");
     if (code === "not_permitted") {
       this.ssoError =
-        "Your account signed in successfully but is not permitted to use this mikroview. Contact whoever administers it.";
+        "Your account signed in successfully but is not permitted to use this MikroView. Contact whoever administers it.";
     } else if (code === "link_identity_taken") {
       this.ssoError =
         "That SSO identity is already connected to a different account, so it can't be connected to this one. Nothing was changed.";

@@ -161,7 +161,7 @@ var (
 	// ErrSingleAdmin is returned by CreateUser for a RoleAdmin request.
 	// mikroview holds exactly one admin; handover is TransferAdmin, not
 	// creating a second one.
-	ErrSingleAdmin = errors.New("auth: mikroview has a single admin account -- transfer the role instead of creating another admin")
+	ErrSingleAdmin = errors.New("auth: MikroView has a single admin account -- transfer the role instead of creating another admin")
 	// ErrInvalidRole is returned by CreateUser for any role other than
 	// RoleUser or RoleViewer. RoleAdmin is refused separately, as
 	// ErrSingleAdmin above -- that failure means something different to a

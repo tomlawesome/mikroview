@@ -107,7 +107,7 @@ is re-derived the original way: measured + ~15%.
   match interaction specs the owner has already ratified.
 - **Headless behaviour libraries** (Bits UI, Melt UI — MIT, small,
   accessibility-focused; the serious candidate). Rejected on three
-  counts: the behaviours mikroview needs are few and already specified
+  counts: the behaviours MikroView needs are few and already specified
   to the letter, so the library's generality is dead weight; part of
   the behaviour is already implemented and shipped; and every
   inner-loop dependency is supply-chain surface on a product whose
