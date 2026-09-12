@@ -738,9 +738,12 @@
       <div class="stsection wide" id="engineroom-ingest">
         <h3>ingest</h3>
         <div class="wleft">
+          <!-- 560 wide, not 520: the two door labels start at x=396 and the
+               longest of them ("10 events/s arriving now" at 9.5px mono) runs
+               past 520, so it was clipped mid-word (#1142). -->
           <svg
             class="stpath"
-            viewBox="0 0 520 92"
+            viewBox="0 0 560 92"
             role="img"
             aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
           >
