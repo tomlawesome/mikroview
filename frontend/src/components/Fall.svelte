@@ -1566,6 +1566,16 @@
     min-height: 320px;
     display: flex;
     justify-content: center;
+    /* The rig is drawn at its own pixel size, 800 units tall, which is
+       more than a 1366×768 screen has room for: the foot -- the port
+       labels and each band's "+n quieter ▸" -- fell off the bottom with
+       no way to reach it (#1141). It scrolls to the foot instead of
+       being scaled down to fit, because scaling shrinks the labels
+       through the app's 8px legibility floor and undoes the deliberate
+       band width #722 chose. `onwheel` above only ever acts on a
+       horizontal wheel, so an ordinary scroll down reaches the foot. */
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
   }
   .rig svg {
     /* No width: 100% here (#722) -- the svg's own width/height
