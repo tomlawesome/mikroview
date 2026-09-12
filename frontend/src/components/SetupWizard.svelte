@@ -24,7 +24,7 @@
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import { newestGeneration } from '../lib/backups'
-  import { HOW_TO_MOUNT_URL } from '../lib/history'
+  import { HOW_TO_MOUNT_URL, KEY_FILE_PATH, newHistoryKey } from '../lib/history'
   import {
     announceStep,
     backupReceiptForDevice,
@@ -42,6 +42,7 @@
     type LedgerStep,
   } from '../lib/setupsteps'
   import type { RouterosStanding } from '../lib/types'
+  import CopyButton from './CopyButton.svelte'
   import MemoryControl from './MemoryControl.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
@@ -266,6 +267,25 @@
     return entries
   })
 
+  // Step 6 with no key mounted mints one here (#1133). The field starts
+  // on a freshly generated key and stays editable, so an operator who
+  // already has a key -- or who would rather generate their own -- can
+  // type or paste it over the top and still get the steps below built
+  // around it. Nothing sends it anywhere: history.keyFile is not
+  // editable from the app (#853), there is no endpoint that accepts key
+  // material, and none of the blocks below quote the value either --
+  // the key goes into the file on standard input, which is what keeps
+  // it out of the operator's shell history as well.
+  let historyKey = $state(newHistoryKey())
+
+  // The steps under the field, one block each, in the order they have to
+  // happen. Constants so the copy buttons, the tests and the scenario
+  // all quote the same text.
+  const KEY_SAVE_COMMAND = `umask 077 && cat > ${KEY_FILE_PATH}`
+  const KEY_MOUNT_COMMAND = `services:\n  mikroview:\n    volumes:\n      - ${KEY_FILE_PATH}:${KEY_FILE_PATH}:ro`
+  const KEY_CONFIG_COMMAND = `history:\n  keyFile: ${KEY_FILE_PATH}`
+  const KEY_RESTART_COMMAND = 'docker compose up -d'
+
   // Step 6's own three departures from every other step's fixed
   // lead/header (#394, round 45): the title gains "<router> is gone" in
   // the lost-router shape, the lead reads one of three ways depending
@@ -287,10 +307,13 @@
         )
       }
       if (step.status.state === 'blocked') {
+        // Said once, and correctly (#1133). The key file is mikroview's
+        // own -- it seals the backups, the event history and the state
+        // store -- so the old "a key it does not hold" was describing
+        // the vault passphrase, a different thing entirely.
         return (
-          'Mikroview keeps a backup only under a key it does not hold, and none is mounted. Mount ' +
-          'one and this step prints the script; until then the drop box is closed and a push would ' +
-          'be refused.'
+          'Mikroview encrypts backups — and the event history and the state store — under the key ' +
+          'file you mount. None is mounted, so nothing can be stored yet. Generate one here.'
         )
       }
     }
@@ -591,7 +614,11 @@
                 </div>
               {/if}
 
-              {#if step.n <= 4 || step.n === 6}
+              <!-- Not on step 6 with no key mounted (#1133): there is no
+                   RouterOS command on that pane to pick a version for --
+                   the pane is about the key file, and the picker only
+                   stands between the operator and it. -->
+              {#if step.n <= 4 || (step.n === 6 && step.status.state !== 'blocked')}
                 {@render commandsHead()}
               {/if}
 
@@ -703,12 +730,69 @@
                 {/each}
               {:else if step.n === 6}
                 {#if step.status.state === 'blocked'}
-                  <pre class="wzpre-dim">   — the script prints here once a key is mounted —</pre>
+                  <!-- #1133: the step mints the key rather than
+                       describing one twice. 32 random bytes, base64 --
+                       the same shape as the setup guide's `head -c 32
+                       /dev/urandom | base64` -- generated in this tab
+                       and never sent anywhere, which is exactly why the
+                       warning beside it has to be believed: mikroview
+                       cannot reprint what it has never been given. -->
+                  <div class="keymint">
+                    <label for="history-key">Your key</label>
+                    <input
+                      id="history-key"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      bind:value={historyKey}
+                    />
+                    <CopyButton value={historyKey} label="the history key" />
+                    <button type="button" onclick={() => (historyKey = newHistoryKey())}>Reroll</button>
+                  </div>
+                  <p class="wzcaveat">
+                    <b>Save this now.</b> Mikroview can never show it again — it never receives this
+                    value and never stores it, it only reads the file you are about to write. Lose
+                    the key and everything kept under it, backups included, is unreadable.
+                  </p>
                   <p class="note">
+                    Write it to a secret file, outside the data directory — a key kept beside the
+                    files it protects travels with any copy of them:
+                  </p>
+                  <pre>{KEY_SAVE_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_SAVE_COMMAND, 'keysave')}>
+                    {copied === 'keysave' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">
+                    Paste the key at the prompt, then press Ctrl-D. It goes in on standard input, so
+                    it never reaches your shell history or a process list.
+                  </p>
+                  <p class="note">Mount the file into the container, read-only:</p>
+                  <pre>{KEY_MOUNT_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_MOUNT_COMMAND, 'keymount')}>
+                    {copied === 'keymount' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">Running mikroview directly on the host instead? Skip this one.</p>
+                  <p class="note">Point mikroview at it, in config.yaml:</p>
+                  <pre>{KEY_CONFIG_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_CONFIG_COMMAND, 'keyconfig')}>
+                    {copied === 'keyconfig' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">
+                    Or <code>MIKROVIEW_HISTORY_KEY_FILE={KEY_FILE_PATH}</code> — both name the path,
+                    and no setting anywhere carries the key itself.
+                  </p>
+                  <p class="note">Then restart:</p>
+                  <pre>{KEY_RESTART_COMMAND}</pre>
+                  <button type="button" class="copy" onclick={() => copy(KEY_RESTART_COMMAND, 'keyrestart')}>
+                    {copied === 'keyrestart' ? 'Copied' : 'Copy'}
+                  </button>
+                  <p class="note">
+                    The key is read once, at startup. This step notices on its own and prints the
+                    router script ·
                     <a class="olink" href={HOW_TO_MOUNT_URL} target="_blank" rel="noopener noreferrer">
-                      how to mount one
+                      more on mounting a key
                     </a>
-                    · the same key keeps the event history and the state store.
                   </p>
                 {:else if !token}
                   <!-- Round 45 draws no mint form here at all: it
@@ -1209,8 +1293,32 @@
     font-weight: 600;
   }
 
-  .wzpre-dim {
-    color: var(--fg-dim);
+  /* Step 6's key field with no key mounted (#1133): the field, its copy
+     control and Reroll on one line, laid out like the version pick-list
+     above rather than as a new idiom. */
+  .keymint {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .keymint label {
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
+  .keymint input {
+    flex: 1 1 320px;
+    min-width: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
   }
 
   /* The lost-router title (#394, round 45): "<router> is gone" in the

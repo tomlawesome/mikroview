@@ -41,6 +41,17 @@ page.on('response', (r) => {
     .catch(() => {})
 })
 
+// Every request this page makes, and every websocket frame it sends,
+// recorded from before the modal is ever opened. The no-key section at
+// the end needs it to prove a negative: a key minted in the browser
+// (#1133) must never appear in a URL or a body, and the only way to show
+// that is to have watched everything that left.
+const requestsSeen = []
+page.on('request', (r) => requestsSeen.push({ url: r.url(), body: r.postData() ?? '' }))
+page.on('websocket', (ws) =>
+  ws.on('framesent', (f) => requestsSeen.push({ url: ws.url(), body: String(f.payload ?? '') })),
+)
+
 const modal = page.locator('.setup-wizard')
 if (await modal.count()) {
   await page.keyboard.press('Escape')
@@ -564,6 +575,104 @@ const reopened =
 check(
   reopened.includes('done'),
   `reopening shows the ledger as it stands — evidence that arrived is already green (${reopened})`,
+)
+
+// --- With no key mounted, step 6 mints one (#1133) ----------------------
+// The live instance always has a key (scripts/live-env.sh mounts one), so
+// the no-key branch is reached by answering the wizard's own read of
+// GET /api/router-backups with enabled:false -- the same page.route
+// stand-in live-setup-wizard-tls-off-cert-mismatch.mjs uses for a state
+// the harness cannot be put into. Nothing under test here is server-side:
+// the key is minted in the browser and must stay there.
+await page.route('**/api/router-backups', (route) =>
+  route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ enabled: false, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0 }),
+  }),
+)
+
+// Reopened rather than waited out: the modal refetches on open, so this
+// does not hang on the 5-second poll landing at the right moment.
+await page.keyboard.press('Escape')
+await modal.waitFor({ state: 'detached' })
+await goTo(page, 'Run setup…')
+await modal.waitFor({ state: 'visible' })
+await page.locator('.setup-wizard .steps li:nth-child(6) .step-row').click()
+
+const keyField = page.locator('#history-key')
+await keyField.waitFor({ state: 'visible' })
+// 32 bytes, base64 -- docs/configuration.md's `head -c 32 /dev/urandom |
+// base64`, the shape retention.LoadKey accepts.
+const KEY_SHAPE = /^[A-Za-z0-9+/]{43}=$/
+const mintedKey = await keyField.inputValue()
+check(KEY_SHAPE.test(mintedKey), `the field arrives pre-filled with a generated key (${mintedKey.length} chars)`)
+
+await page.click('.setup-wizard .keymint button:has-text("Reroll")')
+const rerolledKey = await keyField.inputValue()
+check(
+  rerolledKey !== mintedKey && KEY_SHAPE.test(rerolledKey),
+  'Reroll mints a different key, rather than redrawing the same one',
+)
+
+// The operator's own key, pasted over the top, is taken as it stands --
+// this is a field, not a read-only display.
+const pastedKey = 'PastedKeyPastedKeyPastedKeyPastedKeyPastedK='
+await keyField.fill(pastedKey)
+check((await keyField.inputValue()) === pastedKey, 'a key pasted into the field is kept as typed')
+
+await page.click('.setup-wizard .keymint button:has-text("Reroll")')
+const copiedKey = await keyField.inputValue()
+
+// Clipboard permissions granted explicitly, so this proves what landed on
+// the clipboard rather than only that a toast appeared (live-token-copy's
+// own reasoning).
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await page.click('.setup-wizard .keymint .copy-btn')
+await page.waitForSelector('.toast[role="status"]', { timeout: 3000 })
+const clipboardKey = await page.evaluate(() => navigator.clipboard.readText())
+check(clipboardKey === copiedKey, 'the copy control puts the key itself on the clipboard')
+
+const caveat = ((await page.textContent('.setup-wizard .wzcaveat')) ?? '').replace(/\s+/g, ' ')
+check(
+  /Save this now/.test(caveat) && /never receives this value/.test(caveat),
+  `the warning says save it now, and why nothing can reprint it (${caveat})`,
+)
+
+const keyBlocks = await page.$$eval('.setup-wizard .body pre', (els) => els.map((e) => e.textContent ?? ''))
+check(
+  keyBlocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key')),
+  'the steps say how to write the key to a file outside the data directory',
+)
+check(
+  keyBlocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key')),
+  'and how to point mikroview at it',
+)
+check(
+  keyBlocks.every((b) => !b.includes(copiedKey)),
+  'no printed command quotes the key -- it goes in on standard input, not as an argument',
+)
+
+const noKeyLead = ((await page.textContent('.setup-wizard .lead')) ?? '').replace(/\s+/g, ' ')
+check(
+  /under the key file you mount/.test(noKeyLead) && !/does not hold/.test(noKeyLead),
+  `the step says the model once, and says it correctly (${noKeyLead})`,
+)
+check(
+  (await page.locator('.setup-wizard .routeros-version').count()) === 0,
+  'no RouterOS version picker on a pane with no RouterOS command on it',
+)
+
+// The point of the whole design: mikroview never receives this value.
+// Raw and percent-encoded, since a leak through a query string would
+// arrive escaped.
+const mintedKeys = [mintedKey, rerolledKey, pastedKey, copiedKey]
+const needles = mintedKeys.flatMap((k) => [k, encodeURIComponent(k)])
+const leaked = requestsSeen.filter((r) => needles.some((n) => r.url.includes(n) || r.body.includes(n)))
+check(
+  leaked.length === 0,
+  `no request carries the key, in a URL or a body (${requestsSeen.length} inspected, ${leaked.length} leaked` +
+    `${leaked.length ? `: ${leaked.map((r) => r.url).join(', ')}` : ''})`,
 )
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
