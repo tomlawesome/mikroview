@@ -190,7 +190,11 @@
       <span class="fact"><b>{hour.eventsInHour}</b> events in the hour</span>
       {#if hour.brink}
         <span class="sep">·</span>
-        <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
+        <!-- #1167: what "the brink" means, for a reader meeting the word
+             for the first time. -->
+        <span class="brinkmark" title="The brink is the newest minute on this hour's axis"
+          >the brink · {formatHM(hour.brink)}</span
+        >
       {/if}
       <!-- The last fact on the line (#795, round 41 #s4): what the hour
            is an account of, after a restart. A fact, not a control --

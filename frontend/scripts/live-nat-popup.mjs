@@ -341,7 +341,7 @@ await openRowSheet(UNLOGGED_SRC)
     'the popup names the evidence it was evaluated against',
   )
   check(
-    !text.includes('NAT rule — logged'),
+    !text.includes('NAT rule —'),
     'the logged rendering never appears in the unlogged mode',
   )
 
@@ -377,7 +377,9 @@ await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
 {
   const text = await openPopover(LOGGED_TRIGGER)
 
-  check(text.includes('NAT rule — logged'), 'the logged mode is announced in the header')
+  // #1167: the header names the router; the chip below is the one place
+  // the mode is said.
+  check(text.includes(`NAT rule — ${DEVICE_NAME}`), 'the logged header names the router it read')
   check(
     (await page.textContent('.popover .chip')).trim() === 'logged',
     'the mode chip reads "logged"',

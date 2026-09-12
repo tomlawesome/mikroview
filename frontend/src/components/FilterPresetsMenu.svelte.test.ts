@@ -126,7 +126,24 @@ describe('the saved list', () => {
     await open(trigger)
 
     expect(rows()).toHaveLength(0)
-    expect(container.querySelector('.fpnone')?.textContent?.trim()).toBe('No saved filters yet.')
+    // #1167: and how to get one. With a filter set, the save item below
+    // is the way.
+    expect(container.querySelector('.fpnone')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'No saved filters yet — save the filter you have set, below.',
+    )
+  })
+
+  // #1167: the save item only appears once something is filtered, so
+  // with nothing set this menu was four words and no way forward.
+  it('tells a reader with no filter set that a filter comes first', async () => {
+    presetState.presets = []
+    appState.filters = emptyFilters()
+    const { trigger, container } = renderMenu()
+    await open(trigger)
+
+    expect(container.querySelector('.fpnone')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'No saved filters yet — set a filter first, then save it here.',
+    )
   })
 })
 
