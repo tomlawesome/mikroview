@@ -3957,10 +3957,12 @@ before it could reach a database at all.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`
-and `-generate-recovery-keys` are standalone modes -- each does its one job and
-exits, rather than starting the server. See
-[Authentication](#authentication) for all but the first.
+`-version`, `-healthcheck`, `-validate-config`,
+`-recover-admin-account`, `-generate-recovery-keys`,
+`-transfer-admin <username>`, `-backup`, `-restore` and `-migrate-data`
+are standalone modes -- each does its one job and exits, rather than
+starting the server. `mikroview -h` lists them too. See
+[Authentication](#authentication) for the account ones.
 
 ## API reference
 

@@ -125,6 +125,11 @@ beforeEach(async () => {
   wizardState.pickedVersion = ''
   wizardState.backups = null
   wizardState.lostRouterDevice = null
+  // #1183 moved these onto wizardState so a key outlives the component
+  // -- which means each test has to start without one, the way a fresh
+  // page load does.
+  wizardState.token = ''
+  wizardState.tokenDevice = ''
 })
 
 describe('SetupWizard', () => {
@@ -597,6 +602,19 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     expect(container.textContent).not.toContain('runs RouterOS')
   })
 
+  // #1181: the four versions rendered identical command blocks and the
+  // step never said what the pick was for, so it read as a dead
+  // control. It says now: one dialect covers the table, and the pick is
+  // what gets the release checked against it.
+  it('says what picking a version is for, since it is not the command text', async () => {
+    wizardState.pane = 1
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.routeros-version')).toBeTruthy())
+    expect(container.textContent).toContain('One set of commands covers RouterOS 7.18 to 7.24.1')
+    expect(container.textContent).toContain('picking a version does not change them')
+  })
+
   it("renders a step's own note directly under that step's block", async () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
       commandsFixture({
@@ -620,6 +638,19 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
 
     await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('TAG'))
     expect(container.textContent).toContain('on this release, tag rules one at a time')
+  })
+
+  // #1174: the bulk command labels by action, so every drop rule logs
+  // as D|drop| -- the setup guide's per-rule slugs are the only way to
+  // tell two of them apart, and the step now says so instead of leaving
+  // the operator to find out from the log.
+  it('says the bulk command labels by action alone', async () => {
+    wizardState.pane = 3
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('RULE_TAGGING_COMMANDS'))
+    expect(container.textContent).toContain('the log cannot tell one from another')
+    expect(container.textContent).toContain('docs/routeros-setup.md')
   })
 })
 
@@ -687,6 +718,54 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
     const pres = [...container.querySelectorAll('.body pre')].map((p) => p.textContent)
     expect(pres).toEqual(['mvt-shown-once', 'SCRIPT_ADD_WITH_THE_BODY_IN_IT'])
     expect(container.textContent).not.toContain('Then save it and run it once')
+  })
+
+  // #1146: the box was 300px tall for 800px of script, which sliced the
+  // last visible line in half, and its overlay scrollbars stayed hidden
+  // so nothing said the lines ran off to the right either. The height is
+  // a whole number of lines now; the class is what draws the bars, and
+  // is the half of that fix a DOM test can see.
+  // #1183: every visit to the push step used to reach for a key of its
+  // own, so four walks left four rows called "setup-edge-1" in
+  // Settings, each with a revoke control and nothing to tell them
+  // apart. The key belongs to the wizard session now, not to whichever
+  // component instance happened to be showing the step.
+  it('shows the session key again on a second visit rather than minting another', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+
+    const first = render(SetupWizard)
+    await waitFor(() => expect(createToken).toHaveBeenCalledTimes(1))
+    first.unmount()
+
+    const second = render(SetupWizard)
+    await waitFor(() => expect(second.container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
+    expect(createToken).toHaveBeenCalledTimes(1)
+  })
+
+  // The one way past the reuse rule is the operator asking for it --
+  // step 6's "mint a new one" for a router being replaced.
+  it('mints again when the operator asks for a new one', async () => {
+    wizardState.token = 'mvt-from-step-4'
+    wizardState.tokenDevice = 'edge-1'
+    wizardState.lostRouterDevice = 'edge-1'
+    wizardState.pane = 6
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    render(SetupWizard)
+
+    const again = await screen.findByRole('button', { name: 'mint a new one' })
+    await fireEvent.click(again)
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
+  })
+
+  it('gives the script box always-drawn scrollbars', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    expect(container.querySelector('pre.script')?.classList.contains('scrollbar')).toBe(true)
   })
 })
 

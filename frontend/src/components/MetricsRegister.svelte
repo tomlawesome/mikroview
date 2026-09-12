@@ -147,6 +147,30 @@
     return HEADER + rowOf(index) * ROW_H
   }
 
+  // The ×N beside a tick says how many episodes that one minute held.
+  // Rows are only ROW_H (8px) apart and the annotation is 9px type, so a
+  // run of busy minutes printed its figures on top of each other
+  // (#1155) -- "×6", "×5", "×4" overlapping into a smudge. Walk each
+  // column from the brink down and give a label the gap it needs from
+  // the one above, nudging it down only as far as that takes: an
+  // isolated annotation still sits exactly on its own tick, and a run
+  // reads as a short ladder beside the ticks it belongs to.
+  const TICK_N_GAP = 11
+
+  function tickLabels(values: number[]): { mi: number; v: number; y: number }[] {
+    const out: { mi: number; v: number; y: number }[] = []
+    let last = -Infinity
+    // rowOf() counts down from the brink, so newest-minute-first is
+    // top-of-column-first.
+    for (let mi = values.length - 1; mi >= 0; mi--) {
+      if (values[mi] <= 1) continue
+      const y = Math.max(yOf(mi), last + TICK_N_GAP)
+      out.push({ mi, v: values[mi], y })
+      last = y
+    }
+    return out
+  }
+
   function colX(i: number): number {
     return GUTTER + i * COL_W + COL_W / 2
   }
@@ -273,10 +297,12 @@
           {#each series.values as v, mi (mi)}
             {#if v > 0}
               <line class="tick" x1={cx - 9} x2={cx + 9} y1={snapLine(yOf(mi), dpr)} y2={snapLine(yOf(mi), dpr)} />
-              {#if v > 1}
-                <text class="tick-n" x={cx + 11} y={snapFill(yOf(mi), dpr) + 3}>×{v}</text>
-              {/if}
             {/if}
+          {/each}
+          <!-- Placed by tickLabels, not straight off the tick's own row:
+               see its comment for why a run has to be spread. -->
+          {#each tickLabels(series.values) as t (t.mi)}
+            <text class="tick-n" x={cx + 11} y={snapFill(t.y, dpr) + 3}>×{t.v}</text>
           {/each}
           <text class="f-total" class:quiet={!series.spoke} x={cx} y={height - BOTTOM + 14} text-anchor="middle"
             >{series.total}</text

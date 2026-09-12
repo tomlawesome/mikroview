@@ -5,6 +5,7 @@ import {
   countFilterRules,
   counterText,
   darkBoundaryKeys,
+  exportProblem,
   groupRules,
   initialSelection,
   waitingMessage,
@@ -140,5 +141,30 @@ describe('countFilterRules (#1134)', () => {
   it('is zero for an export with no filter section, and for nothing at all', () => {
     expect(countFilterRules('/ip firewall nat\nadd action=masquerade chain=srcnat\n')).toBe(0)
     expect(countFilterRules('')).toBe(0)
+  })
+
+  // #1186: junk pasted into the page reached Analyse and came back as
+  // "watching for 0 hours", which reads as "nothing yet" rather than
+  // "that was not an export" -- two states the operator has to be able
+  // to tell apart.
+  describe('exportProblem (#1186)', () => {
+    it('says nothing about a real export', () => {
+      expect(exportProblem(fixture)).toBeNull()
+      expect(exportProblem('/ip/firewall/filter\nadd action=drop chain=forward\n')).toBeNull()
+    })
+
+    it('says nothing about an empty box, which is not a fault', () => {
+      expect(exportProblem('')).toBeNull()
+      expect(exportProblem('   \n\n')).toBeNull()
+    })
+
+    it('names text that is not an export at all', () => {
+      expect(exportProblem('the quick brown fox')).toContain('no /ip firewall filter section')
+    })
+
+    it('tells an export with no filter rules apart from text that is not one', () => {
+      const empty = '/ip firewall filter\n\n/ip firewall nat\nadd action=masquerade chain=srcnat\n'
+      expect(exportProblem(empty)).toContain('no rules in it')
+    })
   })
 })

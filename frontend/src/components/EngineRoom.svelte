@@ -716,10 +716,19 @@
             {#if card.key === 'fall' && epsText}
               <span class="lv">{epsText} events/s now</span>
             {:else if card.key === 'docket'}
+              <!-- #1156: the same two counts the scene bar is already
+                   carrying two inches above this card, so the flag
+                   count is the bar's alone now -- printing "⚑ 67" here
+                   as well said the same thing twice on one screen. The
+                   watch count is the bar's own reading too:
+                   `heldCount`, watchers enabled and not ring-broken,
+                   partitioned against `brokenCount` beside it. It used
+                   to be `entries.length`, which counted the broken and
+                   the switched-off ones as well and so read one or two
+                   higher than the eye in the bar. -->
               <span class="lv">
-                {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
-                {#if isAdmin && watchlistState.entries.length > 0}
-                  <b class="wct">◉ {watchlistState.entries.length}</b>
+                {#if isAdmin && (watchlistState.heldCount > 0 || watchlistState.brokenCount > 0)}
+                  <b class="wct">◉ {watchlistState.heldCount}</b>
                   {#if watchlistState.brokenCount > 0}<b class="ct">○{watchlistState.brokenCount}</b>{/if}
                 {/if}
               </span>
@@ -1180,7 +1189,18 @@
            onMount), so absent rather than shown a 403 it cannot act on. -->
       {#if isAdmin}
         {#if routerBackups}
-          <div id="bakg" class="stsection wide">
+          <!-- The generation strips are the left column's diagram, and
+               there are none until backups are on and a router has
+               pushed a pair. Without one the rows sat alone in column
+               two, starting 600px in with the whole left half blank
+               (#1153) -- so with nothing to draw the group stacks, the
+               same answer the disk group's own no-diagram states give
+               (`dnokey`/`dfail`). -->
+          <div
+            id="bakg"
+            class="stsection wide"
+            class:dnodiagram={!routerBackups.enabled || routerBackups.routers.length === 0}
+          >
             <h3>router backups</h3>
             <RouterBackups resp={routerBackups} onopenlost={openLostRouter} />
           </div>
@@ -1392,8 +1412,11 @@
 
   /* No key mounted: the disk group is two statements and no diagram, so
      it stacks like account rather than holding an empty left column
-     (round 42's `#set.dnokey #diskg { display: block }`). */
+     (round 42's `#set.dnokey #diskg { display: block }`). `dnodiagram`
+     is the same answer for router backups before any pair has arrived
+     (#1153). */
   .stsection.wide.dnokey,
+  .stsection.wide.dnodiagram,
   .stsection.wide.dfail {
     display: block;
   }

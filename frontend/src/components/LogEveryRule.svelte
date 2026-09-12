@@ -49,6 +49,7 @@
     countFilterRules,
     counterText,
     darkBoundaryKeys,
+    exportProblem,
     groupRules,
     initialSelection,
     waitingMessage,
@@ -91,6 +92,9 @@
   let dragging = $state(false)
   let fileInput = $state<HTMLInputElement | null>(null)
   const ruleCount = $derived(exportText ? countFilterRules(exportText) : 0)
+  // #1186: what is wrong with the text in the zone, said here rather
+  // than left for Analyse to answer with the under-24h waiting line.
+  const problem = $derived(exportProblem(exportText))
 
   let analysing = $state(false)
   let analyseError = $state<string | null>(null)
@@ -182,7 +186,7 @@
   const darkBoundaries = $derived(darkBoundaryKeys(policyState.edges, new Set(coverageState.byKey.keys())))
 
   async function analyse() {
-    if (!device || !exportText.trim() || analysing) return
+    if (!device || !exportText.trim() || problem || analysing) return
     analysing = true
     analyseError = null
     const res = await fetchTuneLoggingAnalyse({ device, export: exportText, darkBoundaries })
@@ -280,6 +284,15 @@
           for every firewall rule that is not logging yet, ready to paste into the router. Nothing you paste is stored.
         </p>
 
+        <!-- #1186: the 24-hour gate, said before the operator hands
+             anything over. It used to appear only after Analyse, as
+             "watching for 0 hours" -- which arrives as a refusal, in a
+             place where the operator has already done the work. -->
+        <p class="note">
+          Which rules are worth logging is worked out from 24 hours of watching the router. Until
+          that has passed, this page can only say how far along it is.
+        </p>
+
         {#if appState.devices.length === 0}
           <p class="empty">No routers known yet — finish setup first, and this fills in on its own.</p>
         {:else}
@@ -339,6 +352,16 @@
               onchange={onFile}
             />
 
+            <!-- #1186: text that cannot be an export is said so here,
+                 under the zone that took it, rather than after a round
+                 trip that could only answer with "watching for 0
+                 hours". The Analyse button below is held until it is
+                 sorted -- there is nothing for the server to find in
+                 text with no firewall rules in it. -->
+            {#if problem}
+              <p class="load-error">{problem}</p>
+            {/if}
+
             <!-- The ephemerality sentence, verbatim from #435's issue
                  body. #1134 moved it here, under the zone, as the
                  footnote it always was rather than the headline. -->
@@ -353,7 +376,7 @@
             type="button"
             class="primary"
             onclick={analyse}
-            disabled={!device || !exportText.trim() || analysing}
+            disabled={!device || !exportText.trim() || problem !== null || analysing}
           >
             {analysing ? 'Analysing…' : 'Analyse'}
           </button>

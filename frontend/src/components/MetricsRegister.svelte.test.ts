@@ -81,3 +81,48 @@ describe('MetricsRegister flag-type labels', () => {
     expect(container.querySelector('.f-name')).toBeNull()
   })
 })
+
+// #1155: the ×N annotations beside the ticks are 9px type on rows 8px
+// apart, so a run of busy minutes printed them on top of each other.
+describe('MetricsRegister episode-count annotations', () => {
+  // The annotation's own line height -- MetricsRegister's TICK_N_GAP,
+  // named here rather than imported so the test pins the claim (they do
+  // not overlap) instead of re-running the component's arithmetic.
+  const LINE_H = 11
+
+  it('spreads the ×N figures of a run of busy minutes so none overlaps its neighbour', () => {
+    const hour = buildHour(
+      [0, 1, 2, 3].map((m) => ({ time: minute(m), byAction: { accept: 400 } })),
+      [
+        { time: minute(0), byType: { activity_spike: 6 } },
+        { time: minute(1), byType: { activity_spike: 5 } },
+        { time: minute(2), byType: { activity_spike: 4 } },
+        { time: minute(3), byType: { activity_spike: 3 } },
+      ],
+    )
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
+    const labels = Array.from(container.querySelectorAll('.tick-n'))
+    // Every minute still prints its own figure: spreading them, not
+    // dropping the ones that would not fit.
+    expect(labels.map((l) => l.textContent)).toEqual(['×3', '×4', '×5', '×6'])
+    const ys = labels.map((l) => Number(l.getAttribute('y')))
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(LINE_H)
+    }
+  })
+
+  it('leaves a lone ×N on its own tick rather than nudging it', () => {
+    const hour = buildHour(
+      [0, 1].map((m) => ({ time: minute(m), byAction: { accept: 400 } })),
+      [{ time: minute(0), byType: { activity_spike: 4 } }],
+    )
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
+    const label = container.querySelector('.tick-n')
+    const tick = container.querySelector('.tick')
+    expect(label?.textContent).toBe('×4')
+    // The text sits on the tick's baseline offset (+3), nowhere else --
+    // within the half-pixel by which snapFill (text) and snapLine (the
+    // tick) differ from each other.
+    expect(Math.abs(Number(label?.getAttribute('y')) - (Number(tick?.getAttribute('y1')) + 3))).toBeLessThanOrEqual(0.5)
+  })
+})
