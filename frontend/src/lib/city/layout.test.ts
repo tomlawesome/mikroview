@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mockupEstate } from './fixture'
-import { bankV, layoutGround, plateHalfWidth, plateRadius } from './layout'
+import { CIDR_FALLBACK, PLAQUE_W, bankV, layoutGround, plaqueWidth, plateHalfWidth, plateRadius } from './layout'
 import { bezAt, bezTangent, dm, segsOf } from './roads'
 import type { CityInput } from './input'
 import type { Pt } from './project'
@@ -39,6 +39,26 @@ describe('city layout: the ground plan', () => {
     const longName = { r: plateRadius(2), name: "uplink -- inside rb5009's LAN", cidr: '10.0.0.0/24' }
     const hostFloor = Math.max(38, longName.r * S * 0.9)
     expect(plateHalfWidth(longName, S)).toBeGreaterThan(hostFloor)
+  })
+
+  it("sizes a plaque so its name and its subnet never meet (#1137)", () => {
+    // A short name leaves the plaque at the 200 the round drew.
+    expect(plaqueWidth({ name: 'lan', cidr: '10.0.0.0/24' })).toBe(PLAQUE_W)
+
+    // "bridge-workshop" with a subnet beside it is what the operator saw
+    // printed on top of itself: the name starts 22 in from the left, the
+    // subnet is anchored 11 in from the right, and 200 was not enough
+    // room for both.
+    const long = { name: 'bridge-workshop', cidr: '192.168.88.0/24' }
+    expect(plaqueWidth(long)).toBeGreaterThan(PLAQUE_W)
+    const nameEnd = 22 + long.name.length * 0.55 * 12.5
+    const cidrStart = plaqueWidth(long) - 11 - long.cidr.length * 0.6 * 10
+    expect(cidrStart).toBeGreaterThan(nameEnd)
+
+    // No subnet is not a blank caption: the slot reads the fallback, and
+    // the plaque is wide enough to hold that instead.
+    const none = { name: 'bridge-workshop', cidr: null }
+    expect(plaqueWidth(none)).toBeGreaterThan(22 + none.name.length * 0.55 * 12.5 + CIDR_FALLBACK.length * 0.6 * 10)
   })
 
   it('lays out every zone as a plate, none overlapping', () => {

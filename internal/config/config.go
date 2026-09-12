@@ -11,6 +11,7 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/netip"
@@ -1914,6 +1915,37 @@ func parseIntList(v string) ([]int, bool) {
 	return out, true
 }
 
+// OtherCommands is the block `mikroview -h` prints under the flags.
+//
+// main.go dispatches each of these on os.Args[1] before the flag
+// package ever sees the command line, so `-h` listed the six flags
+// below and nothing else -- an operator reading the binary's own help
+// had no way to learn that -backup, -restore or -recover-admin-account
+// exist (#1176). They are named here instead, and
+// TestUsageNamesEveryDispatchedSubcommand keeps this list and that
+// dispatch in step; docs/configuration.md's "CLI flags" section carries
+// the same list in prose.
+const OtherCommands = `
+other commands -- each does its one job and exits, rather than starting
+the server. Run one with -h for its own flags; docs/configuration.md
+explains when to reach for them.
+  -version                  print the build's commit stamp and exit
+  -healthcheck              check this deployment; the container's HEALTHCHECK runs it
+  -validate-config          check a config the way startup would, without starting
+  -recover-admin-account    set a new password for the admin account
+  -generate-recovery-keys   mint the recovery keys those commands ask for
+  -transfer-admin <user>    move admin to another account
+  -backup                   write every store to one encrypted file
+  -restore                  read a backup back onto disk
+  -migrate-data             move the data directory between a bind mount and a volume
+`
+
+// HelpRequested reports whether a Load error is `-h`/`--help` rather
+// than a fault. The FlagSet has already printed the usage by then, so
+// the caller exits cleanly instead of reporting a broken configuration
+// under the help it just gave (#1176).
+func HelpRequested(err error) bool { return errors.Is(err, flag.ErrHelp) }
+
 func applyFlags(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("mikroview", flag.ContinueOnError)
 	syslogTLS := fs.String("syslog-tls", cfg.Listen.SyslogTLS, "syslog TLS listen address, RouterOS remote-protocol=tls (started whenever non-empty, independently of tls.enabled; empty disables it)")
@@ -1923,6 +1955,15 @@ func applyFlags(cfg *Config, args []string) error {
 	maxMemory := cfg.Store.MaxMemory
 	fs.Var(&maxMemory, "max-memory", "memory budget for the event ring buffer, e.g. 120MiB (see docs/configuration.md)")
 	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
+
+	// The flag package's own usage, with OtherCommands after it: the
+	// standalone modes never reach this FlagSet, so nothing else can
+	// put them in front of an operator running `mikroview --help`.
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage of mikroview:")
+		fs.PrintDefaults()
+		fmt.Fprint(fs.Output(), OtherCommands)
+	}
 
 	if err := fs.Parse(args); err != nil {
 		return err

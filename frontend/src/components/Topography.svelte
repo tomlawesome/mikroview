@@ -103,7 +103,7 @@
     zoomPercent,
     type Placed,
   } from '../lib/topography/cluster'
-  import { layoutGround, plateHalfWidth } from '../lib/city/layout'
+  import { CIDR_FALLBACK, layoutGround, plateHalfWidth } from '../lib/city/layout'
   import { cityInputFrom, ghostCityZones } from '../lib/city/input'
   import { hostMarksFrom } from '../lib/city/presence'
   import {
@@ -4865,12 +4865,21 @@
       {#if portOn}
         <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
       {/if}
-    {:else if portOn}
+    {:else if portFilterState.active}
+      <!-- Collapsed the instant a port is chosen, not once its answer
+           lands (#1178): the pill states what is selected straight away,
+           and the tail joins it when the server has answered. The tail
+           is held back rather than drawn from an unsettled answer --
+           `nothing seen · 0 doors` while a request is still in flight
+           would be a claim about the network made out of a pending
+           fetch, the same reason refresh() does not mark a failed one
+           settled. -->
       <button
         class="pill p on"
         aria-pressed="true"
         title="filtered to {portFilterState.label} — click to change, ✕ to clear"
-        onclick={openPortPicker}>⌕ <b>{portFilterState.label}</b> <em>· {portFilterState.summary}</em></button
+        onclick={openPortPicker}
+        >⌕ <b>{portFilterState.label}</b>{#if portOn}&nbsp;<em>· {portFilterState.summary}</em>{/if}</button
       >
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
@@ -5223,9 +5232,9 @@
         {/each}
 
         <!-- Every label this lens draws, now that every line above it is
-             down. The click/keydown here duplicate the line's own (the
-             plate is a real, sizeable target and deserves to be one) --
-             see this file's own report on what that costs the tab order. -->
+             down. The click here duplicates the line's own (the plate is
+             a real, sizeable target and deserves to be one); the tab
+             order is the line's alone (#1180). -->
         {#each drawnReality.drawn as d, di (d.r.key)}
           <!-- The escalated pair keeps its slot in trafficBadges so
                every later index still lines up, but the slot carries no
@@ -5235,11 +5244,17 @@
                direction skips its empty label the same way. -->
           {#if d !== worstUnplanned && !silentDir(d.r.key) && !filterOn}
             {@const badge = trafficBadges[di]}
+            <!-- A mouse target only (#1180). The plate is a real,
+                 sizeable thing to click and stays one, but its rib
+                 underneath carries the same action under the same
+                 label and is already in the tab order: two of each
+                 meant a keyboard walk of the map stopped at every
+                 boundary twice, and a screen reader heard it twice. -->
             <g
               class="detail"
               role="button"
-              tabindex="0"
-              aria-label="{realityLabel(d.r)} — open this rib's reach"
+              tabindex="-1"
+              aria-hidden="true"
               onclick={(e) => {
                 e.stopPropagation()
                 descendRib(d.r.from, d.r.to)
@@ -6153,7 +6168,7 @@
               stroke={LANE_INKS[fc.d.ink % LANE_INKS.length]}
             />
             <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
-            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
+            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? CIDR_FALLBACK}</text>
             <!-- Round 49: `name · subnet`, and the zones stop's own
                  host count. The DARK word that used to trail the count
                  is gone with every other coverage caption -- the
@@ -7229,6 +7244,18 @@
     z-index: 2;
     display: flex;
     gap: 8px;
+    /* The row stops short of the altitude slider (#1136). Both are
+       absolute on the same bottom line, and the slider is centred on
+       the stage and about 274px wide (CLIENTS + track + STREET), so
+       half of that plus a gutter is what this row may not have. Open,
+       the picker had grown clean across it: the chip bar reached the
+       same width at every viewport, so at 1100 it covered the slider
+       and at 1920 the off-baseline tally printed over CLIENTS.
+       Wrapping rather than clipping keeps that tally readable when the
+       bar takes the whole line -- the row is bottom-anchored, so a
+       second line grows upward, over the map and not off it. */
+    flex-wrap: wrap;
+    max-width: calc(50% - 190px);
   }
 
   /* The off-baseline mark (round-49/index.html:76-77's `.nmk`): the
@@ -9476,6 +9503,11 @@
     border-color: color-mix(in srgb, var(--accent) 55%, transparent);
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     max-width: min(60vw, 640px);
+    /* A flex item will not shrink past its content by default, which
+       would push the tally beside it out of the row the moment the
+       chip strip is long (#1136). Shrinking is what the strip's own
+       `overflow-x: auto` is there for. */
+    min-width: 0;
   }
 
   .pill.p.edit .ports,

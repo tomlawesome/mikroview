@@ -1134,6 +1134,31 @@ describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018
     expect(pills[0].textContent?.trim()).toBe('⌕ port')
     expect(pills[0].getAttribute('aria-pressed')).toBe('false')
   })
+
+  it('shows the collapsed answer, with no picker bar, the moment a port is selected (#1178)', () => {
+    // Selected but not yet answered: the store's own collapse has closed
+    // the picker (portFilter.svelte.ts), and the pill is the answer.
+    portFilterState.ports = [445]
+    portFilterState.proto = 'tcp'
+    portFilterState.open = false
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.pill.p.edit')).toBeNull()
+    const pill = container.querySelector('.pill.p.on')
+    expect(pill?.textContent).toContain('445/tcp')
+    // ...and it claims nothing about the traffic until the answer is in:
+    // "nothing seen · 0 doors" out of a pending fetch would be a
+    // statement about the network nobody has made yet.
+    expect(pill?.textContent).not.toContain('nothing seen')
+    expect(container.querySelector('.pill-x')).not.toBeNull()
+
+    portFilterState.answer = { ...portFilterState.answer, events: 2, lines: 2 }
+    portFilterState.answeredKey = portFilterState.key
+    flushSync()
+    expect(container.querySelector('.pill.p.on')?.textContent).toContain('2 lines seen')
+  })
 })
 
 describe('the watcher dial\'s eye (#682, ported from the scene)', () => {
@@ -1321,6 +1346,31 @@ describe('the round-30 layout (#699)', () => {
     const texts = [...container.querySelectorAll('.stage svg text')].map((t) => t.textContent ?? '')
     expect(texts.some((t) => /pairs? not drawn/.test(t))).toBe(false)
     expect(texts.some((t) => /^unjudged — push the rule table/.test(t))).toBe(false)
+  })
+
+  it('gives a rib one tab stop, not two (#1180)', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 445, action: 'drop' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    // The rib and its own label plate carried the same action under the
+    // same name, and both were in the tab order, so a keyboard walk of
+    // the map stopped at every boundary twice.
+    const ribs = [...container.querySelectorAll('.edge-g')]
+    expect(ribs.length).toBeGreaterThan(0)
+    for (const r of ribs) expect(r.getAttribute('tabindex')).toBe('0')
+
+    const plates = [...container.querySelectorAll('g.detail')].filter((g) => g.querySelector('.edge-plate'))
+    expect(plates.length).toBeGreaterThan(0)
+    for (const p of plates) {
+      expect(p.getAttribute('tabindex')).toBe('-1')
+      // ...and the screen reader is not told the same rib twice either.
+      expect(p.getAttribute('aria-hidden')).toBe('true')
+    }
   })
 
   it('puts every edge label on a plate rather than bare on its line', () => {
