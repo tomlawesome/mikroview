@@ -5529,8 +5529,8 @@
                     e.stopPropagation()
                     wizardState.launch()
                   }
-                }}>Run setup… ▸</tspan
-              > adds it</text
+                }}>Run setup ▸</tspan
+              > adds the address table</text
             >
           {/if}
         </g>
@@ -5693,6 +5693,16 @@
               <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally" class:filter-tally={!!tally}
                 >{tally ?? hostTally(row)}</text
               >
+            {:else if !filterOn}
+              <!-- #1165: a zone the router named but whose addresses
+                   resolved to nothing left this band blank, which reads
+                   as a card that failed to draw. It says the fact
+                   instead, in the tally's own slot. Under a filter it
+                   stays silent: #1056 ruled that a lane with no known
+                   host says nothing rather than `0 of 0`, and "no hosts
+                   seen yet" would be answering a question about the
+                   port that this lane cannot answer either. -->
+              <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally">no hosts seen yet</text>
             {/if}
             <!-- Round 49: the card says `name · subnet` and stops.
                  LOGGED / DARK / COVERED are gone from it -- the ribs
@@ -5708,7 +5718,10 @@
                  this line, and the two facts are both the card's own
                  sub-text, so they stack. -->
             {#if !policyState.anyPushed}
-              <text x={-cardHalf + cardPad} y={row.dots.length > 0 ? 96 : 74} class="n-sub no-table">no rule table pushed</text>
+              <!-- Always under the tally line now that an empty lane
+                   prints one of its own (#1165), rather than moving up
+                   into the slot that line occupies. -->
+              <text x={-cardHalf + cardPad} y="96" class="n-sub no-table">no rule table pushed</text>
             {/if}
             <!-- Round 30's zone card carries name, subnet, hosts and the
                  coverage badge, and stops there (the-whole.html:1002-1008).
