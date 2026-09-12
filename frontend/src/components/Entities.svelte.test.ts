@@ -347,12 +347,12 @@ describe('Entities router cards (#675)', () => {
 })
 
 describe('Entities named-things table (#675)', () => {
-  it('renders name · lane · address · mac · first seen · last seen · marks', async () => {
+  it('renders name · zone · address · mac · first seen · last seen · marks', async () => {
     const { container } = render(Entities)
     await settle()
 
     const headers = [...container.querySelectorAll('.etable th')].map((th) => th.textContent)
-    expect(headers).toEqual(['name', 'lane', 'address', 'mac', 'first seen', 'last seen', 'marks'])
+    expect(headers).toEqual(['name', 'zone', 'address', 'mac', 'first seen', 'last seen', 'marks'])
   })
 
   it('shows a named host entity with its label and address', async () => {
@@ -413,7 +413,7 @@ describe('Entities named-things table (#675)', () => {
     const rows = [...container.querySelectorAll('.etable tbody tr')]
     const named = rows.find((tr) => tr.textContent?.includes('tom-desktop'))
     const guest = rows.find((tr) => tr.textContent?.includes('guest-e8b2'))
-    // name · lane · address · mac · first seen · last seen · marks
+    // name · zone · address · mac · first seen · last seen · marks
     expect(named?.children[3]?.textContent?.trim()).toBe('2c:f0:5d:…:8a')
     expect(guest?.children[3]?.textContent?.trim()).toBe('—')
     expect(container.textContent).not.toContain('private')
@@ -766,7 +766,7 @@ describe('Entities views (#804, rounds 37-38)', () => {
     await settle()
     expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
       'name',
-      'lane',
+      'zone',
       'address',
       'mac',
       'first seen',

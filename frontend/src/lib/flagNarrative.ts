@@ -150,7 +150,7 @@ const STORIES: Partial<Record<FlagType, (f: Flag) => string>> = {
   },
   internal_recon: (f) => {
     const hostCount = f.evidence?.hosts?.length || f.count
-    return `${f.target} reached ${spellSmall(hostCount)} other host${hostCount === 1 ? '' : 's'} on the network${durationClause(span(f))}, more than a single device usually needs to talk to inside its own lane.`
+    return `${f.target} reached ${spellSmall(hostCount)} other host${hostCount === 1 ? '' : 's'} on the network${durationClause(span(f))}, more than a single device usually needs to talk to inside its own zone.`
   },
   rule_spike: (f) =>
     `Rule ${f.target} fired ${plural(f.count, 'time')}${durationClause(span(f))}, well above its own usual rate -- the rule itself hasn't changed, only how often something is hitting it.`,
