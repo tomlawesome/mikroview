@@ -62,6 +62,7 @@
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { watchDraftForFlag } from '../lib/watchDraft'
+  import { viewportState } from '../lib/viewport.svelte'
   import type { Flag, FlagType, FirewallEvent, Verdict, Exclusion } from '../lib/types'
 
   // "watch this pathway" / "watch this source" (#761 item 3): a flag
@@ -943,7 +944,10 @@
                   count <span class="dir">{dirGlyph('count')}</span>
                 </button>
               </th>
-              <th>
+              <!-- class="age" only so the head can carry #1150's width
+                   floor beside COUNT's; it says nothing about alignment,
+                   which is why it is not `num`. -->
+              <th class="age">
                 <button class="sorth" class:on={sortKey === 'age'} onclick={() => toggleSort('age')}>
                   age <span class="dir">{dirGlyph('age')}</span>
                 </button>
@@ -1025,7 +1029,7 @@
                 <th>where</th>
                 <th>evidence</th>
                 <th class="num">count</th>
-                <th>age</th>
+                <th class="age">age</th>
                 <th class="vc">{canEdit ? 'call it' : ''}</th>
               </tr>
             </thead>
@@ -1048,6 +1052,53 @@
     {/if}
   </div>
 </div>
+
+<!-- The verdict trio (#780, #640), in one place because #1150 draws it
+     in two: the row's own CALL IT cell at desktop width, and the row's
+     drawer below 1300px where that cell has no room left. A fresh flag
+     offers expected · checked · investigate; one already being
+     investigated offers expected · resolved, the two ways that story
+     can end. Every click stops propagating -- in the cell it would
+     toggle the drawer, in the drawer it would close it. -->
+{#snippet verdictChips(f: Flag, kind: Verdict | null)}
+  <span class="vrow">
+    <button
+      class="v expected"
+      title="Normal for this host, at this size — clears the flag and stops it firing again below 1.5× this size"
+      onclick={(ev) => {
+        ev.stopPropagation()
+        callVerdict(f, 'expected')
+      }}><i>✓</i>expected</button
+    >
+    {#if kind === 'investigate'}
+      <button
+        class="v resolved"
+        title="Dealt with — clears the flag; if the same circumstances recur it comes back"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          callVerdict(f, 'resolved')
+        }}><i>✦</i>resolved</button
+      >
+    {:else}
+      <button
+        class="v checked"
+        title="Looked at, fine this time — clears the flag, and a re-fire will say when you checked"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          callVerdict(f, 'checked')
+        }}><i>~</i>checked</button
+      >
+      <button
+        class="v investigate"
+        title="Of concern — records the verdict; the flag stays open while you look"
+        onclick={(ev) => {
+          ev.stopPropagation()
+          callInvestigate(f)
+        }}><i>✱</i>investigate</button
+      >
+    {/if}
+  </span>
+{/snippet}
 
 {#snippet flagRows(f: Flag, provisional: boolean, member: boolean = false)}
   {@const family = familyOf(f.type)}
@@ -1151,44 +1202,14 @@
             >
           {/if}
         </span>
-      {:else if canEdit}
-        <span class="vrow">
-          <button
-            class="v expected"
-            title="Normal for this host, at this size — clears the flag and stops it firing again below 1.5× this size"
-            onclick={(ev) => {
-              ev.stopPropagation()
-              callVerdict(f, 'expected')
-            }}><i>✓</i>expected</button
-          >
-          {#if kind === 'investigate'}
-            <button
-              class="v resolved"
-              title="Dealt with — clears the flag; if the same circumstances recur it comes back"
-              onclick={(ev) => {
-                ev.stopPropagation()
-                callVerdict(f, 'resolved')
-              }}><i>✦</i>resolved</button
-            >
-          {:else}
-            <button
-              class="v checked"
-              title="Looked at, fine this time — clears the flag, and a re-fire will say when you checked"
-              onclick={(ev) => {
-                ev.stopPropagation()
-                callVerdict(f, 'checked')
-              }}><i>~</i>checked</button
-            >
-            <button
-              class="v investigate"
-              title="Of concern — records the verdict; the flag stays open while you look"
-              onclick={(ev) => {
-                ev.stopPropagation()
-                callInvestigate(f)
-              }}><i>✱</i>investigate</button
-            >
-          {/if}
-        </span>
+      {:else if canEdit && !viewportState.isNarrow}
+        <!-- #1150: below 1300px this cell's chips (and the caret after
+             them) were pushed off the right edge of the docket, so a
+             flag could not be judged at that width at all. They move
+             into the row's own drawer there -- the same three buttons
+             from the same snippet, never a second set worded
+             differently. -->
+        {@render verdictChips(f, kind)}
       {/if}
       {#if !isDone(kind)}
         <!-- The row's one affordance (rounds 18-19/29): the
@@ -1349,6 +1370,12 @@
           {/if}
 
           <div class="dwr-acts">
+            <!-- #1150: where the verdict lives below 1300px. First on
+                 the foot line, ahead of the errands, because judging
+                 the flag is what the drawer was opened to do. -->
+            {#if canEdit && viewportState.isNarrow && !isDone(kind)}
+              {@render verdictChips(f, kind)}
+            {/if}
             {#if isFilterable(f)}
               <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
             {/if}
@@ -1550,6 +1577,19 @@
 
   .ftable thead th.num {
     text-align: right;
+  }
+
+  /* #1150: at 1100 the COUNT and AGE heads clipped to a single letter
+     each -- they are the two narrowest columns, so the auto table layout
+     took their width first and the words went with it. A floor under
+     both, so the word sets the column's width instead of being cut to
+     fit one. Deliberately not an ellipsis: a head that cannot be read
+     cannot be sorted by, and these two are sort controls. */
+  .ftable thead th.num,
+  .ftable thead th.age,
+  .shelf-heads th.num,
+  .shelf-heads th.age {
+    min-width: 76px;
   }
 
   /* `.panel thead th` in the record: the head *is* the sort control. A
@@ -2365,14 +2405,22 @@
     font-weight: 600;
   }
 
+  /* #1150: at 1100 these cells shared the row out so thinly that the
+     labels were cut mid-word -- and the label is the only thing telling
+     the six family inks apart (see the round's own note above), so a cut
+     one is undecodable, not merely untidy. They wrap to a second line
+     instead: a floor wide enough for the longest type word, and no
+     shrinking past it. On a wide docket they still share one row, which
+     is the drawing. */
   .btcells {
     display: flex;
+    flex-wrap: wrap;
     gap: 14px;
   }
 
   .btc {
     --ti: var(--fg-muted);
-    flex: 1 1 0;
+    flex: 1 0 140px;
     min-width: 0;
     background: transparent;
     border: 0;
