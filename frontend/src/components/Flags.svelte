@@ -1624,11 +1624,25 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* CALL IT (#780): right-aligned like the record's `.panel td.vc` --
-     the trio/stamp and caret hug the row's own right edge. */
+  /* CALL IT (#780): the trio/stamp and caret hug the row's own right
+     edge, like the record's `.panel td.vc`.
+     #1154: the head does not follow them there. Right-aligned it landed
+     over the ▸ caret, a column's width away from the verdict chips it
+     names, so it read as a label for the expander. Left-aligned it
+     starts where the chips start. It also spells out the head
+     typography the sort buttons carry in this table and .shelf-heads th
+     carries in the other one -- without it this was the one head
+     rendering as a plain bold `th`. */
   .ftable thead th.vc,
   .shelf-heads th.vc {
-    text-align: right;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    white-space: nowrap;
   }
 
   .ftable tbody td.vc {
