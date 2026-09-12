@@ -78,7 +78,18 @@ export function groupRules(rules: readonly TuneLoggingRule[]): {
 // that decides what the export actually contains, and it is what the
 // rule list below is drawn from.
 export function countFilterRules(text: string): number {
-  let count = 0
+  return scanFilterSection(text).adds
+}
+
+// scanFilterSection is the single pass both countFilterRules above and
+// exportProblem below read: whether the text has an
+// /ip firewall filter section at all, and how many `add` lines are in
+// it. Split out for exportProblem's sake -- "no section" and "a section
+// with nothing in it" are different things to say, and counting alone
+// cannot tell them apart.
+function scanFilterSection(text: string): { found: boolean; adds: number } {
+  let adds = 0
+  let found = false
   let inFilter = false
   let continuing = false
   for (const raw of text.split('\n')) {
@@ -88,9 +99,36 @@ export function countFilterRules(text: string): number {
     if (wasContinuing || line === '' || line.startsWith('#')) continue
     if (line.startsWith('/')) {
       inFilter = line.replace(/\\$/, '').trim().replace(/[\s/]+/g, '/') === '/ip/firewall/filter'
+      if (inFilter) found = true
       continue
     }
-    if (inFilter && /^add(\s|$)/.test(line)) count++
+    if (inFilter && /^add(\s|$)/.test(line)) adds++
   }
-  return count
+  return { found, adds }
+}
+
+// exportProblem is what the page says about text that cannot be a
+// RouterOS export, before anything is sent (#1186). Pasting a stray
+// paragraph used to reach Analyse and come back as the under-24h
+// waiting line -- "watching for 0 hours" reads as "nothing yet", not as
+// "that was not an export", and the operator had no way to tell which
+// they were looking at.
+//
+// Like countFilterRules, a reading rather than a parse: the server's
+// parser is still the one that decides, and it can reject text this
+// passes (an unredacted export, contract §3). Null means nothing here
+// contradicts an export, never that one is known to be good.
+export function exportProblem(text: string): string | null {
+  if (!text.trim()) return null
+  const { found, adds } = scanFilterSection(text)
+  if (!found) {
+    return (
+      'This does not look like a RouterOS export — there is no /ip firewall filter section in it. ' +
+      'Run /export hide-sensitive on the router and hand over the whole output.'
+    )
+  }
+  if (adds === 0) {
+    return 'This export has an /ip firewall filter section with no rules in it, so there is nothing to switch logging on for.'
+  }
+  return null
 }
