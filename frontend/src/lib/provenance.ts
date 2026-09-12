@@ -64,5 +64,19 @@ export function startStatement(stats: Stats | null | undefined, now: Date): stri
   if (restoredTo && !Number.isNaN(new Date(restoredTo).getTime())) {
     return `restored to ${formatHM(restoredTo)} · live since ${formatHM(stats.liveSince)}`
   }
-  return `counting since ${formatHM(stats.liveSince)} — nothing before`
+  return countingNote(stats.liveSince)
+}
+
+/**
+ * The same cold-start sentence, for a surface that has to print it
+ * beside the blank paper itself rather than among the hour's facts
+ * (#1192: the drum leaves the minutes before `liveSince` unmarked and
+ * anchors this note at the first counted minute).
+ *
+ * Here rather than in the component because this module is the only
+ * place that sentence is built -- two surfaces wording it separately is
+ * exactly the drift the note at the top of this file describes.
+ */
+export function countingNote(liveSince: string): string {
+  return `counting since ${formatHM(liveSince)} — nothing before`
 }

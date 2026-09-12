@@ -226,7 +226,10 @@
     aria-valuetext={valueText}
   >
     {#if metricsPref.view === 'seismograph'}
-      <MetricsSeismograph {hour} {cursor} onselect={select} />
+      <!-- #1192: the drum leaves the minutes that ended before this
+           process started counting as blank paper, the same fact the
+           table prints as an em dash. -->
+      <MetricsSeismograph {hour} {cursor} onselect={select} liveSince={appState.stats?.liveSince ?? null} />
     {:else if metricsPref.view === 'register'}
       <MetricsRegister {hour} {cursor} onselect={select} />
     {:else}
