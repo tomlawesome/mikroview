@@ -60,14 +60,14 @@ const { page, consoleErrors } = await session()
 //
 // Its id and its configured display name are not the same string here
 // (live-env.sh's own devices block: id "live-router", name "Live
-// Router") and the two are still used in different places: the
-// sheet/popover body's own copy (RouterNatLookup.svelte) reports
-// routerLookupState's device, which EventDetailSheet.svelte's
-// openNatLookup sets from event.deviceId -- the raw id -- while both
-// header titles (natTitle) now take the friendly name (#1195: the
-// popover used to take the id there, so one router read two ways).
-// Both are captured so each check below reads the one the component it
-// targets actually renders.
+// Router"). Everything this popup shows the operator uses the display
+// name: both header titles (natTitle) and the two "no table pushed" /
+// "table is empty" states in the shared body (RouterNatLookup.svelte).
+// #1195 is why -- the popover's header took routerLookupState.device,
+// the raw id it was opened with, and the sheet's took the friendly
+// name, so one router read two ways; the body printed the id on both
+// surfaces. The id is still what the lookup fetches by, and still what
+// /api/devices reports, so DEVICE is captured too.
 feedSyslog(2, 'mv445-device-probe')
 let DEVICE
 let DEVICE_NAME
