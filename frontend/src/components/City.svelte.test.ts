@@ -12,6 +12,7 @@ import { bufferHost } from '../lib/city/presence'
 import { layoutGround } from '../lib/city/layout'
 import { roadEnds } from '../lib/city/baselineRoads'
 import { faceOf } from '../lib/city/walls'
+import { STAGE_W, ringHalfW } from '../lib/city/project'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -104,6 +105,35 @@ describe('City', () => {
     // borough level.
     const { container } = render(City, { props: { stop: 'city', ground: overflowGround } })
     expect(container.textContent).toContain('+1 zone not shown')
+  })
+
+  it('keeps every borough header inside the stage (#1139)', () => {
+    const input = mockupEstate()
+    // The operator's own estate: a router with no name but its address,
+    // and five districts, so the hull the header hangs off ends past the
+    // stage. At the borough stop it read "172.23.0.1 BOR" and the rest
+    // was over the edge.
+    input.routers[0].name = '172.23.0.1'
+    input.zones.push({ id: 'vlan-lab', name: 'Lab', cidr: '10.70.0.0/24', hosts: [], hostCount: 2, eventCount: 10, routerId: 'rb5009', coverage: 'logged', dark: false })
+    const wide = layoutGround(input)
+    const { container } = render(City, { props: { stop: 'borough', ground: wide } })
+
+    // The labels are drawn inside the view transform, so they are read
+    // through it -- `translate(ox oy) scale(k)`, the only transform on
+    // the stage's own top-level group.
+    const t = container.querySelector('svg > g[transform]')?.getAttribute('transform') ?? ''
+    const m = /translate\((-?[\d.]+) (-?[\d.]+)\) scale\((-?[\d.]+)\)/.exec(t)
+    expect(m).not.toBeNull()
+    const [ox, , k] = [Number(m![1]), Number(m![2]), Number(m![3])]
+
+    const labels = [...container.querySelectorAll('.boro-t')]
+    expect(labels.length).toBeGreaterThan(0)
+    for (const el of labels) {
+      const half = ringHalfW(el.textContent ?? '') * k
+      const centre = ox + Number(el.getAttribute('x')) * k
+      expect(centre - half).toBeGreaterThanOrEqual(0)
+      expect(centre + half).toBeLessThanOrEqual(STAGE_W)
+    }
   })
 
   it('walks buildings within a district and districts within the map', async () => {
