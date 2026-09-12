@@ -63,6 +63,16 @@ func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
 	}
 }
 
+// #1173: the block the wizard hands the operator dropped
+// remote-log-format=syslog, which docs/routeros-setup.md has carried
+// since #614 -- without it a burst of lines can be read as one.
+func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	if !strings.Contains(cmd, "remote-log-format=syslog") {
+		t.Errorf("syslogCommands omitted remote-log-format=syslog: %s", cmd)
+	}
+}
+
 func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
 	if !strings.Contains(cmd, "remote=192.0.2.10") {

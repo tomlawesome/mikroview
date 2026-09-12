@@ -104,7 +104,11 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 	// handler validates address/syslogPort's charset before either
 	// reaches here (#1095), so there is nothing for quote() to do.
 	return strings.Join([]string{
-		fmt.Sprintf(`/system logging action add name=mikroview target=remote remote=%s remote-port=%s remote-protocol=tls check-certificate=yes`, host, port),
+		// remote-log-format=syslog gives every message its own standard
+		// header, so a burst of matching lines arriving at once is read
+		// as separate lines rather than one garbled one (#614). Keep
+		// this identical to docs/routeros-setup.md's block.
+		fmt.Sprintf(`/system logging action add name=mikroview target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=syslog check-certificate=yes`, host, port),
 		`/system logging add topics=firewall,info action=mikroview`,
 	}, "\n")
 }
