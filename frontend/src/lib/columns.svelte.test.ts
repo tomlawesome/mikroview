@@ -104,6 +104,86 @@ describe('column visibility (#729)', () => {
   })
 })
 
+// #1150: at 1366 the fifteen columns measure 1762px into a 1308px box,
+// so the table's right-hand end fell off the edge. Below 1500px MAC and
+// Interfaces start hidden -- and start hidden *in the picker* too, so
+// the operator can see what was taken and put it back.
+describe('the narrow starting column set (#1150)', () => {
+  const NARROW_HIDDEN = ['mac', 'iface']
+
+  // The width is read once, at module load (see startsNarrow), so proving
+  // it needs a genuinely fresh module instance -- same vi.resetModules
+  // route the pinned-column load guard above uses.
+  async function loadAt(narrow: boolean) {
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: narrow && query.includes('1500'),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }) as unknown as MediaQueryList) as typeof window.matchMedia
+    try {
+      localStorage.removeItem('mikroview-column-visibility-v1')
+      vi.resetModules()
+      return await import('./columns.svelte')
+    } finally {
+      window.matchMedia = original
+    }
+  }
+
+  it('starts MAC and Interfaces hidden below 1500px, and nothing else', async () => {
+    const fresh = await loadAt(true)
+
+    for (const col of fresh.COLUMNS) {
+      expect(fresh.columnState.isColumnVisible(col.key), col.key).toBe(!NARROW_HIDDEN.includes(col.key))
+    }
+    // The picker reads exactly this, so "hidden" and "drawn unticked"
+    // cannot come apart.
+    expect(fresh.columnState.visibleColumns.map((c) => c.key)).not.toContain('mac')
+  })
+
+  it('changes nothing above 1500px -- the shipped default is still all fifteen', async () => {
+    const fresh = await loadAt(false)
+
+    for (const col of fresh.COLUMNS) {
+      expect(fresh.columnState.isColumnVisible(col.key), col.key).toBe(true)
+    }
+  })
+
+  it('lets the operator put one back, and persists that the way any other picker choice persists', async () => {
+    const fresh = await loadAt(true)
+
+    fresh.columnState.toggleColumn('mac')
+    expect(fresh.columnState.isColumnVisible('mac')).toBe(true)
+
+    // One mechanism, not a second one for narrow screens: the same
+    // localStorage entry the picker has always written.
+    const parsed = JSON.parse(localStorage.getItem('mikroview-column-visibility-v1') as string)
+    expect(parsed.mac).toBe(true)
+    expect(parsed.iface).toBe(false)
+
+    localStorage.removeItem('mikroview-column-visibility-v1')
+  })
+
+  it('honours a saved choice over the narrow default -- the width never overrules the reader', async () => {
+    const stored: Record<string, boolean> = Object.fromEntries([...COLUMNS].map((col) => [col.key, true]))
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) =>
+      ({ matches: query.includes('1500'), media: query, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList) as typeof window.matchMedia
+    try {
+      localStorage.setItem('mikroview-column-visibility-v1', JSON.stringify(stored))
+      vi.resetModules()
+      const fresh = await import('./columns.svelte')
+      expect(fresh.columnState.isColumnVisible('mac')).toBe(true)
+      expect(fresh.columnState.isColumnVisible('iface')).toBe(true)
+    } finally {
+      window.matchMedia = original
+      localStorage.removeItem('mikroview-column-visibility-v1')
+    }
+  })
+})
+
 describe('column headers and default widths (#1149)', () => {
   function labelOf(key: string): string {
     return COLUMNS.find((c) => c.key === key)?.label as string
