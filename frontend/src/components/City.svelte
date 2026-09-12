@@ -3429,19 +3429,38 @@
     const g = ground
     const bank = (a: Pt[]) => a.map((p, i) => (i ? 'L' : 'M') + R2(X(mc, p[0])) + ' ' + R2(Y(mc, p[1]))).join('')
     const river = g.river ? bank(g.river.bankN) + bank(g.river.bankF.slice().reverse()).replace('M', 'L') + 'Z' : ''
-    const plates = g.districts.map((d) => ({
-      d: diamond(mc, d.u, d.v, d.r, 0),
-      ink: inkOf(d),
-      fo: d.plateDark ? 0.22 : 0.5,
-      name: d.name,
-      x: R2(X(mc, d.u)),
+    // The same claim-a-rectangle pass the main map runs (#1140): a name
+    // that would land on one already placed is dropped rather than drawn
+    // over it. The panel is 264 wide, so on an estate of similarly-named
+    // VLANs the names printed through each other and through the
+    // diamonds between them -- unreadable, and worse than a plate going
+    // unnamed. Names cannot shrink out of the collision instead: 8px is
+    // the app's legibility floor (#978, owner 2026-09-06). Only the
+    // names claim, exactly as on the main map -- a name is drawn under
+    // its own plate's bottom vertex, so claiming the plates as well
+    // would drop names for touching a neighbouring diamond they sit
+    // clear of on the drawing.
+    const placed: [number, number, number, number][] = []
+    const claim = (x: number, y: number, w: number, h: number) => {
+      const r: [number, number, number, number] = [x - w / 2, y, x + w / 2, y + h]
+      for (const p of placed) if (r[0] < p[2] && r[2] > p[0] && r[1] < p[3] && r[3] > p[1]) return false
+      placed.push(r)
+      return true
+    }
+    const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
+    const plates = g.districts.map((d) => ({ d: diamond(mc, d.u, d.v, d.r, 0), ink: inkOf(d), fo: d.plateDark ? 0.22 : 0.5 }))
+    const names: { name: string; x: number; y: number }[] = []
+    for (const d of g.districts) {
       // The name sits under the plate's bottom vertex (#978), not over
       // the diamond and its device dots -- clamped so a plate at the
       // panel's own bottom edge keeps its name inside the svg.
-      y: R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8)),
-    }))
-    const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
-    return { river, plates, nodes }
+      const x = R2(X(mc, d.u))
+      const y = R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8))
+      // 8px monospace: about 4.8 to the character, plus a little air on
+      // either side so two names never sit shoulder to shoulder.
+      if (claim(x, y - 8, d.name.length * 4.8 + 5, 11)) names.push({ name: d.name, x, y })
+    }
+    return { river, plates, names, nodes }
   })
   const miniView = $derived.by(() => {
     const mc = miniCam
@@ -4648,8 +4667,8 @@
       {#each mini.plates as p, i (i)}
         <path d={p.d} fill={p.ink} fill-opacity={p.fo} />
       {/each}
-      {#each mini.plates as p, i (i)}
-        <text x={p.x} y={p.y} text-anchor="middle" class="mini-name">{p.name}</text>
+      {#each mini.names as n, i (i)}
+        <text x={n.x} y={n.y} text-anchor="middle" class="mini-name">{n.name}</text>
       {/each}
       {#each mini.nodes as n, i (i)}
         <circle cx={n.x} cy={n.y} r="2" fill="var(--accent)" />
