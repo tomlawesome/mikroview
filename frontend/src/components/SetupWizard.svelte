@@ -454,6 +454,20 @@
         {/each}
       </select>
     </div>
+    <!-- #1181: switching version left every command block byte-identical
+         and the step said nothing about why, which reads as a control
+         that does nothing. It is not -- one dialect covers the whole
+         table today (dialects.go), so what the pick buys is the check
+         against it: the standing lines below, and any note that belongs
+         to that release (step 3 prints one for 7.24.0). Saying that is
+         the fix rather than hiding the picker, because the check is
+         what the pick is for, not the command text. -->
+    <p class="note">
+      One set of commands covers RouterOS {commands.routeros.minimum} to {commands.routeros.newest}, so
+      picking a version does not change them. It is how your release gets checked against the ones
+      these were verified on — anything outside that range, or with a warning of its own, is said
+      here and on the step it concerns.
+    </p>
     {#each warningEntries as w (w.key)}
       <p class="note" class:below-minimum={w.kind === 'below-minimum'}>
         {#if w.kind === 'below-minimum'}

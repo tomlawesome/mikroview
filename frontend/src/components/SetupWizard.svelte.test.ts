@@ -597,6 +597,19 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     expect(container.textContent).not.toContain('runs RouterOS')
   })
 
+  // #1181: the four versions rendered identical command blocks and the
+  // step never said what the pick was for, so it read as a dead
+  // control. It says now: one dialect covers the table, and the pick is
+  // what gets the release checked against it.
+  it('says what picking a version is for, since it is not the command text', async () => {
+    wizardState.pane = 1
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.routeros-version')).toBeTruthy())
+    expect(container.textContent).toContain('One set of commands covers RouterOS 7.18 to 7.24.1')
+    expect(container.textContent).toContain('picking a version does not change them')
+  })
+
   it("renders a step's own note directly under that step's block", async () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
       commandsFixture({
