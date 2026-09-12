@@ -40,6 +40,7 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 3/4 · `live-metrics-views` (and `live-rule-regex`, counted above)
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
 - 2026-09-10 · 5265a1f8 (!1012) · pipeline 881, gate:scenarios 4/4 · `live-watchlist-manage` exited 1 without printing a result; pipelines 879-882 shared the runner
+- 2026-09-12 · 43a3f55c (!1036, local workstation) · shard 3/4 rerun · `live-log-every-rule` (`page.goto` 30 s on networkidle), `live-routeros-ingest` (15 s waiting for `#main-content` to be visible, which the log shows already visible) and `live-memory-slider` (`g.mcut` never marked on a proposed shrink) all died before or without a verdict, while a peer agent's vitest ran in another worktree and load average sat near 80. Pipeline 1005's gate:scenarios 3/4 passed all three on this exact commit; the two it did fail are the ones !1036 fixes. The skill's rule holds — a browser-phase failure on a shared host is not evidence until it is reproduced alone.
 
 ## live-watchlist-manage: the fenced button never reads "learn again"
 
