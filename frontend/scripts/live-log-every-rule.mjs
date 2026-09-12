@@ -57,12 +57,9 @@ await modal.waitFor({ state: 'visible' })
 // "Back up the router" as the ledger's sixth step, so the finish row --
 // rendered after the six-item ledger loop -- shifted from position 6.
 await page.locator('.setup-wizard .steps li:nth-child(7) .step-row').click()
-// Still "Tune logging…": #1134 renamed the page, and the wizard's own
-// link has not caught up yet -- SetupWizard.svelte was being changed on
-// another branch when the rename landed.
-const tuneLink = page.locator('.setup-wizard button.link:text-is("Tune logging…")')
-await tuneLink.waitFor({ state: 'visible' })
-await tuneLink.click()
+const pageLink = page.locator('.setup-wizard button.link:text-is("Log every rule…")')
+await pageLink.waitFor({ state: 'visible' })
+await pageLink.click()
 await modal.waitFor({ state: 'detached' })
 
 await page.waitForSelector('.og h3:has-text("log every rule")')

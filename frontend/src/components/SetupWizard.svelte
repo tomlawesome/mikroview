@@ -390,11 +390,12 @@
     wizardState.close()
   }
 
-  // The finish screen's own door into Tune logging (#435 decision 2):
+  // The finish screen's own door into Log every rule (#435 decision 2;
+  // "Tune logging" until #1134 renamed the page, not the view key):
   // its other way in besides the topography's coverage lens. Closes the
   // modal rather than leaving it open behind the new page, the same way
   // leaveToLanding above does.
-  function openTuneLogging() {
+  function openLogEveryRule() {
     appState.view = 'tune-logging'
     wizardState.close()
   }
@@ -1000,7 +1001,7 @@
               {/if}
               <p class="note">Run setup… reopens this any time, from the Admin group.</p>
               <p class="note">
-                <button type="button" class="link" onclick={openTuneLogging}>Tune logging…</button>
+                <button type="button" class="link" onclick={openLogEveryRule}>Log every rule…</button>
                 turns a dark connection into a watched one once mikroview has been listening a day.
               </p>
             {/if}
@@ -1433,7 +1434,7 @@
     font-weight: 600;
   }
 
-  /* Tune logging's own door on the finish pane (#435): reads as a link
+  /* Log every rule's own door on the finish pane (#435): reads as a link
      inline with the sentence beside it, not a second boxed button next
      to "Run setup… reopens this". Step 6's "see it in Settings", "mint
      a new one" and "how to mount one"/"download the newest .backup"
