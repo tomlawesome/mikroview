@@ -117,6 +117,7 @@ import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
+import { watchlistState } from '../lib/watchlist.svelte'
 import { fetchHistorySettings as fetchHistorySettingsReal, fetchRouterBackups as fetchRouterBackupsReal } from '../lib/api'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
@@ -151,6 +152,8 @@ beforeEach(() => {
   appState.stats = stats()
   appState.devices = []
   flagsState.list = []
+  watchlistState.entries = []
+  watchlistState.coverage = {}
   detectorSettingsState.list = []
   usersState.list = []
   tokensState.list = []
@@ -206,6 +209,39 @@ describe('The settings shelf (#633)', () => {
     expect(within(shelf).getByText('Entities')).toBeTruthy()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
     expect(within(shelf).getByText('Log every rule')).toBeTruthy()
+  })
+
+  it('the docket card reads the same watcher count the scene bar does, and leaves the flag count to it (#1156)', async () => {
+    // The operator had the bar's eye saying 5 while the card beside it
+    // said 6, and "67" flags printed twice on one screen. The card used
+    // entries.length -- every watch, including the ring-broken and the
+    // switched-off -- where the bar reads heldCount.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [
+      { id: 'f1', type: 'port_scan', cleared: false, provisional: false },
+      { id: 'f2', type: 'port_scan', cleared: false, provisional: false },
+    ] as never
+    watchlistState.entries = [
+      { id: 'w1', enabled: true },
+      { id: 'w2', enabled: true },
+      { id: 'w3', enabled: true },
+      { id: 'w4', enabled: true },
+      // broken: enabled, but no pushed rule can produce a matching event
+      { id: 'w5', enabled: true },
+      // switched off: never counted by either marker
+      { id: 'w6', enabled: false },
+    ] as never
+    watchlistState.coverage = { w5: 'no-logging' }
+    render(EngineRoom)
+    await settle()
+
+    const docket = screen.getByRole('button', { name: /The docket, position/ })
+    expect(within(docket).getByText('◉ 4')).toBeTruthy()
+    expect(within(docket).getByText('○1')).toBeTruthy()
+    expect(docket.textContent).not.toContain('⚑')
+    // and the bar's own reading is the one the card now matches
+    expect(watchlistState.heldCount).toBe(4)
   })
 
   it('reordering a card moves the landing with it', async () => {
