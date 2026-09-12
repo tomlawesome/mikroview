@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Pure helpers behind TuneLogging.svelte (#435), kept out of the
-// component the way setupsteps.ts is kept out of SetupWizard.svelte --
-// unit-testable without a DOM, and the one place this logic can live
-// rather than being re-derived wherever the component needs it.
+// Pure helpers behind LogEveryRule.svelte (#435; the page was "Tune
+// logging" until #1134 renamed it), kept out of the component the way
+// setupsteps.ts is kept out of SetupWizard.svelte -- unit-testable
+// without a DOM, and the one place this logic can live rather than
+// being re-derived wherever the component needs it.
+//
+// The `TuneLogging*` types below keep their names: they mirror the two
+// /api/tune-logging endpoints, and those paths do not change (#1134).
 import { edgeCoverage } from './coverageRule'
 import type { PolicyEdge } from './policy.svelte'
 import type { TuneLoggingRule } from './types'
@@ -60,4 +64,33 @@ export function groupRules(rules: readonly TuneLoggingRule[]): {
     dark: rules.filter((r) => r.crossesDark),
     other: rules.filter((r) => !r.crossesDark),
   }
+}
+
+// countFilterRules is what the drop zone says it is holding before
+// anything is sent (#1134: "showing the file name and rule count once
+// something is in it") -- the `add` lines in the export's own
+// /ip firewall filter section, counted the way
+// internal/routeros/export/parser.go counts them: continuation lines
+// (trailing `\`) belong to the `add` above them, and a section header
+// is written either spaced or slash-joined.
+//
+// A reading for the label, not a parse: the server's parser is the one
+// that decides what the export actually contains, and it is what the
+// rule list below is drawn from.
+export function countFilterRules(text: string): number {
+  let count = 0
+  let inFilter = false
+  let continuing = false
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    const wasContinuing = continuing
+    continuing = line.endsWith('\\')
+    if (wasContinuing || line === '' || line.startsWith('#')) continue
+    if (line.startsWith('/')) {
+      inFilter = line.replace(/\\$/, '').trim().replace(/[\s/]+/g, '/') === '/ip/firewall/filter'
+      continue
+    }
+    if (inFilter && /^add(\s|$)/.test(line)) count++
+  }
+  return count
 }

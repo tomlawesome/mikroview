@@ -19,7 +19,22 @@ const STORAGE_KEY = 'mikroview-deck-order'
 // the machinery behind the log -- and Fleet is a viewer's machinery
 // card exactly as Entities/Settings are a user's, so it takes the same
 // tail position they do.
-const DEFAULT_ORDER = ['fall', 'topography', 'metrics', 'live', 'docket', 'entities', 'engineroom', 'fleet']
+// 'log-every-rule' (#1134) joins the tail for the same reason: it is a
+// tool for changing the router, not a reading of the log, and it is the
+// edit tier's alone. A browser holding an order from before it existed
+// picks it up from normalize() below, appended after the cards it
+// already knows.
+const DEFAULT_ORDER = [
+  'fall',
+  'topography',
+  'metrics',
+  'live',
+  'docket',
+  'entities',
+  'engineroom',
+  'log-every-rule',
+  'fleet',
+]
 
 function loadInitial(): string[] {
   try {

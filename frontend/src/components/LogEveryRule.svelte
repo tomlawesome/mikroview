@@ -1,16 +1,34 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // Tune logging (#435): the config annotation helper. Its own surface,
-  // not a sixth wizard step (the issue's decision 2) -- reached from the
-  // wizard's finish screen and from the topography's coverage lens on a
-  // dark pair, and built to recur (#895 later adds a second way in). The
-  // operator uploads their router's `/export hide-sensitive`, and gets
-  // it back with logging switched on for every rule that crosses a dark
-  // connection -- their exact config, changed only in its logging
-  // attributes -- or the equivalent `set` commands to paste individually.
+  // Log every rule (#435, renamed from "Tune logging" by #1134): the
+  // config annotation helper. Its own surface, not a sixth wizard step
+  // (the issue's decision 2) -- reached from the wizard's finish screen
+  // and from the topography's coverage lens on a dark pair, and built to
+  // recur (#895 later adds a second way in). The operator hands over
+  // their router's `/export hide-sensitive`, and gets it back with
+  // logging switched on for every rule that crosses a dark connection --
+  // their exact config, changed only in its logging attributes -- or the
+  // equivalent `set` commands to paste individually.
   //
-  // The invariant this page exists to keep honest: the upload never
+  // #1134 is the owner's ruling on three faults found in v0.5.1, and it
+  // is what this file's shape now answers to:
+  //
+  // - A page nobody could leave. It rendered outside the deck, whose
+  //   roll rail is the app's navigation, so it had none. It is a deck
+  //   card now (lib/deckCards.ts's `log-every-rule`), taking the deck's
+  //   shell exactly as Entities and Settings do -- not a second shell
+  //   invented for it. The old "workflow you step into and leave"
+  //   reading is superseded: a workflow with no way out is a trap.
+  // - A raw <input type="file"> beside a bare textarea. One drop zone
+  //   now: drop a file on it, click it to browse, or paste -- the same
+  //   control for all three, with the native file control kept but never
+  //   shown.
+  // - It never said what it was for. The lead sentence, verbatim from
+  //   the ruling, is the first thing on the page, and the never-stored
+  //   line is a footnote under the drop zone rather than the headline.
+  //
+  // The invariant this page exists to keep honest: the export never
   // leaves the browser except in the two POSTs it drives
   // (fetchTuneLoggingAnalyse/fetchTuneLoggingRender, lib/api.ts). Nothing
   // here writes it to storage, a log, or anywhere that outlives this
@@ -18,17 +36,23 @@
   // this unmounts, which is what the ephemerality note below states in
   // the operator's own words.
   //
-  // Outside the deck deliberately (see App.svelte's DECK_VIEWS): a
-  // workflow stepped into and left, not a dashboard to swipe among --
-  // the same operate-page shape Fleet.svelte has always used.
+  // The `TuneLogging*` names it imports keep theirs: they mirror the two
+  // /api/tune-logging endpoints, and #1134 leaves those paths alone.
   import { appState } from '../lib/state.svelte'
   import { policyState } from '../lib/policy.svelte'
   import { coverageState } from '../lib/coverage.svelte'
-  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { fetchTuneLoggingAnalyse, fetchTuneLoggingRender } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { downloadText } from '../lib/export'
-  import { counterText, darkBoundaryKeys, groupRules, initialSelection, waitingMessage } from '../lib/tuneLogging'
+  import {
+    countFilterRules,
+    counterText,
+    darkBoundaryKeys,
+    groupRules,
+    initialSelection,
+    waitingMessage,
+  } from '../lib/logEveryRule'
   import type { TuneLoggingAnalyseResponse, TuneLoggingRenderResponse, TuneLoggingRule } from '../lib/types'
 
   // The pushed tables the dark-boundary set is computed from -- the same
@@ -47,7 +71,7 @@
   let preselectedBoundary = $state<string | null>(null)
 
   $effect(() => {
-    const pending = tuneLoggingNavState.consume()
+    const pending = logEveryRuleNavState.consume()
     if (!pending) return
     device = pending.device
     preselectedBoundary = pending.boundaryKey
@@ -61,6 +85,12 @@
   })
 
   let exportText = $state('')
+  // What the drop zone says it is holding. A dropped or chosen file is
+  // named by the file; a paste has no name of its own, so it says so.
+  let exportName = $state('')
+  let dragging = $state(false)
+  let fileInput = $state<HTMLInputElement | null>(null)
+  const ruleCount = $derived(exportText ? countFilterRules(exportText) : 0)
 
   let analysing = $state(false)
   let analyseError = $state<string | null>(null)
@@ -92,16 +122,59 @@
     resultSaved = false
   }
 
+  // The one intake. Every door into the drop zone -- a dropped file, a
+  // chosen file, a paste -- ends here, so a second export always lands
+  // in exactly the state the first one did.
+  function take(text: string, name: string) {
+    exportText = text
+    exportName = name
+    resetDownstream()
+  }
+
   async function onFile(e: Event) {
     const input = e.currentTarget as HTMLInputElement
     const file = input.files?.[0]
     if (!file) return
-    exportText = await file.text()
-    resetDownstream()
+    take(await file.text(), file.name)
     // Cleared so choosing the same file twice (after editing it outside
     // the browser) still fires a change event.
     input.value = ''
   }
+
+  async function onDrop(e: DragEvent) {
+    e.preventDefault()
+    dragging = false
+    const file = e.dataTransfer?.files?.[0]
+    if (file) {
+      take(await file.text(), file.name)
+      return
+    }
+    // Dragging a selection rather than a file: the text is the export
+    // just as much as a file's contents are.
+    const text = e.dataTransfer?.getData('text/plain')
+    if (text) take(text, 'dragged text')
+  }
+
+  // Paste is listened for on the window, not on the zone: the zone's
+  // click opens the file browser, so there is no way to focus it first
+  // and "paste into it" the way an input would allow. Anything already
+  // typing into a field of its own keeps its own paste -- including a
+  // neighbouring deck card's, since the deck mounts more than the card
+  // you are on.
+  function onPaste(e: ClipboardEvent) {
+    const target = e.target as HTMLElement | null
+    const tag = target?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return
+    const text = e.clipboardData?.getData('text/plain')
+    if (!text?.trim()) return
+    e.preventDefault()
+    take(text, 'pasted export')
+  }
+
+  $effect(() => {
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  })
 
   // darkBoundaries mirrors Topography.svelte's own coverageOf: logged ->
   // observed, declared -> quiet, neither -> dark. Estate-wide, the same
@@ -197,11 +270,14 @@
   <div class="opwrap">
     <div class="opanel">
       <div class="og">
-        <h3>tune logging — coverage-complete, from your own export</h3>
+        <h3>log every rule</h3>
 
-        <!-- The ephemerality sentence, verbatim from the issue body. -->
-        <p class="note ephemeral">
-          Your config is never stored — it runs through memory, and once you leave this page it is gone.
+        <!-- The lead sentence, verbatim from #1134's ruling, and the
+             first thing on the page: what you put in, what you get
+             back, and what happens to it. -->
+        <p class="lead">
+          Drop in your router's export (<code>/export hide-sensitive</code>). You get it back with logging switched on
+          for every firewall rule that is not logging yet, ready to paste into the router. Nothing you paste is stored.
         </p>
 
         {#if appState.devices.length === 0}
@@ -209,8 +285,8 @@
         {:else}
           {#if appState.devices.length > 1}
             <div class="field">
-              <label for="tl-device">Router</label>
-              <select id="tl-device" bind:value={device}>
+              <label for="ler-device">Router</label>
+              <select id="ler-device" bind:value={device}>
                 <option value="" disabled>Which router is this export from?…</option>
                 {#each appState.devices as d (d.id)}
                   <option value={d.id}>{d.name && d.name !== d.id ? `${d.name} (${d.id})` : d.id}</option>
@@ -219,17 +295,56 @@
             </div>
           {/if}
 
+          <!-- One control for all three ways in (#1134). The native
+               file control is kept -- it is the only way to open the
+               browser's own file chooser -- but never shown; the zone
+               clicks it. -->
           <div class="field">
-            <label for="tl-export">The router's export (<code>/export hide-sensitive</code>)</label>
-            <input id="tl-file" type="file" accept=".rsc,.txt,text/plain" onchange={onFile} />
-            <textarea
-              id="tl-export"
-              class="export-box"
-              rows="8"
-              placeholder="paste the export here, or choose a file above…"
-              bind:value={exportText}
-              oninput={resetDownstream}
-            ></textarea>
+            <button
+              type="button"
+              class="drop"
+              class:dragging
+              class:filled={exportText.trim().length > 0}
+              onclick={() => fileInput?.click()}
+              ondragenter={(e) => {
+                e.preventDefault()
+                dragging = true
+              }}
+              ondragover={(e) => {
+                e.preventDefault()
+                dragging = true
+              }}
+              ondragleave={() => (dragging = false)}
+              ondrop={onDrop}
+            >
+              {#if exportText.trim()}
+                <span class="drop-picked">{exportName}</span>
+                <span class="drop-sub">
+                  {ruleCount} firewall rule{ruleCount === 1 ? '' : 's'} in it — drop, click or paste another to replace
+                  it
+                </span>
+              {:else}
+                <span class="drop-picked">Drop the export here</span>
+                <span class="drop-sub">or click to choose a file, or paste it</span>
+              {/if}
+            </button>
+            <input
+              bind:this={fileInput}
+              id="ler-file"
+              class="sr-only"
+              type="file"
+              accept=".rsc,.txt,text/plain"
+              tabindex="-1"
+              aria-hidden="true"
+              onchange={onFile}
+            />
+
+            <!-- The ephemerality sentence, verbatim from #435's issue
+                 body. #1134 moved it here, under the zone, as the
+                 footnote it always was rather than the headline. -->
+            <p class="note ephemeral">
+              Your config is never stored — it runs through memory, and once you leave this page it is gone.
+            </p>
           </div>
 
           {#if analyseError}<p class="load-error">{analyseError}</p>{/if}
@@ -351,13 +466,21 @@
     color: var(--fg-muted);
   }
 
-  /* The wizard's own amber-left-rule register (SetupWizard.svelte's
-     .note.below-minimum), reused here for the ephemerality statement --
-     the loudest thing on this page, without a second colour. */
-  .note.ephemeral {
-    border-left: 3px solid var(--log);
-    padding-left: 10px;
+  /* The lead sentence: page ink, a size up from the notes around it,
+     because it is what the page is for. */
+  .lead {
+    margin: 0;
+    max-width: 62ch;
+    font-size: 14px;
+    line-height: 1.65;
     color: var(--fg);
+  }
+
+  /* A footnote since #1134, not the headline it used to be: the quiet
+     register of every other .note, one size down again. */
+  .note.ephemeral {
+    font-size: 12px;
+    color: var(--fg-dim);
   }
 
   .empty {
@@ -387,16 +510,74 @@
     align-self: flex-start;
   }
 
-  .export-box {
+  /* The drop zone (#1134). The dashed edge is the app's own
+     "something belongs here and does not yet" mark -- Entities' empty
+     third slot and AddTopTalkerWidget's berth wear the same one -- on
+     the elevated surface every other input here sits on. It is a real
+     <button> so the keyboard reaches it, Enter opens the file browser
+     and the a11y rules are satisfied without a role attribute. */
+  .drop {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 112px;
+    padding: 18px 16px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
     background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    cursor: pointer;
+    text-align: center;
+    transition:
+      border-color 0.15s,
+      color 0.15s;
+  }
+
+  /* :not(:disabled) only to outweigh the generic button:hover rule
+     below, which would otherwise win on specificity and grey the edge
+     back down. */
+  .drop:hover:not(:disabled),
+  .drop.dragging:not(:disabled) {
+    border-color: var(--accent);
+  }
+
+  /* Solid once it is holding something: the border stops asking. */
+  .drop.filled:not(:disabled) {
+    border-style: solid;
+    border-color: var(--accent);
+  }
+
+  .drop-picked {
+    font-size: 13.5px;
+    font-weight: 600;
     color: var(--fg);
-    border-radius: 6px;
-    padding: 10px 12px;
+  }
+
+  .drop.filled .drop-picked {
     font-family: var(--font-mono);
+    font-weight: 500;
+  }
+
+  .drop-sub {
     font-size: 12px;
-    line-height: 1.5;
-    resize: vertical;
+    color: var(--fg-muted);
+  }
+
+  /* The native file control, kept for the browser's own chooser and
+     never shown (#1134). Not display:none: a hidden-by-display input
+     cannot be clicked open in every engine. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   code {

@@ -375,7 +375,7 @@ export interface RouterFilterRule {
   disabled?: boolean
   // packets/bytes (#435 decision 4, contract §1) are RouterOS's own
   // counters for this rule -- kept whether or not it logs, which is what
-  // lets Tune logging show "fired N times" as the cost of switching
+  // lets Log every rule show "fired N times" as the cost of switching
   // logging on before it is switched on. Optional for the same reason as
   // the fields above: a push predating #435 sends nothing.
   packets?: number
@@ -1471,11 +1471,12 @@ export async function replayDefinition(
 }
 
 // ===========================================================================
-// Tune logging (#435)
+// Log every rule (#435; the page was "Tune logging" until #1134, which
+// left these two endpoint paths and the names that mirror them alone)
 //
 // The upload never leaves this pair of calls: the export text is sent in
 // the request body and nothing else in this file ever holds onto it (see
-// TuneLogging.svelte's own doc comment for how the component honours
+// LogEveryRule.svelte's own doc comment for how the component honours
 // that). Both endpoints share the fixed contract's shape -- a `rejected`
 // reason is a *value* in a normal 200 response body (see the contract's
 // §3 sample, `"rejected": null // or {"reason": "..."}`), not a thrown
