@@ -621,6 +621,19 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('TAG'))
     expect(container.textContent).toContain('on this release, tag rules one at a time')
   })
+
+  // #1174: the bulk command labels by action, so every drop rule logs
+  // as D|drop| -- the setup guide's per-rule slugs are the only way to
+  // tell two of them apart, and the step now says so instead of leaving
+  // the operator to find out from the log.
+  it('says the bulk command labels by action alone', async () => {
+    wizardState.pane = 3
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('RULE_TAGGING_COMMANDS'))
+    expect(container.textContent).toContain('the log cannot tell one from another')
+    expect(container.textContent).toContain('docs/routeros-setup.md')
+  })
 })
 
 // #1131: step 4 showed a token it never printed, and handed over two
