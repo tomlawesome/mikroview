@@ -100,7 +100,7 @@
   // whichever device step 4 last touched.
   $effect(() => {
     const device = wizardState.lostRouterDevice
-    if (device) tokenDevice = device
+    if (device) wizardState.tokenDevice = device
   })
 
   const ledger = $derived(wizardState.ledger)
@@ -130,8 +130,13 @@
   // place. Minting on entry is only unambiguous when mikroview knows
   // exactly one router -- with several, which router the token is scoped
   // to is the operator's call, so the picker stands in for "entry".
-  let token = $state('')
-  let tokenDevice = $state('')
+  //
+  // The token and the router it is for live on wizardState since #1183:
+  // they have to outlive this component, or a second visit to the push
+  // step mints a second key with the same name. See that field's own
+  // comment.
+  const token = $derived(wizardState.token)
+  const tokenDevice = $derived(wizardState.tokenDevice)
   let tokenError = $state<string | null>(null)
   let minting = $state(false)
   // Whether entering step 4 has already reached for a token. Without
@@ -173,7 +178,7 @@
     deviceCountSeen = true
     if (known.length === 1) {
       mintAttempted = true
-      tokenDevice = known[0].id
+      wizardState.tokenDevice = known[0].id
       mintToken()
     }
   })
@@ -190,6 +195,12 @@
       tokenError = 'Choose which router this token is for.'
       return
     }
+    // #1183: one key per wizard session. The key this session already
+    // minted is the one to show again -- a second mint would give the
+    // operator a second row with the same name in Settings, and only
+    // the newer value in hand. The only way past this is to clear the
+    // token first, which is what "mint a new one" below does.
+    if (wizardState.token) return
     minting = true
     const result = await createToken(`setup-${tokenDevice}`, 'ingest', tokenDevice)
     minting = false
@@ -197,16 +208,17 @@
       tokenError = result
       return
     }
-    token = result.value ?? ''
+    wizardState.token = result.value ?? ''
   }
 
   // mintNewBackupToken is round 45's "mint a new one", offered only in
   // the lost-router shape: the old token still opens the drop box (it
   // is never revoked here -- Settings ▸ keys already offers that,
   // deliberately not duplicated), this just gives the replacement a
-  // fresh one of its own to use instead.
+  // fresh one of its own to use instead. The operator asking is the one
+  // thing that gets past the reuse rule above (#1183).
   function mintNewBackupToken() {
-    token = ''
+    wizardState.token = ''
     mintToken()
   }
 
@@ -704,7 +716,7 @@
               {:else if step.n === 4 && wizardState.status}
                 {#if !token}
                   <div class="mint">
-                    <select bind:value={tokenDevice} aria-label="Router this token is for">
+                    <select bind:value={wizardState.tokenDevice} aria-label="Router this token is for">
                       <option value="" disabled>Which router is this for?…</option>
                       {#each wizardState.devices as d (d.id)}
                         <option value={d.id}>
@@ -851,7 +863,7 @@
                        to print, which the "done when" bar does not
                        allow. -->
                   <div class="mint">
-                    <select bind:value={tokenDevice} aria-label="Router this token is for">
+                    <select bind:value={wizardState.tokenDevice} aria-label="Router this token is for">
                       <option value="" disabled>Which router is this for?…</option>
                       {#each wizardState.devices as d (d.id)}
                         <option value={d.id}>
