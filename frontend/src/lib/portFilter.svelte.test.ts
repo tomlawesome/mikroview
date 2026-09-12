@@ -78,6 +78,30 @@ describe('the port pill (#1018)', () => {
     expect([...portFilterState.hostIps]).toEqual(['10.0.10.21'])
   })
 
+  it('collapses the picker onto the answer as soon as a port is chosen (#1178)', async () => {
+    vi.mocked(fetchPorts).mockResolvedValue(answer())
+
+    await portFilterState.openPicker()
+    expect(portFilterState.open).toBe(true)
+
+    // The operator saw the whole 34-chip bar stay open with the chosen
+    // chip merely lit. Round 53: "Selected, the pill collapses onto the
+    // answer".
+    await portFilterState.togglePort(445)
+    expect(portFilterState.open).toBe(false)
+
+    // Typing a list lands in the same place.
+    await portFilterState.openPicker()
+    await portFilterState.setPorts([22, 23])
+    expect(portFilterState.open).toBe(false)
+
+    // Emptying the selection leaves the bar open: there is no answer to
+    // collapse onto, and the next pick is what the picker is for.
+    await portFilterState.openPicker()
+    await portFilterState.setPorts([])
+    expect(portFilterState.open).toBe(true)
+  })
+
   it('takes several ports at once and drops one on a second click', async () => {
     vi.mocked(fetchPorts).mockResolvedValue(answer())
 
