@@ -68,7 +68,9 @@ describe('an empty ledger', () => {
 
     expect(screen.getByRole('heading', { name: 'What it has been told to expect' })).toBeTruthy()
     expect(
-      screen.getByText('Nothing yet — every Expected verdict on the Flags card records one here.'),
+      // #1163: "the Flags card" is a place the app never shows -- flags
+      // is a tab of The docket.
+      screen.getByText("Nothing yet — every Expected verdict on the docket's flags tab records one here."),
     ).toBeTruthy()
   })
 
