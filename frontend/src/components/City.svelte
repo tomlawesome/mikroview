@@ -1906,7 +1906,8 @@
         (d.cidr ? ' ' + d.cidr : '') +
         ', ' +
         (d.buildings.length + d.more) +
-        ' hosts' +
+        // #1165: "1 hosts" on a district holding one.
+        (d.buildings.length + d.more === 1 ? ' host' : ' hosts') +
         (!d.rulesPushed
           ? ', no rule table has been pushed yet -- walls show no gates'
           : d.dark
@@ -2902,6 +2903,14 @@
 
   /** What the card's first line says the host is. */
   const PRESENCE_WORD: Record<string, string> = { live: 'live', quiet: 'quiet', intended: 'quiet on purpose', dismissed: 'dismissed' }
+
+  /** #1165: a host only the event buffer has seen carries no stamps and
+   * no count, so the card said "live" directly above "0 events · last
+   * seen not recorded" and contradicted itself. The feed is all that has
+   * heard it, and that is what the card says -- the register line below
+   * already explains why there is nothing else. One function so the
+   * card's aria-label and its first line cannot disagree. */
+  const hostWord = (h: CityHost): string => (h.presence === 'live' && h.events === 0 && !h.lastSeen ? 'seen in the feed' : PRESENCE_WORD[h.presence])
 
   const stamp = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : 'not recorded')
 
@@ -4221,12 +4230,15 @@
       bind:this={hcardEl}
       role="dialog"
       tabindex="-1"
-      aria-label="{c.b.name}: {PRESENCE_WORD[c.h.presence]}"
+      aria-label="{c.b.name}: {hostWord(c.h)}"
       onpointerenter={hostGrace.hold}
       onpointerleave={releaseHostCard}
     >
       <div class="bc-t">
-        <span class="n">{c.b.name}<small>{c.b.ip}</small></span>
+        <!-- #1165: an unnamed host's name is its address, and the card
+             printed it twice side by side. The address is a second fact
+             only where there is a name in front of it. -->
+        <span class="n">{c.b.name}{#if c.b.ip && c.b.ip !== c.b.name}<small>{c.b.ip}</small>{/if}</span>
         <button
           type="button"
           class="pin"
@@ -4243,6 +4255,8 @@
         </div>
       {:else if c.h.presence === 'intended'}
         <div class="s quiet"><i class="sw quiet"></i>quiet on purpose</div>
+      {:else if c.h.events === 0 && !c.h.lastSeen}
+        <div class="s quiet"><i class="sw quiet"></i>{hostWord(c.h)}</div>
       {:else}
         <div class="s logged"><i class="sw logged"></i>live</div>
       {/if}
