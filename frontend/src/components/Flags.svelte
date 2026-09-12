@@ -1282,9 +1282,12 @@
                  episode once it's fetched, the flag's
                  firstSeen/lastSeen before then). See
                  episodeShape.ts. -->
+            <!-- #1157: the separator is an expression, not literal
+                 whitespace. Written as a space before the "·" at the
+                 head of the block, Svelte trims it and the line reads
+                 "still arriving· scored 40". -->
             <span class="span"
-              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}
-                · scored {f.confidence}{/if}</span
+              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}{' · '}scored {f.confidence}{/if}</span
             >
             {#if ep === 'loading'}
               <p class="ep-note">fetching the events…</p>

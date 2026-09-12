@@ -1742,7 +1742,10 @@
         <tbody id="sugg">
           <tr class="sdiv">
             <td colspan="6">
-              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0} · <b>{openSuggestions.length}</b>{/if}</span>
+              <!-- #1157: `{' · '}` rather than a literal space before the
+                   "·" -- inside the block Svelte trims the leading
+                   whitespace, and the heading read "…PUSHED· 15". -->
+              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0}{' · '}<b>{openSuggestions.length}</b>{/if}</span>
               <span class="sdr">
                 {#if asideSuggestions.length > 0}
                   <button

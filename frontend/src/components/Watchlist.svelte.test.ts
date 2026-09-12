@@ -240,6 +240,10 @@ describe('The suggestion body under the watches (#771)', () => {
     const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
     expect(heading.textContent).toContain('mikroview suggests · from what rb5009 and hap-ax2 pushed')
     expect(heading.querySelector('b')?.textContent).toBe('2')
+    // #1157: the space before the count's own "·" was written as literal
+    // whitespace at the head of an {#if}, which Svelte trims -- the
+    // heading read "…PUSHED· 2".
+    expect(heading.textContent).toMatch(/pushed · 2$/)
   })
 
   it('keeps set-aside suggestions out of the list until "show them" is clicked, and the pill then reads "hide them"', async () => {
