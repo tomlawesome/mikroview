@@ -672,6 +672,21 @@
                   <code>D</code>rop, <code>R</code>eject, <code>L</code>og. The trailing
                   <code>|</code> is required.
                 </p>
+                <!-- #1174: what the bulk form costs, said rather than
+                     left to be discovered. One command can only label
+                     by action -- that is why it is one command -- so
+                     the label after the letter is the action's own
+                     name, and every drop rule carries the same one.
+                     The setup guide's per-rule slugs are the way to
+                     get further, and this points at them rather than
+                     growing a rule-by-rule generator here. -->
+                <p class="note">
+                  These three label rules by what they do, so every drop rule logs as
+                  <code>D|drop|</code> and the log cannot tell one from another. To name them
+                  individually — <code>D|wan-in|</code> — set each rule's own
+                  <code>log-prefix</code>, as <code>docs/routeros-setup.md</code> step 3 walks
+                  through; the first letter must still match the action.
+                </p>
               {:else if step.n === 4 && wizardState.status}
                 {#if !token}
                   <div class="mint">
