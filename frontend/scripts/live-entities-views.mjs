@@ -99,7 +99,7 @@ check(
 await page.click(`${card} #eviews [data-v="hosts"]`)
 await page.waitForSelector(`${card} #eviews [data-v="hosts"].on`, { timeout: 5000 })
 check(
-  (await headersOf()).join(',') === 'name,lane,address,mac,first seen,last seen,marks',
+  (await headersOf()).join(',') === 'name,zone,address,mac,first seen,last seen,marks',
   `the hosts view draws the ratified hosts table unchanged -- got ${JSON.stringify(await headersOf())}`,
 )
 
