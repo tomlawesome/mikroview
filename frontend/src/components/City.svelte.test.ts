@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
+import { bufferHost } from '../lib/city/presence'
 import { layoutGround } from '../lib/city/layout'
 import { roadEnds } from '../lib/city/baselineRoads'
 import { faceOf } from '../lib/city/walls'
@@ -925,6 +926,114 @@ describe('standing on a building (#868)', () => {
     expect(container.querySelector('.port-t')).toBeNull()
     const svgText = [...container.querySelectorAll('.city svg text')].map((t) => t.textContent ?? '')
     for (const t of svgText) expect(t).not.toMatch(/:\d/)
+  })
+})
+
+describe('Escape takes any pinned card down, and the ✕ says what it does (#1177)', () => {
+  const GUEST = 'vlan-guest/10.40.0.10'
+
+  // Standing first, so Escape's lower rung has something to take: the
+  // point of the ladder is that the card goes before the stand does.
+  async function standingWithPinnedHostCard() {
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    await fireEvent.click(container.querySelector('.bcard.hcard .pin') as HTMLElement)
+    flushSync()
+    return container
+  }
+
+  it('takes a pinned host card down, then surfaces on the next press', async () => {
+    // Only the drop card was on this rung; a pinned host, wall or line
+    // card could be let go with its ✕ and nothing else, though
+    // DESIGN.md "Cards" gives Escape to every card.
+    const container = await standingWithPinnedHostCard()
+    expect(container.querySelector('.bcard.hcard.pinned')).not.toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.bcard.hcard')).toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+
+  it('leaves a merely hovered card alone, so that press still surfaces from standing', async () => {
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    expect(container.querySelector('.bcard.hcard')).not.toBeNull()
+    expect(container.querySelector('.bcard.hcard.pinned')).toBeNull()
+
+    // A hovered card goes when the pointer goes, and the composer's own
+    // door sits on one (#1035) -- so this press belongs to the composer
+    // and the stand, which is the sequence live-city-reach.mjs reads.
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+
+  it('names the pin rather than leaving ✕ as the whole of its accessible name', async () => {
+    const container = await standingWithPinnedHostCard()
+    const pin = container.querySelector('.bcard.hcard .pin') as HTMLElement
+    expect(pin.textContent).toBe('✕')
+    expect(pin.getAttribute('aria-label')).toBe('unpin this card')
+    expect(pin.getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('the host card says each fact once, and only the ones it has (#1165)', () => {
+  // An unnamed host the event buffer has seen and the register has not:
+  // its name IS its address, and it carries no stamps and no count.
+  const unnamed = layoutGround({
+    ...mockupEstate(),
+    zones: mockupEstate().zones.map((z) => (z.id === 'vlan-guest' ? { ...z, hosts: [bufferHost('10.40.0.10', '10.40.0.10')] } : z)),
+  })
+  const GUEST = 'vlan-guest/10.40.0.10'
+
+  async function openCard(g: typeof unnamed) {
+    const { container } = render(City, { props: { stop: 'street', ground: g } })
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    return container.querySelector('.bcard.hcard') as HTMLElement
+  }
+
+  it('prints an unnamed host’s address once, not twice', async () => {
+    const card = await openCard(unnamed)
+    expect(card.querySelector('.n')?.textContent).toBe('10.40.0.10')
+    expect(card.querySelector('.n small')).toBeNull()
+  })
+
+  it('keeps the address beside a real name', async () => {
+    const card = await openCard(ground)
+    expect(card.querySelector('.n')?.textContent).toBe('guest-110.40.0.10')
+    expect(card.querySelector('.n small')?.textContent).toBe('10.40.0.10')
+  })
+
+  it('does not claim "live" for a host with no events and nothing recorded', async () => {
+    const card = await openCard(unnamed)
+    // "live" above "0 events · last seen not recorded" contradicted
+    // itself. The feed is all that has heard it, on the line and in the
+    // card's accessible name alike.
+    expect(card.querySelector('.s')?.textContent?.trim()).toBe('seen in the feed')
+    expect(card.getAttribute('aria-label')).toBe('10.40.0.10: seen in the feed')
+  })
+
+  it('says "1 host" on a district plate holding one', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const guest = [...container.querySelectorAll('.plate')].find((p) => p.getAttribute('aria-label')?.startsWith('Guest'))
+    expect(guest?.getAttribute('aria-label')).toContain('1 host,')
+    expect(guest?.getAttribute('aria-label')).not.toContain('1 hosts')
   })
 })
 

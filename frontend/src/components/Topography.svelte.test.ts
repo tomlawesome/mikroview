@@ -1028,7 +1028,11 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     flushSync()
 
     const lines = [...container.querySelectorAll('.deg-t')].map((n) => n.textContent?.trim())
-    expect(lines).toEqual(['no address table pushed — zones from boundaries', 'Run setup… ▸ adds it'])
+    // #1165: the second line was "Run setup… ▸ adds it" -- the ellipsis
+    // drew as three raised dots in this face, and "adds it" left the
+    // reader to work out what "it" was. Both are named in full now.
+    expect(lines).toEqual(['no address table pushed — zones from boundaries', 'Run setup ▸ adds the address table'])
+    expect(lines.join(' ')).not.toContain('…')
 
     // The statement sits on the router card, not loose on the stage: it
     // is inside the waist island's own group.
@@ -1048,7 +1052,7 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     flushSync()
 
     const go = container.querySelector<SVGTSpanElement>('.deg-go')
-    expect(go?.textContent).toBe('Run setup… ▸')
+    expect(go?.textContent).toBe('Run setup ▸')
     go!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     flushSync()
     expect(wizardState.open).toBe(true)
@@ -1265,6 +1269,20 @@ describe('the round-30 layout (#699)', () => {
 
     const tally = container.querySelector('.zone .hosttally')
     expect(tally?.textContent).toBe('3 hosts')
+  })
+
+  it('says so on a lane whose addresses resolved no host, rather than leaving the band blank (#1165)', () => {
+    // sfp-sfpplus1 on the operator's own router: the address table names
+    // the interface and nothing in the feed ever resolved to it. The
+    // card drew its name and subnet and then an empty band, which reads
+    // as a card that failed to finish drawing.
+    pushLanes(1)
+    appState.events = []
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.zone .h-dot')).toBeNull()
+    expect(container.querySelector('.zone .hosttally')?.textContent).toBe('no hosts seen yet')
   })
 
   it('draws the aggregate bar flush with the card, 16 tall', () => {
