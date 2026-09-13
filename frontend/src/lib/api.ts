@@ -32,6 +32,7 @@ import type {
   ReputationResult,
   RouterBackupsResponse,
   RuleUsage,
+  VaultLock,
   SetupCommandsRequest,
   SetupCommandsResponse,
   Stats,
@@ -1432,6 +1433,37 @@ export async function fetchRouterBackups(): Promise<RouterBackupsResponse> {
 // when the request actually lands, not when the link is merely drawn.
 export function routerBackupDownloadUrl(device: string, generation: string, kind: 'backup' | 'rsc'): string {
   return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/${kind}`
+}
+
+// The vault passphrase's four controls (#1115, #956): unlock, lock, set
+// and remove, each admin-only server-side and each returning the same
+// VaultLock the GET above carries, so RouterBackups.svelte never has to
+// infer the new state from which of these it just called -- only from
+// what came back. Failure surfaces as the server's own words, the same
+// `T | string` shape setStoreMaxMemory/setHistorySettings use above.
+
+export async function unlockRouterBackupVault(passphrase: string): Promise<VaultLock | string> {
+  const res = await postJSON('/api/router-backups/unlock', { passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `unlockRouterBackupVault: ${res.status}`
+}
+
+export async function lockRouterBackupVault(): Promise<VaultLock | string> {
+  const res = await postJSON('/api/router-backups/lock', {})
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `lockRouterBackupVault: ${res.status}`
+}
+
+export async function setRouterBackupPassphrase(passphrase: string): Promise<VaultLock | string> {
+  const res = await postJSON('/api/router-backups/passphrase', { passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setRouterBackupPassphrase: ${res.status}`
+}
+
+export async function removeRouterBackupPassphrase(passphrase: string): Promise<VaultLock | string> {
+  const res = await deleteJSON('/api/router-backups/passphrase', { passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `removeRouterBackupPassphrase: ${res.status}`
 }
 
 // ===========================================================================
