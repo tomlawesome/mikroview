@@ -1407,7 +1407,17 @@ func loadYAML(path string, cfg *Config) error {
 	}
 	defer f.Close()
 	dec := yaml.NewDecoder(f)
-	return dec.Decode(cfg)
+	// KnownFields(true) (#1207): without it, a key the struct no longer
+	// has -- carried over from an old release, or simply mistyped -- is
+	// dropped with no comment at all. An operator who believes
+	// listen.syslogUdp is still doing something has no way to learn
+	// otherwise short of reading this source. Refusing to start is the
+	// honest failure; see explainYAMLError for what the message says.
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		return explainYAMLError(path, err)
+	}
+	return nil
 }
 
 func applyEnv(cfg *Config) {
