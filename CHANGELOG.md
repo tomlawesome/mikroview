@@ -18,6 +18,15 @@ rewritten.
 
 ### Changed
 
+- **A flag's confidence is now a rating in its drawer, not a number on
+  its row** (#1231). Beside the type — `▲ ACTIVITY SPIKE 72`, one column
+  away from COUNT's `26×` — the figure read as a count of events. It
+  moves under the drawer's sparkline, where there is room to name it:
+  the number and its band (low, moderate, high) in the band's colour, a
+  meter, and one line saying it measures distance from this subject's
+  usual against how much history backs that — the detector's number, not
+  a verdict. Unscored detectors still show nothing.
+
 - **The container now runs as uid/gid `1000`, not `65532`** (#1210).
   1000 is the first account created on an ordinary Linux host, so it is
   almost always the operator: a file you mount in — the Postgres DSN,
