@@ -1190,8 +1190,9 @@ func main() {
 	switch {
 	case snapshotDir == "":
 		// Already explained above.
-	case persistence.key == nil:
-		snapshotLog.Info("warm-restart snapshots are off: no history.keyFile configured -- counters, detector windows and device first-seen dates all start cold after every restart")
+	case !snapshotKeyState(snapshotLog, persistence.key != nil, persistence.keyErr):
+		// Already explained by snapshotKeyState, which also distinguishes
+		// "not configured" from "configured but unusable" (#1211).
 	default:
 		restoreSnapshot(snapshotLog, snapshotDir, persistence.key, time.Now(), snapshotParts...)
 	}

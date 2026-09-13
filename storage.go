@@ -42,6 +42,14 @@ type storage struct {
 	// with history.enabled, which only switches the *event log* on top
 	// of this same key.
 	key *retention.Key
+	// keyErr is set when history.keyFile names a path but the key
+	// couldn't be loaded from it (unreadable, too short) -- nil in both
+	// of the other two states, "no key configured" and "key loaded".
+	// Existing only so a caller can tell those two apart (#1211): key
+	// alone is nil in both, which is what let the warm-restart snapshot
+	// startup line claim "no history.keyFile configured" for a key that
+	// was configured but broken. See snapshotKeyState in snapshot.go.
+	keyErr error
 }
 
 // openStorage connects to Postgres if configured, and applies the schema.
@@ -67,7 +75,8 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	case keyErr == retention.ErrNoKey:
 		log.Info("no history.keyFile configured -- every JSON-file-backed store except accounts, tokens and recovery keys (flags, entities, watchlist, definitions and the rest), and the warm-restart snapshots, are memory-only and are lost on every restart; there is no unencrypted mode to fall back to for those (#853). Accounts, tokens and recovery keys keep persisting in plain JSON because they hold only one-way hashes (#853 rule 6)")
 	case keyErr != nil:
-		log.Warn("history.keyFile is set but could not be used -- the state store and warm-restart snapshots run exactly as if no key were configured (memory-only)", "keyFile", cfg.History.KeyFile, "err", keyErr)
+		s.keyErr = keyErr
+		log.Warn(fmt.Sprintf("history.keyFile is set but could not be used (%v) -- the state store and warm-restart snapshots run exactly as if no key were configured (memory-only)", keyErr), "keyFile", cfg.History.KeyFile, "err", keyErr)
 	default:
 		s.key = key
 		if key.GroupOrWorldReadable {
