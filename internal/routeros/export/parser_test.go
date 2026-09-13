@@ -313,3 +313,75 @@ func TestQuoteRoundTripsThroughUnquote(t *testing.T) {
 		}
 	}
 }
+
+// TestParseReadsConnectionStateAndFlagsEveryPacketRules is #1230's
+// per-rule half: the Log every rule page has to be able to say which
+// rules log per packet rather than per connection, so the parser keeps
+// connection-state and Rule answers for itself.
+//
+// The three-value spelling is the one that matters -- RouterOS 7's own
+// default firewall writes established,related,untracked, and an exact
+// comparison against established,related is what missed it in the bulk
+// wizard block.
+func TestParseReadsConnectionStateAndFlagsEveryPacketRules(t *testing.T) {
+	text := `# 2026/09/01 10:00:00 by RouterOS 7.24.1
+/ip firewall filter
+add action=accept chain=input comment="defconf" connection-state=established,related,untracked
+add action=accept chain=forward comment="v6 style" connection-state=established,related
+add action=drop chain=input comment="invalid" connection-state=invalid
+add action=accept chain=forward comment="new only" connection-state=new
+add action=accept chain=forward comment="no state at all"
+`
+	ex, err := Parse(text)
+	if err != nil {
+		t.Fatalf("Parse = error %v, want success", err)
+	}
+	if len(ex.FilterRules) != 5 {
+		t.Fatalf("parsed %d rules, want 5", len(ex.FilterRules))
+	}
+
+	for _, tc := range []struct {
+		index int
+		state string
+		every bool
+	}{
+		{0, "established,related,untracked", true},
+		{1, "established,related", true},
+		{2, "invalid", false},
+		{3, "new", false},
+		{4, "", false},
+	} {
+		r := ex.FilterRules[tc.index]
+		if r.ConnectionState != tc.state {
+			t.Errorf("rule %d ConnectionState = %q, want %q", tc.index, r.ConnectionState, tc.state)
+		}
+		if got := r.LogsEveryPacket(); got != tc.every {
+			t.Errorf("rule %d (%s) LogsEveryPacket = %v, want %v", tc.index, r.Comment, got, tc.every)
+		}
+	}
+}
+
+// TestConnectionStateIsNotComparedExactly guards the specific mistake
+// #1230 was: reading the whole value and testing it against
+// "established,related". Order and extra members vary between RouterOS
+// versions and between hand-written rules, and every one of these logs
+// per packet.
+func TestConnectionStateIsNotComparedExactly(t *testing.T) {
+	for _, state := range []string{
+		"established,related",
+		"established,related,untracked",
+		"untracked,established,related",
+		"related",
+		"established",
+		"ESTABLISHED,RELATED",
+	} {
+		if !(Rule{ConnectionState: state}).LogsEveryPacket() {
+			t.Errorf("connection-state=%q was not read as every-packet", state)
+		}
+	}
+	for _, state := range []string{"", "new", "invalid", "new,untracked"} {
+		if (Rule{ConnectionState: state}).LogsEveryPacket() {
+			t.Errorf("connection-state=%q was read as every-packet, want not", state)
+		}
+	}
+}

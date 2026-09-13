@@ -5,6 +5,7 @@ import {
   countFilterRules,
   counterText,
   darkBoundaryKeys,
+  everyPacketNote,
   exportProblem,
   groupRules,
   initialSelection,
@@ -41,6 +42,7 @@ function rule(over: Partial<TuneLoggingRule> = {}): TuneLoggingRule {
     outInterfaceList: '',
     boundary: 'bridge|ether1',
     crossesDark: true,
+    everyPacket: false,
     log: false,
     logPrefix: '',
     packets: 41230,
@@ -81,6 +83,30 @@ describe('initialSelection', () => {
   it('ticks every rule that crosses a dark connection, and none other', () => {
     const rules = [rule({ id: 1, crossesDark: true }), rule({ id: 2, crossesDark: false }), rule({ id: 3, crossesDark: true })]
     expect(initialSelection(rules)).toEqual(new Set([1, 3]))
+  })
+
+  // #1230: an established/related accept rule usually names no
+  // interface, so it crosses every dark boundary and the plain default
+  // would tick the one rule that turns the whole traffic volume into
+  // log lines.
+  it('leaves an every-packet rule unticked even when it crosses a dark connection', () => {
+    const rules = [
+      rule({ id: 1, crossesDark: true, everyPacket: true }),
+      rule({ id: 2, crossesDark: true, everyPacket: false }),
+    ]
+    expect(initialSelection(rules)).toEqual(new Set([2]))
+  })
+})
+
+describe('everyPacketNote (#1230)', () => {
+  it('warns beside a rule that logs per packet rather than per connection', () => {
+    expect(everyPacketNote(rule({ everyPacket: true }))).toBe(
+      'logs every packet, not every connection — your whole traffic volume',
+    )
+  })
+
+  it('is null for every other rule', () => {
+    expect(everyPacketNote(rule({ everyPacket: false }))).toBeNull()
   })
 })
 

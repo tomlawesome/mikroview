@@ -198,6 +198,8 @@ func parseRule(toks []string) Rule {
 			r.InInterfaceList = val
 		case "out-interface-list":
 			r.OutInterfaceList = val
+		case "connection-state":
+			r.ConnectionState = val
 		case "log":
 			r.Log = val == "yes" || val == "true"
 		case "log-prefix":

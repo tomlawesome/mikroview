@@ -67,12 +67,21 @@ type tuneLoggingRule struct {
 	OutInterfaceList string `json:"outInterfaceList"`
 	Boundary         string `json:"boundary"`
 	CrossesDark      bool   `json:"crossesDark"`
-	Log              bool   `json:"log"`
-	LogPrefix        string `json:"logPrefix"`
-	Packets          int    `json:"packets"`
-	Bytes            int    `json:"bytes"`
-	CountersKnown    bool   `json:"countersKnown"`
-	Line             int    `json:"line"`
+	// EveryPacket is #1230's per-rule warning: this rule's
+	// connection-state names established or related, so logging it
+	// writes a line per packet rather than per connection. The page says
+	// so beside the rule and leaves it unticked by default, even when it
+	// crosses a dark boundary -- the flood the wizard's bulk block caused
+	// is reachable one rule at a time from here otherwise, and a rule
+	// with no interface scoping crosses every dark boundary, so the
+	// default selection would have ticked it.
+	EveryPacket   bool   `json:"everyPacket"`
+	Log           bool   `json:"log"`
+	LogPrefix     string `json:"logPrefix"`
+	Packets       int    `json:"packets"`
+	Bytes         int    `json:"bytes"`
+	CountersKnown bool   `json:"countersKnown"`
+	Line          int    `json:"line"`
 }
 
 type tuneLoggingAnalyseRequest struct {
@@ -323,6 +332,7 @@ func buildTuneLoggingRules(s *Server, device string, ex *export.Export, darkBoun
 			OutInterfaceList: rule.OutInterfaceList,
 			Boundary:         boundary,
 			CrossesDark:      crosses,
+			EveryPacket:      rule.LogsEveryPacket(),
 			Log:              rule.Log,
 			LogPrefix:        rule.LogPrefix,
 			Packets:          packets,
