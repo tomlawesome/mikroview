@@ -134,7 +134,7 @@ func unwrapPathErr(err error) error {
 // reconciles the two.
 //
 // The ids are read at runtime rather than hardcoded to the image's
-// 65532, because --user, a rebuilt image or rootless uid remapping all
+// 1000, because --user, a rebuilt image or rootless uid remapping all
 // change them, and advice that is confidently wrong about which id to
 // chown to is worse than none.
 func storeFailureAdvice(e *storeUnusable) []string {
@@ -171,7 +171,7 @@ func storeFailureAdvice(e *storeUnusable) []string {
 // this would eventually be wrong in one of them.
 //
 // The ids are read at runtime rather than hardcoded to the image's
-// 65532, because --user, a rebuilt image or rootless uid remapping all
+// 1000, because --user, a rebuilt image or rootless uid remapping all
 // change them.
 func ownershipFacts(dir string) []string {
 	lines := []string{fmt.Sprintf("MikroView is running as uid %d, gid %d.", os.Getuid(), os.Getgid())}
