@@ -101,6 +101,7 @@ function backupsFixture(over: Partial<import('../lib/types').RouterBackupsRespon
     totalGenerations: 0,
     totalRouters: 0,
     totalBytes: 0,
+    lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
     ...over,
   }
 }

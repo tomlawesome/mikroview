@@ -30,7 +30,15 @@ import {
 import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
 
 function backups(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse {
-  return { enabled: true, routers: [], totalGenerations: 0, totalRouters: 0, totalBytes: 0, ...over }
+  return {
+    enabled: true,
+    routers: [],
+    totalGenerations: 0,
+    totalRouters: 0,
+    totalBytes: 0,
+    lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    ...over,
+  }
 }
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
