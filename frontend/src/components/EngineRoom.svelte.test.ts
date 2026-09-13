@@ -733,6 +733,7 @@ describe('The settings shelf (#633)', () => {
       totalGenerations: 1,
       totalRouters: 1,
       totalBytes: 1024,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
     })
     render(EngineRoom)
     await settle()
