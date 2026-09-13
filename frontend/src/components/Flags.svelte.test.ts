@@ -1179,7 +1179,10 @@ describe('the drawer’s note (#1232, round 59)', () => {
 
     const label = drawer.querySelector('.prior .plab')?.textContent?.replace(/\s+/g, ' ').trim()
     expect(label).toContain('you wrote last time · checked')
-    expect(label).toContain('2 Sep')
+    // formatDayMonth follows the runtime's locale ("2 Sep" here, "Sep 2"
+    // on the CI runner), so assert the parts the way format.test.ts does.
+    expect(label).toContain('2')
+    expect(label).toContain('Sep')
     expect(drawer.querySelector('.prior p')?.textContent).toBe(
       'Checked the upstream block list — every source already on it. Left it alone.',
     )
