@@ -125,15 +125,36 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 // packet rather than per connection. That is the established/related
 // trap below, one order of magnitude worse, and it is not something to
 // do to someone from a "run this" box. The doc walks it per rule.
+//
+// The established/related accept rule is excluded rather than switched
+// back off afterwards (#1230). It used to be tagged with everything
+// else and then undone by
+// `set [find connection-state=established,related] log=no`, which
+// relies on the whole value matching exactly: RouterOS 7's own default
+// firewall writes that rule as `established,related,untracked`, so the
+// undo matched nothing and said nothing, and a live router went from
+// ~15 to ~1500 events/s -- every packet of every established
+// connection. Measured on a CHR running 7.23.3: with both a
+// `established,related,untracked` rule and a plain
+// `established,related` one present, `find connection-state=...`
+// returned 0 matches for either spelling. Enabling and then undoing is
+// the wrong shape whatever the match string is -- one silent miss
+// floods the operator's log -- so the accept line now never switches
+// logging on for a rule whose connection-state mentions established or
+// related at all. `~` is RouterOS's regex-match operator and it does
+// work against connection-state's multi-value form; that was measured
+// on the same CHR rather than assumed.
 func RuleTaggingCommands(dialect string) string {
 	return strings.Join([]string{
 		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"`,
 		`/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"`,
-		`/ip firewall filter set [find where !dynamic action=accept] log=yes log-prefix="A|accept|"`,
 		``,
-		`# The established/related accept rule logs every packet, not every`,
-		`# connection -- that is your whole traffic volume. Turn it back off:`,
-		`/ip firewall filter set [find connection-state=established,related] log=no log-prefix=""`,
+		`# An accept rule matching established or related traffic logs every`,
+		`# packet, not every connection -- that is your whole traffic volume.`,
+		`# So the accept line below skips any rule whose connection-state`,
+		`# mentions either, whatever else is in the list: RouterOS 7's default`,
+		`# rule says established,related,untracked.`,
+		`/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"`,
 	}, "\n")
 }
 

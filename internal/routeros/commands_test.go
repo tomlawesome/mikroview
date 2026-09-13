@@ -183,11 +183,13 @@ func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	cmd := RuleTaggingCommands("a")
 	want := "/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix=\"D|drop|\"\n" +
 		"/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix=\"R|reject|\"\n" +
-		"/ip firewall filter set [find where !dynamic action=accept] log=yes log-prefix=\"A|accept|\"\n" +
 		"\n" +
-		"# The established/related accept rule logs every packet, not every\n" +
-		"# connection -- that is your whole traffic volume. Turn it back off:\n" +
-		"/ip firewall filter set [find connection-state=established,related] log=no log-prefix=\"\""
+		"# An accept rule matching established or related traffic logs every\n" +
+		"# packet, not every connection -- that is your whole traffic volume.\n" +
+		"# So the accept line below skips any rule whose connection-state\n" +
+		"# mentions either, whatever else is in the list: RouterOS 7's default\n" +
+		"# rule says established,related,untracked.\n" +
+		"/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~\"established\") and !(connection-state~\"related\")] log=yes log-prefix=\"A|accept|\""
 	if cmd != want {
 		t.Errorf("ruleTaggingCommands =\n%s\nwant\n%s", cmd, want)
 	}
@@ -195,6 +197,48 @@ func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	// comment for why bulk-tagging those is a much worse trap.
 	if strings.Contains(cmd, "mangle") || strings.Contains(cmd, "/ip firewall nat") {
 		t.Errorf("ruleTaggingCommands touched mangle/NAT rules, which it must never bulk-tag: %s", cmd)
+	}
+}
+
+// TestRuleTaggingCommandsNeverEnableThenUndoEstablishedRelated is
+// #1230's reproduction, written against the old command text first: the
+// bulk block used to switch log=yes on every non-dynamic accept rule
+// and then try to take it back off the established/related one with
+// `set [find connection-state=established,related] log=no`. That is an
+// exact match on the whole value, so RouterOS 7's own default rule --
+// `connection-state=established,related,untracked` -- never matched it,
+// nothing was undone, and nothing said so.
+//
+// The two assertions are the shape of the fix rather than its wording:
+// no exact-value match on a connection-state list anywhere in the
+// block, and an accept line that excludes established and related
+// before it enables anything.
+func TestRuleTaggingCommandsNeverEnableThenUndoEstablishedRelated(t *testing.T) {
+	cmd := RuleTaggingCommands("a")
+
+	if strings.Contains(cmd, "connection-state=established,related") {
+		t.Errorf("ruleTaggingCommands still matches connection-state by its exact whole value, which misses RouterOS 7's established,related,untracked default:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "log=no") {
+		t.Errorf("ruleTaggingCommands still enables logging and then undoes it; a missed undo floods the operator's log:\n%s", cmd)
+	}
+
+	var accept string
+	for _, line := range strings.Split(cmd, "\n") {
+		if strings.Contains(line, `log-prefix="A|accept|"`) {
+			accept = line
+		}
+	}
+	if accept == "" {
+		t.Fatalf("ruleTaggingCommands no longer tags accept rules at all:\n%s", cmd)
+	}
+	for _, want := range []string{
+		`!(connection-state~"established")`,
+		`!(connection-state~"related")`,
+	} {
+		if !strings.Contains(accept, want) {
+			t.Errorf("the accept line does not exclude %s, so it would enable logging on an established/related rule:\n%s", want, accept)
+		}
 	}
 }
 
