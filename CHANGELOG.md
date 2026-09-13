@@ -61,6 +61,19 @@ rewritten.
   under the drop zone. The two `/api/tune-logging` endpoints and the
   tier that may call them are unchanged.
 
+### Fixed
+
+- **The docs now say who has to own a mounted file, for every file you
+  mount** (#1212). That note existed only for the Postgres DSN file, so
+  mounting `history.keyFile`, your own TLS certificate and key, or a
+  GeoIP database and hitting `permission denied` left you with nothing
+  to go on. `docs/configuration.md` has one section that states the rule
+  and the `chown`, ["Files you mount into the
+  container"](docs/configuration.md#files-you-mount-into-the-container),
+  and each of those settings links to it; `deploy/config.example.yaml`
+  and `deploy/docker-compose.yml` carry the short version beside the
+  settings themselves.
+
 ## [0.5.1] - 2026-09-11
 
 ### Added

@@ -75,7 +75,9 @@ store:
 
 # Optional: shows a country flag next to public IPs in the UI. Requires
 # your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
-# unset, no flags are shown; this is never required.
+# unset, no flags are shown; this is never required. The .mmdb file is
+# mounted in, so it must be readable by the container's user (uid 1000);
+# it is not a secret, so `chmod 644 GeoLite2-Country.mmdb` is enough.
 # geoip:
 #   dbPath: /etc/mikroview/GeoLite2-Country.mmdb
 
@@ -251,6 +253,10 @@ store:
 # outside this data directory (never inside it, and never in this
 # file). Generate one with:
 #   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+# The key file has to be readable by the container's user (uid 1000),
+# the same rule as every other file you mount in -- if it is not,
+# MikroView refuses to start with "permission denied":
+#   sudo chown 1000:1000 mikroview-history.key && chmod 600 mikroview-history.key
 # Turning enabled back off deletes what was already retained. See
 # docs/configuration.md's "On-disk event history" section for what the
 # encryption does and doesn't protect against.
@@ -462,7 +468,11 @@ store:
 # generates its own local CA + certificate on first start, already
 # persisted to /var/lib/mikroview/tls by default. Only uncomment this
 # block to move that path, or point certFile/keyFile at your own cert
-# instead of generating one. See SECURITY.md and docs/configuration.md's
+# instead of generating one. Both of those are files you mount in, so
+# both must be readable by the container's user (uid 1000):
+#   sudo chown 1000:1000 tls.crt tls.key
+#   chmod 644 tls.crt && chmod 600 tls.key
+# See SECURITY.md and docs/configuration.md's
 # "TLS" section, including the one documented reason to set
 # enabled: false.
 # tls:

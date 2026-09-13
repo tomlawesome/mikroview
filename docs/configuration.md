@@ -6,6 +6,39 @@
 overrides the one before it. The list of monitored devices only comes
 from the YAML file (see below for why).
 
+## Files you mount into the container
+
+MikroView runs as **uid `1000`, gid `1000`** inside the container. On an
+ordinary Linux host 1000 is the first account created, so it is probably
+you: a file you own is readable by MikroView as it stands and there is
+nothing to do.
+
+Where a file belongs to some other account, MikroView cannot read it and
+refuses to start with `permission denied`. Don't loosen the mode — hand
+the file over instead:
+
+```sh
+sudo chown 1000:1000 the-file
+chmod 600 the-file
+```
+
+That is the rule for **every** file you mount in: `config.yaml`, the
+[Postgres DSN file](#postgres-optional),
+[`history.keyFile`](#on-disk-event-history-optional-off-by-default), your
+own [TLS `certFile`/`keyFile`](#tls), and the
+[GeoIP database](#geoip-country-flags-optional). A file only MikroView
+reads (the DSN, the history key, a TLS private key) should stay `600`; a
+certificate or a GeoIP database is not a secret and `644` is fine.
+
+A whole *directory* you bind-mount — the data directory — is the same
+idea with `-R`: `sudo chown -R 1000:1000 ./data`, described in README.md's
+"Persistent data" section.
+
+1000 is not a number MikroView invented for itself: it is the uid in the
+image's `USER` line, which `docker inspect` will show you. If you start
+the container with `--user`, or your host remaps uids, chown to whatever
+uid it is actually running as instead.
+
 ## config.yaml
 
 Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
@@ -274,6 +307,12 @@ the wizard says it can never show it to you again.
   ```
   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
   ```
+
+  Mounted files have to be readable by the user MikroView runs as, or it
+  refuses to start with `permission denied` — see
+  [Files you mount into the container](#files-you-mount-into-the-container).
+  Generating the key as some other account is the usual way to get this
+  wrong.
 
   The file must hold at least 32 bytes. This is a path, never the key
   itself — there is deliberately no environment variable carrying key
@@ -619,11 +658,11 @@ That banner is only shown to admins, since the messages name file paths
 and hostnames.
 
 **File permissions**: the container runs as a fixed non-root user (uid
-1000), which is the first account created on most Linux hosts and so is
-usually you — but need not be on a host where someone else got there
-first. If `config.yaml` isn't world-readable (or owned by a matching
-uid/gid), the container will fail to start with a permission error —
-`chmod 644 deploy/config.yaml` after editing it.
+1000) — see
+[Files you mount into the container](#files-you-mount-into-the-container).
+If `config.yaml` isn't readable by that user, the container will fail to
+start with a permission error. `chmod 644 deploy/config.yaml` after
+editing it is the simplest fix here, since a config file is not a secret.
 
 ### Problem codes
 
@@ -1088,7 +1127,10 @@ you to create your own free account to obtain one.
    their `geoipupdate` tool to keep it current).
 2. Mount the `.mmdb` file into the container and point MikroView at it
    with `MIKROVIEW_GEOIP_DB_PATH` (or `geoip.dbPath` in `config.yaml`, or
-   `-geoip-db` for local development).
+   `-geoip-db` for local development). It has to be readable by the user
+   MikroView runs as — see
+   [Files you mount into the container](#files-you-mount-into-the-container).
+   A GeoIP database is not a secret, so `chmod 644` is fine here.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
@@ -3520,8 +3562,11 @@ tls:
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
 - **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set. See "Renewing your own
-  certificate" below if something renews it for you.
+  generation entirely when both are set. Both are mounted files, so both
+  have to be readable by the user MikroView runs as — see
+  [Files you mount into the container](#files-you-mount-into-the-container);
+  the private key should stay `600`, the certificate can be `644`. See
+  "Renewing your own certificate" below if something renews it for you.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
@@ -3807,11 +3852,13 @@ postgres:
 
 or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
 
-**The file has to be readable by the container's user.** MikroView runs
-as uid `1000` — the first account created on most Linux hosts, so on a
-single-user machine it is you and a `0600` file you own already works.
-Where the file belongs to some other account, `0600` leaves it
-unreadable inside the container and MikroView refuses to start:
+**The file has to be readable by the container's user** — the same rule
+as every other mounted file, see
+[Files you mount into the container](#files-you-mount-into-the-container).
+MikroView runs as uid `1000`, so on a single-user host it is you and a
+`0600` file you own already works. Where the file belongs to some other
+account, `0600` leaves it unreadable inside the container and MikroView
+refuses to start:
 
 ```
 ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permission denied
