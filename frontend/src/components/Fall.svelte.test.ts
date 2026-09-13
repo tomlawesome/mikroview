@@ -791,3 +791,64 @@ describe('the overview strip (#722 amendment, 2026-08-31): replaces the pager', 
     expect(container.textContent).toContain('b15 → x')
   })
 })
+
+// A band's own text node, excluding the full-name <title> nested inside
+// it (#1114) -- reading el.textContent would concatenate both.
+function drawnText(el: Element): string {
+  const node = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE)
+  return node?.textContent ?? ''
+}
+
+describe('band header text stays inside its own band (#1114)', () => {
+  // 10 boundaries on the default 1600px frame shrinks every band to the
+  // width the sizing policy test above already calls "just above the
+  // MIN_PITCH floor" (142px, GUTTER already subtracted) -- the narrowest
+  // a band gets on one page without paginating.
+  it('truncates an over-budget band label with a middle ellipsis, keeping the full name in a nested title', async () => {
+    const longLabel = 'bridge-lan-uplink-to-vlan-iot-gateway-core-switch'
+    const boundaries = makeBoundaries(10)
+    boundaries[0] = { ...boundaries[0], label: longLabel }
+    const { container } = await renderFall({ boundaries })
+
+    const labelEl = container.querySelector('.band-label')!
+    const drawn = drawnText(labelEl)
+    // (142 - 6) / 8 (measured 13px/bold monospace char width) = 17
+    expect(drawn.length).toBeLessThanOrEqual(17)
+    expect(drawn).not.toBe(longLabel)
+    expect(drawn).toContain('…')
+    // Both ends survive the truncation, not just a trailing "...".
+    expect(drawn.startsWith(longLabel.slice(0, 3))).toBe(true)
+    expect(drawn.endsWith(longLabel.slice(-3))).toBe(true)
+    expect(labelEl.querySelector('title')?.textContent).toBe(longLabel)
+  })
+
+  it('truncates an over-budget epithet the same way, and leaves a short one untouched', async () => {
+    const longEpithet = 'a fairly long epithet sentence that will not fit in the header'
+    const boundaries = makeBoundaries(10)
+    boundaries[0] = { ...boundaries[0], epithet: longEpithet }
+    const { container } = await renderFall({ boundaries })
+
+    const epithetEl = container.querySelector('.band-epithet')!
+    const drawn = drawnText(epithetEl)
+    // (142 - 6) / 6.5 (measured 10px monospace char width) = 20
+    expect(drawn.length).toBeLessThanOrEqual(20)
+    expect(drawn).toContain('…')
+    expect(epithetEl.querySelector('title')?.textContent).toBe(longEpithet)
+  })
+
+  it('leaves a short label undisturbed -- no ellipsis, no title needed to recover it', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(10) })
+    const labelEl = container.querySelector('.band-label')!
+    expect(drawnText(labelEl)).toBe('b0 → x')
+    expect(labelEl.querySelector('title')?.textContent).toBe('b0 → x')
+  })
+
+  it("doesn't touch the band head's own aria-label, which still carries the full summary", async () => {
+    const longLabel = 'bridge-lan-uplink-to-vlan-iot-gateway-core-switch'
+    const boundaries = makeBoundaries(10)
+    boundaries[0] = { ...boundaries[0], label: longLabel }
+    const { container } = await renderFall({ boundaries })
+    const head = container.querySelector('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain(longLabel)
+  })
+})
