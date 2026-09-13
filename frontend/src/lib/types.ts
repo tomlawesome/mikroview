@@ -1614,6 +1614,11 @@ export interface TuneLoggingRule {
   outInterfaceList: string
   boundary: string
   crossesDark: boolean
+  // everyPacket: this rule's connection-state names established or
+  // related, so switching logging on writes a line per packet rather
+  // than per connection (#1230). The row says so, and the rule starts
+  // unticked whatever crossesDark says.
+  everyPacket: boolean
   log: boolean
   logPrefix: string
   packets: number

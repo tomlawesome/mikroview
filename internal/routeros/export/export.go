@@ -19,6 +19,8 @@
 // this package will not carry that further.
 package export
 
+import "strings"
+
 // Rule is one /ip firewall filter add line, decoded.
 //
 // Index is the 0-based ordinal among the filter section's add lines in
@@ -41,6 +43,7 @@ type Rule struct {
 	OutInterface     string
 	InInterfaceList  string
 	OutInterfaceList string
+	ConnectionState  string
 	Log              bool
 	LogPrefix        string
 	Disabled         bool
@@ -57,6 +60,26 @@ type Rule struct {
 type ruleToken struct {
 	key string
 	raw string
+}
+
+// LogsEveryPacket reports whether switching logging on for r would
+// write a line per packet rather than a line per connection: its
+// connection-state names established or related, so every packet of
+// every already-open connection matches it (#1230).
+//
+// Substring matching on purpose, and it is the same rule the wizard's
+// bulk `[find ... !(connection-state~"established")]` exclusion uses.
+// connection-state is a list, and RouterOS 7's own default firewall
+// writes it as `established,related,untracked` -- an exact comparison
+// against `established,related` is exactly the mistake #1230 was: it
+// misses the list that matters most and says nothing about having
+// missed it. A negated value (`!established`) is caught too, which is
+// the conservative direction: the page's worst outcome then is one rule
+// the operator has to tick by hand, not a router logging its whole
+// throughput.
+func (r Rule) LogsEveryPacket() bool {
+	s := strings.ToLower(r.ConnectionState)
+	return strings.Contains(s, "established") || strings.Contains(s, "related")
 }
 
 // Fingerprint is a rule's identity for a logging-only-diff check: every

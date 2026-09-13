@@ -160,13 +160,21 @@ reference for the pattern (match condition + `action=` + `log=yes
 log-prefix=...`), not something to paste in blind:
 
 ```
-/ip firewall filter add chain=input connection-state=established,related action=accept log=yes log-prefix="A|est-rel|"
+/ip firewall filter add chain=input connection-state=established,related,untracked action=accept
 /ip firewall filter add chain=input connection-state=invalid action=drop log=yes log-prefix="D|invalid|"
 /ip firewall filter add chain=input protocol=tcp dst-port=22 src-address-list=mgmt action=accept log=yes log-prefix="A|mgmt-ssh|"
 /ip firewall filter add chain=input action=drop log=yes log-prefix="D|input-def|"
 /ip firewall filter add chain=forward action=accept log=yes log-prefix="A|lan-wan|"
 /ip firewall filter add chain=forward action=drop log=yes log-prefix="D|fwd-def|"
 ```
+
+The first rule is the one with no `log=yes` on it, on purpose. An accept
+rule matching established or related traffic sees every packet of every
+open connection, so logging it writes your whole traffic volume into the
+log and tells you nothing a line at connection-open did not already say.
+Section 6 has the measurements. MikroView's setup wizard leaves that
+rule alone for the same reason, and the **Log every rule** page marks it
+and does not tick it for you.
 
 ### NAT rules (optional)
 
@@ -719,6 +727,32 @@ Three caveats that belong next to that table, not in a footnote:
   (This is also why a log-only `action=passthrough` rule placed above
   an accept is a safe way to add logging without touching policy at
   all.)
+- **Match that rule on what its `connection-state` *contains*, never on
+  the whole value.** RouterOS 7's own default firewall writes it as
+  `connection-state=established,related,untracked` — three values, not
+  two — so `[find connection-state=established,related]` selects
+  nothing on a stock RouterOS 7 router and says nothing about having
+  selected nothing. MikroView shipped exactly that mistake once (#1230)
+  and a live router went from ~15 to ~1500 events/sec. Use
+  `[find where connection-state~"established"]` (`~` is RouterOS's
+  regex match, and it does work on this field), and prefer leaving
+  logging off to switching it on and undoing it afterwards: an undo that
+  misses is silent, and it is your log that pays for it.
+
+**If you ran MikroView's step 3 before this was fixed, your router is
+still flooding** — the old block switched logging on and the undo
+missed, so those rules kept `log=yes`. Two lines turn it back off, and
+they are safe to run on a router that was never bitten:
+
+```
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+```
+
+Those same two lines now end the wizard's step 3, so re-running step 3
+repairs the router as well as tagging it. One line per term rather than
+one with `or`: two `~` tests in a single `find` is the form checked
+against a real router.
 - **Fasttrack changes what the filter chain sees.** With a
   `fasttrack-connection` rule in place, established packets bypass most
   of the chain entirely — which is fine for this posture (the

@@ -185,6 +185,48 @@ func TestTuneLoggingAnalyseWildcardBoundaryMatching(t *testing.T) {
 	}
 }
 
+// TestTuneLoggingAnalyseFlagsEveryPacketRules is #1230 on the per-rule
+// path. The wizard's bulk block was the reported flood, but this page
+// can reach the same state one rule at a time -- and worse, by default:
+// RouterOS 7's own established,related,untracked accept rule names no
+// interface, an unscoped rule crosses every dark boundary (see
+// crossesDarkBoundary), so the page would have arrived with that rule
+// already ticked. everyPacket is what the page uses to warn and to
+// leave it alone.
+func TestTuneLoggingAnalyseFlagsEveryPacketRules(t *testing.T) {
+	s, _ := newTestServer(t)
+	setDeviceFirstSeen(s, 48*time.Hour)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	text := "# 2026/09/01 10:00:00 by RouterOS 7.24.1\n" +
+		"/ip firewall filter\n" +
+		`add action=accept chain=forward comment="defconf est/rel" connection-state=established,related,untracked` + "\n" +
+		`add action=accept chain=forward comment="new only" connection-state=new in-interface=bridge1 out-interface=ether1` + "\n"
+
+	body, _ := json.Marshal(tuneLoggingAnalyseRequest{
+		Device: "core", Export: text, DarkBoundaries: []string{"bridge1|ether1"},
+	})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/analyse", body)
+	defer resp.Body.Close()
+	var out tuneLoggingAnalyseResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Rules) != 2 {
+		t.Fatalf("Rules has %d entries, want 2", len(out.Rules))
+	}
+	if !out.Rules[0].EveryPacket {
+		t.Errorf("the established,related,untracked accept rule was not flagged as every-packet: %+v", out.Rules[0])
+	}
+	if !out.Rules[0].CrossesDark {
+		t.Error("the established,related,untracked rule stopped crossing a dark boundary; everyPacket is a warning, not a reclassification")
+	}
+	if out.Rules[1].EveryPacket {
+		t.Errorf("a connection-state=new rule was flagged as every-packet: %+v", out.Rules[1])
+	}
+}
+
 // TestTuneLoggingAnalyseRejectsSecrets covers #435's parser-level
 // safety gate end to end: an export that is not actually
 // hide-sensitive output is refused with 400, and the reason names the
