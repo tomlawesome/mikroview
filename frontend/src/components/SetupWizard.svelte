@@ -125,6 +125,16 @@
   let busy = $state(false)
   let copied = $state('')
 
+  // The reader (#1219): one paste block opened at the full height of
+  // the step column, the modal grown to the veil's edge, the step list
+  // untouched on the left. The owner's shape -- the small box stays as
+  // the summary; its drawer handle opens this. The text is captured at
+  // the click: nothing regenerates a script while its reader is open
+  // (the version picker and the mint form live in the body this
+  // replaces), and a stale capture misquoting a live script would be
+  // worse than a missed refresh.
+  let expandedPaste = $state<{ key: string; label: string; text: string } | null>(null)
+
   // Step 4 acts before it waits: the token is created on entry, with its
   // own audit line, and the script below is written with it already in
   // place. Minting on entry is only unambiguous when mikroview knows
@@ -165,6 +175,10 @@
     void wizardState.pane
     warning = false
     copied = ''
+    // A reader is about the step it was opened on and nothing else --
+    // so a step-list click while one is open lands on that step's
+    // ordinary body, never on another step's script.
+    expandedPaste = null
   })
 
   $effect(() => {
@@ -385,6 +399,13 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (!wizardState.open || e.key !== 'Escape') return
+    // With a reader open (#1219), Esc closes the reader, not the
+    // wizard: the operator is one level in, and one keystroke backs
+    // out one level, to the same step the reader was opened from.
+    if (expandedPaste) {
+      expandedPaste = null
+      return
+    }
     // Explicit close, both ways. Esc is not a click-outside: it is a
     // deliberate keystroke, and the record names it alongside the ✕.
     dismiss()
@@ -506,6 +527,7 @@
     <div
       class="modal setup-wizard"
       class:sheet={viewportState.isMobile}
+      class:reading={!!expandedPaste}
       role="dialog"
       aria-modal="true"
       aria-labelledby="setup-wizard-title"
@@ -599,6 +621,28 @@
         {/if}
 
         {#if !viewportState.isMobile || !wizardState.showStepList}
+          {#if expandedPaste}
+            <!-- The reader (#1219): takes the body's own slot rather than
+                 stacking a panel over it, so the step list stays exactly
+                 where it is and the script gets the whole height of the
+                 column the body was already using. -->
+            <div class="reader">
+              <div class="reader-head">
+                <span class="reader-label">{expandedPaste.label}</span>
+                <button
+                  type="button"
+                  class="close"
+                  onclick={() => (expandedPaste = null)}
+                  aria-label="Close and return to this step"
+                >
+                  ✕
+                </button>
+              </div>
+              <!-- No 14-line cap here: the column's own height is the
+                   limit, and it is already close to the screen's. -->
+              <pre class="reader-pre scrollbar">{expandedPaste.text}</pre>
+            </div>
+          {:else}
           <div class="body scrollbar">
             {#if wizardState.error}
               <p class="load-error">Could not load setup status: {wizardState.error}</p>
@@ -754,7 +798,30 @@
                        which asked the operator to nest one clipboard
                        inside another and to do RouterOS's escaping by
                        hand (#1131). -->
-                  <pre class="script scrollbar">{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
+                  <div class="paste">
+                    <pre class="script scrollbar">{wizardState.commands?.steps.schedule.commands ?? ''}</pre>
+                    {#if !viewportState.isMobile}
+                      <!-- The drawer handle (#1219): part of the box, not a
+                           button beside it -- the owner's words. Only the
+                           two boxes that actually hide content behind the
+                           14-line cap get one; the short, always-fully-shown
+                           blocks elsewhere on this step have nothing to
+                           expand into. -->
+                      <button
+                        type="button"
+                        class="handle"
+                        onclick={() =>
+                          (expandedPaste = {
+                            key: 'script',
+                            label: 'the push scheduling script',
+                            text: wizardState.commands?.steps.schedule.commands ?? '',
+                          })}
+                        aria-label="Read the push scheduling script in full"
+                      >
+                        ‹
+                      </button>
+                    {/if}
+                  </div>
                   <button
                     type="button"
                     class="copy"
@@ -895,7 +962,24 @@
                       so it is scoped to that one router and to this drop box.
                     </p>
                   {/if}
-                  <pre class="script scrollbar">{wizardState.commands?.steps.backup.commands ?? ''}</pre>
+                  <div class="paste">
+                    <pre class="script scrollbar">{wizardState.commands?.steps.backup.commands ?? ''}</pre>
+                    {#if !viewportState.isMobile}
+                      <button
+                        type="button"
+                        class="handle"
+                        onclick={() =>
+                          (expandedPaste = {
+                            key: 'backup',
+                            label: 'the backup script',
+                            text: wizardState.commands?.steps.backup.commands ?? '',
+                          })}
+                        aria-label="Read the backup script in full"
+                      >
+                        ‹
+                      </button>
+                    {/if}
+                  </div>
                   <button
                     type="button"
                     class="copy"
@@ -1064,6 +1148,7 @@
               </p>
             {/if}
           </div>
+          {/if}
         {/if}
       </div>
 
@@ -1144,6 +1229,18 @@
     border: none;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  /* The reader (#1219): "grows the modal to near-full-screen" per the
+     owner's own words. An explicit height, not just a taller max-height
+     -- .modal is otherwise sized to its content, and the reader wants
+     the column to fill the space, not merely be allowed to. Never
+     reached on a phone: the sheet is already this size, so there is
+     nothing to grow into (see the handle's own comment). */
+  .modal.reading {
+    width: 98vw;
+    max-width: 98vw;
+    height: 92vh;
   }
 
   header {
@@ -1428,6 +1525,24 @@
     font-weight: 600;
   }
 
+  /* #1219: every paste block in the wizard shares this one selector, so
+     the fix lives here once rather than per box. white-space: pre with
+     overflow-x: auto (the old rule) is what let the scheduler box run
+     off the right edge, cut off mid-word, with no wrap and -- because
+     it was a bare `<pre>`, missing the `scrollbar` class its siblings
+     carry -- no visible bar to say so. Wrapping means there is no
+     right edge to run off: every character is on screen without
+     scrolling, and the Copy button still copies the real, un-wrapped
+     string underneath.
+     text-indent's `hanging each-line` needs no per-line markup to tell
+     a wrapped continuation from the next command: `each-line` scopes
+     text-indent to every line the browser treats as forced (which
+     includes a preserved `\n` under pre-wrap, not only the block's
+     first line), and `hanging` flips its target from that line to
+     every other -- i.e. exactly the rows a soft wrap adds. Widely
+     supported (Chromium, Firefox and Safari all ship it); where it
+     is not, the declaration is simply ignored and wrapping still
+     works, just without the hanging cue. */
   pre {
     margin: 0;
     align-self: stretch;
@@ -1437,39 +1552,131 @@
     border-radius: 6px;
     font-size: 12.5px;
     line-height: 1.6;
-    overflow-x: auto;
-    white-space: pre;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    text-indent: 1.1em hanging each-line;
     color: var(--fg);
     user-select: all;
   }
 
-  /* #1146: a flat 300px left 13.8 lines of a 12.5px/1.6 box visible, so
-     the 14th was sliced through its glyphs and read as a rendering
-     fault rather than as "there is more below". Whole lines instead --
-     14 of them, plus the padding this border-box height includes -- and
-     in `em` so the sheet's smaller type below still lands on a line
-     boundary. The `scrollbar` class in the markup is app.css's own thin
-     always-drawn bar: a script box whose lines run several thousand
-     pixels wide has to say so sideways as well as downwards. */
+  /* #1146's cap, still whole lines -- 14 of them, plus the padding this
+     border-box height includes, in `em` so the sheet's smaller type
+     below still lands on a line boundary. What #1146 did not hold
+     against, and #1219 fixes: a flex item shrinks by default, and a
+     short modal was squeezing this box under that cap rather than
+     merely limiting it above it, so the last visible row was a
+     mid-glyph fragment rather than one of 14 whole lines.
+     flex-shrink: 0 pins it at its intended size regardless of the
+     modal's own height; .body's own overflow (below) absorbs a short
+     viewport instead of this box being asked to. Content shorter than
+     14 lines was never at risk -- box-sizing gives it exactly its own
+     line count, always a whole multiple of the line height -- so this
+     is the one property the squeeze needed. */
   pre.script {
     max-height: calc(14 * 1.6em + 24px);
     overflow-y: auto;
+    flex-shrink: 0;
   }
 
   /* The token's own box (#1131): one line, and the one thing on this
-     step that is shown once and never again, so it wraps rather than
-     scrolling out of sight on a narrow modal. */
+     step that is shown once and never again. word-break: break-all is
+     kept on top of the shared pre's own wrap -- a token is one run
+     with no spaces to wrap at, so anywhere is the only place it can
+     break. */
   pre.token {
-    white-space: pre-wrap;
     word-break: break-all;
   }
 
-  /* Commands come pre-broken to phone width so nothing scrolls sideways;
-     Copy matters more here, not less. */
+  /* Slightly smaller so a wrapped command reads as one paragraph
+     rather than a wall of short broken lines on a narrow sheet; the
+     wrap itself is already the shared pre's default. */
   .modal.sheet pre {
-    white-space: pre-wrap;
-    word-break: break-word;
     font-size: 12px;
+  }
+
+  /* No reader exists on a phone (the handle is not rendered there --
+     see its own comment), so a script pre needs to be readable inline
+     instead: the 14-line cap would strand the rest of it with nothing
+     to expand into. The sheet's own body already scrolls, the same way
+     it does for every other step's overflowing content. */
+  .modal.sheet pre.script {
+    max-height: none;
+    overflow-y: visible;
+    flex-shrink: 1;
+  }
+
+  /* The paste block (#1219): the pre plus its drawer handle, laid out
+     as one row so the handle reads as part of the box's right edge
+     rather than a control beside it. */
+  .paste {
+    align-self: stretch;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .paste pre.script {
+    flex: 1;
+    min-width: 0;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+  }
+
+  /* The handle itself: full box height, on the right edge, drawn as
+     part of the pre rather than a button floating beside it -- "like a
+     drawer handle" (the owner's words, verbatim). ‹ points at the
+     column it opens into. */
+  .handle {
+    flex: none;
+    width: 26px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    background: var(--bg-elevated);
+    color: var(--fg-muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .handle:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+  }
+
+  /* The reader (#1219): the body's own slot, filled instead of the
+     step's usual content, so the script gets the whole height of the
+     column the body already had -- no cap, because the column itself
+     is now the limit and it is already close to the screen's. */
+  .reader {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 18px 22px 22px;
+    gap: 10px;
+  }
+
+  .reader-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .reader-label {
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .reader-pre {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   button {

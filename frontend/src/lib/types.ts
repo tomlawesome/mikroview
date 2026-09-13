@@ -1377,6 +1377,24 @@ export interface PersistenceInfo {
   dir?: string
 }
 
+// VaultLock (#1115, #956) is the optional admin passphrase's state --
+// every control that touches it returns one, and the frontend always
+// replaces what it shows from the object a call returned rather than
+// inferring the new state from which call was made. Mirrors internal/
+// api's vaultLockStatusResponse.
+export interface VaultLock {
+  passphraseSet: boolean
+  // locked is the vault's own state: no private key held anywhere.
+  locked: boolean
+  // unlockedForYou is the narrower, session-scoped question: another of
+  // the admin's own sign-ins can hold the unlock while this is false.
+  unlockedForYou: boolean
+  // minPassphraseLength lets the set/change form refuse early, before
+  // the server has to say no to something it could have said first.
+  minPassphraseLength: number
+  idleTimeoutSeconds: number
+}
+
 // GET /api/router-backups (#394, round 44's "router backups" group).
 // Mirrors internal/api's routerBackupsResponse.
 export interface RouterBackupsResponse {
@@ -1391,6 +1409,7 @@ export interface RouterBackupsResponse {
   // The SFTP drop box's own listening port ("arrive by"), absent when
   // backup.enabled is false.
   port?: string
+  lock: VaultLock
 }
 
 // One router's block (round 44's per-router strip). IntervalSeconds/

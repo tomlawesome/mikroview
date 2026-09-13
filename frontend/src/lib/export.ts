@@ -126,3 +126,34 @@ export function downloadText(filename: string, text: string): void {
   a.remove()
   URL.revokeObjectURL(url)
 }
+
+// downloadFromUrl (#1115) is the same blob-a-link-click idiom above, run
+// off a fetch instead of text the caller already had in hand -- so an
+// authenticated download (a router backup behind the vault passphrase)
+// can be read before it is saved. A plain `<a href>` can't do that: the
+// browser navigates and shows whatever the server sent, including a
+// refusal. Returns 'forbidden' on a 403 without saving anything -- an
+// unlock that went idle between the link being drawn and the click is
+// what this exists to catch, not a network failure -- 'failed' for
+// anything else that didn't come back ok, and 'ok' once the browser has
+// been handed the file to save.
+export async function downloadFromUrl(url: string, filename: string): Promise<'ok' | 'forbidden' | 'failed'> {
+  let res: Response
+  try {
+    res = await fetch(url)
+  } catch {
+    return 'failed'
+  }
+  if (res.status === 403) return 'forbidden'
+  if (!res.ok) return 'failed'
+  const blob = await res.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(objectUrl)
+  return 'ok'
+}

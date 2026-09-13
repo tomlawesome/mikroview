@@ -2888,6 +2888,16 @@ file, where the alternative to "unchanged" is "locked out".
 `-restore` refuses to overwrite stores that already exist unless you pass
 `--force`.
 
+**Peak memory tracks the backup you actually have, not a worst case you
+don't.** A restore holds the decompressed envelope in memory before
+writing anything to disk, so peak memory is roughly the envelope's
+decompressed size — for a handful of routers with real RouterOS exports,
+that's tens of MiB. Anything claiming to decompress to more than
+`internal/backup.MaxDecompressed` (~6.5 GiB) is refused outright; that
+figure is a ceiling on what a hostile file may claim, sized for far more
+routers and generations than this product targets, not a memory budget
+real restores approach.
+
 > **Using Postgres?** These commands refuse, on purpose. Back up the
 > database with `pg_dump` or your provider's snapshots — see
 > [CHANGELOG.md](../CHANGELOG.md) and the migration section above.

@@ -155,16 +155,26 @@ feedRaw(
 // own unmatched-events bucket already satisfy a bare count of 2), which
 // raced this exact check to a false-positive pass before the real push
 // had landed.
+// #1114 nests a <title> holding the full name inside each label's own
+// <text>, so `textContent` returns the drawn text *and* the title after
+// it -- "ether1 → bridge1ether1 → bridge1". Read the first child text
+// node instead: that is what a reader actually sees, and it is the only
+// thing worth asserting a boundary's name against. Reading the whole
+// element would also pass over a label truncated to nothing, since the
+// title alone would still carry the name.
 await page.waitForFunction(
   () =>
-    [...document.querySelectorAll('.fall .band .band-label')].some(
-      (e) => e.textContent.includes('ether1') && e.textContent.includes('bridge1'),
-    ),
+    [...document.querySelectorAll('.fall .band .band-label')].some((e) => {
+      const t = e.firstChild?.textContent ?? ''
+      return t.includes('ether1') && t.includes('bridge1')
+    }),
   null,
   { timeout: 25000 },
 )
 
-const bandLabels = await page.$$eval('.fall .band .band-label', (els) => els.map((e) => e.textContent.trim()))
+const bandLabels = await page.$$eval('.fall .band .band-label', (els) =>
+  els.map((e) => e.firstChild?.textContent?.trim() ?? ''),
+)
 check(
   bandLabels.some((l) => l.includes('ether1') && l.includes('bridge1')),
   `the observed boundary renders as its own band -- got ${JSON.stringify(bandLabels)}`,
@@ -246,9 +256,20 @@ check(
   ((await page.locator('.fall .now-caption').textContent()) ?? '').includes('NOW ·'),
   'the NOW line carries its labelled moment -- "the spectrum above is this instant"',
 )
+const epithet = observedBand.locator('.band-epithet')
+const epithetDrawn = await epithet.evaluate((e) => e.firstChild?.textContent?.trim() ?? '')
 check(
-  (await observedBand.locator('.band-epithet').textContent())?.trim() === 'log the household',
-  "the band's epithet is the pushed rule's own comment, not an invented name",
+  epithetDrawn === 'log the household',
+  `the band's epithet is the pushed rule's own comment, not an invented name (got ${JSON.stringify(epithetDrawn)})`,
+)
+// The drawn text above is what fits; this is the promise #1114 made when
+// it started shortening labels -- whatever is drawn, the full name stays
+// reachable. Asserting only the drawn text would let a silent truncation
+// through as long as the visible part still matched.
+const epithetTitle = await epithet.evaluate((e) => e.querySelector('title')?.textContent?.trim() ?? '')
+check(
+  epithetTitle === 'log the household',
+  `the epithet's title carries the full comment, whatever was drawn (got ${JSON.stringify(epithetTitle)})`,
 )
 const dashCount = await observedBand.locator('.waterfall .mark[data-port="443"]').count()
 check(dashCount > 0, 'the carrier draws bucketed dash marks below the NOW line, not an aggregate lane bar')

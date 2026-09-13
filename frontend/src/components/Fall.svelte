@@ -131,6 +131,21 @@
   // pages instead.
   const MIN_PITCH = 150
   const GUTTER = 10 // the shipped rig's own band-to-band gutter -- unchanged, not part of this issue
+  // Per-character pixel widths for the rig's own type, measured rather
+  // than guessed (#1114): `.rig svg text { font-family: var(--font-mono) }`
+  // puts every label in the rig -- band names, the epithet, peak and
+  // carrier labels alike -- in the same monospace stack regardless of
+  // which class sets its font-size or weight, so a flat per-class figure
+  // is legitimate as long as it's measured for that class's actual size
+  // and weight. Measured by rendering representative label/carrier text
+  // (hostname-shaped strings, not a bare alphabet average) in a real
+  // Chromium instance against this component's own font stack, then
+  // rounded up for a safety margin across platforms whose installed
+  // monospace font differs from the one this workstation resolved to --
+  // the previous flat 6.2px/char guess pre-dates the shared monospace
+  // rule and under-measured against it.
+  const CHAR_W_13_BOLD = 8 // .blab: 13px / weight 700 -- the band label line
+  const CHAR_W_10 = 6.5 // .bsub/.plab: 10px / weight 400 -- epithet, peak + carrier labels
   // Only used to size a carrier's invisible click target (below) before
   // the render pass has counted this page's bands and settled on a real
   // pitch; imprecision here only affects a hit-target's width slightly,
@@ -652,6 +667,28 @@
     return Math.max(MIN_PITCH, natural)
   })
   const bandW = $derived(Math.max(20, pitch - GUTTER))
+  // Character budgets for the band header's two free-text lines (#1114):
+  // the inset the text starts at (6px, matching the `x={slot.bx + 6}`
+  // the template already draws at) subtracted from the band's own
+  // width, divided by that line's measured per-character width.
+  const bandLabelBudget = $derived(Math.max(1, Math.floor((bandW - 6) / CHAR_W_13_BOLD)))
+  const bandEpithetBudget = $derived(Math.max(1, Math.floor((bandW - 6) / CHAR_W_10)))
+
+  // Middle-ellipsis truncation (#1114): an end ellipsis reads
+  // "bridge-lan..." and "vlan-iot..." as the same prefix once both
+  // overflow, which is exactly the pair a boundary name most needs to
+  // stay distinguishable. Splitting the kept characters between both
+  // ends (favouring the head by one on an odd remainder) keeps enough
+  // of each side legible instead.
+  function truncateMiddle(text: string, maxChars: number): string {
+    if (maxChars < 1) return text.slice(0, 1)
+    if (text.length <= maxChars) return text
+    if (maxChars === 1) return '…'
+    const keep = maxChars - 1
+    const head = Math.ceil(keep / 2)
+    const tail = Math.floor(keep / 2)
+    return `${text.slice(0, head)}…${tail > 0 ? text.slice(text.length - tail) : ''}`
+  }
 
   // ── Rig layout: every band on this page gets its own pitch-wide slot ─
   interface BandSlot {
@@ -771,7 +808,7 @@
     cands.sort((a, b) => b.h - a.h)
     const kept: typeof cands = []
     for (const c of cands) {
-      const w = c.text.length * 6.2
+      const w = c.text.length * CHAR_W_10
       // Round 30 places one label above each curve, never stacked on
       // another (#700) -- the build's own 11-unit vertical tolerance was
       // tight enough that two peaks differing in height by just over
@@ -779,8 +816,13 @@
       // roughly a full line's height either side of its baseline) to
       // visibly overlap. Widened to a margin that actually clears a
       // label's own rendered height, alongside a slightly wider
-      // horizontal gap.
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 8 && Math.abs(k.y - c.y) < 15)) continue
+      // horizontal gap. #1114: 15 was still short of a full label
+      // height (~20 for this 10px type, baseline to baseline), and the
+      // per-character width feeding the horizontal half was a flat 6.2
+      // guess that under-measured the rig's actual (monospace) type --
+      // both now use the measured CHAR_W_10 above.
+      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * CHAR_W_10 + w) / 2 + 8 && Math.abs(k.y - c.y) < 20))
+        continue
       kept.push(c)
     }
     return kept
@@ -807,8 +849,16 @@
     cands.sort((a, b) => b.w - a.w)
     const kept: typeof cands = []
     for (const c of cands) {
-      const w = c.text.length * 6.2
-      if (kept.some((k) => k.bandKey === c.bandKey && Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
+      const w = c.text.length * CHAR_W_10
+      // #1114: same measured-width correction as peakLabels above, plus
+      // a wider same-band gap (4 -> 8) -- the flat 6.2 guess left too
+      // little room between two carrier labels sharing one band's foot.
+      if (
+        kept.some(
+          (k) => k.bandKey === c.bandKey && Math.abs(k.x - c.x) < (k.text.length * CHAR_W_10 + w) / 2 + 8,
+        )
+      )
+        continue
       kept.push(c)
     }
     return kept
@@ -1115,8 +1165,12 @@
               onkeydown={(e) => keyActivate(e, () => openInStream(b))}
             >
               <rect class="head-hit" x={slot.bx} y="6" width={bandW} height="56" />
-              <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
-              {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
+              <text class="blab band-label" x={slot.bx + 6} y="22"
+                >{truncateMiddle(b.label, bandLabelBudget)}<title>{b.label}</title></text
+              >
+              {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36"
+                  >{truncateMiddle(b.epithet, bandEpithetBudget)}<title>{b.epithet}</title></text
+                >{/if}
               {#if b.key === '__unmatched__'}
                 <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50"
                   ><title>{UNMATCHED_EXPLANATION}</title>NOT IN A PUSHED TABLE</text
