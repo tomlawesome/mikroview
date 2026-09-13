@@ -25,7 +25,7 @@ func TestRecordPermittedNeedsAnExpectationToHangOn(t *testing.T) {
 		t.Error("recording a permission against a flag with no expectation must report false: a permission with no expectation beside it is half a judgement")
 	}
 
-	s.SetVerdict(id, VerdictExpected, "alice", now)
+	s.SetVerdict(id, VerdictExpected, "alice", "", now)
 	if !s.RecordPermitted(id, rec) {
 		t.Fatal("expected the record to attach once the expectation exists")
 	}
@@ -50,7 +50,7 @@ func TestWithdrawPermittedTakesTheLastVerdictsRecord(t *testing.T) {
 	now := time.Now()
 	raiseSized(s, TypeInternalRecon, "192.168.1.50", intPtr(3), now)
 	id := flagID(TypeInternalRecon, "192.168.1.50")
-	s.SetVerdict(id, VerdictExpected, "alice", now)
+	s.SetVerdict(id, VerdictExpected, "alice", "", now)
 
 	first := PermittedRecord{EntryID: "entry-1", Dests: []HostPort{{Host: "192.168.1.10", Port: 445}}, Verdict: VerdictExpected, At: now}
 	second := PermittedRecord{EntryID: "entry-1", Dests: []HostPort{{Host: "192.168.1.12", Port: 139}}, Verdict: VerdictExpected, At: now.Add(time.Hour)}
@@ -86,7 +86,7 @@ func TestPermittedRecordsAreDetachedFromStoreState(t *testing.T) {
 	now := time.Now()
 	raiseSized(s, TypeInternalRecon, "192.168.1.50", intPtr(3), now)
 	id := flagID(TypeInternalRecon, "192.168.1.50")
-	s.SetVerdict(id, VerdictExpected, "alice", now)
+	s.SetVerdict(id, VerdictExpected, "alice", "", now)
 	s.RecordPermitted(id, PermittedRecord{EntryID: "entry-1", Dests: []HostPort{{Host: "192.168.1.10", Port: 445}}, Verdict: VerdictExpected, At: now})
 
 	listed := s.ListExclusions()
@@ -118,7 +118,7 @@ func TestPermittedRecordSurvivesReload(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	raiseSized(s1, TypeInternalRecon, "192.168.1.50", intPtr(3), now)
 	id := flagID(TypeInternalRecon, "192.168.1.50")
-	s1.SetVerdict(id, VerdictExpected, "alice", now)
+	s1.SetVerdict(id, VerdictExpected, "alice", "", now)
 	s1.RecordPermitted(id, PermittedRecord{
 		EntryID: "entry-1", Dests: []HostPort{{Host: "192.168.1.10", Port: 445}},
 		CreatedEntry: true, Verdict: VerdictExpected, At: now,

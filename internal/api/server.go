@@ -513,6 +513,12 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
 		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
 		{http.MethodPost, "/api/flags/{id}/verdict", s.handleFlagsVerdict},
+		// Editing the note a verdict already carries (#1232). Free to
+		// take the wildcard-then-literal shape the POST above uses --
+		// the ambiguity the next comment describes is between patterns
+		// that could match the same request, and no other PUT is
+		// registered under /api/flags/.
+		{http.MethodPut, "/api/flags/{id}/note", s.handleFlagNote},
 		// Not "/{id}/verdict" (which would mirror the POST above): that
 		// shape is structurally ambiguous against any literal-then-
 		// wildcard sibling under /api/flags/ in Go's net/http.ServeMux

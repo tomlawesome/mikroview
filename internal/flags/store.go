@@ -311,8 +311,8 @@ type Flag struct {
 	// (dealt with, normally a firewall change). Empty (omitted from
 	// JSON) means unjudged -- same "empty is the common, unset case"
 	// convention Provisional above follows. Set only through SetVerdict,
-	// which also owns VerdictBy/VerdictAt and, for the three that clear,
-	// reuses clearLocked rather than duplicating it.
+	// which also owns VerdictBy/VerdictAt/Note and, for the three that
+	// clear, reuses clearLocked rather than duplicating it.
 	Verdict Verdict `json:"verdict,omitempty"`
 	// PriorVerdict is the checked-or-resolved judgement this pair
 	// carried when it was last cleared, kept across the revival that
@@ -336,6 +336,31 @@ type Flag struct {
 	// VerdictAt is when Verdict was set -- zero (omitted, same
 	// omitzero convention as ClearedAt) exactly when Verdict is empty.
 	VerdictAt time.Time `json:"verdictAt,omitzero"`
+	// Note is the operator's own reason for the verdict (#1232): free
+	// text they wrote while looking at the flag, kept with the
+	// judgement they then chose, so a flag that returns can say not
+	// only that a decision happened but why. Always optional -- empty
+	// (omitted) is the ordinary case.
+	//
+	// It belongs to the verdict, not to the flag: SetVerdict carries
+	// it, SetNote edits it afterwards, and UndoVerdict zeroes it with
+	// Verdict/VerdictBy/VerdictAt (owner, 2026-09-13: "if the verdict
+	// is undone, the note is lost"). One note, overwritten in place --
+	// the same "no history of a changed mind" this store keeps for the
+	// verdict itself, so there is nothing here to prune or cap.
+	//
+	// This is the only copy. The audit log records that a note was
+	// attached, edited or withdrawn and never the text (#1232's
+	// ratified §3), which is what lets "lost on undo" mean exactly one
+	// thing rather than leaving the words standing in a second home.
+	Note string `json:"note,omitempty"`
+	// PriorNote is the note that came with PriorVerdict, kept across a
+	// revival the same way and under the same rule (#1232): what the
+	// operator wrote last time, for the drawer to read back beside the
+	// returning sentence. Empty exactly when PriorVerdict is, since
+	// the note travels with the verdict it explains -- and empty too
+	// when the remembered verdict simply carried no note.
+	PriorNote string `json:"priorNote,omitempty"`
 	// verdictCleared records whether the most recent SetVerdict call's
 	// own clearLocked call is what cleared this flag -- as opposed to
 	// the flag already being cleared beforehand (a plain Clear, or an
@@ -909,16 +934,23 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 		// of it left. Any other verdict clears the memory rather than
 		// leaving a stale one standing: it is the last judgement that
 		// counts, not the last remembered one.
+		// The note the operator wrote for that verdict travels with it
+		// (#1232), for the same reason: it is the reason behind the
+		// remembered call, so it is remembered exactly where the call is
+		// and forgotten exactly where the call is.
 		if f.Verdict.Remembered() {
 			f.PriorVerdict = f.Verdict
 			f.PriorVerdictAt = f.VerdictAt
+			f.PriorNote = f.Note
 		} else {
 			f.PriorVerdict = ""
 			f.PriorVerdictAt = time.Time{}
+			f.PriorNote = ""
 		}
 		f.Verdict = ""
 		f.VerdictBy = ""
 		f.VerdictAt = time.Time{}
+		f.Note = ""
 		f.verdictCleared = false // this Clear=false transition is the revival's doing, not any verdict's
 	}
 	f.Detail = detail
@@ -1201,7 +1233,13 @@ func (s *Store) unclearLocked(f *Flag) {
 // previous value, so UndoVerdict always reflects whether the *current*
 // verdict is what's holding the flag cleared -- see verdictCleared's
 // own doc comment on Flag.
-func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag, bool) {
+//
+// note is the operator's own reason for the call (#1232), written in
+// the drawer before the verdict was clicked and always optional: empty
+// is the ordinary case, and it overwrites whatever the previous verdict
+// carried, since the note belongs to the verdict being set rather than
+// to the flag. SetNote edits it afterwards.
+func (s *Store) SetVerdict(id string, v Verdict, by, note string, now time.Time) (Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1220,6 +1258,7 @@ func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag
 	f.Verdict = v
 	f.VerdictBy = by
 	f.VerdictAt = now
+	f.Note = note
 	f.verdictCleared = false
 	f.expectationBefore = nil
 	if v.Clears() {
@@ -1239,7 +1278,7 @@ func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag
 // POST relied on, so a verdict judged just before a reload could be
 // lost before it ever reached the server).
 //
-// Resets Verdict/VerdictBy/VerdictAt to their zero values, and re-opens
+// Resets Verdict/VerdictBy/VerdictAt/Note to their zero values, and re-opens
 // the flag only if the verdict being undone is what cleared it --
 // f.verdictCleared, set by SetVerdict -- never if the flag was already
 // cleared beforehand by something else (an earlier verdict later
@@ -1253,6 +1292,12 @@ func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag
 // leaving the suppression standing would be the worst of both: a flag
 // visibly back in the inbox and a store quietly absorbing every further
 // firing of it. See undoExpectationLocked.
+//
+// The note goes with it (#1232, the owner's own ruling: "if the verdict
+// is undone, the note is lost"). The note is the reason for a decision,
+// so withdrawing the decision withdraws the reason, and this is the
+// only copy of the text -- the audit log holds the events and never the
+// words, so nothing is left behind pointing at prose that has gone.
 //
 // Reports whether id was known at all, same true/false contract as
 // every other id-keyed mutator here. Undoing an unjudged flag (empty
@@ -1276,9 +1321,43 @@ func (s *Store) UndoVerdict(id string) (Flag, bool) {
 	f.Verdict = ""
 	f.VerdictBy = ""
 	f.VerdictAt = time.Time{}
+	f.Note = ""
 	f.verdictCleared = false
 	s.persistLocked()
 	return *f, true
+}
+
+// SetNote edits the note on an already-judged flag (#1232, the owner's
+// ruling: "we should be able to edit"). The write path for a note
+// written *before* the verdict is SetVerdict, which carries it; this is
+// only for changing one's words afterwards.
+//
+// Two reports, so the handler can tell the two refusals apart: known
+// says whether id exists at all (404), judged whether it carries a
+// verdict for the note to belong to (409). A note without a verdict has
+// nothing to be the reason for and nothing to be discarded with, which
+// is exactly the state UndoVerdict leaves behind -- so it is refused
+// rather than quietly stored where nothing would ever read it.
+//
+// It deliberately takes no author and touches VerdictBy not at all.
+// VerdictBy names who made the *call*, and an operator tidying someone
+// else's wording did not make it; moving the name would quietly rewrite
+// who judged this flag. Who edited the words is the audit log's
+// question, and flag.note_edit answers it there.
+func (s *Store) SetNote(id, note string) (f Flag, known, judged bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fl, ok := s.byID[id]
+	if !ok {
+		return Flag{}, false, false
+	}
+	if fl.Verdict == "" {
+		return *fl, true, false
+	}
+	fl.Note = note
+	s.persistLocked()
+	return *fl, true, true
 }
 
 // recordExpectationLocked records an expectation from a flag -- "this

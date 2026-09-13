@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { clearAllFlags, deleteFlagVerdict, fetchFlags, setFlagVerdict } from './api'
+import { clearAllFlags, deleteFlagVerdict, fetchFlags, setFlagVerdict, updateFlagNote } from './api'
 import type { Flag, FlagTimeBucket, Verdict } from './types'
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
@@ -314,28 +314,34 @@ class FlagsState {
   // with its own canonical values in case the two ever diverge, same
   // reasoning setFlagVerdict's doc comment gives for returning the
   // updated flag at all.
-  async judgeInvestigate(id: string, judgedBy: string) {
+  //
+  // note (#1232) is whatever was in the drawer's box when the chip was
+  // clicked, and rides along optimistically with the rest.
+  async judgeInvestigate(id: string, judgedBy: string, note = '') {
     const flag = this.list.find((f) => f.id === id)
     if (!flag || flag.verdict) return
 
-    const prev = { verdict: flag.verdict, verdictBy: flag.verdictBy, verdictAt: flag.verdictAt }
+    const prev = { verdict: flag.verdict, verdictBy: flag.verdictBy, verdictAt: flag.verdictAt, note: flag.note }
     this.generation++
     flag.verdict = 'investigate'
     flag.verdictBy = judgedBy
     flag.verdictAt = new Date().toISOString()
+    flag.note = note
 
     try {
-      const updated = await setFlagVerdict(id, 'investigate')
+      const updated = await setFlagVerdict(id, 'investigate', note)
       this.applyToCurrent(id, (current) => {
         current.verdict = updated.verdict
         current.verdictBy = updated.verdictBy
         current.verdictAt = updated.verdictAt
+        current.note = updated.note
       })
     } catch (err) {
       this.applyToCurrent(id, (current) => {
         current.verdict = prev.verdict
         current.verdictBy = prev.verdictBy
         current.verdictAt = prev.verdictAt
+        current.note = prev.note
       })
       throw err
     }
@@ -365,7 +371,16 @@ class FlagsState {
   // masked it). Posting at once has no equivalent gap: there is no
   // window in which the click has happened but the request has not been
   // sent, so there is nothing left for a page teardown to lose.
-  async judgeAndClear(id: string, verdict: Extract<Verdict, 'expected' | 'checked' | 'resolved'>) {
+  //
+  // note (#1232) is what the operator wrote in the drawer before they
+  // clicked -- write first, judge second -- so it is sent in this same
+  // request rather than by a second call that could fail on its own and
+  // leave the judgement standing without its reason.
+  async judgeAndClear(
+    id: string,
+    verdict: Extract<Verdict, 'expected' | 'checked' | 'resolved'>,
+    note = '',
+  ) {
     const flag = this.list.find((f) => f.id === id)
     if (!flag || flag.cleared) return
 
@@ -375,17 +390,20 @@ class FlagsState {
       verdict: flag.verdict,
       verdictBy: flag.verdictBy,
       verdictAt: flag.verdictAt,
+      note: flag.note,
     }
     this.generation++
     flag.cleared = true
     flag.clearedAt = new Date().toISOString()
+    flag.note = note
 
     try {
-      const updated = await setFlagVerdict(id, verdict)
+      const updated = await setFlagVerdict(id, verdict, note)
       this.applyToCurrent(id, (current) => {
         current.verdict = updated.verdict
         current.verdictBy = updated.verdictBy
         current.verdictAt = updated.verdictAt
+        current.note = updated.note
         current.cleared = updated.cleared
         current.clearedAt = updated.clearedAt
       })
@@ -396,6 +414,7 @@ class FlagsState {
         current.verdict = prev.verdict
         current.verdictBy = prev.verdictBy
         current.verdictAt = prev.verdictAt
+        current.note = prev.note
       })
       throw err
     }
@@ -421,6 +440,7 @@ class FlagsState {
       verdict: flag.verdict,
       verdictBy: flag.verdictBy,
       verdictAt: flag.verdictAt,
+      note: flag.note,
     }
     this.generation++
     flag.cleared = false
@@ -428,6 +448,10 @@ class FlagsState {
     flag.verdict = undefined
     flag.verdictBy = undefined
     flag.verdictAt = undefined
+    // The note goes with the verdict it explained (#1232, the owner's
+    // ruling). Optimistic here like everything else, and put back with
+    // the rest if the request fails.
+    flag.note = undefined
 
     try {
       const updated = await deleteFlagVerdict(id)
@@ -437,6 +461,7 @@ class FlagsState {
         current.verdict = updated.verdict
         current.verdictBy = updated.verdictBy
         current.verdictAt = updated.verdictAt
+        current.note = updated.note
       })
     } catch (err) {
       this.applyToCurrent(id, (current) => {
@@ -445,6 +470,37 @@ class FlagsState {
         current.verdict = prev.verdict
         current.verdictBy = prev.verdictBy
         current.verdictAt = prev.verdictAt
+        current.note = prev.note
+      })
+      throw err
+    }
+  }
+
+  // Edits the note on a flag that already carries a verdict (#1232's
+  // "we should be able to edit"), which is what the drawer's box sends
+  // on blur once the judgement has been made. Optimistic like every
+  // other mutation here, reverted on failure the same way.
+  //
+  // A no-op on a flag with no verdict: the note has nothing to belong
+  // to yet, and the box's contents are sent with the verdict when one
+  // is clicked instead. The server refuses that case with a 409; this
+  // is the client not making the call in the first place.
+  async editNote(id: string, note: string) {
+    const flag = this.list.find((f) => f.id === id)
+    if (!flag || !flag.verdict) return
+
+    const prev = flag.note
+    this.generation++
+    flag.note = note
+
+    try {
+      const updated = await updateFlagNote(id, note)
+      this.applyToCurrent(id, (current) => {
+        current.note = updated.note
+      })
+    } catch (err) {
+      this.applyToCurrent(id, (current) => {
+        current.note = prev
       })
       throw err
     }

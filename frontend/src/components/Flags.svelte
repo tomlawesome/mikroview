@@ -44,6 +44,12 @@
   // snapshot is one click away through the IP popover (owner,
   // 2026-09-06), and #691 has what else remains. The ledger of recorded
   // expectations is #640 part C.
+  //
+  // #1232 (round 59) gave the drawer its last band: a note box full
+  // width across the bottom, below both columns and above the buttons
+  // (`.note`/`.prior`). You write in it while you look at the flag and
+  // then call it; what you wrote is carried with the verdict you chose
+  // and read back in full when the flag returns.
   import { onMount } from 'svelte'
   import { flagsState, extractSourceIp, buildCampaigns } from '../lib/flags.svelte'
   import type { Campaign } from '../lib/flags.svelte'
@@ -53,7 +59,7 @@
   import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
   import { familyOf, worstFamilyOf } from '../lib/flagPalette'
   import { FLAG_TYPE_ORDER } from '../lib/metricsSeries'
-  import { formatHM, formatTime } from '../lib/format'
+  import { formatDayMonth, formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
@@ -424,6 +430,52 @@
     if (expandedId === f.id) loadEpisode(f)
   }
 
+  // The drawer's note box (#1232), while it is being typed. Write first,
+  // judge second: the text exists on the client before any verdict does,
+  // so it cannot live on the flag until one is chosen -- it is held here
+  // by flag id and sent with the verdict click. Once a verdict exists the
+  // flag itself carries the note and the box saves through editNote on
+  // blur, so a draft here is only ever ahead of the server for as long
+  // as the operator is still typing.
+  let noteDrafts = $state<Record<string, string>>({})
+
+  function noteText(f: Flag): string {
+    return noteDrafts[f.id] ?? f.note ?? ''
+  }
+
+  // The box grows with what is in it and the drawer grows with the box,
+  // everything below moving down (the owner's ruling: "the drawer just
+  // gets taller vertically"). Height is set through the CSSOM rather
+  // than a style attribute, which this app's CSP refuses (#659).
+  function autogrow(el: HTMLTextAreaElement) {
+    const fit = () => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
+    el.addEventListener('input', fit)
+    fit()
+    return {
+      destroy() {
+        el.removeEventListener('input', fit)
+      },
+    }
+  }
+
+  // Saving an edit to a note a verdict already carries. Only after a
+  // verdict: before one, what is in the box travels with the click that
+  // makes it, so there is nothing to save yet.
+  async function saveNote(f: Flag) {
+    const text = noteText(f)
+    if (!f.verdict || text === (f.note ?? '')) return
+    error = null
+    try {
+      await flagsState.editNote(f.id, text)
+      delete noteDrafts[f.id]
+    } catch (err) {
+      reportFailure('Could not save the note', err)
+    }
+  }
+
   async function callVerdict(f: Flag, verdict: 'expected' | 'checked' | 'resolved') {
     error = null
     // Pinned *before* the call, not after: flagsState.judgeAndClear
@@ -436,8 +488,14 @@
     // once the response landed, rather than staying put for the flash.
     flagsState.pin(f.id)
     if (expandedId === f.id) expandedId = null
+    // What was written in the drawer goes with the click (#1232), and
+    // the draft is dropped whichever way the request goes: on success
+    // the flag carries it, on failure the revert puts the flag back the
+    // way it was and a draft left behind would claim otherwise.
+    const note = noteText(f)
+    delete noteDrafts[f.id]
     try {
-      await flagsState.judgeAndClear(f.id, verdict)
+      await flagsState.judgeAndClear(f.id, verdict, note)
     } catch (err) {
       flagsState.unpin(f.id)
       reportFailure('Could not record the verdict', err)
@@ -446,8 +504,10 @@
 
   async function callInvestigate(f: Flag) {
     error = null
+    const note = noteText(f)
+    delete noteDrafts[f.id]
     try {
-      await flagsState.judgeInvestigate(f.id, authState.username ?? '')
+      await flagsState.judgeInvestigate(f.id, authState.username ?? '', note)
     } catch (err) {
       reportFailure('Could not record the verdict', err)
     }
@@ -458,6 +518,10 @@
     try {
       await flagsState.undoVerdict(f.id)
       flagsState.unpin(f.id)
+      // Undoing the verdict discards its note (the owner's ruling), so
+      // the box empties with it rather than holding words the server
+      // has just dropped.
+      delete noteDrafts[f.id]
     } catch (err) {
       // Left pinned: flagsState.undoVerdict reverts its own optimistic
       // reopen on failure, so the flag is still exactly as done as it
@@ -1372,6 +1436,53 @@
                    it closes. -->
               {#if pairsTruncated(pairs, pairsTotal)}
                 <p class="ev-foot">{pairsTruncationLabel(pairs.length, pairsTotal ?? 0, f.evidence?.pairsTotalIsFloor)}</p>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- What you wrote last time (#1232, round 59): a returning
+               flag's own prior note, in full, introduced by the verdict
+               and date the row's one-line returning sentence can only
+               allude to. Read-back is a first-class requirement of the
+               issue, so this renders for anyone who can open the
+               drawer, editable or not. -->
+          {#if f.priorNote}
+            <div class="prior">
+              <span class="plab"
+                >you wrote last time · {f.priorVerdict}
+                {f.priorVerdictAt ? formatDayMonth(f.priorVerdictAt) : ''}</span
+              >
+              <p>{f.priorNote}</p>
+            </div>
+          {/if}
+          <!-- The note box (#1232, round 59's ratified drawing): a
+               full-width band across the bottom of the drawer, below
+               both columns and above the buttons -- the owner's own
+               composition call, so it never competes with the
+               confidence rating in the right column for space, and
+               growing it pushes the buttons down rather than scrolling
+               inside itself.
+               Write first, judge second: this is not #640's retired
+               "clear with a note", which asked after the decision. You
+               write whatever you want and then click a verdict, which
+               carries what is here. Always optional. -->
+          {#if canEdit || f.note}
+            <div class="note">
+              <label class="nlab" for="note-{f.id}">note</label>
+              <textarea
+                id="note-{f.id}"
+                rows="1"
+                readonly={!canEdit}
+                placeholder="why you're calling it what you're about to call it — optional"
+                value={noteText(f)}
+                use:autogrow
+                oninput={(ev) => (noteDrafts[f.id] = ev.currentTarget.value)}
+                onblur={() => saveNote(f)}
+              ></textarea>
+              {#if canEdit}
+                <span class="nhint"
+                  >kept with the verdict you choose next · editable later · goes if the verdict is undone</span
+                >
               {/if}
             </div>
           {/if}
@@ -2349,6 +2460,88 @@
 
   .dwr-in .side .conf.c-high {
     --ci: #ff5470;
+  }
+
+  /* ============================================================
+     The note band (#1232), ported from docs/design/concepts/round-59/
+     build.py's `.dwr-in .note` / `.dwr-in .prior` onto this app's
+     tokens (--ink-3 -> --fg-dim, --ink-2 -> --fg-muted, --ink -> --fg,
+     --hair -> --border, --sans -> --font-sans, --mono -> --font-mono;
+     --hair-2 and --accent are this app's own names already).
+     Full width across the bottom of the drawer, below both columns and
+     above the buttons -- the owner's composition call, so growing the
+     box pushes the buttons down and nothing in the right column moves.
+     ============================================================ */
+  .dwr-in .note,
+  .dwr-in .prior {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* The read-back and the box are one band, not two: the prior note
+     introduces the box rather than sitting in its own compartment. */
+  .dwr-in .prior + .note {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .dwr-in .note .nlab,
+  .dwr-in .prior .plab {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  /* No inner scroll and no resize handle: the box's height is set from
+     its content (see autogrow), so it is the drawer that grows. */
+  .dwr-in .note textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 64px;
+    resize: none;
+    overflow: hidden;
+    padding: 9px 12px;
+    font: 12.5px/1.55 var(--font-sans);
+    color: var(--fg);
+    background: color-mix(in srgb, var(--fg) 4%, transparent);
+    border: 1px solid var(--hair-2);
+    border-radius: 6px;
+    outline: none;
+  }
+
+  .dwr-in .note textarea::placeholder {
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .note textarea:focus {
+    border-color: var(--accent);
+  }
+
+  .dwr-in .note .nhint {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  /* What was written last time, as prose rather than in a box: it is
+     read, not edited. 72ch because a line much longer than that is
+     hard to track back to its start. */
+  .dwr-in .prior p {
+    margin: 0;
+    padding-left: 12px;
+    border-left: 2px solid var(--hair-2);
+    font: 12.5px/1.55 var(--font-sans);
+    color: var(--fg-muted);
+    max-width: 72ch;
   }
 
   .dwr-acts {
