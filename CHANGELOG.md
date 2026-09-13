@@ -63,6 +63,24 @@ rewritten.
 
 ### Fixed
 
+- **The setup wizard no longer switches logging on for your
+  established/related accept rule** (#1230). Step 3's bulk tagging used
+  to tag every accept rule and then take it back off that one with
+  `set [find connection-state=established,related] log=no`. That is an
+  exact match on the whole value, and RouterOS 7's own default firewall
+  writes the rule as `established,related,untracked`, so the undo
+  matched nothing, said nothing, and the router logged every packet of
+  every open connection — measured on a live instance as ~15 events/sec
+  becoming ~1500. **If you ran the wizard's step 3 against a RouterOS 7
+  default firewall, check that rule now:**
+  `/ip firewall filter print detail where log=yes` will show it, and
+  `/ip firewall filter set [find where connection-state~"established"] log=no log-prefix=""`
+  turns it back off. The wizard now excludes any rule whose
+  `connection-state` mentions established or related instead of enabling
+  and undoing, verified against a CHR running 7.23.3. **Log every rule**
+  marks such a rule "logs every packet, not every connection" and leaves
+  it unticked even when it crosses a dark boundary, where the default
+  selection used to tick it for you.
 - **The docs now say who has to own a mounted file, for every file you
   mount** (#1212). That note existed only for the Postgres DSN file, so
   mounting `history.keyFile`, your own TLS certificate and key, or a
