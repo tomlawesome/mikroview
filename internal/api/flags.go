@@ -3,7 +3,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -86,10 +85,23 @@ func (s *Server) baselinesWarming(now time.Time) *bool {
 
 // verdictRequest is POST /api/flags/{id}/verdict's body: one of the
 // four bare verdict labels the owner ratified on #640 (2026-09-02) --
-// "expected", "checked", "investigate" or "resolved", no explanatory
-// second line.
+// "expected", "checked", "investigate" or "resolved" -- and, since
+// #1232, the operator's optional note explaining it.
+//
+// The note is not #640's retired "clear with a note": that was a prompt
+// after the decision, this is what was already written in the drawer
+// before the verdict was clicked, and it is always optional.
 type verdictRequest struct {
 	Verdict flags.Verdict `json:"verdict"`
+	Note    string        `json:"note"`
+}
+
+// noteRequest is PUT /api/flags/{id}/note's body: a replacement note
+// for a flag that already carries a verdict (#1232's "we should be able
+// to edit"). Empty is allowed and means "take what I wrote back" --
+// the same state as never having written one.
+type noteRequest struct {
+	Note string `json:"note"`
 }
 
 // handleFlagsVerdict records an operator's judgement of one flag (#640).
@@ -109,7 +121,11 @@ type verdictRequest struct {
 // the record clear-permanent's admin gate used to guarantee: an
 // expectation suppresses future detection for a (detector, target) pair,
 // and "who decided this stopped being flagged" must stay answerable now
-// that any user can decide it.
+// that any user can decide it. A verdict that arrived with a note says
+// so -- "checked, with note" -- and never carries the words themselves:
+// the flag is the note's one home (#1232), so undoing the verdict can
+// discard it without an audit entry being deleted or left quoting text
+// that has gone.
 //
 // 400 for a body that doesn't parse or names anything other than the
 // four recognised verdicts (flags.Verdict.Valid()), checked before the
@@ -123,8 +139,12 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
+	// Through decodeJSONBody rather than json.NewDecoder(r.Body)
+	// directly, since #1232 put free operator text in this body:
+	// maxJSONBodyBytes is what bounds how much of it one request can
+	// make this process hold.
 	var req verdictRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -164,7 +184,7 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	f, ok := s.Flags.SetVerdict(id, req.Verdict, actor, now)
+	f, ok := s.Flags.SetVerdict(id, req.Verdict, actor, req.Note, now)
 	if !ok {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
@@ -186,7 +206,56 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 			s.Flags.RecordPermitted(id, rec)
 		}
 	}
-	s.Audit.Record(actor, "flag.verdict", id, string(req.Verdict))
+	detail := string(req.Verdict)
+	if req.Note != "" {
+		detail += ", with note"
+	}
+	s.Audit.Record(actor, "flag.verdict", id, detail)
+	writeJSON(w, http.StatusOK, f)
+}
+
+// handleFlagNote replaces the note on an already-judged flag (#1232's
+// "we should be able to edit"). A note written *before* the verdict
+// travels with the verdict itself, on the POST above; this is only the
+// edit afterwards, which the drawer sends on blur.
+//
+// Same user tier as the verdict it explains, for the same #653 reason:
+// a viewer may not change what mikroview is showing, and the note is
+// part of the record a returning flag reads back.
+//
+// 404 for an id the store does not know. 409 where it does but the flag
+// carries no verdict: the note belongs to the decision, so there is
+// nothing for it to be the reason for and nothing for an undo to
+// discard it with -- storing it anyway would leave text in a place
+// nothing on screen ever reads back. 200 with the updated flag
+// otherwise.
+//
+// Audit-logged as flag.note_edit, with no text (#1232's ratified §3 --
+// the flag is the note's only home, so an edit never leaves an older
+// wording standing in a second one). Empty is a legitimate edit: it is
+// how the operator takes back what they wrote.
+func (s *Server) handleFlagNote(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
+	var req noteRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	id := r.PathValue("id")
+	f, known, judged := s.Flags.SetNote(id, req.Note)
+	if !known {
+		http.Error(w, "flag not found", http.StatusNotFound)
+		return
+	}
+	if !judged {
+		http.Error(w, "this flag has no verdict for a note to belong to", http.StatusConflict)
+		return
+	}
+	s.Audit.Record(auditActor(r), "flag.note_edit", id, "")
 	writeJSON(w, http.StatusOK, f)
 }
 

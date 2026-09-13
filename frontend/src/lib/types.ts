@@ -1038,6 +1038,15 @@ export interface Flag {
   // fine" or "resolved on 2 Sept -- it's back".
   priorVerdict?: Verdict
   priorVerdictAt?: string
+  // note/priorNote (#1232): the operator's own reason for the verdict,
+  // written in the drawer before the verdict was clicked, and the one
+  // the remembered priorVerdict carried. Both always optional -- absent
+  // is the ordinary case, and a verdict never requires one. The note
+  // belongs to the verdict: it is discarded when the verdict is undone,
+  // and carried to priorNote on a revival exactly as verdict is carried
+  // to priorVerdict.
+  note?: string
+  priorNote?: string
   // size/expectedSize (#640): this firing's own size (the measure the
   // detector compares against its threshold -- distinct ports for
   // port_scan, and so on), and the size an expectation for this pair had

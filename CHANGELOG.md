@@ -16,6 +16,22 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **A flag's drawer now has a note box: record why you called it what
+  you called it** (#1232). It sits across the bottom of the drawer,
+  above the verdict buttons, and grows as you type. Write whatever you
+  want about the flag first, then click Expected, Checked or
+  Investigate — what you wrote is kept with that verdict, and read back
+  in full the next time the same flag returns, under the line that
+  already says when you last looked at it. It is never required, you can
+  edit it afterwards, and undoing the verdict discards it: the note is
+  the reason for a decision, so withdrawing the decision withdraws the
+  reason. The audit log records that a verdict carried a note and that a
+  note was edited, never the words — the flag is the only place they
+  live. `POST /api/flags/{id}/verdict` takes an optional `note`, and
+  `PUT /api/flags/{id}/note` edits one.
+
 ### Changed
 
 - **A flag's confidence is now a rating in its drawer, not a number on

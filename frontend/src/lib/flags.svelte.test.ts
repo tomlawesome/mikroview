@@ -16,11 +16,11 @@ import type { Flag, FlagType, Verdict } from './types'
 // matches whatever .list already holds, so it stays a no-op.
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
-  return { ...actual, fetchFlags: vi.fn(), setFlagVerdict: vi.fn(), deleteFlagVerdict: vi.fn() }
+  return { ...actual, fetchFlags: vi.fn(), setFlagVerdict: vi.fn(), deleteFlagVerdict: vi.fn(), updateFlagNote: vi.fn() }
 })
 
 import type { FlagsResponse } from './api'
-import { deleteFlagVerdict, fetchFlags, setFlagVerdict } from './api'
+import { deleteFlagVerdict, fetchFlags, setFlagVerdict, updateFlagNote } from './api'
 import { buildCampaigns, extractSourceIp, flagsState } from './flags.svelte'
 
 let nextId = 1
@@ -187,7 +187,7 @@ describe('FlagsState verdicts (#638, #640)', () => {
 
     await flagsState.judgeAndClear(id, 'expected')
 
-    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'expected')
+    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'expected', '')
     expect(flagsState.list[0].cleared).toBe(true)
     expect(flagsState.list[0].verdict).toBe('expected')
     expect(flagsState.list[0].verdictBy).toBe('alice')
@@ -293,7 +293,7 @@ describe('FlagsState verdicts (#638, #640)', () => {
 
     await flagsState.judgeInvestigate(id, 'alice')
 
-    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'investigate')
+    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'investigate', '')
     expect(flagsState.list[0].cleared).toBe(false)
     expect(flagsState.list[0].verdict).toBe('investigate')
     expect(flagsState.list[0].verdictBy).toBe('alice')
@@ -315,6 +315,62 @@ describe('FlagsState verdicts (#638, #640)', () => {
 
     expect(flagsState.list[0].verdictBy).toBe('alice')
     expect(setFlagVerdict).not.toHaveBeenCalled()
+  })
+})
+
+// #1232: the note is the operator's reason for a verdict, so it rides
+// with the verdict that carries it and is discarded with the verdict
+// that is withdrawn.
+describe('FlagsState notes (#1232)', () => {
+  it('judgeAndClear sends what was written and keeps the server’s copy', async () => {
+    flagsState.list = [flag('port_scan', '203.0.113.9')]
+    const id = flagsState.list[0].id
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      flag('port_scan', '203.0.113.9', { id, cleared: true, verdict: 'checked', note: 'already blocked upstream' }),
+    )
+
+    await flagsState.judgeAndClear(id, 'checked', 'already blocked upstream')
+
+    expect(setFlagVerdict).toHaveBeenCalledWith(id, 'checked', 'already blocked upstream')
+    expect(flagsState.list[0].note).toBe('already blocked upstream')
+  })
+
+  it('undoVerdict takes the note with the verdict', async () => {
+    flagsState.list = [
+      flag('port_scan', '203.0.113.9', { cleared: true, verdict: 'checked', verdictBy: 'alice', verdictAt: 't', note: 'my reason' }),
+    ]
+    const id = flagsState.list[0].id
+    vi.mocked(deleteFlagVerdict).mockResolvedValue(flag('port_scan', '203.0.113.9', { id, cleared: false }))
+
+    await flagsState.undoVerdict(id)
+
+    expect(flagsState.list[0].note).toBeUndefined()
+  })
+
+  it('editNote saves an edit, and reverts it if the request fails', async () => {
+    flagsState.list = [
+      flag('port_scan', '203.0.113.9', { verdict: 'investigate', verdictBy: 'alice', verdictAt: 't', note: 'first go' }),
+    ]
+    const id = flagsState.list[0].id
+    vi.mocked(updateFlagNote).mockResolvedValue(
+      flag('port_scan', '203.0.113.9', { id, verdict: 'investigate', note: 'reworded' }),
+    )
+
+    await flagsState.editNote(id, 'reworded')
+    expect(updateFlagNote).toHaveBeenCalledWith(id, 'reworded')
+    expect(flagsState.list[0].note).toBe('reworded')
+
+    vi.mocked(updateFlagNote).mockRejectedValue(new Error('boom'))
+    await expect(flagsState.editNote(id, 'third go')).rejects.toThrow('boom')
+    expect(flagsState.list[0].note).toBe('reworded')
+  })
+
+  it('never edits a flag that carries no verdict: the box travels with the click instead', async () => {
+    flagsState.list = [flag('port_scan', '203.0.113.9')]
+
+    await flagsState.editNote(flagsState.list[0].id, 'nothing to attach this to')
+
+    expect(updateFlagNote).not.toHaveBeenCalled()
   })
 })
 
