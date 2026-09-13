@@ -144,6 +144,17 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 // related at all. `~` is RouterOS's regex-match operator and it does
 // work against connection-state's multi-value form; that was measured
 // on the same CHR rather than assumed.
+//
+// Skipping those rules is not enough on its own, which is why the block
+// ends by switching logging off on them. Every install that ran the old
+// step 3 against a RouterOS 7 default firewall already has log=yes on
+// its established/related accept rules, and a version of this block that
+// only excludes them leaves that router flooding: re-running step 3
+// would not repair the damage it caused. The two repair lines are one
+// per term rather than one line with `or`, because two `~` predicates in
+// one `find` are the form already measured on the CHR and `or` inside a
+// `find where` is not; they are idempotent, and on a router that was
+// never bitten they match rules that are already log=no.
 func RuleTaggingCommands(dialect string) string {
 	return strings.Join([]string{
 		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"`,
@@ -155,6 +166,10 @@ func RuleTaggingCommands(dialect string) string {
 		`# mentions either, whatever else is in the list: RouterOS 7's default`,
 		`# rule says established,related,untracked.`,
 		`/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"`,
+		``,
+		`# Repairs a router an earlier version of this block flooded, and matches the posture in section 6 of the setup guide: these rules never log.`,
+		`/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""`,
+		`/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""`,
 	}, "\n")
 }
 

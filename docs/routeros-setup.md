@@ -738,6 +738,21 @@ Three caveats that belong next to that table, not in a footnote:
   regex match, and it does work on this field), and prefer leaving
   logging off to switching it on and undoing it afterwards: an undo that
   misses is silent, and it is your log that pays for it.
+
+**If you ran MikroView's step 3 before this was fixed, your router is
+still flooding** — the old block switched logging on and the undo
+missed, so those rules kept `log=yes`. Two lines turn it back off, and
+they are safe to run on a router that was never bitten:
+
+```
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+```
+
+Those same two lines now end the wizard's step 3, so re-running step 3
+repairs the router as well as tagging it. One line per term rather than
+one with `or`: two `~` tests in a single `find` is the form checked
+against a real router.
 - **Fasttrack changes what the filter chain sees.** With a
   `fasttrack-connection` rule in place, established packets bypass most
   of the chain entirely — which is fine for this posture (the
