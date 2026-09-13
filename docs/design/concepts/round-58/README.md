@@ -61,4 +61,22 @@ three-bands  CVD worst adjacent ΔE 12.8 (deutan) · normal 20.6 · contrast all
 
 ## Verdicts
 
-Pending.
+Owner, 2026-09-13, after the specificity fix (7b0bae94) made the two
+directions actually differ:
+
+> "I like the three bands."
+
+**three-bands ratified**; one-hue dropped. The first cut of this round
+opened on the wrong tab with nothing expanded, and then both directions
+rendered in one colour — the owner could not find the rating at all ("I
+can't even find it"). Both were build defects, not the design; the
+placement verdict was given only once the page opened straight onto the
+drawer.
+
+Open at the same time: #1232 puts a notes box in the same drawer. The
+owner (2026-09-13): "another session is working on adding a notes
+section on the right, where you just placed things. We might have to
+work the two things in together." Composition to settle before either
+builds: the rating stays under the sparkline (it is the sparkline's
+number), and the note takes its own full-width band below both columns,
+above the buttons, growing the drawer downward as #1232's ruling says.
