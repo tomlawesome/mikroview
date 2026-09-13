@@ -127,7 +127,42 @@ drawer's content ever exceeds 80vh on a real phone (and so ever hits
 this) is not confirmed — worth a quick check, not filed as an issue
 from here since it is unreproduced against the running app.
 
-## Open questions
+## Owner verdicts, 2026-09-13
+
+The three questions below were put to the owner and all three are
+answered. Their words, verbatim, with what each settles.
+
+**1. `proto` and `interface` menus.** The round invented
+seen-this-window lists for both, because neither field has a fixed
+option list anywhere in the app.
+
+> "it should grow a real list of what it has seen over time, and be
+> persisted."
+
+Neither option offered. mikroview keeps an observed-value list for
+these two fields that accumulates across restarts, and the token bar
+reads it. That is a backend store with its own retention question, so
+it is not part of this round's build -- a separate issue carries it.
+The drawings stand; only where the menu's values come from changes.
+
+**2. The `action` field-menu hint.**
+
+> "shorten"
+
+The field menu shows a count; the value menu carries the full list.
+
+**3. Backspace with a half-typed value.**
+
+> "character you just typed"
+
+A value box you are typing in is not empty. Backspace there deletes
+the character, and never reaches past it to the last token. Only an
+empty free-text box lets Backspace delete a token -- one key, one
+meaning, in whichever box holds the caret.
+
+## Questions as put
+
+Kept so the verdicts above read against what was actually asked.
 
 Numbered for the owner's reply.
 
