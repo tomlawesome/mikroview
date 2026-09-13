@@ -18,6 +18,34 @@ rewritten.
 
 ### Changed
 
+- **The container now runs as uid/gid `1000`, not `65532`** (#1210).
+  1000 is the first account created on an ordinary Linux host, so it is
+  almost always the operator: a file you mount in — the Postgres DSN,
+  `history.keyFile`, a TLS key — is now readable by MikroView as it
+  stands, where 65532 was nobody on your host and every mounted file
+  needed a `chown` first. Getting that wrong showed up as a bare
+  "permission denied" at startup. Ports are unchanged (8080/8081): an
+  unprivileged uid still cannot bind below 1024, and `runAsNonRoot`
+  checks still pass.
+
+  **Upgrading an existing install needs one command.** A data directory
+  or volume written by the old image is owned by 65532, and the new
+  container cannot write to it. Stop MikroView, then hand it over:
+
+  ```sh
+  # bind mount
+  sudo chown -R 1000:1000 /path/on/host/data
+  ```
+
+  ```sh
+  # named volume
+  docker run --rm -v mikroview-data:/data alpine:3.22 chown -R 1000:1000 /data
+  ```
+
+  Mounted secret files want the same treatment —
+  `sudo chown 1000:1000 postgres-dsn` and so on — unless you already own
+  them as uid 1000, in which case there is nothing to do.
+
 - **"Tune logging" is now "Log every rule"** (#1134), and the page has
   been rebuilt around the owner's ruling on three faults in 0.5.1. It
   used to render outside the deck, so it was the one page in the app

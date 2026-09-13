@@ -178,7 +178,7 @@ echo "==> running the gate (35-50 minutes unsharded; about 36 divided by the sha
 # --user 0 then dropping to ci-gate inside is deliberate, and is what the
 # GitLab job worked out: under rootless Docker this account maps to container
 # root, so it owns the bind mount, while the gate itself must not run as root
-# -- mikroview ships USER nonroot:nonroot, and one of the defects this gate
+# -- mikroview ships USER 1000:1000, and one of the defects this gate
 # exists to catch was a recovery key reaching the log through a TTY check that
 # a Docker pty satisfies. See docs/decisions/gitlab-ci-root-in-container-test-failure.md.
 set +e

@@ -128,11 +128,13 @@ services:
     #      file, and never in config.yaml -- it carries a password):
     #        postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full
     #   2. Make it readable by the container's user -- MikroView runs as
-    #      uid 65532, which is not you, so a plain `chmod 600` leaves it
+    #      uid 1000, the first account on most Linux hosts, so a file
+    #      you own is usually readable as it stands. If the file belongs
+    #      to some other account, a plain `chmod 600` leaves it
     #      unreadable inside the container and MikroView refuses to
     #      start with "permission denied". Keep the tight mode and give
     #      it to that user:
-    #        chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+    #        sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
     #   3. Mount it read-only and point config.yaml's postgres.dsnFile at
     #      it, or set MIKROVIEW_POSTGRES_DSN_FILE:
     #        - ./postgres-dsn:/run/secrets/mikroview-postgres-dsn:ro

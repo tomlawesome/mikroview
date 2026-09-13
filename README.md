@@ -168,15 +168,16 @@ from the host the way you can with a bind mount -- you'd go through
 If you want that direct host access, switch to the commented-out bind
 mount in either compose file (`./data:/var/lib/mikroview`) instead of
 the named volume -- but it needs one extra step first: MikroView runs
-as a fixed non-root user inside the container, **uid `65532`, gid
-`65532`** (distroless's built-in `nonroot` account, same identity used
-by the `--chown` in the Dockerfile), which can't chown a host directory
-the way a root-run container could. Pick one before starting:
+as a fixed non-root user inside the container, **uid `1000`, gid
+`1000`** (the same identity used by the `--chown` in the Dockerfile,
+and the first account on most Linux hosts -- likely you), which can't
+chown a host directory the way a root-run container could. Pick one
+before starting:
 
 ```sh
 # Preferred: exact uid/gid ownership, nothing broader
 mkdir -p data
-sudo chown 65532:65532 data
+sudo chown 1000:1000 data
 ```
 
 ```sh
