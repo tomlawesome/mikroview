@@ -20,14 +20,24 @@
   import { onMount } from 'svelte'
   import { auditState } from '../lib/audit.svelte'
   import { appState } from '../lib/state.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
+  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { formatHM } from '../lib/format'
   import { compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { nextSort, ariaSort as sortAriaSort, sortGlyph } from '../lib/tableSort'
-  import type { AuditEntry } from '../lib/types'
+  import { FLAG_TYPE_LABELS } from '../lib/metricsSeries'
+  import type { AuditEntry, FlagType } from '../lib/types'
 
   onMount(() => {
     auditState.refresh()
+    // definitionNoun below reads detectorSettingsState.list to tell a
+    // detector from a watch. EngineRoom.svelte already refreshes it for
+    // its own bench, but an operator can reach the audit log without
+    // ever visiting the engine room. watchlistState needs no second call
+    // here -- App.svelte already refreshes it unconditionally on every
+    // session (#756).
+    detectorSettingsState.refresh().catch(() => {})
   })
 
   // Every column sorts and filters (#649): click a head to sort by it,
@@ -80,11 +90,41 @@
 
   // flagKey turns a flag/exclusion id -- always Type:Target, per
   // internal/flags.flagID -- into the mockup's "TYPE · target" reading,
-  // e.g. "port_scan:198.51.100.77" -> "PORT SCAN · 198.51.100.77".
+  // e.g. "port_scan:198.51.100.77" -> "PORT SCAN · 198.51.100.77". The
+  // docket's own flag-type label (lib/metricsSeries.ts's
+  // FLAG_TYPE_LABELS -- the same map Flags.svelte's badges read, which
+  // CSS then uppercases) is looked up rather than reinvented from the
+  // id's words: a second, independent underscore-to-words mapping is
+  // exactly how this used to read "DISTRIBUTED BRUTE FORCE" where the
+  // docket says "DISTRIBUTED BRUTE-FORCE" (#1161; #1127 names the same
+  // mistake shape elsewhere). A type this map doesn't recognise falls
+  // back to the old plain reading rather than a blank.
   function flagKey(id: string): string {
     const i = id.indexOf(':')
     if (i < 0) return id
-    return `${id.slice(0, i).replace(/_/g, ' ').toUpperCase()} · ${id.slice(i + 1)}`
+    const type = id.slice(0, i)
+    const label = FLAG_TYPE_LABELS[type as FlagType] ?? type.replace(/_/g, ' ')
+    return `${label.toUpperCase()} · ${id.slice(i + 1)}`
+  }
+
+  // A definition id alone doesn't say whether it names a detector or a
+  // watch: a custom detector and a watch both get the same random
+  // 32-hex id (internal/api.newDefinitionEntryID and
+  // engine.newDefinitionID are deliberate mirrors of each other, per
+  // their own doc comments), and the audit action itself is shared --
+  // handleDefinitionsCreate/Update/Delete/Clone all record a plain
+  // "definition.*" action whichever kind they touch. Calling both a
+  // "definition" is #1161's fourth mismatch: a watch is a watch.
+  // watchlistState.entries and detectorSettingsState.list are the two
+  // lists the rest of the app already keeps, by id, for exactly this
+  // distinction (Watchlist.svelte, EngineRoomWatchers.svelte) -- read
+  // from here rather than re-derived. An id neither recognises (most
+  // often one since deleted, or before either list has loaded) falls
+  // back to the generic noun this file always used.
+  function definitionNoun(id: string): string {
+    if (watchlistState.entries.some((w) => w.id === id)) return 'watch'
+    if (detectorSettingsState.list.some((d) => d.name === id)) return 'detector'
+    return 'definition'
   }
 
   // describeEntry composes the "what" sentence from action/target/detail
@@ -132,7 +172,7 @@
     'flag.clear_all': (e) => ({ lead: 'cleared all flags', key: '', tail: tailOf(e.detail) }),
     // #1161: both fell through to the humanizing fallback, which prints
     // the flag id raw -- "flag verdict distributed_brute_force:port 22"
-    // where the docket calls the same flag "DISTRIBUTED BRUTE FORCE ·
+    // where the docket calls the same flag "DISTRIBUTED BRUTE-FORCE ·
     // port 22". flagKey is that reading, and the other flag rows here
     // already use it.
     'flag.verdict': (e) => ({ lead: 'flag verdict ', key: flagKey(e.target), tail: tailOf(e.detail) }),
@@ -155,12 +195,27 @@
     'entity.delete': (e) => ({ lead: 'deleted entity ', key: e.target, tail: '' }),
     'coverage.declare': (e) => ({ lead: 'declared coverage for ', key: e.target, tail: tailOf(e.detail) }),
     'coverage.undeclare': (e) => ({ lead: 'undeclared coverage for ', key: e.target, tail: '' }),
-    'definition.create': (e) => named('created definition ', e),
-    'definition.clone': (e) => named('cloned definition ', e),
-    'definition.update': (e) => ({ lead: 'updated definition ', key: e.target, tail: tailOf(e.detail) }),
-    'definition.delete': (e) => ({ lead: 'deleted definition ', key: e.target, tail: tailOf(e.detail) }),
-    'definition.reset': (e) => ({ lead: 'reset definition ', key: e.target, tail: '' }),
-    'definition.promote': (e) => ({ lead: 'promoted definition ', key: e.target, tail: tailOf(e.detail) }),
+    // create/clone/update/delete apply to either kind -- definitionNoun
+    // (above) is what tells them apart (#1161). reset and promote don't
+    // need it: handleDefinitionsReset only ever resets a shipped
+    // detector's params, and handleDefinitionsPromote only ever moves
+    // destinations onto an inverted watch's permitted list (both
+    // internal/api/definitions.go) -- always the one kind, so it's named
+    // outright rather than looked up.
+    'definition.create': (e) => named(`created ${definitionNoun(e.target)} `, e),
+    'definition.clone': (e) => named(`cloned ${definitionNoun(e.target)} `, e),
+    'definition.update': (e) => ({
+      lead: `updated ${definitionNoun(e.target)} `,
+      key: e.target,
+      tail: tailOf(e.detail),
+    }),
+    'definition.delete': (e) => ({
+      lead: `deleted ${definitionNoun(e.target)} `,
+      key: e.target,
+      tail: tailOf(e.detail),
+    }),
+    'definition.reset': (e) => ({ lead: 'reset detector ', key: e.target, tail: '' }),
+    'definition.promote': (e) => ({ lead: 'promoted watch ', key: e.target, tail: tailOf(e.detail) }),
     'definition.observing.start': (e) => ({ lead: 'started observing ', key: e.target, tail: '' }),
     'definition.observing.stop': (e) => ({ lead: 'stopped observing ', key: e.target, tail: '' }),
     'definition.suggestion.accept': (e) => ({ lead: 'accepted suggestion ', key: e.target, tail: tailOf(e.detail) }),
