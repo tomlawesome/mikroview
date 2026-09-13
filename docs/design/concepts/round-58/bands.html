@@ -1,0 +1,838 @@
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 58 · the three bands</title>
+<style>
+  /* ============================================================
+     ROUND 5 — THE GLUE. Direction R: the deck.
+
+     The owner's own read of this round, promoted to the design: the
+     scenes are full-viewport cards in a vertical deck with scroll
+     snap. There is no "which scene is home" — the deck plays in the
+     operator's own order, and sign-in lands on whatever card they
+     put first. The atlas stays the jump navigator, and gains the
+     deck-order editor. P and Q are superseded by this one file,
+     which carries every scene once.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
+
+  /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
+  /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
+     rigid top bar"): the same information, loose on the void — no
+     strip, no border, no glass. Each element floats where it reads. */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .wordmark .hintkey { font-size: 9px; color: var(--ink-3); font-weight: 400; margin-left: 6px; letter-spacing: 0.08em; }
+  /* NO PAGE HEADING, NO STRAP (owner, 2026-08-31). The scene bar drew
+     a page name and an epithet; he struck them on metrics, the docket,
+     the fall and the topography in turn, so they are gone outright
+     rather than kept as a shrinking list of exceptions. The roll rail
+     already says which card you are on. Rounds up to 29 drew `.scname`
+     and `.scname .epi`; this is a change to the record, and the rule
+     is deleted here so nobody restores it from the stylesheet. */
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
+  .scstatus .who { color: var(--ink-3); }
+
+  /* ---- scene 1: the door — one beat, then in ---- */
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
+  .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
+  .door .stack { text-align: center; width: 300px; position: relative; z-index: 2; }
+  .door .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out;
+  }
+  .door .wm em { font-style: normal; color: var(--accent); }
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    /* The rain lives behind the door's elements, never across them: a
+       radial mask carves the centre out of the layer entirely. */
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+  .cred input {
+    display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); text-align: center; outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .enter {
+    margin-top: 20px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover { border-color: var(--accent); }
+
+  /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
+  .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
+  .lens { font-size: 11px; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 14px; padding: 3px 12px; }
+  .lens.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
+  .lens .ct { color: var(--void); background: var(--alarm); border-radius: 8px; padding: 0 6px; margin-left: 6px; font-weight: 700; font-size: 10px; }
+  .stage { position: absolute; inset: 132px 0 90px; }
+  .stage svg { width: 100%; height: 100%; }
+  .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
+  .n-name { font: 650 15px var(--sans); fill: var(--ink); }
+  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }
+  .n-sub { font: 11px var(--sans); fill: var(--ink-3); }
+  .cov { font: 700 9px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
+  .rib { fill: none; opacity: 0.5; }
+  .rib-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 3 6; opacity: 0.45; }
+  .rib-alarm { fill: none; stroke: var(--alarm); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45)); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .halo { animation: halo 2s ease-out infinite; }
+  @keyframes halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .scrub {
+    position: absolute; left: 20px; bottom: 118px; width: 300px; z-index: 4;
+    background: var(--glass); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 12px 6px;
+  }
+  .scrub .row { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scrub .live { color: var(--ok); }
+  .scrub svg { width: 100%; height: 26px; }
+  .scrub polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: 0.7; }
+  .scrub line { stroke: var(--now); stroke-width: 2; }
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2); padding: 8px 20px 10px;
+  }
+  .ticker .head { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .ticker .head i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .ticker .lift { color: var(--accent); }
+  .trow { display: flex; gap: 12px; font: 11.5px var(--mono); color: var(--ink-2); padding: 2px 0; }
+  .trow .t { color: var(--ink-3); }
+  .badge { font: 700 10px var(--mono); border-radius: 4px; padding: 0 6px; letter-spacing: 0.06em; }
+  .b-drop { color: var(--drop); background: rgba(245, 166, 35, 0.12); }
+  .b-accept { color: var(--accept); background: rgba(62, 207, 126, 0.12); }
+  .b-nat { color: var(--nat); background: rgba(45, 212, 191, 0.12); }
+
+  /* ---- scene 2 (Q): the fall — the accepted live build, restated ---- */
+  .fallwrap { position: absolute; inset: 78px 0 0; display: flex; flex-direction: column; }
+  .fall-head { display: flex; gap: 10px; align-items: center; padding: 10px 20px 4px; }
+  .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
+  .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
+  .fc-dim { color: var(--ink-2); border-color: var(--hair-2); }
+  .fall-info { position: absolute; bottom: 10px; left: 14px; z-index: 6; }
+  .ibtn {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair-2);
+    background: transparent; color: var(--ink-3); font: italic 600 11px Georgia, serif;
+    cursor: pointer; line-height: 1;
+  }
+  .ibtn:hover { color: var(--accent); border-color: var(--accent); }
+  .fallcanvas { flex: 1; position: relative; }
+  .fallcanvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bh-name { font: 650 11px var(--mono); fill: var(--ink); }
+  .bh-epi { font: 9.5px var(--sans); fill: var(--ink-3); }
+  .bh-watch { font: 700 8px var(--mono); fill: var(--ok); letter-spacing: 0.08em; }
+  .bh-watch.bad { fill: var(--alarm); }
+  .bh-watch.dim { fill: var(--ink-3); }
+  .spec { fill: rgba(90, 167, 240, 0.18); stroke: var(--fall-accept); stroke-width: 1.2; }
+  .spec.r { fill: rgba(224, 82, 82, 0.16); stroke: var(--fall-drop); }
+  .peak-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .now-t { font: 10px var(--mono); fill: var(--now); }
+  .gut { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .carrier { stroke-linecap: round; }
+  .flagline { stroke: var(--alarm); stroke-width: 0.7; stroke-dasharray: 2 5; opacity: 0.7; }
+  .flag-t { font: 700 9.5px var(--mono); fill: var(--alarm); }
+  .dark-t { font: 9.5px var(--mono); fill: var(--fall-drop); }
+  .port-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .fall-legend { display: flex; gap: 24px; justify-content: center; padding: 8px 12px 12px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair); flex-wrap: wrap; }
+  .fall-legend .b { color: var(--fall-accept); }
+  .fall-legend .r { color: var(--fall-drop); }
+  .fall-legend .v { color: #a78bfa; }
+
+  /* ---- the topography card: one place, two viewpoints, three depths ---- */
+  .modechip {
+    margin-left: 18px; font: 600 10.5px var(--mono); letter-spacing: 0.08em;
+    color: var(--accent); background: var(--raised); border: 1px solid var(--hair-2);
+    border-radius: 14px; padding: 3px 14px; cursor: pointer;
+  }
+  #topo { perspective: 1400px; }
+  #topo svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  #topo.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  #topo .isl-card, #topo .g-dot, #topo .detail, #topo .svc, #topo .cli { transition: opacity 0.55s ease; }
+  #topo .g-dot { opacity: 0; pointer-events: none; }
+  #topo.survey .g-dot { opacity: 1; }
+  #topo.survey .isl-card, #topo.survey .detail { opacity: 0; pointer-events: none; }
+  #topo[data-lvl="0"] .svc, #topo[data-lvl="0"] .cli { opacity: 0; }
+  #topo[data-lvl="1"] .cli { opacity: 0; }
+  .cli .c-dot { stroke: none; }
+  .cli .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .cli .spoke { stroke-width: 0.8; opacity: 0.3; }
+  @media (prefers-reduced-motion: reduce) { #topo svg { transition: none; } }
+
+  /* ---- the deck: snap + the rail ---- */
+  html { scroll-snap-type: y mandatory; }
+  .scene { scroll-snap-align: start; scroll-snap-stop: always; }
+  /* The roll rail (owner, round 11): the deck's names as vertical text
+     hugging the right edge, letter-tops outward. Click one: the card
+     rolls to centre while the name gently grows, in the same beat. */
+  .deckrail {
+    position: fixed; right: 8px; top: 50%; transform: translateY(-50%); z-index: 60;
+    display: flex; flex-direction: column; gap: 30px; align-items: center;
+  }
+  .deckrail a {
+    writing-mode: sideways-lr; text-decoration: none; color: var(--ink-3);
+    font: 500 9.5px var(--mono); letter-spacing: 0.22em;
+    transition: font-size 0.45s cubic-bezier(0.4, 0, 0.2, 1), color 0.3s, letter-spacing 0.45s;
+  }
+  .deckrail a:hover { color: var(--ink-2); }
+  .deckrail a.on { color: var(--ink); font-size: 12px; letter-spacing: 0.26em; }
+  /* ---- the atlas's deck-order editor ---- */
+  .heartdeck {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--ink-2);
+    text-align: left; min-width: 240px;
+  }
+  .heartdeck .lab { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 2px; text-align: center; }
+  .heartdeck .card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 14px; background: var(--raised); cursor: grab; }
+  .heartdeck .card .n { color: var(--ink-3); font-size: 10px; }
+  .heartdeck .card .grip { color: var(--ink-3); letter-spacing: -1px; }
+  .heartdeck .first { border-color: var(--accent); }
+  .heartdeck .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; margin-left: 4px; }
+  .heartdeck .hint { font-size: 9.5px; color: var(--ink-3); text-align: center; margin-top: 2px; }
+  .faro-orbit { stroke: var(--hair); }
+  .dest .dg { fill: var(--raised); stroke: var(--ink-3); stroke-width: 1.5; transform: rotate(45deg); }
+  .dest .dest-l { font: 600 12px var(--sans); fill: var(--ink-2); }
+  .dest .dest-b { font: 700 10px var(--mono); fill: var(--void); }
+  .dest:hover .dg { stroke: var(--accent); }
+  .dest:hover .dest-l { fill: var(--ink); }
+
+  /* ---- scene 3: the atlas overlay ---- */
+  .atlas { min-height: 100vh; display: flex; flex-direction: column; background: radial-gradient(900px 540px at 50% 30%, rgba(80, 115, 205, 0.08), transparent 65%), var(--void); }
+  .atlas .chart { flex: 1; position: relative; }
+  .atlas .chart svg { width: 100%; height: 100%; position: absolute; inset: 0; }
+  .orbit { fill: none; stroke: var(--hair-2); stroke-dasharray: 2 7; }
+  .zrib { stroke: var(--hair); stroke-width: 1; }
+  .station-ring { fill: none; stroke: var(--accent); stroke-opacity: 0.5; }
+  .station-core { fill: var(--accent); }
+  .station-label { font: 10.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-dot { fill: var(--raised); stroke-width: 2.5; }
+  .zone-label { font: 650 13.5px var(--sans); fill: var(--ink); }
+  .zone-epithet { font: 11px var(--sans); fill: var(--ink-3); }
+  .zone-state { font: 700 9px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-state.bad { fill: var(--alarm); }
+  .atlas .hint { text-align: center; font-size: 11px; color: var(--ink-3); padding: 6px 0 14px; }
+  .ports { display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; padding: 16px 20px 10px; border-top: 1px solid var(--hair); }
+  .pgroup { min-width: 110px; }
+  .pname { display: block; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .port { display: block; font-size: 12.5px; color: var(--ink-2); padding: 2px 0; cursor: pointer; }
+  .port.on { color: var(--accent); font-weight: 650; }
+  .port .home { font-size: 9px; color: var(--ink-3); letter-spacing: 0.1em; margin-left: 6px; }
+  .port .badge { margin-left: 6px; }
+  .atlas .account { display: flex; gap: 22px; justify-content: center; font-size: 11px; color: var(--ink-3); padding: 8px 0 22px; }
+  .atlas .account b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- scene 4: the stream, columns squared ---- */
+  .controls { position: absolute; top: 50px; right: 24px; display: flex; gap: 10px; align-items: center; }
+  .controls .search {
+    width: 320px; padding: 5px 12px; font: 12px var(--mono); color: var(--ink-2);
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair); border-radius: 7px;
+  }
+  .controls .search em { font-style: normal; color: var(--accent); }
+  .spans { display: flex; gap: 2px; font: 10.5px var(--mono); color: var(--ink-3); }
+  .spans span { padding: 3px 9px; border-radius: 6px; }
+  .spans .on { color: var(--ink); background: var(--raised); border: 1px solid var(--hair); }
+  table.stream { width: calc(100% - 40px); margin: 100px 20px 14px; border-collapse: collapse; font: 12px var(--mono); }
+  table.stream th {
+    text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--hair-2);
+  }
+  table.stream td { padding: 5px 10px; border-bottom: 1px solid var(--hair); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  table.stream .num { text-align: right; }
+  table.stream .host { color: var(--ink); }
+  table.stream .geo { color: var(--ink-3); font-size: 10.5px; }
+  table.stream tr.hl td { background: rgba(255, 84, 112, 0.05); }
+
+  /* The three facts of the day, and the reason you would look at the
+     stream at all -- they were set at the same weight as a caption.
+     Lifted to the ticker's own footing: a real band, ink-2 body, the
+     salient token in full ink. */
+  .foot-legend {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 44px; justify-content: center;
+    padding: 12px 20px 13px; font-size: 12.5px; color: var(--ink-2);
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2);
+  }
+  .foot-legend .k { color: var(--ink); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+<style>
+  .alt { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; gap: 14px; align-items: center; font: 500 9px var(--mono); letter-spacing: 0.12em; color: var(--ink-3); opacity: 0.6; }
+  .alt:hover { opacity: 1; }
+  .alt input { width: 210px; height: 2px; accent-color: var(--accent); }
+  .wlens2 { position: absolute; bottom: 12px; left: 26px; z-index: 6; display: flex; gap: 14px; font: 500 10.5px var(--sans); color: var(--ink-3); opacity: 0.8; }
+  .wlens2 .on { color: var(--ink); }
+  .flag-t { font: 700 10px var(--mono); fill: var(--alarm); }
+  .whisper { position: absolute; top: 92px; left: 24px; right: 24px; z-index: 8; display: flex; gap: 26px; align-items: center; font: 11px var(--mono); color: var(--ink-3); }
+  .whisper svg { height: 22px; width: 190px; }
+  .whisper polyline { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: 0.7; }
+  .whisper .k { color: var(--ink-2); }
+  .whisper .r { color: var(--fall-drop); }
+
+  .wtab-r { fill: rgba(232, 176, 90, 0.13); stroke: rgba(232, 176, 90, 0.45); }
+  .wtab { font: 600 9.5px var(--mono); fill: var(--now); }
+  .ftab-r { fill: rgba(255, 84, 112, 0.12); stroke: rgba(255, 84, 112, 0.45); }
+  .ftab { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  .alt input { -webkit-appearance: none; appearance: none; height: 2px; background: var(--hair-2); border-radius: 1px; }
+  .alt input::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 9px; height: 9px;
+    background: var(--void); border: 1.5px solid var(--accent); border-radius: 2px;
+    transform: rotate(45deg); cursor: pointer;
+  }
+  .alt input::-moz-range-thumb {
+    width: 9px; height: 9px; background: var(--void); border: 1.5px solid var(--accent);
+    border-radius: 2px; transform: rotate(45deg); cursor: pointer;
+  }
+</style>
+<style>
+  .mx { position: absolute; inset: 110px 24px 40px; display: grid; grid-template-columns: 2fr 1fr; gap: 48px; }
+  .mx-t { font: 600 9.5px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); margin-bottom: 12px; }
+  .mx-chart svg { width: 100%; height: 60%; }
+  .mx-legend { display: flex; gap: 22px; font: 10.5px var(--mono); color: var(--ink-3); margin-top: 10px; }
+  .mx-bar { display: flex; align-items: center; gap: 10px; margin: 7px 0; font: 11.5px var(--mono); color: var(--ink-2); }
+  .mx-bar .h { width: 120px; color: var(--ink); }
+  .mx-bar i { display: block; height: 5px; border-radius: 3px; background: var(--fall-accept); opacity: 0.75; }
+  .mx-bar b { color: var(--ink-3); font-weight: 500; }
+</style>
+<style>
+  /* Aggregates are part of their entity (owner, round 12): drawn inside
+     the card, matching the house chip style — rounded, hairline — in
+     their colours only, riding the camera with everything else. */
+  .wchip-r { fill: rgba(232, 176, 90, 0.10); stroke: rgba(232, 176, 90, 0.40); stroke-width: 0.9; }
+  .wchip { font: 600 9.5px var(--mono); fill: var(--now); }
+  .fchip-r { fill: rgba(255, 84, 112, 0.10); stroke: rgba(255, 84, 112, 0.40); stroke-width: 0.9; }
+  .fchip { font: 600 9.5px var(--mono); fill: var(--alarm); }
+  .gd-agg { font: 600 9px var(--mono); }
+</style>
+<style>
+  .mviews { position: absolute; top: 20px; left: 148px; z-index: 12; display: flex; gap: 16px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .mviews span { cursor: pointer; }
+  .mviews .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 2px; }
+  .hourline { position: absolute; top: 62px; left: 26px; right: 26px; display: flex; gap: 10px; align-items: baseline; font: 11px var(--mono); color: var(--ink-3); flex-wrap: wrap; }
+  .hourline .big { font-size: 17px; color: var(--ink); }
+  .hourline .unit { font-size: 9px; color: var(--ink-3); margin-left: 6px; letter-spacing: 0.06em; }
+  .hourline .fact b { color: var(--ink-2); font-weight: 600; }
+  .hourline .sep { opacity: 0.5; }
+  .hourline .gap { flex: 1; }
+  .hourline .brinkmark { color: var(--now); }
+  .drumwrap { position: absolute; inset: 108px 24px 30px; }
+  .drumwrap svg { width: 100%; height: 100%; }
+</style>
+<style>
+  /* C corrected (owner, round-14 verdict): the boxes go UNDERNEATH the
+     card they belong to, full width of it, both equally sized, stacked;
+     flags the foot. Watchers purple — ratified this round. */
+  .wp-r { fill: rgba(167, 139, 250, 0.10); stroke: rgba(167, 139, 250, 0.40); stroke-width: 0.9; }
+  .wp { font: 600 9.5px var(--mono); fill: #a78bfa; }
+  .stage { perspective: 1400px; }
+  .stage svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  .stage.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  .stage .isl-card, .stage .g-dot, .stage .detail, .stage .svc, .stage .cli { transition: opacity 0.55s ease; }
+  .stage .g-dot { opacity: 0; pointer-events: none; }
+  .stage.survey .g-dot { opacity: 1; }
+  .stage.survey .isl-card, .stage.survey .detail { opacity: 0; pointer-events: none; }
+  .stage[data-lvl="0"] .svc, .stage[data-lvl="0"] .cli { opacity: 0; }
+  .stage[data-lvl="1"] .cli { opacity: 0; }
+  /* The slider's stops, marked on the line itself: a tiny symbol each,
+     no text (owner, this round). Clicking anywhere on the line jumps to
+     the nearest stop — the input already snaps, the ticks just show
+     where the stops live. The survey stop wears the atlas diamond. */
+  .altwrap { position: relative; display: inline-flex; align-items: center; }
+  .altwrap .tick {
+    position: absolute; top: 50%; width: 3px; height: 3px; border-radius: 50%;
+    background: var(--ink-3); transform: translate(-50%, -50%); pointer-events: none;
+  }
+  .altwrap .tick.survey {
+    width: 5px; height: 5px; border-radius: 0; background: transparent;
+    border: 1px solid var(--ink-3); transform: translate(-50%, -50%) rotate(45deg);
+  }
+</style>
+<style>
+  .dtabs { position: absolute; top: 20px; left: 148px; z-index: 12; display: flex; gap: 16px; font: 500 11px var(--sans); color: var(--ink-3); }
+  .dtabs span { cursor: pointer; }
+  .dtabs .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 2px; }
+  /* NO COUNTS ON THE DOCKET'S TABS (owner, 2026-08-31). Rounds 17-19
+     tried them inline, then beneath the names; both were called clumsy
+     and the tab row now carries the names alone. The counts still live
+     where they are read — the chrome's ⚑ and eye marks, on every scene.
+     Round 29 still carried `.dtabs .under` and its inks in the sheet
+     with nothing using them; they are deleted so no later build can
+     restore counts from the stylesheet. */
+  .panel { position: absolute; inset: 96px 36px 40px; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
+  .panel:not(.on) { display: none; }
+  .panel table { border-collapse: collapse; font: 12px var(--mono); width: 100%; max-width: 1520px; }
+  .panel th, .panel td { padding: 8px 18px; text-align: left; }
+  .panel thead th { font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--hair-2); cursor: pointer; user-select: none; white-space: nowrap; }
+  .panel thead th:hover { color: var(--ink-2); }
+  .panel thead th .dir { color: var(--accent); margin-left: 5px; }
+  /* every column doubles as a filter: a quiet inline row under the heads */
+  .panel tr.filters td { padding: 2px 18px 8px; border-bottom: 1px solid var(--hair); }
+  .panel tr.filters input {
+    width: 100%; background: transparent; border: 0; border-bottom: 1px dashed var(--hair);
+    font: 10.5px var(--mono); color: var(--ink-2); padding: 2px 0; outline: none;
+  }
+  .panel tr.filters input::placeholder { color: var(--ink-3); opacity: 0.6; }
+  .panel tr.filters input:focus { border-bottom-color: var(--accent); }
+  .panel td { color: var(--ink-2); border-bottom: 1px solid var(--hair); }
+  .panel tr.frow { cursor: pointer; }
+  .panel tr.frow:hover td { background: rgba(160, 185, 230, 0.04); }
+  .panel tr.frow.open td { border-bottom-color: transparent; background: rgba(160, 185, 230, 0.04); }
+  .panel td.t { color: var(--ink-3); }
+  .panel td.k { color: var(--ink); }
+  .panel td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .panel .openc { color: var(--accent); white-space: nowrap; transition: transform 0.2s; display: inline-block; }
+  .frow.open .openc { transform: rotate(90deg); }
+  .fmark { font-weight: 700; white-space: nowrap; }
+  .ft-unplanned .fmark { color: #ff5470; } .ft-unplanned td:first-child { box-shadow: inset 3px 0 0 #ff5470; }
+  .ft-portscan .fmark { color: #ff9e64; } .ft-portscan td:first-child { box-shadow: inset 3px 0 0 #ff9e64; }
+  .ft-outbound .fmark { color: #f072c8; } .ft-outbound td:first-child { box-shadow: inset 3px 0 0 #f072c8; }
+  .ft-repeat .fmark { color: #e0765a; } .ft-repeat td:first-child { box-shadow: inset 3px 0 0 #e0765a; }
+  .ft-surge .fmark { color: #e8b05a; } .ft-surge td:first-child { box-shadow: inset 3px 0 0 #e8b05a; }
+  .ft-talker .fmark { color: #b8c56a; } .ft-talker td:first-child { box-shadow: inset 3px 0 0 #b8c56a; }
+  .wl { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--hair-2); }
+  .wl:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .wchip2 { font: 600 10.5px var(--mono); color: #a78bfa; border: 1px solid rgba(167, 139, 250, 0.40); background: rgba(167, 139, 250, 0.10); border-radius: 9px; padding: 1px 10px; white-space: nowrap; }
+  .wchip2.broken { color: var(--alarm); border-color: rgba(255, 84, 112, 0.45); background: rgba(255, 84, 112, 0.10); }
+  /* the drawer: the row opens downward and presents the info */
+  tr.drawer > td { padding: 0 18px; border-bottom: 0; }
+  tr.drawer .dwr { overflow: hidden; max-height: 0; transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  tr.drawer.open > td { border-bottom: 1px solid var(--hair); }
+  tr.drawer.open .dwr { max-height: 300px; }
+  .dwr-in { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px 36px; padding: 6px 2px 16px; border-left: 3px solid var(--hair-2); padding-left: 20px; margin-bottom: 10px; }
+  .dwr-in .story { font: 12.5px var(--sans); color: var(--ink-2); line-height: 1.55; }
+  .dwr-in .story b { color: var(--ink); font-weight: 600; }
+  .dwr-in .lines { grid-column: 1; font: 10.5px var(--mono); color: var(--ink-3); white-space: pre; overflow: hidden; }
+  .dwr-in .side { grid-column: 2; grid-row: 1 / span 2; }
+  .dwr-in .side .lab { font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .dwr-in .side svg { width: 100%; height: 34px; margin: 6px 0 2px; }
+  .dwr-in .side .span { font: 10.5px var(--mono); color: var(--ink-3); }
+  .dwr-acts { grid-column: 1 / -1; display: flex; gap: 10px; margin-top: 2px; }
+  .dwr-acts button { font: 600 11px var(--sans); color: var(--accent); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 4px 16px; cursor: pointer; }
+  .dwr-acts button:hover { border-color: var(--accent); }
+  .dwr-acts button.quiet { color: var(--ink-3); }
+  /* the reach scene */
+  .reach-stage { position: absolute; inset: 110px 0 60px; }
+  .reach-stage svg { width: 100%; height: 100%; }
+  /* two scenes in this file: the rail anchors to its scene, not the viewport */
+  
+  .crumb { position: absolute; top: 62px; left: 26px; z-index: 6; font: 500 11px var(--sans); color: var(--ink-3); }
+  .crumb a { color: var(--accent); text-decoration: none; cursor: pointer; }
+</style>
+<style>
+  /* counts beneath the tab names (owner: the inline numbers read clumsy) */
+  .dtabs { top: 20px; }
+  .dtabs > span { display: inline-flex; align-items: center; }
+  .dtabs .on { border-bottom: 0; position: relative; }
+  .dtabs .on::after { content: ''; position: absolute; left: 0; right: 0; bottom: -3px; height: 1px; background: var(--accent); }
+  .panel { inset: 100px 36px 40px; }
+  /* one unbroken line: row and drawer share the stripe, no drawer indent */
+  tr.drawer.ft-unplanned > td { box-shadow: inset 3px 0 0 #ff5470; }
+  tr.drawer.ft-portscan > td { box-shadow: inset 3px 0 0 #ff9e64; }
+  tr.drawer.ft-outbound > td { box-shadow: inset 3px 0 0 #f072c8; }
+  tr.drawer.ft-repeat > td { box-shadow: inset 3px 0 0 #e0765a; }
+  tr.drawer.ft-surge > td { box-shadow: inset 3px 0 0 #e8b05a; }
+  tr.drawer.ft-talker > td { box-shadow: inset 3px 0 0 #b8c56a; }
+  tr.frow.wt-broken td:first-child, tr.drawer.wt-broken > td { box-shadow: inset 3px 0 0 var(--alarm); }
+  tr.frow.wt-ok td:first-child, tr.drawer.wt-ok > td { box-shadow: inset 3px 0 0 #a78bfa; }
+  .dwr-in { border-left: 0; padding-left: 20px; }
+  
+  .dials { position: absolute; top: 108px; right: 26px; z-index: 6; display: flex; gap: 12px; }
+  .dial { color: var(--ink-3); }
+  .dial .dnum { font: 700 13px var(--mono); fill: var(--ink); }
+  .dial .dsym { font: 10px var(--sans); fill: currentColor; }
+
+</style>
+<style>
+  /* ============================================================
+     ROUND 30 — the stream's top, ordered; and the filter's home.
+
+     Round 29's stream stacked four absolutely-positioned strips at
+     hand-picked offsets. The whisper sat at 88px and stood 46px tall
+     (a 30px line with its two time labels hanging 32px beneath it);
+     the table began at 100px. They overlapped by most of the whisper.
+     Coordinates cannot hold an order — so the top is a flow column
+     now, and each band simply follows the one above it.
+
+     The filter is the same object in two hands (rounds 6-8): the box
+     carries the typed grammar and is ALWAYS on screen, so there is
+     always a way in; `◂ bar` slides round 8's thin strip out of the
+     box's own left edge, and the strip is that filter as named
+     fields. Round 7's glass panel is not restored — it was rejected.
+     ============================================================ */
+  .streamtop {
+    position: relative; z-index: 8;
+    padding: 54px 24px 0; display: flex; flex-direction: column; gap: 14px;
+  }
+  .filterline { display: flex; gap: 18px; align-items: center; }
+
+  /* the handle is welded to the box's left edge, so the bar visibly
+     comes OUT of the box rather than appearing beside it */
+  .fb-open {
+    flex: none; font: 600 10.5px var(--mono); letter-spacing: 0.06em;
+    color: var(--accent); background: transparent;
+    border: 1px solid var(--hair); border-right: 0; border-radius: 7px 0 0 7px;
+    padding: 6px 11px; cursor: pointer; white-space: nowrap;
+  }
+  .fb-open:hover { border-color: var(--hair-2); color: var(--ink); }
+  .fb-open.on { color: var(--ink); background: var(--raised); }
+  .fbox {
+    flex: 1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    min-height: 28px; padding: 4px 12px;
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair);
+    border-radius: 0 7px 7px 0; font: 12px var(--mono); color: var(--ink-2);
+  }
+  .fbox .fchips { display: flex; gap: 12px; flex-wrap: wrap; }
+  .fbox .chip { display: inline-flex; gap: 5px; align-items: baseline; white-space: nowrap; }
+  .fbox .chip em { font-style: normal; color: var(--accent); }
+  .fbox .chip b { color: var(--ink-3); font-weight: 400; cursor: pointer; }
+  .fbox .chip b:hover { color: var(--alarm); }
+  /* the empty box still says what it is — round 29's box rendered only
+     when a filter existed, which is exactly why the app kept a second
+     "Filters ▸" control alive beside it */
+  .fbox .fbtype { color: var(--ink-3); }
+  .fbox.empty .fbtype { color: var(--ink-3); }
+
+  /* round 8's thin bar, unchanged in substance: dim micro-labels over
+     hairline-underlined values, one quiet row, no boxes */
+  .filterbar {
+    display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap;
+    padding: 8px 14px 10px;
+    background: rgba(10, 14, 24, 0.55); backdrop-filter: blur(6px);
+    border: 1px solid var(--hair); border-radius: 8px;
+    animation: unfurl 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform-origin: right center;
+  }
+  .filterbar[hidden] { display: none; }
+  @keyframes unfurl { from { transform: scaleX(0.04); opacity: 0; } }
+  .fb-f { display: flex; flex-direction: column; gap: 2px; min-width: 60px; }
+  .fb-f .l { font: 500 8px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .fb-f .v { font: 12px var(--mono); color: var(--ink); border-bottom: 1px solid var(--hair-2); padding: 1px 2px 3px; min-width: 56px; }
+  .fb-f .v.dim { color: var(--ink-3); }
+  .fb-f .v em { font-style: normal; color: var(--ink-3); font-size: 10px; }
+  .fb-f .v.hot { border-bottom-color: var(--drop); }
+  .fb-swap { align-self: center; color: var(--ink-3); font-size: 13px; cursor: pointer; padding: 0 2px; }
+  .fb-swap:hover { color: var(--accent); }
+  .fb-clear { align-self: center; color: var(--ink-3); font-size: 12px; cursor: pointer; margin-left: auto; }
+  .fb-clear:hover { color: var(--alarm); }
+  .fb-fold { align-self: center; color: var(--accent); font: 10.5px var(--mono); background: transparent; border: 0; cursor: pointer; white-space: nowrap; }
+
+  /* the whisper joins the column; its time labels hang 32px below the
+     line, so the band reserves the room rather than borrowing the
+     table's */
+  #s5 .whisper { position: static; left: auto; right: auto; top: auto; margin-bottom: 22px; }
+  #s5 table.stream { width: 100%; margin: 0; padding: 0 24px 14px; }
+  #s5 table.stream th:first-child, #s5 table.stream td:first-child { padding-left: 0; }
+  #s5 table.stream th:last-child, #s5 table.stream td:last-child { padding-right: 0; }
+
+  /* the flag mark rides AFTER the time, so the tabular figures keep one
+     left edge to line up on; the row wash stays — the mark annotates it */
+  table.stream .rmk { font-style: normal; color: var(--alarm); margin-left: 8px; font-size: 11px; }
+  /* the country glyph never carries the meaning alone: the two-letter
+     code stays beside it, and a row with no country gets neither */
+  table.stream .cf { margin-right: 6px; font-size: 11px; }
+</style>
+<style>
+  /* ROUND 30 — "your deck" is a column of Settings, not a shelf above it
+     (owner, 2026-08-31). Same seven cards, same signature marks, same
+     drag-to-reorder; they simply stand in their own column beside the
+     settings proper instead of pushing them down the page. */
+  /* Two columns and no more: the deck on the left, everything else
+     stacked down the right at full width (owner, 2026-08-31). The
+     settings groups were paired into a 1fr 1fr sub-grid, which made
+     four narrow boxes out of a screen that had room for wide ones. */
+  #set .stgrid { grid-template-columns: 1fr; gap: 12px; }
+  #set .stcol { gap: 12px; }
+  /* the two drawings inside are viewBox-scaled, so a full-width column
+     would blow them up to a few hundred pixels tall — they keep their
+     own reading size and sit left */
+  #set .stpath, #set .stmem { max-width: 100%; }
+  /* Stacked full-width groups would just be wide whitespace with the
+     rows hugging the right edge, and the two viewBox drawings would
+     blow up to a few hundred pixels tall. So a group with a drawing
+     splits: the drawing and its caption on the left, its rows on the
+     right. The width buys a shorter page instead of a longer one. */
+  #set .og.wide { display: grid; grid-template-columns: 560px 1fr; column-gap: 40px; align-items: start; }
+  #set .og.wide > h3 { grid-column: 1 / -1; }
+  #set .og.wide > .wleft { grid-column: 1; }
+  #set .og.wide > .wrows { grid-column: 2; }
+  #set .og.wide .orow:first-child { border-top: 0; }
+  #set .og.wide .stflags { padding: 4px 0 0; }
+  #set .og.wide .oghint { margin-bottom: 0; }
+  #set .setlay { display: grid; grid-template-columns: 224px 1fr; gap: 22px; align-items: start; }
+  #set .deckcol { margin-bottom: 0; }
+  #set .deckcol .stshelf { flex-direction: column; flex-wrap: nowrap; gap: 6px; padding: 4px 0 0; }
+  #set .deckcol .stcard { width: 100%; padding: 8px 12px 7px; }
+  #set .deckcol .stcard svg { height: 22px; margin-bottom: 5px; }
+  #set .deckcol .stcard .lv { margin-top: 4px; }
+<style>
+  /* ============================================================
+     ROUND 33 — SUGGESTIONS AND MATCHES. Additive to round 31's docket;
+     the one thing that grows is round 30's single last-match line,
+     which becomes the first line of a list.
+     ============================================================ */
+  /* what a watch matched: the drawer's log, where the last-match line was */
+  .matches { grid-column: 1; }
+  .matches .lab { font: 600 9px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .mlist { list-style: none; margin: 4px 0 0; padding: 0; }
+  .mlist li { display: grid; grid-template-columns: 74px 1fr auto; align-items: center; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--hair); font: 11px var(--mono); }
+  .mlist .w, .mlist .t { color: var(--ink-3); } .mlist .k { color: var(--ink); } .mlist .k i { color: var(--ink-3); font-style: normal; }
+  .slink { font: 10.5px var(--mono); color: var(--accent); cursor: pointer; text-decoration: none; }
+  .slink:hover { text-decoration: underline; }
+  .slink.quiet { color: var(--ink-3); }
+  .slink.armed { color: var(--alarm); text-decoration: none; }
+  .matches .older { display: inline-block; margin-top: 6px; }
+  tr.drawer.has-m.open .dwr { max-height: 380px; }
+  tr.drawer.wt-learn.has-m.open .dwr { max-height: 520px; }
+  /* suggestions: a second body, its own quiet heading, dashed ink until said yes to */
+  #sugg .sdiv td { padding: 22px 10px 6px; border-bottom: 1px solid var(--hair); }
+  #excl .sdiv td { padding: 22px 10px 6px; border-bottom: 1px solid var(--hair); }
+  #sugg .sdiv .sdl { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  #excl .sdiv .sdl { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  #sugg .sdiv .sdl b { color: var(--ink-2); font-weight: 600; }
+  #excl .sdiv .sdl b { color: var(--ink-2); font-weight: 600; }
+  #sugg .sdiv .sdr { float: right; display: inline-flex; gap: 18px; }
+  #excl .sdiv .sdr { float: right; display: inline-flex; gap: 18px; }
+  #sugg .sdiv .sdr b { font-weight: 600; }
+  #excl .sdiv .sdr b { font-weight: 600; }
+  /* the heading's two verbs wear the drawer's pill, so they read as things to do, not notes */
+  #sugg .sdiv .sdr .slink { font: 600 11px var(--sans); border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; }
+  #excl .sdiv .sdr .slink { font: 600 11px var(--sans); border: 1px solid var(--hair-2); border-radius: 999px; padding: 3px 12px; }
+  #sugg .sdiv .sdr .slink:hover { border-color: var(--accent); text-decoration: none; }
+  #excl .sdiv .sdr .slink:hover { border-color: var(--accent); text-decoration: none; }
+  #sugg .sdiv .sdr .slink.quiet:hover { border-color: var(--ink-3); }
+  #excl .sdiv .sdr .slink.quiet:hover { border-color: var(--ink-3); }
+  #sugg .sdiv .sdr .slink.armed { border-color: var(--alarm); }
+  #excl .sdiv .sdr .slink.armed { border-color: var(--alarm); }
+  #sugg .sdiv .sdr .slink:empty { display: none; }
+  #excl .sdiv .sdr .slink:empty { display: none; }
+
+  /* ============================================================
+     round 34: verdicts and exclusions — a verdict is how a flag is
+     cleared; an exclusion is a verdict that outlives the flag
+     ============================================================ */
+  /* round 35: the verdict trio lives in the row, before the caret — one click, no drawer.
+     Three glyph chips in the verdict's own ink; a call lands as a stamp on the row */
+  .panel td.vc { text-align: right; white-space: nowrap; }
+  .panel th.vc { text-align: right; }
+  .vrow { display: inline-flex; gap: 6px; vertical-align: middle; margin-right: 16px; }
+  .vrow button.v { --vc: var(--ink-2); font: 10.5px var(--mono); color: var(--ink-2); background: transparent; border: 1px solid var(--hair-2); border-radius: 999px; padding: 1px 9px 1px 7px; cursor: pointer; line-height: 16px; transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.15s; }
+  .vrow button.v i { font-style: normal; color: var(--vc); margin-right: 5px; font-weight: 700; }
+  .vrow button.v.expected { --vc: var(--ok); }
+  .vrow button.v.noise { --vc: var(--now); }
+  .vrow button.v.real { --vc: var(--alarm); }
+  .vrow button.v:hover { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 12%, transparent); transform: translateY(-1px); }
+  .vrow button.v.on { color: var(--vc); border-color: var(--vc); background: color-mix(in srgb, var(--vc) 18%, transparent); }
+  /* the stamp: a verdict pressed onto the docket in its own ink */
+  .stamp { --vc: var(--ink-3); display: inline-block; font: 800 9.5px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--vc); border: 1.5px solid var(--vc); border-radius: 3px; padding: 1px 7px 1px 8px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vc) 35%, transparent); animation: stamp-in 0.28s cubic-bezier(0.2, 1.6, 0.4, 1) both; vertical-align: middle; }
+  .stamp.expected { --vc: var(--ok); } .stamp.noise { --vc: var(--now); } .stamp.real { --vc: var(--alarm); }
+  @keyframes stamp-in { from { transform: scale(1.9); opacity: 0; } 60% { opacity: 1; } to { transform: scale(1); } }
+  /* the row takes the ink for a moment as the stamp lands */
+  tr.frow.struck td { animation: struck 0.7s ease-out both; }
+  @keyframes struck { from { background: color-mix(in srgb, var(--sc, var(--ink-3)) 16%, transparent); } }
+  tr.frow.struck.expected { --sc: var(--ok); } tr.frow.struck.noise { --sc: var(--now); } tr.frow.struck.real { --sc: var(--alarm); }
+  .vdone .by { color: var(--ink-3); margin-left: 8px; }
+  /* called real: the stamp takes the chips' place and the row's own bar swells */
+  /* the bar swells, it does not step: a lens over the 3 px bar, its ends arcing back to it */
+  tr.frow td:first-child { position: relative; }
+  tr.frow td:first-child::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--alarm); opacity: 0; border-radius: 0 4px 4px 0 / 0 10px 10px 0; transition: width 0.35s ease, opacity 0.35s ease; }
+  tr.frow.isreal td:first-child::before { width: 7px; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .stamp, tr.frow.struck td { animation: none; } .vrow button.v:hover { transform: none; } }
+  .dwr-acts .never { margin-left: auto; }
+  .dwr-acts .never.armed { color: var(--alarm); border-color: var(--alarm); }
+  /* a flag that has been called: dims in place, keeps its row, offers undo until you leave the tab */
+  tr.frow.fdone td { opacity: 0.45; }
+  tr.frow.fdone td:first-child { box-shadow: none !important; }
+  tr.frow.fdone td:last-child { opacity: 1; }
+  /* takes the trio's place in the same cell, so the columns never move for it */
+  .vdone { font: 10.5px var(--mono); color: var(--ink-3); white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+  .vdone + .openc { margin-left: 16px; }
+  .vdone a { color: var(--accent); cursor: pointer; margin-left: 8px; }
+  .vdone a:hover { text-decoration: underline; }
+  /* called real: stays open, and says so where the type is */
+  .story .called { display: block; color: var(--ink-3); font-size: 11px; margin-bottom: 6px; }
+  /* the exclusions body: the type's ink is off — mikroview does not look at these */
+  tr.fx .fmark { color: var(--ink-3) !important; }
+  tr.fx td:first-child { box-shadow: none !important; }
+  tr.frow.fx td { opacity: 0.7; }
+  tr.frow.fx.open td { opacity: 1; }
+  .wchip2.sugg { color: var(--ink-3); border-style: dashed; border-color: var(--hair-2); background: transparent; }
+  tr.frow.wt-sugg td.k, tr.frow.wt-aside td.k { color: var(--ink-2); }
+  tr.frow.wt-sugg td:first-child, tr.drawer.wt-sugg > td { box-shadow: inset 3px 0 0 var(--hair); }
+  tr.frow.wt-aside td:first-child, tr.drawer.wt-aside > td { box-shadow: inset 3px 0 0 transparent; }
+  tr.frow.wt-aside td { opacity: 0.6; }
+  tr.drawer.wt-sugg.open .dwr, tr.drawer.wt-aside.open .dwr { max-height: 300px; }
+  .seen.facts li { grid-template-columns: 84px 1fr; }
+  tr.wempty td { text-align: center; padding: 48px 0 40px; font: 13px var(--sans); color: var(--ink-2); line-height: 1.7; }
+  tr.wempty b { color: var(--ink); }
+  .seen.facts .t { text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px; }
+</style>
+
+<style>
+  /* ============================================================
+     ROUND 47 — campaigns, the scored number, the by-type strip (#988).
+     Additive to round 35; nothing above it is redrawn.
+     ============================================================ */
+  /* the strip and the table share one width, so the strip is exactly
+     as wide as the table beneath it */
+  .fwrap { width: 100%; max-width: 1520px; }
+
+  /* --- flags by type: one cell per open type, across the whole width.
+     The label carries identity (the type inks are round 30's family
+     inks, a warm set that only the label tells apart); the bar is the
+     count against the largest type's; click a cell to filter the table
+     to that type, click again to clear. --- */
+  .bytype { padding: 6px 18px 0; margin-bottom: 14px; }
+  .bytype .btl { display: block; font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .bytype .btl b { color: var(--ink-2); font-weight: 600; }
+  .btcells { display: flex; gap: 14px; }
+  .btc { --ti: var(--ink-2); flex: 1 1 0; min-width: 0; background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; transition: opacity 0.18s; }
+  .btc .btn { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font: 700 10.5px var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ti); white-space: nowrap; overflow: hidden; }
+  .btc .btn i { font-style: normal; margin-right: 5px; }
+  .btc .btn b { font: 600 12px var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+  .btc .btbar { display: block; height: 3px; margin-top: 6px; border-radius: 2px; background: color-mix(in srgb, var(--ti) 16%, transparent); }
+  .btc .btbar span { display: block; height: 100%; border-radius: 2px; background: var(--ti); transition: width 0.3s ease; }
+  .btc:hover .btn { color: var(--ink); }
+  .btc:hover .btn i, .btc.on .btn i { color: var(--ti); }
+  .btc.on .btn { color: var(--ink); }
+  .btc.on .btbar { background: color-mix(in srgb, var(--ti) 30%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ti) 40%, transparent); }
+  .btcells.picked .btc:not(.on) { opacity: 0.38; }
+  .btc.ft-unplanned { --ti: #ff5470; } .btc.ft-portscan { --ti: #ff9e64; } .btc.ft-outbound { --ti: #f072c8; }
+  .btc.ft-repeat { --ti: #e0765a; } .btc.ft-surge { --ti: #e8b05a; } .btc.ft-talker { --ti: #b8c56a; }
+  .btc:focus-visible { outline: 1px solid var(--accent); outline-offset: 4px; border-radius: 2px; }
+
+  /* --- the scored number: beside the type, only where a detector
+     scored it, and plainly visible (owner, 2026-09-06). No bands. --- */
+  .fmark .conf { font: 700 13px var(--mono); color: #ffffff; font-variant-numeric: tabular-nums; letter-spacing: 0; margin-left: 10px; }
+  tr.fdone .fmark .conf { color: inherit; }
+  .story .scored { display: block; color: var(--ink-3); font-size: 11px; margin-top: 6px; }
+  .story .scored b { color: var(--ink-2); font-weight: 600; }
+
+  /* --- a campaign: one row for the flags one source raised inside one
+     30-minute window. Its ink is the worst flag's; its FLAG cell names
+     it; its EVIDENCE cell is one word per type inside, in that type's
+     ink, then the span. It expands to its flags, indented beneath. --- */
+  tr.camp .fmark .cn { font: 400 10.5px var(--mono); color: var(--ink-3); margin-left: 9px; letter-spacing: 0; text-transform: none; }
+  tr.camp td.ev { white-space: nowrap; }
+  .tchip { font-weight: 600; }
+  .tchip.ft-unplanned { color: #ff5470; } .tchip.ft-portscan { color: #ff9e64; } .tchip.ft-outbound { color: #f072c8; }
+  .tchip.ft-repeat { color: #e0765a; } .tchip.ft-surge { color: #e8b05a; } .tchip.ft-talker { color: #b8c56a; }
+  .tchip + .tchip::before, .cspan::before { content: ' · '; color: var(--ink-3); font-weight: 400; }
+  .cspan { color: var(--ink-3); }
+  tr.camp .openc { transform: none; }
+  tr.camp.open .openc { transform: rotate(90deg); }
+  /* the members: the same flag rows, one step in, carried verbatim */
+  tr.mem td:first-child { padding-left: 32px; }
+  tr.mem td:first-child::after { content: ''; position: absolute; left: 16px; top: 50%; width: 8px; height: 1px; background: var(--hair-2); }
+  /* the FLAG column is pinned at its resting width: opening the campaign never moves WHERE */
+  .panel thead th:first-child { width: 208px; }
+  /* the campaign mark: ⁂ is small in this face, so it gets its own size */
+  tr.camp .fmark .cm { font-style: normal; font-size: 16px; line-height: 0; vertical-align: -2px; margin-right: 2px; }
+  tr.mem td, tr.crule td { background: rgba(160, 185, 230, 0.025); }
+  tr.mem.open td { background: rgba(160, 185, 230, 0.05); }
+  tr.drawer.inc > td { background: rgba(160, 185, 230, 0.025); }
+  /* why these are one campaign: one quiet line under the campaign row */
+  tr.crule td { padding: 6px 18px 6px 32px; font: 10.5px var(--mono); color: var(--ink-3); border-bottom: 1px solid var(--hair); }
+  tr.crule td b { color: var(--ink-2); font-weight: 600; }
+  /* the ink line runs through the rule line, as it does through a drawer */
+  tr.crule.ft-unplanned td { box-shadow: inset 3px 0 0 #ff5470; }
+  tr.camp.open td { border-bottom-color: transparent; }
+  tr.mem[hidden], tr.crule[hidden] { display: none; }
+  /* a campaign called from its own row: the stamp reads for the set */
+  tr.camp .vdone .by { color: var(--ink-3); }
+  @media (prefers-reduced-motion: reduce) { .btc, .btc .btbar span { transition: none; } }
+</style>
+</head>
+<body>
+<style>
+  body { background: var(--void); color: var(--ink); padding: 40px; }
+  h2 { font: 600 11px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 12px; }
+  section { margin-bottom: 40px; max-width: 1100px; }
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; }
+  .side { max-width: 330px; }
+  .side .conf { margin-top: 0; padding-top: 0; border-top: 0; }
+</style>
+<section><h2>one-hue</h2><div class="row"><div class="side"><div class="conf c-low" role="group" aria-label="confidence 18 of 100, low"><span class="clab">confidence</span><span class="cval"><b>18</b><em>low</em></span><span class="cbar" aria-hidden="true"><span style="width:18%"></span></span><span class="cwhy">how far this hour sits from lan's usual × how much history backs that (14 days here). The detector's number, not a verdict.</span></div></div><div class="side"><div class="conf c-moderate" role="group" aria-label="confidence 46 of 100, moderate"><span class="clab">confidence</span><span class="cval"><b>46</b><em>moderate</em></span><span class="cbar" aria-hidden="true"><span style="width:46%"></span></span><span class="cwhy">how far this hour sits from the wan boundary's usual × how much history backs that (14 days here). The detector's number, not a verdict.</span></div></div><div class="side"><div class="conf c-high" role="group" aria-label="confidence 72 of 100, high"><span class="clab">confidence</span><span class="cval"><b>72</b><em>high</em></span><span class="cbar" aria-hidden="true"><span style="width:72%"></span></span><span class="cwhy">how far this hour sits from cam-porch's own usual × how much history backs that (14 days here). The detector's number, not a verdict.</span></div></div></div></section><section><h2>three-bands</h2><div class="row"><div class="side"><div class="conf c-low" role="group" aria-label="confidence 18 of 100, low"><span class="clab">confidence</span><span class="cval"><b>18</b><em>low</em></span><span class="cbar" aria-hidden="true"><span style="width:18%"></span></span><span class="cwhy">how far this hour sits from lan's usual × how much history backs that (14 days here). The detector's number, not a verdict.</span></div></div><div class="side"><div class="conf c-moderate" role="group" aria-label="confidence 46 of 100, moderate"><span class="clab">confidence</span><span class="cval"><b>46</b><em>moderate</em></span><span class="cbar" aria-hidden="true"><span style="width:46%"></span></span><span class="cwhy">how far this hour sits from the wan boundary's usual × how much history backs that (14 days here). The detector's number, not a verdict.</span></div></div><div class="side"><div class="conf c-high" role="group" aria-label="confidence 72 of 100, high"><span class="clab">confidence</span><span class="cval"><b>72</b><em>high</em></span><span class="cbar" aria-hidden="true"><span style="width:72%"></span></span><span class="cwhy">how far this hour sits from cam-porch's own usual × how much history backs that (14 days here). The detector's number, not a verdict.</span></div></div></div></section>
+
+<style>
+  /* ============================================================
+     ROUND 58 — the confidence rating moves into the drawer (#1231).
+     Additive to round 47; the row loses its bare number and the
+     story loses its "Scored N." sentence, nothing else moves.
+     ============================================================ */
+  .fmark .conf { display: none; }
+  .story .scored { display: none; }
+  .side .conf { --ci: var(--ink-2); display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: baseline; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--hair); }
+  .side .conf .clab { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  .side .conf .cval { justify-self: end; font: 700 13px var(--mono); color: var(--ci); font-variant-numeric: tabular-nums; }
+  .side .conf .cval em { font: 600 10px var(--mono); font-style: normal; letter-spacing: 0.1em; text-transform: uppercase; margin-left: 8px; }
+  .side .conf .cbar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ci) 16%, transparent); }
+  .side .conf .cbar span { display: block; height: 100%; border-radius: 2px; background: var(--ci); }
+  .side .conf .cwhy { grid-column: 1 / -1; font: 10.5px var(--mono); color: var(--ink-3); line-height: 1.5; white-space: normal; }
+  section:nth-of-type(1) .conf.c-low { --ci: #5c6f9c; } section:nth-of-type(1) .conf.c-moderate { --ci: #9db8e8; } section:nth-of-type(1) .conf.c-high { --ci: #e2ecff; }
+  tr.drawer.open .dwr { max-height: 340px; }
+</style>
+
+<style>
+  /* ============================================================
+     ROUND 58 — the confidence rating moves into the drawer (#1231).
+     Additive to round 47; the row loses its bare number and the
+     story loses its "Scored N." sentence, nothing else moves.
+     ============================================================ */
+  .fmark .conf { display: none; }
+  .story .scored { display: none; }
+  .side .conf { --ci: var(--ink-2); display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: baseline; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--hair); }
+  .side .conf .clab { font: 600 9px var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  .side .conf .cval { justify-self: end; font: 700 13px var(--mono); color: var(--ci); font-variant-numeric: tabular-nums; }
+  .side .conf .cval em { font: 600 10px var(--mono); font-style: normal; letter-spacing: 0.1em; text-transform: uppercase; margin-left: 8px; }
+  .side .conf .cbar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ci) 16%, transparent); }
+  .side .conf .cbar span { display: block; height: 100%; border-radius: 2px; background: var(--ci); }
+  .side .conf .cwhy { grid-column: 1 / -1; font: 10.5px var(--mono); color: var(--ink-3); line-height: 1.5; white-space: normal; }
+  section:nth-of-type(2) .conf.c-low { --ci: #7f93bd; } section:nth-of-type(2) .conf.c-moderate { --ci: #f5a623; } section:nth-of-type(2) .conf.c-high { --ci: #ff5470; }
+  tr.drawer.open .dwr { max-height: 340px; }
+</style>
+</body></html>
