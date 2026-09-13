@@ -325,7 +325,7 @@ func TestMigrationRefusalsHappenBeforeAnythingIsCopied(t *testing.T) {
 
 // TestMigrationRefusesAnUnwritableDestination is the failure #536's
 // preflight was built for, met at the other end: a root-owned host
-// directory bind-mounted in, which mikroview at uid 65532 cannot write.
+// directory bind-mounted in, which mikroview at uid 1000 cannot write.
 //
 // Caught up front and reported with the ids and the chown, rather than
 // as a permission error partway through the accounts file.
@@ -454,12 +454,12 @@ func TestRunMigrateDataEndToEnd(t *testing.T) {
 //
 // Docker seeds a fresh named volume from whatever the image has at the
 // mount point, ownership included. A volume mounted somewhere the image
-// never created therefore arrives root-owned, and mikroview at uid 65532
+// never created therefore arrives root-owned, and mikroview at uid 1000
 // cannot write to it -- which kills the bind-mount-to-volume direction
-// outright. Observed, not reasoned about: `docker run --user 65532 -v
+// outright. Observed, not reasoned about: `docker run --user 1000 -v
 // newvol:/mnt/x busybox touch /mnt/x/probe` gives "Permission denied"
 // against a 0755 root:root directory, and the same run against a path
-// the image created with --chown=65532:65532 succeeds.
+// the image created with --chown=1000:1000 succeeds.
 //
 // So the image has to ship /var/lib/mikroview-migrate, and deleting
 // those two Dockerfile lines as unused would break the feature while
@@ -471,7 +471,7 @@ func TestDockerfileShipsTheMigrationMountPoint(t *testing.T) {
 	}
 	for _, want := range []string{
 		"mkdir -p " + migrationMountPoint,
-		"--chown=65532:65532 " + migrationMountPoint + " " + migrationMountPoint,
+		"--chown=1000:1000 " + migrationMountPoint + " " + migrationMountPoint,
 	} {
 		if !strings.Contains(string(dockerfile), want) {
 			t.Errorf("Dockerfile is missing %q. Without it a fresh named volume mounted there is "+

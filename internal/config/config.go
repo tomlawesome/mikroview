@@ -28,9 +28,9 @@ import (
 // DefaultDataDir is where every optional persistence path defaults to
 // living, out of the box -- flags, detector settings, accounts, and the
 // self-generated TLS certificate. The Dockerfile creates this directory
-// owned by the nonroot user, so all of it is writable (and persists
-// across simple process restarts) with zero configuration; surviving a
-// full container *recreation* additionally needs a volume mounted over
+// owned by the runtime user (uid 1000), so all of it is writable (and
+// persists across simple process restarts) with zero configuration;
+// surviving a full container *recreation* additionally needs a volume over
 // this same path, documented in deploy/docker-compose.yml rather than
 // forced -- an operator who doesn't want any of this persisted can
 // still point any of these at "" to opt back out per field.

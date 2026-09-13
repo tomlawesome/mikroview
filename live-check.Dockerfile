@@ -70,7 +70,7 @@ RUN set -eux; \
     chmod -R a+rX /ms-playwright
 
 # The gate runs as an unprivileged user, and that is load-bearing rather
-# than hygiene. mikroview's own container runs `USER nonroot:nonroot`, and
+# than hygiene. mikroview's own container runs `USER 1000:1000` (#1210), and
 # this repo has already been caught out once by the difference: test:go
 # failed on GitLab CI purely because it ran as root, and the fix was to
 # drop privileges (docs/decisions/gitlab-ci-root-in-container-test-failure.md).
