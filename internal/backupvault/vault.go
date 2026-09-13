@@ -122,6 +122,17 @@ func classifyBackup(data []byte) (HeaderLabel, bool) {
 	return "", false
 }
 
+// LooksLikeBackup reports whether data's header matches a RouterOS
+// `.backup` file (plain or encrypted), without saying which. Exported so
+// internal/backupslice can reject slice 0 of an upload that is not a
+// backup before the other ~14 POSTs of a 461KB file arrive, using the
+// same magic-byte rule classifyBackup uses (#1127: previously a second
+// hand-copy of this check).
+func LooksLikeBackup(data []byte) bool {
+	_, ok := classifyBackup(data)
+	return ok
+}
+
 // Generation is one script run's pair, as reported to callers -- the
 // vault's own persisted shape (generationMeta) is not exported, so a
 // caller can't reach around Store/Open to touch the files directly.
