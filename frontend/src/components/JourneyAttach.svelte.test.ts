@@ -71,6 +71,16 @@ describe('JourneyAttach', () => {
     expect(screen.getByText(/Fetching this instance/)).toBeTruthy()
   })
 
+  // #1214: this beat used to be the one flat-black screen between the
+  // raining door and the live fall -- the moment the app looked like it
+  // switched its weather off.
+  it('rains the same fullfall as the door, masked away from the command card', () => {
+    const { container } = render(JourneyAttach)
+
+    expect(container.querySelectorAll('.fullfall.attach i').length).toBe(40)
+    expect(container.querySelector('.fullfall')?.getAttribute('aria-hidden')).toBe('true')
+  })
+
   it('Continue moves the journey on to Connecting', async () => {
     wizardState.status = {
       instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
