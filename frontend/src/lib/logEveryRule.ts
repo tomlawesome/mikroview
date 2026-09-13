@@ -34,8 +34,26 @@ export function waitingMessage(hours: number): string {
 // a dark connection starts ticked, everything else starts unticked
 // (contract §6, issue decision 3 -- "every one starts ticked; the
 // operator unticks").
+//
+// One exception, #1230: a rule that logs every packet rather than every
+// connection starts unticked even when it crosses a dark boundary. Such
+// a rule usually names no interface at all, and an unscoped rule
+// crosses every dark boundary, so the plain default would have ticked
+// the one rule capable of turning the operator's whole traffic volume
+// into log lines -- the same flood the setup wizard's bulk block caused,
+// arrived at one rule at a time. It can still be ticked by hand, beside
+// the row's own warning.
 export function initialSelection(rules: readonly TuneLoggingRule[]): Set<number> {
-  return new Set(rules.filter((r) => r.crossesDark).map((r) => r.id))
+  return new Set(rules.filter((r) => r.crossesDark && !r.everyPacket).map((r) => r.id))
+}
+
+// everyPacketNote is the warning drawn beside a rule the server flagged
+// as every-packet (#1230), or null for every other rule. Said in the
+// operator's terms -- what logging it would cost -- rather than by
+// naming connection-state, which the row does not show.
+export function everyPacketNote(rule: TuneLoggingRule): string | null {
+  if (!rule.everyPacket) return null
+  return 'logs every packet, not every connection — your whole traffic volume'
 }
 
 // counterText is the cost line beside each rule's tick-box (issue
