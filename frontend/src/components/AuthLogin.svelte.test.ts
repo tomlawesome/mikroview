@@ -117,6 +117,15 @@ describe('AuthLogin', () => {
     expect(authState.justSignedOut).toBe(false)
   })
 
+  // #1214 extracted the door's rain into the shared Fullfall component
+  // -- this pins that the extraction left the door still raining, with
+  // its own centre mask variant.
+  it('still rains the fullfall across the door, masked out of the centre', () => {
+    const { container } = render(AuthLogin)
+
+    expect(container.querySelectorAll('.fullfall.door i').length).toBe(40)
+  })
+
   it('does not play the way-out beat on a plain page load', () => {
     const { container } = render(AuthLogin)
 

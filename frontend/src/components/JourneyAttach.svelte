@@ -16,6 +16,7 @@
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
+  import Fullfall from './Fullfall.svelte'
 
   let copied = $state(false)
 
@@ -50,6 +51,12 @@
 </script>
 
 <div class="attach-screen" data-void>
+  <!-- The same rain as the door (#1214): the operator walked in under
+       it one beat ago, and this screen going flat read as the app
+       switching the weather off. The `attach` mask carves a taller
+       centre than the door's -- this stack carries the command card --
+       so the rain still never crosses what the operator is reading. -->
+  <Fullfall mask="attach" />
   <div class="stack">
     <div class="wm-box"><span class="wm">MIKRO<em>VIEW</em></span></div>
     <p class="account">Signed in as <b>{authState.username}</b> — the account you just made.</p>
@@ -69,14 +76,18 @@
   .attach-screen {
     flex: 1;
     min-height: 100%;
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
     background: var(--bg);
+    overflow: hidden;
   }
 
   .stack {
+    position: relative;
+    z-index: 2;
     width: 100%;
     max-width: 420px;
     display: flex;
