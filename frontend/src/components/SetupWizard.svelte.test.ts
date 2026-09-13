@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { tick } from 'svelte'
 
@@ -38,6 +38,7 @@ vi.mock('../lib/api', () => ({
 import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
+import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
@@ -767,6 +768,149 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
     expect(container.querySelector('pre.script')?.classList.contains('scrollbar')).toBe(true)
+  })
+})
+
+// #1219: the small box stays a summary; its own drawer handle opens the
+// full script into the column the step body already occupies. Covers
+// the handle's open/close round trip, that it returns to the same
+// step, and that a line long enough to have sliced under the old fixed
+// box height comes through whole -- the actual bug (a real backup
+// script, screenshotted) was a horizontal cut mid-word and a vertical
+// cut through a line's glyphs, neither of which a shorter fixture
+// would exercise.
+describe('SetupWizard -- the paste-block reader (#1219)', () => {
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  // One line, deliberately longer than the box or the reader column
+  // could ever show without wrapping -- round-tripping it verbatim
+  // through both is what proves neither one truncates or clips it,
+  // rather than merely looking right at a fixture's usual length.
+  const longLine =
+    '/system scheduler add name=mv-backup interval=1d start-time=03:00:00 ' +
+    'policy=read,write,test,sensitive on-event="/system script run mv-backup" ' +
+    'comment="built long on purpose, well past any box on this step, so a slice or a cut would show"'
+
+  beforeEach(() => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: longLine, note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+  })
+
+  afterEach(() => {
+    viewportState.isMobile = false
+  })
+
+  it('opens the reader from the handle, with the exact text unsliced', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    // The small box's own text is the full string too -- the 14-line
+    // cap is a CSS max-height, never a shorter copy of the script.
+    expect(container.querySelector('pre.script')?.textContent).toBe(longLine)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+
+    const reader = container.querySelector('.reader-pre')
+    expect(reader).toBeTruthy()
+    expect(reader?.textContent).toBe(longLine)
+    expect(container.querySelector('.modal.reading')).toBeTruthy()
+  })
+
+  it('closes on its own ✕ and returns to exactly the same step', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    expect(container.querySelector('.reader')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Close and return to this step' }))
+
+    expect(container.querySelector('.reader')).toBeFalsy()
+    expect(container.querySelector('.modal.reading')).toBeFalsy()
+    expect(container.querySelector('.body')).toBeTruthy()
+    expect(wizardState.pane).toBe(4)
+    expect(wizardState.open).toBe(true)
+  })
+
+  // The WIP this built on already routes Esc to the reader rather than
+  // the wizard while one is open; this is that behaviour exercised
+  // through the handle that opens it.
+  it('closes on Esc without closing the wizard', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    expect(container.querySelector('.reader')).toBeTruthy()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await tick()
+
+    expect(container.querySelector('.reader')).toBeFalsy()
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(4)
+  })
+
+  it('clears on a step change, so a reader never shows over the wrong step', async () => {
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    expect(container.querySelector('.reader')).toBeTruthy()
+
+    wizardState.pane = 1
+    await tick()
+
+    expect(container.querySelector('.reader')).toBeFalsy()
+  })
+
+  // The modal is already near-full-screen on a phone (the sheet), so
+  // there is nothing left to grow into -- decision 4 on #1219 is that
+  // the handle does not appear there at all.
+  it('has no handle on a phone, where the modal is already near-full-screen', async () => {
+    viewportState.isMobile = true
+    wizardState.pane = 4
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    expect(container.querySelector('.handle')).toBeFalsy()
+    // Uncapped inline instead: the same full text, no reader to open.
+    expect(container.querySelector('pre.script')?.textContent).toBe(longLine)
   })
 })
 
