@@ -71,13 +71,15 @@ rewritten.
   writes the rule as `established,related,untracked`, so the undo
   matched nothing, said nothing, and the router logged every packet of
   every open connection — measured on a live instance as ~15 events/sec
-  becoming ~1500. **If you ran the wizard's step 3 against a RouterOS 7
-  default firewall, check that rule now:**
-  `/ip firewall filter print detail where log=yes` will show it, and
-  `/ip firewall filter set [find where connection-state~"established"] log=no log-prefix=""`
-  turns it back off. The wizard now excludes any rule whose
+  becoming ~1500. The wizard now excludes any rule whose
   `connection-state` mentions established or related instead of enabling
-  and undoing, verified against a CHR running 7.23.3. **Log every rule**
+  and undoing, verified against a CHR running 7.23.3. **If you already
+  ran step 3 against a RouterOS 7 default firewall your router is still
+  flooding — excluding the rule does not switch it back off.** Step 3
+  now ends with two lines that do, so re-running it repairs the router:
+  `/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""`
+  and the same line for `related`. They are safe to run on a router that
+  was never bitten. **Log every rule**
   marks such a rule "logs every packet, not every connection" and leaves
   it unticked even when it crosses a dark boundary, where the default
   selection used to tick it for you.
