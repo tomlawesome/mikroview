@@ -1290,8 +1290,9 @@ describe('a pinned row across the watch-for-this detour (#961)', () => {
 
 // #988 (round 47): campaigns, the scored number, flags by type -- the
 // three ratified additions, each pinned by what it renders rather than
-// how it is styled.
-describe('campaigns, the scored number and the by-type strip (#988, round 47)', () => {
+// how it is styled. The middle one moved in #1231 (round 58): the
+// number left the row and became a coloured rating in the drawer.
+describe('campaigns, the confidence rating and the by-type strip (#988 round 47, #1231 round 58)', () => {
   const now = Date.parse('2026-01-01T13:55:00Z')
 
   beforeEach(() => {
@@ -1397,31 +1398,53 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
     expect(document.querySelector('tr.crule')?.textContent).toContain('Showing the one that matches the filters.')
   })
 
-  it('shows the scored number beside the type only where a detector scored the flag, and says where it came from in the drawer', async () => {
+  it('keeps the row to its type alone, and rates the confidence in the drawer under the sparkline (#1231)', async () => {
     render(Flags)
     flushSync()
 
-    // #1167: the figure carries the word "scored" in the list too, not
-    // only in the drawer -- bare, it read as an unlabelled tally of the
-    // type beside it.
-    const confs = Array.from(document.querySelectorAll('tr.frow .fmark .conf')).map((el) =>
-      el.textContent?.replace(/\s+/g, ' ').trim(),
-    )
-    expect(confs).toEqual(['scored 72'])
-    const scored = document.querySelector('tr.frow:has(.conf)') as HTMLElement
-    expect(scored.querySelector('td.k')?.textContent?.trim()).toBe('10.0.20.14')
+    // #1231: nothing numeric beside the type any more -- the row that
+    // carries a scored flag reads exactly as the rows that do not. #988
+    // put the figure here and #1167 put the word "scored" in front of
+    // it; it still read as an event count.
+    expect(document.querySelector('tr.frow .fmark .conf')).toBeNull()
+    const marks = Array.from(document.querySelectorAll('tr.frow:not(.camp) .fmark'))
+      .map((el) => el.textContent?.replace(/\s+/g, ' ').trim())
+      .sort()
+    expect(marks).toEqual(['▲ Activity spike', '✱ Outbound anomaly'])
 
+    const scored = Array.from(document.querySelectorAll('tr.frow')).find(
+      (r) => r.querySelector('td.k')?.textContent?.trim() === '10.0.20.14' && !r.classList.contains('camp'),
+    ) as HTMLElement
     await fireEvent.click(scored)
     flushSync()
+
     const drawer = document.querySelector('tr.drawer') as HTMLElement
-    expect(drawer.querySelector('.story .scored')?.textContent?.replace(/\s+/g, ' ')).toContain(
-      "Scored 72. How far this sits from 10.0.20.14's usual, and how much history backs that. The detector's number, not a verdict.",
+    const block = drawer.querySelector('.side .conf') as HTMLElement
+    expect(block.classList.contains('c-high')).toBe(true)
+    expect(block.getAttribute('aria-label')).toBe('confidence 72 of 100, high')
+    expect(block.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      // The number and the word sit against each other in the markup --
+      // the gap between them is the word's own margin, per the drawing.
+      "confidence 72high how far this sits from 10.0.20.14's usual × how much history backs that. The detector's number, not a verdict.",
     )
-    expect(drawer.querySelector('.side .span')?.textContent?.replace(/\s+/g, ' ')).toContain('· scored 72')
-    // #1157: unnormalised -- the space before the "·" was literal
-    // whitespace at the head of an {#if}, which Svelte trims, so the
-    // line read "still arriving· scored 72".
-    expect(drawer.querySelector('.side .span')?.textContent).toMatch(/\S · scored 72$/)
+    expect(block.querySelector('.cbar span')?.getAttribute('style')).toContain('width: 72%')
+    // The rating says the number once: the episode's caption lost the
+    // "· scored 72" tail it carried alongside it.
+    expect(drawer.querySelector('.side .span')?.textContent).not.toContain('scored')
+    expect(drawer.querySelector('.story .scored')).toBeNull()
+  })
+
+  it('an unscored flag gets no rating block at all — no dash, no word (#1231)', async () => {
+    render(Flags)
+    flushSync()
+
+    const unscored = Array.from(document.querySelectorAll('tr.frow')).find(
+      (r) => r.querySelector('td.k')?.textContent?.trim() === '10.0.30.2',
+    ) as HTMLElement
+    await fireEvent.click(unscored)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer .side .conf')).toBeNull()
   })
 
   it('the strip counts open flags by type, and a click filters the table to that type; again clears it', async () => {
