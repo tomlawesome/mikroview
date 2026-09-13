@@ -16,6 +16,7 @@
   // annotation (round 23/24) -- not built here; the way out is instead
   // the same beat in reverse (reverseBeat below), no strip.
   import { authState } from '../lib/auth.svelte'
+  import Fullfall from './Fullfall.svelte'
 
   let {
     title = '',
@@ -107,41 +108,12 @@
      token block on this subtree under any theme or colorway. -->
 <div class="screen" class:reverse={reverseBeat} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
-       over the login elements: a radial mask carves the centre out of
-       the layer entirely (round 5 fourth batch). Seventeen strokes,
-       transform-only, is the whole cost -- no particle system. Each
-       stroke's --y is its resting place under reduced motion: the rain
-       hangs still instead of vanishing, so the scene keeps its texture
-       when its movement is declined. -->
-  <div class="fullfall" aria-hidden="true">
-    <!-- The round-29 scene's own seventeen, verbatim: eleven accepts,
-         four drops, two NAT marks. Their per-stroke left/delay/opacity
-         live in this component's stylesheet as nth-child rules, NOT in
-         style attributes: the app's CSP (default-src 'self') forbids
-         inline style attributes, and Firefox enforces that on statically
-         templated markup -- every stroke lost its position there and the
-         whole fall collapsed into one block at the layer's origin
-         (#645, owner report 2026-08-30). Chromium let the same markup
-         through, so no Chromium-driven check can see this class of
-         breakage. -->
-    <i></i>
-    <i></i>
-    <i class="r"></i>
-    <i></i>
-    <i></i>
-    <i class="v"></i>
-    <i></i>
-    <i class="r"></i>
-    <i></i>
-    <i></i>
-    <i></i>
-    <i class="v"></i>
-    <i class="r"></i>
-    <i></i>
-    <i></i>
-    <i class="r"></i>
-    <i></i>
-  </div>
+       over the login elements: the shared layer's `door` mask carves
+       the centre out entirely (round 5 fourth batch). Fullfall.svelte
+       carries the strokes, the CSP lesson and the reduced-motion rule
+       -- extracted under #1214 so the journey's attach beat rains the
+       same weather rather than going flat after this screen. -->
+  <Fullfall mask="door" />
 
   <div class="stack">
     <!-- The amber 1.5px box framing the wordmark (round 5 third batch,
@@ -222,61 +194,6 @@
     padding: 20px;
     background: var(--bg);
     overflow: hidden;
-  }
-
-  .fullfall {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    pointer-events: none;
-    /* The centre is carved out entirely -- the rain never crosses the
-       wordmark or the form, whatever their combined height turns out to
-       be (taller than the mockup's placeholder-only stack, since these
-       fields keep their labels). */
-    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
-    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
-  }
-
-  .fullfall i {
-    position: absolute;
-    top: -20px;
-    width: 2.5px;
-    height: 13px;
-    border-radius: 2px;
-    background: var(--fall-accept);
-    animation: fall 5.5s linear infinite;
-  }
-
-  .fullfall i.r {
-    background: var(--fall-drop);
-  }
-
-  .fullfall i.v {
-    background: var(--fall-nat);
-  }
-
-  .fullfall i:nth-child(1) { left: 4%; animation-delay: 0.2s; --y: 8%; opacity: 0.5; }
-  .fullfall i:nth-child(2) { left: 9%; animation-delay: 3.1s; --y: 64%; opacity: 0.3; }
-  .fullfall i:nth-child(3) { left: 15%; animation-delay: 1.6s; --y: 31%; opacity: 0.55; }
-  .fullfall i:nth-child(4) { left: 21%; animation-delay: 4.4s; --y: 78%; opacity: 0.4; }
-  .fullfall i:nth-child(5) { left: 26%; animation-delay: 2.2s; --y: 15%; opacity: 0.65; }
-  .fullfall i:nth-child(6) { left: 33%; animation-delay: 5.0s; --y: 52%; opacity: 0.45; }
-  .fullfall i:nth-child(7) { left: 38%; animation-delay: 0.9s; --y: 88%; opacity: 0.3; }
-  .fullfall i:nth-child(8) { left: 45%; animation-delay: 3.7s; --y: 24%; opacity: 0.4; }
-  .fullfall i:nth-child(9) { left: 51%; animation-delay: 1.2s; --y: 70%; opacity: 0.6; }
-  .fullfall i:nth-child(10) { left: 57%; animation-delay: 4.8s; --y: 41%; opacity: 0.35; }
-  .fullfall i:nth-child(11) { left: 63%; animation-delay: 2.7s; --y: 95%; opacity: 0.5; }
-  .fullfall i:nth-child(12) { left: 69%; animation-delay: 0.5s; --y: 58%; opacity: 0.4; }
-  .fullfall i:nth-child(13) { left: 75%; animation-delay: 3.4s; --y: 12%; opacity: 0.6; }
-  .fullfall i:nth-child(14) { left: 81%; animation-delay: 1.9s; --y: 83%; opacity: 0.35; }
-  .fullfall i:nth-child(15) { left: 86%; animation-delay: 5.3s; --y: 36%; opacity: 0.55; }
-  .fullfall i:nth-child(16) { left: 91%; animation-delay: 2.4s; --y: 67%; opacity: 0.35; }
-  .fullfall i:nth-child(17) { left: 96%; animation-delay: 4.1s; --y: 47%; opacity: 0.5; }
-
-  @keyframes fall {
-    to {
-      transform: translateY(106vh);
-    }
   }
 
   .stack {
@@ -364,14 +281,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    /* Still rain, not no rain: reduced motion declines the falling, not
-       the scene. Each stroke stops at its own --y instead of animating
-       from above the frame (where the animation's absence would
-       otherwise strand every stroke off-screen at top: -20px). */
-    .fullfall i {
-      animation: none;
-      top: var(--y, 50%);
-    }
+    /* The rain's own still-rain rule lives in Fullfall.svelte; this
+       block declines only this screen's entrance beats. */
     .stack,
     .wm-box,
     .screen.reverse .stack,
