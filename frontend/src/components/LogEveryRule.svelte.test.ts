@@ -69,6 +69,7 @@ function analyseResponse(over: Partial<TuneLoggingAnalyseResponse> = {}): TuneLo
         outInterfaceList: '',
         boundary: 'bridge|ether1',
         crossesDark: true,
+        everyPacket: false,
         log: false,
         logPrefix: '',
         packets: 41230,
@@ -87,6 +88,7 @@ function analyseResponse(over: Partial<TuneLoggingAnalyseResponse> = {}): TuneLo
         outInterfaceList: '',
         boundary: 'guest|bridge',
         crossesDark: false,
+        everyPacket: false,
         log: true,
         logPrefix: 'D|drop|',
         packets: 0,
@@ -329,6 +331,25 @@ describe('LogEveryRule rule selection defaults (#435 decision 3)', () => {
     expect(rows.length).toBe(2)
     const otherCheckbox = rows[1].querySelector('input') as HTMLInputElement
     expect(otherCheckbox.checked).toBe(false)
+  })
+
+  // #1230: the flood the setup wizard's bulk block caused is reachable
+  // from this page one rule at a time, and the every-packet rule is the
+  // one the plain crosses-dark default would have ticked for you.
+  it('warns beside an every-packet rule and leaves it unticked despite crossing a dark connection', async () => {
+    const res = analyseResponse()
+    res.rules[0] = { ...res.rules[0], everyPacket: true }
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(res)
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+
+    await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBe(1))
+    expect(container.querySelector('.rule-warning')?.textContent).toBe(
+      'logs every packet, not every connection — your whole traffic volume',
+    )
+    const checkbox = container.querySelector('.rule-row input') as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
   })
 
   it('renders counters as "fired N times / M bytes since <date>" only when countersKnown', async () => {

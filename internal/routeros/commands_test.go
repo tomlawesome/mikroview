@@ -183,11 +183,17 @@ func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	cmd := RuleTaggingCommands("a")
 	want := "/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix=\"D|drop|\"\n" +
 		"/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix=\"R|reject|\"\n" +
-		"/ip firewall filter set [find where !dynamic action=accept] log=yes log-prefix=\"A|accept|\"\n" +
 		"\n" +
-		"# The established/related accept rule logs every packet, not every\n" +
-		"# connection -- that is your whole traffic volume. Turn it back off:\n" +
-		"/ip firewall filter set [find connection-state=established,related] log=no log-prefix=\"\""
+		"# An accept rule matching established or related traffic logs every\n" +
+		"# packet, not every connection -- that is your whole traffic volume.\n" +
+		"# So the accept line below skips any rule whose connection-state\n" +
+		"# mentions either, whatever else is in the list: RouterOS 7's default\n" +
+		"# rule says established,related,untracked.\n" +
+		"/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~\"established\") and !(connection-state~\"related\")] log=yes log-prefix=\"A|accept|\"\n" +
+		"\n" +
+		"# Repairs a router an earlier version of this block flooded, and matches the posture in section 6 of the setup guide: these rules never log.\n" +
+		"/ip firewall filter set [find where !dynamic and action=accept and connection-state~\"established\"] log=no log-prefix=\"\"\n" +
+		"/ip firewall filter set [find where !dynamic and action=accept and connection-state~\"related\"] log=no log-prefix=\"\""
 	if cmd != want {
 		t.Errorf("ruleTaggingCommands =\n%s\nwant\n%s", cmd, want)
 	}
@@ -195,6 +201,103 @@ func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	// comment for why bulk-tagging those is a much worse trap.
 	if strings.Contains(cmd, "mangle") || strings.Contains(cmd, "/ip firewall nat") {
 		t.Errorf("ruleTaggingCommands touched mangle/NAT rules, which it must never bulk-tag: %s", cmd)
+	}
+}
+
+// TestRuleTaggingCommandsNeverEnableThenUndoEstablishedRelated is
+// #1230's reproduction, written against the old command text first: the
+// bulk block used to switch log=yes on every non-dynamic accept rule
+// and then try to take it back off the established/related one with
+// `set [find connection-state=established,related] log=no`. That is an
+// exact match on the whole value, so RouterOS 7's own default rule --
+// `connection-state=established,related,untracked` -- never matched it,
+// nothing was undone, and nothing said so.
+//
+// The assertions are the shape of the fix rather than its wording: no
+// exact-value match on a connection-state list anywhere in the block, an
+// accept line that excludes established and related before it enables
+// anything, and every log=no line selecting by `~` rather than by a
+// whole value.
+func TestRuleTaggingCommandsNeverEnableThenUndoEstablishedRelated(t *testing.T) {
+	cmd := RuleTaggingCommands("a")
+
+	if strings.Contains(cmd, "connection-state=established,related") {
+		t.Errorf("ruleTaggingCommands still matches connection-state by its exact whole value, which misses RouterOS 7's established,related,untracked default:\n%s", cmd)
+	}
+
+	var accept string
+	for _, line := range strings.Split(cmd, "\n") {
+		if strings.Contains(line, `log-prefix="A|accept|"`) {
+			accept = line
+		}
+	}
+	if accept == "" {
+		t.Fatalf("ruleTaggingCommands no longer tags accept rules at all:\n%s", cmd)
+	}
+	for _, want := range []string{
+		`!(connection-state~"established")`,
+		`!(connection-state~"related")`,
+	} {
+		if !strings.Contains(accept, want) {
+			t.Errorf("the accept line does not exclude %s, so it would enable logging on an established/related rule:\n%s", want, accept)
+		}
+	}
+	if strings.Contains(accept, "log=no") {
+		t.Errorf("the accept line both enables and disables logging; a missed undo floods the operator's log:\n%s", accept)
+	}
+}
+
+// TestRuleTaggingCommandsRepairsAnAlreadyFloodedRouter is the other half
+// of #1230, and it is not covered by excluding the rule: a router that
+// ran the old step 3 against a RouterOS 7 default firewall already has
+// log=yes on its established/related accept rules, and a block that only
+// skips them leaves it flooding -- re-running step 3 would not repair
+// the damage step 3 caused.
+//
+// One line per term rather than one with `or`: two `~` predicates in a
+// single `find` is the form measured on the CHR, `or` inside a
+// `find where` is not.
+func TestRuleTaggingCommandsRepairsAnAlreadyFloodedRouter(t *testing.T) {
+	cmd := RuleTaggingCommands("a")
+
+	var repairs []string
+	acceptLine := -1
+	for i, line := range strings.Split(cmd, "\n") {
+		switch {
+		case strings.Contains(line, `log-prefix="A|accept|"`):
+			acceptLine = i
+		case strings.Contains(line, "log=no"):
+			repairs = append(repairs, line)
+			if acceptLine == -1 {
+				t.Errorf("a log=no line runs before the accept line, so the accept line would re-enable it:\n%s", cmd)
+			}
+		}
+	}
+	if len(repairs) != 2 {
+		t.Fatalf("found %d switch-off lines, want one per term (established, related):\n%s", len(repairs), cmd)
+	}
+
+	for i, want := range []string{
+		`connection-state~"established"`,
+		`connection-state~"related"`,
+	} {
+		if !strings.Contains(repairs[i], want) {
+			t.Errorf("switch-off line %d does not select on %s:\n%s", i, want, repairs[i])
+		}
+		if strings.Contains(repairs[i], "!(") {
+			t.Errorf("switch-off line %d negated its match, so it would switch logging off on everything else instead:\n%s", i, repairs[i])
+		}
+		// Scoped to accept rules and to rules the operator owns: a
+		// drop rule matching established traffic is cheap and stays
+		// logged, and a dynamic rule is not ours to edit.
+		for _, scope := range []string{"!dynamic", "action=accept"} {
+			if !strings.Contains(repairs[i], scope) {
+				t.Errorf("switch-off line %d is not scoped by %s:\n%s", i, scope, repairs[i])
+			}
+		}
+		if !strings.Contains(repairs[i], `log-prefix=""`) {
+			t.Errorf("switch-off line %d left the old log-prefix in place:\n%s", i, repairs[i])
+		}
 	}
 }
 

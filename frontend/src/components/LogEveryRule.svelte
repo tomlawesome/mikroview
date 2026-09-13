@@ -49,6 +49,7 @@
     countFilterRules,
     counterText,
     darkBoundaryKeys,
+    everyPacketNote,
     exportProblem,
     groupRules,
     initialSelection,
@@ -259,12 +260,16 @@
 
 {#snippet ruleRow(r: TuneLoggingRule)}
   {@const ct = result ? counterText(r, result.observing.since) : null}
+  {@const epn = everyPacketNote(r)}
   <label class="rule-row" class:highlight={preselectedBoundary !== null && r.boundary === preselectedBoundary}>
     <input type="checkbox" checked={selected.has(r.id)} onchange={() => toggle(r.id)} />
     <span class="rule-main">
       <span class="rule-title">
         {r.chain} · {r.action} · {r.inInterface || 'any'} → {r.outInterface || 'any'}{r.comment ? ` — ${r.comment}` : ''}
       </span>
+      <!-- #1230: said beside the rule rather than only in the docs, and
+           this rule starts unticked whatever its boundary says. -->
+      {#if epn}<span class="rule-warning">{epn}</span>{/if}
       {#if ct}<span class="rule-counter">{ct}</span>{/if}
     </span>
   </label>
@@ -732,6 +737,13 @@
     font-size: 11.5px;
     color: var(--fg-muted);
     font-family: var(--font-mono);
+  }
+
+  /* #1230: the one line on this page that is a caution rather than a
+     fact about the rule, so it is the only one that takes --warn. */
+  .rule-warning {
+    font-size: 11.5px;
+    color: var(--warn);
   }
 
   pre {
