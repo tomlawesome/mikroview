@@ -40,7 +40,7 @@ Usage (against an already-running instance):
   scripts/seed-demo.py watchlist   # 6 entries: 4 healthy, 1 held, 1 broken ring
   scripts/seed-demo.py all         # the four above, in order
   scripts/seed-demo.py feed        # runs forever: the syslog traffic generator
-  scripts/seed-demo.py mutate      # a cleared flag+note, a rename, a definition edit
+  scripts/seed-demo.py mutate      # a checked-verdict flag, a rename, a definition edit
                                     # (run this once the feed has produced real flags)
 
 `feed` is the long-running piece -- start it (nohup, in the background)
@@ -1443,13 +1443,15 @@ def cmd_watchlist(args):
 def cmd_mutate(args):
     api = API(args.url, args.user, args.password)
 
-    # 1) A cleared flag with a note.
+    # 1) A judged flag: "checked" -- looked suspicious, checked, fine
+    # this time (#640). The plain clear and the note-carrying clear are
+    # both retired; POST /api/flags/{id}/verdict takes only a verdict,
+    # no note field.
     flags = api.get("/api/flags").json()["flags"]
     target = next((f for f in flags if not f.get("cleared")), None)
     if target:
-        api.post(f"/api/flags/{target['id']}/clear",
-                  json={"note": "reviewed -- expected traffic for this host, clearing with context"})
-        print(f"cleared flag {target['id']} ({target['type']}) with a note")
+        api.post(f"/api/flags/{target['id']}/verdict", json={"verdict": "checked"})
+        print(f"gave flag {target['id']} ({target['type']}) a 'checked' verdict")
     else:
         print("no active flag found to clear yet -- run this again once `feed` has produced one",
               file=sys.stderr)
