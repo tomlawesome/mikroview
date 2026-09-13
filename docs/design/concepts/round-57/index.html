@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 57 · The token bar — GitLab-style filter tokens on the stream (#983)</title>
+<style>
+  /* ============================================================
+     ROUND 57 — THE TOKEN BAR (#983). Fable's shape, drawn: the
+     stream's filter box (FilterBar.svelte's `.fbox`) gains a third
+     face. Face one is the named-field strip (`.bar.thin`, unchanged,
+     shown resting beside the box in every wide scene and standing in
+     for the drawer on phones). Face two was the read-only chip
+     summary the box already renders from appState.filters via
+     buildFilterChips(). Face three, new here: clicking the box (or
+     typing "device:") opens a field menu, then a value menu, and
+     committing a value writes a chip identical to the one face two
+     already draws -- same classes (.chip/.chip-x/em), same
+     aria-label wording ("Remove the {field} filter"), same
+     appState.filters underneath. Nothing here is a second filter
+     store.
+
+     Every rule, class and CSS variable below not marked "new" is
+     copied verbatim from the shipped frontend/src/components/
+     FilterBar.svelte and FilterPresetsMenu.svelte, so a screenshot
+     of this file and a screenshot of the running app differ only in
+     the parts #983 asks to add: the field menu (.token-menu), the
+     value menu (.token-menu.tm-values), and the pending-token caret
+     (.chip.pending). Data story: round 30's stream (the-whole.html
+     #s5) verbatim -- cam-porch's repeat drop to nas on :445
+     (iot-to-lan-drop) and rb5009's four logged WAN scans
+     (wan-in-drop) are the same rows and the same devices in every
+     scene here.
+     ============================================================ */
+
+  /* ---- tokens, verbatim from frontend/src/app.css ---- */
+  :root {
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --bg-hover: rgba(160, 185, 230, 0.08);
+    --border: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+    --accent-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+    --alarm: #ff5470;
+    --accept: #3ecf7e;
+    --accept-bg: rgba(62, 207, 126, 0.12);
+    --drop: #f5a623;
+    --drop-bg: rgba(245, 166, 35, 0.12);
+    --reject: #ef4444;
+    --reject-bg: rgba(239, 68, 68, 0.12);
+    --log: #38bdf8;
+    --log-bg: rgba(56, 189, 248, 0.12);
+    --font-sans: -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--bg);
+    color: var(--fg); font: 13.5px/1.5 var(--font-sans); -webkit-font-smoothing: antialiased;
+    padding: 30px 0 60px;
+  }
+
+  .intro { width: 1180px; margin: 0 auto 10px; font: 12px var(--font-sans); color: var(--fg-muted); }
+  .intro h1 { font: 700 16px var(--font-sans); color: var(--fg); letter-spacing: 0.02em; margin-bottom: 4px; }
+  .intro p { max-width: 900px; }
+
+  .cap { width: 1180px; margin: 34px auto 6px; padding: 0 4px; font: 11px var(--font-mono); color: var(--fg-dim); letter-spacing: 0.03em; }
+  .cap b { color: var(--fg-muted); font-weight: 600; letter-spacing: 0.1em; margin-right: 10px; }
+
+  .scene {
+    width: 1180px; margin: 0 auto; padding: 26px 28px 22px;
+    border: 1px solid var(--hair-2); border-radius: 10px;
+    background: radial-gradient(900px 420px at 50% 0%, rgba(60, 92, 170, 0.055), transparent 70%), var(--bg-elevated);
+  }
+
+  /* ============================================================
+     Everything from here to "-- new for #983 --" is copied verbatim
+     from FilterBar.svelte's <style> block (selectors and values
+     unchanged), so the box, chips, strip and drawer read exactly as
+     they do in the running app.
+     ============================================================ */
+  .filterline { display: flex; gap: 18px; align-items: center; position: relative; }
+
+  .fbox {
+    flex: 1; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    min-height: 28px; padding: 4px 12px; background: var(--bg-elevated);
+    border: 1px solid var(--border); border-radius: 7px; font: 12px var(--font-mono);
+    color: var(--fg-muted); cursor: pointer; position: relative;
+  }
+  .fbox:hover { border-color: var(--fg-muted); }
+  .fbox.open { border-color: var(--accent); }
+
+  .fchips { display: flex; gap: 12px; flex-wrap: wrap; }
+  .chip { display: inline-flex; gap: 5px; align-items: baseline; white-space: nowrap; }
+  .chip em { font-style: normal; color: var(--accent); }
+  .chip-x { background: transparent; border: none; color: var(--fg-dim); font-size: 12px; cursor: pointer; padding: 0; }
+  .chip-x:hover { color: var(--alarm); }
+
+  .fbtype {
+    appearance: none; background: none; border: 0; padding: 0; font: inherit;
+    text-align: left; cursor: text; flex: 1; min-width: 60px; color: var(--fg-muted);
+  }
+  .fbtype::placeholder { color: var(--fg-dim); }
+  .fbtype:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .spans { flex: none; display: flex; align-items: baseline; gap: 10px; }
+  .span { background: transparent; border: none; padding: 0; font: 500 11px var(--font-sans); color: var(--fg-dim); cursor: pointer; }
+  .span.on { color: var(--fg); }
+  .span:disabled { color: var(--fg-dim); opacity: 0.4; cursor: not-allowed; }
+  .reach { font: 400 10.5px var(--font-sans); color: var(--fg-dim); margin-left: 2px; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .bar.thin {
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    backdrop-filter: blur(6px); border: none; border-bottom: 1px solid var(--border);
+    border-radius: 0; padding: 6px 4px 8px; gap: 6px; align-items: flex-end;
+    animation: unfurl 0.35s ease-out; transform-origin: right center;
+    position: relative; z-index: 10; margin-top: 10px;
+  }
+  @keyframes unfurl { from { transform: scaleX(0.05); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .bar.thin { animation: none; } }
+
+  .fb-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .fb-label { display: block; font: 500 8px var(--font-mono); letter-spacing: 0.14em; color: var(--fg-dim); text-transform: uppercase; }
+  .bar.thin > .fb-field { flex-grow: 1; }
+
+  .thin input, .thin select {
+    background: transparent; border: none; border-bottom: 1px solid var(--hair-2); border-radius: 0;
+    padding: 1px 2px 3px; font: 12px var(--font-mono); max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: var(--fg);
+  }
+  .thin select { width: 72px; appearance: none; cursor: pointer; padding-right: 13px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%), linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+    background-position: calc(100% - 8px) 55%, calc(100% - 4px) 55%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+  .thin input[type="text"] { width: 80px; }
+  .thin .addr-group select { width: 58px; }
+  .thin .rule { width: 130px; }
+
+  .addr-group { display: flex; gap: 8px; }
+  .thin .addr-group { gap: 4px; }
+  .addr-group select { flex: none; width: auto; }
+
+  .swap { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); border-radius: 5px; padding: 8px 10px; font-size: 16px; line-height: 1; flex: none; align-self: center; }
+  .thin .swap { background: none; border: none; padding: 0 2px; font-size: 14px; align-self: flex-end; }
+
+  .rule-group { display: flex; gap: 4px; }
+  .rule { width: 200px; flex: 1 1 200px; }
+  .regex-toggle { background: transparent; border: 1px solid var(--border); color: var(--fg-dim); border-radius: 5px; padding: 0 10px; font-family: var(--font-mono); font-size: 13px; flex: none; }
+  .thin .regex-toggle { background: none; border: none; border-bottom: 1px solid var(--hair-2); border-radius: 0; padding: 1px 2px 3px; font-size: 11px; width: auto; }
+
+  .tf-fold { color: var(--accent); font-family: var(--font-mono); font-size: 10.5px; margin-left: auto; align-self: center; background: none; border: none; cursor: pointer; white-space: nowrap; }
+
+  input, select { background: var(--bg); border: 1px solid var(--border); color: var(--fg); border-radius: 5px; padding: 8px 10px; font-size: 14px; min-width: 0; }
+  input::placeholder { color: var(--fg-dim); }
+  input[type="text"] { width: 145px; }
+
+  /* -- the mobile drawer, verbatim (including the shipped max-height/
+     scroll: `max-height: 80vh; overflow-y: auto` -- fixed here to a
+     comparable phone-viewport px figure since this file has no real
+     viewport chrome around it) -- */
+  .bar.drawer {
+    width: 340px; flex-direction: column; border-radius: 16px; padding: 10px 18px 18px;
+    box-shadow: 0 -20px 50px rgba(0, 0, 0, 0.4); background: var(--bg-elevated); border: 1px solid var(--border);
+    max-height: 460px; overflow-y: auto;
+    /* Not in the shipped rule (FilterBar.svelte's `.bar` sets
+       flex-wrap: wrap for the desktop thin bar's row-wrap, and
+       `.bar.drawer` never overrides it) -- caught here because a
+       constrained max-height on a flex-direction:column container
+       with wrap left on does not scroll, it opens a second column
+       beside the first. Worth a quick check against the real app:
+       this file did not invent the underlying rule, only the
+       max-height that exposed it. */
+    flex-wrap: nowrap;
+  }
+  .handle { width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto 10px; flex: none; }
+  .drawer-header { display: flex; align-items: center; margin-bottom: 6px; }
+  .drawer-title { font-size: 15px; font-weight: 600; color: var(--fg); }
+  .done { margin-left: auto; background: transparent; border: 1px solid var(--border); color: var(--accent); border-radius: 5px; padding: 7px 14px; font-size: 13px; min-height: 44px; }
+  .drawer input, .drawer select { width: 100%; min-height: 44px; }
+  .drawer .addr-group { flex-direction: column; }
+  .drawer .addr-group select { width: 100%; }
+  .drawer .swap { align-self: flex-start; min-height: 44px; }
+
+  /* -- saved ▾, verbatim from FilterPresetsMenu.svelte -- */
+  .saved { position: relative; margin-left: auto; flex: none; }
+  .fsaved { background: transparent; border: none; padding: 0; font: 10.5px var(--font-mono); color: var(--fg-dim); cursor: pointer; white-space: nowrap; }
+  .fsaved:hover, .fsaved.on { color: var(--fg); }
+  .fpmenu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 220px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; padding: 2px 0; z-index: 40; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+  .mg { padding: 6px 0; }
+  .mg + .mg { border-top: 1px solid var(--border); }
+  .fprow { display: flex; align-items: baseline; gap: 18px; }
+  .fpname, .fpsave { background: none; border: 0; text-align: left; cursor: pointer; font: 12px var(--font-mono); color: var(--fg-muted); padding: 6px 14px; }
+  .fpname { flex: 1; min-width: 0; }
+  .fpname.applied { color: var(--accent); }
+  .fpx { background: none; border: 0; cursor: pointer; font: 12px var(--font-mono); color: var(--fg-dim); padding: 6px 14px 6px 0; }
+
+  /* ============================================================
+     -- new for #983: the field menu and value menu. Same floating-
+     panel dress as .fpmenu/.col-panel above (elevated bg, hairline
+     border, 10px radius, the account menu's own shadow) rather than
+     inventing a second kind of popup -- anchored to the box's left
+     edge instead of the trigger's right edge, and full-width enough
+     to carry a field name plus its one-line hint.
+     ============================================================ */
+  .token-menu {
+    position: absolute; top: calc(100% + 6px); left: 0; width: 360px; max-width: 92vw;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px;
+    padding: 6px 0; z-index: 40; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    animation: tm-in 0.16s ease-out;
+  }
+  .token-menu.tm-values { width: 220px; }
+  @keyframes tm-in { from { opacity: 0; transform: translateY(-4px); } }
+  @media (prefers-reduced-motion: reduce) { .token-menu { animation: none; } }
+
+  .tm-crumb { padding: 4px 14px 6px; font: 500 9px var(--font-mono); letter-spacing: 0.08em; color: var(--fg-dim); border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+
+  .tm-item {
+    display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+    background: none; border: 0; padding: 7px 14px; cursor: pointer;
+  }
+  .tm-item:hover, .tm-item.focused { background: var(--bg-hover); }
+  .tm-item .tm-name { font: 12px var(--font-mono); color: var(--fg-muted); }
+  .tm-item.focused .tm-name, .tm-item:hover .tm-name { color: var(--fg); }
+  .tm-item .tm-hint { font: 10.5px var(--font-sans); color: var(--fg-dim); }
+  .tm-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tm-item.focused { box-shadow: inset 2px 0 0 var(--accent); }
+
+  /* The pending token: a field committed (typed "device:" or picked
+     from the field menu), value not chosen yet -- reads as an
+     in-progress chip rather than a fourth committed one, so the box
+     never claims a filter that is not yet active. */
+  .chip.pending { color: var(--fg-muted); }
+  .tm-caret { display: inline-block; width: 1px; height: 12px; background: var(--accent); margin-left: 2px; vertical-align: -2px; animation: tm-blink 1s step-end infinite; }
+  @media (prefers-reduced-motion: reduce) { .tm-caret { animation: none; } }
+  @keyframes tm-blink { 50% { opacity: 0; } }
+
+  /* -- new for #983: context dressing only, not a redrawn LiveTable --
+     a few rows of what the stream shows under each filter state, so
+     the token bar is proven against real-looking data rather than
+     floating over an empty card. */
+  .ctxwrap { margin-top: 16px; }
+  .ctxcap { font: 10.5px var(--font-mono); color: var(--fg-dim); margin-bottom: 6px; letter-spacing: 0.03em; }
+  .ctxtable { width: 100%; border-collapse: collapse; font: 12px var(--font-mono); color: var(--fg-muted); }
+  .ctxtable th { text-align: left; font: 500 9px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-dim); padding: 4px 10px; border-bottom: 1px solid var(--border); }
+  .ctxtable td { padding: 5px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .ctxtable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 4px; font: 600 10px var(--font-mono); letter-spacing: 0.03em; }
+  .b-accept { background: var(--accept-bg); color: var(--accept); }
+  .b-drop { background: var(--drop-bg); color: var(--drop); }
+  .b-nat { background: var(--log-bg); color: var(--log); }
+  .host { color: var(--fg); }
+  .cf { margin-right: 3px; }
+  .foot-legend { margin-top: 8px; font: 11px var(--font-sans); color: var(--fg-dim); }
+  .foot-legend b { color: var(--fg-muted); font-weight: 600; }
+
+  .side-by-side { display: flex; gap: 36px; align-items: flex-start; }
+  .side-by-side .col { flex: none; }
+  .side-cap { font: 500 9px var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-dim); margin-bottom: 10px; }
+  .wide-col { width: 760px; }
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>Round 57 — the token bar (#983)</h1>
+  <p>Fable's shape, settled 2026-09-13, drawn on the shipped
+  <code>FilterBar.svelte</code>. Six scenes, one dataset: round 30's
+  stream (<code>the-whole.html #s5</code>) — cam-porch's repeat drop
+  to nas on :445, rb5009's four logged WAN scans. Read
+  <code>README.md</code> for the field list, the picker rules, the
+  keyboard map and what was rejected.</p>
+</div>
+
+<div class="cap"><b>01</b>empty — no filter, the box as shipped</div>
+<section class="scene" id="empty" aria-label="Empty token bar, no filter set">
+  <div class="filterline">
+    <div class="fbox empty">
+      <input type="text" class="fbtype" value="" placeholder="no filter — every line, as it arrived. type a term, or click a value in a row" aria-label="no filter — every line, as it arrived. type a term, or click a value in a row">
+      <div class="saved"><button type="button" class="fsaved" aria-haspopup="menu" aria-expanded="false" title="Saved filters">saved ▾</button></div>
+    </div>
+    <span class="spans" role="group" aria-label="How far back the stream shows — 9 h buffer held">
+      <button type="button" class="span">15 m</button>
+      <button type="button" class="span on">1 h</button>
+      <button type="button" class="span">24 h</button>
+      <button type="button" class="span" disabled title="Buffer holds only 9 h">14 d</button>
+      <span class="reach">9 h buffer held</span>
+    </span>
+  </div>
+  <div class="ctxwrap">
+    <div class="ctxcap">what the stream shows right now</div>
+    <table class="ctxtable">
+      <thead><tr><th>time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr></thead>
+      <tbody>
+        <tr><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+        <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-tom</td><td class="num">10.0.10.23</td><td>142.250.187.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
+        <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td><span class="cf">🇩🇪</span>185.220.101.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+        <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="host">pihole</td><td class="num">10.0.40.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+        <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">10.0.10.7</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+        <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td><span class="cf">🇨🇳</span>198.51.100.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="cap"><b>02</b>field menu open — click (or focus) the box, before anything is typed</div>
+<section class="scene" id="field-menu" aria-label="Field menu open, listing the eight token fields">
+  <div class="filterline">
+    <div class="fbox open">
+      <input type="text" class="fbtype" value="" placeholder="no filter — every line, as it arrived. type a term, or click a value in a row" aria-label="no filter — every line, as it arrived. type a term, or click a value in a row" aria-haspopup="listbox" aria-expanded="true">
+      <div class="saved"><button type="button" class="fsaved" aria-haspopup="menu" aria-expanded="false" title="Saved filters">saved ▾</button></div>
+      <div class="token-menu" role="listbox" aria-label="Choose a field to filter on">
+        <button type="button" class="tm-item focused" role="option" aria-selected="true"><span class="tm-name">device</span><span class="tm-hint">pick from known devices</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">action</span><span class="tm-hint">accept · drop · reject · log · marked (mangle) · natted (NAT) · unknown</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">chain</span><span class="tm-hint">input · forward · output · srcnat · dstnat</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">proto</span><span class="tm-hint">seen this window: tcp · udp</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">interface</span><span class="tm-hint">seen this window: ether1 · bridge-lan · bridge-iot</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">port</span><span class="tm-hint">type a number, ↵ to commit</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">source</span><span class="tm-hint">scope, name/IP or CIDR, or country</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">destination</span><span class="tm-hint">scope, name/IP or CIDR, or country</span></button>
+      </div>
+    </div>
+    <span class="spans" role="group" aria-label="How far back the stream shows — 9 h buffer held">
+      <button type="button" class="span">15 m</button>
+      <button type="button" class="span on">1 h</button>
+      <button type="button" class="span">24 h</button>
+      <button type="button" class="span" disabled title="Buffer holds only 9 h">14 d</button>
+      <span class="reach">9 h buffer held</span>
+    </span>
+  </div>
+  <div aria-hidden="true" style="height: 420px;"></div>
+</section>
+
+<div class="cap"><b>03</b>value menu open — device chosen as the field, its list of known devices</div>
+<section class="scene" id="value-menu" aria-label="Value menu open, listing known devices, cam-porch keyboard-focused">
+  <div class="filterline">
+    <div class="fbox open">
+      <span class="fchips"><span class="chip pending">device:<span class="tm-caret" aria-hidden="true"></span></span></span>
+      <input type="text" class="fbtype" value="" placeholder="" aria-label="type a term, or click a value in a row" aria-haspopup="listbox" aria-expanded="true">
+      <div class="saved"><button type="button" class="fsaved" aria-haspopup="menu" aria-expanded="false" title="Saved filters">saved ▾</button></div>
+      <div class="token-menu tm-values" role="listbox" aria-label="Pick a device">
+        <div class="tm-crumb">‹ device</div>
+        <button type="button" class="tm-item focused" role="option" aria-selected="true"><span class="tm-name">cam-porch</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">hue-bridge</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">laptop-anna</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">nas</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">phone-tom</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">rb5009</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">tom-desktop</span></button>
+        <button type="button" class="tm-item" role="option"><span class="tm-name">unifi</span></button>
+      </div>
+    </div>
+    <span class="spans" role="group" aria-label="How far back the stream shows — 9 h buffer held">
+      <button type="button" class="span">15 m</button>
+      <button type="button" class="span on">1 h</button>
+      <button type="button" class="span">24 h</button>
+      <button type="button" class="span" disabled title="Buffer holds only 9 h">14 d</button>
+      <span class="reach">9 h buffer held</span>
+    </span>
+  </div>
+  <div aria-hidden="true" style="height: 440px;"></div>
+</section>
+
+<div class="cap"><b>04</b>three tokens plus free text — device:cam-porch, action:drop, chain:forward, typing a rule search</div>
+<section class="scene" id="tokens-and-text" aria-label="Three committed tokens plus free text being typed in the same box">
+  <div class="filterline">
+    <div class="fbox">
+      <span class="fchips">
+        <span class="chip">device:<em>cam-porch</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the device filter">⌫</button></span>
+        <span class="chip">action:<em>drop</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the action filter">⌫</button></span>
+        <span class="chip">chain:<em>forward</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the chain filter">⌫</button></span>
+      </span>
+      <input type="text" class="fbtype" value="iot-to-lan" aria-label="type a term, or click a value in a row">
+      <div class="saved"><button type="button" class="fsaved" aria-haspopup="menu" aria-expanded="false" title="Saved filters">saved ▾</button></div>
+    </div>
+    <span class="spans" role="group" aria-label="How far back the stream shows — 9 h buffer held">
+      <button type="button" class="span">15 m</button>
+      <button type="button" class="span on">1 h</button>
+      <button type="button" class="span">24 h</button>
+      <button type="button" class="span" disabled title="Buffer holds only 9 h">14 d</button>
+      <span class="reach">9 h buffer held</span>
+    </span>
+  </div>
+  <div class="ctxwrap">
+    <div class="ctxcap">what the stream shows now — device, action and chain tokens narrow the rows; "iot-to-lan" (free text, not a token) narrows further by rule label</div>
+    <table class="ctxtable">
+      <thead><tr><th>time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr></thead>
+      <tbody>
+        <tr><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+        <tr><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      </tbody>
+    </table>
+    <div class="foot-legend"><b>cam-porch → nas :445</b> — every ~64 s since 13:52:07 · 14 so far · flagged</div>
+  </div>
+</section>
+
+<div class="cap"><b>05</b>saved filter applied — "WAN scans" just clicked in saved ▾, expanded into its tokens</div>
+<section class="scene" id="saved-applied" aria-label="A saved filter just applied, expanded into three individually removable tokens">
+  <div class="filterline">
+    <div class="fbox">
+      <span class="fchips">
+        <span class="chip">action:<em>drop</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the action filter">⌫</button></span>
+        <span class="chip">chain:<em>input</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the chain filter">⌫</button></span>
+        <span class="chip">source:<em>185.220.101.34 · external · DE</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the source filter">⌫</button></span>
+      </span>
+      <input type="text" class="fbtype" value="" placeholder="type a term, or click a value in a row" aria-label="type a term, or click a value in a row">
+      <div class="saved">
+        <button type="button" class="fsaved on" aria-haspopup="menu" aria-expanded="true" title="Saved filters">saved ▾</button>
+        <div class="fpmenu" role="menu" aria-label="Saved filters">
+          <div class="mg">
+            <div class="fprow"><button type="button" class="fpname applied" role="menuitem">WAN scans</button><button type="button" class="fpx" title="forget this one" aria-label="Forget the saved filter WAN scans">×</button></div>
+            <div class="fprow"><button type="button" class="fpname" role="menuitem">IoT lockdown</button><button type="button" class="fpx" title="forget this one" aria-label="Forget the saved filter IoT lockdown">×</button></div>
+          </div>
+          <div class="mg"><button type="button" class="fpsave" role="menuitem">save this filter as…</button></div>
+        </div>
+      </div>
+    </div>
+    <span class="spans" role="group" aria-label="How far back the stream shows — 9 h buffer held">
+      <button type="button" class="span">15 m</button>
+      <button type="button" class="span on">1 h</button>
+      <button type="button" class="span">24 h</button>
+      <button type="button" class="span" disabled title="Buffer holds only 9 h">14 d</button>
+      <span class="reach">9 h buffer held</span>
+    </span>
+  </div>
+  <div class="ctxwrap" style="margin-top: 90px;">
+    <div class="ctxcap">what the stream shows now — three separately removable tokens, not one opaque saved-filter pill</div>
+    <table class="ctxtable">
+      <thead><tr><th>time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr></thead>
+      <tbody>
+        <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td><span class="cf">🇩🇪</span>185.220.101.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      </tbody>
+    </table>
+    <div class="foot-legend"><b>185.220.101.34 (DE) → rb5009 :8291</b> — 6 attempts today · wan-in-drop</div>
+  </div>
+</section>
+
+<div class="cap"><b>06</b>the narrow drawer, unchanged, beside the same applied filter wide</div>
+<section class="scene" id="drawer-beside" aria-label="The wide token bar and the untouched narrow drawer, same filter, side by side">
+  <div class="side-by-side">
+    <div class="col wide-col">
+      <div class="side-cap">wide — the token bar</div>
+      <div class="filterline">
+        <div class="fbox">
+          <span class="fchips">
+            <span class="chip">action:<em>drop</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the action filter">⌫</button></span>
+            <span class="chip">chain:<em>input</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the chain filter">⌫</button></span>
+            <span class="chip">source:<em>185.220.101.34 · external · DE</em><button type="button" class="chip-x" title="drop this term" aria-label="Remove the source filter">⌫</button></span>
+          </span>
+          <input type="text" class="fbtype" value="" placeholder="type a term, or click a value in a row" aria-label="type a term, or click a value in a row">
+          <div class="saved"><button type="button" class="fsaved" aria-haspopup="menu" aria-expanded="false" title="Saved filters">saved ▾</button></div>
+        </div>
+        <span class="spans" role="group" aria-label="How far back the stream shows — 9 h buffer held">
+          <button type="button" class="span">15 m</button>
+          <button type="button" class="span on">1 h</button>
+          <button type="button" class="span">24 h</button>
+          <span class="reach">9 h buffer held</span>
+        </span>
+      </div>
+      <div class="ctxwrap">
+        <div class="ctxcap">what the stream shows now — the same filter, either face</div>
+        <table class="ctxtable">
+          <thead><tr><th>time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr></thead>
+          <tbody>
+            <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td><span class="cf">🇩🇪</span>185.220.101.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+          </tbody>
+        </table>
+        <div class="foot-legend"><b>185.220.101.34 (DE) → rb5009 :8291</b> — 6 attempts today · wan-in-drop</div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="side-cap">narrow — the drawer (#683 round 29, unchanged)</div>
+      <div class="bar drawer">
+        <div class="handle"></div>
+        <div class="drawer-header"><span class="drawer-title">Filters</span><button type="button" class="done">Done</button></div>
+        <div class="fb-field"><span class="fb-label">Device</span><select aria-label="Device"><option>Any device</option></select></div>
+        <div class="fb-field"><span class="fb-label">Action</span><select aria-label="Action"><option selected>Drop</option></select></div>
+        <div class="fb-field"><span class="fb-label">Chain</span><select aria-label="Chain"><option selected>input</option></select></div>
+        <div class="fb-field"><span class="fb-label">Proto</span><input type="text" placeholder="Protocol (tcp, udp, icmp…)" aria-label="Protocol"></div>
+        <div class="fb-field">
+          <span class="fb-label">Source</span>
+          <div class="addr-group">
+            <div class="fb-field"><span class="fb-label">Scope</span><select aria-label="Source scope"><option selected>External</option></select></div>
+            <div class="fb-field"><span class="fb-label">Name, IP or CIDR</span><input type="text" value="185.220.101.34" aria-label="Source — name, IP or CIDR"></div>
+            <div class="fb-field"><span class="fb-label">Country</span><select aria-label="Source country"><option selected>DE</option></select></div>
+          </div>
+        </div>
+        <button type="button" class="swap" aria-label="Swap source and destination filters" title="Swap source and destination filters">⇄</button>
+        <div class="fb-field">
+          <span class="fb-label">Destination</span>
+          <div class="addr-group">
+            <div class="fb-field"><span class="fb-label">Scope</span><select aria-label="Destination scope"><option selected>Any destination</option></select></div>
+            <div class="fb-field"><span class="fb-label">Name, IP or CIDR</span><input type="text" placeholder="Destination — name, IP or CIDR" aria-label="Destination — name, IP or CIDR"></div>
+            <div class="fb-field"><span class="fb-label">Country</span><select aria-label="Destination country"><option selected>Any country</option></select></div>
+          </div>
+        </div>
+        <div class="fb-field"><span class="fb-label">Port</span><input type="text" placeholder="Port — number or service" aria-label="Port — number or service"></div>
+        <div class="fb-field"><span class="fb-label">Interface</span><input type="text" placeholder="Interface" aria-label="Interface"></div>
+        <div class="fb-field">
+          <span class="fb-label">Rule</span>
+          <div class="rule-group"><input type="text" class="rule" placeholder="Rule / label contains…" aria-label="Rule label search"><button type="button" class="regex-toggle" aria-label="Treat the rule search as a regular expression">.*</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
