@@ -83,7 +83,7 @@ CSS = r'''
   .dwr-in .side .conf .cbar { grid-column: 1 / -1; display: block; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--ci) 16%, transparent); }
   .dwr-in .side .conf .cbar span { display: block; height: 100%; border-radius: 2px; background: var(--ci); }
   .dwr-in .side .conf .cwhy { grid-column: 1 / -1; font: 10.5px var(--mono); color: var(--ink-3); line-height: 1.5; white-space: normal; }
-  .conf.c-low { --ci: @low@; } .conf.c-moderate { --ci: @moderate@; } .conf.c-high { --ci: @high@; }
+  .dwr-in .side .conf.c-low { --ci: @low@; } .dwr-in .side .conf.c-moderate { --ci: @moderate@; } .dwr-in .side .conf.c-high { --ci: @high@; }
   tr.drawer.open .dwr { max-height: 340px; }
 </style>
 '''
@@ -164,9 +164,10 @@ bands = f'''{head}
 {cards}
 '''
 for name, colours in PALETTES.items():
-    bands += (css(colours)).replace('.conf.c-low', f'section:nth-of-type({list(PALETTES).index(name) + 1}) .conf.c-low') \
-        .replace('.conf.c-moderate', f'section:nth-of-type({list(PALETTES).index(name) + 1}) .conf.c-moderate') \
-        .replace('.conf.c-high', f'section:nth-of-type({list(PALETTES).index(name) + 1}) .conf.c-high') \
-        .replace('.dwr-in .side', '.side')
+    k = list(PALETTES).index(name) + 1
+    bands += css(colours).replace('.dwr-in .side', '.side') \
+        .replace('.side .conf.c-low', f'section:nth-of-type({k}) .side .conf.c-low') \
+        .replace('.side .conf.c-moderate', f'section:nth-of-type({k}) .side .conf.c-moderate') \
+        .replace('.side .conf.c-high', f'section:nth-of-type({k}) .side .conf.c-high')
 bands += '</body></html>'
 (here / 'bands.html').write_text(bands)

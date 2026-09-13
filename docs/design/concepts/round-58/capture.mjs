@@ -23,17 +23,16 @@ async function take(name, sel = '#s7') {
 }
 
 for (const dir of ['one-hue', 'three-bands']) {
+  // the page opens itself onto the flags tab with d7's drawer out
   await page.goto('file://' + path.join(here, dir + '.html'));
-  await page.waitForTimeout(800);
-  await page.locator('#dtabs span[data-p="flags"]').click();
+  await page.waitForTimeout(1200);
+
+  // 2. the activity spike's drawer: scored 72, high
+  await take(dir + '-spike-high');
+  await page.locator('tr[data-d="d7"]').click();
 
   // 1. resting: the rows carry the type alone
   await take(dir + '-flags');
-
-  // 2. the activity spike's drawer: scored 72, high
-  await page.locator('tr[data-d="d7"]').click();
-  await take(dir + '-spike-high');
-  await page.locator('tr[data-d="d7"]').click();
 
   // 3. the drop surge's drawer: scored 46, moderate
   await page.locator('tr[data-d="d5"]').click();
