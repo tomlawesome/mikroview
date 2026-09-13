@@ -522,8 +522,9 @@ store:
 #
 # There is no `dsn` field, deliberately: a connection string carries a
 # password, so it is read from a file you control the permissions of.
-# The file must be readable by uid 65532 (the container's user):
-#   chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+# The file must be readable by uid 1000 (the container's user -- the
+# first account on most Linux hosts, so probably you already):
+#   sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
 # postgres:
 #   dsnFile: /run/secrets/mikroview-postgres-dsn
 

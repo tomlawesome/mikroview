@@ -535,7 +535,7 @@ test:go:
   # permission bits (CAP_DAC_OVERRIDE) — not because the code is wrong.
   # Dropping to a non-root user for the actual `go test` run matches both
   # GitHub's environment and mikroview's own production posture (its
-  # Dockerfile runs USER nonroot:nonroot). See
+  # Dockerfile runs USER 1000:1000). See
   # docs/decisions/gitlab-ci-root-in-container-test-failure.md.
   script:
     - useradd -m -u 10001 ci-test
@@ -697,7 +697,7 @@ test:postgres:
 #   image tag whatever happened. The layer cache stays on the daemon,
 #   which is what keeps the build quick when the Dockerfile inputs have
 #   not changed.
-# - The image runs as uid 65532 (Dockerfile), so the tmpfs at the data
+# - The image runs as uid 1000 (Dockerfile), so the tmpfs at the data
 #   directory is created with that owner: without a writable data
 #   directory the container has nowhere to persist its CA, and the app
 #   once carried a "persistence is optional" contract purely to keep this
@@ -725,7 +725,7 @@ test:container:
     - >-
       docker run --detach --name "$APP"
       --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
-      --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=65532,gid=65532
+      --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
       --cap-drop ALL --security-opt no-new-privileges
       --pids-limit 64 --memory 128m --cpus 0.5
       "$APP"

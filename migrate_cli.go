@@ -33,7 +33,7 @@ import (
 // Why this is a mikroview command rather than a documented `cp -a`:
 //
 //   - Ownership. The destination has to end up owned by the uid
-//     mikroview runs as (65532 in the shipped image), and that is the
+//     mikroview runs as (1000 in the shipped image), and that is the
 //     step operators get wrong -- a root-owned copy looks fine until the
 //     next start refuses with #536's preflight. Copying from inside the
 //     mikroview container means every file is created *by* that uid, so
@@ -62,8 +62,8 @@ import (
 // It is a fixed path rather than the operator's choice because Docker
 // seeds a fresh named volume from whatever the image has at the mount
 // point, ownership included: a volume mounted at a path the image never
-// created arrives owned by root, and mikroview at uid 65532 cannot write
-// to it. The Dockerfile creates this one owned by 65532 so that a brand
+// created arrives owned by root, and mikroview at uid 1000 cannot write
+// to it. The Dockerfile creates this one owned by 1000 so that a brand
 // new volume is writable the moment it appears, which is what makes the
 // bind-mount-to-volume direction work at all.
 //
@@ -351,7 +351,7 @@ func planMigration(cfg config.Config, dest string, force bool) (*migrationPlan, 
 // reason checkPathUsable gives: ownership, ACLs, read-only mounts and uid
 // remapping all change the answer and only an attempt accounts for all of
 // them. This is the check that catches the common failure -- a
-// root-owned host directory bind-mounted in, which mikroview at uid 65532
+// root-owned host directory bind-mounted in, which mikroview at uid 1000
 // cannot write a thing to.
 func prepareDest(dest string, force bool) error {
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.

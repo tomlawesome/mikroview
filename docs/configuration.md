@@ -619,8 +619,9 @@ That banner is only shown to admins, since the messages name file paths
 and hostnames.
 
 **File permissions**: the container runs as a fixed non-root user (uid
-65532, distroless `nonroot`) that is unrelated to any user on the Docker
-host. If `config.yaml` isn't world-readable (or owned by a matching
+1000), which is the first account created on most Linux hosts and so is
+usually you — but need not be on a host where someone else got there
+first. If `config.yaml` isn't world-readable (or owned by a matching
 uid/gid), the container will fail to start with a permission error —
 `chmod 644 deploy/config.yaml` after editing it.
 
@@ -2866,7 +2867,7 @@ mounted where it always is, the new one mounted at
 
 ```sh
 # Named volume -> bind mount. /path/on/host/new-data must exist and be
-# owned by uid 65532 first -- see "Ownership" below.
+# owned by uid 1000 first -- see "Ownership" below.
 docker run --rm \
   -v mikroview-data:/var/lib/mikroview \
   -v /path/on/host/new-data:/var/lib/mikroview-migrate \
@@ -2887,7 +2888,7 @@ docker run --rm \
 ```
 
 **Use `/var/lib/mikroview-migrate`, not a path of your own choosing.**
-The image ships that directory owned by uid 65532 for exactly this job.
+The image ships that directory owned by uid 1000 for exactly this job.
 Docker copies a fresh named volume's ownership from whatever the image
 has at the mount point, so a new volume mounted anywhere else — `/mnt`,
 `/data`, anything the image never created — arrives owned by root, and
@@ -2919,7 +2920,7 @@ migration never leaves the host, so carrying them across is exactly
 right.
 
 **Ownership.** MikroView creates every file on the destination itself,
-so the copy ends up owned by the user MikroView runs as (uid `65532` in
+so the copy ends up owned by the user MikroView runs as (uid `1000` in
 the shipped image) with no `chown` step afterwards. A named volume needs
 nothing — Docker hands it to the container on first use. A bind-mount
 destination on the host has to be writable by that uid *before* you run
@@ -3543,7 +3544,7 @@ tls:
   - the directory cannot be written, so a newly generated CA could not
     be saved and would be replaced again on the next restart;
   - CA files are present but cannot be read or parsed -- typically
-    ownership, since the container runs as uid `65532`. MikroView will
+    ownership, since the container runs as uid `1000`. MikroView will
     not overwrite them, because those files may be the only copy of the
     anchor everything currently trusts.
 
@@ -3807,10 +3808,10 @@ postgres:
 or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
 
 **The file has to be readable by the container's user.** MikroView runs
-as uid `65532` (distroless `nonroot`), which is not the user that created
-the file on your host — so a `0600` file, which is the natural mode for
-something holding a password, is unreadable inside the container and
-MikroView refuses to start:
+as uid `1000` — the first account created on most Linux hosts, so on a
+single-user machine it is you and a `0600` file you own already works.
+Where the file belongs to some other account, `0600` leaves it
+unreadable inside the container and MikroView refuses to start:
 
 ```
 ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permission denied
@@ -3819,7 +3820,7 @@ ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permis
 Keep the tight mode and hand it to that user:
 
 ```sh
-chown 65532:65532 postgres-dsn
+sudo chown 1000:1000 postgres-dsn
 chmod 600 postgres-dsn
 ```
 
