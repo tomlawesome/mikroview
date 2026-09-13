@@ -126,7 +126,15 @@ def build(name, colours):
     sub1('<span class="span">baseline dashed · 11:10 → 11:50 · settled</span></div>',
          '<span class="span">baseline dashed · 11:10 → 11:50 · settled</span>' + block(72, "cam-porch's own", 14) + '</div>')
 
-    sub1('</body>', css(colours) + '</body>')
+    # open straight onto the flags tab with ACTIVITY SPIKE's drawer out,
+    # so the thing this round is about is on screen without a click
+    OPEN = ('<script>window.addEventListener(\'load\', function () {'
+            'location.hash = \'#s7\';'
+            'var t = document.querySelector(\'#dtabs span[data-p="flags"]\'); if (t) t.click();'
+            'var r = document.querySelector(\'tr.frow[data-d="d7"]\'); if (r) r.click();'
+            'setTimeout(function () { var d = document.getElementById(\'d7\'); if (d) d.scrollIntoView({block: \'center\'}); }, 350);'
+            '});</script>')
+    sub1('</body>', css(colours) + OPEN + '</body>')
     (here / f'{name}.html').write_text(s)
 
 
