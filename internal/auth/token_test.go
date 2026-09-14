@@ -396,3 +396,149 @@ func TestUnknownKindOnDiskCannotAuthenticateButStaysRevocable(t *testing.T) {
 		t.Errorf("Revoke: %v, want nil -- an unusable token must still be removable", err)
 	}
 }
+
+// TestDroplistPullTokenLifecycle is #1224's version of
+// TestTokenCreateAndAuthenticate: create, authenticate, revoke, for the
+// third kind.
+func TestDroplistPullTokenLifecycle(t *testing.T) {
+	s := newTestTokenStore(t)
+	now := time.Now()
+
+	raw, tok, err := s.Create("droplist-pull", TokenKindDroplistPull, "", nil, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if tok.Device != "" {
+		t.Errorf("Device = %q, want empty -- a droplist-pull key is not scoped to one router", tok.Device)
+	}
+	got, ok := s.Authenticate(raw, TokenKindDroplistPull, now)
+	if !ok {
+		t.Fatal("the droplist-pull token did not authenticate as its own kind")
+	}
+	if got.ID != tok.ID {
+		t.Errorf("Authenticate returned %q, want %q", got.ID, tok.ID)
+	}
+	if err := s.Revoke(tok.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if _, ok := s.Authenticate(raw, TokenKindDroplistPull, now); ok {
+		t.Error("a revoked droplist-pull token still authenticated")
+	}
+}
+
+// TestDroplistPullTokenKindIsNotInterchangeable extends
+// TestTokenKindsAreNotInterchangeable to the third kind: a droplist-pull
+// key must not authenticate as either of the other two, and neither of
+// them may authenticate as a droplist-pull key -- all six directions,
+// since only checking the ones that seem dangerous is how the others
+// ship broken.
+func TestDroplistPullTokenKindIsNotInterchangeable(t *testing.T) {
+	s := newTestTokenStore(t)
+	now := time.Now()
+
+	apiRaw, _, err := s.Create("birdcage", TokenKindAPI, "", nil, now)
+	if err != nil {
+		t.Fatalf("Create api: %v", err)
+	}
+	ingestRaw, _, err := s.Create("router-1", TokenKindIngest, "router-1", nil, now)
+	if err != nil {
+		t.Fatalf("Create ingest: %v", err)
+	}
+	pullRaw, _, err := s.Create("droplist-pull", TokenKindDroplistPull, "", nil, now)
+	if err != nil {
+		t.Fatalf("Create droplist-pull: %v", err)
+	}
+
+	if _, ok := s.Authenticate(pullRaw, TokenKindAPI, now); ok {
+		t.Error("a droplist-pull key authenticated as a read-only API token")
+	}
+	if _, ok := s.Authenticate(pullRaw, TokenKindIngest, now); ok {
+		t.Error("a droplist-pull key authenticated as an ingest token")
+	}
+	if _, ok := s.Authenticate(apiRaw, TokenKindDroplistPull, now); ok {
+		t.Error("a read-only API token authenticated as a droplist-pull key -- it would reach the drop list feed too")
+	}
+	if _, ok := s.Authenticate(ingestRaw, TokenKindDroplistPull, now); ok {
+		t.Error("an ingest token authenticated as a droplist-pull key")
+	}
+
+	if _, ok := s.Authenticate(pullRaw, TokenKindDroplistPull, now); !ok {
+		t.Error("the droplist-pull key no longer authenticates as a droplist-pull key")
+	}
+}
+
+// TestTokenByKindFiltersByKind covers the lookup the droplist admin
+// handlers use to find the single pull key among every other token this
+// store holds.
+func TestTokenByKindFiltersByKind(t *testing.T) {
+	s := newTestTokenStore(t)
+	now := time.Now()
+
+	if _, _, err := s.Create("birdcage", TokenKindAPI, "", nil, now); err != nil {
+		t.Fatalf("Create api: %v", err)
+	}
+	if _, _, err := s.Create("router-1", TokenKindIngest, "router-1", nil, now); err != nil {
+		t.Fatalf("Create ingest: %v", err)
+	}
+	_, pull, err := s.Create("droplist-pull", TokenKindDroplistPull, "", nil, now)
+	if err != nil {
+		t.Fatalf("Create droplist-pull: %v", err)
+	}
+
+	got := s.ByKind(TokenKindDroplistPull)
+	if len(got) != 1 || got[0].ID != pull.ID {
+		t.Fatalf("ByKind(droplist-pull) = %+v, want exactly the one droplist-pull token", got)
+	}
+	if got[0].HashedValue != "" {
+		t.Error("ByKind returned a token carrying its hash -- it must never be usable to authenticate")
+	}
+	if len(s.ByKind(TokenKindAPI)) != 1 {
+		t.Errorf("ByKind(api) = %d tokens, want 1", len(s.ByKind(TokenKindAPI)))
+	}
+}
+
+// TestTokenTouchUpdatesLastUsedAtAndPersists pins Touch's contract
+// directly, separate from Authenticate's own LastUsedAt bookkeeping:
+// calling it updates the in-memory value immediately and, once
+// touchGranularity has passed since the last persisted value, survives a
+// reopen.
+func TestTokenTouchUpdatesLastUsedAtAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("OpenTokenStore: %v", err)
+	}
+	created := time.Now()
+	_, tok, err := s.Create("droplist-pull", TokenKindDroplistPull, "", nil, created)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first := created.Add(time.Hour)
+	s.Touch(tok.ID, first)
+	for _, got := range s.List() {
+		if got.ID == tok.ID && !got.LastUsedAt.Equal(first) {
+			t.Errorf("LastUsedAt = %v after Touch, want %v", got.LastUsedAt, first)
+		}
+	}
+
+	reopened, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	found := false
+	for _, got := range reopened.List() {
+		if got.ID == tok.ID {
+			found = true
+			if !got.LastUsedAt.Equal(first) {
+				t.Errorf("LastUsedAt did not survive a reopen: got %v, want %v", got.LastUsedAt, first)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("token missing after reopen")
+	}
+
+	// Touch on an unknown id is a silent no-op, not a panic or an error.
+	s.Touch("no-such-id", time.Now())
+}

@@ -85,18 +85,22 @@ type Token struct {
 	CreatedByUsername string `json:"createdByUsername,omitempty"`
 }
 
-// TokenKind separates the two credentials this store holds. They are not
-// interchangeable in either direction, and that is enforced structurally
-// rather than by convention: Authenticate requires its caller to name
-// the kind it expects, so "I forgot to check the kind" is not an
-// available mistake.
+// TokenKind separates the three credentials this store holds. They are
+// not interchangeable in either direction, and that is enforced
+// structurally rather than by convention: Authenticate requires its
+// caller to name the kind it expects, so "I forgot to check the kind" is
+// not an available mistake.
 //
 // The asymmetry is the reason. A read-only API token reads everything
 // mikroview knows -- events, flags, stats, devices. An ingest token only
-// writes observations about one router and can read nothing at all. If
-// either could be presented where the other was expected, the ingest
-// token issued to a script on a router (where #186 established any
-// `read` user can print it) would become a read-everything credential.
+// writes observations about one router and can read nothing at all. A
+// droplist-pull token (#1224) can read exactly one thing -- the
+// generated .rsc drop-list feed -- and nothing else. If any could be
+// presented where another was expected, the ingest token issued to a
+// script on a router (where #186 established any `read` user can print
+// it) would become a read-everything credential, and the droplist-pull
+// key -- meant to sit in the same kind of scheduled router fetch, so the
+// same exposure applies to it -- would become one too.
 type TokenKind string
 
 const (
@@ -105,13 +109,20 @@ const (
 	// TokenKindIngest is a RouterOS push-ingest token (#186), scoped to
 	// one device and accepted only by the ingest endpoint.
 	TokenKindIngest TokenKind = "ingest"
+	// TokenKindDroplistPull is the pull-only credential RouterOS's own
+	// scheduled `/tool fetch` presents at GET /api/droplist.rsc (#1224).
+	// It carries no device: unlike an ingest token it is not scoped to
+	// one router -- every router that fetches the drop list reads the
+	// same list -- so the "kind != TokenKindIngest && device != """ rule
+	// in Create already refuses one that tries to carry one.
+	TokenKindDroplistPull TokenKind = "droplist-pull"
 )
 
 // Valid reports whether k is a kind this build knows about. Anything
 // else is treated as unusable rather than as a variant to be tolerated
 // -- see OpenTokenStoreWithBackend.
 func (k TokenKind) Valid() bool {
-	return k == TokenKindAPI || k == TokenKindIngest
+	return k == TokenKindAPI || k == TokenKindIngest || k == TokenKindDroplistPull
 }
 
 var (
@@ -383,6 +394,41 @@ func (s *TokenStore) Authenticate(raw string, want TokenKind, now time.Time) (*T
 // rather than continuously.
 const lastUsedGranularity = time.Hour
 
+// touchGranularity is Touch's own version of the same coalescing, held
+// far shorter than lastUsedGranularity's hour. A droplist-pull fetch
+// (#1224) is far rarer than an API poll to begin with -- RouterOS runs it
+// on its own scheduler, typically every 15-30 minutes -- so even a
+// minute's granularity means a router that is actually fetching will
+// almost never see its persisted LastUsedAt lag more than one fetch
+// behind, without writing to disk on every single one.
+const touchGranularity = time.Minute
+
+// Touch records now as id's LastUsedAt, persisting only when the
+// previously stored value is more than touchGranularity stale -- the
+// same coalescing Authenticate applies via lastUsedGranularity, kept as
+// a separate, coarser-grained path here because handleDroplistPull
+// (#1224) calls this directly rather than through Authenticate: by the
+// time it runs, requireAuth's bearer branch has already authenticated
+// this same request's token once, and authenticating it a second time
+// would just repeat that lookup for nothing. Unlike Authenticate, an
+// unknown id is silently ignored -- the caller already knows the token is
+// real (it is the one that just authenticated the request), so there is
+// nothing actionable to report back.
+func (s *TokenStore) Touch(id string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	if now.Sub(t.LastUsedAt) >= touchGranularity {
+		t.LastUsedAt = now
+		s.persistLocked()
+	} else {
+		t.LastUsedAt = now
+	}
+}
+
 // Revoke permanently deletes a token by ID -- there is no "disable and
 // keep around" state, matching how a revoked session is deleted
 // outright rather than flagged (see SessionStore.Revoke).
@@ -441,6 +487,28 @@ func (s *TokenStore) List() []Token {
 		cp := *t
 		cp.HashedValue = ""
 		out = append(out, cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
+// ByKind returns every token of kind kind, oldest first -- the same
+// copy-and-zero-hash contract List uses, so a caller holding the result
+// can never use it to authenticate. Introduced for #1224's droplist-pull
+// key: at most one is ever meant to exist, and the admin handlers use
+// this to find it (to report its status, or to revoke it once a
+// replacement is minted) without listing and filtering every token themselves.
+func (s *TokenStore) ByKind(kind TokenKind) []*Token {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Token
+	for _, t := range s.byID {
+		if t.Kind != kind {
+			continue
+		}
+		cp := *t
+		cp.HashedValue = ""
+		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out

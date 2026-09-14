@@ -160,6 +160,22 @@ var authzMatrix = []routeExpectation{
 			"same reason set and remove are, and no stored backup is touched since the key pair itself does not " +
 			"change"},
 
+	{http.MethodGet, "/api/droplist", accessAdmin,
+		"lists every drop-list entry and the pull key's own status (#1224) -- admin-only, matching the router-" +
+			"backups group beside it: this is an enforcement list an admin authored by hand (#461), not a read " +
+			"any signed-in tier gets by default"},
+	{http.MethodPost, "/api/droplist", accessAdmin,
+		"adds an entry to block -- admin-only, since #461 settled that a droplist entry is always operator-" +
+			"authored and never written by anything else, including a lesser-tier caller"},
+	{http.MethodDelete, "/api/droplist/{cidr...}", accessAdmin,
+		"removes an entry -- same tier as adding one"},
+	{http.MethodPost, "/api/droplist/key", accessAdmin,
+		"mints (or rotates) the droplist-pull key a router's own scheduled fetch presents at GET " +
+			"/api/droplist.rsc -- admin-only, mirroring POST /api/tokens: minting a bearer credential is a setup " +
+			"task, not day-to-day product use"},
+	{http.MethodDelete, "/api/droplist/key", accessAdmin,
+		"revokes the droplist-pull key -- same tier as minting it"},
+
 	{http.MethodPut, "/api/settings/store", accessAdmin,
 		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
 			"separate reasons, either sufficient: it spends the host's memory, which is an instance-wide cost " +
@@ -599,6 +615,13 @@ var bearerMuxRoutes = map[string][]string{
 		// credential already does for the same router.
 		"POST /api/ingest/router-backup",
 	},
+	"droplist-pull": {
+		// #1224's third bearer mux, and the narrowest of the three: a
+		// leaked pull key can read the generated .rsc drop-list feed and
+		// nothing else -- not events, not flags, not any router's pushed
+		// state, and no write of any kind.
+		"GET /api/droplist.rsc",
+	},
 }
 
 // TestBearerMuxesServeOnlyTheirDeclaredRoutes reads the two
@@ -625,6 +648,8 @@ func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 			name = "read-only"
 		case "ingestRoutes":
 			name = "ingest"
+		case "droplistPullRoutes":
+			name = "droplist-pull"
 		default:
 			continue
 		}

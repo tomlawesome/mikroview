@@ -54,6 +54,13 @@ const (
 	// body, so a payload cannot claim to be from a router other than the
 	// one its own credential is scoped to.
 	ingestTokenContextKey
+	// droplistTokenContextKey is ingestTokenContextKey's counterpart for
+	// the droplist-pull kind (#1224) -- carries the authenticated
+	// *auth.Token through to handleDroplistPull, which needs its ID for
+	// the ingest-limiter reservation and the LastUsedAt touch, and needs
+	// it from the token that authenticated this exact request rather
+	// than looking it up a second time.
+	droplistTokenContextKey
 )
 
 // exemptPaths lists routes reachable without a session once auth is
@@ -164,6 +171,19 @@ func (s *Server) ingestRoutes() http.Handler {
 	return mux
 }
 
+// droplistPullRoutes is the third and narrowest bearer mux -- one route,
+// for the droplist-pull key (#1224) a router's own scheduled
+// `/tool fetch` presents. This is the whole blast radius of a leaked
+// pull key: it can read the generated .rsc drop-list feed and nothing
+// else, the same structural guarantee readOnlyRoutes and ingestRoutes
+// document above -- there is no other handler registered on this mux for
+// a bearer-authenticated request to fall through to.
+func (s *Server) droplistPullRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/droplist.rsc", s.handleDroplistPull)
+	return mux
+}
+
 const bearerPrefix = "Bearer "
 
 // bearerToken extracts the raw token value from an Authorization: Bearer
@@ -194,9 +214,10 @@ func bearerToken(r *http.Request) (string, bool) {
 //     service-to-service caller -- CSRF is a browser-cookie-specific
 //     mitigation that doesn't apply to it. A valid *read-only API* token
 //     is dispatched to readOnlyRoutes, never to next (the full mux); a
-//     valid *ingest* token (#186) is dispatched to ingestRoutes instead,
-//     equally never to next -- the two kinds reach two disjoint muxes,
-//     neither of which is the real one, so a token of either kind is
+//     valid *ingest* token (#186) is dispatched to ingestRoutes instead;
+//     a valid *droplist-pull* token (#1224) is dispatched to
+//     droplistPullRoutes instead -- the three kinds reach three disjoint
+//     muxes, none of which is the real one, so a token of any kind is
 //     structurally incapable of reaching a session-gated route. An
 //     invalid or revoked token is rejected outright with 401, not
 //     silently treated as "no token" and passed through to the
@@ -211,6 +232,7 @@ func bearerToken(r *http.Request) (string, bool) {
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	readOnly := s.readOnlyRoutes()
 	ingest := s.ingestRoutes()
+	droplistPull := s.droplistPullRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Auth.Count() == 0 {
 			if !bootstrapExemptPaths[r.URL.Path] {
@@ -257,6 +279,14 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				ingest.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ingestTokenContextKey, tok)))
 				return
 			}
+			// Tried last: a droplist-pull key exists once per deployment
+			// (minted from Settings, not handed out per-integration the
+			// way API/ingest tokens are), so it is by far the rarest of
+			// the three to actually be presented here.
+			if tok, valid := s.Tokens.Authenticate(raw, auth.TokenKindDroplistPull, time.Now()); valid {
+				droplistPull.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), droplistTokenContextKey, tok)))
+				return
+			}
 			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
 			return
 		}
@@ -294,6 +324,15 @@ func userFromContext(r *http.Request) *auth.User {
 // requireAuth's ingest-token branch ever dispatches to.
 func ingestTokenFromContext(r *http.Request) *auth.Token {
 	t, _ := r.Context().Value(ingestTokenContextKey).(*auth.Token)
+	return t
+}
+
+// droplistTokenFromContext is ingestTokenFromContext's counterpart --
+// only ever non-nil inside handleDroplistPull, the sole handler
+// droplistPullRoutes registers and therefore the only one requireAuth's
+// droplist-pull-token branch ever dispatches to.
+func droplistTokenFromContext(r *http.Request) *auth.Token {
+	t, _ := r.Context().Value(droplistTokenContextKey).(*auth.Token)
 	return t
 }
 

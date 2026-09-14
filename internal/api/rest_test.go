@@ -19,6 +19,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -58,6 +59,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	}
 	ru, _ := rules.Open("")
 	cs, _ := coverage.Open("")
+	ds, _ := droplist.Open("")
 	hr, _ := hosts.Open("")
 	as, _ := audit.Open("")
 	ss, _ := suggest.Open("")
@@ -78,6 +80,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Entities:      es,
 		Rules:         ru,
 		Coverage:      cs,
+		Droplist:      ds,
 		Hosts:         hr,
 		Audit:         as,
 		Suggest:       ss,

@@ -1260,15 +1260,16 @@ live reputation lookups above already play for those flags, just
 resolved synchronously (a local lookup needs no network round-trip)
 instead of asynchronously.
 
-## Drop list: operator-authored ranges to block (optional, #1223)
+## Drop list: operator-authored ranges to block (optional, #1223/#1224)
 
 Separate from the fetched feeds above: the drop list is a small store of
 ranges an admin has explicitly decided to block, typed in directly or
-raised from a flag's drawer, never written automatically. Stage 1 of the
-design ratified on #461 -- this is just the store and its validation
-(public IPv4 only, no broader than /24, and never a range the pushed
-router state shows as the router's own); no API, no UI, and nothing
-pushed to RouterOS yet -- those are #1224/#1225.
+raised from a flag's drawer, never written automatically. #461's ratified
+design has three stages -- the store and its validation (#1223: public
+IPv4 only, no broader than /24, and never a range the pushed router state
+shows as the router's own), the admin API and the RouterOS feed (#1224,
+this stage), and the Settings group and router setup card (#1225, still
+to come).
 
 ```yaml
 droplist:
@@ -1277,6 +1278,42 @@ droplist:
   # entries still work, they just don't survive a restart.
   storePath: "/var/lib/mikroview/droplist.json"
 ```
+
+### How the router fetches it
+
+A router pulls the current drop list itself, on its own schedule, with
+its own pull-only key -- MikroView never connects to a router (see
+`AGENTS.md`'s "MikroView observes; it never scans or connects"). Minting
+a key (`POST /api/droplist/key`) prints the two lines to paste into the
+router's terminal (#1225's setup card renders these; shown here for what
+they actually are):
+
+```
+/tool fetch url="https://<mikroview>/api/droplist.rsc" http-header-field="Authorization: Bearer <key>" dst-path=mikroview-drop.rsc
+/import file-name=mikroview-drop.rsc
+```
+
+The fetched script never rewrites the live `mikroview-drop` address list
+directly. It builds the new generation entirely in a staging list
+(`mikroview-drop-next`) first, and only swaps it onto the live list in
+its last two lines -- because RouterOS's own `/import` aborts at the
+first line that errors and leaves everything after it un-run, so a script
+that cleared the live list up front and then hit a bad line partway
+through would leave the router with an empty, wide-open drop list until
+the next successful fetch. With the staging-list swap, a failed import
+leaves the live list exactly as it was.
+
+A fetch failure -- the router unreachable, a network blip, an expired
+key -- imports nothing at all, so the last successfully-imported list
+stays in force; nothing is ever left half-applied.
+
+The key reads the drop list and nothing else: minting one (`POST
+/api/droplist/key`) mints a `droplist-pull` bearer token good for exactly
+one route, `GET /api/droplist.rsc`, the same structural, separate-mux
+guarantee the read-only and ingest tokens carry (see [API
+tokens](#api-tokens-read-only)). Minting again **replaces** the existing
+key rather than adding a second one -- every router that fetches the drop
+list uses the same key, so there is only ever one to rotate.
 
 ## Network attribution (optional, on by default)
 
@@ -1832,12 +1869,14 @@ device-attributed exception:
   the pushing device (`device:<name>`), or to `system` for a fault that
   was MikroView's own rather than the router's.
 
-- Adding or removing a drop list entry (issue #1223, stage 1) is
-  `droplist.add` / `droplist.remove`, naming the range as its target and
-  carrying the entry's reason as detail (plus which flag raised it, when
-  one did). This stage has no API or UI writing entries yet, so nothing
-  produces these two actions in practice until #1224/#1225 land -- the
-  store and its audit trail exist first.
+- Adding or removing a drop list entry (issue #1223) is `droplist.add` /
+  `droplist.remove`, naming the range as its target and carrying the
+  entry's reason as detail (plus which flag raised it, when one did).
+  Minting or revoking the pull key a router fetches the feed with (#1224)
+  is `droplist.key_minted` (detail says "replaced the previous key" when
+  minting rotated an existing one rather than creating the first) and
+  `droplist.key_revoked`. There is still no UI writing any of this yet --
+  that is #1225.
 
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
@@ -3835,7 +3874,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
-| `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-1223)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
+| `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-12231224)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
@@ -4178,6 +4217,12 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/router-backups/passphrase` | admin-only: turns the lock on, given `{"passphrase": "..."}` (at least 12 characters) -- generates an X25519 key pair, re-seals every stored backup to the public half, and leaves the vault open for the session that set it. Audited as `router_backup.passphrase_set`; a 500 if a file could not be re-sealed, which is still audited and named in the response |
 | `DELETE /api/router-backups/passphrase` | admin-only: turns the lock off, given the current `{"passphrase": "..."}` -- re-seals every backup back to the retention key MikroView holds itself. Rate-limited like unlock. A wrong passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_removed`; a partial re-seal failure as `router_backup.passphrase_remove_failed` |
 | `PUT /api/router-backups/passphrase` | admin-only: changes the passphrase, given `{"current": "...", "passphrase": "..."}` -- re-wraps the vault's existing key pair under the new passphrase and a fresh salt in one atomic write; no stored backup is touched, so this cannot be interrupted half-way. Rate-limited like unlock. A wrong current passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_changed` |
+| `GET /api/droplist` | admin-only: every drop-list entry (`cidr`, `addedBy`, `addedAt`, `reason`, `flagID` if raised from a flag) plus the pull key's own status (`key.present`, and when present `createdAt`/`createdBy`/`lastUsedAt`) (#1224, see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)) |
+| `POST /api/droplist` | admin-only: add an entry, given `{"cidr": "...", "reason": "...", "flagID": "..."}` (`flagID` optional). 201 with the stored entry. 400 for a range `internal/droplist.Validate` refuses (too broad, not public, or the router's own range), naming the specific rule in the response body; 400 if `flagID` names no flag; 409 for a duplicate of an existing entry |
+| `DELETE /api/droplist/{cidr}` | admin-only: remove the entry for `cidr` (e.g. `DELETE /api/droplist/203.0.113.0/24`). 204 on success, 404 if no entry matches |
+| `POST /api/droplist/key` | admin-only: mint the droplist-pull key a router's scheduled fetch presents at `GET /api/droplist.rsc` -- returns `{"key": "...", "createdAt": ...}`, the raw value shown exactly once. Minting again **replaces** any existing key rather than adding a second one, since every router fetches the same feed with the same credential; audited as `droplist.key_minted` |
+| `DELETE /api/droplist/key` | admin-only: revoke the droplist-pull key. 204 on success, 404 if none exists. Audited as `droplist.key_revoked` |
+| `GET /api/droplist.rsc` | droplist-pull-token-only, not session-gated and not reachable with any other token kind (#1224) -- the RouterOS-importable script a router's own scheduled `/tool fetch` pulls: a staging-list build followed by a live-list swap, so a fetch or import failure never leaves the live list empty (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)). `Cache-Control: no-store`; 401 with no key or an invalid/revoked one, 429 over the same per-token rate limit ingest pushes use. Never audited per pull -- the key's own `lastUsedAt` (visible on `GET /api/droplist`) is the record |
 | `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
