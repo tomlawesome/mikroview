@@ -62,6 +62,12 @@ var ErrExists = errors.New("droplist: an entry for that range already exists")
 // ErrNotFound is returned by Remove for a CIDR with no matching entry.
 var ErrNotFound = errors.New("droplist: no entry for that range")
 
+// ErrBadText reports an actor, reason or flag id that is not plain,
+// bounded text -- the same check every operator-typed string here gets,
+// surfaced as its own error so a handler can answer it as the caller's
+// mistake rather than the server's.
+var ErrBadText = errors.New("droplist: addedBy, reason and flagID must be plain, bounded text")
+
 const maxTextLen = 256
 
 // validText mirrors internal/suggest.validText (itself mirroring
@@ -217,7 +223,7 @@ func (s *Store) List() []Entry {
 // stored that was not validated.
 func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, error) {
 	if !validText(actor) || !validText(reason) || !validText(flagID) {
-		return Entry{}, fmt.Errorf("droplist: addedBy, reason and flagID must be plain, bounded text")
+		return Entry{}, ErrBadText
 	}
 
 	s.mu.Lock()

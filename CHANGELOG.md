@@ -40,6 +40,21 @@ rewritten.
   remove is audited. Nothing is served yet: no API, no UI, no RouterOS
   push — that is #1224/#1225.
 
+- **The drop list's admin API and RouterOS feed** (#1224, stage 2):
+  `GET`/`POST /api/droplist` and `DELETE /api/droplist/{cidr}` manage
+  entries, and `GET /api/droplist.rsc` is the script a router imports to
+  actually block them. The router pulls this itself, on its own
+  schedule, with its own pull-only key (`POST`/`DELETE
+  /api/droplist/key`) — a third bearer-token kind that can read the
+  generated feed and nothing else, the same structural, separate-mux
+  guarantee the read-only and ingest tokens already carry. The fetched
+  script builds the new generation in a staging address list first and
+  only swaps it onto the live one in its last two lines, so a `/import`
+  that aborts partway through — RouterOS's own documented behaviour on a
+  bad line — leaves the live list exactly as it was, never emptied.
+  There is still no Settings group or setup card writing any of this
+  from the UI — that is #1225.
+
 ### Changed
 
 - **A flag's confidence is now a rating in its drawer, not a number on

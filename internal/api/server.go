@@ -666,6 +666,21 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodDelete, "/api/router-backups/passphrase", s.handleRouterBackupRemovePassphrase},
 		{http.MethodPut, "/api/router-backups/passphrase", s.handleRouterBackupChangePassphrase},
 
+		// The drop list's admin API (issue #1224): the entry list/add/
+		// remove routes, and the pull key that lets a router fetch the
+		// generated .rsc feed. The pull route itself
+		// (GET /api/droplist.rsc) is bearer-only and lives on its own
+		// mux -- see droplistPullRoutes in auth.go -- deliberately absent
+		// from this session-gated table.
+		{http.MethodGet, "/api/droplist", s.handleDroplistList},
+		{http.MethodPost, "/api/droplist", s.handleDroplistCreate},
+		// Registered before the {cidr...} pattern purely for readability,
+		// same as /api/definitions/schema above it: ServeMux matches the
+		// literal segment regardless of declaration order.
+		{http.MethodPost, "/api/droplist/key", s.handleDroplistKeyCreate},
+		{http.MethodDelete, "/api/droplist/key", s.handleDroplistKeyDelete},
+		{http.MethodDelete, "/api/droplist/{cidr...}", s.handleDroplistDelete},
+
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},

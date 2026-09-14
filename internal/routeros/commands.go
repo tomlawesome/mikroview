@@ -32,6 +32,15 @@ func quote(s string) string {
 	return s
 }
 
+// Quote is quote, exported for internal/droplist (#1224): the .rsc feed
+// places an operator-authored entry reason inside a RouterOS quoted
+// comment, and this is that same one place the escaping rule lives,
+// rather than a second copy of it in a package that has to trust it
+// stays in step.
+func Quote(s string) string {
+	return quote(s)
+}
+
 // scriptSource escapes a whole script body for the inside of a
 // `source="..."` value: quote()'s backslash-then-quote rule, plus `$`
 // as `\$` because RouterOS expands `$name` inside a double-quoted
