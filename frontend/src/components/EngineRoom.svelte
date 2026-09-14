@@ -47,19 +47,27 @@
   import { versionState } from '../lib/version.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchSetupStatus, fetchDevices, fetchSetupCommands, fetchHistorySettings, fetchRouterBackups } from '../lib/api'
+  import {
+    fetchSetupStatus,
+    fetchDevices,
+    fetchSetupCommands,
+    fetchHistorySettings,
+    fetchRouterBackups,
+    fetchDroplist,
+  } from '../lib/api'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
   import DiskControl from './DiskControl.svelte'
   import RouterBackups from './RouterBackups.svelte'
+  import Droplist from './Droplist.svelte'
   import { usersState } from '../lib/users.svelte'
   import { tokensState } from '../lib/tokens.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
-  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse } from '../lib/types'
+  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse, DroplistResponse } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -110,6 +118,14 @@
       refreshRouterBackups()
       routerBackupsTimer = setInterval(refreshRouterBackups, 60_000)
     }
+    // The drop list group (#1225, #461) is admin-only end to end, same
+    // reason as router backups just above -- GET /api/droplist 403s
+    // anyone else.
+    let droplistTimer: ReturnType<typeof setInterval> | undefined
+    if (isAdmin) {
+      refreshDroplist()
+      droplistTimer = setInterval(refreshDroplist, 60_000)
+    }
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule the former tokens door applied -- an
@@ -130,6 +146,7 @@
       clearInterval(historyTimer)
       if (historyRetry) clearTimeout(historyRetry)
       if (routerBackupsTimer) clearInterval(routerBackupsTimer)
+      if (droplistTimer) clearInterval(droplistTimer)
     }
   })
 
@@ -165,6 +182,24 @@
   // reached only from here (owner decision, issue note 10572).
   function openLostRouter(device: string) {
     wizardState.openLostRouter(device)
+  }
+
+  // --- drop list (#1225, #461) --------------------------------------------
+  let droplist = $state<DroplistResponse | null>(null)
+  // The disk group's own `dfail` idiom, same reason router backups above
+  // draws it directly: the GET did not answer for a reason other than
+  // role, and there is no settings object yet to render a control from.
+  let droplistUnanswered = $state(false)
+
+  function refreshDroplist(): Promise<void> {
+    return fetchDroplist(window.location.host)
+      .then((r) => {
+        droplist = r
+        droplistUnanswered = false
+      })
+      .catch(() => {
+        droplistUnanswered = true
+      })
   }
 
   function refreshHistory() {
@@ -1225,6 +1260,32 @@
                 <span class="ov">
                   unknown — the server did not answer ·
                   <button class="olink" onclick={refreshRouterBackups}>ask again</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      {/if}
+
+      <!-- The drop list group (#1225, #461), straight after router
+           backups: the third thing mikroview hands the router rather
+           than keeps for itself. Admin-only, same reason as backups
+           above. -->
+      {#if isAdmin}
+        {#if droplist}
+          <div id="engineroom-droplist" class="stsection wide">
+            <h3>drop list</h3>
+            <Droplist resp={droplist} onrefresh={refreshDroplist} />
+          </div>
+        {:else if droplistUnanswered}
+          <div id="engineroom-droplist" class="stsection wide dfail">
+            <h3>drop list</h3>
+            <div class="wrows">
+              <div class="orow">
+                <span>entries</span>
+                <span class="ov">
+                  unknown — the server did not answer ·
+                  <button class="olink" onclick={refreshDroplist}>ask again</button>
                 </span>
               </div>
             </div>
