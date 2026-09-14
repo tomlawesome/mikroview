@@ -745,3 +745,28 @@ func TestDroplistKeyCreateAcceptsOptionalAddressAndFillsScheduler(t *testing.T) 
 		t.Error("expected a scheduler line even with no request body, falling back to r.Host")
 	}
 }
+
+// A supplied setup address is used only when it looks like a host[:port]
+// (stage-3 security review): the rendered commands are pasted into a
+// RouterOS terminal, and a line break in the address would smuggle a
+// second command into the paste. Anything else falls back to the Host
+// header.
+func TestDroplistAddressOrRefusesAnythingButAHostPort(t *testing.T) {
+	cases := map[string]string{
+		"":                             "fallback:1",
+		"mv.example":                   "mv.example",
+		"mv.example:8443":              "mv.example:8443",
+		"192.0.2.10:19803":             "192.0.2.10:19803",
+		"[2001:db8::1]:8443":           "[2001:db8::1]:8443",
+		"mv.example\n/user add name=p": "fallback:1",
+		"mv.example/api":               "fallback:1",
+		"mv example":                   "fallback:1",
+		"mv.example\"":                 "fallback:1",
+		"mv.example;":                  "fallback:1",
+	}
+	for in, want := range cases {
+		if got := droplistAddressOr(in, "fallback:1"); got != want {
+			t.Errorf("droplistAddressOr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

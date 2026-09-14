@@ -114,10 +114,30 @@ const droplistSetupKeyPlaceholder = "<DROP-LIST-KEY>"
 // header -- a reasonable default for the common case of one mikroview
 // reachable at the address the admin is browsing it from right now.
 func droplistSetupAddress(r *http.Request) string {
-	if a := r.URL.Query().Get("address"); a != "" {
-		return a
+	return droplistAddressOr(r.URL.Query().Get("address"), r.Host)
+}
+
+// droplistAddressOr returns supplied when it is a plausible host[:port]
+// and fallback otherwise. The rendered commands are pasted into a
+// RouterOS terminal by hand, and QuoteScriptString cannot escape a line
+// break: an address carrying one would let a second command ride into
+// the paste (stage-3 security review). Rather than escape, refuse:
+// only letters, digits, `.`, `-`, `:`, `[` and `]` (a bracketed IPv6
+// literal) ever appear in a real host[:port], so anything else falls
+// back to the Host header, which Go has already vetted.
+func droplistAddressOr(supplied, fallback string) string {
+	if supplied == "" || len(supplied) > 253 {
+		return fallback
 	}
-	return r.Host
+	for _, c := range supplied {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '-', c == ':', c == '[', c == ']':
+		default:
+			return fallback
+		}
+	}
+	return supplied
 }
 
 // handleDroplistList is the admin-only read backing the Settings group
@@ -296,10 +316,7 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	address := req.Address
-	if address == "" {
-		address = r.Host
-	}
+	address := droplistAddressOr(req.Address, r.Host)
 
 	// Create first, revoke second. The other order is the remove-then-set
 	// shape #1222 took out of the vault: a Create that failed after the
