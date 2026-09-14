@@ -47,7 +47,14 @@ beforeEach(() => {
 describe('JourneyAttach', () => {
   it('shows the real two RouterOS lines -- exactly what the server rendered', async () => {
     wizardState.status = {
-      instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+      instance: {
+        tlsEnabled: true,
+        hosts: ['localhost'],
+        syslogPort: ':6514',
+        syslogEnabled: true,
+        address: '',
+        addressCandidates: [],
+      },
       sources: [],
       devices: [],
       pushKinds: [],
@@ -84,7 +91,14 @@ describe('JourneyAttach', () => {
 
   it('Continue moves the journey on to Connecting', async () => {
     wizardState.status = {
-      instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+      instance: {
+        tlsEnabled: true,
+        hosts: ['localhost'],
+        syslogPort: ':6514',
+        syslogEnabled: true,
+        address: '',
+        addressCandidates: [],
+      },
       sources: [],
       devices: [],
       pushKinds: [],

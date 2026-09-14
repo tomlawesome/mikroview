@@ -122,6 +122,39 @@ func TestMarksSurviveARestart(t *testing.T) {
 	})
 }
 
+// TestAddressSurvivesARestart pins #1213's whole point: the operator's
+// answer to "what address can your router reach mikroview on?" is
+// persisted beside the marks, the same eachSetupBackend suite proves
+// they survive with, so a restart mid-wizard does not force it to be
+// asked again.
+func TestAddressSurvivesARestart(t *testing.T) {
+	eachSetupBackend(t, func(t *testing.T, open func() *Store) {
+		first := open()
+		if first.Address() != "" {
+			t.Fatalf("Address() on a fresh store = %q, want empty", first.Address())
+		}
+		if !first.SetAddress("10.0.40.5:8443") {
+			t.Fatal("SetAddress refused a valid address")
+		}
+
+		second := open()
+		if got := second.Address(); got != "10.0.40.5:8443" {
+			t.Errorf("Address() after reopen = %q, want the value just stored", got)
+		}
+
+		// Editable afterwards (re-running setup on a moved instance must
+		// not require a reinstall): a later answer replaces the first,
+		// and that replacement survives too.
+		if !second.SetAddress("192.168.1.9") {
+			t.Fatal("SetAddress refused a valid replacement")
+		}
+		third := open()
+		if got := third.Address(); got != "192.168.1.9" {
+			t.Errorf("Address() after the replacement reopen = %q, want the newer value", got)
+		}
+	})
+}
+
 // TestChangedMindSurvivesAsOneMark. A step has exactly one outcome at a
 // time in memory; a restart must not resurrect the one it replaced.
 func TestChangedMindSurvivesAsOneMark(t *testing.T) {

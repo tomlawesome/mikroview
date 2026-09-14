@@ -1483,6 +1483,16 @@ export interface SetupStatus {
     hosts: string[]
     syslogPort: string
     syslogEnabled: boolean
+    // The operator's own answer (#1213) to "what address can your
+    // router reach mikroview on?" -- empty until they have answered
+    // once. Persisted server-side beside the setup ledger's marks, so a
+    // restart mid-wizard does not lose it.
+    address: string
+    // The server's own guesses at that answer: every address it is
+    // bound to, on its own HTTPS port. Offered as candidates for the
+    // field above, alongside the browser's own host -- never sent on
+    // the operator's behalf.
+    addressCandidates: string[]
   }
   sources: {
     source: string
@@ -1638,7 +1648,11 @@ export interface SetupCommandsResponse {
 // anything to embed, version is omitted until the operator has picked
 // one or a router has reported, and device is omitted until step 4 or
 // 6 has a router chosen (it names step 6's backup script is being
-// rendered for; the push script needs no such field).
+// rendered for; the push script needs no such field). address itself
+// may be sent empty (#1213: the operator has not answered the wizard's
+// header field yet) -- every block that embeds it then comes back
+// blank with the "no-address" key on its own commandStep.blocked,
+// rather than the request being refused.
 export interface SetupCommandsRequest {
   address: string
   syslogPort?: string

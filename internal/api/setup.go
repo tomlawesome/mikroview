@@ -79,6 +79,20 @@ type setupInstance struct {
 	// case no amount of router-side configuration will ever work and the
 	// wizard should say so rather than wait.
 	SyslogEnabled bool `json:"syslogEnabled"`
+	// Address is the operator's own stored answer (#1213) to "what
+	// address can your router reach mikroview on?" -- empty until they
+	// have answered once. Persisted in internal/setup beside the marks,
+	// so a restart mid-wizard does not lose it. Every RouterOS command
+	// the wizard renders is written against this value once it is set,
+	// never against the browser's own host.
+	Address string `json:"address"`
+	// AddressCandidates are this instance's own guesses at that answer,
+	// from SetupInstance.Candidates (set at startup -- see that field's
+	// comment for how it is derived and why it never polls a router).
+	// The wizard offers these, and the browser's own host, as starting
+	// points for the field above -- never as a value sent on the
+	// operator's behalf.
+	AddressCandidates []string `json:"addressCandidates"`
 }
 
 type setupDevice struct {
@@ -181,12 +195,18 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	address := ""
+	if s.Setup != nil {
+		address = s.Setup.Address()
+	}
 	writeJSON(w, http.StatusOK, setupStatus{
 		Instance: setupInstance{
-			TLSEnabled:    s.SetupInstance.TLSEnabled,
-			Hosts:         nonNilStrings(s.SetupInstance.Hosts),
-			SyslogPort:    s.SetupInstance.SyslogPort,
-			SyslogEnabled: s.SetupInstance.SyslogPort != "",
+			TLSEnabled:        s.SetupInstance.TLSEnabled,
+			Hosts:             nonNilStrings(s.SetupInstance.Hosts),
+			SyslogPort:        s.SetupInstance.SyslogPort,
+			SyslogEnabled:     s.SetupInstance.SyslogPort != "",
+			Address:           address,
+			AddressCandidates: nonNilStrings(s.SetupInstance.Candidates),
 		},
 		Sources:   sources,
 		Devices:   devices,
@@ -323,6 +343,61 @@ func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mark)
 }
 
+// setupAddressRequest is the wizard header field's answer (#1213): what
+// address a router can reach this instance on.
+type setupAddressRequest struct {
+	Address string `json:"address"`
+}
+
+// setupAddressResponse echoes the stored value back, the same shape
+// GET /api/setup/status's Instance.Address already reports it in.
+type setupAddressResponse struct {
+	Address string `json:"address"`
+}
+
+// handleSetupAddress records the operator's answer to "what address can
+// your router reach mikroview on?" -- persisted in internal/setup beside
+// the marks, so it survives the restart an upgrade brings, and so it
+// need not be re-asked on every visit (it is editable afterwards from
+// the same field, for an instance that moves).
+//
+// Admin-only, the same gate as handleSetupMark just above: there is no
+// read-only wizard, so a viewer has no business changing what every
+// RouterOS command in it is written against.
+//
+// validSetupAddress (setupcommands.go, #1095) is reused rather than
+// reimplemented here: it already rejects anything that is not a
+// well-formed hostname or IP literal, optionally with a port, which is
+// exactly what a value about to sit bare inside routeros.CaTrustCommands,
+// SyslogCommands, PushScript and BackupScript needs -- a newline or
+// space here would smuggle a second command into what the operator
+// pastes.
+func (s *Server) handleSetupAddress(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	var req setupAddressRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !validSetupAddress(req.Address) {
+		http.Error(w, "address must be a hostname or IP address, optionally with :port", http.StatusBadRequest)
+		return
+	}
+	if s.Setup == nil {
+		http.Error(w, "setup observations are not available", http.StatusServiceUnavailable)
+		return
+	}
+	if !s.Setup.SetAddress(req.Address) {
+		http.Error(w, "address could not be stored", http.StatusBadRequest)
+		return
+	}
+	s.Audit.Record(auditActor(r), "setup.address_set", req.Address, "")
+	writeJSON(w, http.StatusOK, setupAddressResponse{Address: req.Address})
+}
+
 // SetupInstance is the running configuration the wizard needs to write
 // commands that work. Set once at startup by main.go.
 type SetupInstance struct {
@@ -334,6 +409,16 @@ type SetupInstance struct {
 	// a different listener entirely. Empty when backup.enabled is
 	// false: step 6 has no address to render a script for.
 	BackupPort string
+	// Candidates are this instance's own guesses at the address a router
+	// could reach it on (#1213): every real address it is bound to, on
+	// the configured HTTPS port. Set once at startup by
+	// main.setupAddressCandidates -- see that function's comment for how
+	// it is derived (net.InterfaceAddrs plus the configured listen
+	// address) and why it stops there rather than inventing a richer
+	// discovery mechanism. May be empty on a host with nothing to
+	// enumerate; the wizard still has the browser's own host to fall
+	// back to.
+	Candidates []string
 }
 
 func nonNilStrings(v []string) []string {

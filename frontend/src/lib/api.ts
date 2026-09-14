@@ -1269,6 +1269,17 @@ export async function markSetupStep(
   return (await res.text()) || `markSetupStep: ${res.status}`
 }
 
+// saveSetupAddress records the wizard header field's answer (#1213):
+// what address a router can reach this instance on. Admin-only
+// server-side, matching markSetupStep beside it -- every RouterOS
+// command the wizard renders downstream is written against whatever
+// this stores.
+export async function saveSetupAddress(address: string): Promise<string | null> {
+  const res = await postJSON('/api/setup/address', { address })
+  if (res.ok) return null
+  return (await res.text()) || `saveSetupAddress: ${res.status}`
+}
+
 // CoverageDeclaration mirrors internal/coverage.Declaration -- an
 // admin's on-record statement that a given boundary-direction pair
 // (`key`, e.g. "ether1|bridge1") is intentionally, not accidentally,

@@ -512,14 +512,16 @@
 
   // copyRouterLines hands back the same push script the setup wizard
   // would -- POST /api/setup/commands' steps.push.commands (#436 moved
-  // the RouterOS syntax itself server-side), keyed to this instance's
-  // address and status.pushKinds -- with the freshly-minted key already
-  // embedded, so rotating an ingest key never sends the operator back
-  // through setup for a line-by-line diff.
+  // the RouterOS syntax itself server-side), keyed to wizardState.address
+  // (#1213 -- the operator's own answer to "what address can your router
+  // reach mikroview on?", not this tab's own URL) and status.pushKinds --
+  // with the freshly-minted key already embedded, so rotating an ingest
+  // key never sends the operator back through setup for a line-by-line
+  // diff.
   async function copyRouterLines(value: string) {
     if (!status) return
     const result = await fetchSetupCommands({
-      address: window.location.host,
+      address: wizardState.address,
       syslogPort: status.instance.syslogPort,
       token: value,
       kinds: status.pushKinds,

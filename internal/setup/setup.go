@@ -75,6 +75,13 @@ type Store struct {
 	// forcing the same step, and must never itself displace what the
 	// operator decided. Keyed by step number; lazily created.
 	witnessed map[int]Mark
+	// address is the operator's own answer to "what address can your
+	// router reach mikroview on?" (#1213) -- see SetAddress. Persisted
+	// beside the marks, for the same reason: a restart mid-wizard must
+	// not lose it, and every RouterOS command the wizard renders is
+	// written against this value once it is set, never against the
+	// browser's own host.
+	address string
 	// backend is where the marks are persisted, or nil when persistence
 	// is switched off. Only the marks go through it -- the observations
 	// above are re-made every run by definition.
@@ -160,6 +167,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 				s.witnessed[m.Step] = m
 			}
 		}
+		s.address = file.Address
 		return nil
 	})
 	if err != nil {
@@ -392,6 +400,11 @@ const maxNote = 200
 // difference between an observation and a witness (see NoteWitnessed).
 type storeFile struct {
 	Marks []Mark `json:"marks"`
+	// Address is the operator's stored answer (#1213) -- see
+	// Store.address's own comment. Omitted when empty, the "not answered
+	// yet" case, so an old document without this field round-trips
+	// unchanged.
+	Address string `json:"address,omitempty"`
 }
 
 // NoteMark records one step decision, replacing any previous mark for
@@ -450,7 +463,10 @@ func (s *Store) persistLocked() {
 	if s.backend == nil {
 		return
 	}
-	data, err := json.MarshalIndent(storeFile{Marks: append(s.marksLocked(), s.witnessedLocked()...)}, "", "  ")
+	data, err := json.MarshalIndent(storeFile{
+		Marks:   append(s.marksLocked(), s.witnessedLocked()...),
+		Address: s.address,
+	}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding the setup ledger for persistence failed: %v -- this decision exists only in memory and will be lost on restart", err))
 		return
@@ -553,4 +569,53 @@ func (s *Store) Witnessed() []Mark {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.witnessedLocked()
+}
+
+// --- The wizard's own address (#1213) -----------------------------------
+//
+// mikroview never connects to a router, so it cannot ask one which
+// address reaches it -- the whole reason every other value in this file
+// is an observation rather than a question. This one has no observable
+// answer at all: nothing arrives here that says "you can reach me at
+// this address", so it is the one field in the wizard that has to be
+// asked rather than watched for. Persisted beside the marks for the same
+// restart-survives-it reason, and kept separate from them because it is
+// not a step outcome -- it has no step number, and evidence can never
+// outrank it the way a witness outranks a stale mark.
+
+// maxAddress caps the length defensively, mirroring maxNote -- the
+// charset and structure are the caller's job (validSetupAddress in
+// internal/api, #1095, checked before this is ever reached), this is
+// only a backstop against an absurd value reaching the persisted
+// document.
+const maxAddress = 253
+
+// SetAddress records the operator's answer, replacing any previous one:
+// a step has exactly one current address, and changing one's mind (the
+// instance moved) is not a second claim needing history the way a mark
+// does. Editable at any time -- re-running setup on a moved instance
+// must not require a reinstall. Reports whether the value was accepted;
+// the caller has already run it past validSetupAddress, so this only
+// rejects an empty value (there is no "clear the address" operation) or
+// one implausibly long. No timestamp is kept: unlike a mark, there is
+// only ever one current answer, with nothing about past ones worth
+// reading back.
+func (s *Store) SetAddress(address string) bool {
+	if address == "" || len(address) > maxAddress {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.address = address
+	s.persistLocked()
+	return true
+}
+
+// Address returns the operator's stored answer, or "" if they have not
+// answered yet -- the wizard then falls back to a candidate address, and
+// then to the browser's own host.
+func (s *Store) Address() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.address
 }

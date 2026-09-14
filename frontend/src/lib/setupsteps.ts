@@ -37,14 +37,6 @@ export interface StepStatus {
   shortfall?: string
 }
 
-// instanceAddress is the address a router should be pointed at: the one
-// the operator's own browser is currently using. Taken from the live
-// location rather than configuration, because that is the address
-// known to work from at least one place on the network.
-export function instanceAddress(loc: { host: string }): string {
-  return loc.host
-}
-
 // hostname strips a port. Certificate names never carry one, so this is
 // what tls.hosts is compared against.
 export function hostname(hostPort: string): string {
@@ -99,7 +91,12 @@ export function deviceStanza(sourceIp: string, name: string): string {
 // --- Step status --------------------------------------------------------
 
 export function caStep(status: SetupStatus, address: string): StepStatus {
-  if (!certificateCovers(status, address)) {
+  // An empty address (#1213: the header field has not been answered
+  // yet) is not a certificate mismatch to report -- there is nothing to
+  // check yet, not a wrong answer. It falls through to the ordinary
+  // waiting/done read below, the same as it would before any address
+  // existed to check at all.
+  if (address && !certificateCovers(status, address)) {
     const shown = hostname(address)
     return {
       state: 'blocked',
@@ -221,6 +218,24 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
   return { state: 'done', detail: receipt ? `arrived ${receipt}` : 'A router has pushed a backup.' }
 }
 
+// --- The address-not-answered no-command state (#1213) ------------------
+//
+// Every RouterOS command block that embeds the operator's address --
+// caTrust, syslog, push/schedule, and backup/backupSchedule beside its
+// own preconditions below -- comes back blank with this one
+// commandStep.blocked key when nothing has been answered yet in the
+// wizard header field above the numbered steps. Reuses #1217's own
+// mechanism (a machine-readable key the server states, worded here)
+// rather than a second "why is this blank" shape.
+export const NO_ADDRESS_KEY = 'no-address'
+
+// NO_COMMAND_HEADING is caTrust/syslog/push's own no-command state --
+// simpler than backup's below, since a missing address is the only
+// reason any of those three ever come back blank.
+export const NO_COMMAND_HEADING = 'no commands yet'
+export const NO_ADDRESS_LINE =
+  'no address has been given yet — answer "What address can your router reach MikroView on?" above, at the top of this wizard, and this fills in.'
+
 // --- The backup step's no-script state (#1217) --------------------------
 //
 // commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)
@@ -230,15 +245,17 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
 // draws for the RouterOS commands themselves.
 //
 // Order matters (owner's ruling, 2026-09-14): config problems first --
-// the operator edits config.yaml and restarts -- then the two the
-// wizard itself can still fix by moving to an earlier step.
-export const BACKUP_BLOCKED_ORDER = ['backups-off', 'no-retention-key', 'no-device', 'no-token'] as const
+// the operator edits config.yaml and restarts -- then the ones the
+// wizard itself can still fix, in the order it asks them (the header
+// field before either step-4/6 pick).
+export const BACKUP_BLOCKED_ORDER = ['backups-off', 'no-retention-key', NO_ADDRESS_KEY, 'no-device', 'no-token'] as const
 
 const BACKUP_BLOCKED_COPY: Record<string, string> = {
   'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
   'no-retention-key':
     'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
     'config.yaml and restart mikroview.',
+  [NO_ADDRESS_KEY]: NO_ADDRESS_LINE,
   'no-device': 'this router has no name yet. Name it in the step above; the script files each backup under that name.',
   'no-token': 'no token has been minted for this router yet. The step above mints it.',
 }
