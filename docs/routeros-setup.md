@@ -73,8 +73,11 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes
+:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
 ```
+
+This block is safe to paste again — a second run updates the existing
+action instead of adding another one (#1208).
 
 This does **not** authenticate the router to MikroView — RouterOS's
 logging action has no client-certificate option, so anything able to
@@ -95,8 +98,11 @@ RouterOS tags firewall rule matches with both the `firewall` category and
 `info` severity — forward both:
 
 ```
-/system logging add topics=firewall,info action=mikroview
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 ```
+
+This is also safe to paste again — it only adds the rule when it is not
+already there (#1208).
 
 ## 3. Tag your firewall rules
 
@@ -184,7 +190,7 @@ same way as step 2 covers firewall/info, then tag the NAT rules you care
 about:
 
 ```
-/system logging add topics=firewall,info action=mikroview
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 /ip firewall nat set <rule-number> log=yes log-prefix="N|port-fwd|"
 ```
 

@@ -518,7 +518,7 @@ export function nameStep(devices: Device[]): StepStatus {
 // component.
 const LEADS = [
   "The router has to trust MikroView's certificate authority before it will open a TLS connection. Run this on the router; it fetches the certificate and imports it.",
-  'Point the router at this instance. The handshake itself is the evidence — a failed one never counts as arrived.',
+  'Point the router at this instance. The handshake itself is the evidence — a failed one never counts as arrived. This block is safe to paste again — a second run updates the existing rule rather than adding another.',
   'The letter in the log-prefix is how MikroView knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
   'MikroView does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
