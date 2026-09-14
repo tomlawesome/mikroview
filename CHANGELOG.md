@@ -31,6 +31,14 @@ rewritten.
   note was edited, never the words — the flag is the only place they
   live. `POST /api/flags/{id}/verdict` takes an optional `note`, and
   `PUT /api/flags/{id}/note` edits one.
+- **Settings ▸ ingest now tells you when your router's own setup is out
+  of date** (#1205). A router still logging without
+  `remote-log-format=syslog` — every wizard before 2026-09-12 shipped
+  without it, fixed in #1208 — shows up as a sustained run of oversized
+  syslog reads. When that pattern comes from a device you've declared,
+  Settings ▸ ingest now names the router and points at
+  [routeros-setup.md](docs/routeros-setup.md)'s new upgrade note, rather
+  than leaving you to work it out from #1203's banner alone.
 
 ### Changed
 
@@ -86,6 +94,14 @@ rewritten.
   under the drop zone. The two `/api/tune-logging` endpoints and the
   tier that may call them are unchanged.
 
+- **A skipped setup step now reads as a choice, not a gap** (#1216). Its
+  disc used to be dashed but otherwise uncoloured, so a step you
+  deliberately skipped looked the same as one nobody had reached yet.
+  Skipped now takes the same solid disc-and-receipt colour as done, kept
+  apart only by its dashed border; a step forced past without evidence
+  moves to a caution colour instead, since pushing through without
+  evidence is not the same as choosing to skip.
+
 ### Fixed
 
 - **The setup wizard no longer switches logging on for your
@@ -118,6 +134,40 @@ rewritten.
   and each of those settings links to it; `deploy/config.example.yaml`
   and `deploy/docker-compose.yml` carry the short version beside the
   settings themselves.
+- **The setup wizard's logging commands are now safe to paste twice**
+  (#1208). Re-running step 1 used to append a second copy of the logging
+  action and rule every time — a real router ended up with three
+  identical rules, tripling its firewall event volume. The block now
+  adds the action if it's missing and updates it in place if it's
+  already there, and only adds the rule when it isn't already present.
+- **The oversized-run banner now names the likely cause, instead of
+  blaming a "non-RouterOS sender"** (#1203). It used to print a count of
+  discarded continuation reads as if each were a lost message. It now
+  counts over-long runs honestly, and when the sender is a router you've
+  declared, says so and points at the fix — the far commoner cause than
+  a stray non-RouterOS sender.
+- **A setup step MikroView watched happen now survives a restart**
+  (#1221). A step whose only evidence lived in memory — syslog
+  connecting, a table being pushed — used to read back as "waiting"
+  after a restart mid-setup, even though it had genuinely happened. The
+  wizard now keeps a dated, past-tense record of what it witnessed
+  ("syslog connected from 1.2.3.4 — seen on 13 Sep at 10:27"), separate
+  from an operator's own skip or force marks, so a restart no longer
+  undoes progress.
+- **Step 6's backup block says why there's no script yet, instead of
+  showing empty boxes** (#1217). It used to render blank input boxes and
+  Copy buttons whenever a token, a device name, backups being enabled,
+  or a mounted retention key was missing. It now names which of those is
+  missing and drops the prose promising a script until one actually
+  exists.
+- **The wizard asks which address the router can reach MikroView on,
+  instead of assuming it's your browser's** (#1213). Every RouterOS
+  command used to fill in `window.location.host` — the address your own
+  browser happened to be using — which is wrong behind a reverse proxy,
+  on a multi-homed host, or wherever ports are mapped, and could
+  silently send logs nowhere. It's now a field in the wizard's header
+  that every command reads from, defaulting to a real address on this
+  instance when one can be detected.
 
 ## [0.5.1] - 2026-09-11
 
