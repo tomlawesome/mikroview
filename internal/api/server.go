@@ -653,6 +653,7 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/router-backups/lock", s.handleRouterBackupLock},
 		{http.MethodPost, "/api/router-backups/passphrase", s.handleRouterBackupSetPassphrase},
 		{http.MethodDelete, "/api/router-backups/passphrase", s.handleRouterBackupRemovePassphrase},
+		{http.MethodPut, "/api/router-backups/passphrase", s.handleRouterBackupChangePassphrase},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},

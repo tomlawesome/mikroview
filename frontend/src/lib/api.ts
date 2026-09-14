@@ -1481,6 +1481,16 @@ export async function removeRouterBackupPassphrase(passphrase: string): Promise<
   return (await res.text()).trim() || `removeRouterBackupPassphrase: ${res.status}`
 }
 
+// changeRouterBackupPassphrase re-wraps the vault's key under a new
+// passphrase in one call (#1222), rather than a remove followed by a
+// set: two calls leave the vault with no passphrase at all if the
+// second never runs.
+export async function changeRouterBackupPassphrase(current: string, passphrase: string): Promise<VaultLock | string> {
+  const res = await putJSON('/api/router-backups/passphrase', { current, passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `changeRouterBackupPassphrase: ${res.status}`
+}
+
 // ===========================================================================
 // Definitions editor (issues #787, #786)
 //
