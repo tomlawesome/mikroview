@@ -69,7 +69,8 @@ each, recorded together because the cause is shared (#831's contention):
 
 ## TestRunMigrateDataEndToEnd: refuses a destination it just emptied
 
-- 2026-09-14 · b0cf5bb1 (feature/wizard-upgrade-safety, local, `go test ./...`) · full-suite run · `FAIL`, `.../002/new-data is not empty (6 entr(y/ies))` right after the same test logged migrating 7 files there and deleting the source; standalone rerun (`go test . -run TestRunMigrateDataEndToEnd`) passed immediately after at the same commit. A peer agent's own test run shared this workstation and `/tmp` at the time. The diff in this run touches internal/syslog and frontend ingest-loss code only, nothing in the migrate-data path.
+- 2026-09-14 · b0cf5bb1 (feature/wizard-upgrade-safety, local, `go test ./...`) · full-suite run · failed once; 23 reruns at the same commit (`go test . -count=3` and `-run TestRunMigrateDataEndToEnd -count=20`) all passed. Two agents were running the suite on this workstation at the same time.
+  **What the symptom is not:** the reported line, `new-data is not empty (6 entr(y/ies))`, is the test's own second `runMigrateData` call being refused, which is exactly what it asserts — it is expected output, not the failure. The real failing assertion was not captured, so this entry records a sighting and nothing more. The test writes under `t.TempDir()`, so a path collision with the peer run is not the explanation either. Capture the full `--- FAIL` block next time before concluding anything.
 
 ## live-account-menu: the foot has no uptime segment
 
