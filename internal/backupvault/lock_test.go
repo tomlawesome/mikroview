@@ -29,6 +29,10 @@ func openVaultAt(t *testing.T, dir string, key *retention.Key) *Vault {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// The same roomy fake disk openVault pins (#1125): a CI runner
+	// under the real low-space floor otherwise cycles generations out
+	// from under a lock test, which then cannot open what it stored.
+	v.statfs = (&fakeDisk{free: testDiskRoomy, total: testDiskTotal}).statfs
 	return v
 }
 
@@ -760,6 +764,167 @@ func TestAResealPassSkipsAConvertedFileWithoutReadingIt(t *testing.T) {
 	if allocated, limit := after.TotalAlloc-before.TotalAlloc, uint64(128<<10); allocated > limit {
 		t.Fatalf("a pass over %d files already in the target scheme allocated %d bytes, want under %d -- every file is being read in full before its header is looked at",
 			count, allocated, limit)
+	}
+}
+
+// #1222: changing the passphrase re-wraps the existing key pair rather
+// than re-sealing the vault, so it must be atomic -- the lock document
+// on disk is either the old one or the new one, never neither.
+
+func TestChangePassphraseSwapsWhichOneUnlocksAndKeepsStoredBackups(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v := openVaultAt(t, dir, key)
+	body := plainBackup(48)
+	if err := v.Store("rb5009", KindBackup, body, time.Now()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := v.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+	gen := v.Generations("rb5009")[0]
+
+	const newPassphrase = "a different passphrase entirely"
+	if err := v.ChangePassphrase(testPassphrase, newPassphrase); err != nil {
+		t.Fatalf("ChangePassphrase: %v", err)
+	}
+
+	v.Lock()
+	if err := v.Unlock(testPassphrase); !errors.Is(err, ErrWrongPassphrase) {
+		t.Fatalf("Unlock(old) after a change = %v, want ErrWrongPassphrase", err)
+	}
+	if err := v.Unlock(newPassphrase); err != nil {
+		t.Fatalf("Unlock(new) after a change: %v", err)
+	}
+	got, err := v.Open("rb5009", gen.ID, KindBackup)
+	if err != nil {
+		t.Fatalf("Open after a passphrase change: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatal("a backup stored before the change did not round-trip after it")
+	}
+
+	// A fresh process reads the same thing off disk.
+	reopened := openVaultAt(t, dir, key)
+	if err := reopened.Unlock(newPassphrase); err != nil {
+		t.Fatalf("Unlock(new) on a reopened vault: %v", err)
+	}
+	got, err = reopened.Open("rb5009", gen.ID, KindBackup)
+	if err != nil {
+		t.Fatalf("Open on a reopened vault: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatal("the stored backup did not round-trip across a reopen after the change")
+	}
+}
+
+func TestChangePassphraseWithTheWrongCurrentOneIsRefused(t *testing.T) {
+	v := openVault(t, testKey(t))
+	if err := v.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+	if err := v.ChangePassphrase("not the current passphrase", "a different passphrase entirely"); !errors.Is(err, ErrWrongPassphrase) {
+		t.Fatalf("ChangePassphrase(wrong current) = %v, want ErrWrongPassphrase", err)
+	}
+	v.Lock()
+	if err := v.Unlock(testPassphrase); err != nil {
+		t.Fatalf("Unlock(old) after a refused change: %v", err)
+	}
+}
+
+// TestAnInterruptedChangeLeavesTheOldPassphraseWorking is the atomicity
+// proof #1222 asks for: the lock document's write is made to fail, and
+// the vault must come out exactly as it went in -- old passphrase still
+// works, new one does not, and the claim on the vault is released
+// rather than left stuck busy.
+func TestAnInterruptedChangeLeavesTheOldPassphraseWorking(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a read-only directory would not refuse the write")
+	}
+	dir := t.TempDir()
+	key := testKey(t)
+	v := openVaultAt(t, dir, key)
+	if err := v.Store("rb5009", KindBackup, plainBackup(32), time.Now()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := v.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+
+	// Take the write away: the vault directory still exists, but the new
+	// lock document cannot be created in it.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	const newPassphrase = "a different passphrase entirely"
+	if err := v.ChangePassphrase(testPassphrase, newPassphrase); err == nil {
+		t.Fatal("ChangePassphrase with an unwritable vault directory succeeded, want it to fail")
+	}
+
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	v.Lock()
+	if err := v.Unlock(testPassphrase); err != nil {
+		t.Fatalf("Unlock(old) after an interrupted change: %v", err)
+	}
+	v.Lock()
+	if err := v.Unlock(newPassphrase); !errors.Is(err, ErrWrongPassphrase) {
+		t.Fatalf("Unlock(new) after an interrupted change = %v, want ErrWrongPassphrase", err)
+	}
+
+	// The claim must not outlive the failed attempt: Lock refuses only
+	// while a conversion is genuinely running (see lockState.busy), and a
+	// second ChangePassphrase must be free to try again rather than being
+	// told the vault is busy with the first attempt forever.
+	if !v.Lock() {
+		t.Fatal("Lock() refused after a failed change -- the busy claim was not released")
+	}
+	if err := v.Unlock(testPassphrase); err != nil {
+		t.Fatalf("Unlock(old) after Lock(): %v", err)
+	}
+	if err := v.ChangePassphrase(testPassphrase, newPassphrase); err != nil {
+		t.Fatalf("ChangePassphrase retried after a failed attempt: %v", err)
+	}
+}
+
+func TestChangePassphraseNeedsOneToAlreadyBeSet(t *testing.T) {
+	v := openVault(t, testKey(t))
+	if err := v.ChangePassphrase(testPassphrase, "a different passphrase entirely"); !errors.Is(err, ErrNoPassphrase) {
+		t.Fatalf("ChangePassphrase with none set = %v, want ErrNoPassphrase", err)
+	}
+}
+
+func TestChangePassphraseLeavesLockedStateAsItFoundIt(t *testing.T) {
+	const newPassphrase = "a different passphrase entirely"
+
+	unlocked := openVault(t, testKey(t))
+	if err := unlocked.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+	if err := unlocked.ChangePassphrase(testPassphrase, newPassphrase); err != nil {
+		t.Fatalf("ChangePassphrase: %v", err)
+	}
+	if unlocked.Locked() {
+		t.Fatal("a change locked a vault that was unlocked when it started")
+	}
+
+	locked := openVault(t, testKey(t))
+	if err := locked.SetPassphrase(testPassphrase); err != nil {
+		t.Fatalf("SetPassphrase: %v", err)
+	}
+	locked.Lock()
+	if err := locked.ChangePassphrase(testPassphrase, newPassphrase); err != nil {
+		t.Fatalf("ChangePassphrase: %v", err)
+	}
+	if !locked.Locked() {
+		t.Fatal("a change unlocked a vault that was locked when it started")
+	}
+	if err := locked.Unlock(newPassphrase); err != nil {
+		t.Fatalf("Unlock(new) after a change made on a locked vault: %v", err)
 	}
 }
 
