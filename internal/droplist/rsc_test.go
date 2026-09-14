@@ -146,7 +146,7 @@ func TestScriptMidwayFailureLeavesLiveListIntact(t *testing.T) {
 
 // TestScriptEscapesReasonCharacters proves a reason carrying a quote and
 // a backslash can never break out of the comment's quoted string --
-// checked against routeros.Quote directly (the one place the escaping
+// checked against entryComment directly (the one place the escaping
 // rule lives) rather than re-implementing the escaping to compare
 // against.
 func TestScriptEscapesReasonCharacters(t *testing.T) {
@@ -167,6 +167,31 @@ func TestScriptEscapesReasonCharacters(t *testing.T) {
 	// quoted string.
 	if strings.Contains(got, `comment="mv: say "no" to \bad actors\"`) {
 		t.Fatal("the reason's raw quote/backslash characters reached the script unescaped")
+	}
+}
+
+// TestScriptEscapesDollarInReason is the BLOCKING case a security review
+// found: RouterOS expands `$name` and `$[cmd]` inside any double-quoted
+// string it parses on /import, including a comment="..." value, so a
+// reason of `$[/user add name=x]` left unescaped would run as a command
+// the moment a router imports the generated script rather than merely
+// display as text. entryComment must escape every `$` to `\$`, the same
+// rule PushScript's own scriptSource already applies to a script body.
+func TestScriptEscapesDollarInReason(t *testing.T) {
+	entries := []Entry{
+		{CIDR: mustPrefix(t, "203.0.113.0/24"), Reason: `blocked $[/user add name=x] and $name too`},
+	}
+	now := time.Date(2026, 9, 14, 8, 0, 0, 0, time.UTC)
+	got := string(Script(entries, now))
+
+	if !strings.Contains(got, `\$[`) {
+		t.Errorf("script does not contain an escaped $[ -- got:\n%s", got)
+	}
+	if !strings.Contains(got, `\$name`) {
+		t.Errorf("script does not contain an escaped \\$name -- got:\n%s", got)
+	}
+	if strings.ContainsRune(strings.ReplaceAll(got, `\$`, ""), '$') {
+		t.Errorf("script contains a bare, unescaped $ once every \\$ is discounted:\n%s", got)
 	}
 }
 

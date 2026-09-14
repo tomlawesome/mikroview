@@ -82,7 +82,13 @@ func validText(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		// Cf (formatting, e.g. the bidi-override characters #1224's
+		// review of this same package already worried about) and control
+		// characters were the original guard; Zl/Zp (line/paragraph
+		// separator) are the same class of "renders as whitespace but
+		// isn't a plain space" character a reason or actor name has no
+		// legitimate reason to carry, added after a security review.
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
 			return false
 		}
 	}
@@ -197,6 +203,24 @@ func (s *Store) SetOwnRanges(r OwnRanges) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.own = r
+}
+
+// OwnRangesKnown reports whether Add's own-range check actually had
+// anything to check a candidate against: false with no OwnRanges wired
+// at all, and equally false with one wired but no router having pushed
+// any address state yet. Either way Add still succeeds -- refusing a
+// legitimate entry during first-time setup, before any router has ever
+// reported in, would be the wrong direction to fail -- but a caller
+// (the API's Add handler, security review) uses this to tell the
+// operator the range was not actually checked, rather than silently
+// letting it look like it passed.
+func (s *Store) OwnRangesKnown() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.own == nil {
+		return false
+	}
+	return len(s.own.OwnPrefixes()) > 0
 }
 
 // List returns every entry, sorted by CIDR -- by address and then by

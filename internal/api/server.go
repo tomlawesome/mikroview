@@ -421,6 +421,19 @@ type Server struct {
 	// permitted somewhere no record still claims. Zero value is ready to
 	// use, same as the two above.
 	verdictWatchlistMu sync.Mutex
+
+	// droplistKeyMintMu serializes handleDroplistKeyCreate's create-then-
+	// revoke sequence (#1224 hardening, security review): at most one
+	// droplist-pull token is ever meant to exist, but Create and the
+	// revoke loop that follows it are two separate steps, so two
+	// concurrent mint requests could otherwise each create a token before
+	// either reaches its revoke loop and leave two live keys instead of
+	// one. Held for the whole create-then-revoke sequence, in that order
+	// -- create first, same as an unserialized request -- so a request
+	// that failed after create still leaves no worse than an extra
+	// revocable token, never zero. Zero value is ready to use, same as
+	// the mutexes above.
+	droplistKeyMintMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather

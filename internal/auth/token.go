@@ -394,41 +394,6 @@ func (s *TokenStore) Authenticate(raw string, want TokenKind, now time.Time) (*T
 // rather than continuously.
 const lastUsedGranularity = time.Hour
 
-// touchGranularity is Touch's own version of the same coalescing, held
-// far shorter than lastUsedGranularity's hour. A droplist-pull fetch
-// (#1224) is far rarer than an API poll to begin with -- RouterOS runs it
-// on its own scheduler, typically every 15-30 minutes -- so even a
-// minute's granularity means a router that is actually fetching will
-// almost never see its persisted LastUsedAt lag more than one fetch
-// behind, without writing to disk on every single one.
-const touchGranularity = time.Minute
-
-// Touch records now as id's LastUsedAt, persisting only when the
-// previously stored value is more than touchGranularity stale -- the
-// same coalescing Authenticate applies via lastUsedGranularity, kept as
-// a separate, coarser-grained path here because handleDroplistPull
-// (#1224) calls this directly rather than through Authenticate: by the
-// time it runs, requireAuth's bearer branch has already authenticated
-// this same request's token once, and authenticating it a second time
-// would just repeat that lookup for nothing. Unlike Authenticate, an
-// unknown id is silently ignored -- the caller already knows the token is
-// real (it is the one that just authenticated the request), so there is
-// nothing actionable to report back.
-func (s *TokenStore) Touch(id string, now time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t, ok := s.byID[id]
-	if !ok {
-		return
-	}
-	if now.Sub(t.LastUsedAt) >= touchGranularity {
-		t.LastUsedAt = now
-		s.persistLocked()
-	} else {
-		t.LastUsedAt = now
-	}
-}
-
 // Revoke permanently deletes a token by ID -- there is no "disable and
 // keep around" state, matching how a revoked session is deleted
 // outright rather than flagged (see SessionStore.Revoke).

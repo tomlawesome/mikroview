@@ -97,6 +97,22 @@ type droplistCreateRequest struct {
 	FlagID string `json:"flagID"`
 }
 
+// ownRangesUnknownWarning is handleDroplistCreate's Warning text for a
+// 201 whose CIDR was not actually checked against the router's own
+// ranges (security review): Store.Add stays fail-open (blocking would
+// break first-time setup, before any router has ever reported in), but
+// the operator should be told the check was skipped rather than assume
+// it passed.
+const ownRangesUnknownWarning = "No router has reported its addresses yet, so this range was not checked against the router's own ranges."
+
+// droplistCreateResponse is handleDroplistCreate's 201 body: the stored
+// entry, plus Warning when Store.OwnRangesKnown() was false at the time
+// -- see ownRangesUnknownWarning.
+type droplistCreateResponse struct {
+	droplistEntryResponse
+	Warning string `json:"warning,omitempty"`
+}
+
 // handleDroplistCreate adds one entry. Admin-only: this is an
 // enforcement list, and #461 settled that a droplist entry is always
 // operator-authored, never automatic.
@@ -138,7 +154,11 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toDroplistEntryResponse(entry))
+	resp := droplistCreateResponse{droplistEntryResponse: toDroplistEntryResponse(entry)}
+	if !s.Droplist.OwnRangesKnown() {
+		resp.Warning = ownRangesUnknownWarning
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // handleDroplistDelete removes one entry by its CIDR, taken from the
@@ -184,6 +204,14 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 	// shape #1222 took out of the vault: a Create that failed after the
 	// revoke would leave the router with no key at all, when the admin
 	// asked for a new one.
+	//
+	// droplistKeyMintMu serializes the whole sequence (security review):
+	// without it, two concurrent mint requests could each create a token
+	// before either reached its revoke loop below, leaving two live keys
+	// where at most one is ever meant to exist.
+	s.droplistKeyMintMu.Lock()
+	defer s.droplistKeyMintMu.Unlock()
+
 	now := time.Now()
 	raw, tok, err := s.Tokens.Create("droplist-pull", auth.TokenKindDroplistPull, "", userFromContext(r), now)
 	if err != nil {
@@ -209,6 +237,10 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 		detail = "replaced the previous key"
 	}
 	s.Audit.Record(auditActor(r), "droplist.key_minted", tok.Name, detail)
+	// The raw key is shown exactly once, in this response -- no-store so
+	// no cache along the way keeps a copy of it, the same header the pull
+	// handler below already sets on the feed itself.
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, droplistKeyCreateResponse{Key: raw, CreatedAt: tok.CreatedAt})
 }
 
@@ -242,8 +274,11 @@ func (s *Server) handleDroplistKeyDelete(w http.ResponseWriter, r *http.Request)
 // audit entry is recorded per pull: this is hit on the router's own
 // fetch schedule and would flood the admin trail the same way an
 // unqualified per-push ingest audit once did (see noteIngest's doc
-// comment in ingest.go) -- the token's own LastUsedAt, touched below, is
-// the record of "is this still being fetched".
+// comment in ingest.go) -- the token's own LastUsedAt is the record of
+// "is this still being fetched", already updated by requireAuth's
+// Authenticate call before this handler ever runs (security review: the
+// separate TokenStore.Touch this used to call here was redundant with
+// that and has been removed).
 func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 	tok := droplistTokenFromContext(r)
 	if tok == nil {
@@ -260,7 +295,6 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
-	s.Tokens.Touch(tok.ID, now)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

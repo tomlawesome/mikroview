@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,6 +193,59 @@ func TestDroplistWriteRoutesAreAdminOnly(t *testing.T) {
 	}
 }
 
+// TestDroplistAddWarnsWhenOwnRangesUnknown covers the fail-open case a
+// security review flagged: with no router having ever pushed state, an
+// otherwise-valid Add still succeeds (refusing would break first-time
+// setup), but the 201 must carry a Warning so the operator knows the
+// range was not actually checked against the router's own addresses.
+func TestDroplistAddWarnsWhenOwnRangesUnknown(t *testing.T) {
+	_, ts, admin := droplistTestServer(t)
+	resp := postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "test"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var created droplistCreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Warning == "" {
+		t.Error("expected a warning when no router has ever pushed its own address state")
+	}
+}
+
+// TestDroplistAddNoWarningOnceOwnRangesAreKnown is the same case once a
+// router has actually reported in: the 201 for an unrelated range must
+// not carry the warning, since the check genuinely ran.
+func TestDroplistAddNoWarningOnceOwnRangesAreKnown(t *testing.T) {
+	s, ts, admin := droplistTestServer(t)
+
+	adminUser, ok := s.Auth.ByUsername("admin")
+	if !ok {
+		t.Fatal("admin account not found")
+	}
+	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+	pushResp := postIngest(t, ts, ingestRaw,
+		`{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"203.0.114.9/24","network":"203.0.114.0","interface":"ether1","comment":""}]}`)
+	pushResp.Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.116.0/24", Reason: "unrelated"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var created droplistCreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Warning != "" {
+		t.Errorf("warning = %q, want empty once a router has reported its own address state", created.Warning)
+	}
+}
+
 // TestDroplistAddRefusesRoutersOwnRange is the router's-own case end to
 // end: a real ingest push carrying an /ip/address entry, then an attempt
 // to drop the same range it names.
@@ -243,6 +297,9 @@ func TestDroplistPullKeyServesTheFeed(t *testing.T) {
 	}
 	if minted.Key == "" {
 		t.Fatal("expected a raw key in the mint response")
+	}
+	if cc := mintResp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("mint response Cache-Control = %q, want no-store -- the raw key is shown exactly once", cc)
 	}
 
 	pullResp := bearerGet(t, ts.URL+"/api/droplist.rsc", minted.Key)
@@ -424,6 +481,32 @@ func TestDroplistPullKeyMintTwiceRotates(t *testing.T) {
 
 	if got := len(s.Tokens.ByKind(auth.TokenKindDroplistPull)); got != 1 {
 		t.Errorf("ByKind(droplist-pull) = %d tokens, want exactly 1 after rotating", got)
+	}
+}
+
+// TestDroplistKeyMintConcurrentRequestsLeaveExactlyOneKey pins the
+// concurrency fix a security review asked for: handleDroplistKeyCreate's
+// create-then-revoke sequence must be serialized, or two requests
+// arriving together can each create a token before either reaches its
+// own revoke loop, leaving two live droplist-pull keys where at most one
+// is ever meant to exist.
+func TestDroplistKeyMintConcurrentRequestsLeaveExactlyOneKey(t *testing.T) {
+	s, ts, admin := droplistTestServer(t)
+
+	const n = 8
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			resp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+			resp.Body.Close()
+		}()
+	}
+	wg.Wait()
+
+	if got := len(s.Tokens.ByKind(auth.TokenKindDroplistPull)); got != 1 {
+		t.Errorf("ByKind(droplist-pull) = %d tokens after %d concurrent mints, want exactly 1", got, n)
 	}
 }
 
