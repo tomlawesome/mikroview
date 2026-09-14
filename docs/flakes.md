@@ -67,6 +67,10 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
 
+## TestRunMigrateDataEndToEnd: refuses a destination it just emptied
+
+- 2026-09-14 · b0cf5bb1 (feature/wizard-upgrade-safety, local, `go test ./...`) · full-suite run · `FAIL`, `.../002/new-data is not empty (6 entr(y/ies))` right after the same test logged migrating 7 files there and deleting the source; standalone rerun (`go test . -run TestRunMigrateDataEndToEnd`) passed immediately after at the same commit. A peer agent's own test run shared this workstation and `/tmp` at the time. The diff in this run touches internal/syslog and frontend ingest-loss code only, nothing in the migrate-data path.
+
 ## live-account-menu: the foot has no uptime segment
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
