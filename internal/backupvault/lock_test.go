@@ -29,6 +29,10 @@ func openVaultAt(t *testing.T, dir string, key *retention.Key) *Vault {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// The same roomy fake disk openVault pins (#1125): a CI runner
+	// under the real low-space floor otherwise cycles generations out
+	// from under a lock test, which then cannot open what it stored.
+	v.statfs = (&fakeDisk{free: testDiskRoomy, total: testDiskTotal}).statfs
 	return v
 }
 
