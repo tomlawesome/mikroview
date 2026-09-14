@@ -107,6 +107,13 @@ vi.mock('../lib/api', () => ({
     totalBytes: 0,
   })),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
+  fetchDroplist: vi.fn(async () => ({
+    listName: 'mikroview-drops',
+    entries: [],
+    key: { present: false },
+    ownRangesKnown: false,
+    setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+  })),
   clearAllFlags: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),

@@ -32,11 +32,26 @@ func quote(s string) string {
 	return s
 }
 
+// QuoteScriptString escapes s for the inside of any RouterOS
+// double-quoted string that RouterOS itself may still interpret --
+// quote()'s backslash-then-quote rule, plus `$` as `\$`, because
+// RouterOS expands `$name` and `$[cmd]` inside a double-quoted string
+// wherever one appears, not only inside a script's own source="..."
+// body. Exported for internal/droplist (#1224 hardening, security
+// review): the .rsc feed places an operator-authored entry reason
+// inside a RouterOS comment="..." on an /import line, and without this
+// a reason of `blocked $[/user add name=x]` would run as a command the
+// moment the router imports the generated script, not merely display
+// as text. This is that one place the escaping rule lives, rather than
+// a second copy of it in a package that has to trust it stays in step.
+func QuoteScriptString(s string) string {
+	return strings.ReplaceAll(quote(s), `$`, `\$`)
+}
+
 // scriptSource escapes a whole script body for the inside of a
-// `source="..."` value: quote()'s backslash-then-quote rule, plus `$`
-// as `\$` because RouterOS expands `$name` inside a double-quoted
-// string and a push script is nothing but `$v`, `$alRecs` and their
-// kin -- unescaped, RouterOS would save a script with every variable
+// `source="..."` value: QuoteScriptString's backslash/quote/dollar
+// rule -- a push script is nothing but `$v`, `$alRecs` and their kin,
+// and unescaped, RouterOS would save a script with every variable
 // already substituted away to nothing.
 //
 // Newlines are left as they are: BackupScript's multi-line
@@ -44,7 +59,7 @@ func quote(s string) string {
 // under #394, so a script body keeps its own line breaks rather than
 // being folded into `\n` escapes.
 func scriptSource(body string) string {
-	return strings.ReplaceAll(quote(body), `$`, `\$`)
+	return QuoteScriptString(body)
 }
 
 // scriptAdd wraps a script body in the `/system script add` that saves

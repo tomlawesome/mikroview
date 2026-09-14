@@ -658,6 +658,35 @@ func (s *Store) Devices() []string {
 	return sortedDeviceNamesLocked(s.devices)
 }
 
+// OwnPrefixes returns every IPv4 prefix any known device has pushed as
+// one of its own configured addresses (its /ip/address table -- see
+// IPAddresses), masked to its network -- issue #1223's answer to
+// "what ranges are the router's own", so the drop list entry store
+// (internal/droplist.OwnRanges) can refuse an operator trying to block
+// a range mikroview would then be unable to reach. A RouterOS
+// /ip/address entry is "a.b.c.d/nn"; anything that fails to parse or is
+// not IPv4 is skipped rather than failing the whole call, the same
+// tolerant-of-one-bad-record convention Apply's decoders already use --
+// this is display/validation input, not something to crash startup
+// over.
+func (s *Store) OwnPrefixes() []netip.Prefix {
+	var out []netip.Prefix
+	for _, device := range s.Devices() {
+		addrs, _, ok := s.IPAddresses(device)
+		if !ok {
+			continue
+		}
+		for _, a := range addrs {
+			p, err := netip.ParsePrefix(a.Address)
+			if err != nil || !p.Addr().Is4() {
+				continue
+			}
+			out = append(out, p.Masked())
+		}
+	}
+	return out
+}
+
 // RouterOSVersion reports what device last said it was running, and
 // when it said it. ok is false when that device has never pushed a
 // version at all -- which is every device whose push script predates
