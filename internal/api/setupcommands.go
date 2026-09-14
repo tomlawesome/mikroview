@@ -64,9 +64,19 @@ type setupCommandsRouter struct {
 // note that belongs beside this specific step (currently only
 // ruleTagging ever carries one -- a row's Note, when the selected
 // version's row has one).
+//
+// Blocked carries every reason this block came back blank, as
+// machine-readable keys (#1217): the server says which precondition is
+// missing, the frontend owns the sentence it says about it. Only
+// Backup/BackupSchedule ever set this today -- see the keys listed
+// beside backupBlockedKeys below. Empty/omitted means either the block
+// is not blank, or it is blank for a reason this field does not cover
+// (Push/Schedule's own token-and-kinds gate, unrelated to #1217's
+// backup-step complaint).
 type commandStep struct {
-	Commands string `json:"commands"`
-	Note     string `json:"note"`
+	Commands string   `json:"commands"`
+	Note     string   `json:"note"`
+	Blocked  []string `json:"blocked,omitempty"`
 }
 
 type setupCommandsSteps struct {
@@ -113,9 +123,18 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Address == "" {
-		http.Error(w, "address is required", http.StatusBadRequest)
-		return
+	// Address falls back to the operator's own stored answer (#1213) the
+	// same way syslogPort below falls back to the running configuration
+	// when the wizard didn't send one -- this endpoint is open to any
+	// signed-in user and re-renders text, not a source of truth in its
+	// own right, so a caller that omits it gets what the header field
+	// actually holds rather than nothing. It is no longer required at
+	// the door either way: an operator who has not yet answered that
+	// field gets every address-dependent block back blank with the
+	// noAddressKey below, the same "blank rather than half-formed"
+	// contract every other missing precondition here already gets.
+	if req.Address == "" && s.Setup != nil {
+		req.Address = s.Setup.Address()
 	}
 	if err := validateSetupCommandsRequest(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -182,14 +201,39 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// A push script only means something with both a token and at least
-	// one kind to push; either missing leaves it blank rather than
-	// rendering an empty or half-formed script. Schedule follows it:
-	// since #1131 it carries the script body itself, so with nothing to
-	// carry it is a `/system script add` around an empty source, which
-	// is exactly the half-formed block this blankness rule exists for.
+	// noAddressKey is #1213's own precondition, checked ahead of every
+	// other one below: CaTrust, Syslog, Push/Schedule and Backup all
+	// embed req.Address somewhere in what they render, so with nothing
+	// answered yet none of them mean anything -- not even the caTrust
+	// step, which used to render unconditionally against
+	// window.location.host and now has as much reason to be blank as the
+	// rest. Reuses commandStep.Blocked, #1217's mechanism for saying why
+	// a block is blank, with one more key rather than a second shape for
+	// the same idea.
+	const noAddressKey = "no-address"
+	noAddress := req.Address == ""
+	var addressBlocked []string
+	if noAddress {
+		addressBlocked = []string{noAddressKey}
+	}
+
+	caTrustCommands, syslogCommands := "", ""
+	if !noAddress {
+		caTrustCommands = routeros.CaTrustCommands(req.Address, dialect)
+		syslogCommands = routeros.SyslogCommands(req.Address, syslogPort, dialect)
+	}
+
+	// A push script only means something with an address to embed, a
+	// token, and at least one kind to push; any missing leaves it blank
+	// rather than rendering an empty or half-formed script. Schedule
+	// follows it: since #1131 it carries the script body itself, so with
+	// nothing to carry it is a `/system script add` around an empty
+	// source, which is exactly the half-formed block this blankness rule
+	// exists for. Only the address gets a Blocked key, matching the
+	// existing "the token/kinds gate is unrelated to #1217's complaint"
+	// carve-out just below for that half of the precondition.
 	pushCommands, scheduleCommands := "", ""
-	if req.Token != "" && len(req.Kinds) > 0 {
+	if !noAddress && req.Token != "" && len(req.Kinds) > 0 {
 		pushCommands = routeros.PushScript(req.Address, req.Token, req.Kinds, dialect)
 		scheduleCommands = routeros.ScheduleCommands(pushCommands, dialect)
 	}
@@ -202,8 +246,32 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// blocks blank, same "blank rather than half-formed" contract Push
 	// already has above; the wizard reads a blank Backup block as its
 	// wnokey state (round 45).
+	//
+	// backupBlockedKeys names every missing piece, all that apply rather
+	// than just the first (#1217, the owner's "cover all possibilities"
+	// ruling): the operator's instance was missing two at once, and a
+	// key naming only one would have sent them round the loop a second
+	// time to find the other. Wording stays out of Go entirely -- the
+	// frontend owns every operator-facing sentence, same split #436
+	// already draws for the commands themselves.
+	var backupBlockedKeys []string
+	if noAddress {
+		backupBlockedKeys = append(backupBlockedKeys, noAddressKey)
+	}
+	if s.SetupInstance.BackupPort == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "backups-off")
+	}
+	if !s.Vault.Enabled() {
+		backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
+	}
+	if req.Device == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "no-device")
+	}
+	if req.Token == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "no-token")
+	}
 	backupCommands, backupScheduleCommands := "", ""
-	if req.Token != "" && req.Device != "" && s.SetupInstance.BackupPort != "" && s.Vault.Enabled() {
+	if len(backupBlockedKeys) == 0 {
 		// The drop box listens on its own port, not the HTTPS port
 		// req.Address carries -- same reasoning SyslogCommands' Hostname
 		// call gives for stripping the web port off before pairing it
@@ -221,13 +289,15 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		Picked:  picked,
 		Routers: routers,
 		Steps: setupCommandsSteps{
-			CaTrust:        commandStep{Commands: routeros.CaTrustCommands(req.Address, dialect)},
-			Syslog:         commandStep{Commands: routeros.SyslogCommands(req.Address, syslogPort, dialect)},
-			RuleTagging:    commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
-			Push:           commandStep{Commands: pushCommands},
-			Schedule:       commandStep{Commands: scheduleCommands},
-			Backup:         commandStep{Commands: backupCommands},
-			BackupSchedule: commandStep{Commands: backupScheduleCommands},
+			CaTrust:     commandStep{Commands: caTrustCommands, Blocked: addressBlocked},
+			Syslog:      commandStep{Commands: syslogCommands, Blocked: addressBlocked},
+			RuleTagging: commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
+			// Push/Schedule only carry the address key, never the
+			// token/kinds gate -- see the comment above pushCommands.
+			Push:           commandStep{Commands: pushCommands, Blocked: addressBlocked},
+			Schedule:       commandStep{Commands: scheduleCommands, Blocked: addressBlocked},
+			Backup:         commandStep{Commands: backupCommands, Blocked: backupBlockedKeys},
+			BackupSchedule: commandStep{Commands: backupScheduleCommands, Blocked: backupBlockedKeys},
 		},
 	})
 }
@@ -240,8 +310,13 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 // '"', '\', ';', space or newline reaching one of those templates is
 // never a value worth rendering.
 func validateSetupCommandsRequest(req setupCommandsRequest) error {
-	if !validSetupAddress(req.Address) {
-		return errors.New("address must be a hostname or IP address, optionally with :port")
+	// Empty is the "not answered yet" case (#1213) -- handleSetupCommands
+	// reads it as noAddress and blanks every block that needs one, rather
+	// than refusing the whole request the way an empty value used to.
+	// Anything non-empty still has to be a plausible address: it is about
+	// to sit bare inside a RouterOS command.
+	if req.Address != "" && !validSetupAddress(req.Address) {
+		return errors.New("address must be empty, a hostname, or an IP address, optionally with :port")
 	}
 	if !validSetupSyslogPort(req.SyslogPort) {
 		return errors.New("syslogPort must be empty or a number from 1 to 65535")

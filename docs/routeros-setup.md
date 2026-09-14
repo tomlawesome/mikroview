@@ -21,6 +21,25 @@ MikroView. Either way, the router always initiates; MikroView never
 connects to it. This is a
 one-time configuration on each router you want to monitor.
 
+## Upgrading from a MikroView older than 2026-09-12?
+
+Every released wizard before that date — v0.3.0, v0.4.0 and v0.5.1 —
+printed the logging action below without `remote-log-format=syslog`.
+Without it, RouterOS gives each syslog message no header of its own, so
+a burst of firewall lines can arrive as one undelimited run. If that run
+crosses 64 KiB, MikroView has no choice but to discard the rest of it.
+
+**What you'll see:** MikroView reporting oversized or over-long runs
+from your router (Settings ▸ ingest names the router when it sees this),
+and the Fall and other views looking emptier than they should — the
+traffic was there, but the run it arrived in was too long to read.
+
+**The fix:** re-paste the logging block in step 1 below. It's safe to
+run again — it adds the logging action if it's missing and updates it in
+place if it's already there, so this is exactly how an existing router
+picks up the missing flag. Nothing else in this guide needs
+re-running.
+
 ## 1. Point RouterOS at the container over TLS
 
 MikroView's only syslog listener speaks `remote-protocol=tls` (RFC
@@ -73,8 +92,11 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes
+:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
 ```
+
+This block is safe to paste again — a second run updates the existing
+action instead of adding another one (#1208).
 
 This does **not** authenticate the router to MikroView — RouterOS's
 logging action has no client-certificate option, so anything able to
@@ -95,8 +117,11 @@ RouterOS tags firewall rule matches with both the `firewall` category and
 `info` severity — forward both:
 
 ```
-/system logging add topics=firewall,info action=mikroview
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 ```
+
+This is also safe to paste again — it only adds the rule when it is not
+already there (#1208).
 
 ## 3. Tag your firewall rules
 
@@ -184,7 +209,7 @@ same way as step 2 covers firewall/info, then tag the NAT rules you care
 about:
 
 ```
-/system logging add topics=firewall,info action=mikroview
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 /ip firewall nat set <rule-number> log=yes log-prefix="N|port-fwd|"
 ```
 

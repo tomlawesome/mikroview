@@ -463,6 +463,18 @@
     ),
   )
 
+  // #1205: sustained oversized runs from a *declared* router almost
+  // always mean its logging action still lacks
+  // remote-log-format=syslog -- every wizard before 2026-09-12 omitted
+  // it. The detection itself is server-side (internal/syslog's
+  // oversizedIsSetupDrift): this just reads the one flag it sets.
+  const oversizedSetupDriftHost = $derived.by(() => {
+    const oversized = appState.stats?.syslog?.loss?.oversized
+    return oversized?.setupDrift ? oversized.host : undefined
+  })
+  const ROUTEROS_SETUP_DOCS_URL =
+    'https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md'
+
   function quietFor(lastSeen: string): string | null {
     const days = Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
     return days >= 1 ? `quiet ${days} d — quiet is a fact, not a fault` : null
@@ -535,14 +547,16 @@
 
   // copyRouterLines hands back the same push script the setup wizard
   // would -- POST /api/setup/commands' steps.push.commands (#436 moved
-  // the RouterOS syntax itself server-side), keyed to this instance's
-  // address and status.pushKinds -- with the freshly-minted key already
-  // embedded, so rotating an ingest key never sends the operator back
-  // through setup for a line-by-line diff.
+  // the RouterOS syntax itself server-side), keyed to wizardState.address
+  // (#1213 -- the operator's own answer to "what address can your router
+  // reach mikroview on?", not this tab's own URL) and status.pushKinds --
+  // with the freshly-minted key already embedded, so rotating an ingest
+  // key never sends the operator back through setup for a line-by-line
+  // diff.
   async function copyRouterLines(value: string) {
     if (!status) return
     const result = await fetchSetupCommands({
-      address: window.location.host,
+      address: wizardState.address,
       syslogPort: status.instance.syslogPort,
       token: value,
       kinds: status.pushKinds,
@@ -878,6 +892,15 @@
                   : ''}
               </span>
             </div>
+            {#if oversizedSetupDriftHost}
+              <div class="orow sub">
+                <span>router setup out of date</span>
+                <span class="ov ink-caution">
+                  {oversizedSetupDriftHost} is likely missing <code>remote-log-format=syslog</code> — see
+                  <a href={ROUTEROS_SETUP_DOCS_URL} target="_blank" rel="noopener noreferrer">RouterOS setup</a>
+                </span>
+              </div>
+            {/if}
             <div class="orow sub">
               <span>not shown in this tab</span>
               <span class="ov" class:ink-info={ingestLoss.wsDropped > 0}>
@@ -1632,6 +1655,14 @@
 
   .orow .ov.dim {
     color: var(--fg-dim);
+  }
+
+  /* #1205's setup-drift line links out to the docs -- inherit the
+     row's ink (caution, here) rather than the browser's default blue,
+     underlined so it still reads as a link. */
+  .orow .ov a {
+    color: inherit;
+    text-decoration: underline;
   }
 
   /* #995: the ingest-loss counters' sub-rows under "syslog slots" --

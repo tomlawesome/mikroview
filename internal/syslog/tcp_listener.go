@@ -438,8 +438,15 @@ type ListenerStats struct {
 	// log line at all.
 	Dropped uint64 `json:"dropped"`
 	// Oversized counts continuation reads discarded from a message
-	// larger than the 64 KiB per-message limit. Above zero means
-	// something is sending log lines no RouterOS device produces.
+	// larger than the 64 KiB per-message limit -- a read, not a
+	// message: one over-long run can cross the cap many times before a
+	// delimiter ever turns up, so this number is not "messages lost"
+	// (#1203). The commoner cause by far is a RouterOS router whose
+	// logging action lacks remote-log-format=syslog: with no
+	// per-message header there is no delimiter, so a fast burst reads
+	// as one long run. A genuinely foreign, non-RouterOS sender is
+	// possible but rarer. See LossStats.Oversized.Runs for the same
+	// activity counted as runs instead of reads.
 	Oversized uint64 `json:"oversized"`
 	// RejectedConfiguredHosts names the most recently rejected declared
 	// hosts, most-recent-first -- so the UI can say *which* router was
@@ -481,6 +488,25 @@ type LossCounterStats struct {
 	// only while that message's own lastAt is still within window. Only
 	// ever set on the oversized entry.
 	Host string `json:"host,omitempty"`
+	// Declared is whether Host names a device declared under `devices:`
+	// in config.yaml (#1203) -- computed here so the frontend never
+	// needs its own copy of that address list just to phrase the
+	// oversized banner: a declared source gets "known router" copy,
+	// anything else stays an unidentified sender. Only ever set on the
+	// oversized entry.
+	Declared bool `json:"declared,omitempty"`
+	// Runs is the current episode's count of over-long *runs*, not
+	// discarded reads: a single run can generate many Recent hits
+	// (#1203's 138,309-read report was very likely a handful of runs
+	// from one stalled RouterOS logging action, not that many lost
+	// messages). Only ever set on the oversized entry.
+	Runs uint64 `json:"runs,omitempty"`
+	// SetupDrift is #1205's narrow, detectable case: Declared plus a
+	// sustained run of oversized activity almost always means this
+	// router's logging action still lacks remote-log-format=syslog, the
+	// flag every wizard before 2026-09-12 omitted. Only ever set on the
+	// oversized entry -- see oversizedIsSetupDrift.
+	SetupDrift bool `json:"setupDrift,omitempty"`
 }
 
 // LossStats is ListenerStats.Loss's shape -- issue #1015.
@@ -515,7 +541,10 @@ func lossStats() LossStats {
 	oversized := lossCounterStats(&tcpOversizedFreshness, lossWindowOversized, now)
 	if host, active := oversizedHostIfActive(lossWindowOversized, now); active {
 		oversized.Host = host
+		oversized.Declared = isConfiguredSource(host)
 	}
+	oversized.Runs, _, _ = tcpOversizedRunsFreshness.snapshot(lossWindowOversized, now)
+	oversized.SetupDrift = oversizedIsSetupDrift(oversized.Declared, oversized.Active, oversized.Runs)
 
 	return LossStats{
 		Dropped:            lossCounterStats(&tcpDroppedFreshness, lossWindowDropped, now),
@@ -523,6 +552,23 @@ func lossStats() LossStats {
 		Rejected:           lossCounterStats(&tcpRejectedFreshness, lossWindowRejected, now),
 		Oversized:          oversized,
 	}
+}
+
+// sustainedOversizedRuns is #1205's threshold for "not a one-off": a
+// single large legitimate log line proves nothing, but a second
+// over-long run inside the same active window is a pattern rather than
+// a fluke.
+const sustainedOversizedRuns = 2
+
+// oversizedIsSetupDrift is #1205's narrow detection rule: a declared
+// device sending a sustained run of oversized activity almost always
+// means its logging action still lacks remote-log-format=syslog (the
+// commoner cause #1203 identified), so Settings should say so and name
+// the fix. An address nobody declared is left alone -- undeclared
+// traffic already gets its own explanation from #1203's banner, and
+// this package has no evidence to say more about it than that.
+func oversizedIsSetupDrift(declared, active bool, runs uint64) bool {
+	return declared && active && runs >= sustainedOversizedRuns
 }
 
 // ClearLossResult is what ClearLoss hands its caller for an audit entry
@@ -552,11 +598,13 @@ func ClearLoss() ClearLossResult {
 	tcpRejectedConfigured.Store(0)
 	tcpRejected.Store(0)
 	tcpOversized.Store(0)
+	tcpOversizedRuns.Store(0)
 
 	tcpDroppedFreshness.clear()
 	tcpRejectedConfiguredFreshness.clear()
 	tcpRejectedFreshness.clear()
 	tcpOversizedFreshness.clear()
+	tcpOversizedRunsFreshness.clear()
 
 	rejectedConfiguredHostsMu.Lock()
 	rejectedConfiguredHosts = nil
@@ -1292,6 +1340,12 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				emit(pending[:maxTCPMessageBytes])
 				tcpOversized.Add(1)
 				noteOversizedHost(host)
+				// This over-cap line resolved within the same read that
+				// crossed the cap -- start and end of one run, never
+				// picked up by the continuation-read branch above, so it
+				// has to count itself here (#1203's honest run total).
+				tcpOversizedRuns.Add(1)
+				tcpOversizedRunsFreshness.hit(lossWindowOversized)
 				pending = pending[idx+1:]
 				headerScanned = 0
 			}
@@ -1367,6 +1421,12 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				pending = pending[:0]
 				oversized = true
 				headerScanned = 0
+				// The run starts here (oversized flips false -> true);
+				// every further read while it stays true is the same run
+				// continuing, counted at the continuation branch above
+				// without touching this counter again.
+				tcpOversizedRuns.Add(1)
+				tcpOversizedRunsFreshness.hit(lossWindowOversized)
 			}
 		}
 
@@ -1438,6 +1498,21 @@ var (
 	tcpOversized atomic.Uint64
 	dropLogGate  = logging.NewLimiter(ingestDropLogInterval)
 )
+
+// tcpOversizedRuns counts over-long *runs* rather than discarded reads
+// -- one run's worth of continuation reads all land under the one
+// tcpOversized increment that started it, never a second one, so this
+// stays the honest "how many times has this happened" figure #1203
+// asked for beside the existing read-level total. See
+// tcpOversizedRunsFreshness for the windowed view the API exposes as
+// LossStats.Oversized.Runs.
+var tcpOversizedRuns atomic.Uint64
+
+// tcpOversizedRunsFreshness is tcpOversizedRuns' own #1015-style
+// episode tracker, on the same window as tcpOversizedFreshness --
+// separate instance because it counts a different event (a run
+// starting, not a read being discarded).
+var tcpOversizedRunsFreshness lossFreshness
 
 // tcpOversizedHost holds the source host of the most recent oversized
 // message, so the UI can say which sender is producing lines no

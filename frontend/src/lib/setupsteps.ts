@@ -14,7 +14,7 @@
 // wasn't" would be worse than no wizard at all.
 
 import { formatSize } from './memory'
-import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
+import type { Device, RouterBackupsResponse, SetupMark, SetupStatus, SetupWitness } from './types'
 
 // 'quiet' is #487's fifth reading, and the only one that is not a claim
 // about a router: a step with nothing to wait for (step 5's naming is
@@ -35,14 +35,6 @@ export interface StepStatus {
   // shortfall set means there was no arrival to word -- one warning box
   // and nothing above it.
   shortfall?: string
-}
-
-// instanceAddress is the address a router should be pointed at: the one
-// the operator's own browser is currently using. Taken from the live
-// location rather than configuration, because that is the address
-// known to work from at least one place on the network.
-export function instanceAddress(loc: { host: string }): string {
-  return loc.host
 }
 
 // hostname strips a port. Certificate names never carry one, so this is
@@ -99,7 +91,12 @@ export function deviceStanza(sourceIp: string, name: string): string {
 // --- Step status --------------------------------------------------------
 
 export function caStep(status: SetupStatus, address: string): StepStatus {
-  if (!certificateCovers(status, address)) {
+  // An empty address (#1213: the header field has not been answered
+  // yet) is not a certificate mismatch to report -- there is nothing to
+  // check yet, not a wrong answer. It falls through to the ordinary
+  // waiting/done read below, the same as it would before any address
+  // existed to check at all.
+  if (address && !certificateCovers(status, address)) {
     const shown = hostname(address)
     return {
       state: 'blocked',
@@ -219,6 +216,62 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
   }
   const receipt = backupReceipt(backups)
   return { state: 'done', detail: receipt ? `arrived ${receipt}` : 'A router has pushed a backup.' }
+}
+
+// --- The address-not-answered no-command state (#1213) ------------------
+//
+// Every RouterOS command block that embeds the operator's address --
+// caTrust, syslog, push/schedule, and backup/backupSchedule beside its
+// own preconditions below -- comes back blank with this one
+// commandStep.blocked key when nothing has been answered yet in the
+// wizard header field above the numbered steps. Reuses #1217's own
+// mechanism (a machine-readable key the server states, worded here)
+// rather than a second "why is this blank" shape.
+export const NO_ADDRESS_KEY = 'no-address'
+
+// NO_COMMAND_HEADING is caTrust/syslog/push's own no-command state --
+// simpler than backup's below, since a missing address is the only
+// reason any of those three ever come back blank.
+export const NO_COMMAND_HEADING = 'no commands yet'
+export const NO_ADDRESS_LINE =
+  'no address has been given yet — answer "What address can your router reach MikroView on?" above, at the top of this wizard, and this fills in.'
+
+// --- The backup step's no-script state (#1217) --------------------------
+//
+// commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)
+// names every precondition the backup block came back blank for, as
+// machine-readable keys. The server states which keys apply; every
+// operator-facing sentence lives here instead, same split #436 already
+// draws for the RouterOS commands themselves.
+//
+// Order matters (owner's ruling, 2026-09-14): config problems first --
+// the operator edits config.yaml and restarts -- then the ones the
+// wizard itself can still fix, in the order it asks them (the header
+// field before either step-4/6 pick).
+export const BACKUP_BLOCKED_ORDER = ['backups-off', 'no-retention-key', NO_ADDRESS_KEY, 'no-device', 'no-token'] as const
+
+const BACKUP_BLOCKED_COPY: Record<string, string> = {
+  'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+  'no-retention-key':
+    'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
+    'config.yaml and restart mikroview.',
+  [NO_ADDRESS_KEY]: NO_ADDRESS_LINE,
+  'no-device': 'this router has no name yet. Name it in the step above; the script files each backup under that name.',
+  'no-token': 'no token has been minted for this router yet. The step above mints it.',
+}
+
+// BACKUP_NO_SCRIPT_HEADING is the heading over the lines above -- the
+// no-script state entirely replaces the input boxes and Copy buttons
+// the step would otherwise show (#1217).
+export const BACKUP_NO_SCRIPT_HEADING = 'no script yet'
+
+// backupBlockedLines turns commandStep.blocked's keys into the sentences
+// the wizard shows, in the ratified order, regardless of what order the
+// server happened to list them in.
+export function backupBlockedLines(blocked: string[] | undefined): string[] {
+  if (!blocked || blocked.length === 0) return []
+  const set = new Set(blocked)
+  return BACKUP_BLOCKED_ORDER.filter((key) => set.has(key)).map((key) => BACKUP_BLOCKED_COPY[key])
 }
 
 // backupReceipt is the newest pair to have arrived, across every
@@ -407,6 +460,14 @@ export interface LedgerStep {
   // upward, and step 5 has nothing to wait for, so on both Next is
   // always free -- there is no waiting check to force past.
   hasCheck: boolean
+  // witnessed is true when this step's 'done' outcome rests on the
+  // server's own witness (#1221) rather than evidence it can see right
+  // now -- the moment that happens, status.detail is a stale reading
+  // (whatever the live check falls back to with nothing to look at,
+  // usually 'waiting') and must not be shown as if it were current.
+  // receipt already carries the honestly past-tense line to use
+  // instead; see witnessReceipt.
+  witnessed: boolean
 }
 
 // STEP_TITLES is the ratified six, in order -- round 45 (#394) adds the
@@ -513,21 +574,71 @@ export function nameStep(devices: Device[]): StepStatus {
   }
 }
 
+// BACKUP_LEAD_INTRO is step 6's lead sentence with no script promised --
+// what the step is for, said whether or not a script can be printed
+// right now. BACKUP_LEAD_SCRIPT_NOTE is only true once one can: #1217's
+// bug was this second sentence surviving into the no-script state,
+// describing a token and a script that were not on the screen.
+export const BACKUP_LEAD_INTRO =
+  'Every night the router saves itself twice — the binary backup that restores it whole, and the plain ' +
+  'export you can read — and drops both into MikroView. Nothing is sent back, and nothing is left on ' +
+  'the router.'
+const BACKUP_LEAD_SCRIPT_NOTE = ' The token below is minted for this one router and is already in the script.'
+
+// backupLead is step 6's lead, gated on whether a script actually
+// exists to describe (#1217).
+export function backupLead(scriptExists: boolean): string {
+  return scriptExists ? BACKUP_LEAD_INTRO + BACKUP_LEAD_SCRIPT_NOTE : BACKUP_LEAD_INTRO
+}
+
+// BACKUP_WAITING_NO_SCRIPT replaces backupStep's ordinary waiting line
+// when the backup block is blocked (#1217): "the script below runs once
+// at the end" is false with no script below, so the promise is dropped
+// rather than carried into a state that cannot make it true.
+export const BACKUP_WAITING_NO_SCRIPT = 'Waiting for the first push.'
+
 // LEADS are the step bodies' lead sentences. Wording is design, so it
 // lives with the step it belongs to rather than being assembled in the
 // component.
 const LEADS = [
   "The router has to trust MikroView's certificate authority before it will open a TLS connection. Run this on the router; it fetches the certificate and imports it.",
-  'Point the router at this instance. The handshake itself is the evidence — a failed one never counts as arrived.',
+  'Point the router at this instance. The handshake itself is the evidence — a failed one never counts as arrived. This block is safe to paste again — a second run updates the existing rule rather than adding another.',
   'The letter in the log-prefix is how MikroView knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
   'MikroView does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
-  'Every night the router saves itself twice — the binary backup that restores it whole, and the plain export you can read — and drops both into MikroView. Nothing is sent back, and nothing is left on the router. The token below is minted for this one router and is already in the script.',
+  backupLead(true),
 ] as const
 
 // stepMarks indexes marks by step, so building the ledger stays one pass.
 function markFor(marks: SetupMark[], step: number): SetupMark | undefined {
   return marks.find((m) => m.step === step)
+}
+
+// witnessFor is markFor's own twin for the server's witnesses (#1221).
+function witnessFor(witnesses: SetupWitness[], step: number): SetupWitness | undefined {
+  return witnesses.find((w) => w.step === step)
+}
+
+// witnessedWhen renders a witness's timestamp always dated, unlike
+// `when` above, which drops the date for something read the same day it
+// happened. A witness is read back after evidence has already gone
+// (that is the only time it is used at all -- see buildLedger), so "just
+// now" is never true of it, and the date has to say so rather than
+// leaving a bare time that reads as today's.
+function witnessedWhen(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const day = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const time = d.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit' })
+  return `${day} at ${time}`
+}
+
+// witnessReceipt words a step read back from the server's own witness:
+// the fact it recorded, plus plainly that this is a memory and not a
+// reading -- "seen on 13 Sep at 10:27" -- so it can never be mistaken
+// for a current observation the way a bare fact-plus-time could be.
+export function witnessReceipt(witness: SetupWitness): string {
+  return `${witness.receipt} — seen on ${witnessedWhen(witness.at)}`
 }
 
 // decisionReceipt words a recorded decision for the step list. Skip is
@@ -586,19 +697,33 @@ export function buildLedger(
   return checks.map((check, i) => {
     const n = i + 1
     const mark = markFor(status.marks, n)
+    const witness = witnessFor(status.witnesses, n)
     const hasEvidence = arrived(check.state)
+    // A witness only ever speaks when there is nothing better to go on:
+    // live evidence outranks it (the record's "forced is not failed"
+    // reasoning applies here too -- a witness that later gets its own
+    // live evidence back is simply done, the ordinary way), and an
+    // operator's own mark for the same step outranks it as well, per
+    // #1221's architecture call -- witnessing must never overwrite a
+    // skip or force, so reading one back must not either.
+    const witnessedOnly = !hasEvidence && !mark && !!witness
     let outcome: Outcome = 'open'
     if (hasEvidence) outcome = 'done'
     else if (mark) outcome = mark.outcome
+    else if (witness) outcome = 'done'
     return {
       n,
       title: STEP_TITLES[i],
       lead: LEADS[i],
       status: check,
-      flavour: flavourFor(n, check.state),
+      // A witnessed-only step reads the same as arrived evidence would
+      // -- no waiting dot, no "counting" -- since as far as the operator
+      // is concerned it is done; only the receipt says it is a memory.
+      flavour: witnessedOnly ? 'arrived' : flavourFor(n, check.state),
       outcome,
-      receipt: hasEvidence ? receipts[i] : mark ? decisionReceipt(mark) : '',
+      receipt: hasEvidence ? receipts[i] : mark ? decisionReceipt(mark) : witness ? witnessReceipt(witness) : '',
       hasCheck: checked[i],
+      witnessed: witnessedOnly,
     }
   })
 }
@@ -719,6 +844,13 @@ export const SKIP_CONSEQUENCES = [
 // for the first push" -- rather than the step title alone, which would
 // announce a move without announcing what was moved to.
 export function announceStep(step: LedgerStep): string {
+  // A witnessed step has nothing current to speak (#1221): status.detail
+  // is whatever the live check falls back to with no evidence in front
+  // of it, and reading that aloud would announce a step as waiting that
+  // the disc already shows done. The receipt says what actually happened.
+  if (step.witnessed) {
+    return `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${step.receipt}`
+  }
   // A partial step's shortfall is spoken with its arrival, in the order
   // the two boxes are read on screen: a screen reader told only what
   // arrived would hear the step as finished (#1132).

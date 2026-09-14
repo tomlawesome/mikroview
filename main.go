@@ -376,26 +376,73 @@ func localRedirectHosts() []string {
 	if name, err := os.Hostname(); err == nil {
 		add(name)
 	}
-	if addrs, err := net.InterfaceAddrs(); err == nil {
-		for _, a := range addrs {
-			ipNet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			addr, ok := netip.AddrFromSlice(ipNet.IP)
-			if !ok {
-				continue
-			}
-			addr = addr.Unmap()
-			if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
-				continue
-			}
-			add(addr.String())
-		}
+	for _, addr := range boundInterfaceAddrs() {
+		add(addr.String())
 	}
 	add("localhost")
 	add("127.0.0.1")
 	return hosts
+}
+
+// boundInterfaceAddrs is the "real address" enumeration localRedirectHosts
+// and setupAddressCandidates below both need -- every address this host
+// holds on any interface, minus loopback, link-local and unspecified,
+// which are never an address a router elsewhere on the network could
+// reach it on. Pulled out so the two lists cannot silently disagree
+// about what counts as real.
+func boundInterfaceAddrs() []netip.Addr {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Addr
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		addr, ok := netip.AddrFromSlice(ipNet.IP)
+		if !ok {
+			continue
+		}
+		addr = addr.Unmap()
+		if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
+}
+
+// setupAddressCandidates is the wizard header field's server-known
+// defaults (#1213): every real address this instance is bound to, on
+// the configured HTTPS port, so the field the operator answers ("what
+// address can your router reach mikroview on?") starts from something
+// mikroview actually knows about itself rather than only the browser's
+// own host (that fallback stays in
+// frontend/src/lib/wizard.svelte.ts). This is not a new discovery
+// mechanism -- it reads net.InterfaceAddrs, the same source
+// localRedirectHosts already trusts, and the configured listen address,
+// nothing polled from a router.
+//
+// A container with no real interface enumerates nothing (host
+// networking not in use, or every address filtered as loopback/
+// link-local); in that case this falls back to whatever host
+// cfg.Listen.HTTP itself names, since that is the one address
+// configuration actually states, rather than guessing further.
+func setupAddressCandidates(listenHTTP string) []string {
+	host, port, err := net.SplitHostPort(listenHTTP)
+	if err != nil || port == "" {
+		return nil
+	}
+	var out []string
+	for _, addr := range boundInterfaceAddrs() {
+		out = append(out, net.JoinHostPort(addr.String(), port))
+	}
+	if len(out) == 0 && host != "" {
+		out = append(out, net.JoinHostPort(host, port))
+	}
+	return out
 }
 
 // joinOnShutdown registers a goroutine with wg that waits for ctx to be
@@ -1577,6 +1624,7 @@ func main() {
 			Hosts:      cfg.TLS.Hosts,
 			SyslogPort: cfg.Listen.SyslogTLS,
 			BackupPort: routerBackupPort(cfg),
+			Candidates: setupAddressCandidates(cfg.Listen.HTTP),
 		},
 		OIDC:              oidcClient,
 		OIDCState:         oidcState,

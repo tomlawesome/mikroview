@@ -51,21 +51,71 @@ func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setu
 	return out
 }
 
-// TestHandleSetupCommandsRequiresAddress covers the one required field
-// the contract states: every other field is optional, address is not.
-func TestHandleSetupCommandsRequiresAddress(t *testing.T) {
+// TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress
+// covers #1213: an empty address is no longer refused at the door (that
+// used to be the whole point of the field the operator's browser filled
+// in for them). It is instead read the same way every other missing
+// precondition here is -- every block that embeds it comes back blank
+// with the "no-address" key, RuleTagging (which needs no address at all)
+// renders regardless, and the request itself still succeeds.
+func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	key := testRetentionKey(t)
+	v, err := backupvault.Open(t.TempDir(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// Every other precondition met, so if address were not itself gating
+	// these blocks, they would render.
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Token: "tok-123", Kinds: []string{"filter-rule"}, Device: "rb5009",
+	})
+	for name, step := range map[string]commandStep{
+		"caTrust":  out.Steps.CaTrust,
+		"syslog":   out.Steps.Syslog,
+		"push":     out.Steps.Push,
+		"schedule": out.Steps.Schedule,
+	} {
+		if step.Commands != "" {
+			t.Errorf("%s commands = %q, want empty with no address", name, step.Commands)
+		}
+		if !slicesEqual(step.Blocked, []string{"no-address"}) {
+			t.Errorf("%s.Blocked = %v, want [no-address]", name, step.Blocked)
+		}
+	}
+	if !slicesEqual(out.Steps.Backup.Blocked, []string{"no-address"}) {
+		t.Errorf("Backup.Blocked = %v, want [no-address] with every other precondition met", out.Steps.Backup.Blocked)
+	}
+	if !slicesEqual(out.Steps.BackupSchedule.Blocked, []string{"no-address"}) {
+		t.Errorf("BackupSchedule.Blocked = %v, want [no-address]", out.Steps.BackupSchedule.Blocked)
+	}
+	if out.Steps.RuleTagging.Commands == "" {
+		t.Error("RuleTagging.Commands is empty, want it to render regardless -- it embeds no address")
+	}
+}
+
+// TestHandleSetupCommandsRejectsAMalformedAddress covers the other half
+// of #1213's contract change: empty is now fine (not answered yet), but
+// a non-empty value still has to be a plausible address, since it is
+// about to sit bare inside a RouterOS command.
+func TestHandleSetupCommandsRejectsAMalformedAddress(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
-	body, _ := json.Marshal(setupCommandsRequest{})
+	body, _ := json.Marshal(setupCommandsRequest{Address: "not a valid host\naddress"})
 	resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for a missing address", resp.StatusCode)
+		t.Errorf("status = %d, want 400 for a malformed address", resp.StatusCode)
 	}
 }
 
@@ -265,6 +315,85 @@ func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	if !strings.Contains(ready.Steps.BackupSchedule.Commands, "mv-backup") {
 		t.Errorf("backup schedule commands = %q, want the scheduler entry", ready.Steps.BackupSchedule.Commands)
 	}
+	if len(ready.Steps.Backup.Blocked) != 0 {
+		t.Errorf("Backup.Blocked = %v, want none once every precondition is met", ready.Steps.Backup.Blocked)
+	}
+	if len(ready.Steps.BackupSchedule.Blocked) != 0 {
+		t.Errorf("BackupSchedule.Blocked = %v, want none once every precondition is met", ready.Steps.BackupSchedule.Blocked)
+	}
+}
+
+// TestHandleSetupCommandsBackupBlockedKeys covers #1217: the server
+// names every missing precondition as a machine-readable key, all that
+// apply rather than just the first, so the wizard can say why the
+// backup step printed nothing instead of showing empty boxes. Wording
+// stays out of Go entirely -- these keys are exactly what the frontend
+// switches on.
+func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// Nothing present at all: every key fires, in the order the wizard
+	// wants them read -- config problems first, then the two the
+	// operator fixes in the wizard.
+	none := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5"})
+	want := []string{"backups-off", "no-retention-key", "no-device", "no-token"}
+	if !slicesEqual(none.Steps.Backup.Blocked, want) {
+		t.Errorf("Backup.Blocked = %v, want %v", none.Steps.Backup.Blocked, want)
+	}
+	if !slicesEqual(none.Steps.BackupSchedule.Blocked, want) {
+		t.Errorf("BackupSchedule.Blocked = %v, want %v (same condition as Backup)", none.Steps.BackupSchedule.Blocked, want)
+	}
+
+	// Exactly one precondition missing at a time -- the owner's actual
+	// case (#1217's correction note): backups switched off in config,
+	// everything else present.
+	key := testRetentionKey(t)
+	v, err := backupvault.Open(t.TempDir(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+	s.SetupInstance.BackupPort = ""
+	onlyBackupsOff := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
+	})
+	if !slicesEqual(onlyBackupsOff.Steps.Backup.Blocked, []string{"backups-off"}) {
+		t.Errorf("Backup.Blocked = %v, want just [backups-off]", onlyBackupsOff.Steps.Backup.Blocked)
+	}
+
+	s.SetupInstance.BackupPort = "47022"
+	onlyNoDevice := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
+	if !slicesEqual(onlyNoDevice.Steps.Backup.Blocked, []string{"no-device"}) {
+		t.Errorf("Backup.Blocked = %v, want just [no-device]", onlyNoDevice.Steps.Backup.Blocked)
+	}
+
+	onlyNoToken := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Device: "rb5009"})
+	if !slicesEqual(onlyNoToken.Steps.Backup.Blocked, []string{"no-token"}) {
+		t.Errorf("Backup.Blocked = %v, want just [no-token]", onlyNoToken.Steps.Backup.Blocked)
+	}
+
+	// Several missing at once -- the owner's instance actually hit this:
+	// two preconditions unmet together, and both keys must come back,
+	// not just the first one found.
+	s.SetupInstance.BackupPort = ""
+	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
+	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
+		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestHandleSetupCommandsRejectsUnsafeInput covers #1095: every field

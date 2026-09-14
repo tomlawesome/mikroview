@@ -100,7 +100,8 @@
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
   import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
-  import { instanceAddress, portOf } from '../lib/setupsteps'
+  import { portOf } from '../lib/setupsteps'
+  import { wizardState } from '../lib/wizard.svelte'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
@@ -513,8 +514,12 @@
     fetchSetupStatus()
       .then((s) => {
         status = s
+        // wizardState.address (#1213) is the operator's own answer to
+        // "what address can your router reach mikroview on?", not this
+        // tab's own URL -- the same value the wizard itself renders
+        // every RouterOS command against.
         return fetchSetupCommands({
-          address: instanceAddress({ host: location.host }),
+          address: wizardState.address,
           syslogPort: s.instance.syslogPort,
         })
       })

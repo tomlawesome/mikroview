@@ -290,8 +290,12 @@ export interface SyslogListenerStats {
   // real router records that were received and then thrown away.
   dropped: number
   // Continuation reads discarded from a message over the 64 KiB
-  // per-message limit. Above zero means something is sending log lines
-  // no RouterOS device produces.
+  // per-message limit -- a read, not a message (#1203): one over-long
+  // run can cross the cap many times before a delimiter turns up. The
+  // commoner cause by far is a RouterOS router whose logging action
+  // lacks remote-log-format=syslog; a genuinely foreign sender is
+  // possible but rarer. See loss.oversized.runs for the same activity
+  // counted as runs instead of reads.
   oversized: number
   // The most recently rejected declared hosts, most-recent-first,
   // bounded server-side (see internal/syslog.maxRejectedConfiguredHosts).
@@ -299,9 +303,9 @@ export interface SyslogListenerStats {
   // router instead of only counting it. Empty when nothing declared has
   // been turned away.
   rejectedConfiguredHosts: string[]
-  // The source of the most recent oversized message -- what the yellow
-  // "non-RouterOS sender" banner's "received from <ip>" names. Empty
-  // string until the first oversized message.
+  // The source of the most recent oversized message -- what the
+  // ingest-loss banner's "Oversized messages" row names. Empty string
+  // until the first oversized message.
   oversizedHost: string
   // #1015: the freshness signal the totals above cannot give -- a total
   // that stopped growing is indistinguishable from one that never grew.
@@ -335,6 +339,23 @@ export interface IngestLossHostsCounter extends IngestLossCounter {
 // it were current.
 export interface IngestLossHostCounter extends IngestLossCounter {
   host?: string
+  // declared (#1203) is whether host names a device the operator
+  // declared under `devices:` -- computed server-side (internal/syslog
+  // already has that address list) so the banner never needs its own
+  // copy of it. False whenever host is absent.
+  declared: boolean
+  // runs (#1203) is the current episode's count of over-long *runs*,
+  // not discarded reads -- one run can span many reads (a single
+  // stalled RouterOS logging action can discard tens of thousands of
+  // reads), so this is the honest number for "how many times has this
+  // happened", unlike `recent` above which still counts reads.
+  runs: number
+  // setupDrift (#1205) is true when a sustained run of oversized
+  // activity is coming from a declared device -- almost always a
+  // router still missing remote-log-format=syslog. Optional so the
+  // (unrelated) oversized-banner fixtures committed for #1203 don't
+  // all need updating just to add a field they never read.
+  setupDrift?: boolean
 }
 
 // Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
@@ -1522,6 +1543,16 @@ export interface SetupStatus {
     hosts: string[]
     syslogPort: string
     syslogEnabled: boolean
+    // The operator's own answer (#1213) to "what address can your
+    // router reach mikroview on?" -- empty until they have answered
+    // once. Persisted server-side beside the setup ledger's marks, so a
+    // restart mid-wizard does not lose it.
+    address: string
+    // The server's own guesses at that answer: every address it is
+    // bound to, on its own HTTPS port. Offered as candidates for the
+    // field above, alongside the browser's own host -- never sent on
+    // the operator's behalf.
+    addressCandidates: string[]
   }
   sources: {
     source: string
@@ -1543,6 +1574,9 @@ export interface SetupStatus {
   // The claim ledger's own marks (#487) -- see SetupMark. Always
   // present, empty when nothing has been skipped or forced past.
   marks: SetupMark[]
+  // The server's own witnesses (#1221) -- see SetupWitness. Always
+  // present, empty for a step never yet seen satisfied.
+  witnesses: SetupWitness[]
 }
 
 // Mirrors internal/setup.Mark (#487): the operator's own statement about
@@ -1563,6 +1597,21 @@ export interface SetupMark {
   // What had not arrived when the decision was made, as the wizard's own
   // observation line worded it.
   note?: string
+}
+
+// Mirrors internal/api's setupWitness (#1221): a step mikroview itself
+// watched turn satisfied, kept as a floor under evidence that lives only
+// in memory and so does not survive a restart. Unlike SetupMark, nobody
+// decided this -- there is no actor, and no client can ever send one
+// (internal/setup.NoteMark keeps refusing the outcome).
+export interface SetupWitness {
+  step: number
+  // The fact observed at the moment this step was first seen satisfied,
+  // in the present tense the live receipts elsewhere use -- see
+  // witnessReceipt in lib/setupsteps.ts for how that becomes honestly
+  // past tense once it is all a restart has left.
+  receipt: string
+  at: string
 }
 
 // --- RouterOS version-aware commands (#436) --------------------------
@@ -1620,9 +1669,17 @@ export interface RouterosWarningRouter {
 // note that goes with this exact step (e.g. the 7.24.0 rule-tagging
 // caveat) -- distinct from the router-standing warning, which is about
 // the router's version generally rather than one step's content.
+// blocked carries every reason a step's commands came back blank, as
+// machine-readable keys (#1217) -- the server says which precondition
+// is missing, the frontend owns the sentence it says about each one.
+// Only backup/backupSchedule ever set this today: no-token, no-device,
+// backups-off, no-retention-key. Undefined/empty means either the block
+// is not blank, or it is blank for a reason not covered here (push and
+// schedule's own token-and-kinds gate).
 export interface CommandStep {
   commands: string
   note: string
+  blocked?: string[]
 }
 
 export interface SetupCommandsResponse {
@@ -1651,7 +1708,11 @@ export interface SetupCommandsResponse {
 // anything to embed, version is omitted until the operator has picked
 // one or a router has reported, and device is omitted until step 4 or
 // 6 has a router chosen (it names step 6's backup script is being
-// rendered for; the push script needs no such field).
+// rendered for; the push script needs no such field). address itself
+// may be sent empty (#1213: the operator has not answered the wizard's
+// header field yet) -- every block that embeds it then comes back
+// blank with the "no-address" key on its own commandStep.blocked,
+// rather than the request being refused.
 export interface SetupCommandsRequest {
   address: string
   syslogPort?: string

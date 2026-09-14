@@ -14,11 +14,19 @@ import type { SetupStatus } from './types'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
-    instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+    instance: {
+      tlsEnabled: true,
+      hosts: ['localhost'],
+      syslogPort: ':6514',
+      syslogEnabled: true,
+      address: '',
+      addressCandidates: [],
+    },
     sources: [],
     devices: [],
     pushKinds: [],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }
@@ -53,6 +61,11 @@ describe('auto-launch, once', () => {
 
 describe('relaunch is the same door', () => {
   it('reopens at the first step still waiting', () => {
+    // address (#1213) is ordinarily set by refresh() before the modal
+    // can ever open; this test drives wizardState.status directly, so
+    // it sets the answer itself -- a host the fixture's tls.hosts covers,
+    // so step 1's own certificate check does not itself read as blocked.
+    wizardState.address = 'localhost'
     wizardState.status = status({
       sources: [{ source: '192.0.2.1', caFetchedAt: '2026-08-23T09:00:00Z' }],
     })
