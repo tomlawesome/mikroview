@@ -55,6 +55,17 @@ rewritten.
   There is still no Settings group or setup card writing any of this
   from the UI — that is #1225.
 
+- **The drop list's router drift and setup scripts, on the backend**
+  (#1225, stage 3's backend half): `GET /api/droplist` now says how many
+  of the store's entries each router's last pushed address-list snapshot
+  actually holds and when that snapshot was confirmed, whether the
+  router's own ranges are known at all, and the four RouterOS commands
+  (the scheduled fetch, the drop rule, and their two undo commands)
+  rendered for the address a router would reach mikroview on. Minting
+  the pull key now also returns the scheduler command with the real key
+  already filled in. The Settings group and setup card that render these
+  for an operator are the other half of #1225.
+
 ### Changed
 
 - **A flag's confidence is now a rating in its drawer, not a number on
