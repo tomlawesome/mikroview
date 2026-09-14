@@ -501,6 +501,12 @@ type LossCounterStats struct {
 	// from one stalled RouterOS logging action, not that many lost
 	// messages). Only ever set on the oversized entry.
 	Runs uint64 `json:"runs,omitempty"`
+	// SetupDrift is #1205's narrow, detectable case: Declared plus a
+	// sustained run of oversized activity almost always means this
+	// router's logging action still lacks remote-log-format=syslog, the
+	// flag every wizard before 2026-09-12 omitted. Only ever set on the
+	// oversized entry -- see oversizedIsSetupDrift.
+	SetupDrift bool `json:"setupDrift,omitempty"`
 }
 
 // LossStats is ListenerStats.Loss's shape -- issue #1015.
@@ -538,6 +544,7 @@ func lossStats() LossStats {
 		oversized.Declared = isConfiguredSource(host)
 	}
 	oversized.Runs, _, _ = tcpOversizedRunsFreshness.snapshot(lossWindowOversized, now)
+	oversized.SetupDrift = oversizedIsSetupDrift(oversized.Declared, oversized.Active, oversized.Runs)
 
 	return LossStats{
 		Dropped:            lossCounterStats(&tcpDroppedFreshness, lossWindowDropped, now),
@@ -545,6 +552,23 @@ func lossStats() LossStats {
 		Rejected:           lossCounterStats(&tcpRejectedFreshness, lossWindowRejected, now),
 		Oversized:          oversized,
 	}
+}
+
+// sustainedOversizedRuns is #1205's threshold for "not a one-off": a
+// single large legitimate log line proves nothing, but a second
+// over-long run inside the same active window is a pattern rather than
+// a fluke.
+const sustainedOversizedRuns = 2
+
+// oversizedIsSetupDrift is #1205's narrow detection rule: a declared
+// device sending a sustained run of oversized activity almost always
+// means its logging action still lacks remote-log-format=syslog (the
+// commoner cause #1203 identified), so Settings should say so and name
+// the fix. An address nobody declared is left alone -- undeclared
+// traffic already gets its own explanation from #1203's banner, and
+// this package has no evidence to say more about it than that.
+func oversizedIsSetupDrift(declared, active bool, runs uint64) bool {
+	return declared && active && runs >= sustainedOversizedRuns
 }
 
 // ClearLossResult is what ClearLoss hands its caller for an audit entry
