@@ -481,8 +481,8 @@ on time whether or not anything else is happening.
 **If you lose the passphrase, you lose those backups.** There is no
 recovery, deliberately: a way back in for you is a way back in for
 whoever copies the disk, which is the whole point of setting one. It is
-off by default, and there is no screen for it yet: setting, unlocking,
-changing and removing a passphrase are API-only for now. The passphrase must
+off by default; the controls live in Settings' router-backups group, and
+the same operations are in the API table below. The passphrase must
 be at least 12 characters, and it protects a file an attacker could
 carry away and attack at their leisure, so pick accordingly.
 
