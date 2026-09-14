@@ -29,7 +29,7 @@ function loss(overrides: Partial<SyslogIngestLoss> = {}): SyslogIngestLoss {
     dropped: { recent: 0, lastAt: null, active: false },
     rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
     rejected: { recent: 0, lastAt: null, active: false },
-    oversized: { recent: 0, lastAt: null, active: false },
+    oversized: { recent: 0, lastAt: null, active: false, declared: false, runs: 0 },
     ...overrides,
   }
 }
@@ -55,7 +55,14 @@ const ALL_FIVE = loss({
   dropped: { recent: 812, lastAt: '2026-09-06T19:49:15Z', active: true },
   rejectedConfigured: { recent: 43, lastAt: '2026-09-06T19:49:02Z', active: true, hosts: ['branch-e4a1'] },
   rejected: { recent: 2867, lastAt: '2026-09-06T19:49:00Z', active: true },
-  oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true, host: '10.20.3.9' },
+  oversized: {
+    recent: 7,
+    lastAt: '2026-09-06T19:48:40Z',
+    active: true,
+    host: '10.20.3.9',
+    declared: false,
+    runs: 2,
+  },
 })
 
 beforeEach(() => {

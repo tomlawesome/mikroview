@@ -1389,4 +1389,104 @@ func TestClearLossZeroesTotalsEpisodesAndHosts(t *testing.T) {
 		after.Loss.Oversized.LastAt != nil || after.Loss.Oversized.Host != "" {
 		t.Errorf("Loss.Oversized after ClearLoss = %+v, want zeroed with no host", after.Loss.Oversized)
 	}
+	if after.Loss.Oversized.Runs != 0 {
+		t.Errorf("Loss.Oversized.Runs after ClearLoss = %d, want 0", after.Loss.Oversized.Runs)
+	}
+}
+
+// TestLossOversizedRunsCountsRunsNotReads is #1203's central claim: one
+// over-long run can be spread across many discarded continuation reads
+// (Recent, the pre-existing per-read count), but it is still one run
+// (Runs, added by this issue) -- the gap the owner's real 138,309-read
+// report exposed, where the banner read as 138,309 lost messages. Drives
+// the two counters exactly as tcp_listener.go's read loop does: three
+// discarded reads belonging to the same run call noteOversizedHost
+// (and tcpOversized.Add) once per read, but the run-start counter only
+// once, at the point the run began.
+func TestLossOversizedRunsCountsRunsNotReads(t *testing.T) {
+	prevOversized := tcpOversized.Swap(0)
+	prevRuns := tcpOversizedRuns.Swap(0)
+	tcpOversizedHostMu.Lock()
+	prevHost, prevHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpOversized.Store(prevOversized)
+		tcpOversizedRuns.Store(prevRuns)
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevHost, prevHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpOversizedFreshness.clear()
+		tcpOversizedRunsFreshness.clear()
+	})
+	tcpOversizedFreshness.clear()
+	tcpOversizedRunsFreshness.clear()
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	const host = "203.0.113.20"
+
+	// The run starts (one over-long line, no newline yet).
+	tcpOversizedRuns.Add(1)
+	tcpOversizedRunsFreshness.hit(lossWindowOversized)
+	// ...and continues across two more discarded reads before a
+	// delimiter finally ends it -- three discarded reads, still the
+	// one run that started above.
+	for i := 0; i < 3; i++ {
+		tcpOversized.Add(1)
+		noteOversizedHost(host)
+	}
+
+	loss := Stats().Loss.Oversized
+	if loss.Recent != 3 {
+		t.Errorf("Loss.Oversized.Recent = %d, want 3 (three discarded reads)", loss.Recent)
+	}
+	if loss.Runs != 1 {
+		t.Errorf("Loss.Oversized.Runs = %d, want 1 (one run, however many reads it spanned)", loss.Runs)
+	}
+}
+
+// TestLossOversizedDeclaredField is #1203's other new field: Host is
+// only ever useful to the banner alongside whether it names a device
+// the operator actually declared -- a declared source gets "known
+// router" copy, anything else stays an unidentified sender.
+func TestLossOversizedDeclaredField(t *testing.T) {
+	prevOversized := tcpOversized.Swap(0)
+	prevConfigured := configuredSources.Load()
+	tcpOversizedHostMu.Lock()
+	prevHost, prevHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpOversized.Store(prevOversized)
+		configuredSources.Store(prevConfigured)
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevHost, prevHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpOversizedFreshness.clear()
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	const declaredHost = "203.0.113.21"
+	configured := map[string]bool{declaredHost: true}
+	configuredSources.Store(&configured)
+
+	tcpOversizedFreshness.clear()
+	tcpOversized.Add(1)
+	noteOversizedHost(declaredHost)
+
+	if loss := Stats().Loss.Oversized; !loss.Declared {
+		t.Errorf("Loss.Oversized.Declared = false for a declared host, want true")
+	}
+
+	const undeclaredHost = "203.0.113.22"
+	tcpOversized.Add(1)
+	noteOversizedHost(undeclaredHost)
+
+	if loss := Stats().Loss.Oversized; loss.Declared {
+		t.Errorf("Loss.Oversized.Declared = true for an undeclared host, want false")
+	}
 }
