@@ -1768,7 +1768,12 @@ deliberate exception to the "log admin actions" rule above:
   verdict suppresses detection for that (detector, target) pair while
   it stays within the recorded size, and "who decided this stopped being
   flagged" has to stay answerable. The admin-only "clear and never flag
-  this again" this replaced was logged for the same reason.
+  this again" this replaced was logged for the same reason. A verdict
+  given with a note says so -- "checked, with note" -- and **editing a
+  note** (`PUT /api/flags/{id}/note`) is logged as its own entry. Neither
+  carries the note's text: the flag is the only place the words live, so
+  undoing a verdict can discard them without an audit entry being
+  deleted or left quoting something that has gone.
 - **What that verdict wrote to the watchlist** is logged as though you
   had done it by hand: `definition.create` for an observing entry it
   created, `definition.promote` for the destinations it permitted, and
@@ -2500,6 +2505,35 @@ against a moving baseline). An expected verdict on one of those means
 verdict. Undoing an expected verdict withdraws the expectation it
 recorded -- removing it, or putting a raised size back where it was --
 and takes back the permitted destinations it wrote, below.
+
+### Notes: why you called it that
+
+The drawer has a box across the bottom, above the verdict buttons. Write
+in it whatever you want about the flag -- what you checked, what you
+found, what you decided to leave alone -- and then click Expected,
+Checked or Investigate. What you wrote is kept with the verdict you
+chose, and read back in full the next time that flag returns, under the
+line that already says when you last looked at it.
+
+Four things about it are worth knowing:
+
+- **It is always optional.** No verdict ever needs one.
+- **You can change it afterwards.** Reopen the flag and edit the box;
+  it saves when you click away. Emptying it takes the note back.
+- **Undoing the verdict discards the note.** The note is the reason for
+  a decision, so withdrawing the decision withdraws the reason. There is
+  no second copy anywhere to go back to.
+- **The audit log records the event, never the words.** It says a
+  verdict was given with a note attached, and that a note was later
+  edited, so who wrote and changed things stays answerable without the
+  text living in two places that could disagree.
+
+A note written before the verdict travels with it on
+`POST /api/flags/{id}/verdict`, as an optional `note` alongside the
+verdict. Editing one afterwards is `PUT /api/flags/{id}/note` with
+`{"note": "..."}`, available to any signed-in user (not a viewer), same
+as the verdict itself. It answers 404 for a flag MikroView does not
+know, and 409 for one carrying no verdict for the note to belong to.
 
 ### What a verdict writes to the watchlist
 
