@@ -35,9 +35,9 @@ and the Fall and other views looking emptier than they should — the
 traffic was there, but the run it arrived in was too long to read.
 
 **The fix:** re-paste the logging block in step 1 below. It's safe to
-run again — since #1208, it adds the action if it's missing and updates
-it in place if it's already there, so this is exactly how an existing
-router picks up the missing flag. Nothing else in this guide needs
+run again — it adds the logging action if it's missing and updates it in
+place if it's already there, so this is exactly how an existing router
+picks up the missing flag. Nothing else in this guide needs
 re-running.
 
 ## 1. Point RouterOS at the container over TLS
