@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-topography-trace-list: a keyboard re-trace lands on no row
+
+- 2026-09-14 · 4a4655b2 (feature/wizard-upgrade-safety) · pipeline 1101, `gate:scenarios 4/4` · `the list stays open across a keyboard re-trace` and `the second row is now the traced one (-1)` -- `onIndex` came back `-1`, so the re-trace selected nothing rather than the wrong thing. The branch touches no topography code at all; `dev` passed the same scenario at e4296ef3 (pipeline 1100) an hour earlier, and the same branch passed it at bef16483 (pipeline 1102) with only banner-text and wizard changes in between.
+
 ## live-topography-port-trace: waitForSelector(.note-t) times out (10 s) after other scenarios
 
 - 2026-09-09 · 274276e8 (feature/m11-rounds-2, local) · 15-scenario batch (live-city-*, live-watchlist-*, live-topography-edges, this one, ...), scenario 11/15 · `page.waitForSelector: Timeout 10000ms exceeded` waiting for `[data-card="topography"] .note-t` at `live-topography-port-trace.mjs:276`; every check up to it passed. Ran clean against a fresh instance with no baseline feed and no preceding scenarios, same commit.
@@ -66,6 +70,11 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
+
+## TestRunMigrateDataEndToEnd: refuses a destination it just emptied
+
+- 2026-09-14 · b0cf5bb1 (feature/wizard-upgrade-safety, local, `go test ./...`) · full-suite run · failed once; 23 reruns at the same commit (`go test . -count=3` and `-run TestRunMigrateDataEndToEnd -count=20`) all passed. Two agents were running the suite on this workstation at the same time.
+  **What the symptom is not:** the reported line, `new-data is not empty (6 entr(y/ies))`, is the test's own second `runMigrateData` call being refused, which is exactly what it asserts — it is expected output, not the failure. The real failing assertion was not captured, so this entry records a sighting and nothing more. The test writes under `t.TempDir()`, so a path collision with the peer run is not the explanation either. Capture the full `--- FAIL` block next time before concluding anything.
 
 ## live-account-menu: the foot has no uptime segment
 

@@ -112,19 +112,33 @@ func CaTrustCommands(address, dialect string) string {
 
 // SyslogCommands is step 2: point the router's logging at mikroview,
 // over the configured syslog port rather than an assumed one.
+//
+// Both lines are guarded rather than bare `add` (#1208): RouterOS does
+// not deduplicate, so a wizard re-run -- and an upgraded install goes
+// through this more than once -- appended another action and another
+// rule every time, and a router the owner had upgraded several times
+// carried three identical rules, tripling every firewall event it sent.
+// The rule only needs a guarded add: nothing about it changes between
+// versions. The action is different -- its argument list *has* changed
+// before (remote-log-format=syslog, #614/#1173) and can again -- so an
+// upgrade must still reach a router whose action already exists,
+// which is why the action branches to `set` on the existing one rather
+// than leaving it as it was the day it was first created.
 func SyslogCommands(address, syslogPort, dialect string) string {
 	host := Hostname(address)
 	port := PortOf(syslogPort)
 	// host and port are placed bare, not inside a quoted string -- the
 	// handler validates address/syslogPort's charset before either
 	// reaches here (#1095), so there is nothing for quote() to do.
+	//
+	// remote-log-format=syslog gives every message its own standard
+	// header, so a burst of matching lines arriving at once is read as
+	// separate lines rather than one garbled one (#614). Keep this
+	// identical to docs/routeros-setup.md's block.
+	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=syslog check-certificate=yes`, host, port)
 	return strings.Join([]string{
-		// remote-log-format=syslog gives every message its own standard
-		// header, so a burst of matching lines arriving at once is read
-		// as separate lines rather than one garbled one (#614). Keep
-		// this identical to docs/routeros-setup.md's block.
-		fmt.Sprintf(`/system logging action add name=mikroview target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=syslog check-certificate=yes`, host, port),
-		`/system logging add topics=firewall,info action=mikroview`,
+		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
+		`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }`,
 	}, "\n")
 }
 

@@ -306,7 +306,16 @@ check(
 // property of the harness rather than of the wizard, which is the exact
 // mistake the rule-tagging check above avoids. It failed that way on
 // first run.
-const alreadyPushed = status.devices.some((d) => Object.keys(d.pushedKinds ?? {}).length > 0)
+//
+// "Has anything pushed" is now two sources, not one (#1221): the live
+// pushed-kinds above, and a witness the server wrote the first time it
+// saw this step satisfied. A witness outliving its evidence is the
+// whole point of that change -- the wizard says "arrived ... seen on
+// 13 Sep" rather than forgetting a push it watched happen -- so reading
+// only the live half would assert the behaviour #1221 removed.
+const witnessedPush = (status.witnesses ?? []).some((w) => w.step === 4)
+const alreadyPushed =
+  status.devices.some((d) => Object.keys(d.pushedKinds ?? {}).length > 0) || witnessedPush
 // Same race as step 3, and the same wait: the wizard has to agree with
 // the server before its answer means anything. The target here is
 // whichever answer the server gave, not a fixed one.

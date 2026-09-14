@@ -43,11 +43,19 @@ function backups(over: Partial<RouterBackupsResponse> = {}): RouterBackupsRespon
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
-    instance: { tlsEnabled: true, hosts: ['192.0.2.10'], syslogPort: ':6514', syslogEnabled: true },
+    instance: {
+      tlsEnabled: true,
+      hosts: ['192.0.2.10'],
+      syslogPort: ':6514',
+      syslogEnabled: true,
+      address: '',
+      addressCandidates: [],
+    },
     sources: [],
     devices: [],
     pushKinds: ['filter-rule', 'address-list', 'dhcp-lease', 'arp'],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }
@@ -78,13 +86,17 @@ describe('certificate cover check', () => {
   })
 
   it('falls back to localhost/127.0.0.1 when tls.hosts is unset', () => {
-    const s = status({ instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true } })
+    const s = status({
+      instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [] },
+    })
     expect(certificateCovers(s, '127.0.0.1:8080')).toBe(true)
     expect(certificateCovers(s, '192.168.1.5:8080')).toBe(false)
   })
 
   it('is not a question when both HTTP TLS and syslog are off', () => {
-    const s = status({ instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false } })
+    const s = status({
+      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false, address: '', addressCandidates: [] },
+    })
     expect(certificateCovers(s, 'anything:8080')).toBe(true)
   })
 
@@ -96,13 +108,22 @@ describe('certificate cover check', () => {
   // TLS on. The short-circuit must key off syslogEnabled too, not just
   // tlsEnabled.
   it('still checks the host when HTTP TLS is off but syslog TLS is on', () => {
-    const s = status({ instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true } })
+    const s = status({
+      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [] },
+    })
     expect(certificateCovers(s, '192.0.2.30:18084')).toBe(false)
   })
 
   it('accepts a covered host when HTTP TLS is off but syslog TLS is on', () => {
     const s = status({
-      instance: { tlsEnabled: false, hosts: ['192.0.2.30'], syslogPort: ':6514', syslogEnabled: true },
+      instance: {
+        tlsEnabled: false,
+        hosts: ['192.0.2.30'],
+        syslogPort: ':6514',
+        syslogEnabled: true,
+        address: '',
+        addressCandidates: [],
+      },
     })
     expect(certificateCovers(s, '192.0.2.30:18084')).toBe(true)
   })
@@ -115,13 +136,26 @@ describe('step status', () => {
     expect(s.detail).toContain('tls.hosts')
   })
 
+  // #1213: an empty address is "not answered yet", not a wrong answer --
+  // reporting it as a certificate mismatch would send the operator to
+  // edit tls.hosts for a problem that is really the header field above
+  // the steps sitting unanswered.
+  it('does not read an unanswered address as a certificate mismatch', () => {
+    const s = caStep(status(), '')
+    expect(s.state).not.toBe('blocked')
+  })
+
   it('reports the CA step done once something has fetched it', () => {
     const s = caStep(status({ sources: [{ source: '192.0.2.1', caFetchedAt: '2026-08-13T00:00:00Z' }] }), '192.0.2.10')
     expect(s.state).toBe('done')
   })
 
   it('blocks the syslog step when the listener is switched off', () => {
-    const s = syslogStep(status({ instance: { tlsEnabled: true, hosts: [], syslogPort: '', syslogEnabled: false } }))
+    const s = syslogStep(
+      status({
+        instance: { tlsEnabled: true, hosts: [], syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [] },
+      }),
+    )
     expect(s.state).toBe('blocked')
     expect(s.detail).toContain('listen.syslogTls')
   })

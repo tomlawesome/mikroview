@@ -32,24 +32,38 @@ vi.mock('../lib/api', () => ({
   markSetupStep: vi.fn(),
   createToken: vi.fn(),
   fetchRouterBackups: vi.fn(),
+  saveSetupAddress: vi.fn(),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
-import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
+import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep, saveSetupAddress } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
+// Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
+// its own CSS-token assertions (#1216): jsdom does not resolve a scoped
+// custom property through getComputedStyle, so the ink itself is checked
+// against the source's own CSS rules rather than a rendered style.
+import componentSource from './SetupWizard.svelte?raw'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
-    instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+    instance: {
+      tlsEnabled: true,
+      hosts: ['localhost'],
+      syslogPort: ':6514',
+      syslogEnabled: true,
+      address: '',
+      addressCandidates: [],
+    },
     sources: [],
     devices: [],
     pushKinds: ['filter-rule', 'arp'],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }
@@ -113,6 +127,7 @@ beforeEach(async () => {
   vi.mocked(fetchDevices).mockResolvedValue([])
   vi.mocked(fetchSetupCommands).mockResolvedValue(commandsFixture())
   vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture())
+  vi.mocked(saveSetupAddress).mockResolvedValue(null)
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -132,6 +147,15 @@ beforeEach(async () => {
   // page load does.
   wizardState.token = ''
   wizardState.tokenDevice = ''
+  // address (#1213) is a module-lifetime field too, same reasoning as
+  // token/tokenDevice above. Defaulted to a host status()'s own
+  // tls.hosts fixture covers -- the same "already answered, matches the
+  // certificate" state refresh() would ordinarily have left it in --
+  // so existing tests that never mention the address keep exercising
+  // step 1 as done-or-waiting rather than newly reading blocked. Tests
+  // for the no-address state itself set it back to '' explicitly.
+  wizardState.address = 'localhost'
+  wizardState.addressSaveError = null
 })
 
 describe('SetupWizard', () => {
@@ -506,11 +530,198 @@ describe('SetupWizard', () => {
     expect(row.textContent).toContain('no logs arrive')
   })
 
+  // #1216: a skipped step reads as a decision, not a gap -- the owner's
+  // ruling gives it done's own solid disc-and-receipt treatment, just in
+  // --log's blue rather than --accept's green, with the dashed border as
+  // the only remaining cue that it isn't done. Forced-past moves off blue
+  // to --caution's yellow so the two non-done outcomes stay distinguishable.
+  // jsdom does not resolve scoped CSS custom properties through
+  // getComputedStyle, so this asserts the class structure that carries
+  // the ink rather than a computed colour; the CSS rules themselves are
+  // checked against the component source below.
+  it('marks a skipped step and its receipt with the skipped class, not the muted one', () => {
+    wizardState.status = status({
+      marks: [{ step: 2, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+    })
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[1]
+    expect(row.className).toContain('skipped')
+    const receipt = row.querySelector('.step-receipt')
+    expect(receipt).toBeTruthy()
+    expect(receipt?.className).not.toContain('gap')
+    // The consequence sub-line is still there, and still its own class --
+    // the CSS keeps it muted even though its parent row is skipped.
+    const consequence = row.querySelector('.step-receipt.consequence')
+    expect(consequence).toBeTruthy()
+  })
+
+  it('marks a forced-past step with the forced class, distinct from skipped', () => {
+    wizardState.status = status({
+      marks: [{ step: 2, outcome: 'forced', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+    })
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[1]
+    expect(row.className).toContain('forced')
+    expect(row.className).not.toContain('skipped')
+    expect(row.querySelector('.step-receipt')).toBeTruthy()
+  })
+
+  // #1221: evidence that lived only in memory does not survive a
+  // restart, but a step the server watched happen still reads done --
+  // from its own witness, not a fresh reading -- with a receipt worded
+  // past tense and dated rather than as a current observation.
+  it('reads a witnessed step as done, with a past-tense dated receipt', async () => {
+    // Mocked as well as set directly: the modal's own sign-in effect
+    // re-fetches status on mount, and a mismatched mock would clobber
+    // wizardState.status back to the default the moment that resolves.
+    const withWitness = status({
+      witnesses: [{ step: 2, receipt: 'syslog connected from 192.0.2.1', at: '2026-09-13T10:27:00Z' }],
+    })
+    vi.mocked(fetchSetupStatus).mockResolvedValue(withWitness)
+    wizardState.status = withWitness
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[1]
+    // Done's own disc, the same as live evidence gets -- the step
+    // genuinely happened, which is the whole complaint #1221 fixes.
+    expect(row.className).toContain('done')
+    expect(row.className).not.toContain('skipped')
+    expect(row.className).not.toContain('forced')
+    const receipt = row.querySelector('.step-receipt')
+    expect(receipt?.textContent).toContain('syslog connected from 192.0.2.1')
+    expect(receipt?.textContent).toContain('seen on')
+    // Opening the step itself must read the same way: the observation
+    // line is the receipt, never the live check's stale "waiting" text.
+    await fireEvent.click(row)
+    const observation = container.querySelector('.body .observation')
+    expect(observation?.textContent).toContain('seen on')
+    expect(observation?.className).not.toContain('waiting')
+  })
+
+  // #1216's ink itself, read off the component's own CSS: skipped takes
+  // --log (done's solid treatment, dashed border kept as the secondary
+  // cue), forced-past takes --caution, and skipped's gap/consequence
+  // sub-line stays muted rather than following the disc's blue.
+  it('colours skipped and forced-past with distinct inks in the component CSS', () => {
+    const skippedDisc = componentSource.match(/\.step-row\.skipped \.step-n\s*\{([^}]*)\}/)
+    expect(skippedDisc).toBeTruthy()
+    expect(skippedDisc![1]).toMatch(/border-color:\s*var\(--log\)/)
+    expect(skippedDisc![1]).toMatch(/color:\s*var\(--log\)/)
+    expect(skippedDisc![1]).toMatch(/border-style:\s*dashed/)
+
+    const forcedDisc = componentSource.match(/\.step-row\.forced \.step-n\s*\{([^}]*)\}/)
+    expect(forcedDisc).toBeTruthy()
+    expect(forcedDisc![1]).toMatch(/border-color:\s*var\(--caution\)/)
+    expect(forcedDisc![1]).toMatch(/color:\s*var\(--caution\)/)
+
+    const skippedReceipt = componentSource.match(/\.step-row\.skipped \.step-receipt\s*\{([^}]*)\}/)
+    expect(skippedReceipt).toBeTruthy()
+    expect(skippedReceipt![1]).toMatch(/color:\s*var\(--log\)/)
+
+    const forcedReceipt = componentSource.match(/\.step-row\.forced \.step-receipt\s*\{([^}]*)\}/)
+    expect(forcedReceipt).toBeTruthy()
+    expect(forcedReceipt![1]).toMatch(/color:\s*var\(--caution\)/)
+
+    // The gap/consequence sub-line under a skipped row must not inherit
+    // the disc's blue -- checked as its own, more specific rule.
+    const skippedMuted = componentSource.match(
+      /\.step-row\.skipped \.step-receipt\.gap,\s*\n\s*\.step-row\.skipped \.step-receipt\.consequence\s*\{([^}]*)\}/,
+    )
+    expect(skippedMuted).toBeTruthy()
+    expect(skippedMuted![1]).toMatch(/color:\s*var\(--fg-muted\)/)
+  })
+
   it('announces the step it moved to, not just that it moved', () => {
     const { container } = render(SetupWizard)
     const live = container.querySelector('[role="status"]')?.textContent ?? ''
     expect(live).toContain('Step 1 of 6')
     expect(live).toContain('Trust the certificate')
+  })
+})
+
+// #1213: the wizard header's own field, above the numbered steps -- what
+// address a router can reach mikroview on, editable at any time, with
+// every RouterOS command block written against it instead of the
+// browser's own host.
+describe('SetupWizard -- the address field (#1213)', () => {
+  it('editing it re-renders every command block, through a fresh POST /api/setup/commands', async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    expect(input.value).toBe('localhost')
+
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(wizardState.address).toBe('192.168.1.9:8443')
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.address).toBe('192.168.1.9:8443')
+    })
+  })
+
+  it('persists on blur, not on every keystroke', async () => {
+    render(SetupWizard)
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(saveSetupAddress).not.toHaveBeenCalled()
+
+    await fireEvent.blur(input)
+    expect(saveSetupAddress).toHaveBeenCalledWith('192.168.1.9:8443')
+  })
+
+  it('surfaces a save the server refused, beside the field', async () => {
+    vi.mocked(saveSetupAddress).mockResolvedValue('address must be a hostname or IP address, optionally with :port')
+    render(SetupWizard)
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+
+    await fireEvent.input(input, { target: { value: 'not a valid host' } })
+    await fireEvent.blur(input)
+
+    await waitFor(() => {
+      expect(screen.getByText('address must be a hostname or IP address, optionally with :port')).toBeTruthy()
+    })
+  })
+
+  // The no-command state (#1213, reusing #1217's commandStep.blocked
+  // mechanism with the "no-address" key): every block that embeds the
+  // address comes back blank server-side with nothing answered yet, and
+  // the wizard shows why rather than an empty box.
+  it('renders "no commands yet" on steps 1, 2 and 4 when nothing has been answered', async () => {
+    wizardState.address = ''
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          caTrust: { commands: '', note: '', blocked: ['no-address'] },
+          syslog: { commands: '', note: '', blocked: ['no-address'] },
+          ruleTagging: { commands: 'RULE_TAGGING_COMMANDS', note: '' },
+          push: { commands: '', note: '', blocked: ['no-address'] },
+          schedule: { commands: '', note: '', blocked: ['no-address'] },
+          backup: { commands: '', note: '' },
+          backupSchedule: { commands: '', note: '' },
+        },
+      }),
+    )
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    // Step 1.
+    expect(container.textContent).toContain('no commands yet')
+    expect(container.querySelector('pre')?.textContent).not.toBe('CA_TRUST_COMMANDS')
+
+    // Step 2 -- the step list rows, in order, the same way the ledger
+    // tests elsewhere in this file navigate.
+    const rows = container.querySelectorAll('.steps .step-row')
+    await fireEvent.click(rows[1])
+    await waitFor(() => expect(container.textContent).toContain('no commands yet'))
+    expect(container.textContent).not.toContain('SYSLOG_COMMANDS')
+
+    // Step 4, once a token exists.
+    wizardState.token = 'mvt-token'
+    wizardState.tokenDevice = 'edge-1'
+    await fireEvent.click(rows[3])
+    await waitFor(() => expect(container.textContent).toContain('no commands yet'))
+    expect(container.querySelector('pre.script')).toBeNull()
   })
 })
 
@@ -1177,5 +1388,115 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'done — the replacement is pushing' }))
     expect(wizardState.lostRouterDevice).toBeNull()
+  })
+})
+
+// #1217: a token and device already in hand, but the backup block still
+// came back blank -- the owner's actual instance, backups switched off
+// in config.yaml. The old rendering showed two empty boxes and two Copy
+// buttons that copied nothing, under prose promising a script that
+// wasn't there. This is the fix: the server names why, in keys; the
+// component says why, in words, and shows nothing to interact with.
+describe('SetupWizard -- step 6, no script yet (#1217)', () => {
+  function rb5009(): Device {
+    return {
+      id: 'rb5009',
+      name: 'rb5009',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  async function step6WithBlocked(blocked: string[]) {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: '', note: '', blocked },
+          backupSchedule: { commands: '', note: '', blocked },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(createToken).toHaveBeenCalled())
+    await tick()
+    return rendered
+  }
+
+  it('renders one line per unmet precondition, in the config-first order, with no box and no Copy button', async () => {
+    const { container } = await step6WithBlocked(['no-token', 'no-device', 'backups-off', 'no-retention-key'])
+
+    expect(container.textContent).toContain('no script yet')
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual([
+      'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+      'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
+        'config.yaml and restart mikroview.',
+      'this router has no name yet. Name it in the step above; the script files each backup under that name.',
+      'no token has been minted for this router yet. The step above mints it.',
+    ])
+    // No script, no copy button, no empty input box for the operator to
+    // stare at -- the actual bug. Scoped to the step body: the header's
+    // own address field (#1213) is a text input too, but it is not this
+    // step's box and is present on every pane regardless.
+    expect(container.querySelector('pre.script')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Copy/ })).toBeNull()
+    expect(container.querySelectorAll('.body input').length).toBe(0)
+    // The prose promising a token and a script does not survive either.
+    expect(container.textContent).not.toContain('already in the script')
+    expect(container.textContent).not.toContain('runs once at the end')
+  })
+
+  it('names only the preconditions that are actually unmet', async () => {
+    const { container } = await step6WithBlocked(['backups-off'])
+
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual(['backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.'])
+  })
+
+  it('leaves an unblocked step unchanged -- the script, its Copy button and the token promise all still show', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.querySelector('.no-script')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy script' })).toBeTruthy()
+    expect(container.querySelector('.lead')?.textContent ?? '').toContain('already in the script')
   })
 })

@@ -47,11 +47,19 @@ function firstEvent(): ClientEvent {
 }
 
 const STATUS = {
-  instance: { tlsEnabled: true, hosts: ['mv.example'], syslogPort: ':6514', syslogEnabled: true },
+  instance: {
+    tlsEnabled: true,
+    hosts: ['mv.example'],
+    syslogPort: ':6514',
+    syslogEnabled: true,
+    address: '',
+    addressCandidates: [],
+  },
   sources: [],
   devices: [],
   pushKinds: [],
   marks: [],
+  witnesses: [],
 }
 
 beforeEach(() => {

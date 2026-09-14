@@ -7,10 +7,20 @@
   //
   // The model is a claim ledger. Mikroview never connects to a router
   // (the AGENTS.md invariant), so every check here is an observation of
-  // what arrived, and each step ends in exactly one of: done, with its
-  // receipt; skipped, quietly; or forced past, recorded. The record is
-  // the feature -- a forced-past line reaches the step list, the audit
-  // log, and every empty state whose silence it explains.
+  // what arrived, and each step ends in exactly one of: done, in green;
+  // skipped, in the same solid style but --log's bright blue, since a
+  // step seen and declined is a decision, not a gap (#1216); or forced
+  // past, in --caution's yellow -- pushed through without evidence, so
+  // it reads as a caution rather than either choice. The record is the
+  // feature -- a forced-past line reaches the step list, the audit log,
+  // and every empty state whose silence it explains.
+  //
+  // A step done from evidence mikroview no longer has -- typically
+  // because a restart emptied the memory-backed store that saw it --
+  // still shows done's own green disc, from the server's own witness
+  // (#1221); only its receipt changes, to a past-tense, dated line that
+  // never claims to be a current reading. See setupsteps.ts's
+  // witnessReceipt and LedgerStep.witnessed.
   //
   // Mounted once, beside the other overlays in App.svelte rather than
   // inside the rail that opens it: the rail unmounts when it is docked
@@ -27,11 +37,17 @@
   import { HOW_TO_MOUNT_URL, KEY_FILE_PATH, newHistoryKey } from '../lib/history'
   import {
     announceStep,
+    backupBlockedLines,
+    backupLead,
     backupReceiptForDevice,
+    BACKUP_NO_SCRIPT_HEADING,
+    BACKUP_WAITING_NO_SCRIPT,
     deviceStanza,
     finishHeadline,
     forcedPastRecord,
     notObserved,
+    NO_COMMAND_HEADING,
+    NO_ADDRESS_LINE,
     prose,
     sourceSplits,
     arrivingAddresses,
@@ -242,6 +258,13 @@
   // or not anything relevant changed, and re-requesting commands on
   // every poll tick would be wasted work. This key only changes when
   // something the request actually carries changes.
+  // The addresses the server reports itself bound to, minus whatever is
+  // already in the field: offering the operator the value they are
+  // looking at is noise.
+  const addressCandidates = $derived(
+    (wizardState.status?.instance.addressCandidates ?? []).filter((a) => a !== wizardState.address),
+  )
+
   const commandsKey = $derived(
     wizardState.status
       ? JSON.stringify([
@@ -304,6 +327,20 @@
   // it out of the operator's shell history as well.
   let historyKey = $state(newHistoryKey())
 
+  // backupBlocked is #1217's reason the backup step printed nothing:
+  // the server's own keys for whichever preconditions are unmet. Never
+  // read in the lost-router shape or the ledger's own key-mint "blocked"
+  // state -- both already have their own dedicated body and lead text
+  // above this, and the retention-key precondition the two states can
+  // share is the ledger's to explain when it applies (#1133's richer
+  // "generate one here" flow beats a plain sentence pointing at
+  // config.yaml).
+  const backupBlocked = $derived(
+    step && step.n === 6 && step.status.state !== 'blocked' && !wizardState.lostRouterDevice
+      ? (wizardState.commands?.steps.backup.blocked ?? [])
+      : [],
+  )
+
   // The steps under the field, one block each, in the order they have to
   // happen. Constants so the copy buttons, the tests and the scenario
   // all quote the same text.
@@ -341,6 +378,12 @@
           'MikroView encrypts backups — and the event history and the state store — under the key ' +
           'file you mount. None is mounted, so nothing can be stored yet. Generate one here.'
         )
+      }
+      if (backupBlocked.length > 0) {
+        // #1217: no script exists yet, so the ordinary lead's promise of
+        // a token "already in the script" would describe something not
+        // on the screen.
+        return backupLead(false)
       }
     }
     return step.lead
@@ -460,7 +503,21 @@
     wizardState.close()
   }
 
-  const announcement = $derived(step ? announceStep(step) : onFinish ? finishHeadline(ledger) : '')
+  // #1217: the screen-reader announcement has to say the same thing the
+  // visible observation line does. announceStep reads step.status.detail
+  // straight, which carries the same "the script below runs once at the
+  // end" promise the visible line overrides above -- without this, a
+  // sighted operator would see the honest line while a screen reader
+  // heard the false one.
+  const announcement = $derived(
+    step && step.n === 6 && !step.witnessed && backupBlocked.length > 0 && step.flavour === 'waiting'
+      ? `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${BACKUP_WAITING_NO_SCRIPT}`
+      : step
+        ? announceStep(step)
+        : onFinish
+          ? finishHeadline(ledger)
+          : '',
+  )
 
   const closeLabel = 'Close setup — finish later from your account menu ▸ Run setup…'
 </script>
@@ -559,6 +616,53 @@
         </h2>
         <button type="button" class="close" onclick={dismiss} aria-label={closeLabel}>✕</button>
       </header>
+
+      <!-- The address field (#1213): a required part of the header, above
+           the numbered steps, answered before any command block renders --
+           not a numbered step itself, since a step number is persisted in
+           internal/setup's marks and inserting one here would silently
+           renumber every stored mark. Editable at any time: changing it
+           re-renders every command block below, through commandsKey. -->
+      <div class="address-field">
+        <label for="setup-wizard-address">What address can your router reach MikroView on?</label>
+        <input
+          id="setup-wizard-address"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          bind:value={wizardState.address}
+          onblur={() => wizardState.saveAddress()}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
+          }}
+        />
+        <p class="note">
+          The router has to reach this address, which may not be the one you typed — a proxy, a
+          second interface or a mapped port all change it.
+        </p>
+        <!-- The addresses the server finds itself bound to (#1213).
+             Offered, never chosen for the operator: on a host with
+             several interfaces, picking one is a different guess rather
+             than a better one, and only they know which one the router
+             can route to. -->
+        {#if addressCandidates.length > 0}
+          <p class="note">
+            This machine also answers on
+            {#each addressCandidates as candidate, i (candidate)}{i > 0 ? ', ' : ''}<button
+                type="button"
+                class="addr-candidate"
+                onclick={() => {
+                  wizardState.address = candidate
+                  wizardState.saveAddress()
+                }}>{candidate}</button
+              >{/each}.
+          </p>
+        {/if}
+        {#if wizardState.addressSaveError}
+          <p class="load-error">{wizardState.addressSaveError}</p>
+        {/if}
+      </div>
 
       <div class="middle">
         {#if !viewportState.isMobile || wizardState.showStepList}
@@ -671,7 +775,7 @@
             {:else if step}
               <p class="lead">{leadText}</p>
 
-              {#if step.n === 6 && step.status.state !== 'blocked'}
+              {#if step.n === 6 && step.status.state !== 'blocked' && backupBlocked.length === 0}
                 <!-- Round 45's caveat, in the amber the heavy warning
                      above already uses, before the script rather than
                      after: RouterOS never verifies who it is sending a
@@ -689,40 +793,58 @@
                    RouterOS command on that pane to pick a version for --
                    the pane is about the key file, and the picker only
                    stands between the operator and it. -->
-              {#if step.n <= 4 || (step.n === 6 && step.status.state !== 'blocked')}
+              {#if step.n <= 4 || (step.n === 6 && step.status.state !== 'blocked' && backupBlocked.length === 0)}
                 {@render commandsHead()}
               {/if}
 
               {#if step.n === 1 && wizardState.status}
                 {#if step.status.state !== 'blocked'}
-                  <pre>{wizardState.commands?.steps.caTrust.commands ?? ''}</pre>
-                  <button
-                    type="button"
-                    class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.caTrust.commands ?? '', 'ca')}
-                  >
-                    {copied === 'ca' ? 'Copied' : 'Copy'}
-                  </button>
-                  {#if wizardState.commands?.steps.caTrust.note}
-                    <p class="note">{wizardState.commands.steps.caTrust.note}</p>
+                  {#if wizardState.commands?.steps.caTrust.blocked?.length}
+                    <!-- #1213: no address answered yet, so there is
+                         nothing to fetch the certificate from. -->
+                    <div class="no-script">
+                      <h4>{NO_COMMAND_HEADING}</h4>
+                      <p class="note">{NO_ADDRESS_LINE}</p>
+                    </div>
+                  {:else}
+                    <pre>{wizardState.commands?.steps.caTrust.commands ?? ''}</pre>
+                    <button
+                      type="button"
+                      class="copy"
+                      onclick={() => copy(wizardState.commands?.steps.caTrust.commands ?? '', 'ca')}
+                    >
+                      {copied === 'ca' ? 'Copied' : 'Copy'}
+                    </button>
+                    {#if wizardState.commands?.steps.caTrust.note}
+                      <p class="note">{wizardState.commands.steps.caTrust.note}</p>
+                    {/if}
+                    <p class="note">
+                      <code>check-certificate=no</code> belongs on this one line only — it is fetching
+                      the thing everything else checks against.
+                    </p>
                   {/if}
-                  <p class="note">
-                    <code>check-certificate=no</code> belongs on this one line only — it is fetching
-                    the thing everything else checks against.
-                  </p>
                 {/if}
               {:else if step.n === 2 && wizardState.status}
                 {#if step.status.state !== 'blocked'}
-                  <pre>{wizardState.commands?.steps.syslog.commands ?? ''}</pre>
-                  <button
-                    type="button"
-                    class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.syslog.commands ?? '', 'syslog')}
-                  >
-                    {copied === 'syslog' ? 'Copied' : 'Copy'}
-                  </button>
-                  {#if wizardState.commands?.steps.syslog.note}
-                    <p class="note">{wizardState.commands.steps.syslog.note}</p>
+                  {#if wizardState.commands?.steps.syslog.blocked?.length}
+                    <!-- #1213: no address answered yet, so there is
+                         nowhere to point the router's logging action. -->
+                    <div class="no-script">
+                      <h4>{NO_COMMAND_HEADING}</h4>
+                      <p class="note">{NO_ADDRESS_LINE}</p>
+                    </div>
+                  {:else}
+                    <pre>{wizardState.commands?.steps.syslog.commands ?? ''}</pre>
+                    <button
+                      type="button"
+                      class="copy"
+                      onclick={() => copy(wizardState.commands?.steps.syslog.commands ?? '', 'syslog')}
+                    >
+                      {copied === 'syslog' ? 'Copied' : 'Copy'}
+                    </button>
+                    {#if wizardState.commands?.steps.syslog.note}
+                      <p class="note">{wizardState.commands.steps.syslog.note}</p>
+                    {/if}
                   {/if}
                 {/if}
               {:else if step.n === 3}
@@ -778,6 +900,13 @@
                     </p>
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
+                {:else if wizardState.commands?.steps.schedule.blocked?.length}
+                  <!-- #1213: a token exists, but there is still no
+                       address to embed it against. -->
+                  <div class="no-script">
+                    <h4>{NO_COMMAND_HEADING}</h4>
+                    <p class="note">{NO_ADDRESS_LINE}</p>
+                  </div>
                 {:else}
                   <!-- The token is shown, not merely described (#1131):
                        it is minted once and never shown again, so a
@@ -948,6 +1077,21 @@
                     </p>
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
+                {:else if backupBlocked.length > 0}
+                  <!-- #1217: a token exists, but the backup block still
+                       came back blank -- backups switched off in
+                       config.yaml is the reachable case (the owner's
+                       instance), no-device/no-token are named for
+                       completeness. No input box, no Copy button: there
+                       is nothing behind either to copy. -->
+                  <div class="no-script">
+                    <h4>{BACKUP_NO_SCRIPT_HEADING}</h4>
+                    <ul>
+                      {#each backupBlockedLines(backupBlocked) as line (line)}
+                        <li class="note">{line}</li>
+                      {/each}
+                    </ul>
+                  </div>
                 {:else}
                   {#if wizardState.lostRouterDevice}
                     <p class="note token-note">
@@ -1015,7 +1159,16 @@
                    saying what arrived, with its shortfall in the warning
                    box below (#1132), and it renders only when there was
                    an arrival to word. -->
-              {#if step.status.detail || !step.status.shortfall}
+              {#if step.witnessed}
+                <!-- #1221: a witness is a floor under evidence that did
+                     not survive a restart, not a current reading --
+                     status.detail below is whatever the live check
+                     falls back to with nothing to look at, so this line
+                     is the receipt instead: past tense, dated, and
+                     never worded as though mikroview is watching the
+                     router right now. -->
+                <p class="observation arrived">{step.receipt}</p>
+              {:else if step.status.detail || !step.status.shortfall}
                 <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
                   {#if step.n === 6 && wizardState.lostRouterDevice}
                     {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
@@ -1032,7 +1185,15 @@
                     {/if}
                   {:else}
                     {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
-                    {step.status.detail}
+                    {#if step.n === 6 && backupBlocked.length > 0 && step.flavour === 'waiting'}
+                      <!-- #1217: backupStep's ordinary wording promises
+                           "the script below runs once at the end" --
+                           false with no script below, since the no-script
+                           state above already says why. -->
+                      {BACKUP_WAITING_NO_SCRIPT}
+                    {:else}
+                      {step.status.detail}
+                    {/if}
                     {#if step.n === 6 && step.status.state === 'done'}
                       ·
                       <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
@@ -1290,6 +1451,48 @@
     border-color: var(--fg-muted);
   }
 
+  /* The address field (#1213): sits between the header and the step
+     list/body split below, so it reads as one question every step
+     shares rather than part of any single one. */
+  .address-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+  }
+
+  .address-field label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .address-field input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    max-width: 420px;
+  }
+
+  /* An offered address reads as the link it behaves like, not as another
+     control competing with the field above it. */
+  .addr-candidate {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--log);
+    font-family: var(--font-mono);
+    font-size: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
   .middle {
     flex: 1;
     display: flex;
@@ -1359,14 +1562,22 @@
     color: var(--accept);
   }
 
+  /* Forced-past: pushed through without evidence, which is a caution,
+     not a choice (owner ruling, #1216). */
   .step-row.forced .step-n {
-    border-color: var(--log);
-    color: var(--log);
+    border-color: var(--caution);
+    color: var(--caution);
   }
 
-  /* Dashes are quiet, amber is loud -- the two stay visually distinct. */
+  /* Skipped: seen and declined, so it gets done's solid treatment --
+     just in --log's bright blue instead of --accept's green, so a
+     deliberate skip reads as a decision rather than a gap. The dashed
+     border stays as the secondary cue that distinguishes it from done
+     (owner ruling, #1216). */
   .step-row.skipped .step-n {
     border-style: dashed;
+    border-color: var(--log);
+    color: var(--log);
   }
 
   .step-text {
@@ -1387,14 +1598,26 @@
     word-break: break-word;
   }
 
-  .step-row.skipped .step-receipt,
   .step-receipt.gap,
   .step-receipt.consequence {
     color: var(--fg-muted);
   }
 
-  .step-row.forced .step-receipt {
+  /* Skipped's receipt follows its disc's ink rather than staying grey,
+     so the row is not half-coloured (#1216). Its own gap/consequence
+     sub-line stays muted regardless -- more specific so it is not
+     outweighed by the rule just above. */
+  .step-row.skipped .step-receipt {
     color: var(--log);
+  }
+
+  .step-row.skipped .step-receipt.gap,
+  .step-row.skipped .step-receipt.consequence {
+    color: var(--fg-muted);
+  }
+
+  .step-row.forced .step-receipt {
+    color: var(--caution);
   }
 
   .body {
@@ -1447,6 +1670,34 @@
   .wzcaveat b {
     color: var(--log);
     font-weight: 600;
+  }
+
+  /* Step 6's no-script state (#1217): a heading and one line per unmet
+     precondition, in place of the input boxes and Copy buttons the step
+     would otherwise show -- there is nothing behind either to copy. */
+  .no-script {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .no-script h4 {
+    margin: 0;
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .no-script ul {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .no-script li {
+    margin: 0;
   }
 
   /* Step 6's key field with no key mounted (#1133): the field, its copy

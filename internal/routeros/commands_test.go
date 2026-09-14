@@ -83,6 +83,35 @@ func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 	}
 }
 
+// #1208: a bare `add` on either line meant a wizard re-run -- an
+// upgraded install goes through this more than once -- appended another
+// copy every time. A router the owner had upgraded several times ended
+// up with three identical logging rules, tripling every firewall event
+// it sent. Both lines must guard against re-adding, and since the
+// action's own argument list has changed before (remote-log-format,
+// #614/#1173) and can again, its guard must update an existing action
+// rather than leaving an upgraded install's action as it was the day it
+// was first created.
+func TestSyslogCommandsAreIdempotent(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+
+	if !strings.Contains(cmd, `[:len [/system logging action find name=mikroview]] = 0`) {
+		t.Errorf("syslogCommands' action line is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, `[:len [/system logging find action=mikroview]] = 0`) {
+		t.Errorf("syslogCommands' rule line is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system logging action set [find name=mikroview]") {
+		t.Errorf("syslogCommands does not update an existing action on a second run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system logging action add name=mikroview") {
+		t.Errorf("syslogCommands lost the add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system logging add topics=firewall,info action=mikroview") {
+		t.Errorf("syslogCommands lost the rule add: %s", cmd)
+	}
+}
+
 func TestPushScriptEmbedsTokenInEveryBlock(t *testing.T) {
 	script := PushScript("192.0.2.10:8080", "tok-123", []string{"filter-rule", "arp"}, "a")
 	if n := strings.Count(script, "Bearer tok-123"); n != 2 {

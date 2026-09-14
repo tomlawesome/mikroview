@@ -648,6 +648,10 @@ func (s *Server) apiRoutes() []route {
 		// The claim ledger's own marks (#487): a step skipped or forced
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
+		// The wizard header field's answer (#1213): what address a
+		// router can reach this instance on. Admin-only, same gate as
+		// the mark endpoint above.
+		{http.MethodPost, "/api/setup/address", s.handleSetupAddress},
 
 		// "Log every rule" (#435, named "Tune logging" until #1134,
 		// which left these two paths alone): upload a RouterOS export,
