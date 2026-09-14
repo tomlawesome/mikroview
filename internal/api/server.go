@@ -19,6 +19,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -230,6 +231,16 @@ type Server struct {
 	// unpersisted store), same always-usable convention as Entities/
 	// Flags/Definitions above.
 	Audit *audit.Store
+	// Droplist is the operator-authored drop list entry store (issue
+	// #1223, stage 1 of the design ratified on #461): ranges an admin
+	// has explicitly decided to block, distinct from the fetched
+	// threat-intel feeds internal/blocklist's own doc comment describes
+	// (that half is wired directly into the engine, not here). Always
+	// non-nil (internal/droplist.Open("") returns a usable, empty,
+	// unpersisted store), same always-usable convention as Audit above.
+	// Nothing in this package reads or writes it yet -- no route exists
+	// until #1224.
+	Droplist *droplist.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
 	// same threshold detect.DeviceSilenceDetector uses to raise an actual
