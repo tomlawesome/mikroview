@@ -14,7 +14,7 @@
 // the modal fetches while open belongs to the component and stops with
 // it.
 
-import { fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from './api'
+import { fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep, saveSetupAddress } from './api'
 import { buildLedger, firstOpenStep, silenceExplanation, STEP_COUNT } from './setupsteps'
 import type { Device, RouterBackupsResponse, SetupCommandsResponse, SetupMark, SetupStatus } from './types'
 
@@ -101,8 +101,37 @@ class WizardState {
   // choice, through Run setup….
   private autoLaunched = false
 
-  get address(): string {
-    return window.location.host
+  // address is the operator's own answer (#1213) to "what address can
+  // your router reach mikroview on?" -- a required field in the
+  // wizard's header, above the numbered steps, not a numbered step
+  // itself (a step number is persisted in internal/setup's marks, and
+  // inserting one here would silently renumber every stored mark).
+  // Bound directly to the header field, so typing there is what
+  // SyslogCommands, CaTrustCommands, PushScript, BackupScript and the
+  // certificate check (setupsteps.ts's caStep) all read live. Nothing
+  // else reads window.location.host except the last line of the
+  // default refresh() applies below.
+  address = $state('')
+
+  // addressInitialized guards that one-time default: refresh() polls
+  // every 5s while the modal is open, and must not overwrite an edit
+  // already in flight -- or a value already saved -- on every tick.
+  private addressInitialized = false
+
+  // addressSaveError surfaces a save the server refused (validSetupAddress's
+  // charset check, #1095), read by the header field beside the input.
+  addressSaveError = $state<string | null>(null)
+
+  // saveAddress persists the header field's current value. Called on
+  // blur/Enter rather than every keystroke, so typing stays purely
+  // local (and every command block re-renders from it immediately,
+  // through commandsKey) until the operator is actually done. An empty
+  // value is not sent -- there is nothing to store for "not answered
+  // yet", and every command block already renders its own no-command
+  // state from that on the server side (commandStep.blocked's
+  // "no-address" key, the same mechanism #1217 gave the backup block).
+  async saveAddress(): Promise<void> {
+    this.addressSaveError = this.address ? await saveSetupAddress(this.address) : null
   }
 
   // ledger is the six steps as they currently stand. Empty until the
@@ -148,6 +177,15 @@ class WizardState {
       this.status = s
       this.devices = d
       this.error = null
+      // The field's default order (#1213): the operator's own stored
+      // answer first (it survived whatever restart brought this session
+      // here), then the server's own best guess at an address it is
+      // bound to, then the browser's own host -- last, since it is only
+      // known to work from this one place on the network.
+      if (!this.addressInitialized) {
+        this.address = s.instance.address || s.instance.addressCandidates[0] || window.location.host
+        this.addressInitialized = true
+      }
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e)
     }

@@ -251,6 +251,128 @@ func TestSetupStatusWitnessOutlivesTheStoreThatSawIt(t *testing.T) {
 	}
 }
 
+// TestSetupAddressAdminOnly pins handleSetupAddress's gate: the same
+// tier as handleSetupMark beside it, since there is no read-only wizard
+// and a viewer has no business changing what every RouterOS command in
+// it is written against.
+func TestSetupAddressAdminOnly(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	resp := postJSON(t, viewerClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer POST /api/setup/address = %d, want 403", resp.StatusCode)
+	}
+
+	anonReq, err := http.NewRequest(http.MethodPost, ts.URL+"/api/setup/address", strings.NewReader(`{"address":"10.0.40.5:8443"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonReq.Header.Set("Content-Type", "application/json")
+	anonReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	anonResp, err := http.DefaultClient.Do(anonReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonResp.Body.Close()
+	if anonResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("signed-out POST /api/setup/address = %d, want 401", anonResp.StatusCode)
+	}
+
+	if s.Setup.Address() != "" {
+		t.Errorf("address = %q, want unset -- neither refused caller should have been able to write it", s.Setup.Address())
+	}
+}
+
+// TestSetupAddressRejectsMalformed covers #1095's reasoning applied to
+// this new field: the value is about to sit bare inside a RouterOS
+// command, so a newline or a space must be refused rather than stored.
+func TestSetupAddressRejectsMalformed(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+
+	for _, bad := range []string{"", "10.0.40.5\nput another command here", "not a valid host", "10.0.40.5 8443"} {
+		resp := postJSON(t, adminClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: bad})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("address %q = %d, want 400", bad, resp.StatusCode)
+		}
+	}
+	if s.Setup.Address() != "" {
+		t.Errorf("address = %q, want unset -- every attempt above was refused", s.Setup.Address())
+	}
+}
+
+// TestSetupAddressPersistsAndSurvivesReload pins #1213's whole point:
+// the answer is stored beside the marks, so a restart mid-wizard does
+// not lose it, and GET /api/setup/status and POST /api/setup/commands
+// both read it back afterwards without being told again.
+func TestSetupAddressPersistsAndSurvivesReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	before, err := setup.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	s := newAuthTestServer(t)
+	s.Setup = before
+	ts := httptest.NewServer(s.Routes())
+	adminClient := setUpAdmin(t, ts)
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/address = %d, want 200", resp.StatusCode)
+	}
+
+	got := getSetupStatus(t, adminClient, ts.URL)
+	if got.Instance.Address != "10.0.40.5:8443" {
+		t.Errorf("Instance.Address = %q, want the value just stored", got.Instance.Address)
+	}
+
+	// The command endpoints fall back to the stored answer when the
+	// caller omits one, the same way they already fall back to the
+	// running configuration's syslog port. Built with the admin
+	// client rather than postSetupCommands' bare http.Post, since this
+	// server (unlike that helper's usual newTestServer fixture) has a
+	// real auth store and needs a session and the CSRF header both.
+	cmdsResp := postJSON(t, adminClient, ts.URL+"/api/setup/commands", setupCommandsRequest{})
+	defer cmdsResp.Body.Close()
+	if cmdsResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/commands = %d, want 200", cmdsResp.StatusCode)
+	}
+	var cmds setupCommandsResponse
+	if err := json.NewDecoder(cmdsResp.Body).Decode(&cmds); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmds.Steps.CaTrust.Commands, "10.0.40.5:8443") {
+		t.Errorf("caTrust commands = %q, want the stored address embedded", cmds.Steps.CaTrust.Commands)
+	}
+	ts.Close()
+
+	// The "restart": a brand new Store, opened against the same document.
+	after, err := setup.Open(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	if after.Address() != "10.0.40.5:8443" {
+		t.Errorf("address after reopening = %q, want it to have survived the restart", after.Address())
+	}
+}
+
 // getSetupStatus is the shared GET /api/setup/status round trip these
 // witness tests all need.
 func getSetupStatus(t *testing.T, client *http.Client, baseURL string) setupStatus {

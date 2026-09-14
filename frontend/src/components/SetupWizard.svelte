@@ -46,6 +46,8 @@
     finishHeadline,
     forcedPastRecord,
     notObserved,
+    NO_COMMAND_HEADING,
+    NO_ADDRESS_LINE,
     prose,
     sourceSplits,
     arrivingAddresses,
@@ -608,6 +610,35 @@
         <button type="button" class="close" onclick={dismiss} aria-label={closeLabel}>✕</button>
       </header>
 
+      <!-- The address field (#1213): a required part of the header, above
+           the numbered steps, answered before any command block renders --
+           not a numbered step itself, since a step number is persisted in
+           internal/setup's marks and inserting one here would silently
+           renumber every stored mark. Editable at any time: changing it
+           re-renders every command block below, through commandsKey. -->
+      <div class="address-field">
+        <label for="setup-wizard-address">What address can your router reach MikroView on?</label>
+        <input
+          id="setup-wizard-address"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          bind:value={wizardState.address}
+          onblur={() => wizardState.saveAddress()}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur()
+          }}
+        />
+        <p class="note">
+          The router has to reach this address, which may not be the one you typed — a proxy, a
+          second interface or a mapped port all change it.
+        </p>
+        {#if wizardState.addressSaveError}
+          <p class="load-error">{wizardState.addressSaveError}</p>
+        {/if}
+      </div>
+
       <div class="middle">
         {#if !viewportState.isMobile || wizardState.showStepList}
           <!-- The step list carries each step's receipt sub-line for the
@@ -743,34 +774,52 @@
 
               {#if step.n === 1 && wizardState.status}
                 {#if step.status.state !== 'blocked'}
-                  <pre>{wizardState.commands?.steps.caTrust.commands ?? ''}</pre>
-                  <button
-                    type="button"
-                    class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.caTrust.commands ?? '', 'ca')}
-                  >
-                    {copied === 'ca' ? 'Copied' : 'Copy'}
-                  </button>
-                  {#if wizardState.commands?.steps.caTrust.note}
-                    <p class="note">{wizardState.commands.steps.caTrust.note}</p>
+                  {#if wizardState.commands?.steps.caTrust.blocked?.length}
+                    <!-- #1213: no address answered yet, so there is
+                         nothing to fetch the certificate from. -->
+                    <div class="no-script">
+                      <h4>{NO_COMMAND_HEADING}</h4>
+                      <p class="note">{NO_ADDRESS_LINE}</p>
+                    </div>
+                  {:else}
+                    <pre>{wizardState.commands?.steps.caTrust.commands ?? ''}</pre>
+                    <button
+                      type="button"
+                      class="copy"
+                      onclick={() => copy(wizardState.commands?.steps.caTrust.commands ?? '', 'ca')}
+                    >
+                      {copied === 'ca' ? 'Copied' : 'Copy'}
+                    </button>
+                    {#if wizardState.commands?.steps.caTrust.note}
+                      <p class="note">{wizardState.commands.steps.caTrust.note}</p>
+                    {/if}
+                    <p class="note">
+                      <code>check-certificate=no</code> belongs on this one line only — it is fetching
+                      the thing everything else checks against.
+                    </p>
                   {/if}
-                  <p class="note">
-                    <code>check-certificate=no</code> belongs on this one line only — it is fetching
-                    the thing everything else checks against.
-                  </p>
                 {/if}
               {:else if step.n === 2 && wizardState.status}
                 {#if step.status.state !== 'blocked'}
-                  <pre>{wizardState.commands?.steps.syslog.commands ?? ''}</pre>
-                  <button
-                    type="button"
-                    class="copy"
-                    onclick={() => copy(wizardState.commands?.steps.syslog.commands ?? '', 'syslog')}
-                  >
-                    {copied === 'syslog' ? 'Copied' : 'Copy'}
-                  </button>
-                  {#if wizardState.commands?.steps.syslog.note}
-                    <p class="note">{wizardState.commands.steps.syslog.note}</p>
+                  {#if wizardState.commands?.steps.syslog.blocked?.length}
+                    <!-- #1213: no address answered yet, so there is
+                         nowhere to point the router's logging action. -->
+                    <div class="no-script">
+                      <h4>{NO_COMMAND_HEADING}</h4>
+                      <p class="note">{NO_ADDRESS_LINE}</p>
+                    </div>
+                  {:else}
+                    <pre>{wizardState.commands?.steps.syslog.commands ?? ''}</pre>
+                    <button
+                      type="button"
+                      class="copy"
+                      onclick={() => copy(wizardState.commands?.steps.syslog.commands ?? '', 'syslog')}
+                    >
+                      {copied === 'syslog' ? 'Copied' : 'Copy'}
+                    </button>
+                    {#if wizardState.commands?.steps.syslog.note}
+                      <p class="note">{wizardState.commands.steps.syslog.note}</p>
+                    {/if}
                   {/if}
                 {/if}
               {:else if step.n === 3}
@@ -826,6 +875,13 @@
                     </p>
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
+                {:else if wizardState.commands?.steps.schedule.blocked?.length}
+                  <!-- #1213: a token exists, but there is still no
+                       address to embed it against. -->
+                  <div class="no-script">
+                    <h4>{NO_COMMAND_HEADING}</h4>
+                    <p class="note">{NO_ADDRESS_LINE}</p>
+                  </div>
                 {:else}
                   <!-- The token is shown, not merely described (#1131):
                        it is minted once and never shown again, so a
@@ -1368,6 +1424,35 @@
   .flip:hover {
     color: var(--fg);
     border-color: var(--fg-muted);
+  }
+
+  /* The address field (#1213): sits between the header and the step
+     list/body split below, so it reads as one question every step
+     shares rather than part of any single one. */
+  .address-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+  }
+
+  .address-field label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .address-field input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    max-width: 420px;
   }
 
   .middle {

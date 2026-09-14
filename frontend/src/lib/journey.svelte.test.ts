@@ -134,7 +134,14 @@ describe('journeyState', () => {
   // not that the check had nothing to answer.
   it('spends the ordinary auto-launch slot on hand-off', () => {
     wizardState.status = {
-      instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+      instance: {
+        tlsEnabled: true,
+        hosts: ['localhost'],
+        syslogPort: ':6514',
+        syslogEnabled: true,
+        address: '',
+        addressCandidates: [],
+      },
       sources: [],
       devices: [],
       pushKinds: [],

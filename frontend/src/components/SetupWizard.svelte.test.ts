@@ -32,10 +32,11 @@ vi.mock('../lib/api', () => ({
   markSetupStep: vi.fn(),
   createToken: vi.fn(),
   fetchRouterBackups: vi.fn(),
+  saveSetupAddress: vi.fn(),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
-import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
+import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep, saveSetupAddress } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { viewportState } from '../lib/viewport.svelte'
@@ -50,7 +51,14 @@ import componentSource from './SetupWizard.svelte?raw'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
-    instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+    instance: {
+      tlsEnabled: true,
+      hosts: ['localhost'],
+      syslogPort: ':6514',
+      syslogEnabled: true,
+      address: '',
+      addressCandidates: [],
+    },
     sources: [],
     devices: [],
     pushKinds: ['filter-rule', 'arp'],
@@ -119,6 +127,7 @@ beforeEach(async () => {
   vi.mocked(fetchDevices).mockResolvedValue([])
   vi.mocked(fetchSetupCommands).mockResolvedValue(commandsFixture())
   vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture())
+  vi.mocked(saveSetupAddress).mockResolvedValue(null)
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -138,6 +147,15 @@ beforeEach(async () => {
   // page load does.
   wizardState.token = ''
   wizardState.tokenDevice = ''
+  // address (#1213) is a module-lifetime field too, same reasoning as
+  // token/tokenDevice above. Defaulted to a host status()'s own
+  // tls.hosts fixture covers -- the same "already answered, matches the
+  // certificate" state refresh() would ordinarily have left it in --
+  // so existing tests that never mention the address keep exercising
+  // step 1 as done-or-waiting rather than newly reading blocked. Tests
+  // for the no-address state itself set it back to '' explicitly.
+  wizardState.address = 'localhost'
+  wizardState.addressSaveError = null
 })
 
 describe('SetupWizard', () => {
@@ -617,6 +635,93 @@ describe('SetupWizard', () => {
     const live = container.querySelector('[role="status"]')?.textContent ?? ''
     expect(live).toContain('Step 1 of 6')
     expect(live).toContain('Trust the certificate')
+  })
+})
+
+// #1213: the wizard header's own field, above the numbered steps -- what
+// address a router can reach mikroview on, editable at any time, with
+// every RouterOS command block written against it instead of the
+// browser's own host.
+describe('SetupWizard -- the address field (#1213)', () => {
+  it('editing it re-renders every command block, through a fresh POST /api/setup/commands', async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    expect(input.value).toBe('localhost')
+
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(wizardState.address).toBe('192.168.1.9:8443')
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.address).toBe('192.168.1.9:8443')
+    })
+  })
+
+  it('persists on blur, not on every keystroke', async () => {
+    render(SetupWizard)
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(saveSetupAddress).not.toHaveBeenCalled()
+
+    await fireEvent.blur(input)
+    expect(saveSetupAddress).toHaveBeenCalledWith('192.168.1.9:8443')
+  })
+
+  it('surfaces a save the server refused, beside the field', async () => {
+    vi.mocked(saveSetupAddress).mockResolvedValue('address must be a hostname or IP address, optionally with :port')
+    render(SetupWizard)
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+
+    await fireEvent.input(input, { target: { value: 'not a valid host' } })
+    await fireEvent.blur(input)
+
+    await waitFor(() => {
+      expect(screen.getByText('address must be a hostname or IP address, optionally with :port')).toBeTruthy()
+    })
+  })
+
+  // The no-command state (#1213, reusing #1217's commandStep.blocked
+  // mechanism with the "no-address" key): every block that embeds the
+  // address comes back blank server-side with nothing answered yet, and
+  // the wizard shows why rather than an empty box.
+  it('renders "no commands yet" on steps 1, 2 and 4 when nothing has been answered', async () => {
+    wizardState.address = ''
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          caTrust: { commands: '', note: '', blocked: ['no-address'] },
+          syslog: { commands: '', note: '', blocked: ['no-address'] },
+          ruleTagging: { commands: 'RULE_TAGGING_COMMANDS', note: '' },
+          push: { commands: '', note: '', blocked: ['no-address'] },
+          schedule: { commands: '', note: '', blocked: ['no-address'] },
+          backup: { commands: '', note: '' },
+          backupSchedule: { commands: '', note: '' },
+        },
+      }),
+    )
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    // Step 1.
+    expect(container.textContent).toContain('no commands yet')
+    expect(container.querySelector('pre')?.textContent).not.toBe('CA_TRUST_COMMANDS')
+
+    // Step 2 -- the step list rows, in order, the same way the ledger
+    // tests elsewhere in this file navigate.
+    const rows = container.querySelectorAll('.steps .step-row')
+    await fireEvent.click(rows[1])
+    await waitFor(() => expect(container.textContent).toContain('no commands yet'))
+    expect(container.textContent).not.toContain('SYSLOG_COMMANDS')
+
+    // Step 4, once a token exists.
+    wizardState.token = 'mvt-token'
+    wizardState.tokenDevice = 'edge-1'
+    await fireEvent.click(rows[3])
+    await waitFor(() => expect(container.textContent).toContain('no commands yet'))
+    expect(container.querySelector('pre.script')).toBeNull()
   })
 })
 
@@ -1347,10 +1452,12 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
       'no token has been minted for this router yet. The step above mints it.',
     ])
     // No script, no copy button, no empty input box for the operator to
-    // stare at -- the actual bug.
+    // stare at -- the actual bug. Scoped to the step body: the header's
+    // own address field (#1213) is a text input too, but it is not this
+    // step's box and is present on every pane regardless.
     expect(container.querySelector('pre.script')).toBeNull()
     expect(screen.queryByRole('button', { name: /Copy/ })).toBeNull()
-    expect(container.querySelectorAll('input').length).toBe(0)
+    expect(container.querySelectorAll('.body input').length).toBe(0)
     // The prose promising a token and a script does not survive either.
     expect(container.textContent).not.toContain('already in the script')
     expect(container.textContent).not.toContain('runs once at the end')

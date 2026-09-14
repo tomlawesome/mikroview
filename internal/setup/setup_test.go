@@ -192,6 +192,27 @@ func TestMarkNoteIsBounded(t *testing.T) {
 	}
 }
 
+// TestSetAddressRejectsEmptyAndOverlong covers SetAddress's own
+// backstop: charset and structure are validSetupAddress's job in
+// internal/api (#1095), checked before this is ever reached, but an
+// empty value (there is no "clear the address" operation) or an
+// absurdly long one must not reach the persisted document either way.
+func TestSetAddressRejectsEmptyAndOverlong(t *testing.T) {
+	s := New()
+	if s.SetAddress("") {
+		t.Error("SetAddress accepted an empty address")
+	}
+	if s.SetAddress(strings.Repeat("a", maxAddress+1)) {
+		t.Error("SetAddress accepted a value past maxAddress")
+	}
+	if s.Address() != "" {
+		t.Errorf("Address() = %q, want empty -- both attempts above should have been refused", s.Address())
+	}
+	if !s.SetAddress(strings.Repeat("a", maxAddress)) {
+		t.Error("SetAddress refused a value exactly at maxAddress")
+	}
+}
+
 // TestWitnessSurvivesRestart is #1221's whole point: a step witnessed
 // before the process stops still reads back as witnessed, receipt and
 // all, from a fresh Store opened against the same file -- the same

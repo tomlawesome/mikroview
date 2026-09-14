@@ -51,21 +51,71 @@ func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setu
 	return out
 }
 
-// TestHandleSetupCommandsRequiresAddress covers the one required field
-// the contract states: every other field is optional, address is not.
-func TestHandleSetupCommandsRequiresAddress(t *testing.T) {
+// TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress
+// covers #1213: an empty address is no longer refused at the door (that
+// used to be the whole point of the field the operator's browser filled
+// in for them). It is instead read the same way every other missing
+// precondition here is -- every block that embeds it comes back blank
+// with the "no-address" key, RuleTagging (which needs no address at all)
+// renders regardless, and the request itself still succeeds.
+func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	key := testRetentionKey(t)
+	v, err := backupvault.Open(t.TempDir(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// Every other precondition met, so if address were not itself gating
+	// these blocks, they would render.
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Token: "tok-123", Kinds: []string{"filter-rule"}, Device: "rb5009",
+	})
+	for name, step := range map[string]commandStep{
+		"caTrust":  out.Steps.CaTrust,
+		"syslog":   out.Steps.Syslog,
+		"push":     out.Steps.Push,
+		"schedule": out.Steps.Schedule,
+	} {
+		if step.Commands != "" {
+			t.Errorf("%s commands = %q, want empty with no address", name, step.Commands)
+		}
+		if !slicesEqual(step.Blocked, []string{"no-address"}) {
+			t.Errorf("%s.Blocked = %v, want [no-address]", name, step.Blocked)
+		}
+	}
+	if !slicesEqual(out.Steps.Backup.Blocked, []string{"no-address"}) {
+		t.Errorf("Backup.Blocked = %v, want [no-address] with every other precondition met", out.Steps.Backup.Blocked)
+	}
+	if !slicesEqual(out.Steps.BackupSchedule.Blocked, []string{"no-address"}) {
+		t.Errorf("BackupSchedule.Blocked = %v, want [no-address]", out.Steps.BackupSchedule.Blocked)
+	}
+	if out.Steps.RuleTagging.Commands == "" {
+		t.Error("RuleTagging.Commands is empty, want it to render regardless -- it embeds no address")
+	}
+}
+
+// TestHandleSetupCommandsRejectsAMalformedAddress covers the other half
+// of #1213's contract change: empty is now fine (not answered yet), but
+// a non-empty value still has to be a plausible address, since it is
+// about to sit bare inside a RouterOS command.
+func TestHandleSetupCommandsRejectsAMalformedAddress(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
-	body, _ := json.Marshal(setupCommandsRequest{})
+	body, _ := json.Marshal(setupCommandsRequest{Address: "not a valid host\naddress"})
 	resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for a missing address", resp.StatusCode)
+		t.Errorf("status = %d, want 400 for a malformed address", resp.StatusCode)
 	}
 }
 
