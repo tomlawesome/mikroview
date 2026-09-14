@@ -195,14 +195,31 @@ export function selectIngestLossRows(input: IngestLossRowInputs): IngestLossBann
   }
 
   if (loss?.oversized.active) {
-    const from = loss.oversized.host ? ` received from ${loss.oversized.host}` : ' received'
-    const verb = loss.oversized.recent === 1 ? 'was' : 'were'
+    // #1203: the count is runs (over-long stretches with no delimiter)
+    // when the server has one, never a read count called "messages" --
+    // a single stalled sender can discard tens of thousands of reads
+    // that are still just a handful of runs. Falls back to the honest
+    // read-level unit only against a server that predates Runs.
+    const usingRuns = loss.oversized.runs > 0
+    const count = usingRuns ? loss.oversized.runs : loss.oversized.recent
+    const unit = usingRuns ? noun(count, 'over-long run') : noun(count, 'discarded read')
+    const verb = count === 1 ? 'was' : 'were'
+    const host = loss.oversized.host
+    const from = host ? ` from ${host}` : ''
+    // Only ever call a sender foreign when it isn't a declared device
+    // (#1203) -- a declared router gets named as one, with its likely
+    // fix, instead of being accused of being an intruder.
+    const cause = !host
+      ? ''
+      : loss.oversized.declared
+        ? ' — likely a declared router missing remote-log-format=syslog'
+        : ' — no declared device at that address'
     rows.push({
       id: 'oversized',
       severity: 'caution',
-      label: 'Non-RouterOS sender',
+      label: 'Oversized messages',
       details: 'engineroom/ingest',
-      detail: `${loss.oversized.recent.toLocaleString()} oversized ${noun(loss.oversized.recent, 'message')}${from} ${verb} truncated`,
+      detail: `${count.toLocaleString()} ${unit} ${verb} truncated${from}${cause}`,
     })
   }
 

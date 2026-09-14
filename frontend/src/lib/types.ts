@@ -290,8 +290,12 @@ export interface SyslogListenerStats {
   // real router records that were received and then thrown away.
   dropped: number
   // Continuation reads discarded from a message over the 64 KiB
-  // per-message limit. Above zero means something is sending log lines
-  // no RouterOS device produces.
+  // per-message limit -- a read, not a message (#1203): one over-long
+  // run can cross the cap many times before a delimiter turns up. The
+  // commoner cause by far is a RouterOS router whose logging action
+  // lacks remote-log-format=syslog; a genuinely foreign sender is
+  // possible but rarer. See loss.oversized.runs for the same activity
+  // counted as runs instead of reads.
   oversized: number
   // The most recently rejected declared hosts, most-recent-first,
   // bounded server-side (see internal/syslog.maxRejectedConfiguredHosts).
@@ -299,9 +303,9 @@ export interface SyslogListenerStats {
   // router instead of only counting it. Empty when nothing declared has
   // been turned away.
   rejectedConfiguredHosts: string[]
-  // The source of the most recent oversized message -- what the yellow
-  // "non-RouterOS sender" banner's "received from <ip>" names. Empty
-  // string until the first oversized message.
+  // The source of the most recent oversized message -- what the
+  // ingest-loss banner's "Oversized messages" row names. Empty string
+  // until the first oversized message.
   oversizedHost: string
   // #1015: the freshness signal the totals above cannot give -- a total
   // that stopped growing is indistinguishable from one that never grew.
@@ -335,6 +339,17 @@ export interface IngestLossHostsCounter extends IngestLossCounter {
 // it were current.
 export interface IngestLossHostCounter extends IngestLossCounter {
   host?: string
+  // declared (#1203) is whether host names a device the operator
+  // declared under `devices:` -- computed server-side (internal/syslog
+  // already has that address list) so the banner never needs its own
+  // copy of it. False whenever host is absent.
+  declared: boolean
+  // runs (#1203) is the current episode's count of over-long *runs*,
+  // not discarded reads -- one run can span many reads (a single
+  // stalled RouterOS logging action can discard tens of thousands of
+  // reads), so this is the honest number for "how many times has this
+  // happened", unlike `recent` above which still counts reads.
+  runs: number
 }
 
 // Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
@@ -1483,6 +1498,9 @@ export interface SetupStatus {
   // The claim ledger's own marks (#487) -- see SetupMark. Always
   // present, empty when nothing has been skipped or forced past.
   marks: SetupMark[]
+  // The server's own witnesses (#1221) -- see SetupWitness. Always
+  // present, empty for a step never yet seen satisfied.
+  witnesses: SetupWitness[]
 }
 
 // Mirrors internal/setup.Mark (#487): the operator's own statement about
@@ -1503,6 +1521,21 @@ export interface SetupMark {
   // What had not arrived when the decision was made, as the wizard's own
   // observation line worded it.
   note?: string
+}
+
+// Mirrors internal/api's setupWitness (#1221): a step mikroview itself
+// watched turn satisfied, kept as a floor under evidence that lives only
+// in memory and so does not survive a restart. Unlike SetupMark, nobody
+// decided this -- there is no actor, and no client can ever send one
+// (internal/setup.NoteMark keeps refusing the outcome).
+export interface SetupWitness {
+  step: number
+  // The fact observed at the moment this step was first seen satisfied,
+  // in the present tense the live receipts elsewhere use -- see
+  // witnessReceipt in lib/setupsteps.ts for how that becomes honestly
+  // past tense once it is all a restart has left.
+  receipt: string
+  at: string
 }
 
 // --- RouterOS version-aware commands (#436) --------------------------
