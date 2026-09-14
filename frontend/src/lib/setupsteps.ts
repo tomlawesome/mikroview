@@ -221,6 +221,42 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
   return { state: 'done', detail: receipt ? `arrived ${receipt}` : 'A router has pushed a backup.' }
 }
 
+// --- The backup step's no-script state (#1217) --------------------------
+//
+// commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)
+// names every precondition the backup block came back blank for, as
+// machine-readable keys. The server states which keys apply; every
+// operator-facing sentence lives here instead, same split #436 already
+// draws for the RouterOS commands themselves.
+//
+// Order matters (owner's ruling, 2026-09-14): config problems first --
+// the operator edits config.yaml and restarts -- then the two the
+// wizard itself can still fix by moving to an earlier step.
+export const BACKUP_BLOCKED_ORDER = ['backups-off', 'no-retention-key', 'no-device', 'no-token'] as const
+
+const BACKUP_BLOCKED_COPY: Record<string, string> = {
+  'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+  'no-retention-key':
+    'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
+    'config.yaml and restart mikroview.',
+  'no-device': 'this router has no name yet. Name it in the step above; the script files each backup under that name.',
+  'no-token': 'no token has been minted for this router yet. The step above mints it.',
+}
+
+// BACKUP_NO_SCRIPT_HEADING is the heading over the lines above -- the
+// no-script state entirely replaces the input boxes and Copy buttons
+// the step would otherwise show (#1217).
+export const BACKUP_NO_SCRIPT_HEADING = 'no script yet'
+
+// backupBlockedLines turns commandStep.blocked's keys into the sentences
+// the wizard shows, in the ratified order, regardless of what order the
+// server happened to list them in.
+export function backupBlockedLines(blocked: string[] | undefined): string[] {
+  if (!blocked || blocked.length === 0) return []
+  const set = new Set(blocked)
+  return BACKUP_BLOCKED_ORDER.filter((key) => set.has(key)).map((key) => BACKUP_BLOCKED_COPY[key])
+}
+
 // backupReceipt is the newest pair to have arrived, across every
 // router -- "today 03:00 · rb5009.backup 412 KiB + rb5009.rsc 38 KiB ·
 // kept under the key" (round 45's observation line). Empty when
@@ -521,6 +557,29 @@ export function nameStep(devices: Device[]): StepStatus {
   }
 }
 
+// BACKUP_LEAD_INTRO is step 6's lead sentence with no script promised --
+// what the step is for, said whether or not a script can be printed
+// right now. BACKUP_LEAD_SCRIPT_NOTE is only true once one can: #1217's
+// bug was this second sentence surviving into the no-script state,
+// describing a token and a script that were not on the screen.
+export const BACKUP_LEAD_INTRO =
+  'Every night the router saves itself twice — the binary backup that restores it whole, and the plain ' +
+  'export you can read — and drops both into MikroView. Nothing is sent back, and nothing is left on ' +
+  'the router.'
+const BACKUP_LEAD_SCRIPT_NOTE = ' The token below is minted for this one router and is already in the script.'
+
+// backupLead is step 6's lead, gated on whether a script actually
+// exists to describe (#1217).
+export function backupLead(scriptExists: boolean): string {
+  return scriptExists ? BACKUP_LEAD_INTRO + BACKUP_LEAD_SCRIPT_NOTE : BACKUP_LEAD_INTRO
+}
+
+// BACKUP_WAITING_NO_SCRIPT replaces backupStep's ordinary waiting line
+// when the backup block is blocked (#1217): "the script below runs once
+// at the end" is false with no script below, so the promise is dropped
+// rather than carried into a state that cannot make it true.
+export const BACKUP_WAITING_NO_SCRIPT = 'Waiting for the first push.'
+
 // LEADS are the step bodies' lead sentences. Wording is design, so it
 // lives with the step it belongs to rather than being assembled in the
 // component.
@@ -530,7 +589,7 @@ const LEADS = [
   'The letter in the log-prefix is how MikroView knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
   'MikroView does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
-  'Every night the router saves itself twice — the binary backup that restores it whole, and the plain export you can read — and drops both into MikroView. Nothing is sent back, and nothing is left on the router. The token below is minted for this one router and is already in the script.',
+  backupLead(true),
 ] as const
 
 // stepMarks indexes marks by step, so building the ledger stays one pass.

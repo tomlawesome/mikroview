@@ -37,7 +37,11 @@
   import { HOW_TO_MOUNT_URL, KEY_FILE_PATH, newHistoryKey } from '../lib/history'
   import {
     announceStep,
+    backupBlockedLines,
+    backupLead,
     backupReceiptForDevice,
+    BACKUP_NO_SCRIPT_HEADING,
+    BACKUP_WAITING_NO_SCRIPT,
     deviceStanza,
     finishHeadline,
     forcedPastRecord,
@@ -314,6 +318,20 @@
   // it out of the operator's shell history as well.
   let historyKey = $state(newHistoryKey())
 
+  // backupBlocked is #1217's reason the backup step printed nothing:
+  // the server's own keys for whichever preconditions are unmet. Never
+  // read in the lost-router shape or the ledger's own key-mint "blocked"
+  // state -- both already have their own dedicated body and lead text
+  // above this, and the retention-key precondition the two states can
+  // share is the ledger's to explain when it applies (#1133's richer
+  // "generate one here" flow beats a plain sentence pointing at
+  // config.yaml).
+  const backupBlocked = $derived(
+    step && step.n === 6 && step.status.state !== 'blocked' && !wizardState.lostRouterDevice
+      ? (wizardState.commands?.steps.backup.blocked ?? [])
+      : [],
+  )
+
   // The steps under the field, one block each, in the order they have to
   // happen. Constants so the copy buttons, the tests and the scenario
   // all quote the same text.
@@ -351,6 +369,12 @@
           'MikroView encrypts backups — and the event history and the state store — under the key ' +
           'file you mount. None is mounted, so nothing can be stored yet. Generate one here.'
         )
+      }
+      if (backupBlocked.length > 0) {
+        // #1217: no script exists yet, so the ordinary lead's promise of
+        // a token "already in the script" would describe something not
+        // on the screen.
+        return backupLead(false)
       }
     }
     return step.lead
@@ -470,7 +494,21 @@
     wizardState.close()
   }
 
-  const announcement = $derived(step ? announceStep(step) : onFinish ? finishHeadline(ledger) : '')
+  // #1217: the screen-reader announcement has to say the same thing the
+  // visible observation line does. announceStep reads step.status.detail
+  // straight, which carries the same "the script below runs once at the
+  // end" promise the visible line overrides above -- without this, a
+  // sighted operator would see the honest line while a screen reader
+  // heard the false one.
+  const announcement = $derived(
+    step && step.n === 6 && !step.witnessed && backupBlocked.length > 0 && step.flavour === 'waiting'
+      ? `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${BACKUP_WAITING_NO_SCRIPT}`
+      : step
+        ? announceStep(step)
+        : onFinish
+          ? finishHeadline(ledger)
+          : '',
+  )
 
   const closeLabel = 'Close setup — finish later from your account menu ▸ Run setup…'
 </script>
@@ -681,7 +719,7 @@
             {:else if step}
               <p class="lead">{leadText}</p>
 
-              {#if step.n === 6 && step.status.state !== 'blocked'}
+              {#if step.n === 6 && step.status.state !== 'blocked' && backupBlocked.length === 0}
                 <!-- Round 45's caveat, in the amber the heavy warning
                      above already uses, before the script rather than
                      after: RouterOS never verifies who it is sending a
@@ -699,7 +737,7 @@
                    RouterOS command on that pane to pick a version for --
                    the pane is about the key file, and the picker only
                    stands between the operator and it. -->
-              {#if step.n <= 4 || (step.n === 6 && step.status.state !== 'blocked')}
+              {#if step.n <= 4 || (step.n === 6 && step.status.state !== 'blocked' && backupBlocked.length === 0)}
                 {@render commandsHead()}
               {/if}
 
@@ -958,6 +996,21 @@
                     </p>
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
+                {:else if backupBlocked.length > 0}
+                  <!-- #1217: a token exists, but the backup block still
+                       came back blank -- backups switched off in
+                       config.yaml is the reachable case (the owner's
+                       instance), no-device/no-token are named for
+                       completeness. No input box, no Copy button: there
+                       is nothing behind either to copy. -->
+                  <div class="no-script">
+                    <h4>{BACKUP_NO_SCRIPT_HEADING}</h4>
+                    <ul>
+                      {#each backupBlockedLines(backupBlocked) as line (line)}
+                        <li class="note">{line}</li>
+                      {/each}
+                    </ul>
+                  </div>
                 {:else}
                   {#if wizardState.lostRouterDevice}
                     <p class="note token-note">
@@ -1051,7 +1104,15 @@
                     {/if}
                   {:else}
                     {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
-                    {step.status.detail}
+                    {#if step.n === 6 && backupBlocked.length > 0 && step.flavour === 'waiting'}
+                      <!-- #1217: backupStep's ordinary wording promises
+                           "the script below runs once at the end" --
+                           false with no script below, since the no-script
+                           state above already says why. -->
+                      {BACKUP_WAITING_NO_SCRIPT}
+                    {:else}
+                      {step.status.detail}
+                    {/if}
                     {#if step.n === 6 && step.status.state === 'done'}
                       ·
                       <button type="button" class="link" onclick={openBackupsInSettings}>see it in Settings</button>
@@ -1486,6 +1547,34 @@
   .wzcaveat b {
     color: var(--log);
     font-weight: 600;
+  }
+
+  /* Step 6's no-script state (#1217): a heading and one line per unmet
+     precondition, in place of the input boxes and Copy buttons the step
+     would otherwise show -- there is nothing behind either to copy. */
+  .no-script {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .no-script h4 {
+    margin: 0;
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .no-script ul {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .no-script li {
+    margin: 0;
   }
 
   /* Step 6's key field with no key mounted (#1133): the field, its copy
