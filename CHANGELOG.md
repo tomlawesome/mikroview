@@ -118,6 +118,13 @@ rewritten.
   and each of those settings links to it; `deploy/config.example.yaml`
   and `deploy/docker-compose.yml` carry the short version beside the
   settings themselves.
+- **Changing the vault passphrase is now one atomic step** (#1222).
+  There was no dedicated call for it, so changing meant removing the old
+  passphrase and setting a new one — two API calls, and a process that
+  died between them left the vault with no passphrase at all. `PUT
+  /api/router-backups/passphrase` re-wraps the existing key pair under
+  the new passphrase in a single write; no stored backup is touched, so
+  nothing can be interrupted half-way.
 
 ## [0.5.1] - 2026-09-11
 

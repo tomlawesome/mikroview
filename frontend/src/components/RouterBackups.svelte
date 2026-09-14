@@ -35,6 +35,7 @@
   // locked; the index is an observation of what arrived, and the
   // passphrase gates opening it, not knowing it arrived.
   import {
+    changeRouterBackupPassphrase,
     fetchRouterBackups,
     lockRouterBackupVault,
     removeRouterBackupPassphrase,
@@ -159,20 +160,12 @@
       return
     }
     submitting = true
-    // #956 built set and remove, not a third "change" call -- so this is
-    // the current passphrase's remove followed by the new one's set,
-    // replacing lock from each response in turn. If the remove succeeds
-    // and the set does not, lock already reflects the (now off) state
-    // the remove left behind, and the form stays open on the error so
-    // the new passphrase can be retried through "set".
-    const removed = await removeRouterBackupPassphrase(currentPassphrase)
-    if (typeof removed === 'string') {
-      submitting = false
-      formError = removed
-      return
-    }
-    lock = removed
-    const result = await setRouterBackupPassphrase(newPassphrase)
+    // One call (#1222), not the current passphrase's remove followed by
+    // the new one's set: a process that died between those two left the
+    // vault with no passphrase at all. changeRouterBackupPassphrase
+    // re-wraps the existing key under the new passphrase server-side, so
+    // there is nothing an interruption can leave half-done.
+    const result = await changeRouterBackupPassphrase(currentPassphrase, newPassphrase)
     submitting = false
     if (typeof result === 'string') {
       formError = result

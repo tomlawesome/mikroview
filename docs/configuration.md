@@ -481,8 +481,8 @@ on time whether or not anything else is happening.
 **If you lose the passphrase, you lose those backups.** There is no
 recovery, deliberately: a way back in for you is a way back in for
 whoever copies the disk, which is the whole point of setting one. It is
-off by default, and there is no screen for it yet: setting, unlocking and
-removing a passphrase are API-only for now. The passphrase must
+off by default, and there is no screen for it yet: setting, unlocking,
+changing and removing a passphrase are API-only for now. The passphrase must
 be at least 12 characters, and it protects a file an attacker could
 carry away and attack at their leisure, so pick accordingly.
 
@@ -1797,9 +1797,9 @@ device-attributed exception:
   its own changes: `router_backup.locked`, `router_backup.unlocked`,
   `router_backup.unlock_failed` (a wrong passphrase, whether unlocking
   or removing), `router_backup.passphrase_set`,
-  `router_backup.passphrase_removed`, and
+  `router_backup.passphrase_removed`,
   `router_backup.passphrase_remove_failed` (a removal whose re-seal did
-  not finish).
+  not finish), and `router_backup.passphrase_changed`.
 - The vault running low on disk space logs `router_backup.low_space`,
   and `router_backup.low_space_cleared` when free space recovers. Both
   are attributed to `system` against the vault: no admin asked for
@@ -4151,6 +4151,7 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/router-backups/lock` | admin-only: closes the vault again, from any admin session regardless of who opened it. Audited as `router_backup.locked`; a 409 if no passphrase is set |
 | `POST /api/router-backups/passphrase` | admin-only: turns the lock on, given `{"passphrase": "..."}` (at least 12 characters) -- generates an X25519 key pair, re-seals every stored backup to the public half, and leaves the vault open for the session that set it. Audited as `router_backup.passphrase_set`; a 500 if a file could not be re-sealed, which is still audited and named in the response |
 | `DELETE /api/router-backups/passphrase` | admin-only: turns the lock off, given the current `{"passphrase": "..."}` -- re-seals every backup back to the retention key MikroView holds itself. Rate-limited like unlock. A wrong passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_removed`; a partial re-seal failure as `router_backup.passphrase_remove_failed` |
+| `PUT /api/router-backups/passphrase` | admin-only: changes the passphrase, given `{"current": "...", "passphrase": "..."}` -- re-wraps the vault's existing key pair under the new passphrase and a fresh salt in one atomic write; no stored backup is touched, so this cannot be interrupted half-way. Rate-limited like unlock. A wrong current passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_changed` |
 | `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |

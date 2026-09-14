@@ -155,6 +155,10 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/router-backups/passphrase", accessAdmin,
 		"removes the vault passphrase, which requires the current one (#956): an admin who cannot open the " +
 			"vault cannot decide to stop protecting it"},
+	{http.MethodPut, "/api/router-backups/passphrase", accessAdmin,
+		"changes the vault passphrase in one atomic step, given the current one (#1222): admin-only for the " +
+			"same reason set and remove are, and no stored backup is touched since the key pair itself does not " +
+			"change"},
 
 	{http.MethodPut, "/api/settings/store", accessAdmin,
 		"sets the event buffer's size on the running instance (#796). Admin rather than user tier for two " +
