@@ -7,10 +7,13 @@
   //
   // The model is a claim ledger. Mikroview never connects to a router
   // (the AGENTS.md invariant), so every check here is an observation of
-  // what arrived, and each step ends in exactly one of: done, with its
-  // receipt; skipped, quietly; or forced past, recorded. The record is
-  // the feature -- a forced-past line reaches the step list, the audit
-  // log, and every empty state whose silence it explains.
+  // what arrived, and each step ends in exactly one of: done, in green;
+  // skipped, in the same solid style but --log's bright blue, since a
+  // step seen and declined is a decision, not a gap (#1216); or forced
+  // past, in --caution's yellow -- pushed through without evidence, so
+  // it reads as a caution rather than either choice. The record is the
+  // feature -- a forced-past line reaches the step list, the audit log,
+  // and every empty state whose silence it explains.
   //
   // Mounted once, beside the other overlays in App.svelte rather than
   // inside the rail that opens it: the rail unmounts when it is docked
@@ -1359,14 +1362,22 @@
     color: var(--accept);
   }
 
+  /* Forced-past: pushed through without evidence, which is a caution,
+     not a choice (owner ruling, #1216). */
   .step-row.forced .step-n {
-    border-color: var(--log);
-    color: var(--log);
+    border-color: var(--caution);
+    color: var(--caution);
   }
 
-  /* Dashes are quiet, amber is loud -- the two stay visually distinct. */
+  /* Skipped: seen and declined, so it gets done's solid treatment --
+     just in --log's bright blue instead of --accept's green, so a
+     deliberate skip reads as a decision rather than a gap. The dashed
+     border stays as the secondary cue that distinguishes it from done
+     (owner ruling, #1216). */
   .step-row.skipped .step-n {
     border-style: dashed;
+    border-color: var(--log);
+    color: var(--log);
   }
 
   .step-text {
@@ -1387,14 +1398,26 @@
     word-break: break-word;
   }
 
-  .step-row.skipped .step-receipt,
   .step-receipt.gap,
   .step-receipt.consequence {
     color: var(--fg-muted);
   }
 
-  .step-row.forced .step-receipt {
+  /* Skipped's receipt follows its disc's ink rather than staying grey,
+     so the row is not half-coloured (#1216). Its own gap/consequence
+     sub-line stays muted regardless -- more specific so it is not
+     outweighed by the rule just above. */
+  .step-row.skipped .step-receipt {
     color: var(--log);
+  }
+
+  .step-row.skipped .step-receipt.gap,
+  .step-row.skipped .step-receipt.consequence {
+    color: var(--fg-muted);
+  }
+
+  .step-row.forced .step-receipt {
+    color: var(--caution);
   }
 
   .body {

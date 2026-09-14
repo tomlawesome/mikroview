@@ -42,6 +42,11 @@ import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
+// Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
+// its own CSS-token assertions (#1216): jsdom does not resolve a scoped
+// custom property through getComputedStyle, so the ink itself is checked
+// against the source's own CSS rules rather than a rendered style.
+import componentSource from './SetupWizard.svelte?raw'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
@@ -504,6 +509,75 @@ describe('SetupWizard', () => {
     expect(row.textContent).toContain('skipped by tom')
     // Its consequence, stated plainly -- never a reproach.
     expect(row.textContent).toContain('no logs arrive')
+  })
+
+  // #1216: a skipped step reads as a decision, not a gap -- the owner's
+  // ruling gives it done's own solid disc-and-receipt treatment, just in
+  // --log's blue rather than --accept's green, with the dashed border as
+  // the only remaining cue that it isn't done. Forced-past moves off blue
+  // to --caution's yellow so the two non-done outcomes stay distinguishable.
+  // jsdom does not resolve scoped CSS custom properties through
+  // getComputedStyle, so this asserts the class structure that carries
+  // the ink rather than a computed colour; the CSS rules themselves are
+  // checked against the component source below.
+  it('marks a skipped step and its receipt with the skipped class, not the muted one', () => {
+    wizardState.status = status({
+      marks: [{ step: 2, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+    })
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[1]
+    expect(row.className).toContain('skipped')
+    const receipt = row.querySelector('.step-receipt')
+    expect(receipt).toBeTruthy()
+    expect(receipt?.className).not.toContain('gap')
+    // The consequence sub-line is still there, and still its own class --
+    // the CSS keeps it muted even though its parent row is skipped.
+    const consequence = row.querySelector('.step-receipt.consequence')
+    expect(consequence).toBeTruthy()
+  })
+
+  it('marks a forced-past step with the forced class, distinct from skipped', () => {
+    wizardState.status = status({
+      marks: [{ step: 2, outcome: 'forced', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+    })
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[1]
+    expect(row.className).toContain('forced')
+    expect(row.className).not.toContain('skipped')
+    expect(row.querySelector('.step-receipt')).toBeTruthy()
+  })
+
+  // #1216's ink itself, read off the component's own CSS: skipped takes
+  // --log (done's solid treatment, dashed border kept as the secondary
+  // cue), forced-past takes --caution, and skipped's gap/consequence
+  // sub-line stays muted rather than following the disc's blue.
+  it('colours skipped and forced-past with distinct inks in the component CSS', () => {
+    const skippedDisc = componentSource.match(/\.step-row\.skipped \.step-n\s*\{([^}]*)\}/)
+    expect(skippedDisc).toBeTruthy()
+    expect(skippedDisc![1]).toMatch(/border-color:\s*var\(--log\)/)
+    expect(skippedDisc![1]).toMatch(/color:\s*var\(--log\)/)
+    expect(skippedDisc![1]).toMatch(/border-style:\s*dashed/)
+
+    const forcedDisc = componentSource.match(/\.step-row\.forced \.step-n\s*\{([^}]*)\}/)
+    expect(forcedDisc).toBeTruthy()
+    expect(forcedDisc![1]).toMatch(/border-color:\s*var\(--caution\)/)
+    expect(forcedDisc![1]).toMatch(/color:\s*var\(--caution\)/)
+
+    const skippedReceipt = componentSource.match(/\.step-row\.skipped \.step-receipt\s*\{([^}]*)\}/)
+    expect(skippedReceipt).toBeTruthy()
+    expect(skippedReceipt![1]).toMatch(/color:\s*var\(--log\)/)
+
+    const forcedReceipt = componentSource.match(/\.step-row\.forced \.step-receipt\s*\{([^}]*)\}/)
+    expect(forcedReceipt).toBeTruthy()
+    expect(forcedReceipt![1]).toMatch(/color:\s*var\(--caution\)/)
+
+    // The gap/consequence sub-line under a skipped row must not inherit
+    // the disc's blue -- checked as its own, more specific rule.
+    const skippedMuted = componentSource.match(
+      /\.step-row\.skipped \.step-receipt\.gap,\s*\n\s*\.step-row\.skipped \.step-receipt\.consequence\s*\{([^}]*)\}/,
+    )
+    expect(skippedMuted).toBeTruthy()
+    expect(skippedMuted![1]).toMatch(/color:\s*var\(--fg-muted\)/)
   })
 
   it('announces the step it moved to, not just that it moved', () => {
