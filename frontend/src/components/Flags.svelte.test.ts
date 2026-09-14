@@ -30,6 +30,7 @@ import { flagsState } from '../lib/flags.svelte'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
+import { droplistNavState } from '../lib/droplistNav.svelte'
 import type { Flag } from '../lib/types'
 // Read as text for the CSS claims below, the same way
 // LiveTable.svelte.test.ts proves its sticky head's supporting rules.
@@ -1696,5 +1697,75 @@ describe('the docket below 1300px (#1150)', () => {
     const chip = flagsSource.match(/\n\s*\.btc\s*\{([^}]*)\}/)
     // grow, no shrink, a floor wide enough for the longest type word.
     expect(chip![1]).toMatch(/flex:\s*1 0 \d+px/)
+  })
+})
+
+// "block…" (#1225, #461): the drawer's own handoff into Settings' drop
+// list group. Admin-only, unlike every other drawer action here, and
+// gated the same way canWatchSource already is -- only a flag whose
+// target resolves to a single source IP names an address worth
+// dropping.
+describe('block… into the drop list (#1225, #461)', () => {
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    appState.view = 'flags'
+    droplistNavState.pendingDraft = null
+  })
+
+  it('offers it to an admin for a flag with a source ip', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 's1', type: 'distributed_brute_force', target: '203.0.113.5' })]
+    await openDrawer()
+
+    expect(screen.getByRole('button', { name: 'block…' })).toBeTruthy()
+  })
+
+  it('hides it from a non-admin', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    flagsState.list = [testFlag({ id: 's1', target: '203.0.113.5' })]
+    await openDrawer()
+
+    expect(screen.queryByRole('button', { name: 'block…' })).toBeNull()
+  })
+
+  it('hides it where the target names no single source ip', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 's1', type: 'rule_spike', target: 'ssh-guard' })]
+    await openDrawer()
+
+    expect(screen.queryByRole('button', { name: 'block…' })).toBeNull()
+  })
+
+  it('records the draft, built from the flag, and switches to the drop list', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 's1', type: 'distributed_brute_force', target: '203.0.113.5' })]
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'block…' }))
+    flushSync()
+
+    expect(droplistNavState.pendingDraft).toEqual({
+      cidr: '203.0.113.5',
+      reason: 'distributed brute-force from 203.0.113.5',
+      flagID: 's1',
+    })
+    expect(appState.view).toBe('engineroom')
   })
 })

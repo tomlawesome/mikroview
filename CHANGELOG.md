@@ -32,6 +32,40 @@ rewritten.
   live. `POST /api/flags/{id}/verdict` takes an optional `note`, and
   `PUT /api/flags/{id}/note` edits one.
 
+- **The drop list store and its server-side validation** (#1223, stage 1
+  of the design ratified on #461): somewhere to keep operator-authored
+  ranges to block (`droplist.storePath`), and the rules on what may
+  become one — public IPv4 only, no broader than /24, and never a range
+  the pushed router state shows as the router's own. Every add and
+  remove is audited. Nothing is served yet: no API, no UI, no RouterOS
+  push — that is #1224/#1225.
+
+- **The drop list's admin API and RouterOS feed** (#1224, stage 2):
+  `GET`/`POST /api/droplist` and `DELETE /api/droplist/{cidr}` manage
+  entries, and `GET /api/droplist.rsc` is the script a router imports to
+  actually block them. The router pulls this itself, on its own
+  schedule, with its own pull-only key (`POST`/`DELETE
+  /api/droplist/key`) — a third bearer-token kind that can read the
+  generated feed and nothing else, the same structural, separate-mux
+  guarantee the read-only and ingest tokens already carry. The fetched
+  script builds the new generation in a staging address list first and
+  only swaps it onto the live one in its last two lines, so a `/import`
+  that aborts partway through — RouterOS's own documented behaviour on a
+  bad line — leaves the live list exactly as it was, never emptied.
+  There is still no Settings group or setup card writing any of this
+  from the UI — that is #1225.
+
+- **The drop list's router drift and setup scripts, on the backend**
+  (#1225, stage 3's backend half): `GET /api/droplist` now says how many
+  of the store's entries each router's last pushed address-list snapshot
+  actually holds and when that snapshot was confirmed, whether the
+  router's own ranges are known at all, and the four RouterOS commands
+  (the scheduled fetch, the drop rule, and their two undo commands)
+  rendered for the address a router would reach mikroview on. Minting
+  the pull key now also returns the scheduler command with the real key
+  already filled in. The Settings group and setup card that render these
+  for an operator are the other half of #1225.
+
 ### Changed
 
 - **A flag's confidence is now a rating in its drawer, not a number on
@@ -118,6 +152,13 @@ rewritten.
   and each of those settings links to it; `deploy/config.example.yaml`
   and `deploy/docker-compose.yml` carry the short version beside the
   settings themselves.
+- **Changing the vault passphrase is now one atomic step** (#1222).
+  There was no dedicated call for it, so changing meant removing the old
+  passphrase and setting a new one — two API calls, and a process that
+  died between them left the vault with no passphrase at all. `PUT
+  /api/router-backups/passphrase` re-wraps the existing key pair under
+  the new passphrase in a single write; no stored backup is touched, so
+  nothing can be interrupted half-way.
 
 ## [0.5.1] - 2026-09-11
 

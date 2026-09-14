@@ -78,6 +78,7 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"settings", cfg.Store.SettingsStorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
+		{"droplist", cfg.Droplist.StorePath},
 	}
 }
 

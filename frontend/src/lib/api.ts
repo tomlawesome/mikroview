@@ -14,6 +14,8 @@ import type {
   DefinitionParamSchema,
   DetectorScope,
   Device,
+  DroplistEntry,
+  DroplistResponse,
   Entity,
   EntityType,
   Exclusion,
@@ -1479,6 +1481,67 @@ export async function removeRouterBackupPassphrase(passphrase: string): Promise<
   const res = await deleteJSON('/api/router-backups/passphrase', { passphrase })
   if (res.ok) return res.json()
   return (await res.text()).trim() || `removeRouterBackupPassphrase: ${res.status}`
+}
+
+// changeRouterBackupPassphrase re-wraps the vault's key under a new
+// passphrase in one call (#1222), rather than a remove followed by a
+// set: two calls leave the vault with no passphrase at all if the
+// second never runs.
+export async function changeRouterBackupPassphrase(current: string, passphrase: string): Promise<VaultLock | string> {
+  const res = await putJSON('/api/router-backups/passphrase', { current, passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `changeRouterBackupPassphrase: ${res.status}`
+}
+
+// fetchDroplist reads Settings' "drop list" group (#1225, #461): the
+// router-pulled block list, its confirming routers, the pull key and
+// the printed setup card. Admin-only server-side, same shape as
+// fetchRouterBackups above.
+export async function fetchDroplist(address: string): Promise<DroplistResponse> {
+  const res = await fetch(`/api/droplist?address=${encodeURIComponent(address)}`)
+  if (!res.ok) throw new ApiError(`fetchDroplist: ${res.status}`, res.status)
+  return res.json()
+}
+
+// createDroplistEntry adds one address to the list -- 409 ("already
+// listed") and a 400 validation message both surface as the plain
+// string a caller shows inline, same T | string shape as
+// createWatchlistEntry above. A 201 can carry a `warning` alongside the
+// entry (e.g. the address falls inside the router's own ranges) --
+// still a success, not an error.
+export async function createDroplistEntry(req: {
+  cidr: string
+  reason: string
+  flagID?: string
+}): Promise<(DroplistEntry & { warning?: string }) | string> {
+  const res = await postJSON('/api/droplist', req)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `createDroplistEntry: ${res.status}`
+}
+
+export async function deleteDroplistEntry(cidr: string): Promise<string | null> {
+  const res = await deleteJSON('/api/droplist', { cidr })
+  if (res.ok) return null
+  return (await res.text()).trim() || `deleteDroplistEntry: ${res.status}`
+}
+
+// mintDroplistKey replaces any previous pull key with a fresh one --
+// the only place the key's cleartext value is ever returned, and only
+// once (#1225's one-time reveal). scheduler comes back with the real
+// key already filled in, unlike the placeholder version fetchDroplist's
+// own setup.scheduler carries.
+export async function mintDroplistKey(
+  address: string,
+): Promise<{ key: string; createdAt: string; scheduler: string } | string> {
+  const res = await postJSON('/api/droplist/key', { address })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `mintDroplistKey: ${res.status}`
+}
+
+export async function revokeDroplistKey(): Promise<string | null> {
+  const res = await deleteJSON('/api/droplist/key')
+  if (res.ok) return null
+  return (await res.text()).trim() || `revokeDroplistKey: ${res.status}`
 }
 
 // ===========================================================================

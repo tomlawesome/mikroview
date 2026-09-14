@@ -453,6 +453,46 @@ func (s *Server) handleRouterBackupRemovePassphrase(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
 }
 
+type vaultPassphraseChangeRequest struct {
+	Current    string `json:"current"`
+	Passphrase string `json:"passphrase"`
+}
+
+// handleRouterBackupChangePassphrase re-wraps the vault's key under a
+// new passphrase, which needs the current one. Unlike set and remove
+// this never touches a stored file (#1222): the key pair does not
+// change, so s.vaultUnlock is left exactly as it is -- an admin who was
+// unlocked stays unlocked, and one who was not stays that way too.
+func (s *Server) handleRouterBackupChangePassphrase(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var req vaultPassphraseChangeRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	key := vaultUnlockLimiterKey(r)
+	if !s.LoginLimiter.Reserve(key, now) {
+		http.Error(w, "too many attempts -- wait a little and try again", http.StatusTooManyRequests)
+		return
+	}
+	if err := s.Vault.ChangePassphrase(req.Current, req.Passphrase); err != nil {
+		if errors.Is(err, backupvault.ErrWrongPassphrase) {
+			s.Audit.Record(auditActor(r), "router_backup.unlock_failed", "vault", "while changing the passphrase")
+		}
+		writeVaultLockError(w, err)
+		return
+	}
+	s.LoginLimiter.Release(key, now)
+	s.Audit.Record(auditActor(r), "router_backup.passphrase_changed", "vault",
+		"stored backups were not re-sealed; the same key now answers to the new passphrase")
+	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
+}
+
 // vaultLockStatusResponse is what every control above returns, so the
 // frontend never has to infer the new state from which call it made.
 type vaultLockStatusResponse struct {
