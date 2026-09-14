@@ -826,4 +826,88 @@ describe('The settings shelf (#633)', () => {
       expect(Number(label.getAttribute('x')) + width).toBeLessThanOrEqual(boxWidth)
     }
   })
+
+  // #1205: an upgraded install's router can be missing
+  // remote-log-format=syslog with nothing on screen to say so. The
+  // setup-drift line only appears once the server has flagged a
+  // sustained run from a *declared* device (internal/syslog's
+  // oversizedIsSetupDrift) -- it must name that router and point at the
+  // docs, and it must stay silent for every other shape of the same
+  // counters.
+  it('names the router and links the docs once the server flags a setup-drift run', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.stats = stats({
+      syslog: {
+        inUse: 1,
+        capacity: 256,
+        reservedForConfigured: 8,
+        rejected: 0,
+        rejectedConfigured: 0,
+        dropped: 0,
+        oversized: 42,
+        rejectedConfiguredHosts: [],
+        oversizedHost: '192.168.254.1',
+        loss: {
+          dropped: { recent: 0, lastAt: null, active: false },
+          rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+          rejected: { recent: 0, lastAt: null, active: false },
+          oversized: {
+            recent: 42,
+            lastAt: new Date().toISOString(),
+            active: true,
+            host: '192.168.254.1',
+            declared: true,
+            runs: 6,
+            setupDrift: true,
+          },
+        },
+      },
+    })
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('router setup out of date')).toBeTruthy()
+    expect(screen.getByText(/192\.168\.254\.1 is likely missing/)).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'RouterOS setup' })
+    expect(link.getAttribute('href')).toBe(
+      'https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md',
+    )
+  })
+
+  it('says nothing about setup drift for an ordinary oversized run', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.stats = stats({
+      syslog: {
+        inUse: 1,
+        capacity: 256,
+        reservedForConfigured: 0,
+        rejected: 0,
+        rejectedConfigured: 0,
+        dropped: 0,
+        oversized: 3,
+        rejectedConfiguredHosts: [],
+        oversizedHost: '203.0.113.9',
+        loss: {
+          dropped: { recent: 0, lastAt: null, active: false },
+          rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+          rejected: { recent: 0, lastAt: null, active: false },
+          oversized: {
+            recent: 3,
+            lastAt: new Date().toISOString(),
+            active: true,
+            host: '203.0.113.9',
+            declared: false,
+            runs: 3,
+            setupDrift: false,
+          },
+        },
+      },
+    })
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('router setup out of date')).toBeNull()
+  })
 })

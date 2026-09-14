@@ -350,6 +350,12 @@ export interface IngestLossHostCounter extends IngestLossCounter {
   // reads), so this is the honest number for "how many times has this
   // happened", unlike `recent` above which still counts reads.
   runs: number
+  // setupDrift (#1205) is true when a sustained run of oversized
+  // activity is coming from a declared device -- almost always a
+  // router still missing remote-log-format=syslog. Optional so the
+  // (unrelated) oversized-banner fixtures committed for #1203 don't
+  // all need updating just to add a field they never read.
+  setupDrift?: boolean
 }
 
 // Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
