@@ -1599,9 +1599,17 @@ export interface RouterosWarningRouter {
 // note that goes with this exact step (e.g. the 7.24.0 rule-tagging
 // caveat) -- distinct from the router-standing warning, which is about
 // the router's version generally rather than one step's content.
+// blocked carries every reason a step's commands came back blank, as
+// machine-readable keys (#1217) -- the server says which precondition
+// is missing, the frontend owns the sentence it says about each one.
+// Only backup/backupSchedule ever set this today: no-token, no-device,
+// backups-off, no-retention-key. Undefined/empty means either the block
+// is not blank, or it is blank for a reason not covered here (push and
+// schedule's own token-and-kinds gate).
 export interface CommandStep {
   commands: string
   note: string
+  blocked?: string[]
 }
 
 export interface SetupCommandsResponse {

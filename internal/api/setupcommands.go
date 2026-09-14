@@ -64,9 +64,19 @@ type setupCommandsRouter struct {
 // note that belongs beside this specific step (currently only
 // ruleTagging ever carries one -- a row's Note, when the selected
 // version's row has one).
+//
+// Blocked carries every reason this block came back blank, as
+// machine-readable keys (#1217): the server says which precondition is
+// missing, the frontend owns the sentence it says about it. Only
+// Backup/BackupSchedule ever set this today -- see the keys listed
+// beside backupBlockedKeys below. Empty/omitted means either the block
+// is not blank, or it is blank for a reason this field does not cover
+// (Push/Schedule's own token-and-kinds gate, unrelated to #1217's
+// backup-step complaint).
 type commandStep struct {
-	Commands string `json:"commands"`
-	Note     string `json:"note"`
+	Commands string   `json:"commands"`
+	Note     string   `json:"note"`
+	Blocked  []string `json:"blocked,omitempty"`
 }
 
 type setupCommandsSteps struct {
@@ -202,8 +212,29 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// blocks blank, same "blank rather than half-formed" contract Push
 	// already has above; the wizard reads a blank Backup block as its
 	// wnokey state (round 45).
+	//
+	// backupBlockedKeys names every missing piece, all that apply rather
+	// than just the first (#1217, the owner's "cover all possibilities"
+	// ruling): the operator's instance was missing two at once, and a
+	// key naming only one would have sent them round the loop a second
+	// time to find the other. Wording stays out of Go entirely -- the
+	// frontend owns every operator-facing sentence, same split #436
+	// already draws for the commands themselves.
+	var backupBlockedKeys []string
+	if s.SetupInstance.BackupPort == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "backups-off")
+	}
+	if !s.Vault.Enabled() {
+		backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
+	}
+	if req.Device == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "no-device")
+	}
+	if req.Token == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "no-token")
+	}
 	backupCommands, backupScheduleCommands := "", ""
-	if req.Token != "" && req.Device != "" && s.SetupInstance.BackupPort != "" && s.Vault.Enabled() {
+	if len(backupBlockedKeys) == 0 {
 		// The drop box listens on its own port, not the HTTPS port
 		// req.Address carries -- same reasoning SyslogCommands' Hostname
 		// call gives for stripping the web port off before pairing it
@@ -226,8 +257,8 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			RuleTagging:    commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
 			Push:           commandStep{Commands: pushCommands},
 			Schedule:       commandStep{Commands: scheduleCommands},
-			Backup:         commandStep{Commands: backupCommands},
-			BackupSchedule: commandStep{Commands: backupScheduleCommands},
+			Backup:         commandStep{Commands: backupCommands, Blocked: backupBlockedKeys},
+			BackupSchedule: commandStep{Commands: backupScheduleCommands, Blocked: backupBlockedKeys},
 		},
 	})
 }

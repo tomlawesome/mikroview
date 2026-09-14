@@ -1285,3 +1285,111 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(wizardState.lostRouterDevice).toBeNull()
   })
 })
+
+// #1217: a token and device already in hand, but the backup block still
+// came back blank -- the owner's actual instance, backups switched off
+// in config.yaml. The old rendering showed two empty boxes and two Copy
+// buttons that copied nothing, under prose promising a script that
+// wasn't there. This is the fix: the server names why, in keys; the
+// component says why, in words, and shows nothing to interact with.
+describe('SetupWizard -- step 6, no script yet (#1217)', () => {
+  function rb5009(): Device {
+    return {
+      id: 'rb5009',
+      name: 'rb5009',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  async function step6WithBlocked(blocked: string[]) {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: '', note: '', blocked },
+          backupSchedule: { commands: '', note: '', blocked },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(createToken).toHaveBeenCalled())
+    await tick()
+    return rendered
+  }
+
+  it('renders one line per unmet precondition, in the config-first order, with no box and no Copy button', async () => {
+    const { container } = await step6WithBlocked(['no-token', 'no-device', 'backups-off', 'no-retention-key'])
+
+    expect(container.textContent).toContain('no script yet')
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual([
+      'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+      'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
+        'config.yaml and restart mikroview.',
+      'this router has no name yet. Name it in the step above; the script files each backup under that name.',
+      'no token has been minted for this router yet. The step above mints it.',
+    ])
+    // No script, no copy button, no empty input box for the operator to
+    // stare at -- the actual bug.
+    expect(container.querySelector('pre.script')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Copy/ })).toBeNull()
+    expect(container.querySelectorAll('input').length).toBe(0)
+    // The prose promising a token and a script does not survive either.
+    expect(container.textContent).not.toContain('already in the script')
+    expect(container.textContent).not.toContain('runs once at the end')
+  })
+
+  it('names only the preconditions that are actually unmet', async () => {
+    const { container } = await step6WithBlocked(['backups-off'])
+
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual(['backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.'])
+  })
+
+  it('leaves an unblocked step unchanged -- the script, its Copy button and the token promise all still show', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.querySelector('.no-script')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy script' })).toBeTruthy()
+    expect(container.querySelector('.lead')?.textContent ?? '').toContain('already in the script')
+  })
+})
