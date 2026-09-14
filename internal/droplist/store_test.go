@@ -66,6 +66,25 @@ func TestAddRejectsInvalidCIDR(t *testing.T) {
 	}
 }
 
+// TestAddRejectsLineAndParagraphSeparators pins validText's Zl/Zp rule
+// (security review): U+2028 LINE SEPARATOR and U+2029 PARAGRAPH
+// SEPARATOR render as whitespace but are not a plain space, the same
+// class of character Cf/control already existed to keep out of a reason
+// that renders directly in the UI and lands in a persisted, admin-read
+// file.
+func TestAddRejectsLineAndParagraphSeparators(t *testing.T) {
+	s := mustOpen(t)
+	if _, err := s.Add("admin", "203.0.114.0/24", "line break", ""); !errors.Is(err, ErrBadText) {
+		t.Errorf("Add(reason with U+2028) error = %v, want ErrBadText", err)
+	}
+	if _, err := s.Add("admin", "203.0.114.0/24", "para break", ""); !errors.Is(err, ErrBadText) {
+		t.Errorf("Add(reason with U+2029) error = %v, want ErrBadText", err)
+	}
+	if len(s.List()) != 0 {
+		t.Error("a rejected Add must not leave a partial entry behind")
+	}
+}
+
 func TestRemoveDeletesEntry(t *testing.T) {
 	s := mustOpen(t)
 	must(t, ignoreEntry(s.Add("admin", "203.0.114.0/24", "reason", "")))

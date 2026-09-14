@@ -38,6 +38,15 @@ const maxCommentRunes = 200
 // only then escaped -- capping first, so a truncation can never land
 // mid-escape-sequence and hand RouterOS a comment with an unbalanced
 // trailing backslash.
+//
+// Escaped with QuoteScriptString, not the plain backslash/quote-only
+// quote a comment might seem to need: RouterOS expands `$name` and
+// `$[cmd]` inside any double-quoted string it parses, including a
+// comment="..." on an /import line, so an unescaped reason of
+// `blocked $[/user add name=x]` would run as a command the moment a
+// router imports the generated script (security review, #1224
+// hardening) rather than merely appear as text next to the blocked
+// range.
 func entryComment(e Entry) string {
 	comment := "mv: " + e.Reason
 	if e.FlagID != "" {
@@ -46,7 +55,7 @@ func entryComment(e Entry) string {
 	if utf8.RuneCountInString(comment) > maxCommentRunes {
 		comment = string([]rune(comment)[:maxCommentRunes])
 	}
-	return routeros.Quote(comment)
+	return routeros.QuoteScriptString(comment)
 }
 
 // scriptHash summarises entries independently of the order Script is
