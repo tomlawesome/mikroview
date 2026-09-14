@@ -556,3 +556,192 @@ func TestDroplistLastUsedAtAppearsAfterPull(t *testing.T) {
 		t.Error("LastUsedAt is still zero after a pull")
 	}
 }
+
+// TestDroplistListSetupUsesAddressQueryParamOrHost pins #1225's setup
+// card content: the four rendered commands come back on GET
+// /api/droplist, using the "address" query parameter when given, and
+// falling back to the request's own Host otherwise -- both cases with
+// the literal key placeholder, since the real key is never shown here.
+func TestDroplistListSetupUsesAddressQueryParamOrHost(t *testing.T) {
+	_, ts, admin := droplistTestServer(t)
+
+	withParam, err := admin.Get(ts.URL + "/api/droplist?address=mv.example:8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer withParam.Body.Close()
+	var withParamList droplistListResponse
+	if err := json.NewDecoder(withParam.Body).Decode(&withParamList); err != nil {
+		t.Fatal(err)
+	}
+	wantScheduler := droplist.NewSetup("mv.example:8443", "<DROP-LIST-KEY>").Scheduler
+	if withParamList.Setup.Scheduler != wantScheduler {
+		t.Errorf("Setup.Scheduler with an address param = %q, want %q", withParamList.Setup.Scheduler, wantScheduler)
+	}
+	if withParamList.Setup.Rule == "" || withParamList.Setup.DisableRule == "" || withParamList.Setup.EmptyList == "" {
+		t.Errorf("expected every Setup field to be populated, got %+v", withParamList.Setup)
+	}
+
+	withoutParam, err := admin.Get(ts.URL + "/api/droplist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer withoutParam.Body.Close()
+	var withoutParamList droplistListResponse
+	if err := json.NewDecoder(withoutParam.Body).Decode(&withoutParamList); err != nil {
+		t.Fatal(err)
+	}
+	wantHostScheduler := droplist.NewSetup(strings.TrimPrefix(ts.URL, "http://"), "<DROP-LIST-KEY>").Scheduler
+	if withoutParamList.Setup.Scheduler != wantHostScheduler {
+		t.Errorf("Setup.Scheduler with no address param = %q, want %q (from r.Host)", withoutParamList.Setup.Scheduler, wantHostScheduler)
+	}
+}
+
+// TestDroplistListOwnRangesKnownMirrorsStore pins ownRangesKnown against
+// the same Store.OwnRangesKnown() TestDroplistAddWarnsWhenOwnRangesUnknown
+// and TestDroplistAddNoWarningOnceOwnRangesAreKnown already exercise
+// through the warning text -- this is the same fact, surfaced directly
+// on the list response for #1225's Settings group.
+func TestDroplistListOwnRangesKnownMirrorsStore(t *testing.T) {
+	s, ts, admin := droplistTestServer(t)
+
+	before, err := admin.Get(ts.URL + "/api/droplist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beforeList droplistListResponse
+	if err := json.NewDecoder(before.Body).Decode(&beforeList); err != nil {
+		t.Fatal(err)
+	}
+	before.Body.Close()
+	if beforeList.OwnRangesKnown {
+		t.Error("ownRangesKnown = true before any router has pushed its own addresses")
+	}
+
+	adminUser, ok := s.Auth.ByUsername("admin")
+	if !ok {
+		t.Fatal("admin account not found")
+	}
+	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+	postIngest(t, ts, ingestRaw,
+		`{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"203.0.114.9/24","network":"203.0.114.0","interface":"ether1","comment":""}]}`).Body.Close()
+
+	after, err := admin.Get(ts.URL + "/api/droplist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Body.Close()
+	var afterList droplistListResponse
+	if err := json.NewDecoder(after.Body).Decode(&afterList); err != nil {
+		t.Fatal(err)
+	}
+	if !afterList.OwnRangesKnown {
+		t.Error("ownRangesKnown = false after a router has pushed its own addresses")
+	}
+}
+
+// TestDroplistListRoutersReportsHeldAgainstPushedSnapshot is the drift
+// number end to end: a drop-list entry, a router that has pushed its
+// own address-list snapshot containing that same range (as the bare /32
+// form RouterOS actually renders), and one that has pushed nothing --
+// the first must show up with held=1, the second must not appear at
+// all.
+func TestDroplistListRoutersReportsHeldAgainstPushedSnapshot(t *testing.T) {
+	s, ts, admin := droplistTestServer(t)
+
+	createResp := postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.5/32", Reason: "scanning"})
+	defer createResp.Body.Close()
+	if createResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create status = %d, want 201, body = %s", createResp.StatusCode, body)
+	}
+
+	adminUser, ok := s.Auth.ByUsername("admin")
+	if !ok {
+		t.Fatal("admin account not found")
+	}
+	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+	pushResp := postIngest(t, ts, ingestRaw,
+		`{"kind":"address-list","page":1,"pages":1,"records":[{"list":"`+droplist.ListName+`","address":"203.0.114.5","comment":"mv: scanning","dynamic":false}]}`)
+	defer pushResp.Body.Close()
+	if pushResp.StatusCode != http.StatusOK {
+		t.Fatalf("address-list ingest push status = %d, want 200", pushResp.StatusCode)
+	}
+
+	listResp, err := admin.Get(ts.URL + "/api/droplist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	var list droplistListResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Routers) != 1 {
+		t.Fatalf("routers = %+v, want exactly one device (only router-1 ever pushed an address-list snapshot)", list.Routers)
+	}
+	got := list.Routers[0]
+	if got.Device != "router-1" || got.Held != 1 || got.Total != 1 {
+		t.Errorf("routers[0] = %+v, want device=router-1 held=1 total=1", got)
+	}
+	if got.ConfirmedAt.IsZero() {
+		t.Error("confirmedAt is zero despite a pushed snapshot")
+	}
+}
+
+// TestDroplistKeyCreateAcceptsOptionalAddressAndFillsScheduler covers
+// #1225's addition to the mint response: an explicit address in the
+// request body lands in the returned Scheduler line with the real key
+// filled in, and a bodyless mint (every call before #1225 made) still
+// works, falling back to the request's own Host.
+func TestDroplistKeyCreateAcceptsOptionalAddressAndFillsScheduler(t *testing.T) {
+	_, ts, admin := droplistTestServer(t)
+
+	withAddress := postJSON(t, admin, ts.URL+"/api/droplist/key", map[string]string{"address": "mv.example:8443"})
+	defer withAddress.Body.Close()
+	if withAddress.StatusCode != http.StatusCreated {
+		t.Fatalf("mint with address status = %d, want 201", withAddress.StatusCode)
+	}
+	var minted droplistKeyCreateResponse
+	if err := json.NewDecoder(withAddress.Body).Decode(&minted); err != nil {
+		t.Fatal(err)
+	}
+	wantScheduler := droplist.NewSetup("mv.example:8443", minted.Key).Scheduler
+	if minted.Scheduler != wantScheduler {
+		t.Errorf("Scheduler = %q, want %q", minted.Scheduler, wantScheduler)
+	}
+	if minted.Scheduler == "" || !strings.Contains(minted.Scheduler, minted.Key) {
+		t.Errorf("Scheduler does not carry the real minted key: %q", minted.Scheduler)
+	}
+
+	// A genuinely empty body (no request payload at all, as opposed to
+	// postJSON's JSON "null") must still work -- decodeJSONBody's
+	// io.EOF is not a request error.
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/droplist/key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	emptyBodyResp, err := admin.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer emptyBodyResp.Body.Close()
+	if emptyBodyResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(emptyBodyResp.Body)
+		t.Fatalf("mint with no body at all: status = %d, want 201, body = %s", emptyBodyResp.StatusCode, body)
+	}
+	var mintedNoBody droplistKeyCreateResponse
+	if err := json.NewDecoder(emptyBodyResp.Body).Decode(&mintedNoBody); err != nil {
+		t.Fatal(err)
+	}
+	if mintedNoBody.Scheduler == "" {
+		t.Error("expected a scheduler line even with no request body, falling back to r.Host")
+	}
+}

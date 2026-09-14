@@ -4,6 +4,7 @@ package api
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -62,14 +63,67 @@ func (s *Server) droplistKeyStatus() droplistKeyStatus {
 	}
 }
 
+// droplistRouterStatus is one device's drift against the drop list
+// (issue #1225): how many of the store's own entries its last pushed
+// address-list snapshot actually holds, alongside Total (the store's
+// own entry count, the same for every device) so a caller can render
+// "N of M" without a second request. Held/Total is a comparison against
+// what the device says it has, not what the store has just resolved to
+// be missing -- a device that has never pushed one at all is left out
+// of the list entirely (see handleDroplistList), rather than reported
+// here with a zero that would read as "confirmed empty".
+type droplistRouterStatus struct {
+	Device      string    `json:"device"`
+	Held        int       `json:"held"`
+	Total       int       `json:"total"`
+	ConfirmedAt time.Time `json:"confirmedAt"`
+}
+
 type droplistListResponse struct {
 	ListName string                  `json:"listName"`
 	Entries  []droplistEntryResponse `json:"entries"`
 	Key      droplistKeyStatus       `json:"key"`
+	// Routers is one entry per device that has ever pushed an
+	// address-list snapshot -- omitted (not zero-length) when none has,
+	// same as every other router-derived slice in this API.
+	Routers []droplistRouterStatus `json:"routers,omitempty"`
+	// OwnRangesKnown mirrors Store.OwnRangesKnown(): whether Add's
+	// own-range check has anything to check a candidate against at all,
+	// surfaced here too so the Settings group can tell the operator the
+	// check is still unproven even before they try adding anything (see
+	// ownRangesUnknownWarning).
+	OwnRangesKnown bool `json:"ownRangesKnown"`
+	// Setup is the four RouterOS commands rendered for the address a
+	// router would reach mikroview on -- the "address" query parameter,
+	// falling back to the request's own Host. Key is always the literal
+	// placeholder "<DROP-LIST-KEY>" here: the real value is never shown
+	// on this route, only once, on the mint response (droplistKeyCreateResponse.Scheduler).
+	Setup droplist.Setup `json:"setup"`
+}
+
+// droplistSetupKeyPlaceholder stands in for the real droplist-pull key
+// on GET /api/droplist's rendered Setup.Scheduler -- that key is shown
+// exactly once, on the mint response, never here.
+const droplistSetupKeyPlaceholder = "<DROP-LIST-KEY>"
+
+// droplistSetupAddress is the host[:port] Setup's rendered commands
+// tell a router to fetch from: the caller-supplied "address" query
+// parameter (the Settings group lets an operator override it, since
+// mikroview cannot know which of its own names or addresses a given
+// router can actually reach), falling back to the request's own Host
+// header -- a reasonable default for the common case of one mikroview
+// reachable at the address the admin is browsing it from right now.
+func droplistSetupAddress(r *http.Request) string {
+	if a := r.URL.Query().Get("address"); a != "" {
+		return a
+	}
+	return r.Host
 }
 
 // handleDroplistList is the admin-only read backing the Settings group
-// (#1224): every entry, plus the pull key's own status.
+// (#1224/#1225): every entry, the pull key's own status, each known
+// router's drift against the list, whether the router's own ranges are
+// known at all, and the setup commands to paste onto a router.
 func (s *Server) handleDroplistList(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -80,10 +134,30 @@ func (s *Server) handleDroplistList(w http.ResponseWriter, r *http.Request) {
 	for _, e := range entries {
 		out = append(out, toDroplistEntryResponse(e))
 	}
+
+	var routers []droplistRouterStatus
+	if s.RouterState != nil {
+		for _, device := range s.RouterState.Devices() {
+			snapshot, updatedAt, ok := s.RouterState.AddressLists(device)
+			if !ok {
+				continue
+			}
+			routers = append(routers, droplistRouterStatus{
+				Device:      device,
+				Held:        droplist.Held(entries, snapshot),
+				Total:       len(entries),
+				ConfirmedAt: updatedAt,
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, droplistListResponse{
-		ListName: droplist.ListName,
-		Entries:  out,
-		Key:      s.droplistKeyStatus(),
+		ListName:       droplist.ListName,
+		Entries:        out,
+		Key:            s.droplistKeyStatus(),
+		Routers:        routers,
+		OwnRangesKnown: s.Droplist.OwnRangesKnown(),
+		Setup:          droplist.NewSetup(droplistSetupAddress(r), droplistSetupKeyPlaceholder),
 	})
 }
 
@@ -181,12 +255,29 @@ func (s *Server) handleDroplistDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// droplistKeyCreateRequest is handleDroplistKeyCreate's optional body:
+// address to render Scheduler for, same meaning and same fallback to
+// r.Host as GET /api/droplist's own "address" query parameter. Every
+// field absent -- no body at all, an empty body, or the literal JSON
+// null a bodyless POST from this package's own tests sends -- is the
+// same as an empty Address, not a request error: this route took no
+// body before #1225, and callers that still send none must keep
+// working.
+type droplistKeyCreateRequest struct {
+	Address string `json:"address"`
+}
+
 type droplistKeyCreateResponse struct {
 	// Key is the raw bearer value -- shown exactly once, the same
 	// one-time contract every other token kind follows (see
 	// auth.TokenStore.Create).
 	Key       string    `json:"key"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Scheduler is the setup scheduler command (droplist.NewSetup) with
+	// this response's own real key already filled in -- shown exactly
+	// once, same one-time contract as Key: the list response only ever
+	// renders this with the placeholder key.
+	Scheduler string `json:"scheduler"`
 }
 
 // handleDroplistKeyCreate mints the droplist-pull key, rotating rather
@@ -198,6 +289,16 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
+	}
+
+	var req droplistKeyCreateRequest
+	if err := decodeJSONBody(w, r, &req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	address := req.Address
+	if address == "" {
+		address = r.Host
 	}
 
 	// Create first, revoke second. The other order is the remove-then-set
@@ -241,7 +342,11 @@ func (s *Server) handleDroplistKeyCreate(w http.ResponseWriter, r *http.Request)
 	// no cache along the way keeps a copy of it, the same header the pull
 	// handler below already sets on the feed itself.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusCreated, droplistKeyCreateResponse{Key: raw, CreatedAt: tok.CreatedAt})
+	writeJSON(w, http.StatusCreated, droplistKeyCreateResponse{
+		Key:       raw,
+		CreatedAt: tok.CreatedAt,
+		Scheduler: droplist.NewSetup(address, raw).Scheduler,
+	})
 }
 
 // handleDroplistKeyDelete revokes the droplist-pull key -- every router
