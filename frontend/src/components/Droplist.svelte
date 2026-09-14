@@ -340,7 +340,7 @@
             class:armed={armedRemove === e.cidr}
             onclick={(ev) => onRemoveClick(ev, e.cidr)}
           >
-            {armedRemove === e.cidr ? 'confirm — it stops dropping now' : 'remove'}
+            {armedRemove === e.cidr ? 'confirm — the router stops dropping it at its next fetch' : 'remove'}
           </button>
         </div>
       </div>
