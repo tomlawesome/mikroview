@@ -35,14 +35,21 @@
   // #988 (round 47) gave three more of those gaps a home: the flags one
   // source raised inside one 30-minute window fold into a campaign row
   // that opens to its members (`tr.camp`/`tr.mem`/`tr.crule`), a
-  // detector's confidence sits beside the type as a bare number only
-  // where a detector scored the flag (`.conf`, and the drawer's own
-  // `.scored` line), and a by-type strip above the column heads counts
+  // detector's confidence is shown only where a detector scored the flag
+  // -- since #1231 (round 58) as a coloured rating in the drawer's side
+  // column under the sparkline (`.conf`), not as a number on the row --
+  // and a by-type strip above the column heads counts
   // what the table holds and filters it on a click (`.bytype`). The
   // density picker and the reputation snapshot stay absent: the
   // snapshot is one click away through the IP popover (owner,
   // 2026-09-06), and #691 has what else remains. The ledger of recorded
   // expectations is #640 part C.
+  //
+  // #1232 (round 59) gave the drawer its last band: a note box full
+  // width across the bottom, below both columns and above the buttons
+  // (`.note`/`.prior`). You write in it while you look at the flag and
+  // then call it; what you wrote is carried with the verdict you chose
+  // and read back in full when the flag returns.
   import { onMount } from 'svelte'
   import { flagsState, extractSourceIp, buildCampaigns } from '../lib/flags.svelte'
   import type { Campaign } from '../lib/flags.svelte'
@@ -52,10 +59,11 @@
   import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
   import { familyOf, worstFamilyOf } from '../lib/flagPalette'
   import { FLAG_TYPE_ORDER } from '../lib/metricsSeries'
-  import { formatHM, formatTime } from '../lib/format'
+  import { formatDayMonth, formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
+  import { confidenceBand } from '../lib/confidenceBand'
   import { episodeShapeFor, RECENT_MS } from '../lib/episodeShape'
   import { groupPairsByHost, pairsTruncated, pairsTruncationLabel } from '../lib/evidencePairs'
   import { zonesState } from '../lib/zones.svelte'
@@ -422,6 +430,52 @@
     if (expandedId === f.id) loadEpisode(f)
   }
 
+  // The drawer's note box (#1232), while it is being typed. Write first,
+  // judge second: the text exists on the client before any verdict does,
+  // so it cannot live on the flag until one is chosen -- it is held here
+  // by flag id and sent with the verdict click. Once a verdict exists the
+  // flag itself carries the note and the box saves through editNote on
+  // blur, so a draft here is only ever ahead of the server for as long
+  // as the operator is still typing.
+  let noteDrafts = $state<Record<string, string>>({})
+
+  function noteText(f: Flag): string {
+    return noteDrafts[f.id] ?? f.note ?? ''
+  }
+
+  // The box grows with what is in it and the drawer grows with the box,
+  // everything below moving down (the owner's ruling: "the drawer just
+  // gets taller vertically"). Height is set through the CSSOM rather
+  // than a style attribute, which this app's CSP refuses (#659).
+  function autogrow(el: HTMLTextAreaElement) {
+    const fit = () => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
+    el.addEventListener('input', fit)
+    fit()
+    return {
+      destroy() {
+        el.removeEventListener('input', fit)
+      },
+    }
+  }
+
+  // Saving an edit to a note a verdict already carries. Only after a
+  // verdict: before one, what is in the box travels with the click that
+  // makes it, so there is nothing to save yet.
+  async function saveNote(f: Flag) {
+    const text = noteText(f)
+    if (!f.verdict || text === (f.note ?? '')) return
+    error = null
+    try {
+      await flagsState.editNote(f.id, text)
+      delete noteDrafts[f.id]
+    } catch (err) {
+      reportFailure('Could not save the note', err)
+    }
+  }
+
   async function callVerdict(f: Flag, verdict: 'expected' | 'checked' | 'resolved') {
     error = null
     // Pinned *before* the call, not after: flagsState.judgeAndClear
@@ -434,8 +488,14 @@
     // once the response landed, rather than staying put for the flash.
     flagsState.pin(f.id)
     if (expandedId === f.id) expandedId = null
+    // What was written in the drawer goes with the click (#1232), and
+    // the draft is dropped whichever way the request goes: on success
+    // the flag carries it, on failure the revert puts the flag back the
+    // way it was and a draft left behind would claim otherwise.
+    const note = noteText(f)
+    delete noteDrafts[f.id]
     try {
-      await flagsState.judgeAndClear(f.id, verdict)
+      await flagsState.judgeAndClear(f.id, verdict, note)
     } catch (err) {
       flagsState.unpin(f.id)
       reportFailure('Could not record the verdict', err)
@@ -444,8 +504,10 @@
 
   async function callInvestigate(f: Flag) {
     error = null
+    const note = noteText(f)
+    delete noteDrafts[f.id]
     try {
-      await flagsState.judgeInvestigate(f.id, authState.username ?? '')
+      await flagsState.judgeInvestigate(f.id, authState.username ?? '', note)
     } catch (err) {
       reportFailure('Could not record the verdict', err)
     }
@@ -456,6 +518,10 @@
     try {
       await flagsState.undoVerdict(f.id)
       flagsState.unpin(f.id)
+      // Undoing the verdict discards its note (the owner's ruling), so
+      // the box empties with it rather than holding words the server
+      // has just dropped.
+      delete noteDrafts[f.id]
     } catch (err) {
       // Left pinned: flagsState.undoVerdict reverts its own optimistic
       // reopen on failure, so the flag is still exactly as done as it
@@ -827,7 +893,8 @@
     openWhereIp(extractSourceIp(f.target))
   }
 
-  // Whose usual the scored line measures against: the host for a
+  // Whose usual the drawer's rating measures against (#1231; #988's
+  // scored line before it): the host for a
   // per-source flag, the rule for a rule spike, the whole network for a
   // global one.
   function scoredSubject(f: Flag): string {
@@ -1124,19 +1191,15 @@
     style="--ft: {family.ink}"
     onclick={() => toggleExpanded(f)}
   >
+    <!-- The row carries the type alone (#1231, round 58). #988 put the
+         detector's 0-100 here beside the type and #1167 put the word
+         "scored" in front of it; the owner still read it as an event
+         count -- a bare figure in the FLAG column, one column family
+         away from COUNT's "26x". It is a rating, so it now lives in the
+         drawer where there is room to say so and colour it (see the
+         `.conf` block under the sparkline below). -->
     <td class="fmark"
-      >{family.mark} {labelFor(f.type)}{#if f.confidence != null}<!-- The scored number (#988, round
-          47): the detector's own 0-100, beside the type, only where a
-          detector scored the flag -- the baseline family
-          (internal/engine/baseline.go's emaConfidence). The other
-          types carry nothing here: no dash, no word.
-          #1167: with the word "scored" in front of it, as the drawer's
-          own line already has. Bare, it read as an unlabelled tally of
-          the type beside it -- "CRITICAL-PORT ATTEMPTS 0" -- rather
-          than as a score, and the title was the only thing saying
-          otherwise. --><span class="conf" title="scored {f.confidence} of 100 by the detector"
-          ><i>scored</i> {f.confidence}</span
-        >{/if}{#if provisional}<span class="ptag">provisional</span>{/if}</td
+      >{family.mark} {labelFor(f.type)}{#if provisional}<span class="ptag">provisional</span>{/if}</td
     >
     <td class="k">
       {#if isFilterable(f)}
@@ -1267,17 +1330,6 @@
               >
             {/if}
             <b class="headline">{headlineFor(f)}</b> {storyFor(f)}
-            {#if f.confidence != null}
-              <!-- Where the number came from (#988): one line under the
-                   story. Deviation from the subject's own usual, scaled
-                   by how much history backs the baseline -- and named
-                   as the detector's number, not a verdict, because the
-                   trio beside the row is where verdicts live. -->
-              <span class="scored"
-                ><b>Scored {f.confidence}.</b> How far this sits from {scoredSubject(f)} usual, and how much history
-                backs that. The detector's number, not a verdict.</span
-              >
-            {/if}
           </p>
           <div class="side">
             <span class="lab">the episode</span>
@@ -1307,13 +1359,10 @@
                  episode once it's fetched, the flag's
                  firstSeen/lastSeen before then). See
                  episodeShape.ts. -->
-            <!-- #1157: the separator is an expression, not literal
-                 whitespace. Written as a space before the "·" at the
-                 head of the block, Svelte trims it and the line reads
-                 "still arriving· scored 40". -->
-            <span class="span"
-              >{episodeShapeFor(f, ep, appState.now)}{#if f.confidence != null}{' · '}scored {f.confidence}{/if}</span
-            >
+            <!-- #1231: the "· scored N" tail this line carried (#988)
+                 went with the row's number -- the rating below says it
+                 once, in full. -->
+            <span class="span">{episodeShapeFor(f, ep, appState.now)}</span>
             {#if ep === 'loading'}
               <p class="ep-note">fetching the events…</p>
             {:else if ep === 'error'}
@@ -1324,6 +1373,28 @@
                    window has moved on rather than drawing an
                    empty strip. -->
               <p class="ep-note">no matching events still buffered</p>
+            {/if}
+            {#if f.confidence != null}
+              <!-- The confidence rating (#1231, round 58's ratified
+                   three-bands): where the detector's 0-100 lives now
+                   that it has left the row. Under the sparkline because
+                   it is the sparkline's number -- a caption to the
+                   chart, not a verdict, which is what the why-line says
+                   in as many words. Only where a detector scored the
+                   flag (the baseline family); the other types show
+                   nothing here, no dash and no word.
+                   The number and the band word always travel with the
+                   colour, so the band never rests on hue alone. -->
+              {@const band = confidenceBand(f.confidence)}
+              <div class="conf c-{band}" role="group" aria-label="confidence {f.confidence} of 100, {band}">
+                <span class="clab">confidence</span>
+                <span class="cval"><b>{f.confidence}</b><em>{band}</em></span>
+                <span class="cbar" aria-hidden="true"><span style="width: {f.confidence}%"></span></span>
+                <span class="cwhy"
+                  >how far this sits from {scoredSubject(f)} usual × how much history backs that. The detector's
+                  number, not a verdict.</span
+                >
+              </div>
             {/if}
           </div>
           {#if Array.isArray(ep) && ep.length > 0}
@@ -1365,6 +1436,53 @@
                    it closes. -->
               {#if pairsTruncated(pairs, pairsTotal)}
                 <p class="ev-foot">{pairsTruncationLabel(pairs.length, pairsTotal ?? 0, f.evidence?.pairsTotalIsFloor)}</p>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- What you wrote last time (#1232, round 59): a returning
+               flag's own prior note, in full, introduced by the verdict
+               and date the row's one-line returning sentence can only
+               allude to. Read-back is a first-class requirement of the
+               issue, so this renders for anyone who can open the
+               drawer, editable or not. -->
+          {#if f.priorNote}
+            <div class="prior">
+              <span class="plab"
+                >you wrote last time · {f.priorVerdict}
+                {f.priorVerdictAt ? formatDayMonth(f.priorVerdictAt) : ''}</span
+              >
+              <p>{f.priorNote}</p>
+            </div>
+          {/if}
+          <!-- The note box (#1232, round 59's ratified drawing): a
+               full-width band across the bottom of the drawer, below
+               both columns and above the buttons -- the owner's own
+               composition call, so it never competes with the
+               confidence rating in the right column for space, and
+               growing it pushes the buttons down rather than scrolling
+               inside itself.
+               Write first, judge second: this is not #640's retired
+               "clear with a note", which asked after the decision. You
+               write whatever you want and then click a verdict, which
+               carries what is here. Always optional. -->
+          {#if canEdit || f.note}
+            <div class="note">
+              <label class="nlab" for="note-{f.id}">note</label>
+              <textarea
+                id="note-{f.id}"
+                rows="1"
+                readonly={!canEdit}
+                placeholder="why you're calling it what you're about to call it — optional"
+                value={noteText(f)}
+                use:autogrow
+                oninput={(ev) => (noteDrafts[f.id] = ev.currentTarget.value)}
+                onblur={() => saveNote(f)}
+              ></textarea>
+              {#if canEdit}
+                <span class="nhint"
+                  >kept with the verdict you choose next · editable later · goes if the verdict is undone</span
+                >
               {/if}
             </div>
           {/if}
@@ -1741,45 +1859,20 @@
 
   /* The FLAG column is pinned (#988), so opening a campaign -- whose
      members step in 32px -- never moves WHERE or EVIDENCE. Must fit the
-     longest built-in label stepped in, plus a 3-digit scored number and
-     its 10px gap, plus 1ch slack. In `ch` rather than a flat px (#1010:
-     248px was tuned against one host's guess at what `monospace`
-     resolves to, and a different host's guess overflowed it by 10px) --
-     `ch` scales with the actual font, `--font-mono`'s own pinned
-     Liberation Mono, on every host alike. 32px step + 12px right padding
-     + 10px badge gap = 54px; mark + space + "Known-bad IP (blocklist
-     match)" + "100" + 1ch slack = 36ch. */
+     longest built-in label stepped in, plus 1ch slack. In `ch` rather
+     than a flat px (#1010: 248px was tuned against one host's guess at
+     what `monospace` resolves to, and a different host's guess
+     overflowed it by 10px) -- `ch` scales with the actual font,
+     `--font-mono`'s own pinned Liberation Mono, on every host alike.
+     32px step + 12px right padding + 10px badge gap = 54px; mark +
+     space + "Known-bad IP (blocklist match)" + "100" + 1ch slack = 36ch.
+     The "100" is slack now rather than a measurement: #1231 took the
+     scored number out of the row, and round 58 leaves the column at the
+     width round 47 ratified rather than retuning it. */
   .ftable thead th:first-child,
   .ftable tbody td.fmark {
     width: calc(54px + 36ch);
     min-width: calc(54px + 36ch);
-  }
-
-  /* The scored number (#988, round 47): bold, pure white, a size up
-     from the type, nothing round it -- the owner's "just the number".
-     Fixed white rather than --fg because it must read against the
-     family ink beside it in every theme; a judged row lets it dim with
-     the rest. */
-  .fmark .conf {
-    font-size: 13px;
-    color: #ffffff;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0;
-    margin-left: 10px;
-  }
-
-  /* #1167's word in front of it: the label, not the figure, so it reads
-     a step down and dim while the number keeps the treatment above. */
-  .fmark .conf i {
-    font-style: normal;
-    font-size: 10px;
-    font-weight: 400;
-    letter-spacing: 0.08em;
-    color: var(--fg-dim);
-  }
-
-  .frow.fdone .fmark .conf {
-    color: inherit;
   }
 
   /* ============================================================
@@ -2093,20 +2186,6 @@
     margin-left: 16px;
   }
 
-  /* Where the scored number came from (#988): under the story, quieter
-     than it. */
-  .story .scored {
-    display: block;
-    color: var(--fg-dim);
-    font-size: 11px;
-    margin-top: 6px;
-  }
-
-  .story .scored b {
-    color: var(--fg-muted);
-    font-weight: 600;
-  }
-
   /* Under investigation: leads the story (see the drawer's .story
      above). */
   .story .called {
@@ -2292,6 +2371,177 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--fg-dim);
+  }
+
+  /* ============================================================
+     The confidence rating (#1231), ported from docs/design/concepts/
+     round-58/build.py's `.dwr-in .side .conf` onto this app's tokens
+     (--ink-3 -> --fg-dim, --hair -> --border, --mono -> --font-mono).
+     A label, the number with its band word beside it, a meter, and one
+     line saying what the number is made of.
+     ============================================================ */
+  .dwr-in .side .conf {
+    --ci: var(--fg-muted);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 10px;
+    align-items: baseline;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .dwr-in .side .conf .clab {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .side .conf .cval {
+    justify-self: end;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ci);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .dwr-in .side .conf .cval em {
+    font-size: 10px;
+    font-weight: 600;
+    font-style: normal;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-left: 8px;
+  }
+
+  .dwr-in .side .conf .cbar {
+    grid-column: 1 / -1;
+    display: block;
+    height: 4px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--ci) 16%, transparent);
+  }
+
+  .dwr-in .side .conf .cbar span {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: var(--ci);
+  }
+
+  .dwr-in .side .conf .cwhy {
+    grid-column: 1 / -1;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+    white-space: normal;
+  }
+
+  /* The three band inks, ratified as a set on round 58 (owner: "I like
+     the three bands") and validated there against the void ground --
+     CVD worst adjacent dE 12.8, contrast >= 3:1. Fixed hexes rather
+     than theme tokens, the same call flagPalette.ts makes for the six
+     family inks: a colorway retunes chrome, not the data colours. They
+     deliberately do not reuse --drop and --alarm, which name a firewall
+     verdict and the chrome's alarm; see app.css on why those two are
+     not shared. */
+  .dwr-in .side .conf.c-low {
+    --ci: #7f93bd;
+  }
+
+  .dwr-in .side .conf.c-moderate {
+    --ci: #f5a623;
+  }
+
+  .dwr-in .side .conf.c-high {
+    --ci: #ff5470;
+  }
+
+  /* ============================================================
+     The note band (#1232), ported from docs/design/concepts/round-59/
+     build.py's `.dwr-in .note` / `.dwr-in .prior` onto this app's
+     tokens (--ink-3 -> --fg-dim, --ink-2 -> --fg-muted, --ink -> --fg,
+     --hair -> --border, --sans -> --font-sans, --mono -> --font-mono;
+     --hair-2 and --accent are this app's own names already).
+     Full width across the bottom of the drawer, below both columns and
+     above the buttons -- the owner's composition call, so growing the
+     box pushes the buttons down and nothing in the right column moves.
+     ============================================================ */
+  .dwr-in .note,
+  .dwr-in .prior {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* The read-back and the box are one band, not two: the prior note
+     introduces the box rather than sitting in its own compartment. */
+  .dwr-in .prior + .note {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .dwr-in .note .nlab,
+  .dwr-in .prior .plab {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  /* No inner scroll and no resize handle: the box's height is set from
+     its content (see autogrow), so it is the drawer that grows. */
+  .dwr-in .note textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 64px;
+    resize: none;
+    overflow: hidden;
+    padding: 9px 12px;
+    font: 12.5px/1.55 var(--font-sans);
+    color: var(--fg);
+    background: color-mix(in srgb, var(--fg) 4%, transparent);
+    border: 1px solid var(--hair-2);
+    border-radius: 6px;
+    outline: none;
+  }
+
+  .dwr-in .note textarea::placeholder {
+    color: var(--fg-dim);
+  }
+
+  .dwr-in .note textarea:focus {
+    border-color: var(--accent);
+  }
+
+  .dwr-in .note .nhint {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  /* What was written last time, as prose rather than in a box: it is
+     read, not edited. 72ch because a line much longer than that is
+     hard to track back to its start. */
+  .dwr-in .prior p {
+    margin: 0;
+    padding-left: 12px;
+    border-left: 2px solid var(--hair-2);
+    font: 12.5px/1.55 var(--font-sans);
+    color: var(--fg-muted);
+    max-width: 72ch;
   }
 
   .dwr-acts {

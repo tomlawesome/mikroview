@@ -621,8 +621,23 @@ export async function clearIngestLoss(): Promise<void> {
 // Sent at once, not deferred behind Undo's window -- see
 // flagsState.judgeAndClear's own doc comment for why an earlier,
 // deferred version of this call lost verdicts silently on a reload.
-export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict })
+// note (#1232) is whatever the operator had written in the drawer's box
+// when they clicked the verdict, and is always optional: it travels in
+// the same request so there is never a moment where the judgement is
+// recorded and the reason for it is not.
+export async function setFlagVerdict(id: string, verdict: Verdict, note = ''): Promise<Flag> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict, note })
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
+}
+
+// updateFlagNote (#1232) edits the note on a flag that already carries a
+// verdict -- the owner's "we should be able to edit". Sending "" is how
+// the words are taken back. Same access tier as setFlagVerdict above;
+// 404s on an unknown id, and 409s on a flag with no verdict for the note
+// to belong to, which the drawer never offers a box for.
+export async function updateFlagNote(id: string, note: string): Promise<Flag> {
+  const res = await putJSON(`/api/flags/${encodeURIComponent(id)}/note`, { note })
   if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }

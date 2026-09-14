@@ -177,6 +177,11 @@
     // already use it.
     'flag.verdict': (e) => ({ lead: 'flag verdict ', key: flagKey(e.target), tail: tailOf(e.detail) }),
     'flag.verdict_undo': (e) => ({ lead: 'undid the verdict on flag ', key: flagKey(e.target), tail: '' }),
+    // #1232: the event, never the words -- the note lives on the flag
+    // alone, so this row says that one was rewritten and nothing more.
+    // Listed here rather than left to the fallback for the #1161 reason
+    // above: the fallback prints the flag id raw.
+    'flag.note_edit': (e) => ({ lead: 'edited the note on flag ', key: flagKey(e.target), tail: '' }),
     'flag.clear_permanent': (e) => ({ lead: 'permanently cleared flag ', key: flagKey(e.target), tail: '' }),
     'flag.exclusion_remove': (e) => ({ lead: 'removed exclusion for ', key: flagKey(e.target), tail: '' }),
     'user.create': (e) => ({ lead: 'created user ', key: e.target, tail: tailOf(e.detail) }),

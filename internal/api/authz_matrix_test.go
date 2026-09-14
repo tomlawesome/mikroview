@@ -245,6 +245,11 @@ var authzMatrix = []routeExpectation{
 			"more dangerous than making one. Not \"/{id}/verdict\": see the registration comment in " +
 			"server.go for why that shape can't be registered here. Tightened from viewer to user tier by " +
 			"#653, same reasoning as clear-all above"},
+	{http.MethodPut, "/api/flags/{id}/note", accessUser,
+		"#1232: edits the note on a flag that already carries a verdict. Same tier as the verdict the note " +
+			"explains, for the same #653 reason -- the note is part of the record a returning flag reads " +
+			"back, so writing one changes what mikroview will show, which a viewer may not do. " +
+			"Audit-logged as flag.note_edit, carrying no text"},
 	{http.MethodDelete, "/api/flags/expectations/{id}", accessUser,
 		"#640's Forget control on the ledger -- same tier as the verdict that records an expectation, since " +
 			"the operator who can say \"expected\" can take it back, and an undo must not be harder to reach " +

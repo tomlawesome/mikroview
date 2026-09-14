@@ -16,6 +16,14 @@ testing-and-ci skill (owner, 2026-09-08).
 - 2026-09-08 · 3fb82271 (!1002) · pipeline 763, gate:scenarios 3/4 · `page.waitForFunction: Timeout 10000ms exceeded` at `live-browser.mjs:385` from `live-rule-regex.mjs:32`; the other 20 scenarios in the shard passed. Same family as #1011 (goTo never settles under runner load).
 - 2026-09-08 · 237d4d84 (!1003) · pipeline 770, gate:scenarios 3/4 · `exited 1 without printing a result`; pipeline 773 on the same branch (one merge later, City.svelte only) passed it. 770's gate stage overlapped 773's on the same runner host.
 
+## live-rule-regex: "a fresh pattern after a refusal evaluates normally" fails on a loaded runner
+
+Separate from the `goTo` heading above -- the same scenario, but a real
+assertion rather than an infrastructure timeout, so it is recorded on its
+own rather than swelling that entry's count.
+
+- 2026-09-13 · 91315101 (!1043) · pipeline 1043, gate:scenarios 3/4 · `FAIL a fresh pattern after a refusal evaluates normally`. The check types a cheap pattern after a refusal and asserts, after a fixed `waitForTimeout(1200)`, that the toggle no longer reads "refused". The scenario's own comment at `live-rule-regex.mjs:88-90` says why it has to guess a duration: "evaluating and idle are DOM-indistinguishable, so this negative assertion still needs a real pause rather than a wait it cannot express". Under runner load the worker's debounce outruns the 1200 ms. Ran three times against fresh instances at this exact commit and passed every time; the branch cannot reach it either, its diff being flag verdict/note plumbing with `ruleMatcher.ts` and `ruleMatcher.worker.ts` untouched.
+
 ## live-flags-watchlist: the reconnaissance row never appears (5 s)
 
 - 2026-09-08 · 70d828ec (dev) · pipeline 775, gate:scenarios 2/4, job 8448 · `locator.waitFor: Timeout 5000ms exceeded` at `live-flags-watchlist.mjs:130` waiting for `tr.frow.mem` for 192.168.1.61 with text "Internal reconnaissance"; 776's job 8473 ran the same shard on the same commit and passed it.

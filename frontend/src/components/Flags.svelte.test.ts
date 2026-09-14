@@ -12,6 +12,7 @@ vi.mock('../lib/api', () => ({
   clearAllFlags: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
+  updateFlagNote: vi.fn(),
   fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
   // Kept mocked so a test can assert the shelf never reaches for the
   // definitions catalogue any more (#768): its warming signal rides on
@@ -24,7 +25,7 @@ vi.mock('../lib/api', () => ({
   fetchExpectations: vi.fn(async () => []),
 }))
 
-import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
+import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict, updateFlagNote } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
@@ -799,7 +800,7 @@ describe('the learning shelf (#642)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'checked')
+    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'checked', '')
     expect(within(shelf).getByText('checked', { selector: '.stamp' })).toBeTruthy()
     expect(within(shelf).getByRole('button', { name: 'undo' })).toBeTruthy()
     // The row stays -- pinned in place, dimmed -- rather than vanishing
@@ -945,7 +946,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'resolved')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'resolved', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.querySelector('.stamp.resolved')?.textContent).toBe('resolved')
     expect(row.classList.contains('fdone')).toBe(true)
@@ -987,7 +988,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.classList.contains('struck')).toBe(true)
     expect(row.classList.contains('fdone')).toBe(true)
@@ -1018,7 +1019,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.querySelector('.stamp.expected')?.textContent).toBe('expected')
     expect(row.classList.contains('fdone')).toBe(true)
@@ -1036,7 +1037,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'investigate')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'investigate', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.classList.contains('investigating')).toBe(true)
     // Investigate never sets `cleared`, so the row is not dimmed away.
@@ -1083,6 +1084,130 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     flushSync()
 
     expect(document.querySelector('.returned')).toBeNull()
+  })
+})
+
+// #1232 (round 59): the note band across the bottom of the drawer.
+// Write first, judge second -- the box is there while you look at the
+// flag, and what is in it goes with the verdict you then click.
+describe('the drawer’s note (#1232, round 59)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'tom'
+  })
+
+  async function openDrawer(f: Flag) {
+    flagsState.list = [f]
+    render(Flags)
+    flushSync()
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+    return document.querySelector('tr.drawer') as HTMLElement
+  }
+
+  it('what you type in the box travels with the verdict you click next', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ id: 's1', cleared: true, verdict: 'checked', note: 'all on the block list already' }) as never,
+    )
+    const drawer = await openDrawer(testFlag({ id: 's1' }))
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    expect(box).toBeTruthy()
+    expect(drawer.querySelector('.note .nhint')?.textContent).toContain('goes if the verdict is undone')
+
+    await fireEvent.input(box, { target: { value: 'all on the block list already' } })
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked', 'all on the block list already')
+  })
+
+  it('editing the note on an already-judged flag saves it on blur', async () => {
+    vi.mocked(updateFlagNote).mockResolvedValue(testFlag({ id: 's1', note: 'reworded' }) as never)
+    const drawer = await openDrawer(
+      testFlag({
+        id: 's1',
+        verdict: 'investigate',
+        verdictBy: 'tom',
+        verdictAt: '2026-01-01T00:01:00Z',
+        note: 'first go',
+      }),
+    )
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    expect(box.value).toBe('first go')
+
+    await fireEvent.input(box, { target: { value: 'reworded' } })
+    await fireEvent.blur(box)
+    await Promise.resolve()
+    flushSync()
+
+    expect(updateFlagNote).toHaveBeenCalledWith('s1', 'reworded')
+  })
+
+  it('an unchanged box saves nothing on blur', async () => {
+    const drawer = await openDrawer(
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z', note: 'first go' }),
+    )
+
+    await fireEvent.blur(drawer.querySelector('#note-s1') as HTMLTextAreaElement)
+    await Promise.resolve()
+    flushSync()
+
+    expect(updateFlagNote).not.toHaveBeenCalled()
+  })
+
+  it('a returning flag reads back what was written last time, in full, above the box', async () => {
+    const drawer = await openDrawer(
+      testFlag({
+        id: 's1',
+        priorVerdict: 'checked',
+        priorVerdictAt: '2026-09-02T09:00:00Z',
+        priorNote: 'Checked the upstream block list — every source already on it. Left it alone.',
+      }),
+    )
+
+    const label = drawer.querySelector('.prior .plab')?.textContent?.replace(/\s+/g, ' ').trim()
+    expect(label).toContain('you wrote last time · checked')
+    // formatDayMonth follows the runtime's locale ("2 Sep" here, "Sep 2"
+    // on the CI runner), so assert the parts the way format.test.ts does.
+    expect(label).toContain('2')
+    expect(label).toContain('Sep')
+    expect(drawer.querySelector('.prior p')?.textContent).toBe(
+      'Checked the upstream block list — every source already on it. Left it alone.',
+    )
+    // The read-back introduces the empty box rather than replacing it:
+    // this firing gets its own note.
+    expect((drawer.querySelector('#note-s1') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('a viewer reads a note but cannot write one', async () => {
+    authState.role = 'viewer'
+    const drawer = await openDrawer(
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z', note: 'tom’s own' }),
+    )
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    expect(box.value).toBe('tom’s own')
+    expect(box.readOnly).toBe(true)
+    expect(drawer.querySelector('.note .nhint')).toBeNull()
+  })
+
+  it('an unjudged flag a viewer opens offers no box at all', async () => {
+    authState.role = 'viewer'
+    const drawer = await openDrawer(testFlag({ id: 's1' }))
+
+    expect(drawer.querySelector('.note')).toBeNull()
   })
 })
 
@@ -1290,8 +1415,9 @@ describe('a pinned row across the watch-for-this detour (#961)', () => {
 
 // #988 (round 47): campaigns, the scored number, flags by type -- the
 // three ratified additions, each pinned by what it renders rather than
-// how it is styled.
-describe('campaigns, the scored number and the by-type strip (#988, round 47)', () => {
+// how it is styled. The middle one moved in #1231 (round 58): the
+// number left the row and became a coloured rating in the drawer.
+describe('campaigns, the confidence rating and the by-type strip (#988 round 47, #1231 round 58)', () => {
   const now = Date.parse('2026-01-01T13:55:00Z')
 
   beforeEach(() => {
@@ -1397,31 +1523,53 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
     expect(document.querySelector('tr.crule')?.textContent).toContain('Showing the one that matches the filters.')
   })
 
-  it('shows the scored number beside the type only where a detector scored the flag, and says where it came from in the drawer', async () => {
+  it('keeps the row to its type alone, and rates the confidence in the drawer under the sparkline (#1231)', async () => {
     render(Flags)
     flushSync()
 
-    // #1167: the figure carries the word "scored" in the list too, not
-    // only in the drawer -- bare, it read as an unlabelled tally of the
-    // type beside it.
-    const confs = Array.from(document.querySelectorAll('tr.frow .fmark .conf')).map((el) =>
-      el.textContent?.replace(/\s+/g, ' ').trim(),
-    )
-    expect(confs).toEqual(['scored 72'])
-    const scored = document.querySelector('tr.frow:has(.conf)') as HTMLElement
-    expect(scored.querySelector('td.k')?.textContent?.trim()).toBe('10.0.20.14')
+    // #1231: nothing numeric beside the type any more -- the row that
+    // carries a scored flag reads exactly as the rows that do not. #988
+    // put the figure here and #1167 put the word "scored" in front of
+    // it; it still read as an event count.
+    expect(document.querySelector('tr.frow .fmark .conf')).toBeNull()
+    const marks = Array.from(document.querySelectorAll('tr.frow:not(.camp) .fmark'))
+      .map((el) => el.textContent?.replace(/\s+/g, ' ').trim())
+      .sort()
+    expect(marks).toEqual(['▲ Activity spike', '✱ Outbound anomaly'])
 
+    const scored = Array.from(document.querySelectorAll('tr.frow')).find(
+      (r) => r.querySelector('td.k')?.textContent?.trim() === '10.0.20.14' && !r.classList.contains('camp'),
+    ) as HTMLElement
     await fireEvent.click(scored)
     flushSync()
+
     const drawer = document.querySelector('tr.drawer') as HTMLElement
-    expect(drawer.querySelector('.story .scored')?.textContent?.replace(/\s+/g, ' ')).toContain(
-      "Scored 72. How far this sits from 10.0.20.14's usual, and how much history backs that. The detector's number, not a verdict.",
+    const block = drawer.querySelector('.side .conf') as HTMLElement
+    expect(block.classList.contains('c-high')).toBe(true)
+    expect(block.getAttribute('aria-label')).toBe('confidence 72 of 100, high')
+    expect(block.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      // The number and the word sit against each other in the markup --
+      // the gap between them is the word's own margin, per the drawing.
+      "confidence 72high how far this sits from 10.0.20.14's usual × how much history backs that. The detector's number, not a verdict.",
     )
-    expect(drawer.querySelector('.side .span')?.textContent?.replace(/\s+/g, ' ')).toContain('· scored 72')
-    // #1157: unnormalised -- the space before the "·" was literal
-    // whitespace at the head of an {#if}, which Svelte trims, so the
-    // line read "still arriving· scored 72".
-    expect(drawer.querySelector('.side .span')?.textContent).toMatch(/\S · scored 72$/)
+    expect(block.querySelector('.cbar span')?.getAttribute('style')).toContain('width: 72%')
+    // The rating says the number once: the episode's caption lost the
+    // "· scored 72" tail it carried alongside it.
+    expect(drawer.querySelector('.side .span')?.textContent).not.toContain('scored')
+    expect(drawer.querySelector('.story .scored')).toBeNull()
+  })
+
+  it('an unscored flag gets no rating block at all — no dash, no word (#1231)', async () => {
+    render(Flags)
+    flushSync()
+
+    const unscored = Array.from(document.querySelectorAll('tr.frow')).find(
+      (r) => r.querySelector('td.k')?.textContent?.trim() === '10.0.30.2',
+    ) as HTMLElement
+    await fireEvent.click(unscored)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer .side .conf')).toBeNull()
   })
 
   it('the strip counts open flags by type, and a click filters the table to that type; again clears it', async () => {
@@ -1532,7 +1680,7 @@ describe('the docket below 1300px (#1150)', () => {
     await fireEvent.click(within(acts).getByRole('button', { name: /expected/ }))
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected', '')
   })
 
   it('floors the COUNT and AGE heads so their words survive, and wraps the by-type chips instead of cutting them', () => {
