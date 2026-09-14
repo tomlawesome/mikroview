@@ -49,11 +49,12 @@ await goTo(page, 'Settings')
 
 // --- The page is the groups, with keys and people mounted in place ------
 
-// #394 (round 44) added the router-backups group straight after disk --
-// memory, disk, router backups is the order EngineRoom.svelte's own
-// comment states, and this list is a copy of the DOM order, not an
-// independent decision, so it has to keep up with what the page mounts.
-const GROUP_ORDER = ['ingest', 'keys', 'detection', 'memory', 'disk', 'router backups', 'account', 'people']
+// #394 (round 44) added the router-backups group straight after disk,
+// and #1225 the drop list straight after that -- memory, disk, router
+// backups, drop list is the order EngineRoom.svelte's own comment
+// states, and this list is a copy of the DOM order, not an independent
+// decision, so it has to keep up with what the page mounts.
+const GROUP_ORDER = ['ingest', 'keys', 'detection', 'memory', 'disk', 'router backups', 'drop list', 'account', 'people']
 const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(groupNames) === JSON.stringify(GROUP_ORDER),
