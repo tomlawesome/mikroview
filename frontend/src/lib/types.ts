@@ -1449,6 +1449,66 @@ export interface RouterBackupGeneration {
   header?: string
 }
 
+// GET /api/droplist (#1225, #461): the router-pulled block list, third
+// of Settings' admin-only "what mikroview holds" groups alongside keys
+// and router backups. Mirrors internal/api's droplistResponse.
+export interface DroplistEntry {
+  cidr: string
+  addedBy: string
+  addedAt: string
+  reason: string
+  // Set when the entry came from a flag's "block…" action -- the row's
+  // "from flag" link opens that flag. Absent for an entry typed in by
+  // hand.
+  flagID?: string
+}
+
+// One router's own account of what it is holding, from the last
+// address-list snapshot it pushed -- held/total let a mismatch (the
+// router dropped some, or has more than mikroview knows about) read at
+// a glance rather than as a bare count.
+export interface DroplistRouterHold {
+  device: string
+  held: number
+  total: number
+  confirmedAt: string
+}
+
+// The pull key's state -- present says whether the router can fetch the
+// list at all; the rest is provenance for the key row, all absent until
+// one is minted.
+export interface DroplistKeyInfo {
+  present: boolean
+  createdAt?: string
+  createdBy?: string
+  lastUsedAt?: string
+}
+
+// The setup card's four printed blocks -- never applied by mikroview,
+// only ever copied and pasted onto the router by hand. scheduler carries
+// the `<DROP-LIST-KEY>` placeholder here; POST /api/droplist/key's own
+// response carries the same line with the real key filled in.
+export interface DroplistSetup {
+  scheduler: string
+  rule: string
+  disableRule: string
+  emptyList: string
+}
+
+export interface DroplistResponse {
+  listName: string
+  entries: DroplistEntry[]
+  key: DroplistKeyInfo
+  // Absent or empty when no router has pushed an address-list snapshot
+  // yet -- distinct from an empty array meaning "reported and holds
+  // nothing".
+  routers?: DroplistRouterHold[]
+  // False until some router has reported its own address ranges -- new
+  // entries can't be checked against them until then.
+  ownRangesKnown: boolean
+  setup: DroplistSetup
+}
+
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
 // router, so "did that step work" is answered by what arrived, not by
