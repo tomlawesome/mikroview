@@ -4,6 +4,7 @@ package setup
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -188,5 +189,111 @@ func TestMarkNoteIsBounded(t *testing.T) {
 	}
 	if len(m.Note) != maxNote {
 		t.Errorf("note length = %d, want it capped at %d", len(m.Note), maxNote)
+	}
+}
+
+// TestWitnessSurvivesRestart is #1221's whole point: a step witnessed
+// before the process stops still reads back as witnessed, receipt and
+// all, from a fresh Store opened against the same file -- the same
+// simulation of a restart persist's own contract tests use, since the
+// witness lives in the same on-disk document as marks.
+func TestWitnessSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	now := time.Unix(1_757_000_000, 0)
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, ok := s1.NoteWitnessed(1, "ca.crt fetched by 192.0.2.1", now); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	witnessed := s2.Witnessed()
+	if len(witnessed) != 1 {
+		t.Fatalf("Witnessed() after reopening = %d entries, want 1", len(witnessed))
+	}
+	w := witnessed[0]
+	if w.Step != 1 || w.Outcome != MarkWitnessed {
+		t.Errorf("witness = step %d %q, want step 1 witnessed", w.Step, w.Outcome)
+	}
+	if w.Note != "ca.crt fetched by 192.0.2.1" {
+		t.Errorf("witness receipt = %q, want the original receipt to survive", w.Note)
+	}
+	if !w.At.Equal(now) {
+		t.Errorf("witness time = %v, want %v", w.At, now)
+	}
+}
+
+// TestWitnessDoesNotDisturbMarks pins the two halves of #1221's
+// architecture call: a witness never overwrites an operator's mark for
+// the same step, and an operator's later decision never erases a
+// witness already recorded -- the two are read back together by
+// whichever caller decides which wins, not merged here.
+func TestWitnessDoesNotDisturbMarks(t *testing.T) {
+	s := New()
+	now := time.Now()
+
+	if _, ok := s.NoteMark(2, MarkSkipped, "tom", "no router has opened a syslog connection", now); !ok {
+		t.Fatal("NoteMark refused a valid skip")
+	}
+	if _, ok := s.NoteWitnessed(2, "syslog connected from 192.0.2.1", now.Add(time.Minute)); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+
+	marks := s.Marks()
+	if len(marks) != 1 || marks[0].Outcome != MarkSkipped {
+		t.Fatalf("Marks() = %+v, want the skip untouched by the witness", marks)
+	}
+	witnessed := s.Witnessed()
+	if len(witnessed) != 1 || witnessed[0].Outcome != MarkWitnessed {
+		t.Fatalf("Witnessed() = %+v, want the witness recorded alongside the skip", witnessed)
+	}
+
+	// The operator changes their mind after the witness exists -- the
+	// witness must still be there afterwards.
+	if _, ok := s.NoteMark(2, MarkForced, "tom", "still nothing", now.Add(2*time.Minute)); !ok {
+		t.Fatal("NoteMark refused a valid force")
+	}
+	if witnessed := s.Witnessed(); len(witnessed) != 1 {
+		t.Fatalf("Witnessed() after a later mark = %+v, want the witness to survive it", witnessed)
+	}
+}
+
+// TestSecondWitnessIsANoOp: NoteWitnessed writes once per step. A second
+// call for a step already witnessed must neither change the recorded
+// receipt nor persist again -- the point made in its own doc comment,
+// pinned here via the version counter persistLocked advances on every
+// real write.
+func TestSecondWitnessIsANoOp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	now := time.Unix(1_757_000_000, 0)
+
+	if _, ok := s.NoteWitnessed(3, "2 of 2 events carried a decoded action", now); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+	versionAfterFirst := s.version
+
+	if _, ok := s.NoteWitnessed(3, "5 of 5 events carried a decoded action", now.Add(time.Hour)); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+
+	if s.version != versionAfterFirst {
+		t.Errorf("version advanced from %d to %d on a repeat witness -- the file was rewritten", versionAfterFirst, s.version)
+	}
+	witnessed := s.Witnessed()
+	if len(witnessed) != 1 || witnessed[0].Note != "2 of 2 events carried a decoded action" {
+		t.Errorf("witness = %+v, want the first receipt kept, not the second", witnessed)
+	}
+	if !witnessed[0].At.Equal(now) {
+		t.Errorf("witness time = %v, want the first observation's time", witnessed[0].At)
 	}
 }

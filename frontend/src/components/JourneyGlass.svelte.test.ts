@@ -52,6 +52,7 @@ const STATUS = {
   devices: [],
   pushKinds: [],
   marks: [],
+  witnesses: [],
 }
 
 beforeEach(() => {

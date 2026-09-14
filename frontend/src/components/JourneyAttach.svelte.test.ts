@@ -52,6 +52,7 @@ describe('JourneyAttach', () => {
       devices: [],
       pushKinds: [],
       marks: [],
+      witnesses: [],
     }
 
     const { container } = render(JourneyAttach)
@@ -88,6 +89,7 @@ describe('JourneyAttach', () => {
       devices: [],
       pushKinds: [],
       marks: [],
+      witnesses: [],
     }
     render(JourneyAttach)
 

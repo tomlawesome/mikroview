@@ -139,6 +139,7 @@ describe('journeyState', () => {
       devices: [],
       pushKinds: [],
       marks: [],
+      witnesses: [],
     }
 
     journeyState.beginTour()
