@@ -258,6 +258,13 @@
   // or not anything relevant changed, and re-requesting commands on
   // every poll tick would be wasted work. This key only changes when
   // something the request actually carries changes.
+  // The addresses the server reports itself bound to, minus whatever is
+  // already in the field: offering the operator the value they are
+  // looking at is noise.
+  const addressCandidates = $derived(
+    (wizardState.status?.instance.addressCandidates ?? []).filter((a) => a !== wizardState.address),
+  )
+
   const commandsKey = $derived(
     wizardState.status
       ? JSON.stringify([
@@ -634,6 +641,24 @@
           The router has to reach this address, which may not be the one you typed — a proxy, a
           second interface or a mapped port all change it.
         </p>
+        <!-- The addresses the server finds itself bound to (#1213).
+             Offered, never chosen for the operator: on a host with
+             several interfaces, picking one is a different guess rather
+             than a better one, and only they know which one the router
+             can route to. -->
+        {#if addressCandidates.length > 0}
+          <p class="note">
+            This machine also answers on
+            {#each addressCandidates as candidate, i (candidate)}{i > 0 ? ', ' : ''}<button
+                type="button"
+                class="addr-candidate"
+                onclick={() => {
+                  wizardState.address = candidate
+                  wizardState.saveAddress()
+                }}>{candidate}</button
+              >{/each}.
+          </p>
+        {/if}
         {#if wizardState.addressSaveError}
           <p class="load-error">{wizardState.addressSaveError}</p>
         {/if}
@@ -1453,6 +1478,19 @@
     font-family: var(--font-mono);
     font-size: 12.5px;
     max-width: 420px;
+  }
+
+  /* An offered address reads as the link it behaves like, not as another
+     control competing with the field above it. */
+  .addr-candidate {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--log);
+    font-family: var(--font-mono);
+    font-size: inherit;
+    cursor: pointer;
+    text-decoration: underline;
   }
 
   .middle {
