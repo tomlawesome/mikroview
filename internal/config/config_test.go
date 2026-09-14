@@ -521,6 +521,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Engine.StorePath":               cfg.Engine.StorePath,
 		"Watchlist.MatchLogPath":         cfg.Watchlist.MatchLogPath,
 		"Watchlist.SuggestionsStorePath": cfg.Watchlist.SuggestionsStorePath,
+		"Droplist.StorePath":             cfg.Droplist.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                "/var/lib/mikroview/flags.json",
@@ -534,6 +535,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Engine.StorePath":               "/var/lib/mikroview/engine-state.json",
 		"Watchlist.MatchLogPath":         "/var/lib/mikroview/matchlog.jsonl",
 		"Watchlist.SuggestionsStorePath": "/var/lib/mikroview/suggestions.json",
+		"Droplist.StorePath":             "/var/lib/mikroview/droplist.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -753,6 +755,18 @@ func TestBlocklistSourcesEnvVarOverridesDefault(t *testing.T) {
 		if cfg.Blocklist.Sources[i] != s {
 			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
 		}
+	}
+}
+
+func TestDroplistStoreEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_DROPLIST_STORE_PATH", "/data/droplist.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Droplist.StorePath != "/data/droplist.json" {
+		t.Errorf("Droplist.StorePath = %v, want /data/droplist.json", cfg.Droplist.StorePath)
 	}
 }
 

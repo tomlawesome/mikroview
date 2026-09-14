@@ -32,6 +32,14 @@ rewritten.
   live. `POST /api/flags/{id}/verdict` takes an optional `note`, and
   `PUT /api/flags/{id}/note` edits one.
 
+- **The drop list store and its server-side validation** (#1223, stage 1
+  of the design ratified on #461): somewhere to keep operator-authored
+  ranges to block (`droplist.storePath`), and the rules on what may
+  become one — public IPv4 only, no broader than /24, and never a range
+  the pushed router state shows as the router's own. Every add and
+  remove is audited. Nothing is served yet: no API, no UI, no RouterOS
+  push — that is #1224/#1225.
+
 ### Changed
 
 - **A flag's confidence is now a rating in its drawer, not a number on

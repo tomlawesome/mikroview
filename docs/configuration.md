@@ -1260,6 +1260,24 @@ live reputation lookups above already play for those flags, just
 resolved synchronously (a local lookup needs no network round-trip)
 instead of asynchronously.
 
+## Drop list: operator-authored ranges to block (optional, #1223)
+
+Separate from the fetched feeds above: the drop list is a small store of
+ranges an admin has explicitly decided to block, typed in directly or
+raised from a flag's drawer, never written automatically. Stage 1 of the
+design ratified on #461 -- this is just the store and its validation
+(public IPv4 only, no broader than /24, and never a range the pushed
+router state shows as the router's own); no API, no UI, and nothing
+pushed to RouterOS yet -- those are #1224/#1225.
+
+```yaml
+droplist:
+  # Where drop list entries are persisted, as a small JSON file. Same
+  # optional-persistence contract as audit.storePath: left unset,
+  # entries still work, they just don't survive a restart.
+  storePath: "/var/lib/mikroview/droplist.json"
+```
+
 ## Network attribution (optional, on by default)
 
 When you click "investigate" on an IP, MikroView also labels it with the
@@ -1813,6 +1831,13 @@ device-attributed exception:
   side is `ingest.router_backup.failed`. These three are attributed to
   the pushing device (`device:<name>`), or to `system` for a fault that
   was MikroView's own rather than the router's.
+
+- Adding or removing a drop list entry (issue #1223, stage 1) is
+  `droplist.add` / `droplist.remove`, naming the range as its target and
+  carrying the entry's reason as detail (plus which flag raised it, when
+  one did). This stage has no API or UI writing entries yet, so nothing
+  produces these two actions in practice until #1224/#1225 land -- the
+  store and its audit trail exist first.
 
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
@@ -3810,6 +3835,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+| `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-1223)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
