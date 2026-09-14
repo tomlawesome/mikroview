@@ -178,12 +178,22 @@ class WizardState {
       this.devices = d
       this.error = null
       // The field's default order (#1213): the operator's own stored
-      // answer first (it survived whatever restart brought this session
-      // here), then the server's own best guess at an address it is
-      // bound to, then the browser's own host -- last, since it is only
-      // known to work from this one place on the network.
+      // answer first -- it survived whatever restart brought this
+      // session here -- then the browser's own host, which is the
+      // owner's ruling on the issue ("with the browser's host offered
+      // as the default to accept or replace"), then an address the
+      // server finds itself bound to.
+      //
+      // The browser's host outranks the server's own list because
+      // neither is more than a guess and this one is at least a guess
+      // the operator can recognise: it is what they typed. A host with
+      // several interfaces offers several candidates and picking one of
+      // them is a different guess, not a better one -- so they are
+      // offered beside the field (addressCandidates) rather than
+      // silently chosen. The field exists because every guess here can
+      // be wrong; the line under it says why.
       if (!this.addressInitialized) {
-        this.address = s.instance.address || s.instance.addressCandidates[0] || window.location.host
+        this.address = s.instance.address || window.location.host || s.instance.addressCandidates[0] || ''
         this.addressInitialized = true
       }
     } catch (e) {
