@@ -18,6 +18,7 @@ vi.mock('../lib/api', () => ({
   lockRouterBackupVault: vi.fn(),
   setRouterBackupPassphrase: vi.fn(),
   removeRouterBackupPassphrase: vi.fn(),
+  changeRouterBackupPassphrase: vi.fn(),
 }))
 
 // Blob/URL.createObjectURL are unreliable in jsdom -- faked at the
@@ -30,6 +31,7 @@ vi.mock('../lib/export', () => ({
 }))
 
 import {
+  changeRouterBackupPassphrase,
   fetchRouterBackups,
   lockRouterBackupVault,
   removeRouterBackupPassphrase,
@@ -250,9 +252,13 @@ describe('the vault passphrase (#1115)', () => {
     expect(await screen.findByText('off')).toBeTruthy()
   })
 
-  it('change composes the current passphrase’s remove and the new one’s set', async () => {
-    vi.mocked(removeRouterBackupPassphrase).mockResolvedValue(lock())
-    vi.mocked(setRouterBackupPassphrase).mockResolvedValue(lock({ passphraseSet: true, unlockedForYou: true }))
+  it('change makes one atomic call rather than a remove followed by a set', async () => {
+    vi.mocked(changeRouterBackupPassphrase).mockResolvedValue(lock({ passphraseSet: true, unlockedForYou: true }))
+    // Cleared rather than asserted from zero: an earlier test in this file
+    // exercises the remove-only form and leaves these mocks with calls of
+    // their own, which is not this test's business.
+    vi.mocked(removeRouterBackupPassphrase).mockClear()
+    vi.mocked(setRouterBackupPassphrase).mockClear()
     render(RouterBackups, {
       props: {
         resp: resp({ lock: lock({ passphraseSet: true, unlockedForYou: true }) }),
@@ -264,8 +270,9 @@ describe('the vault passphrase (#1115)', () => {
     await fireEvent.input(screen.getByLabelText('new passphrase'), { target: { value: 'brand-new-passphrase' } })
     await fireEvent.input(screen.getByLabelText('confirm new passphrase'), { target: { value: 'brand-new-passphrase' } })
     await fireEvent.click(screen.getByRole('button', { name: 'change' }))
-    expect(removeRouterBackupPassphrase).toHaveBeenCalledWith('old-passphrase-1')
-    expect(setRouterBackupPassphrase).toHaveBeenCalledWith('brand-new-passphrase')
+    expect(changeRouterBackupPassphrase).toHaveBeenCalledWith('old-passphrase-1', 'brand-new-passphrase')
+    expect(removeRouterBackupPassphrase).not.toHaveBeenCalled()
+    expect(setRouterBackupPassphrase).not.toHaveBeenCalled()
     expect(await screen.findByText('unlocked')).toBeTruthy()
   })
 

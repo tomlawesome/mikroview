@@ -58,7 +58,7 @@
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
   import { familyOf, worstFamilyOf } from '../lib/flagPalette'
-  import { FLAG_TYPE_ORDER } from '../lib/metricsSeries'
+  import { FLAG_TYPE_ORDER, FLAG_TYPE_LABELS } from '../lib/metricsSeries'
   import { formatDayMonth, formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
@@ -69,6 +69,8 @@
   import { zonesState } from '../lib/zones.svelte'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
   import { topologyNavState } from '../lib/topologyNav.svelte'
+  import { droplistNavState } from '../lib/droplistNav.svelte'
+  import { goToSection } from '../lib/sectionLink'
   import { watchDraftForFlag } from '../lib/watchDraft'
   import { viewportState } from '../lib/viewport.svelte'
   import type { Flag, FlagType, FirewallEvent, Verdict, Exclusion } from '../lib/types'
@@ -130,6 +132,23 @@
     if (!who) return
     topologyNavState.requestWatchDraft({ who, toward: pathwayToward(f), mode: 'expect' })
     appState.view = 'watchlist'
+  }
+
+  // "block…" (#1225, #461): the drawer's own handoff into the drop
+  // list group, same shape as watchThisSource/watchThisPathway above but
+  // for droplistNavState rather than topologyNavState -- gated on
+  // canWatchSource for the identical reason ("watch this source" is
+  // narrower than isFilterable(): only a flag whose target resolves to a
+  // single source IP names an address worth dropping). Admin-only,
+  // since committing an address to the router's own pull list is a step
+  // further than judging a flag -- every other drawer action here is
+  // user-tier.
+  function blockThis(f: Flag) {
+    const ip = extractSourceIp(f.target)
+    if (!ip) return
+    const label = FLAG_TYPE_LABELS[f.type]?.toLowerCase() ?? f.type
+    droplistNavState.requestDraft({ cidr: ip, reason: `${label} from ${ip}`, flagID: f.id })
+    goToSection('engineroom/droplist')
   }
 
   // "watch for this" (#641): the offer that stays behind on a resolved
@@ -1501,6 +1520,9 @@
               <button class="act" onclick={() => watchThisPathway(f)}>watch this pathway</button>
             {:else if canEdit && canWatchSource(f)}
               <button class="act" onclick={() => watchThisSource(f)}>watch this source</button>
+            {/if}
+            {#if isAdminOrOpen && canWatchSource(f)}
+              <button class="act" onclick={() => blockThis(f)}>block…</button>
             {/if}
           </div>
         </div>

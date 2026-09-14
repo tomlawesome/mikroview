@@ -837,6 +837,18 @@ type Blocklist struct {
 	Sources []string `yaml:"sources"`
 }
 
+// Droplist configures internal/droplist's persisted store of
+// operator-authored enforcement entries (issue #1223, stage 1 of the
+// design ratified on #461) -- unrelated to Blocklist above, which is
+// the fetched threat-intel feeds. StorePath left empty is a fully
+// supported, deliberate choice, same optional-persistence contract as
+// Audit.StorePath: entries still work, they just don't survive a
+// restart. This stage has no API or UI reading this store yet; the
+// feature's endpoints and Settings group arrive in #1224/#1225.
+type Droplist struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // NetClass configures internal/netclass's local IP attribution: labelling
 // an address as a Tor exit, a commercial VPN, cloud/datacenter space, or
 // a privacy relay (issue #114). It adds context to a manual IP lookup,
@@ -1109,6 +1121,7 @@ type Config struct {
 	Devices    []Device   `yaml:"devices"`
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
+	Droplist   Droplist   `yaml:"droplist"`
 	NetClass   NetClass   `yaml:"netClass"`
 	OUI        OUI        `yaml:"oui"`
 	Engine     Engine     `yaml:"engine"`
@@ -1294,6 +1307,9 @@ func defaults() Config {
 			// DROP on 2024-04-10 and the endpoint now serves no ranges
 			// at all.
 			Sources: []string{"spamhaus_drop"},
+		},
+		Droplist: Droplist{
+			StorePath: DefaultDataDir + "/droplist.json",
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here
@@ -1817,6 +1833,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_DROPLIST_STORE_PATH"); v != "" {
+		cfg.Droplist.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {

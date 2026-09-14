@@ -50,6 +50,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -805,6 +806,23 @@ func main() {
 	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
 	mustOpenStore(suggestLog, err)
 
+	// The droplist entry store (issue #1223, stage 1 of the design
+	// ratified on #461): operator-authored ranges to block, distinct
+	// from the fetched threat-intel feeds internal/blocklist.Blocklist
+	// (bl, opened further down) matches against -- see internal/droplist's
+	// own doc comment for how the two are unrelated. Persistence itself
+	// is optional, same contract as Audit.StorePath above; SetOwnRanges
+	// is wired once routerState exists below, and SetAuditor now, since
+	// auditStore already does.
+	droplistLog := logging.New("droplist")
+	droplistBackend, err := persistence.backendFor(bootCtx, "droplist", cfg.Droplist.StorePath)
+	if err != nil {
+		droplistLog.Warn(err.Error())
+	}
+	droplistStore, err := droplist.OpenWithBackend(droplistBackend)
+	mustOpenStore(droplistLog, err)
+	droplistStore.SetAuditor(auditStore)
+
 	// The watchlist's match log has no in-memory-only mode (durability
 	// is the entire point of it, see internal/matchlog's package doc
 	// comment), so a failure here is handled differently from every
@@ -1035,6 +1053,11 @@ func main() {
 	// API server for the ingest endpoint to write and the table endpoints
 	// to read.
 	routerState := routerstate.New()
+	// Now that routerState exists, droplistStore.Add can refuse a
+	// range the router has pushed as one of its own (issue #1223's
+	// ErrRouterOwn) -- see internal/droplist.OwnRanges and
+	// routerstate.Store.OwnPrefixes.
+	droplistStore.SetOwnRanges(routerState)
 
 	// Everything the engine evaluates, registered from the one
 	// definitions document and kept in step with it (issues #405/#406/
@@ -1578,6 +1601,7 @@ func main() {
 		Naming:                  names,
 		Rules:                   ru,
 		Audit:                   auditStore,
+		Droplist:                droplistStore,
 		Suggest:                 suggestStore,
 		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
 		MatchLog:                matchLog,
