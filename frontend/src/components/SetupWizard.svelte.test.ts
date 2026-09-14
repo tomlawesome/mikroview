@@ -55,6 +55,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
     devices: [],
     pushKinds: ['filter-rule', 'arp'],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }
@@ -545,6 +546,37 @@ describe('SetupWizard', () => {
     expect(row.className).toContain('forced')
     expect(row.className).not.toContain('skipped')
     expect(row.querySelector('.step-receipt')).toBeTruthy()
+  })
+
+  // #1221: evidence that lived only in memory does not survive a
+  // restart, but a step the server watched happen still reads done --
+  // from its own witness, not a fresh reading -- with a receipt worded
+  // past tense and dated rather than as a current observation.
+  it('reads a witnessed step as done, with a past-tense dated receipt', async () => {
+    // Mocked as well as set directly: the modal's own sign-in effect
+    // re-fetches status on mount, and a mismatched mock would clobber
+    // wizardState.status back to the default the moment that resolves.
+    const withWitness = status({
+      witnesses: [{ step: 2, receipt: 'syslog connected from 192.0.2.1', at: '2026-09-13T10:27:00Z' }],
+    })
+    vi.mocked(fetchSetupStatus).mockResolvedValue(withWitness)
+    wizardState.status = withWitness
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[1]
+    // Done's own disc, the same as live evidence gets -- the step
+    // genuinely happened, which is the whole complaint #1221 fixes.
+    expect(row.className).toContain('done')
+    expect(row.className).not.toContain('skipped')
+    expect(row.className).not.toContain('forced')
+    const receipt = row.querySelector('.step-receipt')
+    expect(receipt?.textContent).toContain('syslog connected from 192.0.2.1')
+    expect(receipt?.textContent).toContain('seen on')
+    // Opening the step itself must read the same way: the observation
+    // line is the receipt, never the live check's stale "waiting" text.
+    await fireEvent.click(row)
+    const observation = container.querySelector('.body .observation')
+    expect(observation?.textContent).toContain('seen on')
+    expect(observation?.className).not.toContain('waiting')
   })
 
   // #1216's ink itself, read off the component's own CSS: skipped takes

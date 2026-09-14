@@ -14,7 +14,7 @@
 // wasn't" would be worse than no wizard at all.
 
 import { formatSize } from './memory'
-import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
+import type { Device, RouterBackupsResponse, SetupMark, SetupStatus, SetupWitness } from './types'
 
 // 'quiet' is #487's fifth reading, and the only one that is not a claim
 // about a router: a step with nothing to wait for (step 5's naming is
@@ -407,6 +407,14 @@ export interface LedgerStep {
   // upward, and step 5 has nothing to wait for, so on both Next is
   // always free -- there is no waiting check to force past.
   hasCheck: boolean
+  // witnessed is true when this step's 'done' outcome rests on the
+  // server's own witness (#1221) rather than evidence it can see right
+  // now -- the moment that happens, status.detail is a stale reading
+  // (whatever the live check falls back to with nothing to look at,
+  // usually 'waiting') and must not be shown as if it were current.
+  // receipt already carries the honestly past-tense line to use
+  // instead; see witnessReceipt.
+  witnessed: boolean
 }
 
 // STEP_TITLES is the ratified six, in order -- round 45 (#394) adds the
@@ -530,6 +538,33 @@ function markFor(marks: SetupMark[], step: number): SetupMark | undefined {
   return marks.find((m) => m.step === step)
 }
 
+// witnessFor is markFor's own twin for the server's witnesses (#1221).
+function witnessFor(witnesses: SetupWitness[], step: number): SetupWitness | undefined {
+  return witnesses.find((w) => w.step === step)
+}
+
+// witnessedWhen renders a witness's timestamp always dated, unlike
+// `when` above, which drops the date for something read the same day it
+// happened. A witness is read back after evidence has already gone
+// (that is the only time it is used at all -- see buildLedger), so "just
+// now" is never true of it, and the date has to say so rather than
+// leaving a bare time that reads as today's.
+function witnessedWhen(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const day = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const time = d.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit' })
+  return `${day} at ${time}`
+}
+
+// witnessReceipt words a step read back from the server's own witness:
+// the fact it recorded, plus plainly that this is a memory and not a
+// reading -- "seen on 13 Sep at 10:27" -- so it can never be mistaken
+// for a current observation the way a bare fact-plus-time could be.
+export function witnessReceipt(witness: SetupWitness): string {
+  return `${witness.receipt} — seen on ${witnessedWhen(witness.at)}`
+}
+
 // decisionReceipt words a recorded decision for the step list. Skip is
 // quiet and force is loud, and the two must stay tellable apart at a
 // glance, so they are worded as differently as they are coloured.
@@ -586,19 +621,33 @@ export function buildLedger(
   return checks.map((check, i) => {
     const n = i + 1
     const mark = markFor(status.marks, n)
+    const witness = witnessFor(status.witnesses, n)
     const hasEvidence = arrived(check.state)
+    // A witness only ever speaks when there is nothing better to go on:
+    // live evidence outranks it (the record's "forced is not failed"
+    // reasoning applies here too -- a witness that later gets its own
+    // live evidence back is simply done, the ordinary way), and an
+    // operator's own mark for the same step outranks it as well, per
+    // #1221's architecture call -- witnessing must never overwrite a
+    // skip or force, so reading one back must not either.
+    const witnessedOnly = !hasEvidence && !mark && !!witness
     let outcome: Outcome = 'open'
     if (hasEvidence) outcome = 'done'
     else if (mark) outcome = mark.outcome
+    else if (witness) outcome = 'done'
     return {
       n,
       title: STEP_TITLES[i],
       lead: LEADS[i],
       status: check,
-      flavour: flavourFor(n, check.state),
+      // A witnessed-only step reads the same as arrived evidence would
+      // -- no waiting dot, no "counting" -- since as far as the operator
+      // is concerned it is done; only the receipt says it is a memory.
+      flavour: witnessedOnly ? 'arrived' : flavourFor(n, check.state),
       outcome,
-      receipt: hasEvidence ? receipts[i] : mark ? decisionReceipt(mark) : '',
+      receipt: hasEvidence ? receipts[i] : mark ? decisionReceipt(mark) : witness ? witnessReceipt(witness) : '',
       hasCheck: checked[i],
+      witnessed: witnessedOnly,
     }
   })
 }
@@ -719,6 +768,13 @@ export const SKIP_CONSEQUENCES = [
 // for the first push" -- rather than the step title alone, which would
 // announce a move without announcing what was moved to.
 export function announceStep(step: LedgerStep): string {
+  // A witnessed step has nothing current to speak (#1221): status.detail
+  // is whatever the live check falls back to with no evidence in front
+  // of it, and reading that aloud would announce a step as waiting that
+  // the disc already shows done. The receipt says what actually happened.
+  if (step.witnessed) {
+    return `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${step.receipt}`
+  }
   // A partial step's shortfall is spoken with its arrival, in the order
   // the two boxes are read on screen: a screen reader told only what
   // arrived would hear the step as finished (#1132).

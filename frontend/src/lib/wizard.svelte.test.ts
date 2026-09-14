@@ -19,6 +19,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
     devices: [],
     pushKinds: [],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }

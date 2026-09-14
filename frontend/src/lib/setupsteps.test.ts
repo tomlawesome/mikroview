@@ -48,6 +48,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
     devices: [],
     pushKinds: ['filter-rule', 'address-list', 'dhcp-lease', 'arp'],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }

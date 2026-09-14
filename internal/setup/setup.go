@@ -25,6 +25,11 @@
 // the observations above, are persisted. See "The ledger's own marks"
 // at the foot of this file for why the two halves are treated
 // differently.
+//
+// A third kind, *witnesses* (#1221), sits beside the marks: the server's
+// own record that a step's evidence arrived at least once, kept so a
+// restart that empties the memory-backed maps above does not read the
+// step back as if it never happened. See "Witnesses" further down.
 package setup
 
 import (
@@ -63,6 +68,13 @@ type Store struct {
 	// Keyed by step number; lazily created, since most instances never
 	// record one.
 	marks map[int]Mark
+	// witnessed is the server's own record of a step it watched turn
+	// satisfied, kept apart from marks -- see NoteWitnessed. A step has
+	// exactly one *operator* outcome at a time (marks' own rule), but a
+	// witness is not one: it must survive an operator later skipping or
+	// forcing the same step, and must never itself displace what the
+	// operator decided. Keyed by step number; lazily created.
+	witnessed map[int]Mark
 	// backend is where the marks are persisted, or nil when persistence
 	// is switched off. Only the marks go through it -- the observations
 	// above are re-made every run by definition.
@@ -129,6 +141,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			return err
 		}
 		s.marks = make(map[int]Mark, len(file.Marks))
+		s.witnessed = make(map[int]Mark, len(file.Marks))
 		for _, m := range file.Marks {
 			// Filtered on the way in, not trusted: a document written by
 			// an older build, or edited by hand, must not put a step 9
@@ -136,10 +149,16 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			if m.Step < 1 || m.Step > maxStep {
 				continue
 			}
-			if m.Outcome != MarkSkipped && m.Outcome != MarkForced {
-				continue
+			// Routed by outcome into the map that outcome belongs to --
+			// this is what keeps a witness from landing in marks[step]
+			// (and so from being read as, or overwritten by, an operator
+			// decision) after a round trip through disk.
+			switch m.Outcome {
+			case MarkSkipped, MarkForced:
+				s.marks[m.Step] = m
+			case MarkWitnessed:
+				s.witnessed[m.Step] = m
 			}
-			s.marks[m.Step] = m
 		}
 		return nil
 	})
@@ -325,6 +344,14 @@ const (
 	// MarkForced: moved past after the heavy warning, with the exact
 	// record quoted on the button that wrote it.
 	MarkForced MarkOutcome = "forced"
+	// MarkWitnessed: the server's own record that a step's evidence
+	// arrived, written from handleSetupStatus the moment it computes the
+	// step as satisfied -- never from a client. See NoteWitnessed. It is
+	// not a client-writable outcome: NoteMark keeps refusing it, exactly
+	// as it refuses anything else that is not skipped or forced, because
+	// a caller that could write this could claim a step happened when it
+	// did not.
+	MarkWitnessed MarkOutcome = "witnessed"
 )
 
 // maxStep bounds the step numbers a mark may carry. Five steps, per the
@@ -338,13 +365,16 @@ type Mark struct {
 	Outcome MarkOutcome `json:"outcome"`
 	// Actor is the acting username, resolved server-side from the
 	// session -- never taken from the request body, so the ledger cannot
-	// be made to name somebody else.
+	// be made to name somebody else. Empty on a MarkWitnessed entry:
+	// nobody acted, mikroview simply watched something arrive.
 	Actor string    `json:"actor"`
 	At    time.Time `json:"at"`
-	// Note is what was not observed at the moment the mark was made
-	// ("no router has fetched /ca.crt"), which is what makes a
-	// forced-past line explain a silence rather than merely report a
-	// click.
+	// Note is what was not observed at the moment a skipped or forced
+	// mark was made ("no router has fetched /ca.crt"), which is what
+	// makes a forced-past line explain a silence rather than merely
+	// report a click. On a MarkWitnessed entry it carries the opposite:
+	// the receipt of what *was* observed, which is the whole point of
+	// witnessing it.
 	Note string `json:"note,omitempty"`
 }
 
@@ -353,11 +383,13 @@ type Mark struct {
 // field cannot be used as storage.
 const maxNote = 200
 
-// storeFile is the on-disk shape. The marks and nothing else: the
-// observations in the rest of this file are re-made from arriving
-// traffic every run, and writing them down would turn "a router fetched
-// the CA at 14:02" into a claim about a router nobody is still
-// watching.
+// storeFile is the on-disk shape. Marks and witnesses, in one list
+// distinguished by Outcome, and nothing else: the observations in the
+// rest of this file are re-made from arriving traffic every run, and
+// writing one down as itself (rather than as a witness that it once
+// happened) would turn "a router fetched the CA at 14:02" into a claim
+// about a router nobody is still watching -- which is exactly the
+// difference between an observation and a witness (see NoteWitnessed).
 type storeFile struct {
 	Marks []Mark `json:"marks"`
 }
@@ -418,7 +450,7 @@ func (s *Store) persistLocked() {
 	if s.backend == nil {
 		return
 	}
-	data, err := json.MarshalIndent(storeFile{Marks: s.marksLocked()}, "", "  ")
+	data, err := json.MarshalIndent(storeFile{Marks: append(s.marksLocked(), s.witnessedLocked()...)}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding the setup ledger for persistence failed: %v -- this decision exists only in memory and will be lost on restart", err))
 		return
@@ -440,4 +472,85 @@ func (s *Store) Marks() []Mark {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.marksLocked()
+}
+
+// --- Witnesses (#1221) --------------------------------------------------
+//
+// Everything above this point, and the marks just above it, predate the
+// gap issue #1221 names: a step whose evidence lives only in the maps at
+// the top of this file (caFetched, syslogSeen, prefixes) or in a sibling
+// store as memory-backed as this one (device event counts, pushed-table
+// times) reads back to "waiting" on every restart, even though it
+// genuinely happened -- mikroview simply has nowhere it wrote that down.
+//
+// A witness is the server's own answer to that, and deliberately not a
+// persisted copy of the observation itself: the package comment above
+// explains why an observation is never written down as such (it would
+// turn "a router fetched the CA at 14:02" into a claim about a router
+// nobody is still watching). A witness instead records that the step
+// was *seen* satisfied, with the receipt it showed at that moment --
+// close enough to the observation to explain itself, but never confused
+// for a live reading. handleSetupStatus writes one the first time it
+// computes a step as satisfied from live evidence; nothing else may.
+
+// NoteWitnessed records that step was seen satisfied by live evidence,
+// carrying the receipt it showed at that moment. Server-only -- there is
+// no request path that reaches this, which is what makes the mark
+// trustworthy as a record of an actual observation rather than a claim a
+// client could fabricate (contrast NoteMark, which a client does reach,
+// and which keeps refusing this very outcome for that reason).
+//
+// Writes once per step and is a no-op after that (reports the existing
+// mark, still ok): the receipt from the first time a step was seen done
+// describes the same fact a later one would, so there is nothing to gain
+// from overwriting it, and every status poll would otherwise be a
+// rewrite of the ledger file for a step that has nothing new to say.
+//
+// Kept in witnessed, a map of its own, rather than in marks[step]:
+// NoteMark's doc is that a step has exactly one *operator* outcome at a
+// time, and a witness is not one. It must not overwrite a skip or force
+// already recorded there -- the operator's decision stands -- and it
+// must not be erased by one recorded afterwards either, so a later skip
+// of a step mikroview once watched happen does not un-remember that it
+// did. Reading the two back together (which wins when both exist) is a
+// rendering choice for the caller, not this store's to make.
+func (s *Store) NoteWitnessed(step int, receipt string, now time.Time) (Mark, bool) {
+	if step < 1 || step > maxStep {
+		return Mark{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := s.witnessed[step]; ok {
+		return m, true
+	}
+	if len(receipt) > maxNote {
+		receipt = receipt[:maxNote]
+	}
+	m := Mark{Step: step, Outcome: MarkWitnessed, At: now, Note: receipt}
+	if s.witnessed == nil {
+		s.witnessed = make(map[int]Mark, maxStep)
+	}
+	s.witnessed[step] = m
+	s.persistLocked()
+	return m, true
+}
+
+// witnessedLocked is Witnessed without taking the lock, for callers that
+// already hold it -- the same pattern marksLocked follows.
+func (s *Store) witnessedLocked() []Mark {
+	out := make([]Mark, 0, len(s.witnessed))
+	for step := 1; step <= maxStep; step++ {
+		if m, ok := s.witnessed[step]; ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Witnessed returns every step the server has recorded seeing satisfied,
+// ordered by step, the same as Marks.
+func (s *Store) Witnessed() []Mark {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.witnessedLocked()
 }

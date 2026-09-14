@@ -15,6 +15,13 @@
   // feature -- a forced-past line reaches the step list, the audit log,
   // and every empty state whose silence it explains.
   //
+  // A step done from evidence mikroview no longer has -- typically
+  // because a restart emptied the memory-backed store that saw it --
+  // still shows done's own green disc, from the server's own witness
+  // (#1221); only its receipt changes, to a past-tense, dated line that
+  // never claims to be a current reading. See setupsteps.ts's
+  // witnessReceipt and LedgerStep.witnessed.
+  //
   // Mounted once, beside the other overlays in App.svelte rather than
   // inside the rail that opens it: the rail unmounts when it is docked
   // and does not exist at all on a phone, and the modal outlives both.
@@ -1018,7 +1025,16 @@
                    saying what arrived, with its shortfall in the warning
                    box below (#1132), and it renders only when there was
                    an arrival to word. -->
-              {#if step.status.detail || !step.status.shortfall}
+              {#if step.witnessed}
+                <!-- #1221: a witness is a floor under evidence that did
+                     not survive a restart, not a current reading --
+                     status.detail below is whatever the live check
+                     falls back to with nothing to look at, so this line
+                     is the receipt instead: past tense, dated, and
+                     never worded as though mikroview is watching the
+                     router right now. -->
+                <p class="observation arrived">{step.receipt}</p>
+              {:else if step.status.detail || !step.status.shortfall}
                 <p class="observation {step.n === 6 && wizardState.lostRouterDevice ? (lostGeneration ? 'arrived' : 'waiting') : step.flavour}">
                   {#if step.n === 6 && wizardState.lostRouterDevice}
                     {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
