@@ -21,6 +21,25 @@ MikroView. Either way, the router always initiates; MikroView never
 connects to it. This is a
 one-time configuration on each router you want to monitor.
 
+## Upgrading from a MikroView older than 2026-09-12?
+
+Every released wizard before that date — v0.3.0, v0.4.0 and v0.5.1 —
+printed the logging action below without `remote-log-format=syslog`.
+Without it, RouterOS gives each syslog message no header of its own, so
+a burst of firewall lines can arrive as one undelimited run. If that run
+crosses 64 KiB, MikroView has no choice but to discard the rest of it.
+
+**What you'll see:** MikroView reporting oversized or over-long runs
+from your router (Settings ▸ ingest names the router when it sees this),
+and the Fall and other views looking emptier than they should — the
+traffic was there, but the run it arrived in was too long to read.
+
+**The fix:** re-paste the logging block in step 1 below. It's safe to
+run again — since #1208, it adds the action if it's missing and updates
+it in place if it's already there, so this is exactly how an existing
+router picks up the missing flag. Nothing else in this guide needs
+re-running.
+
 ## 1. Point RouterOS at the container over TLS
 
 MikroView's only syslog listener speaks `remote-protocol=tls` (RFC
