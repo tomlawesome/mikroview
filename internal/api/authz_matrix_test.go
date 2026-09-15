@@ -146,6 +146,18 @@ var authzMatrix = []routeExpectation{
 		"downloads one generation's .backup or .rsc -- a router's whole configuration, credentials included, so " +
 			"this is admin-only and every call writes an audit entry with the admin's name (#394)"},
 
+	{http.MethodPost, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
+		"marks one stored backup as kept, with a comment saying why (#1126) -- admin-only like the list and the " +
+			"download beside it: it is a decision about what this instance holds on its own disk, and the comment " +
+			"is an operator's note about their own network"},
+	{http.MethodDelete, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
+		"releases a kept backup back into the cycling ten, where the oldest may then go -- same tier as keeping " +
+			"one, deliberately: this is the only control in the group that can cost the operator a stored " +
+			"configuration"},
+	{http.MethodPatch, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
+		"rewrites a kept backup's comment (#1126) -- same tier as the two above, since it edits the same " +
+			"sealed index entry and nothing else reaches it"},
+
 	{http.MethodPost, "/api/router-backups/unlock", accessAdmin,
 		"opens the vault's optional passphrase lock for the calling session (#956) -- admin-only for the same " +
 			"reason the download is, and the unlock is bound to the session that made this call, so the same " +
