@@ -21,7 +21,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import type { FirewallEvent } from '../lib/types'
-import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 
 // jsdom has no window.matchMedia -- viewport.svelte.ts's ViewportState
 // singleton calls it at module-load time (same fix used throughout this
@@ -59,15 +58,6 @@ function getBox() {
 // there is no button any more, so this clicks the box itself.
 async function expandRow() {
   await fireEvent.click(getBox())
-  flushSync()
-}
-
-// #710: the desktop column chooser folds behind its own "columns ▸"
-// toggle now (see FilterBar.svelte's columnsOpen comment) rather than
-// sitting always-open on a forced second row -- opens it the same way a
-// reader would, by clicking the toggle.
-async function openColumns() {
-  await fireEvent.click(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
   flushSync()
 }
 
@@ -356,9 +346,10 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     render(FilterBar)
     await expandRow()
 
-    // #729's "Columns" field is not one of these any more (#710): on the
-    // desktop row it is a "columns ▸" toggle beside clear/fold, not an
-    // fb-field with its own micro-label -- see the next test.
+    // #729's "Columns" field is not one of these any more (#710), and
+    // #1197 moved its desktop "columns ▸" toggle off this strip entirely
+    // -- it lives on Whisper.svelte's own hand now (Whisper.svelte.test.ts
+    // covers it), so there is no trace of it left to assert here.
     // Direct children of the strip: #1191 captions the three controls
     // inside each address group with the same micro-label, and those are
     // that group's business, not the strip's field order (they have
@@ -377,20 +368,6 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
       'Interface',
       'Rule',
     ])
-  })
-
-  // #1197 (owner ruling, 2026-09-13) supersedes #710's framing here: the
-  // toggle no longer lives in the fold-out strip at all -- it moved to
-  // the always-visible .filterline, specifically so an operator who
-  // never opens the fold still finds it. No expandRow() below is the
-  // point of the test, not an oversight.
-  it('draws the column chooser as a toggle on the always-visible toolbar, not inside the fold', () => {
-    render(FilterBar)
-
-    expect(screen.getByRole('button', { name: 'Choose which columns the stream shows' }).textContent?.trim()).toBe(
-      'columns ▸',
-    )
-    expect(screen.queryByRole('checkbox')).toBeNull()
   })
 
   it('does not draw Presets or Export to CSV -- later additions round 29 does not draw', async () => {
@@ -438,190 +415,6 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     expect(box.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByLabelText('Device')).toBeNull()
     expect(document.activeElement).toBe(box)
-  })
-})
-
-// #729: the column chooser rides in the same fold-out strip as the rest
-// of the filter fields -- no new bar, no new button beside the search
-// box. columnState is a module-level singleton (shared with
-// columns.svelte.test.ts and LiveTable.svelte.test.ts), so every test
-// below restores it rather than leaking a toggle into whichever test
-// runs next.
-describe('FilterBar, the column chooser (#729)', () => {
-  beforeEach(() => {
-    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
-  })
-
-  afterEach(() => {
-    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
-  })
-
-  // #1197: none of the tests below open the fold-out strip (expandRow())
-  // any more -- the trigger lives on .filterline now, reachable with the
-  // fold closed the whole time. See the two dedicated tests at the foot
-  // of this block for that independence made explicit.
-  it('offers a checkbox for every optional column, and none for the pinned two', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    // Time and Rule are each a unique label in this list -- a plain
-    // queryByRole miss proves no checkbox exists for either.
-    for (const key of PINNED_COLUMNS) {
-      const label = COLUMNS.find((c) => c.key === key)?.label as string
-      expect(screen.queryByRole('checkbox', { name: `${label} column` })).toBeNull()
-    }
-
-    // 15 columns, 2 pinned -- 13 checkboxes total.
-    expect(screen.getAllByRole('checkbox').length).toBe(COLUMNS.length - PINNED_COLUMNS.size)
-
-    // Spot-check a couple of ordinary columns with unique labels.
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Chain column' })).toBeTruthy()
-  })
-
-  // #710: "Address column" used to name two different checkboxes (source's
-  // and destination's), which is exactly the kind of thing an accessible
-  // name is supposed to rule out. Each one now carries its own
-  // disambiguated aria-label even though the two read identically on
-  // screen ("address" under each of two headings) -- this is what makes a
-  // by-name lookup for either possible at all.
-  it('disambiguates the address/port/MAC checkboxes that repeat visually, by aria-label', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    expect(screen.getByRole('checkbox', { name: 'Source address column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Destination address column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Source port column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Destination port column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Source MAC column' })).toBeTruthy()
-  })
-
-  // The visible word is the bare column name, not "<Label> column" --
-  // the "column" suffix and the disambiguation both still exist, just in
-  // the aria-label (checked above), not on screen where two "Address
-  // column"s side by side is what read as clunky in the first place.
-  it('draws the bare column name on screen, grouped under source/destination headings for the repeated ones', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    const panel = document.querySelector('.col-panel') as HTMLElement
-    const labelTexts = Array.from(panel.querySelectorAll('.col-toggle')).map((el) => el.textContent?.trim())
-    expect(labelTexts).toContain('device')
-    expect(labelTexts).toContain('NAT')
-    // "address" appears twice on screen -- once per heading -- which is
-    // exactly the point: the heading, not the checkbox's own text, is
-    // what tells the two apart now.
-    expect(labelTexts.filter((t) => t === 'address').length).toBe(2)
-
-    const headings = Array.from(panel.querySelectorAll('.col-group-heading')).map((el) => el.textContent?.trim())
-    expect(headings).toEqual(['source', 'destination'])
-  })
-
-  it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toHaveProperty('checked', true)
-  })
-
-  it('unchecking a column writes through to columnState, and is a reader preference -- not tied to any filter term', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    const device = screen.getByRole('checkbox', { name: 'Device column' })
-    await fireEvent.click(device)
-    flushSync()
-
-    expect(columnState.isColumnVisible('device')).toBe(false)
-    expect(appState.hasActiveFilters).toBe(false)
-  })
-
-  // #710: the toggle itself -- opens on click, closes again on a second
-  // click, on Escape (returning focus to the toggle, same convention as
-  // the strip's own fold), and on a click elsewhere in the open strip.
-  it('opens and closes the panel by clicking the toggle again', async () => {
-    render(FilterBar)
-    await openColumns()
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
-
-    await openColumns()
-    expect(screen.queryByRole('checkbox')).toBeNull()
-  })
-
-  // #1197: the trigger no longer lives inside the fold-out strip, but a
-  // reader can still have both open at once (the fold for a filter term,
-  // the columns panel for a layout change) -- expandRow() here proves
-  // Escape closes only the popover even then, not the strip underneath.
-  it('closes the panel on Escape, without also folding the whole strip', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-
-    await fireEvent.keyDown(window, { key: 'Escape' })
-    flushSync()
-
-    expect(screen.queryByRole('checkbox')).toBeNull()
-    // The strip itself stayed open -- Escape closed only the popover.
-    expect(screen.getByLabelText('Device')).toBeTruthy()
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
-  })
-
-  // Same reasoning as the Escape test above: expandRow() puts the strip
-  // in play deliberately, to prove a click inside it (but away from the
-  // columns panel) closes only the panel.
-  it('closes the panel on a click elsewhere in the strip, without folding the strip itself', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-
-    await fireEvent.click(screen.getByLabelText('Protocol'))
-    flushSync()
-
-    expect(screen.queryByRole('checkbox')).toBeNull()
-    expect(screen.getByLabelText('Device')).toBeTruthy()
-  })
-
-  // #1197 (owner ruling, 2026-09-13): the whole point of the move -- an
-  // operator who never opens the filter fold still finds and uses the
-  // picker. Proven here by never calling expandRow() at all.
-  it('is reachable and usable with the filter fold never opened', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    expect(document.getElementById('filterbar-strip')).toBeNull()
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
-  })
-
-  // #1197 item 2 of the ruling: the fold-out's old copy is gone, not
-  // duplicated -- one door to this panel.
-  it('has exactly one columns ▸ trigger on the page', () => {
-    render(FilterBar)
-
-    expect(screen.getAllByRole('button', { name: 'Choose which columns the stream shows' }).length).toBe(1)
-  })
-
-  // #1197 item 3: one click undoes a bad drag. The test's own final
-  // reset() call is what leaves columnState.widths clean for whichever
-  // test runs next -- there is no separate afterEach for widths (only
-  // `visible` is restored above), so this has to put its own mutation
-  // back.
-  it('offers "reset widths" in the panel, disabled only once widths already match the default', async () => {
-    render(FilterBar)
-    await openColumns()
-
-    const resetBtn = screen.getByRole('button', { name: 'reset widths' })
-    expect(columnState.isDefault).toBe(true)
-    expect(resetBtn).toHaveProperty('disabled', true)
-
-    columnState.setWidth(0, 999)
-    flushSync()
-    expect(resetBtn).toHaveProperty('disabled', false)
-
-    await fireEvent.click(resetBtn)
-    flushSync()
-
-    expect(columnState.isDefault).toBe(true)
-    expect(resetBtn).toHaveProperty('disabled', true)
   })
 })
 

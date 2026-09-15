@@ -4,7 +4,7 @@
 // curve itself is the one keyboard control (arrows move, Enter marks an
 // edge, Escape clears). This covers the three gestures directly, plus
 // the shape LiveTable actually reads off whisperState.fenceRange.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // jsdom (unlike a real browser) has no window.matchMedia, and Whisper
 // now pulls in lib/viewport.svelte.ts -- the hand's `group` pill is
@@ -30,14 +30,23 @@ vi.hoisted(() => {
       }) as unknown as MediaQueryList
   }
 })
-import { render } from '@testing-library/svelte'
+import { render, screen } from '@testing-library/svelte'
 import { fireEvent } from '@testing-library/dom'
 import { flushSync } from 'svelte'
 import Whisper from './Whisper.svelte'
 import { appState } from '../lib/state.svelte'
 import { whisperState } from '../lib/whisper.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
+import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 import { emptyFilters, type ClientEvent, type Stats, type TimeBucket } from '../lib/types'
+
+// #1197: opens the columns ▸ picker the same way an operator would, by
+// clicking the toggle -- moved here from FilterBar.svelte.test.ts's own
+// former helper of the same name, along with the trigger itself.
+async function openColumns() {
+  await fireEvent.click(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
+  flushSync()
+}
 
 
 // jsdom's own getBoundingClientRect returns all zeros; the drag/click
@@ -396,5 +405,176 @@ describe("the stream's hand (rounds 36-38)", () => {
     const { stat } = renderHand()
 
     expect(stat()).not.toContain('ring holds')
+  })
+})
+
+// #729/#1197: the column chooser used to ride FilterBar.svelte's own
+// fold-out strip; the owner's ruling on #1197 moved the desktop trigger
+// and its popover onto this hand instead, right after csv ↓ -- this hand
+// is already control over what the table holds and shows, and choosing
+// columns is one more of those. FilterBar.svelte keeps its own copy of
+// the underlying snippet for the mobile drawer's always-open list, which
+// is unchanged and still covered by FilterBar.svelte.test.ts. columnState
+// is a module-level singleton (shared with columns.svelte.test.ts,
+// FilterBar.svelte.test.ts and LiveTable.svelte.test.ts), so every test
+// below restores it rather than leaking a toggle into whichever test
+// runs next.
+describe('the columns ▸ picker (#729/#1197)', () => {
+  beforeEach(() => {
+    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+  })
+
+  afterEach(() => {
+    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+  })
+
+  it('draws the trigger as the last pill on the hand, right after csv ↓', () => {
+    const { container } = render(Whisper)
+    const wpills = Array.from(container.querySelectorAll<HTMLButtonElement>('.wpill'))
+
+    expect(wpills.map((b) => b.textContent?.trim())).toEqual(['wipe', 'csv ↓', 'columns ▸'])
+    const trigger = wpills[wpills.length - 1]
+    expect(trigger.getAttribute('aria-haspopup')).toBe('true')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(trigger.title).toBe('Choose which columns the stream shows')
+  })
+
+  it('has exactly one columns ▸ trigger on the page', () => {
+    render(Whisper)
+
+    expect(screen.getAllByRole('button', { name: 'Choose which columns the stream shows' }).length).toBe(1)
+  })
+
+  it('offers a checkbox for every optional column, and none for the pinned two', async () => {
+    render(Whisper)
+    await openColumns()
+
+    // Time and Rule are each a unique label in this list -- a plain
+    // queryByRole miss proves no checkbox exists for either.
+    for (const key of PINNED_COLUMNS) {
+      const label = COLUMNS.find((c) => c.key === key)?.label as string
+      expect(screen.queryByRole('checkbox', { name: `${label} column` })).toBeNull()
+    }
+
+    // 15 columns, 2 pinned -- 13 checkboxes total.
+    expect(screen.getAllByRole('checkbox').length).toBe(COLUMNS.length - PINNED_COLUMNS.size)
+
+    // Spot-check a couple of ordinary columns with unique labels.
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Chain column' })).toBeTruthy()
+  })
+
+  // #710: "Address column" used to name two different checkboxes (source's
+  // and destination's), which is exactly the kind of thing an accessible
+  // name is supposed to rule out. Each one carries its own disambiguated
+  // aria-label even though the two read identically on screen ("address"
+  // under each of two headings) -- this is what makes a by-name lookup
+  // for either possible at all.
+  it('disambiguates the address/port/MAC checkboxes that repeat visually, by aria-label', async () => {
+    render(Whisper)
+    await openColumns()
+
+    expect(screen.getByRole('checkbox', { name: 'Source address column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Destination address column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Source port column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Destination port column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Source MAC column' })).toBeTruthy()
+  })
+
+  // The visible word is the bare column name, not "<Label> column" -- the
+  // "column" suffix and the disambiguation both still exist, just in the
+  // aria-label (checked above), not on screen where two "Address column"s
+  // side by side is what read as clunky in the first place.
+  it('draws the bare column name on screen, grouped under source/destination headings for the repeated ones', async () => {
+    render(Whisper)
+    await openColumns()
+
+    const panel = document.querySelector('.col-panel') as HTMLElement
+    const labelTexts = Array.from(panel.querySelectorAll('.col-toggle')).map((el) => el.textContent?.trim())
+    expect(labelTexts).toContain('device')
+    expect(labelTexts).toContain('NAT')
+    // "address" appears twice on screen -- once per heading -- which is
+    // exactly the point: the heading, not the checkbox's own text, is
+    // what tells the two apart now.
+    expect(labelTexts.filter((t) => t === 'address').length).toBe(2)
+
+    const headings = Array.from(panel.querySelectorAll('.col-group-heading')).map((el) => el.textContent?.trim())
+    expect(headings).toEqual(['source', 'destination'])
+  })
+
+  it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
+    render(Whisper)
+    await openColumns()
+
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toHaveProperty('checked', true)
+  })
+
+  it('unchecking a column writes through to columnState, and is a reader preference -- not tied to any filter term', async () => {
+    render(Whisper)
+    await openColumns()
+
+    const device = screen.getByRole('checkbox', { name: 'Device column' })
+    await fireEvent.click(device)
+    flushSync()
+
+    expect(columnState.isColumnVisible('device')).toBe(false)
+    expect(appState.hasActiveFilters).toBe(false)
+  })
+
+  // The toggle itself -- opens on click, closes again on a second click,
+  // on Escape (returning focus to the toggle), and on a click elsewhere
+  // on the page.
+  it('opens and closes the panel by clicking the toggle again', async () => {
+    render(Whisper)
+    await openColumns()
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
+
+    await openColumns()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
+  it('closes the panel on Escape, and returns focus to the trigger', async () => {
+    render(Whisper)
+    await openColumns()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    flushSync()
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
+  })
+
+  it('closes the panel on a click elsewhere on the page', async () => {
+    render(Whisper)
+    await openColumns()
+
+    await fireEvent.click(document.body)
+    flushSync()
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+  })
+
+  // #1197 item 3 of the original ruling: one click undoes a bad drag. The
+  // test's own final reset() call is what leaves columnState.widths clean
+  // for whichever test runs next -- there is no separate afterEach for
+  // widths (only `visible` is restored above), so this has to put its own
+  // mutation back.
+  it('offers "reset widths" in the panel, disabled only once widths already match the default', async () => {
+    render(Whisper)
+    await openColumns()
+
+    const resetBtn = screen.getByRole('button', { name: 'reset widths' })
+    expect(columnState.isDefault).toBe(true)
+    expect(resetBtn).toHaveProperty('disabled', true)
+
+    columnState.setWidth(0, 999)
+    flushSync()
+    expect(resetBtn).toHaveProperty('disabled', false)
+
+    await fireEvent.click(resetBtn)
+    flushSync()
+
+    expect(columnState.isDefault).toBe(true)
+    expect(resetBtn).toHaveProperty('disabled', true)
   })
 })
