@@ -14,7 +14,7 @@
   // exactly like clicking the roll rail. This overlay draws the rings and
   // the progress bar on top of it.
   import { journeyState } from '../lib/journey.svelte'
-  import { TOUR_HIGHLIGHTS } from '../lib/tourHighlights'
+  import { TOUR_HIGHLIGHTS, fitRing } from '../lib/tourHighlights'
 
   const total = $derived(journeyState.cards.length)
   const card = $derived(journeyState.cards[journeyState.cardIndex])
@@ -43,29 +43,17 @@
       // only (a plain horizontal SVG <line>'s bounding box is exactly
       // 0 tall, not merely thin -- the live-check skill's own note on
       // Playwright and SVG geometry) -- that case is real and goes on
-      // to the padding below, not to the empty-box fallback.
+      // to fitRing's own padding, not to the empty-box fallback.
       if (r.width === 0 && r.height === 0) continue
-      // A rule or hairline measures only a pixel or two thick -- the
-      // fall's now line is ~1px tall. Pad it to a visible band, centred
-      // on the element, rather than ringing a sliver (#750).
-      const MIN_PX = 28
-      let top = r.top
-      let height = r.height
-      if (height < MIN_PX) {
-        top -= (MIN_PX - height) / 2
-        height = MIN_PX
-      }
-      let left = r.left
-      let width = r.width
-      if (width < MIN_PX) {
-        left -= (MIN_PX - width) / 2
-        width = MIN_PX
-      }
+      // fitRing (lib/tourHighlights.ts) applies the hairline pad (#750)
+      // and, for anything that is not itself a box (#1215 items 2/3),
+      // the clear margin that stands the ring off its target.
+      const fitted = fitRing({ top: r.top, left: r.left, width: r.width, height: r.height }, h.box === true)
       next[h.label] = {
-        top: `${(top / window.innerHeight) * 100}%`,
-        left: `${(left / window.innerWidth) * 100}%`,
-        width: `${(width / window.innerWidth) * 100}%`,
-        height: `${(height / window.innerHeight) * 100}%`,
+        top: `${(fitted.top / window.innerHeight) * 100}%`,
+        left: `${(fitted.left / window.innerWidth) * 100}%`,
+        width: `${(fitted.width / window.innerWidth) * 100}%`,
+        height: `${(fitted.height / window.innerHeight) * 100}%`,
       }
     }
     // Only assign when something moved. This runs every frame, and a
@@ -87,10 +75,54 @@
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   })
+
+  // #1215 item 6: everything outside the current highlight(s) is
+  // lightly blurred so the eye goes to what's being explained -- a
+  // full-screen scrim behind the rings, cut with a hole per ring from
+  // the same boxes the rings themselves draw from (percentages parsed
+  // back to px, since clip-path's path() needs real coordinates).
+  //
+  // Item 7 (several rings sharing a card, e.g. the fall's three):
+  // explained together, not stepped one at a time. The fall already
+  // shows its three rings together -- round 29's own ratified shape,
+  // verbatim -- and every other card in TOUR_HIGHLIGHTS carries exactly
+  // one highlight. Stepping through rings one at a time would need a
+  // second, sub-card "next" that does not exist today; inventing one is
+  // tour-*flow* scope this issue did not ask for, on top of the ring
+  // styling it did. Recorded on #1215 alongside this comment.
+  //
+  // Static, not animated: the hole tracks whatever the rings are
+  // already tracking off the same continuously-measured boxes (moving
+  // only while the deck's own ~700ms roll is still in flight, exactly
+  // like the rings themselves already do, ungated). There is no blur
+  // radius or opacity being animated, so nothing here needs gating
+  // behind prefers-reduced-motion -- a static blur is not motion.
+  const veilClip = $derived.by(() => {
+    if (highlights.length === 0 || typeof window === 'undefined') return ''
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    // A few px beyond the ring itself, so the blur's hard clip edge
+    // sits clear of the bright border rather than crowding it.
+    const HOLE_PAD = 6
+    const holes = highlights
+      .map((h) => {
+        const b = boxes[h.label] ?? h
+        const top = (parseFloat(b.top) / 100) * vh - HOLE_PAD
+        const left = (parseFloat(b.left) / 100) * vw - HOLE_PAD
+        const width = (parseFloat(b.width) / 100) * vw + HOLE_PAD * 2
+        const height = (parseFloat(b.height) / 100) * vh + HOLE_PAD * 2
+        return `M${left},${top} H${left + width} V${top + height} H${left} Z`
+      })
+      .join(' ')
+    return `path(evenodd, "M0,0 H${vw} V${vh} H0 Z ${holes}")`
+  })
 </script>
 
 {#if card}
   <div class="tour" role="group" aria-label="The tour: {card.name}, {journeyState.cardIndex + 1} of {total}">
+    {#if veilClip}
+      <div class="veil" aria-hidden="true" style:clip-path={veilClip}></div>
+    {/if}
     <div class="rings" aria-hidden="true">
       {#each highlights as h (h.label)}
         {@const box = boxes[h.label] ?? h}
@@ -113,6 +145,21 @@
 {/if}
 
 <style>
+  /* #1215 item 6: a light, static blur over the whole screen, clipped
+     with a hole (one per current ring, item 7) so only what the tour is
+     naming stays sharp. Sits under the rings (z-index) and above the
+     app itself, and never intercepts a click -- it is a sightline aid,
+     not a modal scrim. */
+  .veil {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    pointer-events: none;
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+    background: color-mix(in srgb, var(--bg) 15%, transparent);
+  }
+
   .rings {
     position: fixed;
     inset: 0;
@@ -126,9 +173,14 @@
     left: var(--h-left);
     width: var(--h-width);
     height: var(--h-height);
-    border: 1px solid var(--accent);
+    /* #1215 item 1: a spotlight, not chrome -- --tour-ring is its own
+       fixed cyan (app.css), never the app's ordinary --accent, at full
+       opacity with a heavier border and a glow so it reads as unmistakable
+       even under the "frequency" colorway, whose own --accent is a
+       similar cyan. */
+    border: 2px solid var(--tour-ring);
     border-radius: 8px;
-    opacity: 0.85;
+    box-shadow: 0 0 16px 2px color-mix(in srgb, var(--tour-ring) 55%, transparent);
   }
 
   .tag {
@@ -137,7 +189,9 @@
     left: 0;
     font: 600 10.5px var(--font-mono);
     letter-spacing: 0.02em;
-    color: var(--accent);
+    /* Matches the ring it labels (#1215 item 1), not the app's ordinary
+       --accent -- the tag is part of the same spotlight, not chrome. */
+    color: var(--tour-ring);
     white-space: nowrap;
     text-shadow:
       0 0 4px var(--bg),
