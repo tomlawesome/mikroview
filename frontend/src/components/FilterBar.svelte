@@ -111,18 +111,6 @@
   // must be independently togglable.
   let expanded = $state(false)
 
-  // #710 round-30 fidelity: the column chooser's own disclosure. Round
-  // 30 draws filters, the column chooser, clear and fold on one strip
-  // (stream-bar-out.png) -- the build instead gave `.columns-field` a
-  // `flex-basis: 100%` that forced it, and everything after it, onto a
-  // row of its own. Fifteen columns minus the two pinned ones is too
-  // many checkboxes to add to that same one-line strip honestly, so
-  // this follows the strip's own "fold ▸" idiom one level deeper: a
-  // quiet toggle takes the checkboxes' place in the row, and they open
-  // in a panel that floats over the strip rather than pushing it onto a
-  // second line.
-  let columnsOpen = $state(false)
-
   // DOM refs for the outside-click close below: a click only counts as
   // "away from the box" once it lands outside both the trigger
   // (`.fbox`) and the strip it opens (`.bar.thin`), so picking a value
@@ -133,22 +121,9 @@
   // markup), so it -- not the box div, which has no tabstop -- is where
   // keyboard focus goes back to on close.
   let hintEl: HTMLInputElement | undefined = $state()
-  // Same "outside click closes it" shape as fboxEl/barEl above, one
-  // level down: a click inside the open columns panel picks a checkbox
-  // rather than dismissing it.
-  let columnsMenuEl: HTMLDivElement | undefined = $state()
-  let columnsTriggerEl: HTMLButtonElement | undefined = $state()
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
-    // Closes its own popover first, same as any nested disclosure --
-    // Escape while choosing columns closes the column panel, not the
-    // whole filter strip underneath it.
-    if (columnsOpen) {
-      columnsOpen = false
-      columnsTriggerEl?.focus()
-      return
-    }
     if (drawerOpen) drawerOpen = false
     if (expanded) {
       expanded = false
@@ -178,11 +153,6 @@
   // going on to unmount.
   function onWindowClick(e: MouseEvent) {
     const path = e.composedPath()
-    // #1197: columnsOpen no longer lives inside the fold (.bar), so its
-    // own outside-click close can't be gated on `expanded` any more --
-    // the trigger and panel are reachable, and closeable, with the fold
-    // shut the whole time.
-    if (columnsOpen && columnsMenuEl && !path.includes(columnsMenuEl)) columnsOpen = false
     if (viewportState.isMobile || !expanded) return
     if ((fboxEl && path.includes(fboxEl)) || (barEl && path.includes(barEl))) return
     expanded = false
@@ -258,13 +228,12 @@
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
-<!-- #729: the stream's column chooser snippets. File scope (#1197),
-     not nested inside the fold-out strip below -- the desktop trigger
-     that renders columnCheckboxes() now lives in the always-visible
-     .filterline, and the mobile drawer's always-open list (unchanged by
-     #1197) still needs the same snippet from inside .bar, so both
-     callers need it in scope. Time and Rule are pinned -- no checkbox
-     for either, since neither is ever offered as a toggle. -->
+<!-- #729: the stream's column chooser snippets, for the mobile drawer's
+     own always-open list rendered from inside .bar below -- the desktop
+     "columns ▸" trigger and its popover moved to Whisper.svelte under
+     #1197's ruling, with its own copy of this same snippet (see that
+     file's comment). Time and Rule are pinned -- no checkbox for either,
+     since neither is ever offered as a toggle. -->
 {#snippet columnCheckbox(col: ColumnChoice)}
   <!-- aria-label carries the disambiguated name ("Source address
        column", not "Address column") on the input directly, which
@@ -432,51 +401,6 @@
            words instead of only on hover. -->
       <span class="reach">{reachWords}</span>
     </span>
-
-    <!-- #1197 (owner ruling, 2026-09-13): columns ▸ stands on this
-         always-visible toolbar now, beside the span pills above -- not
-         inside the fold, where an operator who never opens the filters
-         never learned the table had hidden columns at all. Same
-         popover panel, same persistence, same
-         columnsOpen/columnsMenuEl/columnsTriggerEl state and
-         columnCheckboxes snippet the fold-out used to own -- only the
-         trigger's home moved, and the fold-out's own copy is gone (see
-         .bar below): one door to this panel, not two. Desktop only --
-         the mobile drawer keeps its own always-open list (see the
-         ruling's item 3, rendered from .bar below, unchanged). -->
-    <div class="columns-menu" bind:this={columnsMenuEl}>
-      <button
-        type="button"
-        class="tf-columns"
-        class:on={columnsOpen}
-        bind:this={columnsTriggerEl}
-        onclick={(e) => {
-          e.stopPropagation()
-          columnsOpen = !columnsOpen
-        }}
-        aria-haspopup="true"
-        aria-expanded={columnsOpen}
-        aria-label="Choose which columns the stream shows"
-        title="Choose which columns the stream shows">columns ▸</button
-      >
-      {#if columnsOpen}
-        <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
-          {@render columnCheckboxes()}
-          <!-- #1197 item 3: one click undoes a bad drag. Disabled once
-               every width already matches DEFAULT_WIDTHS -- nothing to
-               reset, same idiom the csv ↓ pill's own disabled state
-               uses for "nothing to give". -->
-          <button
-            type="button"
-            class="col-reset"
-            onclick={() => columnState.reset()}
-            disabled={columnState.isDefault}
-            title="Reset every column back to its default width"
-            >reset widths</button
-          >
-        </div>
-      {/if}
-    </div>
   </div>
 
   {#if FILTERS_TRIGGER_ENABLED && !expanded}
@@ -725,9 +649,10 @@
 
     {#if viewportState.isMobile}
       <!-- The mobile drawer is already a vertical stack with room to
-           spare (#85's 44px-row convention below), so it keeps the
-           always-open list -- unchanged by #1197's ruling (item 3),
-           which only moves the desktop trigger (see .filterline above). -->
+           spare (#85's 44px-row convention below), so it keeps its own
+           always-open list -- unchanged by #1197's ruling, which only
+           moved the desktop trigger (now Whisper.svelte's own "columns
+           ▸", see that file's comment). -->
       <div class="fb-field columns-field">
         <span class="fb-label">Columns</span>
         <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
@@ -765,7 +690,6 @@
         class="tf-fold"
         onclick={() => {
           expanded = false
-          columnsOpen = false
           hintEl?.focus()
         }}
         aria-label="Fold filters back into the box"
@@ -1036,19 +960,6 @@
     align-items: flex-end;
     animation: unfurl 0.35s ease-out;
     transform-origin: right center;
-    /* #710: neither .card nor .card-body (the shared ancestor of this
-       bar and LiveTable's .table-wrap) is itself a stacking context, so
-       .col-panel's z-index and .table-wrap's sticky header cells' own
-       (.header-cell, z-index 2-4) climb straight past both and are
-       compared as if they were siblings at the document root -- caught
-       live as the header painting straight through the open column
-       panel despite .col-panel's z-index of 40 nominally outranking it.
-       .bar was an unpositioned sibling of .table-wrap and so took no
-       part in that comparison at all; position + a z-index clear of
-       LiveTable's own (2-4) puts it in the race and gives it the
-       header's own weapon back. */
-    position: relative;
-    z-index: 10;
   }
 
   @keyframes unfurl {
@@ -1420,11 +1331,11 @@
     margin-left: 0;
   }
 
-  /* #729: the column chooser, mobile drawer only -- the desktop
-     .filterline uses .columns-menu/.tf-columns above (in the markup)
-     instead. Same fb-field/fb-label shape every other control in the
-     drawer already uses -- a row of checkboxes, not a new kind of
-     control. */
+  /* #729: the column chooser, mobile drawer only now -- the desktop
+     trigger and its popover moved to Whisper.svelte's own hand under
+     #1197's ruling (see that file's comment). Same fb-field/fb-label
+     shape every other control in the drawer already uses -- a row of
+     checkboxes, not a new kind of control. */
   .columns-field {
     flex-basis: 100%;
   }
@@ -1433,63 +1344,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px 14px;
-  }
-
-  /* #710 round-30 fidelity, moved by #1197's owner ruling: the desktop
-     toggle used to sit in the fold-out strip's own flow, riding ahead
-     of clear/fold; it now sits in .filterline instead, which is
-     always on screen rather than only once a reader opens the fold --
-     the ruling's whole point. .filterline's own `align-items: center`
-     already centers every child, but this stays explicit since the
-     rule travelled with the element rather than being re-derived. */
-  .columns-menu {
-    position: relative;
-    align-self: center;
-  }
-
-  .tf-columns {
-    background: none;
-    border: none;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--fg-dim);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .tf-columns:hover,
-  .tf-columns.on {
-    color: var(--accent);
-  }
-
-  .tf-columns:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  /* Floats over the strip (the account menu's dress, same as
-     FilterPresetsMenu's .fpmenu) instead of joining its flex flow, so
-     opening it never pushes clear/fold or anything after it onto
-     another line -- the one-strip fix holds whether the panel is open
-     or closed. */
-  .col-panel {
-    position: absolute;
-    top: calc(100% + 6px);
-    /* Right-anchored, not left: the trigger sits near the strip's own
-       right end (clear/fold ride just after it), so a panel opening
-       rightward from there would run past the viewport edge -- caught
-       on a live instance opening exactly that way (#710). Opening
-       leftward keeps it over the strip that's already on screen. */
-    right: 0;
-    z-index: 40;
-    width: 320px;
-    max-width: 80vw;
-    padding: 10px 14px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-    cursor: default;
   }
 
   .col-toggle {
@@ -1515,42 +1369,11 @@
     outline-offset: 2px;
   }
 
-  /* #1197 item 3: one click undoes a bad drag, set off from the
-     checkboxes above it by the same hairline .col-group-heading already
-     uses, so it doesn't read as one more column toggle. */
-  .col-reset {
-    display: block;
-    width: 100%;
-    margin-top: 8px;
-    padding: 8px 0 0;
-    border: none;
-    border-top: 1px solid var(--border);
-    background: none;
-    color: var(--fg-dim);
-    font: 11px var(--font-mono);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .col-reset:hover:not(:disabled) {
-    color: var(--fg);
-  }
-
-  .col-reset:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .col-reset:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
   /* #710: the small heading naming which side "address"/"src port"/
      "MAC" belongs to. flex-basis: 100% starts a new line the same way
      the old, now-retired .columns-field did for the whole chooser --
-     here it is scoped to one heading inside the panel/drawer list
-     instead of the whole strip. */
+     here it is scoped to one heading inside the drawer list instead of
+     the whole strip. */
   .col-group-heading {
     flex-basis: 100%;
     margin-top: 4px;
