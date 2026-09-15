@@ -441,6 +441,18 @@ store:
 # setup:
 #   storePath: /var/lib/mikroview/setup.json
 
+# Which "N new settings are available" upgrade notice (#1218) has
+# already been dismissed -- so it stops appearing once you've dealt with
+# it, but comes back for the next version that actually adds something
+# new. The notice itself (what's new, and the exact YAML to paste) is
+# never stored here; it's worked out fresh from this file and the
+# running binary every time Settings is opened. storePath already
+# defaults to /var/lib/mikroview/config-drift.json; only uncomment this
+# block to move that path. See docs/configuration.md's "Upgrade notice"
+# section.
+# configDrift:
+#   storePath: /var/lib/mikroview/config-drift.json
+
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,

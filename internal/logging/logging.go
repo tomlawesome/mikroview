@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -91,12 +92,11 @@ func New(component string) *slog.Logger {
 // one unit of work rather than silently ending the goroutine for good.
 func Recover(logger *slog.Logger) {
 	if r := recover(); r != nil {
-		// handler.Handle (below) only ever renders a record's plain
-		// Message plus its "component" attr -- every other structured
-		// attr (slog.Any/slog.String key-value pairs) is silently
-		// dropped. Baking the panic value and stack trace directly
-		// into the message is the only way they actually reach the
-		// log output this package produces.
+		// Baked into the message rather than passed as a "stack" attr:
+		// appendAttr (below) quotes any value containing a control
+		// character, which a multi-line stack trace always does, and
+		// a quoted, escaped stack trace is far less readable than one
+		// printed as-is.
 		logger.Error(fmt.Sprintf("recovered from panic: %v\n%s", r, debug.Stack()))
 	}
 }
@@ -122,8 +122,9 @@ func SetLevel(s string) {
 
 // handler implements slog.Handler directly rather than customizing
 // slog.NewTextHandler -- the target line shape (a fixed-column
-// component field and a │ separator, not key=value pairs) isn't
-// something TextHandler's ReplaceAttr hook can produce.
+// component field and a │ separator before the message, with any
+// other attrs trailing the message as key=value pairs) isn't something
+// TextHandler's ReplaceAttr hook can produce.
 type handler struct {
 	w     io.Writer
 	level slog.Leveler
@@ -138,24 +139,98 @@ func (h *handler) Enabled(_ context.Context, level slog.Level) bool {
 
 func (h *handler) Handle(_ context.Context, r slog.Record) error {
 	component := "mikroview"
+	var tail strings.Builder
+
+	// Handler-level attrs (WithAttrs, in practice just New's
+	// "component") come first, then the record's own -- the same order
+	// slog.TextHandler uses, so a caller that does
+	// logger.With("reqID", id).Warn(msg, "err", err) sees reqID before
+	// err.
 	for _, a := range h.attrs {
 		if a.Key == "component" {
 			component = a.Value.String()
+			continue
 		}
+		appendAttr(&tail, "", a)
 	}
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "component" {
 			component = a.Value.String()
+			return true
 		}
+		appendAttr(&tail, "", a)
 		return true
 	})
 
-	line := formatLine(r.Time.Format("15:04:05"), r.Level, component, r.Message, h.color)
+	line := formatLine(r.Time.Format("15:04:05"), r.Level, component, r.Message, tail.String(), h.color)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, err := io.WriteString(h.w, line)
 	return err
+}
+
+// appendAttr renders a into sb as a space-separated "key=value" token,
+// space-prefixed unless sb is still empty. slog.Group attrs recurse
+// with their key dotted onto prefix (mikroview.reason.code, not a
+// second nesting syntax) -- an empty-keyed group (slog.Group("", ...),
+// which slog treats as "inline these at the parent level") passes
+// prefix through unchanged rather than adding a leading dot.
+func appendAttr(sb *strings.Builder, prefix string, a slog.Attr) {
+	v := a.Value.Resolve()
+	if v.Kind() == slog.KindGroup {
+		childPrefix := prefix
+		if a.Key != "" {
+			if prefix != "" {
+				childPrefix = prefix + "." + a.Key
+			} else {
+				childPrefix = a.Key
+			}
+		}
+		for _, ga := range v.Group() {
+			appendAttr(sb, childPrefix, ga)
+		}
+		return
+	}
+	if a.Key == "" {
+		// Matches slog.TextHandler: an empty key with a non-group value
+		// has nothing to label it with, so it's dropped rather than
+		// printed as a bare "=value".
+		return
+	}
+	key := a.Key
+	if prefix != "" {
+		key = prefix + "." + key
+	}
+	if sb.Len() > 0 {
+		sb.WriteByte(' ')
+	}
+	sb.WriteString(key)
+	sb.WriteByte('=')
+	sb.WriteString(quoteAttrValue(v.String()))
+}
+
+// quoteAttrValue wraps s in Go-quoted form when it contains anything
+// that would make the rendered "key=value" token ambiguous or unsafe
+// to print -- a space or "=" would run into the next token or the
+// separator, and a control character (e.g. a stray newline inside an
+// error message) would otherwise break the one-line-per-record
+// invariant every other reader of this log format relies on.
+func quoteAttrValue(s string) string {
+	if s == "" {
+		return `""`
+	}
+	// unsafeForTerminal, not unicode.IsControl: this package already
+	// treats format characters as unsafe everywhere else (see Printable),
+	// and a right-to-left override in an attribute value would reorder
+	// the rest of the line in the operator's terminal without being a
+	// control character. An attribute can carry a hostname or a fragment
+	// of a syslog line, so the value is not always ours.
+	needsQuote := strings.ContainsAny(s, " \"=") || strings.ContainsFunc(s, unsafeForTerminal)
+	if !needsQuote {
+		return s
+	}
+	return strconv.Quote(s)
 }
 
 // WithAttrs stores attrs (in practice, just the "component" attr New
@@ -211,13 +286,19 @@ func levelColor(level slog.Level) string {
 	}
 }
 
-// formatLine renders "HH:MM:SS LEVEL  component │ message\n" -- the
-// gaps after INFO/WARN and after short component names are the level/
-// column padding lining up with ERROR and the longest common component
-// name, not stray whitespace.
-func formatLine(ts string, level slog.Level, component, message string, color bool) string {
+// formatLine renders "HH:MM:SS LEVEL  component │ message key=value
+// ...\n" -- the gaps after INFO/WARN and after short component names
+// are the level/column padding lining up with ERROR and the longest
+// common component name, not stray whitespace. attrs is already a
+// fully space-joined "key=value key2=value2" tail (see appendAttr) or
+// "" when the record carried no attrs beyond component; either way it
+// never gets its own color treatment, matching the plain message.
+func formatLine(ts string, level slog.Level, component, message, attrs string, color bool) string {
 	levelToken := fmt.Sprintf("%-5s", levelWord(level))
 	componentToken := fmt.Sprintf("%-*s", componentWidth, component)
+	if attrs != "" {
+		message = message + " " + attrs
+	}
 
 	if !color {
 		return fmt.Sprintf("%s %s %s │ %s\n", ts, levelToken, componentToken, message)

@@ -44,6 +44,7 @@ const { default: FilterBar } = await import('./FilterBar.svelte')
 const { appState } = await import('../lib/state.svelte')
 const { emptyFilters } = await import('../lib/types')
 const { retentionState } = await import('../lib/retention.svelte')
+const { geoipState } = await import('../lib/geoip.svelte')
 
 // The box div carries no role -- it holds the chips' own remove buttons,
 // and a screen reader flattens the contents of anything with
@@ -603,5 +604,40 @@ describe('FilterBar, the source and destination captions (#1191)', () => {
     expect(screen.getByLabelText('Destination — name, IP or CIDR').getAttribute('placeholder')).toBe(
       'name, IP or CIDR',
     )
+  })
+})
+
+// #1198: a bare empty country select was indistinguishable from "no
+// public traffic yet" -- this disabled row says why instead. Both tests
+// set geoipState.enabled directly rather than mocking fetchHealthz: the
+// singleton's ensureLoaded() only ever runs its fetch once per module
+// lifetime (see lib/geoip.svelte.ts's own loaded guard), so a real
+// mount's onMount call is a same-value no-op here and never overwrites
+// what the test sets.
+describe("FilterBar, the country select's no-GeoIP row (#1198)", () => {
+  afterEach(() => {
+    geoipState.enabled = null
+  })
+
+  it('shows a disabled explainer row on both country selects with no database configured', async () => {
+    geoipState.enabled = false
+    render(FilterBar)
+    await expandRow()
+
+    for (const label of ['Source country', 'Destination country']) {
+      const select = screen.getByLabelText(label) as HTMLSelectElement
+      const opt = Array.from(select.options).find((o) => o.textContent === 'no GeoIP database — see docs ▸')
+      expect(opt).toBeTruthy()
+      expect(opt?.disabled).toBe(true)
+    }
+  })
+
+  it('omits the row once a database is configured', async () => {
+    geoipState.enabled = true
+    render(FilterBar)
+    await expandRow()
+
+    const select = screen.getByLabelText('Source country') as HTMLSelectElement
+    expect(Array.from(select.options).some((o) => o.textContent?.includes('no GeoIP database'))).toBe(false)
   })
 })

@@ -15,6 +15,12 @@
 // the *header row* out with exactly this label set, and that clicking
 // into a real row's time cell actually opens the sheet -- the same gap
 // live-group-mode.mjs's own comment describes for its own layout check.
+//
+// #1200 (owner ruling, 2026-09-13) put IpInvestigateButton back on the
+// row beside each public address -- this file's own check below used to
+// assert it stayed gone, which #1200 supersedes; updated rather than
+// left contradicting the ruling. PortInvestigateButton was not part of
+// that ruling and stays retired.
 
 import { session, feedSyslog, check, done, waitForStreamRows, goTo, DESKTOP_VIEWPORT } from './live-browser.mjs'
 
@@ -63,20 +69,27 @@ check(
   'every row carries its own .cell.nat again (#717 restored the column)',
 )
 
-// --- The per-cell ⓘ investigate triggers are gone ------------------------
+// --- The IP investigate trigger is back; the port one stays gone --------
 // RouterRuleButton (the rule cell's pushed-table lookup, #186/#445) keeps
-// its own "i" glyph -- that trigger was never one of the ⓘ buttons this
-// issue retires, and live-before-router-lookup.mjs/live-nat-popup.mjs cover it
-// staying put. What must be gone is IpInvestigateButton/
-// PortInvestigateButton, both labelled "Investigate ..." -- distinct
-// from RouterRuleButton's "Look up ..." labels, so this can tell them
-// apart without depending on class names either script already owns.
-const investigateGlyphs = await page.$$eval('.grid .row', (els) =>
+// its own "i" glyph -- that trigger was never one of the ⓘ buttons #644
+// retired, and live-before-router-lookup.mjs/live-nat-popup.mjs cover it
+// staying put. #1200 (owner ruling, 2026-09-13) restored
+// IpInvestigateButton ("Investigate ...") beside each public address;
+// PortInvestigateButton ("What is port ...?") was not part of that
+// ruling and stays off the row. feedSyslog's own fixture (live-env.sh's
+// `syslog`) sources every line from 203.0.113.0/24, a public range, to a
+// private destination -- so every row has exactly one Investigate
+// trigger, on the source side.
+const ariaLabels = await page.$$eval('.grid .row', (els) =>
   els.flatMap((e) => [...e.querySelectorAll('[aria-label]')].map((b) => b.getAttribute('aria-label') ?? '')),
 )
 check(
-  !investigateGlyphs.some((l) => l.startsWith('Investigate ')),
-  `no row carries an IP/port investigate trigger any more -- got ${JSON.stringify(investigateGlyphs.filter((l) => l.startsWith('Investigate ')))}`,
+  ariaLabels.some((l) => l.startsWith('Investigate ')),
+  'a public source address carries the IP investigate trigger again (#1200)',
+)
+check(
+  !ariaLabels.some((l) => /^What is port /.test(l)),
+  `no row carries a port investigate trigger -- got ${JSON.stringify(ariaLabels.filter((l) => /^What is port /.test(l)))}`,
 )
 
 // --- Clicking a row opens the detail sheet ------------------------------

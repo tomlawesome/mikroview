@@ -31,6 +31,7 @@ import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
 import { droplistNavState } from '../lib/droplistNav.svelte'
+import { countryFlag } from '../lib/format'
 import type { Flag } from '../lib/types'
 // Read as text for the CSS claims below, the same way
 // LiveTable.svelte.test.ts proves its sticky head's supporting rules.
@@ -545,6 +546,60 @@ describe('"where" links into the topography, not the stream (#678)', () => {
     flushSync()
 
     expect(document.querySelector('tr.drawer')).toBeNull()
+  })
+})
+
+// #1199: the country flag beside "where" and the IP lookup inside the
+// drawer, both already living on the Stream row/sheet -- e51193b2 (#1200)
+// did the row/sheet side, this is the flags table's own surface.
+describe('the country flag and IP lookup on a flag row (#1199)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'flags'
+  })
+
+  it('shows the country flag beside "where" when the flag carries a code', () => {
+    flagsState.list = [testFlag({ target: '198.51.100.77', country: 'DE' })]
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.frow td.k .geo')?.textContent).toBe(countryFlag('DE'))
+  })
+
+  it('renders no flag at all when the flag carries no country code', () => {
+    flagsState.list = [testFlag({ target: '198.51.100.77' })]
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.frow td.k .geo')).toBeNull()
+  })
+
+  it('carries the IP lookup button in the drawer for a public address', async () => {
+    flagsState.list = [testFlag({ target: '198.51.100.77' })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.getByTitle('Investigate 198.51.100.77')).toBeTruthy()
+  })
+
+  it('carries no IP lookup button in the drawer for a target with no public address', () => {
+    // rule_spike's target is a rule label, not an IP -- extractSourceIp
+    // returns null, so there is nothing for IpInvestigateButton to key
+    // off (same gate as EventDetailSheet.svelte's isPublicIp check).
+    flagsState.list = [testFlag({ type: 'rule_spike', target: 'drop-bad-actors' })]
+    render(Flags)
+    flushSync()
+
+    const drawerButton = screen.queryByRole('button', { name: /the drawer for this flag/ })
+    if (drawerButton) fireEvent.click(drawerButton)
+    flushSync()
+
+    expect(document.querySelector('[title^="Investigate "]')).toBeNull()
   })
 })
 

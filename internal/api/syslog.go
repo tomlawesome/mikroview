@@ -10,10 +10,11 @@ import (
 )
 
 // handleSyslogLossClear is issue #1015's "Clear all" for the
-// ingest-loss family: it zeroes the four monotonic counters
-// GET /api/stats' "syslog.loss" field is built from (syslog.ClearLoss),
-// so a transient loss the operator has already seen stops permanently
-// marking the instance. Same access tier and CSRF requirement as
+// ingest-loss family: it zeroes the monotonic counters
+// GET /api/stats' "syslog.loss" field is built from (syslog.ClearLoss;
+// five since #1234 added duplicate-source detection), so a transient
+// loss the operator has already seen stops permanently marking the
+// instance. Same access tier and CSRF requirement as
 // POST /api/flags/clear-all (see handleFlagsClearAll) -- both are a
 // reversible, whole-family clear of something mikroview is currently
 // showing, which #653 put at user tier rather than viewer or admin.
@@ -28,12 +29,13 @@ func (s *Server) handleSyslogLossClear(w http.ResponseWriter, r *http.Request) {
 	}
 	cleared := syslog.ClearLoss()
 	s.Audit.Record(auditActor(r), "ingest_loss.clear_all", "", fmt.Sprintf(
-		"dropped=%d rejectedConfigured=%d rejected=%d oversized=%d",
-		cleared.Dropped, cleared.RejectedConfigured, cleared.Rejected, cleared.Oversized))
+		"dropped=%d rejectedConfigured=%d rejected=%d oversized=%d duplicateSightings=%d",
+		cleared.Dropped, cleared.RejectedConfigured, cleared.Rejected, cleared.Oversized, cleared.DuplicateSightings))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"dropped":            cleared.Dropped,
 		"rejectedConfigured": cleared.RejectedConfigured,
 		"rejected":           cleared.Rejected,
 		"oversized":          cleared.Oversized,
+		"duplicateSightings": cleared.DuplicateSightings,
 	})
 }

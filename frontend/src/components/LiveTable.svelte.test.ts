@@ -9,7 +9,9 @@ import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
+import { countryFlag } from '../lib/format'
 import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 // Vite's `?raw` import, the same device Topography.svelte.test.ts uses
 // for its own CSS-token assertions -- not a Node fs read, so this stays
@@ -731,10 +733,11 @@ describe('LiveTable squared columns (#644)', () => {
     const ipCells = container.querySelectorAll('.cell.ip')
 
     // Unnamed source: the address IS the name column's content (marked
-    // bare so it renders dim), the country code rides beside it, and the
-    // address column repeats nothing.
+    // bare so it renders dim), the country flag (#1200 restored this as
+    // an emoji, not the bare "DE" #644 had regressed it to) rides beside
+    // it, and the address column repeats nothing.
     expect(nameCells[0]?.textContent).toContain('185.220.101.34')
-    expect(nameCells[0]?.textContent).toContain('DE')
+    expect(nameCells[0]?.querySelector('.geo')?.textContent).toBe(countryFlag('DE'))
     expect(nameCells[0]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(true)
     expect(ipCells[0]?.textContent?.trim()).toBe('—')
 
@@ -856,15 +859,15 @@ describe('LiveTable squared columns (#644)', () => {
     expect(container.querySelector('.cell.action .badge-natted')).toBeTruthy()
   })
 
-  // #644's own text: "Per-cell ⓘ buttons are removed entirely." That is
-  // IpInvestigateButton (titled "Investigate {ip}") and
-  // PortInvestigateButton (titled "What is port {port}?") specifically --
-  // not RouterRuleButton, which keeps its rule-cell lookup trigger
-  // untouched (see EventRow.svelte's own comment on natFilterKey). A
-  // public source IP and a port with a commonPorts entry (443) are
-  // exactly the two conditions that used to grow one of the retired
-  // buttons.
-  it('carries no per-cell ⓘ investigate button for the source IP or the port', () => {
+  // #644's own text: "Per-cell ⓘ buttons are removed entirely." That
+  // covered both IpInvestigateButton (titled "Investigate {ip}") and
+  // PortInvestigateButton (titled "What is port {port}?") -- not
+  // RouterRuleButton, which keeps its rule-cell lookup trigger untouched
+  // (see EventRow.svelte's own comment on natFilterKey). The owner's
+  // #1200 ruling (2026-09-13) put IpInvestigateButton back on the row;
+  // PortInvestigateButton was never part of that ruling and stays
+  // retired, so a port with a commonPorts entry (443) still gets no ⓘ.
+  it('carries no per-cell ⓘ investigate button for the port', () => {
     const e = makeEvent('no-investigate-row', {
       srcIp: '203.0.113.50',
       dstIp: '198.51.100.9',
@@ -874,8 +877,57 @@ describe('LiveTable squared columns (#644)', () => {
     flushSync()
 
     const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title') ?? '')
-    expect(titles.some((t) => t.startsWith('Investigate '))).toBe(false)
     expect(titles.some((t) => /^What is port \d+\?$/.test(t))).toBe(false)
+  })
+
+  // #1200 (owner ruling, 2026-09-13): the IP lookup button goes back on
+  // the row beside each public address, restoring what #644 dropped --
+  // shown or not on exactly the same isPublicIp() condition
+  // EventDetailSheet's own copy already uses, gated per address rather
+  // than per row (a private source beside a public destination shows
+  // only the one button).
+  it('shows the IP lookup button next to a public address and not beside a private one', () => {
+    const e = makeEvent('investigate-row', {
+      srcIp: '203.0.113.50',
+      dstIp: '10.0.40.5',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title') ?? '')
+    expect(titles).toContain('Investigate 203.0.113.50')
+    expect(titles).not.toContain('Investigate 10.0.40.5')
+  })
+
+  // #1200: the flag rides beside the address token whichever one is
+  // showing -- a resolved hostname included, not only a bare address
+  // (the bug #644 introduced: EventRow.svelte's condition used to read
+  // `!event.srcHostName && event.srcCountry`).
+  it('shows the country flag beside a resolved hostname, not only beside a bare address', () => {
+    const e = makeEvent('flag-with-hostname-row', {
+      srcIp: '185.220.101.34',
+      srcHostName: 'known-relay',
+      srcCountry: 'DE',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const nameCell = container.querySelector('.cell.addr')
+    expect(nameCell?.textContent).toContain('known-relay')
+    expect(nameCell?.querySelector('.geo')?.textContent).toBe(countryFlag('DE'))
+  })
+
+  // #1198: an unresolved country is exactly the "GeoIP is off" or
+  // "no match" case that owns its own honest explanation elsewhere (the
+  // country filter's disabled row, the ingest settings line) -- a bare
+  // row has no country to guess at, so it renders nothing rather than a
+  // placeholder.
+  it('renders no flag at all when the event carries no country code', () => {
+    const e = makeEvent('no-country-row', { srcIp: '10.0.10.2' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.addr .geo')).toBeNull()
   })
 })
 
@@ -1096,6 +1148,67 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
     flushSync()
 
     expect(container.querySelector('[title="cleared-flag-row"]')?.classList.contains('flagged')).toBe(false)
+  })
+})
+
+// #1201 (owner ask, 2026-09-12): the ⚑ was inert -- clicking it did
+// nothing, and its title only said a flag existed. It is now a real
+// button (native, not the file's usual role="button" span, so it is
+// keyboard-reachable for free) that opens the flag it points at, reusing
+// #724's own dial-to-docket handoff (topologyNavState.pendingFlagId) for
+// the one-flag case and a new sibling slot (pendingFlagsFilter) when
+// there is more than one honest choice.
+describe('The ⚑ mark opens the flag it points at (#1201)', () => {
+  function openFlag(id: string, target: string, firstSeen = '2026-01-01T00:00:00Z'): Flag {
+    return { id, type: 'port_scan', target, detail: '', count: 1, firstSeen, lastSeen: firstSeen, cleared: false }
+  }
+
+  beforeEach(() => {
+    appState.view = 'live'
+    topologyNavState.pendingFlagId = null
+    topologyNavState.pendingFlagsFilter = null
+  })
+
+  it('is a real button, reachable by keyboard, with the single-flag title', () => {
+    flagsState.list = [openFlag('f1', '203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    const mark = container.querySelector('.rmk')
+    expect(mark?.tagName).toBe('BUTTON')
+    expect(mark?.getAttribute('title')).toBe("open this source's flag ▸")
+  })
+
+  it('sets pendingFlagId and switches to the flags tab when the source has exactly one open flag', async () => {
+    flagsState.list = [openFlag('f1', '203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    await fireEvent.click(container.querySelector('.rmk') as HTMLElement)
+    flushSync()
+
+    expect(topologyNavState.pendingFlagId).toBe('f1')
+    expect(topologyNavState.pendingFlagsFilter).toBeNull()
+    expect(appState.view).toBe('flags')
+  })
+
+  it('sets the source address filter, not a single flag, when the source has several open flags', async () => {
+    flagsState.list = [
+      openFlag('older', '203.0.113.9', '2026-01-01T00:00:00Z'),
+      openFlag('newest', '203.0.113.9', '2026-01-01T01:00:00Z'),
+    ]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    const mark = container.querySelector('.rmk')
+    expect(mark?.getAttribute('title')).toBe('2 open flags for this source ▸')
+
+    await fireEvent.click(mark as HTMLElement)
+    flushSync()
+
+    expect(topologyNavState.pendingFlagId).toBeNull()
+    expect(topologyNavState.pendingFlagsFilter).toBe('203.0.113.9')
+    expect(appState.view).toBe('flags')
   })
 })
 

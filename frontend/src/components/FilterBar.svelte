@@ -26,7 +26,17 @@
   import { buildFilterChips, type FilterChip } from '../lib/filterChips'
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
   import { columnState } from '../lib/columns.svelte'
+  import { geoipState } from '../lib/geoip.svelte'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
+  import { onMount } from 'svelte'
+
+  // #1198: country flags go blank with no GeoIP database configured, and
+  // a blank was previously indistinguishable from "no public traffic
+  // yet". Loaded once here so both country selects below can show the
+  // explainer row the moment it's known to be off.
+  onMount(() => {
+    geoipState.ensureLoaded().catch(() => {})
+  })
 
   // Saved filters have a drawn home now (round 37: "saved filters are
   // the box's business"), so FilterPresetsMenu is mounted inside the box
@@ -515,6 +525,13 @@
           <span class="fb-label">Country</span>
           <select bind:value={appState.filters.srcCountry} aria-label="Source country">
             <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
+            <!-- #1198: with no GeoIP database, every event's country is
+                 unresolved and this list would otherwise just stay
+                 empty -- indistinguishable from "no public traffic
+                 yet". disabled: it exists to explain, not to be picked. -->
+            {#if geoipState.enabled === false}
+              <option value="__no_geoip__" disabled>no GeoIP database — see docs ▸</option>
+            {/if}
             {#each appState.srcCountryOptions as opt (opt.value)}
               <option value={opt.value}>{opt.label}</option>
             {/each}
@@ -556,6 +573,10 @@
           <span class="fb-label">Country</span>
           <select bind:value={appState.filters.dstCountry} aria-label="Destination country">
             <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
+            <!-- #1198: see the matching comment on the source select above. -->
+            {#if geoipState.enabled === false}
+              <option value="__no_geoip__" disabled>no GeoIP database — see docs ▸</option>
+            {/if}
             {#each appState.dstCountryOptions as opt (opt.value)}
               <option value={opt.value}>{opt.label}</option>
             {/each}

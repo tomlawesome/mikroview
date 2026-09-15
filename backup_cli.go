@@ -75,6 +75,11 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"decommission", cfg.Engine.DecommissionStorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
+		// The "N new settings are available" notice's per-version
+		// dismissal (#1218) -- small operator state, same reasoning as
+		// setup just above: a restore that dropped it would bring the
+		// notice back for a version already dealt with.
+		{"config_drift", cfg.ConfigDrift.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
