@@ -112,7 +112,13 @@ await sheet.waitFor({ state: 'hidden', timeout: 5000 })
 // would arrive after the decision was made.
 await page.setViewportSize({ width: 1366, height: 900 })
 await page.reload({ waitUntil: 'networkidle' })
-await goTo(page, 'Stream')
+// unfold: false -- goTo's own default unfolds the stream's filter strip
+// on every arrival (most scenarios need input.rule reachable), which
+// would open #filterbar-strip itself and make the very next check pass
+// or fail on the navigation helper's own side effect rather than on
+// where the columns trigger lives. Asking it not to is what leaves the
+// fold's state entirely down to the trigger this checks next.
+await goTo(page, 'Stream', { unfold: false })
 await waitForStreamRows(page, 1)
 
 const narrowLabels = await page.$$eval('.grid .header-cell .label-text', (els) =>
@@ -125,9 +131,10 @@ check(
 
 // #1197 (owner ruling, 2026-09-13): columns ▸ stands on the whisper's own
 // hand now (Whisper.svelte, right after csv ↓), not behind FilterBar's
-// filter fold -- nothing above this point ever opened that fold (no
-// click on the search box anywhere in this file), so reaching the
-// trigger here proves it needs no expand.
+// filter fold -- nothing above this point ever opened that fold (the
+// goTo above is asked not to, and no click on the search box happens
+// anywhere in this file), so reaching the trigger here proves it needs
+// no expand.
 check(await page.isHidden('#filterbar-strip'), 'the columns ▸ trigger is reached with the filter fold still closed')
 
 // Nothing silent about it: the picker draws both unticked, because every
