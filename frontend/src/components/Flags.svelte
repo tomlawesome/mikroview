@@ -290,24 +290,19 @@
   // #1201: the ⚑ mark's "several" case -- no single flag is the honest
   // choice, so the row hands this tab the source address to filter by
   // instead of one id (topologyNavState.pendingFlagsFilter). Consumed
-  // instantly, same one-shot idiom as pendingFlagId just above. If every
-  // matching flag has cleared between the click and landing here (the
-  // same race that effect's own comment documents), a filter with
-  // nothing to show would be a dead end -- this opens the newest flag
-  // still open instead, rather than leaving an empty table.
+  // instantly, same one-shot idiom as pendingFlagId just above.
+  //
+  // Nothing is opened here, not even when every matching flag cleared
+  // between the click and landing (the race pendingFlagId's own comment
+  // documents). The filtered table showing nothing is the true answer
+  // -- those flags have been called since the click -- and opening the
+  // newest flag from some other source instead would answer a question
+  // the operator did not ask: they clicked one row's mark.
   $effect(() => {
     const address = topologyNavState.pendingFlagsFilter
     if (address === null) return
     topologyNavState.pendingFlagsFilter = null
     filters.where = address
-    const stillOpen =
-      active.some((f) => extractSourceIp(f.target) === address) ||
-      provisionalActive.some((f) => extractSourceIp(f.target) === address)
-    if (!stillOpen) {
-      const f = active[0] ?? provisionalActive[0]
-      expandedId = f?.id ?? null
-      if (f) loadEpisode(f)
-    }
   })
 
   // Tick positions for the episode strip, one per event, normalised
