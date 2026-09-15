@@ -1547,6 +1547,13 @@
     if (cardBackCoverage === undefined) return `${back} · no pushed rule names it`
     if (cardBackCoverage === 'logged') return `${back} · logged`
     if (cardBackCoverage === 'quiet') return `${back} · quiet on purpose`
+    // cardBackCoverage === 'dark' here is the same claim coverageLabel
+    // and the card's own dark line make about the primary direction
+    // (#1237): not evidence-backed while the last declarations read
+    // failed, so say that instead of "dark" for the reverse direction too.
+    if (coverageState.unreadable) {
+      return `${back} · coverage declarations unreadable · checks again in five seconds`
+    }
     return `${back} · dark — nothing logs it`
   })
 
