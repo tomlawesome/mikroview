@@ -602,6 +602,16 @@ func main() {
 	}
 
 	logging.PrintBanner()
+
+	// #1238: bring the data directory up to the schema this build knows,
+	// and refuse outright if a newer build wrote it. Before anything else
+	// touches the data directory -- including the version marker below --
+	// because the refusal's promise is that nothing was written.
+	if err := upgradeDataDirSchema(cfg); err != nil {
+		logging.New("schema").Error(err.Error())
+		os.Exit(1)
+	}
+
 	logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
 	// Before anything is built on top of them (#536). Checked here
