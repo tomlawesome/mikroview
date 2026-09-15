@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MikroView — see what your firewall just did</title>
+<meta name="description" content="A live picture of your RouterOS firewall: every boundary the router watches, every connection accepted, dropped or rejected, and which rule decided it. Self-hosted, one container, near-zero load on the router." />
+<style>
+:root{
+  --bg:#06080e;--bg-elevated:#0f1422;--border:rgba(160,185,230,.13);
+  --fg:#e9eefb;--fg-muted:#97a4c4;--fg-dim:#55628a;--accent:#9db8e8;
+  --alarm:#ff5470;--now:#e8b05a;--tour:#22f3ff;--accept:#3ecf7e;--drop:#f5a623;--mark:#4d9fff;
+  --font-sans:-apple-system,'Segoe UI',system-ui,Roboto,sans-serif;
+  --font-mono:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.live::before{animation:none}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--tour);outline-offset:3px}
+code{font-family:var(--font-mono);font-size:.92em;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;padding:.05em .4em}
+
+/* the docket: one column, a time gutter on the left, like the fall's axis */
+.page{max-width:980px;margin:0 auto;padding:0 28px}
+.top{display:flex;align-items:center;justify-content:space-between;height:60px}
+.mark{font-weight:600;letter-spacing:.14em;font-size:15px;text-decoration:none;color:var(--fg)}
+.mark span{color:var(--mark)}
+.top nav{display:flex;gap:18px;font-family:var(--font-mono);font-size:12px}
+.top nav a{color:var(--fg-muted);text-decoration:none}
+.top nav a:hover{color:var(--fg)}
+.live{color:var(--fg-muted)}
+.live::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accept);margin-right:6px;box-shadow:0 0 6px var(--accept);animation:breathe 2.4s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.35}}
+@media (max-width:640px){.top nav a.h{display:none}}
+
+.entry{display:grid;grid-template-columns:120px 1fr;gap:0 28px;padding:56px 0;border-top:1px solid var(--border)}
+.entry:first-of-type{border-top:0;padding-top:64px}
+.t{font-family:var(--font-mono);font-size:12px;color:var(--fg-dim);line-height:1.7;padding-top:6px}
+.t b{display:block;color:var(--now);font-weight:700}
+.t i{display:block;font-style:normal;color:var(--accent);letter-spacing:.18em;text-transform:uppercase;font-size:10.5px;margin-top:6px}
+@media (max-width:720px){.entry{grid-template-columns:1fr;gap:8px}.t b,.t i{display:inline;margin-right:10px}.t i{margin-left:4px}}
+
+h1{margin:0 0 18px;font-size:clamp(38px,5.4vw,60px);line-height:1.02;letter-spacing:-.025em;font-weight:600;max-width:14ch}
+h1 em{font-style:normal;color:var(--accent)}
+h2{margin:0 0 12px;font-size:24px;line-height:1.2;letter-spacing:-.01em;font-weight:600}
+.lede{font-size:18px;color:var(--fg-muted);max-width:58ch;margin:0 0 22px}
+p{margin:0 0 14px;color:var(--fg-muted);font-size:16px;max-width:66ch}
+p strong{color:var(--fg);font-weight:600}
+.ctas{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.btn{display:inline-block;padding:9px 16px;border-radius:5px;font-size:14px;text-decoration:none;border:1px solid var(--border);color:var(--fg);background:var(--bg-elevated)}
+.btn.p{background:var(--accent);color:#06080e;border-color:var(--accent);font-weight:600}
+.btn:hover{border-color:var(--accent)}
+
+/* evidence: a figure with a callout underneath in the app's voice */
+.ev{margin:18px 0 8px;grid-column:1 / -1}
+.ev img{display:block;width:100%;height:auto;border:1px solid var(--border);border-radius:6px}
+.ev figcaption{display:flex;gap:14px;align-items:baseline;font-family:var(--font-mono);font-size:12px;color:var(--fg-dim);padding:10px 2px 0}
+.ev figcaption b{color:var(--alarm);font-weight:600;white-space:nowrap}
+.ev figcaption b.ok{color:var(--accept)}
+.ev figcaption b.n{color:var(--now)}
+@media (max-width:720px){.ev{grid-column:auto}}
+
+.term{background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:16px 18px;font-family:var(--font-mono);font-size:14px;line-height:1.7;overflow:auto;margin:0 0 16px;max-width:66ch}
+.term .pr{color:var(--fg-dim)} .term .fl{color:var(--accent)} .term .va{color:var(--now)}
+dl{margin:0;max-width:66ch}
+dt{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim);margin:18px 0 4px}
+dd{margin:0;color:var(--fg-muted);font-size:16px}
+footer{padding:30px 0 70px;border-top:1px solid var(--border);color:var(--fg-dim);font-size:13px}
+footer p{font-size:13px;color:var(--fg-dim);max-width:80ch;margin:0 0 8px}
+footer strong{color:var(--fg-muted)}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <a class="mark" href="#top">MIKRO<span>VIEW</span></a>
+    <nav aria-label="Sections">
+      <span class="live" aria-hidden="true">live</span>
+      <a class="h" href="#fall">the fall</a>
+      <a class="h" href="#topography">topography</a>
+      <a class="h" href="#stream">the stream</a>
+      <a href="#quickstart">quickstart</a>
+      <a href="https://github.com/tomlawesome/mikroview">github</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <article class="entry" aria-labelledby="h0">
+      <div class="t"><b>21:57:23</b>now<i>RouterOS · firewall</i></div>
+      <div>
+        <h1 id="h0">See what your firewall <em>just did.</em></h1>
+        <p class="lede">MikroView turns RouterOS's firewall log into a live picture of your network: every boundary the router watches, every connection accepted, dropped or rejected, and which rule decided it.</p>
+        <p>The router pushes; MikroView never logs in to it — no RouterOS credentials, no API access. Start one container, paste the setup commands it writes for you into the router once, and the picture builds itself.</p>
+        <div class="ctas">
+          <a class="btn p" href="#quickstart">Quickstart</a>
+          <a class="btn" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
+        </div>
+      </div>
+    </article>
+
+    <article class="entry" id="fall" aria-labelledby="h1">
+      <div class="t"><b>21:57</b>the fall<i>landing view</i></div>
+      <div>
+        <h2 id="h1">One column per boundary. Time pours down it.</h2>
+        <p>Guest to internet, LAN to servers, the router's own management ports — every boundary your rules mention gets a column, and each connection that crosses it falls as a mark, newest at the top. Port scans, activity spikes and repeated hits on critical ports raise a flag for a human to read, never an automatic action.</p>
+        <p>A boundary whose rules don't log is drawn as a hatched stripe, so <strong>"switched off" never looks like "quiet"</strong>.</p>
+      </div>
+      <figure class="ev">
+        <img src="../../../screenshots/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top; a port scan flagged in red on ether1 and a dark hatched stripe where vlan-iot has no log rule" />
+        <figcaption><b>✱ port scan · 21:50</b><span>ether1 · input, :445 SMB, thirteen hits — raised for you, not acted on. vlan-iot · input is blank because nothing is logged — not because nothing is sent.</span></figcaption>
+      </figure>
+    </article>
+
+    <article class="entry" id="topography" aria-labelledby="h2">
+      <div class="t"><b>21:57</b>topography<i>the estate</i></div>
+      <div>
+        <h2 id="h2">The place, drawn from what the router pushed.</h2>
+        <p>Internet as the road above, the router at the waist, your networks below — built from the rule, NAT and address tables the router sends, not from anything you draw. It shows where logging is dark, and <em>tune logging</em> hands back an export with those rules switched on.</p>
+      </div>
+      <figure class="ev">
+        <img src="../../../screenshots/topography-dark.png" alt="Topography: the internet drawn as a road above, the router at the waist, the LAN, IoT and workshop networks below, with a dropped connection drawn on the path it took" />
+        <figcaption><b class="n">dropped</b><span>a connection from LAN to the servers, drawn on the road it took. ⚑ 58 flags · ◉ 6 watched, always in the corner.</span></figcaption>
+      </figure>
+    </article>
+
+    <article class="entry" id="stream" aria-labelledby="h3">
+      <div class="t"><b>21:57:34</b>the stream<i>5 / s</i></div>
+      <div>
+        <h2 id="h3">Row by row, as it happens.</h2>
+        <p>Accepted, dropped or rejected, and the rule that made the call, decoded from a short log-prefix convention. Type a term or click a value in a row — device, IP or CIDR, port, protocol, interface, rule — and it filters in place, instantly. The watchlist covers the other direction: what <em>should</em> happen, and what deviated.</p>
+      </div>
+      <figure class="ev">
+        <img src="../../../screenshots/stream-dark.png" alt="The stream: a live table of firewall events, each row showing the verdict badge, chain, source, destination and interface, with rows a flag touched marked" />
+        <figcaption><b><span class="ok" style="color:var(--accept)">accept</span> · drop</b><span>the verdict and the rule, per row. drops 22% · top talker tom-desktop · top port 445 · rows a flag touched carry its mark.</span></figcaption>
+      </figure>
+    </article>
+
+    <article class="entry" id="how" aria-labelledby="h4">
+      <div class="t"><b>always</b>how it works<i>push, not poll</i></div>
+      <div>
+        <h2 id="h4">The router sends. MikroView listens.</h2>
+        <dl>
+          <dt>push, not poll</dt>
+          <dd>RouterOS forwards firewall log lines over syslog-over-TLS, and can push its config and encrypted backups the same way. MikroView never connects to the router and holds no RouterOS credentials; the only secret on the router is an ingest token MikroView minted for that device. No polling loop hammering the router — just a stream it was already able to send.</dd>
+          <dt>secure by default, on disk by choice</dt>
+          <dd>Sign-in is always required, HTTPS is on out of the box, local accounts or OIDC/SSO. Events live in memory unless you opt in to encrypted per-day history files; an optional SFTP drop box keeps your router's own nightly backups for the day the router is gone.</dd>
+          <dt>one container</dt>
+          <dd>One Go binary, UI embedded, distroless image. Near-zero load on the router. Self-hosted, AGPL, yours.</dd>
+        </dl>
+      </div>
+    </article>
+
+    <article class="entry" id="quickstart" aria-labelledby="h5">
+      <div class="t"><b>00:00:00</b>quickstart<i>two steps</i></div>
+      <div>
+        <h2 id="h5">Start it. Point the router at it.</h2>
+        <pre class="term" tabindex="0"><span class="pr">$</span> docker run -d --name mikroview \
+    <span class="fl">-p</span> <span class="va">6514:6514/tcp</span> <span class="fl">-p</span> <span class="va">443:8080</span> \
+    ghcr.io/tomlawesome/mikroview:latest</pre>
+        <p>Sign in, and the built-in wizard writes every RouterOS command with your values already filled in — syslog over TLS (RouterOS 7.18+). Paste it once. <code>latest</code> is the most recent release; each release is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one. Reference: <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a> and <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.</p>
+      </div>
+    </article>
+  </main>
+
+  <footer>
+    <p>MikroView is an independent, community project. It is not affiliated with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.</p>
+    <p><strong>Development disclosure:</strong> MikroView was coded by Claude under human direction.</p>
+    <p><strong>License:</strong> <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL v3.0</a> — free and open source. Free to use, modify and self-host, including in a business. A commercial licence is available if you want to bundle MikroView into a product or offer it as a hosted service.</p>
+    <p><a href="https://github.com/tomlawesome/mikroview">github.com/tomlawesome/mikroview</a></p>
+  </footer>
+</div>
+</body>
+</html>
