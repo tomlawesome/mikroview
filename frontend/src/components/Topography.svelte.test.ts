@@ -1386,6 +1386,58 @@ describe('the round-30 layout (#699)', () => {
     }
   })
 
+  it("highlights a rib's own badge on hover, and no other rib's (#1227)", () => {
+    // #1180's fix (above) moved <text class="edge-badge"> out of
+    // .edge-g and into the sibling .detail group, which orphaned the
+    // old pure-CSS `.edge-g:hover .edge-badge` rule -- the two are
+    // siblings now, not ancestor/descendant, so hovering a rib stopped
+    // changing its badge's colour. Same fixture as #1180's test above:
+    // one lane, two directions, so two distinct ribs and two distinct
+    // badges to tell apart by their shared <title> text.
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 445, action: 'drop' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const ribs = [...container.querySelectorAll('.edge-g')]
+    expect(ribs.length).toBe(2)
+
+    function badgeFor(rib: Element): Element {
+      const label = rib.querySelector('title')!.textContent
+      const detail = [...container.querySelectorAll('g.detail')].find((g) => g.querySelector('title')?.textContent === label)
+      return detail!.querySelector('.edge-badge')!
+    }
+
+    const [ribA, ribB] = ribs
+    const badgeA = badgeFor(ribA)
+    const badgeB = badgeFor(ribB)
+    expect(badgeA).not.toBe(badgeB)
+    expect(badgeA.classList.contains('hover-t')).toBe(false)
+    expect(badgeB.classList.contains('hover-t')).toBe(false)
+
+    ribA.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+    flushSync()
+    expect(badgeA.classList.contains('hover-t')).toBe(true)
+    expect(badgeB.classList.contains('hover-t')).toBe(false)
+
+    ribA.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+    flushSync()
+    expect(badgeA.classList.contains('hover-t')).toBe(false)
+
+    // Focus (keyboard) reaches the same badge the way pointer hover does.
+    ribB.dispatchEvent(new FocusEvent('focus', { bubbles: true }))
+    flushSync()
+    expect(badgeB.classList.contains('hover-t')).toBe(true)
+    expect(badgeA.classList.contains('hover-t')).toBe(false)
+
+    ribB.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+    flushSync()
+    expect(badgeB.classList.contains('hover-t')).toBe(false)
+  })
+
   it('puts every edge label on a plate rather than bare on its line', () => {
     zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
     appState.events = [
