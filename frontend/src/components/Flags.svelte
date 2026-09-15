@@ -59,7 +59,12 @@
   import { fetchFlagEpisode, fetchExpectations } from '../lib/api'
   import { familyOf, worstFamilyOf } from '../lib/flagPalette'
   import { FLAG_TYPE_ORDER, FLAG_TYPE_LABELS } from '../lib/metricsSeries'
-  import { formatDayMonth, formatHM, formatTime } from '../lib/format'
+  import { countryFlag, formatDayMonth, formatHM, formatTime, isPublicIp } from '../lib/format'
+  // #1199: the country flag beside the address and the IP lookup inside
+  // the drawer, both already living on the Stream row/sheet
+  // (EventRow.svelte, EventDetailSheet.svelte) -- reused rather than
+  // reimplemented, same as e51193b2 did for the stream side (#1200).
+  import IpInvestigateButton from './IpInvestigateButton.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, returningNoteFor, storyFor } from '../lib/flagNarrative'
@@ -1192,6 +1197,12 @@
   {@const ep = episodes[f.id]}
   {@const kind = verdictKind(f)}
   {@const returning = returningNoteFor(f)}
+  <!-- #1199: extractSourceIp(f.target) is already this flag's one
+       public-ish address -- the same value openWhere/watchThisSource/
+       scoredSubject above key off -- so the flag beside "where" and the
+       drawer's lookup button read off it rather than re-deriving it. -->
+  {@const publicIp = extractSourceIp(f.target)}
+  {@const flagEmoji = countryFlag(f.country)}
   <!-- A campaign's member (#988) is this same row, one step in, with a
        dash where the step is; its drawer is the round 29 drawer
        verbatim. -->
@@ -1235,6 +1246,7 @@
       {:else}
         <span class="wl-plain">network-wide</span>
       {/if}
+      {#if flagEmoji}<span class="geo">{flagEmoji}</span>{/if}
     </td>
     <td>
       {f.detail}
@@ -1513,6 +1525,11 @@
             {#if canEdit && viewportState.isNarrow && !isDone(kind)}
               {@render verdictChips(f, kind)}
             {/if}
+            <!-- #1199: the same IpInvestigateButton EventDetailSheet.svelte
+                 mounts for Source/Destination, gated the same way
+                 (isPublicIp) -- an internal target or a non-IP one
+                 (a rule, a port, a device) shows nothing here. -->
+            {#if publicIp && isPublicIp(publicIp)}<IpInvestigateButton ip={publicIp} />{/if}
             {#if isFilterable(f)}
               <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
             {/if}
@@ -2034,6 +2051,13 @@
 
   .wl-plain {
     color: var(--fg-dim);
+  }
+
+  /* #1199: the country flag beside "where", the same dim/small treatment
+     EventRow.svelte's own .geo uses beside the stream's address. */
+  .geo {
+    color: var(--fg-dim);
+    font-size: 11px;
   }
 
   .openc {
