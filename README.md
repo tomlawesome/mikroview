@@ -313,6 +313,8 @@ available. Full detail and the reasoning behind each is in
   reference, env vars, API reference
 - [docs/reading-the-fall.md](docs/reading-the-fall.md) — how to read
   the fall, the app's landing view
+- [docs/upgrades.md](docs/upgrades.md) — what happens when you start
+  a newer build on existing data, and how to go back
 - [docs/security-by-design.md](docs/security-by-design.md) — the
   security properties the design commits to
 - [SECURITY.md](SECURITY.md) — threat model, hardening and how to
