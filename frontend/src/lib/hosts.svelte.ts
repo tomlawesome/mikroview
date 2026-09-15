@@ -76,14 +76,18 @@ class HostsState {
   hosts = $state<Host[]>([])
   /** Last write's failure, shown inline wherever the mark is offered. */
   error = $state<string | null>(null)
+  /** True from a failed read until the next one succeeds. `hosts` is
+   * left exactly as it was on failure -- a stale register beats an
+   * empty one -- so this is what tells a reader the emptiness (or
+   * staleness) is not evidence of anything (#1236). */
+  unreadable = $state(false)
 
   async refresh() {
     try {
       this.hosts = await fetchHosts()
+      this.unreadable = false
     } catch {
-      // Absence reads as "nothing registered", which is also the honest
-      // state while the register cannot be read -- dark stays dark, the
-      // same way coverageState.refresh swallows its own failure.
+      this.unreadable = true
     }
   }
 
