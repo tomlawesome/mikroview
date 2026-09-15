@@ -1,523 +1,354 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MikroView — RouterOS firewall live view</title>
-<meta name="description" content="A live picture of your RouterOS firewall: every boundary the router watches, every connection accepted, dropped or rejected, and by which rule. Self-hosted, single container, near-zero load on the router." />
-<link rel="icon" type="image/svg+xml" href="img/logo-mark.svg" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MikroView — see what your firewall just did</title>
+<meta name="description" content="A live picture of your RouterOS firewall: every boundary the router watches, every connection accepted, dropped or rejected, and which rule decided it. Self-hosted, one container, near-zero load on the router." />
 <style>
-  :root {
-    --bg: #0b0e14;
-    --bg-elevated: #12161f;
-    --bg-hover: #171c27;
-    --border: #232a38;
-    --fg: #eceef2;
-    --fg-muted: #9aa3b2;
-    --fg-dim: #6b7686;
-    --accent: #4d9fff;
-    --brand: #2f6fe0;
-    --accept: #3ecf7e;
-    --accept-bg: rgba(62, 207, 126, 0.1);
-    --drop: #f5a623;
-    --drop-bg: rgba(245, 166, 35, 0.1);
-    --reject: #ef4444;
-    --reject-bg: rgba(239, 68, 68, 0.1);
-    --unknown: #838d9e;
-    --unknown-bg: rgba(131, 141, 158, 0.08);
-    --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
-    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-    color-scheme: dark;
-  }
-  :root[data-theme='light'] {
-    --bg: #f6f7f9;
-    --bg-elevated: #ffffff;
-    --bg-hover: #eef0f3;
-    --border: #e1e4e9;
-    --fg: #12141a;
-    --fg-muted: #4b5462;
-    --fg-dim: #6b7280;
-    color-scheme: light;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme='dark']) {
-      --bg: #f6f7f9;
-      --bg-elevated: #ffffff;
-      --bg-hover: #eef0f3;
-      --border: #e1e4e9;
-      --fg: #12141a;
-      --fg-muted: #4b5462;
-      --fg-dim: #6b7280;
-      color-scheme: light;
-    }
-  }
+/* ---- Atlas II tokens, verbatim from the app ---- */
+:root{
+  --bg:#06080e;--bg-elevated:#0f1422;--border:rgba(160,185,230,.13);
+  --fg:#e9eefb;--fg-muted:#97a4c4;--fg-dim:#55628a;--accent:#9db8e8;
+  --alarm:#ff5470;--now:#e8b05a;--tour:#22f3ff;--accept:#3ecf7e;--drop:#f5a623;
+  --mark:#4d9fff;
+  --font-sans:-apple-system,'Segoe UI',system-ui,Roboto,sans-serif;
+  --font-mono:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--tour);outline-offset:3px}
+code{font-family:var(--font-mono);font-size:.92em;color:var(--fg);background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;padding:.05em .4em}
+.mono{font-family:var(--font-mono)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
 
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--fg);
-    font-family: var(--font-sans);
-    -webkit-font-smoothing: antialiased;
-  }
-  img { max-width: 100%; display: block; }
-  ::selection { background: var(--accent); color: #fff; }
+/* ---- top bar: the app's own ---- */
+.top{position:sticky;top:0;z-index:5;background:rgba(6,8,14,.86);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.top .wrap{display:flex;align-items:center;justify-content:space-between;height:52px}
+.mark{font-family:var(--font-sans);font-weight:600;letter-spacing:.14em;font-size:15px;text-decoration:none;color:var(--fg)}
+.mark span{color:var(--mark)}
+.status{display:flex;gap:18px;align-items:center;font-family:var(--font-mono);font-size:12px;color:var(--fg-muted)}
+.status .live::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accept);margin-right:6px;box-shadow:0 0 6px var(--accept)}
+.status .flag{color:var(--alarm)} .status .eye{color:#a78bfa}
+.status a{color:var(--fg);text-decoration:none;border:1px solid var(--border);border-radius:4px;padding:4px 10px}
+.status a:hover{border-color:var(--accent)}
+@media (max-width:720px){.status .hide{display:none}}
 
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+/* ---- the rail: the app's right-hand view list, as page nav ---- */
+.rail{position:fixed;right:10px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:22px;z-index:4}
+.rail a{writing-mode:vertical-rl;text-orientation:mixed;font-family:var(--font-mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;text-decoration:none;color:var(--fg-dim)}
+.rail a:hover,.rail a[aria-current]{color:var(--accent)}
+@media (max-width:1260px){.rail{display:none}}
 
-  /* ---------- header ---------- */
-  header.site {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--border);
-  }
-  header.site .wrap {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-top: 16px;
-    padding-bottom: 16px;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-weight: 700;
-    font-size: 16px;
-    letter-spacing: -0.01em;
-  }
-  .brand img { width: 26px; height: 26px; }
-  .brand .accent { color: var(--accent); }
-  nav.site-nav { display: flex; align-items: center; gap: 22px; }
-  nav.site-nav a {
-    color: var(--fg-muted);
-    text-decoration: none;
-    font-size: 14px;
-  }
-  nav.site-nav a:hover { color: var(--fg); }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    padding: 9px 16px;
-    border-radius: 7px;
-    text-decoration: none;
-    border: 1px solid transparent;
-    cursor: pointer;
-    font-family: inherit;
-  }
-  .btn-primary { background: var(--brand); color: #fff; }
-  .btn-primary:hover { background: #2560c9; }
-  .btn-ghost { border-color: var(--border); color: var(--fg); background: transparent; }
-  .btn-ghost:hover { border-color: var(--fg-muted); }
-  .theme-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 7px;
-    padding: 8px 12px;
-    font-size: 13px;
-    font-family: var(--font-mono);
-    cursor: pointer;
-  }
-  .theme-toggle:hover { color: var(--fg); border-color: var(--fg-muted); }
+/* ---- hero: a fall, drawn in CSS ---- */
+.hero{position:relative;overflow:hidden;border-bottom:1px solid var(--border)}
+.fall{position:relative;height:640px;display:grid;grid-template-columns:repeat(6,1fr);gap:18px;padding:34px 32px 0;max-width:1180px;margin:0 auto}
+.col{position:relative;min-width:0}
+.col h4{margin:0;font-family:var(--font-mono);font-weight:600;font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.col .sub{font-family:var(--font-mono);font-size:10.5px;color:var(--fg-dim);margin:2px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.col .st{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;font-weight:700;color:var(--accept);padding-bottom:6px;border-bottom:2px solid var(--accept)}
+.col.alarm .st{color:var(--alarm);border-color:var(--alarm)}
+.col.dark .st{color:var(--alarm);border-color:var(--fg-dim)}
+.lane{position:absolute;left:0;right:0;top:226px;bottom:0;overflow:hidden}
+.col.alarm .lane{background:rgba(255,84,112,.07);box-shadow:inset 0 0 40px rgba(255,84,112,.08)}
+.col.dark .lane{background:repeating-linear-gradient(135deg,transparent 0 6px,rgba(160,185,230,.06) 6px 7px)}
+.col.dark .lane p{position:absolute;top:26%;left:0;right:0;margin:0;text-align:center;font-family:var(--font-mono);font-size:11px;line-height:1.5;color:var(--alarm)}
+.col.dark .lane p small{display:block;color:var(--fg-dim);font-size:10.5px}
+.m{position:absolute;width:3px;height:12px;border-radius:2px;background:var(--mark);box-shadow:0 0 6px rgba(77,159,255,.6);animation:pour var(--d,14s) linear infinite;animation-delay:var(--o,0s);will-change:transform}
+.m.r{background:var(--alarm);box-shadow:0 0 6px rgba(255,84,112,.6)}
+.m.t{height:6px;width:5px;border-radius:50%}
+@keyframes pour{from{transform:translateY(-20px)}to{transform:translateY(400px)}}
+.now{position:absolute;left:0;right:0;top:260px;pointer-events:none}
+.now .line{height:1px;background:var(--now);opacity:.85;box-shadow:0 0 8px rgba(232,176,90,.4)}
+.now .lbl{position:absolute;left:32px;top:-20px;font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--now);letter-spacing:.06em}
+.hero-copy{position:absolute;inset:0;pointer-events:none}
+.hero-copy .wrap{position:relative;height:100%}
+.headline{position:absolute;left:32px;right:32px;top:292px;pointer-events:auto;max-width:600px;padding:22px 26px;background:rgba(6,8,14,.78);backdrop-filter:blur(3px);border:1px solid var(--border);border-radius:6px}
+.eyebrow{margin:0 0 8px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim)}
+h1{margin:0 0 12px;font-size:clamp(34px,4.6vw,52px);line-height:1.05;letter-spacing:-.02em;font-weight:600}
+h1 em{font-style:normal;color:var(--accent)}
+.sub-h{margin:0 0 18px;color:var(--fg-muted);font-size:16px;max-width:52ch}
+.ctas{display:flex;gap:10px;flex-wrap:wrap}
+.btn{display:inline-block;padding:9px 16px;border-radius:5px;font-size:14px;text-decoration:none;border:1px solid var(--border);color:var(--fg);background:var(--bg-elevated)}
+.btn.p{background:var(--accent);color:#06080e;border-color:var(--accent);font-weight:600}
+.btn:hover{border-color:var(--accent)}
+@media (max-width:900px){
+  .fall{grid-template-columns:repeat(3,1fr);height:400px;padding-bottom:0}
+  .col:nth-child(-n+3){display:none}
+  .lane{top:186px}
+  .now{top:220px}
+  .hero-copy{position:static}
+  .headline{position:static;margin:-24px 0 28px;max-width:none}
+  .col.dark .lane p{top:18%}
+}
+@media (prefers-reduced-motion:reduce){
+  .m{animation:none}
+  html{scroll-behavior:auto}
+}
 
-  /* ---------- hero ---------- */
-  .hero { position: relative; overflow: hidden; padding: 88px 0 64px; }
-  .hero-bg {
-    position: absolute;
-    inset: 0;
-    background:
-      radial-gradient(900px 420px at 82% -10%, rgba(45, 111, 224, 0.16), transparent 60%),
-      radial-gradient(600px 320px at 0% 100%, rgba(62, 207, 126, 0.06), transparent 60%);
-    pointer-events: none;
-  }
-  .hero-grid {
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(128, 140, 160, 0.06) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(128, 140, 160, 0.06) 1px, transparent 1px);
-    background-size: 42px 42px;
-    -webkit-mask-image: linear-gradient(to bottom, black, transparent 75%);
-    mask-image: linear-gradient(to bottom, black, transparent 75%);
-    pointer-events: none;
-  }
-  :root[data-theme='light'] .hero-grid { background-image:
-      linear-gradient(rgba(30, 40, 60, 0.05) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(30, 40, 60, 0.05) 1px, transparent 1px); }
+/* ---- sections, named like the app's views ---- */
+section{padding:72px 0;border-bottom:1px solid var(--border)}
+.view{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:40px;align-items:start}
+.view.flip{grid-template-columns:2fr minmax(260px,1fr)}.view.flip .text{order:2}
+.text h2{margin:0 0 4px;font-family:var(--font-mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:700}
+.text h3{margin:0 0 14px;font-size:26px;line-height:1.15;letter-spacing:-.01em;font-weight:600}
+.text p{margin:0 0 12px;color:var(--fg-muted);font-size:15.5px}
+.text p.say{font-family:var(--font-mono);font-size:12.5px;color:var(--fg-dim);border-left:2px solid var(--border);padding-left:12px}
+.text p.say b{color:var(--alarm);font-weight:600}
+.shot{margin:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg-elevated)}
+.shot img{display:block;width:100%;height:auto}
+.shot figcaption{font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);padding:8px 12px;border-top:1px solid var(--border)}
+@media (max-width:900px){.view{grid-template-columns:1fr}.view.flip .text{order:0}}
 
-  .hero .wrap { position: relative; display: grid; grid-template-columns: 1fr; gap: 40px; }
-  .eyebrow {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--accept);
-    margin: 0 0 18px;
-  }
-  .eyebrow::before { content: '● '; }
-  h1 {
-    font-family: var(--font-mono);
-    font-size: clamp(32px, 5vw, 52px);
-    line-height: 1.12;
-    letter-spacing: -0.01em;
-    margin: 0 0 22px;
-    max-width: 16ch;
-    text-wrap: balance;
-  }
-  h1 .accent { color: var(--accent); }
-  .hero-sub {
-    font-size: 17.5px;
-    line-height: 1.65;
-    color: var(--fg-muted);
-    max-width: 54ch;
-    margin: 0 0 30px;
-  }
-  .hero-sub code {
-    font-family: var(--font-mono);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 0.9em;
-    color: var(--fg);
-  }
-  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 56px; }
+/* ---- the quiet rows: push not poll, secure, quickstart ---- */
+.rows{display:grid;grid-template-columns:repeat(3,1fr);gap:28px}
+.rows h3{margin:0 0 8px;font-size:17px;font-weight:600}
+.rows p{margin:0;color:var(--fg-muted);font-size:14.5px}
+.rows .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim);margin:0 0 10px}
+@media (max-width:900px){.rows{grid-template-columns:1fr}}
+.term{background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:18px 20px;font-family:var(--font-mono);font-size:14px;line-height:1.7;overflow:auto;margin:0 0 16px}
+.term .pr{color:var(--fg-dim)} .term .fl{color:var(--accent)} .term .va{color:var(--now)}
+.note{color:var(--fg-muted);font-size:14.5px;max-width:72ch;margin:0}
+.step{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim);margin:0 0 10px}
 
-  /* ---------- hero screenshot ---------- */
-  .hero-shot {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    background: var(--bg-elevated);
-    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.5);
-  }
-  .hero-shot .chrome {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--fg-dim);
-  }
-  .hero-shot .chrome span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
-  .hero-shot .chrome .label { margin-left: 6px; }
-  .hero-shot img { display: block; width: 100%; height: auto; }
-
-  /* ---------- features ---------- */
-  .features { padding: 30px 0 76px; }
-  .section-label {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-    margin: 0 0 14px;
-  }
-  .feature-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-  .feature-card { background: var(--bg-elevated); padding: 26px 24px; }
-  .feature-card h3 {
-    font-size: 15.5px;
-    margin: 0 0 10px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-  }
-  .feature-card h3 .chip {
-    width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none;
-  }
-  .feature-card p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--fg-muted); }
-
-  /* ---------- screenshots ---------- */
-  .proof { padding: 20px 0 40px; }
-  .proof-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 20px;
-  }
-  .proof-frame {
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-    background: var(--bg-elevated);
-    box-shadow: 0 40px 100px -40px rgba(0, 0, 0, 0.55);
-  }
-  .proof-frame .chrome {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    background: var(--bg-elevated);
-    border-bottom: 1px solid var(--border);
-  }
-  .proof-frame .chrome span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
-  .proof-frame img { display: block; width: 100%; height: auto; }
-  .proof-frame figcaption {
-    padding: 12px 16px 14px;
-    font-size: 13.5px;
-    line-height: 1.55;
-    color: var(--fg-muted);
-    border-top: 1px solid var(--border);
-  }
-  .proof-frame figcaption strong { color: var(--fg); }
-
-  /* ---------- quickstart ---------- */
-  .quickstart { padding: 20px 0 84px; }
-  .terminal {
-    background: #0a0d13;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-    max-width: 720px;
-  }
-  :root[data-theme='light'] .terminal { background: #14161d; }
-  .terminal .chrome {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  }
-  .terminal .chrome span { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); }
-  .terminal pre {
-    margin: 0;
-    padding: 20px 22px 22px;
-    font-family: var(--font-mono);
-    font-size: 13.5px;
-    line-height: 1.8;
-    color: #d7dbe2;
-    overflow-x: auto;
-  }
-  .terminal .prompt { color: #6b7686; }
-  .terminal .cmd { color: #eceef2; }
-  .terminal .flag { color: #8ec1ff; }
-  .terminal .val { color: #7fd99a; }
-  .quickstart-note { margin-top: 16px; font-size: 14px; color: var(--fg-muted); }
-  .quickstart-note a { color: var(--accent); }
-
-  /* ---------- footer ---------- */
-  footer.site {
-    border-top: 1px solid var(--border);
-    padding: 32px 0 48px;
-  }
-  footer.site .wrap {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  .footer-notes { display: flex; flex-direction: column; gap: 8px; }
-  footer.site p {
-    margin: 0;
-    font-size: 12.5px;
-    color: var(--fg-dim);
-    max-width: 60ch;
-    line-height: 1.6;
-  }
-  footer.site p strong { color: var(--fg-muted); }
-  footer.site a { color: var(--fg-dim); }
-
-  @media (max-width: 640px) {
-    .hero { padding: 56px 0 40px; }
-  }
+footer{padding:40px 0 60px;color:var(--fg-dim);font-size:13px}
+footer p{margin:0 0 8px;max-width:80ch}
+footer strong{color:var(--fg-muted);font-weight:600}
 </style>
 </head>
 <body>
 
-<header class="site">
+<header class="top">
   <div class="wrap">
-    <a class="brand" href="#top" style="text-decoration:none;color:inherit;">
-      <img src="img/logo-mark.svg" width="26" height="26" alt="" />
-      Mikro<span class="accent">View</span>
-    </a>
-    <nav class="site-nav">
-      <a href="#features">Features</a>
-      <a href="#screenshot">Screenshot</a>
-      <a href="#quickstart">Quickstart</a>
-      <button class="theme-toggle" id="theme-toggle" type="button">Theme: System</button>
-      <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">GitHub →</a>
-    </nav>
+    <a class="mark" href="#top" aria-label="MikroView, top of page">MIKRO<span>VIEW</span></a>
+    <div class="status" aria-hidden="false">
+      <span class="live hide">LIVE · 4/s</span>
+      <span class="flag hide">⚑ 58</span>
+      <span class="eye hide">◉ 5</span>
+      <a href="https://github.com/tomlawesome/mikroview">github</a>
+    </div>
   </div>
 </header>
 
-<section class="hero" id="top">
-  <div class="hero-bg"></div>
-  <div class="hero-grid"></div>
-  <div class="wrap">
-    <div>
-      <p class="eyebrow">RouterOS · Firewall live view</p>
-      <h1>See what your<br/>firewall <span class="accent">just did.</span></h1>
-      <p class="hero-sub">
-        MikroView turns RouterOS's firewall log into a live picture of your
-        network: every boundary the router watches, every connection accepted,
-        dropped or rejected, and which rule decided it. The router pushes;
-        MikroView never logs in to it — no RouterOS credentials, no API
-        access. Start it with <code>docker compose up</code>, paste the setup
-        commands it generates into the router once, and the picture builds
-        itself.
-      </p>
-      <div class="hero-ctas">
-        <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
-        <a class="btn btn-ghost" href="#quickstart">Quickstart →</a>
+<nav class="rail" aria-label="Sections">
+  <a href="#top" aria-current="page">the fall</a>
+  <a href="#topography">topography</a>
+  <a href="#stream">the stream</a>
+  <a href="#push">push, not poll</a>
+  <a href="#quickstart">quickstart</a>
+</nav>
+
+<section class="hero" id="top" aria-label="Introduction">
+  <div class="fall" aria-hidden="true">
+    <div class="col"><h4>bridge-lan · input</h4><div class="sub">Winbox from LAN</div><div class="st">WATCHED</div>
+      <div class="lane">
+        <i class="m" style="left:22%;--o:-6.3s;--d:9s"></i>
+        <i class="m t" style="left:62%;--o:-1.5s;--d:9s"></i>
+        <i class="m" style="left:22%;--o:-0.6s;--d:15s"></i>
+        <i class="m" style="left:22%;--o:-1.5s;--d:15s"></i>
+        <i class="m t" style="left:62%;--o:-2.0s;--d:12s"></i>
+        <i class="m" style="left:62%;--o:-15.2s;--d:15s"></i>
+        <i class="m t" style="left:22%;--o:-0.7s;--d:11s"></i>
+        <i class="m t" style="left:22%;--o:-8.7s;--d:13s"></i>
+        <i class="m" style="left:74%;--o:-2.9s;--d:12s"></i>
+        <i class="m" style="left:62%;--o:-11.4s;--d:9s"></i>
+      </div></div>
+    <div class="col"><h4>bridge-workshop · input</h4><div class="sub">Winbox from Workshop</div><div class="st">WATCHED</div>
+      <div class="lane">
+        <i class="m" style="left:48%;--o:-10.9s;--d:15s"></i>
+        <i class="m" style="left:48%;--o:-9.4s;--d:16s"></i>
+        <i class="m" style="left:22%;--o:-12.7s;--d:12s"></i>
+        <i class="m t" style="left:34%;--o:-8.4s;--d:14s"></i>
+        <i class="m" style="left:34%;--o:-9.7s;--d:10s"></i>
+        <i class="m t" style="left:48%;--o:-2.6s;--d:14s"></i>
+      </div></div>
+    <div class="col"><h4>sfp-sfpplus1 · input</h4><div class="sub">Mgmt SSH inbound</div><div class="st">WATCHED</div>
+      <div class="lane">
+        <i class="m" style="left:84%;--o:-12.5s;--d:15s"></i>
+        <i class="m" style="left:48%;--o:-1.7s;--d:15s"></i>
+        <i class="m t" style="left:14%;--o:-15.8s;--d:16s"></i>
+        <i class="m t" style="left:34%;--o:-9.6s;--d:10s"></i>
+        <i class="m t" style="left:22%;--o:-8.6s;--d:14s"></i>
+      </div></div>
+    <div class="col dark"><h4>vlan-iot · input</h4><div class="sub">DNS from IoT to the router</div><div class="st">DARK — NO LOG RULE</div>
+      <div class="lane"><p>nothing logged —<small>no trace, and no claim of one</small></p></div></div>
+    <div class="col alarm"><h4>ether1 · input</h4><div class="sub">Drop unsolicited WAN inbound</div><div class="st">✱ PORT SCAN</div>
+      <div class="lane">
+        <i class="m r" style="left:62%;--o:-13.7s;--d:10s"></i>
+        <i class="m r" style="left:84%;--o:-9.4s;--d:8s"></i>
+        <i class="m r" style="left:48%;--o:-10.1s;--d:8s"></i>
+        <i class="m r t" style="left:34%;--o:-2.3s;--d:11s"></i>
+        <i class="m r" style="left:74%;--o:-10.2s;--d:11s"></i>
+        <i class="m r" style="left:48%;--o:-10.5s;--d:11s"></i>
+        <i class="m r" style="left:62%;--o:-0.2s;--d:11s"></i>
+        <i class="m r t" style="left:14%;--o:-3.0s;--d:8s"></i>
+        <i class="m r" style="left:84%;--o:-7.4s;--d:10s"></i>
+        <i class="m r" style="left:22%;--o:-8.3s;--d:9s"></i>
+        <i class="m r t" style="left:48%;--o:-6.7s;--d:7s"></i>
+        <i class="m r" style="left:62%;--o:-12.6s;--d:9s"></i>
+        <i class="m r" style="left:34%;--o:-9.5s;--d:11s"></i>
+        <i class="m r" style="left:14%;--o:-13.4s;--d:9s"></i>
+        <i class="m r" style="left:74%;--o:-1.0s;--d:9s"></i>
+        <i class="m r" style="left:74%;--o:-13.2s;--d:9s"></i>
+        <i class="m r" style="left:74%;--o:-5.6s;--d:10s"></i>
+        <i class="m r" style="left:62%;--o:-1.9s;--d:7s"></i>
+        <i class="m r t" style="left:34%;--o:-2.1s;--d:8s"></i>
+        <i class="m r" style="left:84%;--o:-7.9s;--d:8s"></i>
+        <i class="m r" style="left:62%;--o:-4.4s;--d:8s"></i>
+        <i class="m r" style="left:84%;--o:-8.8s;--d:10s"></i>
+        <i class="m r" style="left:74%;--o:-14.1s;--d:8s"></i>
+        <i class="m r t" style="left:22%;--o:-2.4s;--d:8s"></i>
+        <i class="m r t" style="left:84%;--o:-9.4s;--d:9s"></i>
+        <i class="m r t" style="left:22%;--o:-6.7s;--d:9s"></i>
+        <i class="m r" style="left:34%;--o:-15.2s;--d:11s"></i>
+        <i class="m r" style="left:74%;--o:-10.8s;--d:7s"></i>
+      </div></div>
+    <div class="col"><h4>bridge-lan → ether1</h4><div class="sub">LAN to WAN web</div><div class="st">WATCHED</div>
+      <div class="lane">
+        <i class="m" style="left:62%;--o:-13.7s;--d:9s"></i>
+        <i class="m" style="left:84%;--o:-9.4s;--d:7s"></i>
+        <i class="m" style="left:48%;--o:-10.1s;--d:7s"></i>
+        <i class="m t" style="left:34%;--o:-2.3s;--d:10s"></i>
+        <i class="m" style="left:74%;--o:-10.2s;--d:10s"></i>
+        <i class="m" style="left:48%;--o:-10.5s;--d:10s"></i>
+        <i class="m" style="left:62%;--o:-0.2s;--d:10s"></i>
+        <i class="m t" style="left:14%;--o:-3.0s;--d:7s"></i>
+        <i class="m" style="left:84%;--o:-7.4s;--d:9s"></i>
+        <i class="m" style="left:22%;--o:-8.3s;--d:8s"></i>
+        <i class="m" style="left:14%;--o:-14.0s;--d:10s"></i>
+        <i class="m" style="left:74%;--o:-4.0s;--d:8s"></i>
+        <i class="m" style="left:48%;--o:-2.0s;--d:9s"></i>
+        <i class="m" style="left:48%;--o:-7.7s;--d:8s"></i>
+        <i class="m t" style="left:14%;--o:-12.0s;--d:8s"></i>
+        <i class="m" style="left:74%;--o:-2.6s;--d:6s"></i>
+        <i class="m t" style="left:62%;--o:-5.8s;--d:10s"></i>
+        <i class="m" style="left:84%;--o:-8.4s;--d:6s"></i>
+        <i class="m" style="left:34%;--o:-8.3s;--d:7s"></i>
+        <i class="m" style="left:22%;--o:-8.5s;--d:10s"></i>
+        <i class="m" style="left:22%;--o:-9.8s;--d:7s"></i>
+        <i class="m" style="left:84%;--o:-6.4s;--d:7s"></i>
+        <i class="m t" style="left:48%;--o:-5.7s;--d:6s"></i>
+        <i class="m" style="left:84%;--o:-4.5s;--d:8s"></i>
+        <i class="m t" style="left:62%;--o:-15.3s;--d:9s"></i>
+        <i class="m" style="left:74%;--o:-15.8s;--d:8s"></i>
+      </div></div>
+  </div>
+  <div class="now" aria-hidden="true"><span class="lbl">NOW · 21:57:23</span><div class="line"></div></div>
+  <div class="hero-copy">
+    <div class="wrap">
+      <div class="headline">
+        <p class="eyebrow">RouterOS · firewall live view</p>
+        <h1>See what your firewall <em>just did.</em></h1>
+        <p class="sub-h">MikroView turns RouterOS's firewall log into a live picture of your network: every boundary the router watches, every connection accepted, dropped or rejected, and which rule decided it. The router pushes; MikroView never logs in to it — no RouterOS credentials, no API access.</p>
+        <div class="ctas">
+          <a class="btn p" href="#quickstart">Quickstart</a>
+          <a class="btn" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
+        </div>
       </div>
     </div>
+  </div>
+</section>
 
-    <figure class="hero-shot" style="margin:0">
-      <div class="chrome"><span></span><span></span><span></span><span class="label">the fall — MikroView's landing view</span></div>
-      <img src="img/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top" />
+<section id="fall-view" aria-labelledby="h-fall">
+  <div class="wrap view">
+    <div class="text">
+      <h2>the fall</h2>
+      <h3 id="h-fall">One column per boundary. Time pours down it.</h3>
+      <p>Guest to internet, LAN to servers, the router's own management ports — every boundary your rules mention gets a column, and each connection that crosses it falls as a mark, newest at the top.</p>
+      <p>A boundary whose rules don't log is drawn as a hatched stripe, so "switched off" never looks like "quiet".</p>
+      <p class="say">blank because nothing is logged<br>— not because nothing is sent</p>
+    </div>
+    <figure class="shot">
+      <img src="img/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top; a port scan flagged in red on ether1 and a dark hatched stripe where vlan-iot has no log rule" />
+      <figcaption>the fall · 21:57 · ✱ port scan on ether1 · 18 dark boundaries</figcaption>
     </figure>
   </div>
 </section>
 
-<section class="features" id="features">
-  <div class="wrap">
-    <p class="section-label">What you get</p>
-    <div class="feature-grid">
-      <div class="feature-card">
-        <h3><span class="chip"></span>The fall</h3>
-        <p>The landing view. One column per boundary your rules mention —
-        guest to internet, LAN to servers — with time pouring down it. A
-        boundary whose rules don't log is drawn as a solid dark stripe, so
-        "switched off" never looks like "quiet".</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Topography</h3>
-        <p>A map of the place: internet above, the router at the waist, your
-        networks below, drawn from the rule, NAT and address tables the
-        router pushes. It shows where logging is dark, and <em>Tune
-        logging</em> hands back an export with those rules switched on.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>The stream</h3>
-        <p>Row by row, as it happens: accepted, dropped or rejected, and the
-        rule that made the call, decoded from a short log-prefix convention.
-        Filter by device, IP or CIDR, port, protocol, interface or rule —
-        all client-side, all instant.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Flags and a watchlist</h3>
-        <p>Port scans, activity spikes, repeated hits on critical ports (SSH,
-        RDP, Winbox…) and more raise a flag for a human to review — never an
-        automatic action. The watchlist covers the other direction: what
-        <em>should</em> happen, and what deviated.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Push, not poll</h3>
-        <p>RouterOS forwards firewall log lines over syslog-over-TLS, and can
-        push its config and encrypted backups the same way. MikroView never
-        connects to the router and holds no RouterOS credentials; the only
-        secret on the router is an ingest token MikroView minted for that
-        device. No polling loop hammering the router — just a stream it was
-        already able to send. One Go binary, UI embedded, distroless
-        image.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="chip"></span>Secure by default, on disk by choice</h3>
-        <p>Sign-in is always required, HTTPS is on out of the box, local
-        accounts or OIDC/SSO. Events live in memory unless you opt in to
-        encrypted per-day history files; an optional SFTP drop box keeps
-        your router's own nightly backups for the day the router is gone.</p>
-      </div>
+<section id="topography" aria-labelledby="h-topo">
+  <div class="wrap view flip">
+    <div class="text">
+      <h2>topography</h2>
+      <h3 id="h-topo">The estate, drawn from what the router pushed.</h3>
+      <p>Internet above, the router at the waist, your networks below — built from the rule, NAT and address tables the router sends, not from anything you draw. Each link carries the ports that actually crossed it, and a border that has never been exercised says so.</p>
+      <p>It shows where logging is dark, and <em>tune logging</em> hands back an export with those rules switched on.</p>
+    </div>
+    <figure class="shot">
+      <img src="img/topography-map-dark.png" alt="Topography: the internet above, the router at the waist, and the LAN, servers, office, workshop and management zones below with their hosts, each link labelled with the ports it carried" />
+      <figcaption>topography · internet above, the router at the waist, five zones below · ✱ 5 held at the border</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="stream" aria-labelledby="h-stream">
+  <div class="wrap view">
+    <div class="text">
+      <h2>the stream</h2>
+      <h3 id="h-stream">Row by row, as it happens.</h3>
+      <p>Accepted, dropped or rejected, and the rule that made the call, decoded from a short log-prefix convention. Type a term or click a value in a row — device, IP or CIDR, port, protocol, interface, rule — and it filters in place, instantly.</p>
+      <p>Port scans, activity spikes and repeated hits on critical ports (SSH, RDP, Winbox…) raise a flag for a human to read — never an automatic action. The watchlist covers the other direction: what <em>should</em> happen, and what deviated.</p>
+    </div>
+    <figure class="shot">
+      <img src="img/stream-dark.png" alt="The stream: a live table of firewall events, each row showing the verdict badge, chain, source, destination and interface, with rows a flag touched marked" />
+      <figcaption>the stream · 5/s · drops 22% · top talker tom-desktop · top port 445</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="push" aria-labelledby="h-push">
+  <div class="wrap rows">
+    <div>
+      <p class="k">push, not poll</p>
+      <h3 id="h-push">The router sends. MikroView listens.</h3>
+      <p>RouterOS forwards firewall log lines over syslog-over-TLS, and can push its config and encrypted backups the same way. MikroView never connects to the router and holds no RouterOS credentials; the only secret on the router is an ingest token MikroView minted for that device. No polling loop hammering the router — just a stream it was already able to send.</p>
+    </div>
+    <div>
+      <p class="k">secure by default</p>
+      <h3>Sign-in always. HTTPS out of the box.</h3>
+      <p>Local accounts or OIDC/SSO. Events live in memory unless you opt in to encrypted per-day history files; an optional SFTP drop box keeps your router's own nightly backups for the day the router is gone.</p>
+    </div>
+    <div>
+      <p class="k">one container</p>
+      <h3>One Go binary, UI embedded.</h3>
+      <p>A distroless image, near-zero load on the router, and nothing else to run. Self-hosted, AGPL, yours.</p>
     </div>
   </div>
 </section>
 
-<section class="proof" id="screenshot">
+<section id="quickstart" aria-labelledby="h-qs">
   <div class="wrap">
-    <p class="section-label">Two more ways to look</p>
-    <div class="proof-grid">
-      <figure class="proof-frame" style="margin:0">
-        <div class="chrome"><span></span><span></span><span></span></div>
-        <img src="img/topography-dark.png" alt="Topography: the internet above, the router at the waist, the LAN, IoT and guest networks below, with boundaries marked where logging is switched off" />
-        <figcaption><strong>Topography.</strong> Where traffic can go, drawn from what the router pushed — and where nothing is being written down.</figcaption>
-      </figure>
-      <figure class="proof-frame" style="margin:0">
-        <div class="chrome"><span></span><span></span><span></span></div>
-        <img src="img/stream-dark.png" alt="The stream: a live table of firewall events, each row coloured by verdict and naming the rule that decided it" />
-        <figcaption><strong>The stream.</strong> Every event as a row: the verdict, the rule, the addresses, filterable in place.</figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<section class="quickstart" id="quickstart">
-  <div class="wrap">
-    <p class="section-label">Quickstart</p>
-    <div class="terminal">
-      <div class="chrome"><span></span><span></span><span></span></div>
-      <pre><span class="prompt">$</span> <span class="cmd">docker run -d --name mikroview \</span>
-    <span class="flag">-p</span> <span class="val">6514:6514/tcp</span> <span class="flag">-p</span> <span class="val">443:8080</span> \
+    <p class="step">step 1 of 2 · start it</p>
+    <h3 id="h-qs" style="margin:0 0 16px;font-size:26px;font-weight:600">Quickstart</h3>
+    <pre class="term" tabindex="0"><span class="pr">$</span> docker run -d --name mikroview \
+    <span class="fl">-p</span> <span class="va">6514:6514/tcp</span> <span class="fl">-p</span> <span class="va">443:8080</span> \
+    <span class="fl">-v</span> <span class="va">mikroview-data:/var/lib/mikroview</span> \
     ghcr.io/tomlawesome/mikroview:latest</pre>
-    </div>
-    <p class="quickstart-note">
-      Then point RouterOS at it — syslog over TLS (RouterOS 7.18+), and the
-      built-in guided wizard writes every command with your values already
-      filled in. <code>latest</code> is the most recent release; each release
-      is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one.
-      Reference:
-      <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a>
-      and
-      <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.
-    </p>
+    <p class="step">step 2 of 2 · point the router at it</p>
+    <p class="note">Sign in, and the built-in wizard writes every RouterOS command with your values already filled in — syslog over TLS (RouterOS 7.18+). Paste it once; the picture builds itself. <code>latest</code> is the most recent release; each release is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one. Reference: <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a> and <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.</p>
   </div>
 </section>
 
-<footer class="site">
+<footer>
   <div class="wrap">
-    <div class="footer-notes">
-      <p>
-        MikroView is an independent, community project. It is not affiliated
-        with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.
-      </p>
-      <p><strong>Development disclosure:</strong> MikroView was coded by
-      Claude under human direction.</p>
-      <p><strong>License:</strong> <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL v3.0</a> —
-      free and open source. Free to use, modify and self-host, including
-      in a business. A commercial licence is available if you want to
-      bundle MikroView into a product or offer it as a hosted service.</p>
-    </div>
-    <a href="https://github.com/tomlawesome/mikroview">github.com/tomlawesome/mikroview</a>
+    <p>MikroView is an independent, community project. It is not affiliated with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.</p>
+    <p><strong>Development disclosure:</strong> MikroView was coded by Claude under human direction.</p>
+    <p><strong>License:</strong> <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL v3.0</a> — free and open source. Free to use, modify and self-host, including in a business. A commercial licence is available if you want to bundle MikroView into a product or offer it as a hosted service.</p>
+    <p><a href="https://github.com/tomlawesome/mikroview">github.com/tomlawesome/mikroview</a></p>
   </div>
 </footer>
 
 <script>
-  // ---- theme toggle (mirrors the app's own system/light/dark cycle) ----
-  (function () {
-    var order = ['system', 'light', 'dark'];
-    var pref = localStorage.getItem('mikroview-site-theme') || 'system';
-    var btn = document.getElementById('theme-toggle');
-    function apply() {
-      if (pref === 'system') document.documentElement.removeAttribute('data-theme');
-      else document.documentElement.setAttribute('data-theme', pref);
-      btn.textContent = 'Theme: ' + pref.charAt(0).toUpperCase() + pref.slice(1);
-      localStorage.setItem('mikroview-site-theme', pref);
-    }
-    btn.addEventListener('click', function () {
-      pref = order[(order.indexOf(pref) + 1) % order.length];
-      apply();
-    });
-    apply();
+  // rail: mark the section in view (no motion, no external calls)
+  (function(){
+    var links=[].slice.call(document.querySelectorAll('.rail a'));
+    if(!('IntersectionObserver' in window)||!links.length)return;
+    var io=new IntersectionObserver(function(es){es.forEach(function(e){if(!e.isIntersecting)return;
+      links.forEach(function(a){if(a.getAttribute('href')==='#'+e.target.id)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});});},{rootMargin:'-40% 0px -50% 0px'});
+    links.forEach(function(a){var t=document.querySelector(a.getAttribute('href'));if(t)io.observe(t);});
   })();
-
 </script>
-
 </body>
 </html>
