@@ -435,6 +435,13 @@ func TestLogoutAllRejectsAnonymousCaller(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected an anonymous caller to be refused, got %d", resp.StatusCode)
 	}
+	// #1118: RouterOS's /tool fetch refuses to parse any 401 that omits
+	// WWW-Authenticate (RFC 9110 §15.5.2) -- so this session-gated route
+	// needs the header too, not just the bearer-token ingest paths
+	// RouterOS actually calls.
+	if got := resp.Header.Get("WWW-Authenticate"); got != `Bearer realm="mikroview"` {
+		t.Errorf(`expected WWW-Authenticate: Bearer realm="mikroview", got %q`, got)
+	}
 }
 
 // TestLogoutAllEndsEverySessionButTheCallers is the positive case: two
