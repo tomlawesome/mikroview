@@ -16,6 +16,8 @@ import (
 	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
+	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -313,6 +315,18 @@ type Server struct {
 	// now -- set once at boot from main.go's storage decision. See
 	// persistence.go.
 	Persistence PersistenceInfo
+
+	// ConfigUpgradeSettings is #1218's offer: every optional top-level
+	// setting this build understands that the running config does not
+	// set, each paired with deploy/config.example.yaml's own ready-to-
+	// paste YAML for it. Computed once at boot from the fixed inputs it
+	// depends on (this binary, this process's config) -- see main.go and
+	// config.MissingSettings -- and served as-is by handleConfigUpgrade.
+	ConfigUpgradeSettings []config.MissingSetting
+	// ConfigDrift is where an operator's dismissal of that same notice
+	// is remembered, per version (#1218). Nil when persistence for it is
+	// unconfigured, same optional-persistence contract as Setup below.
+	ConfigDrift *configdrift.Store
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -677,6 +691,13 @@ func (s *Server) apiRoutes() []route {
 
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 		{http.MethodGet, "/api/persistence", s.handlePersistence},
+
+		// The "N new settings are available" notice (#1218) and its
+		// per-version dismissal -- the setup wizard's paste-block
+		// treatment, applied to whatever this version understands that
+		// config.yaml does not set. See configupgrade.go.
+		{http.MethodGet, "/api/config/upgrade", s.handleConfigUpgrade},
+		{http.MethodPost, "/api/config/upgrade/dismiss", s.handleConfigUpgradeDismiss},
 
 		// Router-backup vault (#394): the Settings group's list and the
 		// download an admin uses to actually restore a dead router.

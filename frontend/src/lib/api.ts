@@ -2,6 +2,7 @@
 
 import { parseAddress, parseCidr } from './addressMatch'
 import type { OffBaseline } from './baseline'
+import type { ConfigUpgradeResponse } from './configUpgrade'
 import type {
   ApiToken,
   AuditResult,
@@ -1280,6 +1281,24 @@ export async function saveSetupAddress(address: string): Promise<string | null> 
   const res = await postJSON('/api/setup/address', { address })
   if (res.ok) return null
   return (await res.text()) || `saveSetupAddress: ${res.status}`
+}
+
+// fetchConfigUpgrade is #1218's "N new settings are available" notice --
+// admin-only, same gate as the two setup writes above, since there is
+// no read-only wizard for a viewer to reach it alongside.
+export async function fetchConfigUpgrade(): Promise<ConfigUpgradeResponse> {
+  const res = await fetch('/api/config/upgrade')
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
+}
+
+// dismissConfigUpgrade marks that same notice dealt with, for the
+// version the server is currently running -- it comes back on its own
+// the moment a later version has something new to say.
+export async function dismissConfigUpgrade(): Promise<ConfigUpgradeResponse> {
+  const res = await postJSON('/api/config/upgrade/dismiss')
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
 }
 
 // CoverageDeclaration mirrors internal/coverage.Declaration -- an

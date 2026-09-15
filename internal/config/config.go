@@ -488,6 +488,20 @@ type Setup struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// ConfigDrift configures where the "N new settings are available"
+// notice's dismissal is remembered (#1218) -- which version an operator
+// has already dealt with the notice for, so it does not resurface for
+// that version again but does for the next one that actually adds
+// something new. Nothing else about the notice is persisted here: the
+// settings list itself is computed live from the running config and
+// this build's own example config on every read. StorePath left empty
+// is a fully supported, deliberate choice, same optional-persistence
+// contract as Setup.StorePath: the notice still works, a dismissal just
+// does not survive a restart.
+type ConfigDrift struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Watchlist configures the match log (#243) behind the watchlist -- the
 // persisted replacement for Control Ports' single flat criticalPorts
 // port list. The entries themselves are definitions and live in the
@@ -1100,34 +1114,35 @@ type Backup struct {
 }
 
 type Config struct {
-	Listen     Listen     `yaml:"listen"`
-	Store      Store      `yaml:"store"`
-	Log        Log        `yaml:"log"`
-	GeoIP      GeoIP      `yaml:"geoip"`
-	Reputation Reputation `yaml:"reputation"`
-	Flags      Flags      `yaml:"flags"`
-	Auth       Auth       `yaml:"auth"`
-	Entities   Entities   `yaml:"entities"`
-	Coverage   Coverage   `yaml:"coverage"`
-	Hosts      Hosts      `yaml:"hosts"`
-	Baseline   Baseline   `yaml:"baseline"`
-	Audit      Audit      `yaml:"audit"`
-	Setup      Setup      `yaml:"setup"`
-	Watchlist  Watchlist  `yaml:"watchlist"`
-	Notify     Notify     `yaml:"notify"`
-	TLS        TLS        `yaml:"tls"`
-	OIDC       OIDC       `yaml:"oidc"`
-	Postgres   Postgres   `yaml:"postgres"`
-	Devices    []Device   `yaml:"devices"`
-	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
-	Blocklist  Blocklist  `yaml:"blocklist"`
-	Droplist   Droplist   `yaml:"droplist"`
-	NetClass   NetClass   `yaml:"netClass"`
-	OUI        OUI        `yaml:"oui"`
-	Engine     Engine     `yaml:"engine"`
-	Snapshot   Snapshot   `yaml:"snapshot"`
-	History    History    `yaml:"history"`
-	Backup     Backup     `yaml:"backup"`
+	Listen      Listen      `yaml:"listen"`
+	Store       Store       `yaml:"store"`
+	Log         Log         `yaml:"log"`
+	GeoIP       GeoIP       `yaml:"geoip"`
+	Reputation  Reputation  `yaml:"reputation"`
+	Flags       Flags       `yaml:"flags"`
+	Auth        Auth        `yaml:"auth"`
+	Entities    Entities    `yaml:"entities"`
+	Coverage    Coverage    `yaml:"coverage"`
+	Hosts       Hosts       `yaml:"hosts"`
+	Baseline    Baseline    `yaml:"baseline"`
+	Audit       Audit       `yaml:"audit"`
+	Setup       Setup       `yaml:"setup"`
+	ConfigDrift ConfigDrift `yaml:"configDrift"`
+	Watchlist   Watchlist   `yaml:"watchlist"`
+	Notify      Notify      `yaml:"notify"`
+	TLS         TLS         `yaml:"tls"`
+	OIDC        OIDC        `yaml:"oidc"`
+	Postgres    Postgres    `yaml:"postgres"`
+	Devices     []Device    `yaml:"devices"`
+	DeviceMAC   DeviceMAC   `yaml:"deviceMac"`
+	Blocklist   Blocklist   `yaml:"blocklist"`
+	Droplist    Droplist    `yaml:"droplist"`
+	NetClass    NetClass    `yaml:"netClass"`
+	OUI         OUI         `yaml:"oui"`
+	Engine      Engine      `yaml:"engine"`
+	Snapshot    Snapshot    `yaml:"snapshot"`
+	History     History     `yaml:"history"`
+	Backup      Backup      `yaml:"backup"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -1274,6 +1289,9 @@ func defaults() Config {
 		},
 		Setup: Setup{
 			StorePath: DefaultDataDir + "/setup.json",
+		},
+		ConfigDrift: ConfigDrift{
+			StorePath: DefaultDataDir + "/config-drift.json",
 		},
 		Watchlist: Watchlist{
 			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
