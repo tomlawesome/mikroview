@@ -1492,6 +1492,13 @@
       const d = coverageState.byKey.get(e.key)
       return `${pairName(e.from, e.to)}: intentionally quiet — ${d?.reason ?? ''}`
     }
+    // st === 'dark' here means quietKeys has no entry for this edge --
+    // which is also what a failed declarations read looks like before
+    // any successful load (#1237). "dark" is a claim MikroView has no
+    // evidence for in that case, so say the read failed instead.
+    if (coverageState.unreadable) {
+      return `${pairName(e.from, e.to)}: coverage declarations unreadable · checks again in five seconds`
+    }
     return `${pairName(e.from, e.to)}: dark — no rule on this boundary-direction logs`
   }
 
@@ -1540,6 +1547,13 @@
     if (cardBackCoverage === undefined) return `${back} · no pushed rule names it`
     if (cardBackCoverage === 'logged') return `${back} · logged`
     if (cardBackCoverage === 'quiet') return `${back} · quiet on purpose`
+    // cardBackCoverage === 'dark' here is the same claim coverageLabel
+    // and the card's own dark line make about the primary direction
+    // (#1237): not evidence-backed while the last declarations read
+    // failed, so say that instead of "dark" for the reverse direction too.
+    if (coverageState.unreadable) {
+      return `${back} · coverage declarations unreadable · checks again in five seconds`
+    }
     return `${back} · dark — nothing logs it`
   })
 
@@ -6897,7 +6911,16 @@
         <div class="s">{cardDeclaration.declaredBy} · {new Date(cardDeclaration.declaredAt).toLocaleString()}</div>
         <div class="s">{cardBackLine}</div>
       {:else}
-        <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        {#if coverageState.unreadable}
+          <!-- The last read of the declarations store failed, so "dark"
+               is not a claim MikroView has evidence for (#1237) -- this
+               boundary might be declared quiet on purpose and MikroView
+               just cannot see it. Say that instead, and re-check on the
+               same cadence every other coverage read uses. -->
+          <div class="s dk"><i class="sw dk"></i>coverage declarations unreadable · checks again in five seconds</div>
+        {:else}
+          <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        {/if}
         <div class="s">{cardRuleLine}</div>
         <div class="s dk"><i class="sw dk"></i>{cardBackLine}</div>
         <div class="s">nothing drawn across it is a fact; nothing is known</div>
