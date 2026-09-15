@@ -33,6 +33,7 @@ import type {
   PersistenceInfo,
   ReplayResult,
   ReputationResult,
+  RouterBackupRouter,
   RouterBackupsResponse,
   RuleUsage,
   VaultLock,
@@ -128,6 +129,17 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
 async function putJSON(url: string, body: unknown = {}): Promise<Response> {
   return fetch(url, {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    body: JSON.stringify(body),
+  })
+}
+
+// PATCH, for the one route that edits a single field of something the
+// server already holds (a kept backup's comment, #1126). Same CSRF
+// header as its neighbours, for the same reason.
+async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
+  return fetch(url, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
   })
@@ -1521,6 +1533,43 @@ export async function changeRouterBackupPassphrase(current: string, passphrase: 
   const res = await putJSON('/api/router-backups/passphrase', { current, passphrase })
   if (res.ok) return res.json()
   return (await res.text()).trim() || `changeRouterBackupPassphrase: ${res.status}`
+}
+
+// The keep controls (#1126): mark one stored backup as one to hold on
+// to with a comment saying why, rewrite that comment, or release it
+// back into the cycling ten. Each returns the router's whole block, so
+// RouterBackups.svelte renders what the vault now holds rather than
+// what the call was expected to do -- the same reasoning as the
+// VaultLock controls above, and the same `T | string` failure shape.
+
+function keepUrl(device: string, generation: string): string {
+  return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/protect`
+}
+
+export async function keepRouterBackup(
+  device: string,
+  generation: string,
+  comment: string,
+): Promise<RouterBackupRouter | string> {
+  const res = await postJSON(keepUrl(device, generation), { comment })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `keepRouterBackup: ${res.status}`
+}
+
+export async function releaseRouterBackup(device: string, generation: string): Promise<RouterBackupRouter | string> {
+  const res = await deleteJSON(keepUrl(device, generation))
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `releaseRouterBackup: ${res.status}`
+}
+
+export async function setRouterBackupComment(
+  device: string,
+  generation: string,
+  comment: string,
+): Promise<RouterBackupRouter | string> {
+  const res = await patchJSON(keepUrl(device, generation), { comment })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setRouterBackupComment: ${res.status}`
 }
 
 // fetchDroplist reads Settings' "drop list" group (#1225, #461): the

@@ -17,6 +17,14 @@ import { formatDayMonth, formatDurationShort, formatHM } from './format'
  * receipt line ("10 of 10 kept") is what pins the two together. */
 export const MAX_GENERATIONS = 10
 
+/** MAX_KEEP_COMMENT mirrors backupvault.MaxCommentRunes -- a kept
+ * backup's comment is 1 to 120 characters, counted in runes on both
+ * sides so the limit means the same thing in any alphabet (#1126). The
+ * form refuses early rather than making the server say no to something
+ * it could have said first, the way the passphrase field already
+ * does. */
+export const MAX_KEEP_COMMENT = 120
+
 /**
  * cadencePhrase names how often a router pushes, from the interval the
  * server learned from its own arrivals -- never the scheduler line the

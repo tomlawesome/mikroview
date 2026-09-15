@@ -988,6 +988,16 @@ interval from the pushes themselves, never from this scheduler line,
 since an operator could change that on the router without MikroView
 knowing.
 
+A `keep…` link on a router's newest generation marks it kept, with a
+comment saying why (`before the 7.16 upgrade`); its other generations
+sit behind an `earlier…` expander, and every kept one for that router
+gets its own line below, with `edit…` and `release…` beside it. A kept
+generation costs nothing to hold — it stops counting towards the ten
+generations retention keeps and is never touched by low-space cycling
+— but releasing one is the one way to free vault space by hand: it
+goes back into the ordinary ten, in its own place by age, where the
+oldest may then be dropped as normal.
+
 Restoring is your own act on the replacement router
 (`/system backup load`) — MikroView never connects to a router to apply
 one; it only ever reads the header to confirm what arrived.
