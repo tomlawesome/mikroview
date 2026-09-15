@@ -131,10 +131,53 @@ type Width = number | null
 // row's 14px mono, and a 13-character bare IPv4 ~129px, so every one of
 // them was cut short. (#685 sized the address columns for the
 // ten-character IP in the round-29 data; the addresses on a real LAN run
-// to fifteen.) The numbers only move the defaults -- a reader who
-// has dragged a column keeps the width they chose (STORAGE_KEY is not
-// bumped: the stored array's shape has not changed).
-const DEFAULT_WIDTHS: Width[] = [124, 150, 80, 90, 160, 132, 60, 168, 160, 132, 60, 170, 60, 150, null]
+// to fifteen.)
+//
+// #1117: two more were cut short, re-measured the same way (14px mono,
+// ~8.5px/char, the row's 20px cell padding):
+//   time    124 fit the bare 12-char timestamp ("21:57:34.252") but not
+//           the flag marker beside it on a flagged row -- the sticky
+//           cell is a flex row with no reserved gutter for the marker,
+//           so it crowded the digits off the left edge instead of the
+//           column growing. +36 for the marker's own gap/margin/glyph.
+//   nat     `formatAddr`'s "ip:port" shape was bounded "like an IPv4
+//           address plus ':' plus up to 5 digits" from the day this
+//           column was restored (#717, this file's own comment above),
+//           but never actually sized to that bound -- 150 was closer to
+//           the address columns' own number than to its own comment's
+//           math. 21 content chars plus the "→ " prefix is what this
+//           bug's "NAT ... clipped" report was.
+//
+// #1197: five more, same measure, plus EventRow's own button widths --
+// 17px + 4px gap for a copy/edit button, 15px + 4px for an
+// investigate/trace button -- since the bug's own repro named these
+// among the columns reading "…" at the default widths:
+//   source/destination  the name/address cell (EventRow's `.cell.addr`,
+//           not `.cell.ip`): up to 18 chars for a bare geo IP + country,
+//           plus up to two of copy/investigate riding beside it --
+//           160 was measured for an 11-char name plus copy+edit only,
+//           never the geo/country case this bug's "name" columns
+//           showing "…" turned out to be.
+//   srcAddr/dstAddr  `.cell.ip`, no buttons -- 132 covered the 13-char
+//           measurement #1149 quoted but not the fifteen-char real-LAN
+//           case that comment already flagged as the actual ceiling.
+//   iface   two RouterOS names plus the trace-on-map trigger -- 170 fit
+//           the short defaults (ether1, bridge1) this was measured
+//           against, not the longer custom VLAN/bridge names this bug's
+//           "interface" columns showing "…" turned out to be. Still
+//           fixed and ellipsis-truncated by design (see COLUMNS' own
+//           comment) -- this is headroom, not a new ceiling.
+// #1197's "ratified nine" (the original #644 set: time, action, source,
+// srcAddr, destination, dstAddr, proto, port, rule) sums to ~1240px
+// including Rule's 140px flex floor -- comfortably inside a common
+// desktop content width even before any of the six #717 restored. The
+// other five keep their own #717/#1149 measurements.
+//
+// STORAGE_KEY bumps to v7 (below): a v6 reader's saved widths were
+// measured against the old, too-narrow numbers, and keeping them would
+// silently carry the squashed defaults forward as if they were a chosen
+// preference.
+const DEFAULT_WIDTHS: Width[] = [160, 150, 80, 90, 220, 150, 60, 168, 220, 150, 60, 210, 60, 220, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
@@ -165,7 +208,15 @@ const FLEX_MIN_WIDTH = 140
 // shape change here has followed -- a stored width array and the
 // column set it was measured against should always be nameably the
 // same version, not just accidentally the same length.
-const STORAGE_KEY = 'mikroview-column-widths-v6'
+// v7 (#1197): the shape is unchanged (still fifteen entries), so
+// loadInitial's length guard alone would accept a v6 array and keep
+// whatever a reader had -- including the squashed defaults nobody
+// dragged away from, since a column sitting at its (old, too-narrow)
+// default is indistinguishable in storage from one a reader chose. The
+// key still bumps, same as v5's shape-only change did, so every
+// installed v6 array -- chosen or default -- falls back to these wider
+// numbers instead.
+const STORAGE_KEY = 'mikroview-column-widths-v7'
 
 function loadInitial(): Width[] {
   try {
