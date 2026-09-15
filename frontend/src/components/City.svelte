@@ -4349,10 +4349,19 @@
       {/if}
 
       {#if !c.h.key}
-        <!-- Nothing to write to: the register has not recorded this host
-             yet, so the marks would have no key to hang on. Said plainly
-             rather than offering a button that cannot work. -->
-        <div class="s">not in the host register yet · nothing to mark</div>
+        {#if hostsState.unreadable}
+          <!-- The last read of the register failed, so "not registered"
+               is not a claim MikroView has evidence for (#1236) -- it
+               might just as well be sitting there unread. Say that
+               instead, and re-check on the same 60s tick every other
+               read of the register uses. -->
+          <div class="s">host register unreadable · checks again in a minute</div>
+        {:else}
+          <!-- Nothing to write to: the register has not recorded this
+               host yet, so the marks would have no key to hang on. Said
+               plainly rather than offering a button that cannot work. -->
+          <div class="s">not in the host register yet · nothing to mark</div>
+        {/if}
       {/if}
 
       {#if hostPinned && authState.canEdit && c.h.key && !c.h.reason}
