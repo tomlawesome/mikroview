@@ -22,7 +22,11 @@
 // stream rows all carry one stale timestamp instead of a live spread):
 //
 //  - docs/screenshots/fall-dark.png: the landing view.
-//  - docs/screenshots/topography-dark.png: the Topography rail view.
+//  - docs/screenshots/topography-dark.png: the Topography rail view at
+//    its default stop, the city.
+//  - docs/screenshots/topography-map-dark.png: the same view at the
+//    slider's `clients` stop -- the 2D map. The Pages site and README
+//    show this one, not the city (owner, 2026-09-15, #1130).
 //  - docs/screenshots/stream-dark.png: the Stream rail view.
 //
 // 1600x900: at 1440 wide the fall's band headers overlap each other.
@@ -52,12 +56,13 @@ if (!URL_BASE || !USER || !PASS) {
 
 const outDir = path.join(REPO, 'docs', 'screenshots')
 
-async function signedInPage(browser) {
+async function signedInPage(browser, beforeLoad) {
   const context = await browser.newContext({
     viewport: { width: 1600, height: 900 },
     colorScheme: 'dark',
     ignoreHTTPSErrors: true,
   })
+  if (beforeLoad) await beforeLoad(context)
   const page = await context.newPage()
   await page.goto(URL_BASE, { waitUntil: 'networkidle' })
   await page.fill('input[autocomplete="username"]', USER)
@@ -85,6 +90,20 @@ const browser = await chromium.launch()
   await page.waitForTimeout(2000)
   await page.screenshot({ path: path.join(outDir, 'topography-dark.png') })
   console.log('captured topography-dark.png')
+  await context.close()
+}
+
+// Topography, the 2D map: the altitude slider remembers its stop in
+// localStorage (lib/altitudeStop.svelte.ts), so set it before the app
+// loads rather than driving the slider.
+{
+  const { context, page } = await signedInPage(browser, async (ctx) => {
+    await ctx.addInitScript(() => localStorage.setItem('mikroview:topography-altitude', 'clients'))
+  })
+  await page.click('.roll-rail button.rail-name:text-is("Topography")')
+  await page.waitForTimeout(2500)
+  await page.screenshot({ path: path.join(outDir, 'topography-map-dark.png') })
+  console.log('captured topography-map-dark.png')
   await context.close()
 }
 
