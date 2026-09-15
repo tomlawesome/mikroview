@@ -171,3 +171,10 @@ services:
     #
     # If you are unsure, stay on the JSON files. Going the other way
     # later is easy; coming back is not possible.
+
+# Only needed if you use the named volume instead of mikroview/data --
+# swap the data line above for `mikroview-data:/var/lib/mikroview` and
+# uncomment both lines here. `mikroview -migrate-data` moves between the
+# two later (docs/configuration.md, "Moving the data directory").
+# volumes:
+#   mikroview-data:
