@@ -33,10 +33,13 @@ beforeEach(() => {
   nextId = 1
 })
 
-// #546's "Ratified: what puts something in a broken state" -- an enabled
-// expectation whose coverage is exactly 'no-logging', and nothing else.
-// The predicate itself is what this file tests; whether it agrees with a
-// real server's coverage answer is frontend/scripts/live-nav-broken-ring.mjs's
+// #546/#680's ratified "what puts something in a broken state", widened
+// by #1156 to isWatchBroken's full precedence: an enabled expectation
+// whose coverage is exactly 'no-logging', OR one whose recorded ring
+// has gone quiet (e.ring.broken) -- the same two kinds of broken
+// Watchlist.svelte's own watchState draws with '○'. The predicate
+// itself is what this file tests; whether it agrees with a real
+// server's coverage answer is frontend/scripts/live-nav-broken-ring.mjs's
 // job.
 describe('WatchlistState.brokenCount', () => {
   it('is zero with no entries', () => {
@@ -104,5 +107,47 @@ describe('WatchlistState.brokenCount', () => {
       [enabledButFine.id]: 'covered',
     }
     expect(watchlistState.brokenCount).toBe(1)
+  })
+
+  // #1156: the Topography dial's arc read watchlistState.brokenCount,
+  // which only ever checked coverage -- so a watch the panel marks '○'
+  // for a recorded ring break (e.ring.broken), with coverage otherwise
+  // fine, still counted as healthy on the dial for the same entry. A
+  // ring-broken watch must count toward brokenCount (and drop out of
+  // heldCount) exactly as it does in Watchlist.svelte's own '○' marker.
+  it('counts a ring-broken watch even when coverage says nothing is wrong', () => {
+    const e = entry({ ring: { broken: true } })
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'covered' }
+    expect(watchlistState.brokenCount).toBe(1)
+    expect(watchlistState.heldCount).toBe(0)
+  })
+
+  it('excludes a disabled entry from brokenCount even if its ring is broken -- paused, not broken', () => {
+    const e = entry({ enabled: false, ring: { broken: true } })
+    watchlistState.entries = [e]
+    watchlistState.coverage = {}
+    expect(watchlistState.brokenCount).toBe(0)
+    expect(watchlistState.heldCount).toBe(0)
+  })
+})
+
+describe('WatchlistState.heldCount', () => {
+  it('counts an enabled entry with no coverage answer and no ring break as held', () => {
+    const e = entry()
+    watchlistState.entries = [e]
+    watchlistState.coverage = {}
+    expect(watchlistState.heldCount).toBe(1)
+  })
+
+  it('does not double-count: every entry lands in exactly one of heldCount/brokenCount', () => {
+    const held = entry({ enabled: true })
+    const noLogging = entry({ enabled: true })
+    const ringBroken = entry({ enabled: true, ring: { broken: true } })
+    const paused = entry({ enabled: false })
+    watchlistState.entries = [held, noLogging, ringBroken, paused]
+    watchlistState.coverage = { [noLogging.id]: 'no-logging', [ringBroken.id]: 'covered' }
+    expect(watchlistState.heldCount).toBe(1)
+    expect(watchlistState.brokenCount).toBe(2)
   })
 })
