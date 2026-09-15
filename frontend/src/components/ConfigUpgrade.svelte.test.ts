@@ -78,38 +78,38 @@ describe('ConfigUpgrade (#1218)', () => {
     ])
   })
 
-  it('copies the exact block text and shows Copied on the button that was clicked', async () => {
+  it('copies the exact block text and shows copied on the button that was clicked', async () => {
     await renderPanel(
       response({ settings: [{ key: 'geoip', block: '# geoip:\n#   dbPath: x' }] }),
     )
-    const button = screen.getByRole('button', { name: 'Copy' })
+    const button = screen.getByRole('button', { name: 'copy' })
     await fireEvent.click(button)
     flushSync()
 
     expect(copyToClipboard).toHaveBeenCalledWith('# geoip:\n#   dbPath: x')
-    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'copied' })).toBeTruthy()
   })
 
   it('shows a Dismiss control when the notice has not been dismissed yet', async () => {
     await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }], dismissed: false }))
-    expect(screen.getByRole('button', { name: /Dismiss for this version/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /dismiss for this version/ })).toBeTruthy()
   })
 
   it('dismissing calls the API and replaces the button with a note', async () => {
     await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }], dismissed: false }))
     vi.mocked(dismissConfigUpgrade).mockResolvedValue(response({ dismissed: true }))
 
-    await fireEvent.click(screen.getByRole('button', { name: /Dismiss for this version/ }))
+    await fireEvent.click(screen.getByRole('button', { name: /dismiss for this version/ }))
     flushSync()
 
     expect(dismissConfigUpgrade).toHaveBeenCalled()
     expect(screen.getByText(/Dismissed for this version/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /^Dismiss for this version$/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^dismiss for this version$/ })).toBeNull()
   })
 
   it('already dismissed on load shows the note, not the Dismiss control', async () => {
     await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }], dismissed: true }))
     expect(screen.getByText(/Dismissed for this version/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /Dismiss for this version/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /dismiss for this version/ })).toBeNull()
   })
 })

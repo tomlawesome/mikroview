@@ -50,20 +50,20 @@
     <p class="intro">
       {configUpgradeState.settings.length} setting{configUpgradeState.settings.length === 1 ? '' : 's'} this
       version understands {configUpgradeState.settings.length === 1 ? "isn't" : "aren't"} set in your config.yaml yet.
-      Paste whichever you want under your own <code>devices:</code> line.
+      Paste whichever you want into <code>config.yaml</code>, at the top level, then restart mikroview.
     </p>
     {#each configUpgradeState.settings as setting (setting.key)}
       <div class="paste">
         <pre class="script">{setting.block}</pre>
         <button type="button" class="copy" onclick={() => copy(setting.key, setting.block)}>
-          {copiedKey === setting.key ? 'Copied' : 'Copy'}
+          {copiedKey === setting.key ? 'copied' : 'copy'}
         </button>
       </div>
     {/each}
     {#if configUpgradeState.dismissed}
       <p class="dismissed-note">Dismissed for this version -- it will come back once a later one adds something new.</p>
     {:else}
-      <button type="button" class="dismiss" onclick={dismiss}>Dismiss for this version</button>
+      <button type="button" class="dismiss" onclick={dismiss}>dismiss for this version</button>
     {/if}
   {/if}
 </div>
