@@ -134,6 +134,10 @@ var authzMatrix = []routeExpectation{
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
 	{http.MethodGet, "/api/persistence", accessAdmin,
 		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
+	{http.MethodGet, "/api/config/upgrade", accessAdmin,
+		"the \"N new settings are available\" notice (#1218) and its ready-to-paste YAML -- admin-only like the wizard's own writes, since there is no read-only wizard for a viewer to reach this alongside"},
+	{http.MethodPost, "/api/config/upgrade/dismiss", accessAdmin,
+		"dismisses that same notice for this version (#1218) -- same tier as POST /api/setup/mark and /api/setup/address, which persist beside it"},
 
 	{http.MethodGet, "/api/router-backups", accessAdmin,
 		"lists every router's kept generations and missed-push count (#394) -- admin-only like the disk group's " +
