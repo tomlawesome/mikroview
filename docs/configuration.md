@@ -395,6 +395,15 @@ backup:
   empty, MikroView puts them beside the data directory. Config-file
   only, same as `history.dir`.
 
+**Turning this on also means publishing the port.** `backup.enabled:
+true` alone does not make the drop box reachable — the router still
+needs a path to it. `deploy/docker-compose.yml`'s `ports:` carries a
+matching entry, commented out beside the HTTPS and redirect mappings;
+uncomment it (keeping it in step with `backup.listen`) when you turn
+this on, or the router's script times out partway through the upload
+rather than failing cleanly (#1220). The setup wizard's step 6 names
+the port next to the script it hands over, for the same reason.
+
 **No key, no backups.** Every pair is encrypted under `history.keyFile`
 (above) — the same key, the same "no key, no storage" rule #853 applies
 to the rest of MikroView's state. With no key configured, the drop box
