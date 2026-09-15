@@ -41,9 +41,16 @@ uid it is actually running as instead.
 
 ## config.yaml
 
-Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
-`docker-compose.yml` mounts that path into the container at
-`/etc/mikroview/config.yaml`.
+Put the file at `mikroview/config.yaml` and restart: copy
+`deploy/config.example.yaml` there (`deploy/mikroview/config.yaml` for
+the from-source compose file) and edit it —
+[`docker-compose.yml`](../deploy/docker-compose.yml) mounts the whole
+`mikroview/` folder read-only at `/etc/mikroview`, so that is the path
+MikroView reads. `config.yaml` is optional; a fresh install runs on
+defaults without one. See
+[docs/decisions/app-folder.md](decisions/app-folder.md) for the folder
+layout and why. Naming a config file explicitly elsewhere —
+`MIKROVIEW_CONFIG`, or `-config` — is the older, still-supported way.
 
 ```yaml
 listen:
@@ -301,11 +308,14 @@ the wizard says it can never show it to you again.
   has to mean the history is actually gone, or the setting is a lie.
   That applies to the control in the app as well: the files are gone
   before the change is confirmed on screen.
-- `history.keyFile` — path to a master key file that you generate and
-  mount, e.g.:
+- `history.keyFile` — path to a master key file that you generate.
+  **Put it at `mikroview/keys/history.key` and restart** — from the
+  release that carries #1243, MikroView finds it there with nothing
+  else set:
 
   ```
-  head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+  mkdir -p mikroview/keys
+  head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
   ```
 
   Mounted files have to be readable by the user MikroView runs as, or it
@@ -314,9 +324,11 @@ the wizard says it can never show it to you again.
   Generating the key as some other account is the usual way to get this
   wrong.
 
-  The file must hold at least 32 bytes. This is a path, never the key
-  itself — there is deliberately no environment variable carrying key
-  material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+  Naming the path explicitly instead — `MIKROVIEW_HISTORY_KEY_FILE`, or
+  `history.keyFile` pointing somewhere else — works today and keeps
+  working; it wins over the folder default when set. The file must hold
+  at least 32 bytes either way. This is a path, never the key itself —
+  there is deliberately no environment variable carrying key material.
 
   Or let the app generate it: with no key mounted, the setup wizard's
   step 6 hands you a key of exactly this shape, with the commands to
@@ -324,9 +336,13 @@ the wizard says it can never show it to you again.
   in your browser and never sent to the server, so save it when it is
   shown — nothing can reprint it.
 
-  **It must be mounted outside the data directory.** A key kept beside
-  the files it protects is decoration: whoever copies the directory
-  copies both, and now has everything needed to read it.
+  **The rule is that the key must not live inside the data store, not
+  that it must sit outside the app folder.** `mikroview/keys/` beside
+  `mikroview/data/` satisfies it: what MikroView writes to, and what a
+  backup of `data/` alone carries, never includes the key. A copy of the
+  *whole* `mikroview/` folder is a copy of the key too — back up
+  `data/` on its own when the key must stay behind, and back up the
+  whole folder only when you mean to carry the key with it.
 
   **There is no unencrypted mode.** `history.enabled: true` with no key
   file set does not mean "retain, unencrypted" — it means nothing is
@@ -670,7 +686,7 @@ and hostnames.
 1000) — see
 [Files you mount into the container](#files-you-mount-into-the-container).
 If `config.yaml` isn't readable by that user, the container will fail to
-start with a permission error. `chmod 644 deploy/config.yaml` after
+start with a permission error. `chmod 644 mikroview/config.yaml` after
 editing it is the simplest fix here, since a config file is not a secret.
 
 ### Problem codes
@@ -1134,12 +1150,17 @@ you to create your own free account to obtain one.
 1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
    and download `GeoLite2-Country.mmdb` (or generate a license key and use
    their `geoipupdate` tool to keep it current).
-2. Mount the `.mmdb` file into the container and point MikroView at it
-   with `MIKROVIEW_GEOIP_DB_PATH` (or `geoip.dbPath` in `config.yaml`, or
-   `-geoip-db` for local development). It has to be readable by the user
-   MikroView runs as — see
+2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
+   from the release that carries #1243, MikroView finds it there with
+   nothing else set. It has to be readable by the user MikroView runs
+   as — see
    [Files you mount into the container](#files-you-mount-into-the-container).
    A GeoIP database is not a secret, so `chmod 644` is fine here.
+
+   Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
+   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development —
+   works today and keeps working; it wins over the folder default when
+   set.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
@@ -3720,12 +3741,19 @@ tls:
   ingest is unaffected either way: `listen.syslogTls` loads its own
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
-- **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set. Both are mounted files, so both
-  have to be readable by the user MikroView runs as — see
+- **`certFile`/`keyFile`** — your own certificate, instead of the
+  self-generated one. **Put the files at `mikroview/certs/tls.crt` and
+  `mikroview/certs/tls.key` and restart** — from the release that
+  carries #1243, MikroView finds them there with nothing else set, both
+  present or neither used. Both are mounted files, so both have to be
+  readable by the user MikroView runs as — see
   [Files you mount into the container](#files-you-mount-into-the-container);
   the private key should stay `600`, the certificate can be `644`. See
   "Renewing your own certificate" below if something renews it for you.
+  Naming `certFile`/`keyFile` explicitly elsewhere, or the
+  `MIKROVIEW_TLS_CERT_FILE`/`MIKROVIEW_TLS_KEY_FILE` env vars, works
+  today and keeps working; either wins over the folder default when
+  set.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
