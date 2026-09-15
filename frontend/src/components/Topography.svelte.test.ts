@@ -191,6 +191,10 @@ beforeEach(() => {
   // judging traffic against a table it never pushed.
   policyState.anyPushed = false
   coverageState.declarations = []
+  // #1237: a test that flips this to check the unreadable wording would
+  // otherwise leave the next test's dark boundaries reading "unreadable"
+  // instead of "dark".
+  coverageState.unreadable = false
   // The host register is a module-level singleton too (#1016), so a test
   // that seeds a quiet host would otherwise leave it quiet for the next.
   hostsState.hosts = []
@@ -1384,6 +1388,58 @@ describe('the round-30 layout (#699)', () => {
       // ...and the screen reader is not told the same rib twice either.
       expect(p.getAttribute('aria-hidden')).toBe('true')
     }
+  })
+
+  it("highlights a rib's own badge on hover, and no other rib's (#1227)", () => {
+    // #1180's fix (above) moved <text class="edge-badge"> out of
+    // .edge-g and into the sibling .detail group, which orphaned the
+    // old pure-CSS `.edge-g:hover .edge-badge` rule -- the two are
+    // siblings now, not ancestor/descendant, so hovering a rib stopped
+    // changing its badge's colour. Same fixture as #1180's test above:
+    // one lane, two directions, so two distinct ribs and two distinct
+    // badges to tell apart by their shared <title> text.
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 445, action: 'drop' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const ribs = [...container.querySelectorAll('.edge-g')]
+    expect(ribs.length).toBe(2)
+
+    function badgeFor(rib: Element): Element {
+      const label = rib.querySelector('title')!.textContent
+      const detail = [...container.querySelectorAll('g.detail')].find((g) => g.querySelector('title')?.textContent === label)
+      return detail!.querySelector('.edge-badge')!
+    }
+
+    const [ribA, ribB] = ribs
+    const badgeA = badgeFor(ribA)
+    const badgeB = badgeFor(ribB)
+    expect(badgeA).not.toBe(badgeB)
+    expect(badgeA.classList.contains('hover-t')).toBe(false)
+    expect(badgeB.classList.contains('hover-t')).toBe(false)
+
+    ribA.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }))
+    flushSync()
+    expect(badgeA.classList.contains('hover-t')).toBe(true)
+    expect(badgeB.classList.contains('hover-t')).toBe(false)
+
+    ribA.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }))
+    flushSync()
+    expect(badgeA.classList.contains('hover-t')).toBe(false)
+
+    // Focus (keyboard) reaches the same badge the way pointer hover does.
+    ribB.dispatchEvent(new FocusEvent('focus', { bubbles: true }))
+    flushSync()
+    expect(badgeB.classList.contains('hover-t')).toBe(true)
+    expect(badgeA.classList.contains('hover-t')).toBe(false)
+
+    ribB.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+    flushSync()
+    expect(badgeB.classList.contains('hover-t')).toBe(false)
   })
 
   it('puts every edge label on a plate rather than bare on its line', () => {
@@ -3066,6 +3122,26 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     const acts = [...card.querySelectorAll('.acts button')].map((b) => b.textContent?.trim())
     expect(acts).toEqual(['declare quiet on purpose ▸', 'rules ▸', 'stream ▸'])
     expect(card.querySelector('.form')).toBeNull() // the form is behind the pin
+  })
+
+  // #1237: "dark — nothing logs this boundary" is a positive claim about
+  // the boundary having no declaration. When the last read of the
+  // declarations store failed, MikroView has no evidence for that claim
+  // -- the boundary could be declared quiet on purpose and just unread.
+  it('says the declarations are unreadable, not "dark", when the last read failed', () => {
+    guestDark()
+    coverageState.unreadable = true
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = openCard(container)
+    const text = card.textContent?.replace(/\s+/g, ' ') ?? ''
+    expect(text).toContain('coverage declarations unreadable · checks again in five seconds')
+    expect(text).not.toContain('dark — nothing logs this boundary')
+    // The reverse direction's own line makes the same "dark" claim
+    // (cardBackLine) and must be caught by the same flag.
+    expect(text).toContain('the internet → Guest · coverage declarations unreadable · checks again in five seconds')
+    expect(text).not.toContain('the internet → Guest · dark — nothing logs it')
   })
 
   it('opens the declare form on the pin, with both directions checked and who it will be signed by', () => {

@@ -42,10 +42,21 @@
   // or a fence turns it off and the pill reads `follow` in the now ink
   // until it is taken; taking it follows again and clears the cursor
   // and the window -- see whisperState.resumeFollowing.
+  //
+  // `columns ▸` joined this row after csv ↓ per the owner's ruling on
+  // #1197: this hand is already control over what the table holds and
+  // shows (hold the lines, fold repeats, empty the screen, give a copy),
+  // and choosing which columns it draws is one more of those -- not a
+  // filter, which is what FilterBar.svelte's own strip is for. It used
+  // to live behind that strip's fold, where a reader who never opened it
+  // never found the picker at all; FilterBar carries no second copy any
+  // more (see the comment on its mobile-only column list, which the
+  // ruling left alone).
   import { appState } from '../lib/state.svelte'
   import { whisperState } from '../lib/whisper.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
   import { viewportState } from '../lib/viewport.svelte'
+  import { columnState } from '../lib/columns.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import { formatEps, formatHM, formatTime } from '../lib/format'
   import {
@@ -59,6 +70,66 @@
     topTalker,
   } from '../lib/whisperStats'
   import type { TimeBucket } from '../lib/types'
+
+  // #710/#1197: the columns ▸ picker's own naming, distinct from COLUMNS'
+  // table-header labels (lib/columns.svelte) -- a flat list read "Device
+  // column", "Address column", "Address column" with nothing beside the
+  // repeats to tell them apart. These three lists say the bare column
+  // name in the picker's own mono voice, and the source/destination facts
+  // (address, port, MAC) sit under a small heading naming which side they
+  // belong to instead of repeating "source"/"destination" on every row.
+  // Order here is the picker's own -- COLUMNS interleaves source's and
+  // destination's facts around chain/proto for a table-layout reason (see
+  // its own comment) that has nothing to do with how this groups them.
+  // Ported from FilterBar.svelte, whose own copy still serves the mobile
+  // drawer's always-open list -- see that file's own comment.
+  interface ColumnChoice {
+    key: string
+    text: string
+    ariaLabel: string
+  }
+  const PLAIN_COLUMNS: ColumnChoice[] = [
+    { key: 'device', text: 'device', ariaLabel: 'Device column' },
+    { key: 'action', text: 'action', ariaLabel: 'Action column' },
+    { key: 'chain', text: 'chain', ariaLabel: 'Chain column' },
+    { key: 'source', text: 'source', ariaLabel: 'Source column' },
+    { key: 'destination', text: 'destination', ariaLabel: 'Destination column' },
+    { key: 'proto', text: 'proto', ariaLabel: 'Proto column' },
+    { key: 'iface', text: 'interface', ariaLabel: 'Interfaces column' },
+    { key: 'nat', text: 'NAT', ariaLabel: 'NAT column' },
+  ]
+  const SOURCE_COLUMNS: ColumnChoice[] = [
+    { key: 'srcAddr', text: 'address', ariaLabel: 'Source address column' },
+    { key: 'srcPort', text: 'src port', ariaLabel: 'Source port column' },
+    { key: 'mac', text: 'MAC', ariaLabel: 'Source MAC column' },
+  ]
+  const DEST_COLUMNS: ColumnChoice[] = [
+    { key: 'dstAddr', text: 'address', ariaLabel: 'Destination address column' },
+    { key: 'port', text: 'port', ariaLabel: 'Destination port column' },
+  ]
+
+  // The desktop columns ▸ trigger and its popover (#1197, moved here from
+  // FilterBar.svelte's own always-visible strip -- see the top-of-file
+  // comment for why this row is where it belongs now). Same disclosure
+  // shape as the rest of this file's popovers-that-aren't: closes on a
+  // second click of the trigger, on Escape (focus returns to the
+  // trigger), or on a click landing outside the panel.
+  let columnsOpen = $state(false)
+  let columnsMenuEl: HTMLDivElement | undefined = $state()
+  let columnsTriggerEl: HTMLButtonElement | undefined = $state()
+
+  function onColumnsWindowClick(e: MouseEvent) {
+    const path = e.composedPath()
+    if (columnsOpen && columnsMenuEl && !path.includes(columnsMenuEl)) columnsOpen = false
+  }
+
+  function onColumnsWindowKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return
+    if (columnsOpen) {
+      columnsOpen = false
+      columnsTriggerEl?.focus()
+    }
+  }
 
   // A drag shorter than this (screen pixels) is a sloppy click, not a
   // fence -- click and drag must never be ambiguous.
@@ -369,6 +440,43 @@
   }
 </script>
 
+<svelte:window onclick={onColumnsWindowClick} onkeydown={onColumnsWindowKeydown} />
+
+<!-- The columns ▸ picker's own snippets (#1197, moved from FilterBar.svelte
+     along with the trigger and panel -- see the top-of-file comment).
+     Time and Rule are pinned -- no checkbox for either, since neither is
+     ever offered as a toggle. -->
+{#snippet columnCheckbox(col: ColumnChoice)}
+  <!-- aria-label carries the disambiguated name ("Source address
+       column", not "Address column") on the input directly, which wins
+       over the wrapping <label>'s own text for the accessible name -- so
+       the visible word stays bare while a screen reader still hears
+       which side it belongs to. -->
+  <label class="col-toggle">
+    <input
+      type="checkbox"
+      checked={columnState.isColumnVisible(col.key)}
+      onchange={() => columnState.toggleColumn(col.key)}
+      aria-label={col.ariaLabel}
+    />
+    {col.text}
+  </label>
+{/snippet}
+
+{#snippet columnCheckboxes()}
+  {#each PLAIN_COLUMNS as col (col.key)}
+    {@render columnCheckbox(col)}
+  {/each}
+  <span class="col-group-heading">source</span>
+  {#each SOURCE_COLUMNS as col (col.key)}
+    {@render columnCheckbox(col)}
+  {/each}
+  <span class="col-group-heading">destination</span>
+  {#each DEST_COLUMNS as col (col.key)}
+    {@render columnCheckbox(col)}
+  {/each}
+{/snippet}
+
 <div
   class="whisper"
   aria-label="The last {WHISPER_WINDOW_MINUTES} minutes, whispered — click the curve to seek, drag to fence a time range"
@@ -516,6 +624,51 @@
     onclick={() => downloadEventsCsv(heldEvents)}>csv ↓</button
   >
 
+  <!-- #1197 (owner ruling, 2026-09-13): columns ▸ stands on this
+       always-visible hand now, after csv ↓ -- not inside FilterBar's
+       fold, where an operator who never opens the filters never learned
+       the table had hidden columns at all. Same popover panel, same
+       persistence, same columnsOpen/columnsMenuEl/columnsTriggerEl state
+       and columnCheckboxes snippet FilterBar used to own -- only the
+       trigger's home moved, and FilterBar's own copy is gone: one door
+       to this panel, not two. Desktop only -- the mobile drawer keeps
+       its own always-open list (FilterBar.svelte, unchanged). -->
+  {#if !viewportState.isMobile}
+    <div class="columns-menu" bind:this={columnsMenuEl}>
+      <button
+        type="button"
+        class="wpill tf-columns"
+        class:on={columnsOpen}
+        bind:this={columnsTriggerEl}
+        onclick={(e) => {
+          e.stopPropagation()
+          columnsOpen = !columnsOpen
+        }}
+        aria-haspopup="true"
+        aria-expanded={columnsOpen}
+        aria-label="Choose which columns the stream shows"
+        title="Choose which columns the stream shows">columns ▸</button
+      >
+      {#if columnsOpen}
+        <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
+          {@render columnCheckboxes()}
+          <!-- One click undoes a bad drag. Disabled once every width
+               already matches DEFAULT_WIDTHS -- nothing to reset, same
+               idiom csv ↓'s own disabled state uses for "nothing to
+               give". -->
+          <button
+            type="button"
+            class="col-reset"
+            onclick={() => columnState.reset()}
+            disabled={columnState.isDefault}
+            title="Reset every column back to its default width"
+            >reset widths</button
+          >
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <p class="sr-only" role="status">{announcement}</p>
 </div>
 
@@ -525,6 +678,21 @@
     gap: 14px;
     align-items: center;
     padding: 2px 0 6px;
+    /* #1197's own move: neither .card nor .card-body (the shared
+       ancestor of this row and LiveTable's .table-wrap) is itself a
+       stacking context, so a descendant's z-index and .table-wrap's
+       sticky header cells' own (.header-cell, z-index 2-4) climb straight
+       past both and are compared as if they were siblings at the
+       document root -- the same defect FilterBar's own .bar.thin
+       comment recorded for the fold-out strip, caught there as the
+       header painting straight through the open column panel despite
+       its z-index of 40 nominally outranking it. This row sits directly
+       above LiveTable in that same flex column, so it inherits the same
+       fix: position + a z-index clear of LiveTable's own puts it in the
+       race and gives the columns ▸ panel (below) the header's own
+       weapon back. */
+    position: relative;
+    z-index: 10;
   }
 
   .wbar {
@@ -671,6 +839,113 @@
   .wpill:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  /* columns ▸ (#1197, moved from FilterBar.svelte): a .wpill like wipe
+     and csv ↓ either side of it, plus its own open-state ink so the
+     picker being open reads as clearly here as `pause`/`group` do above. */
+  .columns-menu {
+    position: relative;
+  }
+
+  .tf-columns.on {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  /* Floats over the row (the account menu's dress, same as
+     FilterPresetsMenu's .fpmenu) instead of joining the flex flow, so
+     opening it never pushes anything after it onto another line. */
+  .col-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    /* Right-anchored, not left: the trigger is the last pill on the row,
+       so a panel opening rightward from there would run past the
+       viewport edge (the defect this ported from, FilterBar's own #710).
+       Opening leftward keeps it over the row that's already on screen. */
+    right: 0;
+    z-index: 40;
+    width: 320px;
+    max-width: 80vw;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    cursor: default;
+  }
+
+  .col-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+  }
+
+  .col-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font: 12px var(--font-mono);
+    color: var(--fg-muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .col-toggle:hover {
+    color: var(--fg);
+  }
+
+  .col-toggle input[type='checkbox'] {
+    cursor: pointer;
+  }
+
+  .col-toggle input[type='checkbox']:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* One click undoes a bad drag, set off from the checkboxes above it by
+     the same hairline .col-group-heading already uses, so it doesn't
+     read as one more column toggle. */
+  .col-reset {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 0 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    background: none;
+    color: var(--fg-dim);
+    font: 11px var(--font-mono);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .col-reset:hover:not(:disabled) {
+    color: var(--fg);
+  }
+
+  .col-reset:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .col-reset:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* The small heading naming which side "address"/"src port"/"MAC"
+     belongs to. flex-basis: 100% starts a new line, scoped to one
+     heading inside the panel rather than the whole row. */
+  .col-group-heading {
+    flex-basis: 100%;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+    font: 500 9px var(--font-mono);
+    letter-spacing: 0.1em;
+    color: var(--fg-dim);
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

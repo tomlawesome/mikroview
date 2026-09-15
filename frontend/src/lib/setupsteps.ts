@@ -212,7 +212,20 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
   }
   const routers = backups?.routers ?? []
   if (routers.length === 0) {
-    return { state: 'waiting', detail: 'Waiting for the first push — the script below runs once at the end; give it a minute.' }
+    // #1220: a router that cannot reach the drop box's port looks
+    // identical to one that just hasn't run the script yet -- nothing
+    // here distinguishes "give it a minute" from "it will never
+    // arrive". Naming the port is the cheap half-measure available
+    // without a live connection-attempt signal (see backupReceipt/the
+    // module doc above): the operator has something to check instead
+    // of only waiting.
+    const port = backups?.port ? portOf(backups.port) : null
+    return {
+      state: 'waiting',
+      detail: port
+        ? `Waiting for the first push — the script below runs once at the end; give it a minute, and make sure the router can reach this host on port ${port}.`
+        : 'Waiting for the first push — the script below runs once at the end; give it a minute.',
+    }
   }
   const receipt = backupReceipt(backups)
   return { state: 'done', detail: receipt ? `arrived ${receipt}` : 'A router has pushed a backup.' }

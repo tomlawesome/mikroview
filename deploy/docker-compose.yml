@@ -21,6 +21,13 @@ services:
       # "" below) if you'd rather handle the redirect at your own
       # reverse proxy.
       - "80:8081"
+      # RouterOS config backups over SFTP (issue #394, optional) -- a
+      # second listening port, only needed once you turn `backup:
+      # enabled: true` on in config.yaml (see config.example.yaml's
+      # commented `backup:` block and docs/configuration.md's "Router
+      # backups" section). Uncomment this alongside that; it must match
+      # `backup.listen`'s port (":47022" by default).
+      # - "47022:47022/tcp"
     # Container hardening. The image is already distroless + non-root
     # (see Dockerfile), so these are defense-in-depth rather than the
     # primary control -- but they're free, and they cap what a

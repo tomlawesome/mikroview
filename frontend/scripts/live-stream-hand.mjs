@@ -75,7 +75,7 @@ const target = headers.nth(1)
 
 const boundaryStyle = (el) => {
   const s = getComputedStyle(el, '::after')
-  return { color: s.borderRightColor, cursor: s.cursor, width: s.width }
+  return { color: s.backgroundColor, cursor: s.cursor, width: s.width }
 }
 
 // Move the pointer somewhere that is definitely not the header first --
@@ -83,12 +83,14 @@ const boundaryStyle = (el) => {
 // stale hover here would report the hover state as the resting one.
 await page.mouse.move(0, 0)
 // The hairline is a genuine CSS transition (0.15s, LiveTable.svelte's
-// .header-cell::after border-color) -- wait for the pseudo-element's own
-// computed color to settle rather than guessing how long that takes.
+// .header-cell::after background-color -- #1197 redrew it from a
+// border-right onto a background fill, wide and tall enough to read as
+// a handle) -- wait for the pseudo-element's own computed color to
+// settle rather than guessing how long that takes.
 const targetHandle = await target.elementHandle()
 await page.waitForFunction(
   (el) => {
-    const c = getComputedStyle(el, '::after').borderRightColor
+    const c = getComputedStyle(el, '::after').backgroundColor
     return c === 'rgba(0, 0, 0, 0)' || c === 'transparent'
   },
   targetHandle,
@@ -98,13 +100,13 @@ await page.waitForFunction(
 const atRest = await target.evaluate(boundaryStyle)
 check(
   atRest.color === 'rgba(0, 0, 0, 0)' || atRest.color === 'transparent',
-  `nothing is drawn on the column boundary at rest (border-right-color: ${atRest.color})`,
+  `nothing is drawn on the column boundary at rest (background-color: ${atRest.color})`,
 )
 
 await target.hover()
 await page.waitForFunction(
   (el) => {
-    const c = getComputedStyle(el, '::after').borderRightColor
+    const c = getComputedStyle(el, '::after').backgroundColor
     return c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent'
   },
   targetHandle,

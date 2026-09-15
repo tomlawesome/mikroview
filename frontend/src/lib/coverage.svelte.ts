@@ -15,15 +15,20 @@ import {
 
 class CoverageState {
   declarations = $state<CoverageDeclaration[]>([])
+  /** True from a failed read until the next one succeeds. `declarations`
+   * is left exactly as it was on failure -- stale beats empty -- so this
+   * is what tells a reader the emptiness (or staleness) is not evidence
+   * of anything (#1237, matching hostsState.unreadable from #1236). */
+  unreadable = $state(false)
   /** Last write's failure, shown inline in the declare panel. */
   error = $state<string | null>(null)
 
   async refresh() {
     try {
       this.declarations = await fetchCoverageDeclarations()
+      this.unreadable = false
     } catch {
-      // Absence reads as "nothing declared", which is also the honest
-      // state while the store cannot be read -- dark stays dark.
+      this.unreadable = true
     }
   }
 
