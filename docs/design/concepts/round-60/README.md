@@ -74,4 +74,15 @@ Served for review from a disposable nginx container with `docs/` mounted.
 
 ## Verdicts
 
-Pending.
+Owner, 2026-09-15: "the fall is the way to go, but don't show the city
+yet. Show the 2D version."
+
+- **The fall, opened** — chosen. Becomes `site/index.html` with one
+  change: the topography section shows the 2D map (the altitude
+  slider's `clients` stop, `docs/screenshots/topography-map-dark.png`;
+  the three 2D stops are in `shots/topo-2d-*.png`)
+  rather than the city, which is not to be shown yet.
+- **The docket** — not chosen. Survives as a feature idea: the time
+  gutter and evidence captions could carry a docs page or changelog.
+- **The tour** — not chosen. Survives as a feature idea: annotated
+  screenshots for `docs/reading-the-fall.md`.
