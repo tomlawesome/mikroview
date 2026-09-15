@@ -22,22 +22,19 @@ knows how to read, and upgrades the same way.
    No version on disk reads as the oldest schema.
 2. If the data is **newer** than the build — you have started an older
    MikroView on data a newer one wrote — it **refuses to start** and
-   says so, naming both versions and the way back: start the newer
-   build again, or restore the copy it took before it upgraded
-   (below). It never writes an older shape over newer data.
-3. If the data is older, MikroView first copies every document it is
-   about to change into `<data>/upgrade-backup/<version it came
-   from>/`, then runs each pending migration in order, one at a time,
-   stamping the new schema version only when the last one has landed.
-   An upgrade interrupted part-way resumes from the first migration
-   that did not finish; nothing is left half-written.
+   says so: which version wrote the data, and that you need that build
+   or a newer one. It never writes an older shape over newer data.
+3. If the data is older, it runs each pending migration in order, one at
+   a time, stamping the schema version after each one lands. A
+   migration writes a new document beside the old and swaps it in only
+   when it is complete, so an upgrade interrupted part-way leaves the
+   old document as it was and resumes from that migration next start.
 4. It records the build version it is now running, so the next start
    can tell whether it was an upgrade.
 
 On the Postgres backend the migrations are SQL, each in its own
-transaction; MikroView does not copy the database first. Take a
-`pg_dump` before upgrading — that is the copy to restore if you need to
-go back.
+transaction, with the same effect: a migration either lands whole or
+not at all.
 
 ## What you see afterwards
 
@@ -53,18 +50,22 @@ current setup.
 
 ## Going back
 
-Restore the copy under `<data>/upgrade-backup/<version>/` (or your
-`pg_dump`) and start the older build. Do not start the older build on
-the upgraded data: it will refuse, and it is right to.
-
-The copy stays until you delete it or the next upgrade replaces it.
+There is no downgrade. Once a migration has landed, the data belongs to
+the build that wrote it, and an older build will refuse it. If a new
+build has a problem, the fix is a newer build. If you want the option of
+returning to the old version anyway, take your own copy of the data
+directory (or a `pg_dump`) before you upgrade; MikroView does not take
+one for you.
 
 ## How this is tested
 
 For every released version there is a recorded data directory — what
-that version actually wrote after a scripted session — under
-`testdata/upgrade/<version>/`, with made-up users and tokens. Every
-change to MikroView opens each of them with the current build and
+that version actually wrote after a scripted session, with made-up
+users and tokens. The recordings are not in the repository (a data
+directory holds password and token hashes and TLS keys, and a secrets
+scanner rightly cannot tell a made-up one from a real one); they live in
+the project's package registry, and CI fetches them before the test.
+Every change to MikroView opens each of them with the current build and
 checks the result: the migrations run, the users can still sign in, the
 watchlist, flags, entities and coverage declarations are still there
 and still mean what they meant.
