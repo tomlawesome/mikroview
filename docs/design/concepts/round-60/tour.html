@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MikroView — see what your firewall just did</title>
+<meta name="description" content="A live picture of your RouterOS firewall: every boundary the router watches, every connection accepted, dropped or rejected, and which rule decided it. Self-hosted, one container, near-zero load on the router." />
+<style>
+:root{
+  --bg:#06080e;--bg-elevated:#0f1422;--border:rgba(160,185,230,.13);
+  --fg:#e9eefb;--fg-muted:#97a4c4;--fg-dim:#55628a;--accent:#9db8e8;
+  --alarm:#ff5470;--now:#e8b05a;--tour:#22f3ff;--accept:#3ecf7e;--drop:#f5a623;--mark:#4d9fff;
+  --font-sans:-apple-system,'Segoe UI',system-ui,Roboto,sans-serif;
+  --font-mono:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--tour);outline-offset:3px}
+code{font-family:var(--font-mono);font-size:.92em;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;padding:.05em .4em}
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+
+.top{position:sticky;top:0;z-index:5;background:rgba(6,8,14,.86);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.top .wrap{display:flex;align-items:center;justify-content:space-between;height:52px}
+.mark{font-weight:600;letter-spacing:.14em;font-size:15px;text-decoration:none;color:var(--fg)}
+.mark span{color:var(--mark)}
+.top nav{display:flex;gap:16px;font-family:var(--font-mono);font-size:12px}
+.top nav a{color:var(--fg-muted);text-decoration:none}
+.top nav a:hover{color:var(--fg)}
+@media (max-width:640px){.top nav a.h{display:none}}
+
+/* hero: short, then straight into the tour */
+.hero{padding:64px 32px 28px}
+.eyebrow{margin:0 0 10px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim)}
+h1{margin:0 0 14px;font-size:clamp(36px,5vw,58px);line-height:1.03;letter-spacing:-.025em;font-weight:600;max-width:16ch}
+h1 em{font-style:normal;color:var(--accent)}
+.lede{margin:0 0 20px;color:var(--fg-muted);font-size:17px;max-width:60ch}
+.ctas{display:flex;gap:10px;flex-wrap:wrap}
+.btn{display:inline-block;padding:9px 16px;border-radius:5px;font-size:14px;text-decoration:none;border:1px solid var(--border);color:var(--fg);background:var(--bg-elevated)}
+.btn.p{background:var(--accent);color:#06080e;border-color:var(--accent);font-weight:600}
+.btn:hover{border-color:var(--accent)}
+
+/* the tour: a real screenshot with the app's tour ring on it */
+.stop{padding:36px 32px 44px;border-top:1px solid var(--border)}
+.stop header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;margin:0 0 14px}
+.stop h2{margin:0;white-space:nowrap;font-family:var(--font-mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:700}
+.stop h3{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.scene{position:relative;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg-elevated)}
+.pic{position:relative}.scene img{display:block;width:100%;height:auto}
+.ring{position:absolute;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;border:2px solid var(--tour);background:rgba(6,8,14,.55);color:var(--tour);font-family:var(--font-mono);font-size:12px;font-weight:700;cursor:pointer;padding:0;box-shadow:0 0 0 4px rgba(34,243,255,.14),0 0 14px rgba(34,243,255,.35)}
+.ring::after{content:'';position:absolute;inset:-8px;border-radius:50%;border:1px solid var(--tour);opacity:.5;animation:ring 2.2s ease-out infinite}
+.ring[aria-pressed=true]{background:var(--tour);color:#06080e}
+@keyframes ring{from{transform:scale(.7);opacity:.6}to{transform:scale(1.35);opacity:0}}
+@media (prefers-reduced-motion:reduce){.ring::after{animation:none;opacity:.3}html{scroll-behavior:auto}}
+/* the tour's bottom bar: the sentence for the stop you are on */
+.bar{display:flex;gap:14px;align-items:baseline;padding:12px 16px;border-top:1px solid var(--border);background:rgba(6,8,14,.9);font-family:var(--font-mono);font-size:13px;line-height:1.5;min-height:52px}
+.bar .n{color:var(--tour);font-weight:700;white-space:nowrap}
+.bar .s{color:var(--fg)}
+.bar .s b{color:var(--alarm);font-weight:600}
+/* the same sentences, as a list, for keyboards and small screens */
+.stops{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px 24px}
+.stops li{display:grid;grid-template-columns:22px 1fr;gap:10px;font-size:14.5px;color:var(--fg-muted)}
+.stops li[data-on]{color:var(--fg)}
+.stops li span.n{font-family:var(--font-mono);color:var(--tour);font-weight:700;font-size:12px;padding-top:3px}
+.stops li b{color:var(--alarm);font-weight:600}
+@media (max-width:720px){.ring{display:none}.bar{display:none}}
+
+.rows{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;padding:56px 32px;border-top:1px solid var(--border)}
+.rows .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim);margin:0 0 10px}
+.rows h3{margin:0 0 8px;font-size:17px;font-weight:600}
+.rows p{margin:0;color:var(--fg-muted);font-size:14.5px}
+@media (max-width:900px){.rows{grid-template-columns:1fr}}
+.qs{padding:56px 32px 64px;border-top:1px solid var(--border)}
+.qs h3{margin:0 0 16px;font-size:26px;font-weight:600}
+.term{background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:18px 20px;font-family:var(--font-mono);font-size:14px;line-height:1.7;overflow:auto;margin:0 0 16px}
+.term .pr{color:var(--fg-dim)} .term .fl{color:var(--accent)} .term .va{color:var(--now)}
+.note{color:var(--fg-muted);font-size:14.5px;max-width:72ch;margin:0}
+.step{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim);margin:0 0 10px}
+footer{padding:40px 0 60px;border-top:1px solid var(--border);color:var(--fg-dim);font-size:13px}
+footer p{margin:0 0 8px;max-width:80ch}
+footer strong{color:var(--fg-muted);font-weight:600}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="#top">MIKRO<span>VIEW</span></a>
+    <nav aria-label="Sections">
+      <a class="h" href="#fall">the fall</a>
+      <a class="h" href="#topography">topography</a>
+      <a class="h" href="#stream">the stream</a>
+      <a href="#quickstart">quickstart</a>
+      <a href="https://github.com/tomlawesome/mikroview">github</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero wrap" id="top">
+  <p class="eyebrow">RouterOS · firewall live view</p>
+  <h1>See what your firewall <em>just did.</em></h1>
+  <p class="lede">MikroView turns RouterOS's firewall log into a live picture of your network: every boundary the router watches, every connection accepted, dropped or rejected, and which rule decided it. The router pushes; MikroView never logs in to it — no RouterOS credentials, no API access.</p>
+  <div class="ctas">
+    <a class="btn p" href="#quickstart">Quickstart</a>
+    <a class="btn" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
+  </div>
+</section>
+
+<section class="stop wrap" id="fall" aria-labelledby="h-fall">
+  <header><h2>the fall</h2><h3 id="h-fall">One column per boundary. Time pours down it.</h3></header>
+  <div class="scene" data-tour>
+   <div class="pic">
+    <img src="../../../screenshots/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top; a port scan flagged in red on ether1 and a dark hatched stripe where vlan-iot has no log rule" />
+    <button class="ring" style="left:6.2%;top:15.5%" data-i="1" aria-label="stop 1">1</button>
+    <button class="ring" style="left:18.7%;top:31.7%" data-i="2" aria-label="stop 2">2</button>
+    <button class="ring" style="left:34%;top:52%" data-i="3" aria-label="stop 3">3</button>
+    <button class="ring" style="left:56.5%;top:62%" data-i="4" aria-label="stop 4">4</button>
+    <button class="ring" style="left:68.7%;top:93%" data-i="5" aria-label="stop 5">5</button>
+   </div>
+    <div class="bar" aria-live="polite"><span class="n">1 / 5</span><span class="s"></span></div>
+  </div>
+  <ol class="stops">
+    <li data-i="1"><span class="n">1</span><span>one column per boundary your rules mention — LAN to the router, workshop to the router, LAN out to the internet. the line under the name means its rules log.</span></li>
+    <li data-i="2"><span class="n">2</span><span>now. time pours down from here; the newest mark is at the top, and the last quarter-hour is under it.</span></li>
+    <li data-i="3"><span class="n">3</span><span><b>✱ port scan</b> — :445 SMB from the internet, thirteen hits at 21:50. raised for you to read, never acted on.</span></li>
+    <li data-i="4"><span class="n">4</span><span>blank because nothing is logged — not because nothing is sent. a boundary with no log rule is drawn dark, so "switched off" never looks like "quiet".</span></li>
+    <li data-i="5"><span class="n">5</span><span>the ports each boundary carried, quietest folded away.</span></li>
+  </ol>
+</section>
+
+<section class="stop wrap" id="topography" aria-labelledby="h-topo">
+  <header><h2>topography</h2><h3 id="h-topo">The estate, drawn from what the router pushed.</h3></header>
+  <div class="scene" data-tour>
+   <div class="pic">
+    <img src="../../../screenshots/topography-dark.png" alt="Topography: the internet drawn as a road above, the router at the waist, the LAN, IoT and workshop networks below, with a dropped connection drawn on the path it took" />
+    <button class="ring" style="left:11%;top:22%" data-i="1" aria-label="stop 1">1</button>
+    <button class="ring" style="left:52%;top:34%" data-i="2" aria-label="stop 2">2</button>
+    <button class="ring" style="left:55.6%;top:78%" data-i="3" aria-label="stop 3">3</button>
+    <button class="ring" style="left:91%;top:17.5%" data-i="4" aria-label="stop 4">4</button>
+   </div>
+    <div class="bar" aria-live="polite"><span class="n">1 / 4</span><span class="s"></span></div>
+  </div>
+  <ol class="stops">
+    <li data-i="1"><span class="n">1</span><span>the estate map: internet as the road above, the router at the waist, your networks below. drawn from the rule, NAT and address tables the router sends — not from anything you draw.</span></li>
+    <li data-i="2"><span class="n">2</span><span>the router, and each borough its rules mention. where logging is dark, <em>tune logging</em> hands back an export with those rules switched on.</span></li>
+    <li data-i="3"><span class="n">3</span><span><b>dropped</b> — a connection from LAN to the servers, drawn on the road it took.</span></li>
+    <li data-i="4"><span class="n">4</span><span>⚑ 58 flags and ◉ 6 watched entities, always in the corner, whichever view you are on.</span></li>
+  </ol>
+</section>
+
+<section class="stop wrap" id="stream" aria-labelledby="h-stream">
+  <header><h2>the stream</h2><h3 id="h-stream">Row by row, as it happens.</h3></header>
+  <div class="scene" data-tour>
+   <div class="pic">
+    <img src="../../../screenshots/stream-dark.png" alt="The stream: a live table of firewall events, each row showing the verdict badge, chain, source, destination and interface, with rows a flag touched marked" />
+    <button class="ring" style="left:47.5%;top:6.3%" data-i="1" aria-label="stop 1">1</button>
+    <button class="ring" style="left:19.7%;top:30.5%" data-i="2" aria-label="stop 2">2</button>
+    <button class="ring" style="left:7.5%;top:64.7%" data-i="3" aria-label="stop 3">3</button>
+   </div>
+    <div class="bar" aria-live="polite"><span class="n">1 / 3</span><span class="s"></span></div>
+  </div>
+  <ol class="stops">
+    <li data-i="1"><span class="n">1</span><span>type a term, or click any value in a row — device, IP or CIDR, port, protocol, interface, rule. filtered in place, instantly, all client-side.</span></li>
+    <li data-i="2"><span class="n">2</span><span>the verdict — accept, <b>drop</b>, reject — and the rule that made it, decoded from a short log-prefix convention.</span></li>
+    <li data-i="3"><span class="n">3</span><span>rows a flag touched carry its mark. the watchlist covers the other direction: what <em>should</em> happen, and what deviated.</span></li>
+  </ol>
+</section>
+
+<section class="rows wrap" aria-label="How it works">
+  <div>
+    <p class="k">push, not poll</p>
+    <h3>The router sends. MikroView listens.</h3>
+    <p>RouterOS forwards firewall log lines over syslog-over-TLS, and can push its config and encrypted backups the same way. MikroView never connects to the router and holds no RouterOS credentials; the only secret on the router is an ingest token MikroView minted for that device. No polling loop hammering the router — just a stream it was already able to send.</p>
+  </div>
+  <div>
+    <p class="k">secure by default</p>
+    <h3>Sign-in always. HTTPS out of the box.</h3>
+    <p>Local accounts or OIDC/SSO. Events live in memory unless you opt in to encrypted per-day history files; an optional SFTP drop box keeps your router's own nightly backups for the day the router is gone.</p>
+  </div>
+  <div>
+    <p class="k">one container</p>
+    <h3>One Go binary, UI embedded.</h3>
+    <p>A distroless image, near-zero load on the router, and nothing else to run. Self-hosted, AGPL, yours.</p>
+  </div>
+</section>
+
+<section class="qs wrap" id="quickstart" aria-labelledby="h-qs">
+  <p class="step">step 1 of 2 · start it</p>
+  <h3 id="h-qs">Quickstart</h3>
+  <pre class="term" tabindex="0"><span class="pr">$</span> docker run -d --name mikroview \
+    <span class="fl">-p</span> <span class="va">6514:6514/tcp</span> <span class="fl">-p</span> <span class="va">443:8080</span> \
+    ghcr.io/tomlawesome/mikroview:latest</pre>
+  <p class="step">step 2 of 2 · point the router at it</p>
+  <p class="note">Sign in, and the built-in wizard writes every RouterOS command with your values already filled in — syslog over TLS (RouterOS 7.18+). Paste it once; the picture builds itself. <code>latest</code> is the most recent release; each release is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one. Reference: <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a> and <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.</p>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>MikroView is an independent, community project. It is not affiliated with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.</p>
+    <p><strong>Development disclosure:</strong> MikroView was coded by Claude under human direction.</p>
+    <p><strong>License:</strong> <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL v3.0</a> — free and open source. Free to use, modify and self-host, including in a business. A commercial licence is available if you want to bundle MikroView into a product or offer it as a hosted service.</p>
+    <p><a href="https://github.com/tomlawesome/mikroview">github.com/tomlawesome/mikroview</a></p>
+  </div>
+</footer>
+
+<script>
+  // each scene: a ring is a stop; hover or press one and its sentence
+  // shows in the bar beneath, exactly as the app's tour does.
+  document.querySelectorAll('.stop').forEach(function(stop){
+    var scene=stop.querySelector('[data-tour]'),rings=[].slice.call(scene.querySelectorAll('.ring')),
+        items=[].slice.call(stop.querySelectorAll('.stops li')),bar=scene.querySelector('.bar');
+    function go(i){
+      rings.forEach(function(r){r.setAttribute('aria-pressed',r.dataset.i===i?'true':'false')});
+      items.forEach(function(l){if(l.dataset.i===i)l.setAttribute('data-on','');else l.removeAttribute('data-on')});
+      var li=items.filter(function(l){return l.dataset.i===i})[0];
+      bar.querySelector('.n').textContent=i+' / '+rings.length;
+      bar.querySelector('.s').innerHTML=li?li.children[1].innerHTML:'';
+    }
+    rings.forEach(function(r){r.addEventListener('mouseenter',function(){go(r.dataset.i)});r.addEventListener('focus',function(){go(r.dataset.i)});r.addEventListener('click',function(){go(r.dataset.i)});});
+    items.forEach(function(l){l.addEventListener('mouseenter',function(){go(l.dataset.i)})});
+    go('1');
+  });
+</script>
+</body>
+</html>

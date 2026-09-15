@@ -262,7 +262,7 @@ footer strong{color:var(--fg-muted);font-weight:600}
       <p class="say">blank because nothing is logged<br>— not because nothing is sent</p>
     </div>
     <figure class="shot">
-      <img src="img/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top; a port scan flagged in red on ether1 and a dark hatched stripe where vlan-iot has no log rule" />
+      <img src="../../../screenshots/fall-dark.png" alt="The fall: one column per traffic boundary, marks pouring down as connections cross it, with the newest at the top; a port scan flagged in red on ether1 and a dark hatched stripe where vlan-iot has no log rule" />
       <figcaption>the fall · 21:57 · ✱ port scan on ether1 · 18 dark boundaries</figcaption>
     </figure>
   </div>
@@ -273,12 +273,12 @@ footer strong{color:var(--fg-muted);font-weight:600}
     <div class="text">
       <h2>topography</h2>
       <h3 id="h-topo">The estate, drawn from what the router pushed.</h3>
-      <p>Internet above, the router at the waist, your networks below — built from the rule, NAT and address tables the router sends, not from anything you draw. Each link carries the ports that actually crossed it, and a border that has never been exercised says so.</p>
+      <p>Internet as the road above, the router at the waist, your networks below — built from the rule, NAT and address tables the router sends, not from anything you draw.</p>
       <p>It shows where logging is dark, and <em>tune logging</em> hands back an export with those rules switched on.</p>
     </div>
     <figure class="shot">
-      <img src="img/topography-map-dark.png" alt="Topography: the internet above, the router at the waist, and five zones below with their hosts, each link labelled with the ports it carried" />
-      <figcaption>topography · internet above, the router at the waist, five zones below · ✱ 18 held at the border</figcaption>
+      <img src="../../../screenshots/topography-dark.png" alt="Topography: the internet drawn as a road above, the router at the waist, the LAN, IoT and workshop networks below, with a dropped connection drawn on the path it took" />
+      <figcaption>topography · ⚑ 58 · ◉ 6 · a dropped connection on the road it took</figcaption>
     </figure>
   </div>
 </section>
@@ -292,7 +292,7 @@ footer strong{color:var(--fg-muted);font-weight:600}
       <p>Port scans, activity spikes and repeated hits on critical ports (SSH, RDP, Winbox…) raise a flag for a human to read — never an automatic action. The watchlist covers the other direction: what <em>should</em> happen, and what deviated.</p>
     </div>
     <figure class="shot">
-      <img src="img/stream-dark.png" alt="The stream: a live table of firewall events, each row showing the verdict badge, chain, source, destination and interface, with rows a flag touched marked" />
+      <img src="../../../screenshots/stream-dark.png" alt="The stream: a live table of firewall events, each row showing the verdict badge, chain, source, destination and interface, with rows a flag touched marked" />
       <figcaption>the stream · 5/s · drops 22% · top talker tom-desktop · top port 445</figcaption>
     </figure>
   </div>
@@ -324,7 +324,6 @@ footer strong{color:var(--fg-muted);font-weight:600}
     <h3 id="h-qs" style="margin:0 0 16px;font-size:26px;font-weight:600">Quickstart</h3>
     <pre class="term" tabindex="0"><span class="pr">$</span> docker run -d --name mikroview \
     <span class="fl">-p</span> <span class="va">6514:6514/tcp</span> <span class="fl">-p</span> <span class="va">443:8080</span> \
-    <span class="fl">-v</span> <span class="va">mikroview-data:/var/lib/mikroview</span> \
     ghcr.io/tomlawesome/mikroview:latest</pre>
     <p class="step">step 2 of 2 · point the router at it</p>
     <p class="note">Sign in, and the built-in wizard writes every RouterOS command with your values already filled in — syslog over TLS (RouterOS 7.18+). Paste it once; the picture builds itself. <code>latest</code> is the most recent release; each release is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one. Reference: <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a> and <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.</p>
