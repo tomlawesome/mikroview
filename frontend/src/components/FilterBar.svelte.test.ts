@@ -379,14 +379,13 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     ])
   })
 
-  // #710 round-30 fidelity: the column chooser used to force itself and
-  // everything after it (clear, fold) onto a second row via
-  // flex-basis: 100%. It now rides in the same one-line strip as every
-  // other control, collapsed to a toggle so thirteen checkboxes never
-  // have to fit inline.
-  it('draws the column chooser as a toggle in the one-line strip, not a field of its own', async () => {
+  // #1197 (owner ruling, 2026-09-13) supersedes #710's framing here: the
+  // toggle no longer lives in the fold-out strip at all -- it moved to
+  // the always-visible .filterline, specifically so an operator who
+  // never opens the fold still finds it. No expandRow() below is the
+  // point of the test, not an oversight.
+  it('draws the column chooser as a toggle on the always-visible toolbar, not inside the fold', () => {
     render(FilterBar)
-    await expandRow()
 
     expect(screen.getByRole('button', { name: 'Choose which columns the stream shows' }).textContent?.trim()).toBe(
       'columns ▸',
@@ -457,9 +456,12 @@ describe('FilterBar, the column chooser (#729)', () => {
     columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
   })
 
+  // #1197: none of the tests below open the fold-out strip (expandRow())
+  // any more -- the trigger lives on .filterline now, reachable with the
+  // fold closed the whole time. See the two dedicated tests at the foot
+  // of this block for that independence made explicit.
   it('offers a checkbox for every optional column, and none for the pinned two', async () => {
     render(FilterBar)
-    await expandRow()
     await openColumns()
 
     // Time and Rule are each a unique label in this list -- a plain
@@ -485,7 +487,6 @@ describe('FilterBar, the column chooser (#729)', () => {
   // by-name lookup for either possible at all.
   it('disambiguates the address/port/MAC checkboxes that repeat visually, by aria-label', async () => {
     render(FilterBar)
-    await expandRow()
     await openColumns()
 
     expect(screen.getByRole('checkbox', { name: 'Source address column' })).toBeTruthy()
@@ -501,7 +502,6 @@ describe('FilterBar, the column chooser (#729)', () => {
   // column"s side by side is what read as clunky in the first place.
   it('draws the bare column name on screen, grouped under source/destination headings for the repeated ones', async () => {
     render(FilterBar)
-    await expandRow()
     await openColumns()
 
     const panel = document.querySelector('.col-panel') as HTMLElement
@@ -519,7 +519,6 @@ describe('FilterBar, the column chooser (#729)', () => {
 
   it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
     render(FilterBar)
-    await expandRow()
     await openColumns()
 
     expect(screen.getByRole('checkbox', { name: 'Device column' })).toHaveProperty('checked', true)
@@ -527,7 +526,6 @@ describe('FilterBar, the column chooser (#729)', () => {
 
   it('unchecking a column writes through to columnState, and is a reader preference -- not tied to any filter term', async () => {
     render(FilterBar)
-    await expandRow()
     await openColumns()
 
     const device = screen.getByRole('checkbox', { name: 'Device column' })
@@ -543,7 +541,6 @@ describe('FilterBar, the column chooser (#729)', () => {
   // the strip's own fold), and on a click elsewhere in the open strip.
   it('opens and closes the panel by clicking the toggle again', async () => {
     render(FilterBar)
-    await expandRow()
     await openColumns()
     expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
 
@@ -551,6 +548,10 @@ describe('FilterBar, the column chooser (#729)', () => {
     expect(screen.queryByRole('checkbox')).toBeNull()
   })
 
+  // #1197: the trigger no longer lives inside the fold-out strip, but a
+  // reader can still have both open at once (the fold for a filter term,
+  // the columns panel for a layout change) -- expandRow() here proves
+  // Escape closes only the popover even then, not the strip underneath.
   it('closes the panel on Escape, without also folding the whole strip', async () => {
     render(FilterBar)
     await expandRow()
@@ -565,6 +566,9 @@ describe('FilterBar, the column chooser (#729)', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
   })
 
+  // Same reasoning as the Escape test above: expandRow() puts the strip
+  // in play deliberately, to prove a click inside it (but away from the
+  // columns panel) closes only the panel.
   it('closes the panel on a click elsewhere in the strip, without folding the strip itself', async () => {
     render(FilterBar)
     await expandRow()
@@ -575,6 +579,49 @@ describe('FilterBar, the column chooser (#729)', () => {
 
     expect(screen.queryByRole('checkbox')).toBeNull()
     expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+
+  // #1197 (owner ruling, 2026-09-13): the whole point of the move -- an
+  // operator who never opens the filter fold still finds and uses the
+  // picker. Proven here by never calling expandRow() at all.
+  it('is reachable and usable with the filter fold never opened', async () => {
+    render(FilterBar)
+    await openColumns()
+
+    expect(document.getElementById('filterbar-strip')).toBeNull()
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
+  })
+
+  // #1197 item 2 of the ruling: the fold-out's old copy is gone, not
+  // duplicated -- one door to this panel.
+  it('has exactly one columns ▸ trigger on the page', () => {
+    render(FilterBar)
+
+    expect(screen.getAllByRole('button', { name: 'Choose which columns the stream shows' }).length).toBe(1)
+  })
+
+  // #1197 item 3: one click undoes a bad drag. The test's own final
+  // reset() call is what leaves columnState.widths clean for whichever
+  // test runs next -- there is no separate afterEach for widths (only
+  // `visible` is restored above), so this has to put its own mutation
+  // back.
+  it('offers "reset widths" in the panel, disabled only once widths already match the default', async () => {
+    render(FilterBar)
+    await openColumns()
+
+    const resetBtn = screen.getByRole('button', { name: 'reset widths' })
+    expect(columnState.isDefault).toBe(true)
+    expect(resetBtn).toHaveProperty('disabled', true)
+
+    columnState.setWidth(0, 999)
+    flushSync()
+    expect(resetBtn).toHaveProperty('disabled', false)
+
+    await fireEvent.click(resetBtn)
+    flushSync()
+
+    expect(columnState.isDefault).toBe(true)
+    expect(resetBtn).toHaveProperty('disabled', true)
   })
 })
 

@@ -214,6 +214,8 @@ describe('column headers and default widths (#1149)', () => {
     expect(widthOf('srcAddr')).toBeGreaterThanOrEqual(129)
     expect(widthOf('srcAddr')).toBe(widthOf('dstAddr'))
 
-    localStorage.removeItem('mikroview-column-widths-v6')
+    // v7 (#1197): the storage key this test's own columnState.reset()
+    // call above persists under -- stale if left at the pre-bump name.
+    localStorage.removeItem('mikroview-column-widths-v7')
   })
 })

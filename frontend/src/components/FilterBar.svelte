@@ -177,9 +177,13 @@
   // the tree, so it still names the strip regardless of what that click
   // going on to unmount.
   function onWindowClick(e: MouseEvent) {
-    if (viewportState.isMobile || !expanded) return
     const path = e.composedPath()
+    // #1197: columnsOpen no longer lives inside the fold (.bar), so its
+    // own outside-click close can't be gated on `expanded` any more --
+    // the trigger and panel are reachable, and closeable, with the fold
+    // shut the whole time.
     if (columnsOpen && columnsMenuEl && !path.includes(columnsMenuEl)) columnsOpen = false
+    if (viewportState.isMobile || !expanded) return
     if ((fboxEl && path.includes(fboxEl)) || (barEl && path.includes(barEl))) return
     expanded = false
   }
@@ -253,6 +257,44 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
+
+<!-- #729: the stream's column chooser snippets. File scope (#1197),
+     not nested inside the fold-out strip below -- the desktop trigger
+     that renders columnCheckboxes() now lives in the always-visible
+     .filterline, and the mobile drawer's always-open list (unchanged by
+     #1197) still needs the same snippet from inside .bar, so both
+     callers need it in scope. Time and Rule are pinned -- no checkbox
+     for either, since neither is ever offered as a toggle. -->
+{#snippet columnCheckbox(col: ColumnChoice)}
+  <!-- aria-label carries the disambiguated name ("Source address
+       column", not "Address column") on the input directly, which
+       wins over the wrapping <label>'s own text for the accessible
+       name -- so the visible word stays bare while a screen reader
+       still hears which side it belongs to. -->
+  <label class="col-toggle">
+    <input
+      type="checkbox"
+      checked={columnState.isColumnVisible(col.key)}
+      onchange={() => columnState.toggleColumn(col.key)}
+      aria-label={col.ariaLabel}
+    />
+    {col.text}
+  </label>
+{/snippet}
+
+{#snippet columnCheckboxes()}
+  {#each PLAIN_COLUMNS as col (col.key)}
+    {@render columnCheckbox(col)}
+  {/each}
+  <span class="col-group-heading">source</span>
+  {#each SOURCE_COLUMNS as col (col.key)}
+    {@render columnCheckbox(col)}
+  {/each}
+  <span class="col-group-heading">destination</span>
+  {#each DEST_COLUMNS as col (col.key)}
+    {@render columnCheckbox(col)}
+  {/each}
+{/snippet}
 
 {#if viewportState.isMobile}
   <div class="mobile-row">
@@ -390,6 +432,51 @@
            words instead of only on hover. -->
       <span class="reach">{reachWords}</span>
     </span>
+
+    <!-- #1197 (owner ruling, 2026-09-13): columns ▸ stands on this
+         always-visible toolbar now, beside the span pills above -- not
+         inside the fold, where an operator who never opens the filters
+         never learned the table had hidden columns at all. Same
+         popover panel, same persistence, same
+         columnsOpen/columnsMenuEl/columnsTriggerEl state and
+         columnCheckboxes snippet the fold-out used to own -- only the
+         trigger's home moved, and the fold-out's own copy is gone (see
+         .bar below): one door to this panel, not two. Desktop only --
+         the mobile drawer keeps its own always-open list (see the
+         ruling's item 3, rendered from .bar below, unchanged). -->
+    <div class="columns-menu" bind:this={columnsMenuEl}>
+      <button
+        type="button"
+        class="tf-columns"
+        class:on={columnsOpen}
+        bind:this={columnsTriggerEl}
+        onclick={(e) => {
+          e.stopPropagation()
+          columnsOpen = !columnsOpen
+        }}
+        aria-haspopup="true"
+        aria-expanded={columnsOpen}
+        aria-label="Choose which columns the stream shows"
+        title="Choose which columns the stream shows">columns ▸</button
+      >
+      {#if columnsOpen}
+        <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
+          {@render columnCheckboxes()}
+          <!-- #1197 item 3: one click undoes a bad drag. Disabled once
+               every width already matches DEFAULT_WIDTHS -- nothing to
+               reset, same idiom the csv ↓ pill's own disabled state
+               uses for "nothing to give". -->
+          <button
+            type="button"
+            class="col-reset"
+            onclick={() => columnState.reset()}
+            disabled={columnState.isDefault}
+            title="Reset every column back to its default width"
+            >reset widths</button
+          >
+        </div>
+      {/if}
+    </div>
   </div>
 
   {#if FILTERS_TRIGGER_ENABLED && !expanded}
@@ -636,82 +723,16 @@
       </div>
     </div>
 
-    <!-- #729: the stream's column chooser. Lives here, with the rest of
-         the filter fold-out's controls -- not a new bar, not a button
-         beside the search box. A reader's own preference, not a fix for
-         the table's width: the owner likes the sideways scroll and it
-         stays (see this issue's last comment), so the shipped default
-         is every column on, and this only ever narrows from there. Time
-         and Rule are pinned -- no checkbox for either, since neither is
-         ever offered as a toggle. -->
-    {#snippet columnCheckbox(col: ColumnChoice)}
-      <!-- aria-label carries the disambiguated name ("Source address
-           column", not "Address column") on the input directly, which
-           wins over the wrapping <label>'s own text for the accessible
-           name -- so the visible word stays bare while a screen reader
-           still hears which side it belongs to. -->
-      <label class="col-toggle">
-        <input
-          type="checkbox"
-          checked={columnState.isColumnVisible(col.key)}
-          onchange={() => columnState.toggleColumn(col.key)}
-          aria-label={col.ariaLabel}
-        />
-        {col.text}
-      </label>
-    {/snippet}
-
-    {#snippet columnCheckboxes()}
-      {#each PLAIN_COLUMNS as col (col.key)}
-        {@render columnCheckbox(col)}
-      {/each}
-      <span class="col-group-heading">source</span>
-      {#each SOURCE_COLUMNS as col (col.key)}
-        {@render columnCheckbox(col)}
-      {/each}
-      <span class="col-group-heading">destination</span>
-      {#each DEST_COLUMNS as col (col.key)}
-        {@render columnCheckbox(col)}
-      {/each}
-    {/snippet}
-
     {#if viewportState.isMobile}
       <!-- The mobile drawer is already a vertical stack with room to
            spare (#85's 44px-row convention below), so it keeps the
-           always-open list -- the one-strip problem this fixes is a
-           desktop-thin-bar problem only. -->
+           always-open list -- unchanged by #1197's ruling (item 3),
+           which only moves the desktop trigger (see .filterline above). -->
       <div class="fb-field columns-field">
         <span class="fb-label">Columns</span>
         <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
           {@render columnCheckboxes()}
         </div>
-      </div>
-    {:else}
-      <!-- Desktop: folded behind a toggle, "fold ▸"'s own idiom one
-           level deeper (see columnsOpen's doc comment). The panel floats
-           over the strip instead of joining its flow, so opening it
-           never pushes clear/fold (or anything else) onto another
-           line. -->
-      <div class="columns-menu" bind:this={columnsMenuEl}>
-        <button
-          type="button"
-          class="tf-columns"
-          class:on={columnsOpen}
-          bind:this={columnsTriggerEl}
-          onclick={(e) => {
-            e.stopPropagation()
-            columnsOpen = !columnsOpen
-          }}
-          aria-haspopup="true"
-          aria-expanded={columnsOpen}
-          aria-label="Choose which columns the stream shows"
-          title="Choose which columns the stream shows">columns ▸</button
-        >
-        {#if columnsOpen}
-          <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
-            {@render columnCheckboxes()}
-          </div>
-        {/if}
       </div>
     {/if}
 
@@ -1399,10 +1420,11 @@
     margin-left: 0;
   }
 
-  /* #729: the column chooser, mobile drawer only -- the desktop thin bar
-     uses .columns-menu/.tf-columns below instead. Same fb-field/fb-label
-     shape every other control in the drawer already uses -- a row of
-     checkboxes, not a new kind of control. */
+  /* #729: the column chooser, mobile drawer only -- the desktop
+     .filterline uses .columns-menu/.tf-columns above (in the markup)
+     instead. Same fb-field/fb-label shape every other control in the
+     drawer already uses -- a row of checkboxes, not a new kind of
+     control. */
   .columns-field {
     flex-basis: 100%;
   }
@@ -1413,11 +1435,13 @@
     gap: 4px 14px;
   }
 
-  /* #710 round-30 fidelity: the desktop toggle. Sits in the strip's
-     normal flow, same as any other .fb-field, so it rides ahead of
-     clear/fold's own margin-left:auto exactly where the always-open
-     checkbox row used to sit -- the fix is folding the checkboxes away,
-     not moving where they live. */
+  /* #710 round-30 fidelity, moved by #1197's owner ruling: the desktop
+     toggle used to sit in the fold-out strip's own flow, riding ahead
+     of clear/fold; it now sits in .filterline instead, which is
+     always on screen rather than only once a reader opens the fold --
+     the ruling's whole point. .filterline's own `align-items: center`
+     already centers every child, but this stays explicit since the
+     rule travelled with the element rather than being re-derived. */
   .columns-menu {
     position: relative;
     align-self: center;
@@ -1487,6 +1511,37 @@
   }
 
   .col-toggle input[type='checkbox']:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* #1197 item 3: one click undoes a bad drag, set off from the
+     checkboxes above it by the same hairline .col-group-heading already
+     uses, so it doesn't read as one more column toggle. */
+  .col-reset {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 0 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    background: none;
+    color: var(--fg-dim);
+    font: 11px var(--font-mono);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .col-reset:hover:not(:disabled) {
+    color: var(--fg);
+  }
+
+  .col-reset:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .col-reset:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
