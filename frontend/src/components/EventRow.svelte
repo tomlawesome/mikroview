@@ -9,6 +9,14 @@
   // reimplemented, so the popover it opens (lib/ipLookup.svelte) stays
   // the one instance both surfaces share.
   import IpInvestigateButton from './IpInvestigateButton.svelte'
+  // #1201: the ⚑ mark's own click target -- flagsState.list plus
+  // extractSourceIp is the same lookup flaggedSources (lib/grouping.ts)
+  // already does to decide *whether* to draw the mark; this reads it
+  // again to know *which* flag(s) it should open. topologyNavState is
+  // #724's own dial-to-docket handoff, reused unchanged for the
+  // one-flag case.
+  import { flagsState, extractSourceIp } from '../lib/flags.svelte'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   // #729: LiveTable and this component share one flat CSS Grid (`.row` is
   // `display: contents`, so these cells become direct grid items, not
   // children of a row element the grid can reason about on its own) --
@@ -110,6 +118,38 @@
   // render here.
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
+
+  // #1201: the open flags against this row's own source -- same
+  // "target's address, suffix stripped" match flaggedSources uses, kept
+  // behind the `flagged` prop the caller already computed so a row
+  // never flagged skips the list scan. Cleared flags are excluded, same
+  // as flaggedSources: a called-and-cleared flag no longer has anything
+  // here for the mark to open.
+  const sourceFlags = $derived(
+    flagged && event.srcIp ? flagsState.list.filter((f) => !f.cleared && extractSourceIp(f.target) === event.srcIp) : [],
+  )
+
+  // "open this source's flag ▸" for the one honest choice, or a count
+  // when there is more than one to choose among (#1201's ruling, items
+  // 1 and 3).
+  const flagMarkTitle = $derived(
+    sourceFlags.length > 1 ? `${sourceFlags.length} open flags for this source ▸` : "open this source's flag ▸",
+  )
+
+  // Exactly one open flag: reuse #724's own dial-to-docket handoff
+  // unchanged (topologyNavState.pendingFlagId), so Flags.svelte opens
+  // straight to its drawer. Several: no single flag is the honest
+  // choice, so the docket gets the source address to filter on instead
+  // (topologyNavState.pendingFlagsFilter).
+  function openSourceFlag() {
+    if (sourceFlags.length === 0 || !event.srcIp) return
+    if (sourceFlags.length === 1) {
+      topologyNavState.requestFlag(sourceFlags[0].id)
+    } else {
+      topologyNavState.requestFlagsFilter(event.srcIp)
+    }
+    appState.view = 'flags'
+  }
 
   // Which Filters field (if either) a NAT token's translated address
   // belongs to (#438's NAT-parity section). Only the two dedicated NAT
@@ -243,10 +283,12 @@
         tabindex="0"
         title="Show this event's details"
         use:activate={() => onOpen?.()}
-      >{formatTimeMs(event.time)}</span>{#if flagged}<i
+      >{formatTimeMs(event.time)}</span>{#if flagged}<button
+          type="button"
           class="rmk"
-          title="this row's source has an open flag against it"
-          aria-hidden="true">&#9873;</i>{/if}
+          title={flagMarkTitle}
+          onclick={openSourceFlag}>&#9873;</button
+        >{/if}
     </span>
   {/if}
 
@@ -858,12 +900,33 @@
 
   /* The mark that annotates that wash (the-whole.html's .rmk). Sized and
      coloured from the scene: alarm ink, a step down from the row's text,
-     and set clear of the time so the figures keep their own edge. */
+     and set clear of the time so the figures keep their own edge.
+     #1201 turned it into a button (it opens the flag it points at) --
+     reset to plain button chrome rather than the .cell-btn most of this
+     file's click targets use, since that class is `display: block;
+     width: 100%` for a text cell filling its grid track, and would pull
+     the mark off the end of the time it rides beside (#691's round-30
+     audit: its position there does not move). */
   .rmk {
+    font: inherit;
     font-style: normal;
+    font-size: 11px;
     color: var(--alarm);
     margin-left: 8px;
-    font-size: 11px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .rmk:hover {
+    text-decoration: underline;
+  }
+
+  .rmk:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: 2px;
   }
 
   .row:hover .cell {
