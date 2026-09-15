@@ -591,6 +591,16 @@ func main() {
 	if err != nil {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
 	}
+	// One info line on every start, not just on a failed open (#1198): the
+	// unset and the opened-fine cases were both silent before this, so the
+	// owner had no way to tell from the logs whether geoip.dbPath had
+	// actually taken. A failed open still gets the Warn above as well --
+	// this line only adds the two cases that previously said nothing.
+	if geo.Configured() {
+		geoLog.Info(fmt.Sprintf("%s opened", cfg.GeoIP.DBPath))
+	} else if cfg.GeoIP.DBPath == "" {
+		geoLog.Info("no database configured (country flags off)")
+	}
 	defer geo.Close()
 	// rep: always built (AbuseIPDBKey empty just means that one source
 	// inside it stays inert; Shodan InternetDB is free/keyless and
@@ -1631,6 +1641,7 @@ func main() {
 		OIDCPolicy:        oidcPolicy,
 		StartTime:         time.Now(),
 		Version:           version,
+		GeoIP:             geo.Configured(),
 		ThirdPartyNotices: thirdPartyNotices,
 		ConfigProblems:    configProblems,
 		Persistence:       persistenceInfo,
