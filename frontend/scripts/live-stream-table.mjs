@@ -123,6 +123,12 @@ check(
   `at 1366 the table starts with the desktop set less MAC and Interfaces, in the same order -- got ${JSON.stringify(narrowLabels)}`,
 )
 
+// #1197 (owner ruling, 2026-09-13): columns ▸ stands on the always-
+// visible toolbar now, not behind the filter fold -- nothing above this
+// point ever opened the fold (no click on the search box anywhere in
+// this file), so reaching the trigger here proves it needs no expand.
+check(await page.isHidden('#filterbar-strip'), 'the columns ▸ trigger is reached with the filter fold still closed')
+
 // Nothing silent about it: the picker draws both unticked, because every
 // checkbox in it reads the same isColumnVisible the table does.
 await page.click('button.tf-columns')
