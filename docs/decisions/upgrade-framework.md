@@ -88,9 +88,10 @@ about `/system logging` and carries no stamp. It gains a page with the
 mikroview logging action and rules plus the wizard script version;
 the server compares against what the current wizard would push. The
 pasted script is itself the upgrade path for this leg: an old router
-never sends the page, and that absence is the first signal. Its own
-issue in M15, whose exit is the router pushing its configuration.
-Owner ratified 2026-09-15.
+never sends the page, and that absence is the first signal. What is
+sent is exactly the `mikroview` logging action and the rules feeding
+it, plus the script version — nothing else from the router's logging.
+Its own issue, in M14 with the rest (owner, 2026-09-15).
 
 **The operator is told.** A notice after an upgrade, driven by the
 version comparison `main.go` already does: from which version, and
@@ -118,4 +119,4 @@ browser; clears itself per router once routers report their setup.
   resumable migrations) — M16
 - #1239 (recorded fixtures per release, opened in CI) — M16
 - #1240 (upgrade notice in the interface) — M14
-- #1241 (router pushes its logging setup and script version) — M15
+- #1241 (router pushes its logging setup and script version) — M14
