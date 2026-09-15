@@ -435,6 +435,7 @@
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize {col.label} column"
+              title="drag to resize"
             ></span>
           {/each}
         </div>
@@ -607,27 +608,36 @@
     text-overflow: ellipsis;
   }
 
-  /* Round 36's column boundary, ported from the drawing's own
-     `table.stream th::after`: nothing at rest, and under the hand a
-     hairline on the header's edge with the cursor saying what it does.
-     Drawn from the header cell rather than only from the drag handle so
-     hovering anywhere in a column shows that column's edge -- the
-     boundary should be findable without first landing on the six pixels
-     it occupies.
+  /* #1197: nothing at rest, drawn from the header cell rather than only
+     from the drag handle so hovering anywhere in a column reveals that
+     column's boundary -- it should be findable without first landing on
+     the ten pixels the handle itself occupies. Round 36's version drew
+     only a 1px hairline here, which the bug report's own repro found:
+     "hover the boundary and a hairline appears, but nobody finds it."
+     This is a short bar instead -- wide and tall enough to read as a
+     handle rather than a stray pixel -- in the header's own dim ink
+     (var(--fg-dim), the label's own color) rather than the hairline
+     token, which is closer to invisible than a first-time reader needs.
+     The handle itself (.resizer below) still carries the actual
+     drag/click target and its own title; this is purely the
+     discoverability cue.
 
-     Inset to `right: 0` rather than the drawing's `-3px`: these header
-     cells are opaque (they sit over scrolling rows), so a line
-     overhanging into the next cell would be painted over by it. */
+     Inset to `right: 1px` rather than flush: these header cells are
+     opaque (they sit over scrolling rows), so the mark has to clear the
+     cell's own edge to read as sitting on the boundary rather than
+     against it. */
   .header-cell::after {
     content: '';
     position: absolute;
-    right: 0;
-    top: 5px;
-    bottom: 5px;
-    width: 6px;
+    right: 1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 16px;
+    border-radius: 2px;
     cursor: col-resize;
-    border-right: 1px solid transparent;
-    transition: border-color 0.15s;
+    background: transparent;
+    transition: background-color 0.15s;
   }
 
   .header-cell:last-child::after {
@@ -637,7 +647,7 @@
   }
 
   .header-cell:hover::after {
-    border-right-color: var(--hair-2);
+    background: var(--fg-dim);
   }
 
   @media (prefers-reduced-motion: reduce) {

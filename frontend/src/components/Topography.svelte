@@ -78,7 +78,7 @@
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { dossierState } from '../lib/dossier.svelte'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
-  import { watchlistState } from '../lib/watchlist.svelte'
+  import { isWatchBroken, watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
@@ -1492,6 +1492,13 @@
       const d = coverageState.byKey.get(e.key)
       return `${pairName(e.from, e.to)}: intentionally quiet — ${d?.reason ?? ''}`
     }
+    // st === 'dark' here means quietKeys has no entry for this edge --
+    // which is also what a failed declarations read looks like before
+    // any successful load (#1237). "dark" is a claim MikroView has no
+    // evidence for in that case, so say the read failed instead.
+    if (coverageState.unreadable) {
+      return `${pairName(e.from, e.to)}: coverage declarations unreadable · checks again in five seconds`
+    }
     return `${pairName(e.from, e.to)}: dark — no rule on this boundary-direction logs`
   }
 
@@ -1540,6 +1547,13 @@
     if (cardBackCoverage === undefined) return `${back} · no pushed rule names it`
     if (cardBackCoverage === 'logged') return `${back} · logged`
     if (cardBackCoverage === 'quiet') return `${back} · quiet on purpose`
+    // cardBackCoverage === 'dark' here is the same claim coverageLabel
+    // and the card's own dark line make about the primary direction
+    // (#1237): not evidence-backed while the last declarations read
+    // failed, so say that instead of "dark" for the reverse direction too.
+    if (coverageState.unreadable) {
+      return `${back} · coverage declarations unreadable · checks again in five seconds`
+    }
     return `${back} · dark — nothing logs it`
   })
 
@@ -1990,6 +2004,17 @@
   // reason form makes it taller.
   let offCard = $state<{ key: string } | null>(null)
   let offCardPinned = $state(false)
+  // #1227: which rib's badge to highlight on hover/focus, tracked by
+  // key rather than left to CSS. Before #1180 the badge text lived
+  // inside .edge-g itself, so a plain `.edge-g:hover .edge-badge` rule
+  // did this with no JS at all; #1180 moved the badge markup into the
+  // sibling `.detail` group to fix the tab order, which orphaned that
+  // rule (the two are siblings now, and every rib's `.edge-g` paints
+  // before every rib's `.detail` -- a sibling combinator would light up
+  // every badge at once on any hover, not just the one you're over).
+  // Set from the rib's own pointer/focus handlers below and read by the
+  // matching badge's `class:hover-t` in the label pass.
+  let hoveredRibKey = $state<string | null>(null)
   let offCardEl = $state<HTMLDivElement>()
   let offCardPlace = $state<Placement | null>(null)
   let offCardTick = $state(0)
@@ -3368,8 +3393,12 @@
     ariaLabel: string
   }
 
+  // #1156: the one predicate lib/watchlist.svelte.ts's brokenCount/
+  // heldCount now use too, so this panel and the dial's arc (watcherBroken,
+  // derived from watchlistState.brokenCount below) can never disagree
+  // about which watches are broken again.
   function watchIsBroken(e: WatchlistEntry): boolean {
-    return e.enabled && (watchlistState.coverage[e.id] === 'no-logging' || !!e.ring?.broken)
+    return isWatchBroken(e, watchlistState.coverage)
   }
 
   function watchBoundary(e: WatchlistEntry): string {
@@ -5117,10 +5146,22 @@
                   descendRib(d.r.from, d.r.to)
                 }
               }}
-              onpointerenter={nb ? () => openOffCard(d.r.key) : undefined}
-              onpointerleave={nb ? releaseOffCard : undefined}
-              onfocus={nb ? () => openOffCard(d.r.key) : undefined}
-              onblur={nb ? releaseOffCard : undefined}
+              onpointerenter={() => {
+                hoveredRibKey = d.r.key
+                if (nb) openOffCard(d.r.key)
+              }}
+              onpointerleave={() => {
+                if (hoveredRibKey === d.r.key) hoveredRibKey = null
+                if (nb) releaseOffCard()
+              }}
+              onfocus={() => {
+                hoveredRibKey = d.r.key
+                if (nb) openOffCard(d.r.key)
+              }}
+              onblur={() => {
+                if (hoveredRibKey === d.r.key) hoveredRibKey = null
+                if (nb) releaseOffCard()
+              }}
             >
               <title>{realityLabel(d.r)}</title>
               <path class="edge-hit" d={whole ? edgePath(d.line) : halfPath(d.line)} />
@@ -5276,7 +5317,14 @@
             >
               <title>{realityLabel(d.r)}</title>
               <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-              <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
+              <text
+                class="edge-badge"
+                class:alarm-t={d.r.verdict === 'unplanned'}
+                class:hover-t={hoveredRibKey === d.r.key}
+                x={badge.x}
+                y={badge.y}
+                text-anchor="middle"
+              >
                 {realityBadge(d.r)}
               </text>
             </g>
@@ -6863,7 +6911,16 @@
         <div class="s">{cardDeclaration.declaredBy} · {new Date(cardDeclaration.declaredAt).toLocaleString()}</div>
         <div class="s">{cardBackLine}</div>
       {:else}
-        <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        {#if coverageState.unreadable}
+          <!-- The last read of the declarations store failed, so "dark"
+               is not a claim MikroView has evidence for (#1237) -- this
+               boundary might be declared quiet on purpose and MikroView
+               just cannot see it. Say that instead, and re-check on the
+               same cadence every other coverage read uses. -->
+          <div class="s dk"><i class="sw dk"></i>coverage declarations unreadable · checks again in five seconds</div>
+        {:else}
+          <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        {/if}
         <div class="s">{cardRuleLine}</div>
         <div class="s dk"><i class="sw dk"></i>{cardBackLine}</div>
         <div class="s">nothing drawn across it is a fact; nothing is known</div>
@@ -8440,7 +8497,13 @@
     font-size: 9.5px;
   }
 
-  .edge-g:hover .edge-badge {
+  /* #1227: the rib's own hover/focus highlights its badge -- restored
+     via `hoveredRibKey` (set from .edge-g's pointer/focus handlers)
+     rather than the plain `.edge-g:hover .edge-badge` this replaces,
+     which went dead when #1180 moved the badge out of .edge-g into the
+     sibling .detail group for the tab-order fix. `-t` matches this
+     file's other text-colour modifiers (.alarm-t, .ghost-t). */
+  .edge-badge.hover-t {
     fill: var(--accent);
   }
 

@@ -59,8 +59,8 @@ tags and where your data lives are in [docs/install.md](docs/install.md).
   authentication choices from local accounts to SSO
 - [docs/configuration.md](docs/configuration.md) — config.yaml
   reference, environment variables, API
-- [docs/upgrades.md](docs/upgrades.md) — what happens when you move to a
-  newer release
+- [docs/upgrades.md](docs/upgrades.md) — what happens when you start
+  a newer build on existing data, and how to go back
 - [docs/security-by-design.md](docs/security-by-design.md) — the
   security properties the design commits to
 - [SECURITY.md](SECURITY.md) — threat model, hardening and how to report
