@@ -69,3 +69,42 @@ describe('TOUR_HIGHLIGHTS box classification (#1215 item 3)', () => {
     expect(boxed).toEqual(['topography: the router as the waist — subnets below, the internet above'])
   })
 })
+
+// #1235: every stop carries a sentence, and each keeps to the same
+// rules -- the tour is the one place the app explains itself, so a stop
+// added later without its sentence is a failure here, not a blank line
+// in the bar. The rules are the issue's own: one sentence, under ~90
+// characters so the bar stays one line per stop on a laptop, a full
+// stop and no exclamation, and none of the filler the app's voice
+// avoids ("you can", "this is where").
+describe('TOUR_HIGHLIGHTS sentences (#1235)', () => {
+  const stops = Object.entries(TOUR_HIGHLIGHTS).flatMap(([cardKey, list]) =>
+    list.map((h) => ({ name: `${cardKey}: ${h.label}`, says: h.says })),
+  )
+
+  it('covers every stop', () => {
+    expect(stops.length).toBeGreaterThan(0)
+    for (const s of stops) {
+      expect(typeof s.says, s.name).toBe('string')
+      expect(s.says.trim().length, s.name).toBeGreaterThan(0)
+    }
+  })
+
+  it('is one plain sentence per stop: under 90 characters, a full stop, no exclamation', () => {
+    for (const s of stops) {
+      expect(s.says.length, s.name).toBeLessThan(90)
+      expect(s.says.endsWith('.'), s.name).toBe(true)
+      expect(s.says.includes('!'), s.name).toBe(false)
+      // A second full stop would be a second sentence.
+      expect(s.says.slice(0, -1).includes('.'), s.name).toBe(false)
+    }
+  })
+
+  it('keeps to the voice: no "you can", no "this is where"', () => {
+    for (const s of stops) {
+      const lower = s.says.toLowerCase()
+      expect(lower.includes('you can'), s.name).toBe(false)
+      expect(lower.includes('this is where'), s.name).toBe(false)
+    }
+  })
+})
