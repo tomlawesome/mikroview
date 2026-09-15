@@ -1134,7 +1134,9 @@ you to create your own free account to obtain one.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
-error.
+error. The UI says so too rather than leaving a reader to guess why every
+flag is blank: the country filter's select carries a disabled "no GeoIP
+database" row, and Settings ▸ ingest states the same fact in one line.
 
 ## IP reputation lookup (optional)
 

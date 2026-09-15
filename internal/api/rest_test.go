@@ -121,6 +121,36 @@ func TestHandleHealthz(t *testing.T) {
 	if body["version"] != "test-version" {
 		t.Errorf("version field = %v, want test-version", body["version"])
 	}
+	if body["geoip"] != false {
+		t.Errorf("geoip field = %v, want false (Server.GeoIP defaults to false)", body["geoip"])
+	}
+}
+
+// #1198: a country database is nil-means-disabled like every other
+// optional integration -- main sets Server.GeoIP from
+// geoip.Lookup.Configured(), and this is the one place a caller (the
+// country filter, the ingest settings card) can tell "no database" apart
+// from "no public traffic yet". Covers both states the field can report;
+// TestHandleHealthz above already covers the rest of the payload.
+func TestHandleHealthzGeoIP(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.GeoIP = true
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["geoip"] != true {
+		t.Errorf("geoip field = %v, want true", body["geoip"])
+	}
 }
 
 func TestHandleEventsFiltering(t *testing.T) {

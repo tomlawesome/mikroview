@@ -169,6 +169,12 @@ export interface Healthz {
   uptime: string
   uptimeSeconds: number
   version: string
+  // geoip (#1198): whether a country database is actually open. Country
+  // flags degrade silently to blank with none configured -- the same
+  // blank a quiet buffer with no public traffic yet would show -- so this
+  // is what lets the country filter and the Settings > ingest card tell
+  // the two apart instead of both just staying quiet.
+  geoip: boolean
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -307,6 +313,12 @@ export interface SyslogListenerStats {
   // ingest-loss banner's "Oversized messages" row names. Empty string
   // until the first oversized message.
   oversizedHost: string
+  // #1234: all-time count of duplicate sightings across every source --
+  // the same arriving-raw-line already logged once from that source
+  // within a very short window (see loss.duplicate for the windowed,
+  // per-source view). Optional so a test fixture predating #1234 leaves
+  // the duplicate-detection drawer row inactive rather than throwing.
+  duplicateSightings?: number
   // #1015: the freshness signal the totals above cannot give -- a total
   // that stopped growing is indistinguishable from one that never grew.
   // Optional so an older server (or a test fixture) that predates this
@@ -356,6 +368,11 @@ export interface IngestLossHostCounter extends IngestLossCounter {
   // (unrelated) oversized-banner fixtures committed for #1203 don't
   // all need updating just to add a field they never read.
   setupDrift?: boolean
+  // copyCount (#1234) is the apparent number of copies a duplicated
+  // logging rule is producing -- the most common multiplicity among a
+  // drifting source's recent duplicate sightings. Only ever set on the
+  // duplicate entry.
+  copyCount?: number
 }
 
 // Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
@@ -373,6 +390,12 @@ export interface SyslogIngestLoss {
   // traffic that also matters here has stopped.
   rejected: IngestLossCounter
   oversized: IngestLossHostCounter
+  // duplicate (#1234) reports a source whose mikroview logging block
+  // looks pasted more than once: the same raw line arriving several
+  // times over from one router. host/copyCount are only present while
+  // active is true. Optional so fixtures predating #1234 keep
+  // compiling without it.
+  duplicate?: IngestLossHostCounter
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.

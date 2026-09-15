@@ -282,6 +282,15 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// GeoIP reports whether a country database was successfully opened
+	// (main sets this from geoip.Lookup.Configured()), surfaced on
+	// GET /api/healthz as `geoip` (#1198). Country flags degrade silently
+	// to blank when there is no database -- indistinguishable, from the
+	// UI's side, from "no public traffic yet" -- so this is the one fact
+	// that lets the country filter and the ingest settings card tell a
+	// reader which case they are looking at instead of staying quiet
+	// about it.
+	GeoIP bool
 	// ThirdPartyNotices is THIRD-PARTY-NOTICES.md, embedded in the
 	// binary at build time (see notices.go) and served verbatim by
 	// handleThirdPartyNotices. Every dependency compiled into this
