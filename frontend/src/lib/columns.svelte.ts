@@ -131,10 +131,27 @@ type Width = number | null
 // row's 14px mono, and a 13-character bare IPv4 ~129px, so every one of
 // them was cut short. (#685 sized the address columns for the
 // ten-character IP in the round-29 data; the addresses on a real LAN run
-// to fifteen.) The numbers only move the defaults -- a reader who
-// has dragged a column keeps the width they chose (STORAGE_KEY is not
-// bumped: the stored array's shape has not changed).
-const DEFAULT_WIDTHS: Width[] = [124, 150, 80, 90, 160, 132, 60, 168, 160, 132, 60, 170, 60, 150, null]
+// to fifteen.)
+//
+// #1117: two more were cut short, re-measured the same way (14px mono,
+// ~8.5px/char, the row's 20px cell padding):
+//   time    124 fit the bare 12-char timestamp ("21:57:34.252") but not
+//           the flag marker beside it on a flagged row -- the sticky
+//           cell is a flex row with no reserved gutter for the marker,
+//           so it crowded the digits off the left edge instead of the
+//           column growing. +36 for the marker's own gap/margin/glyph.
+//   nat     `formatAddr`'s "ip:port" shape was bounded "like an IPv4
+//           address plus ':' plus up to 5 digits" from the day this
+//           column was restored (#717, this file's own comment above),
+//           but never actually sized to that bound -- 150 was closer to
+//           the address columns' own number than to its own comment's
+//           math. 21 content chars plus the "→ " prefix is what this
+//           bug's "NAT ... clipped" report was.
+// Both keep the storage key at v6 (below) for now: this pass only widens
+// what a *default* install shows (the bug's own "at the default column
+// widths" wording) -- widening every column's real-world measurement and
+// invalidating existing readers' saved arrays is the follow-up pass.
+const DEFAULT_WIDTHS: Width[] = [160, 150, 80, 90, 160, 132, 60, 168, 160, 132, 60, 170, 60, 220, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
