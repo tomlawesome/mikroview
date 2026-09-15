@@ -191,6 +191,10 @@ beforeEach(() => {
   // judging traffic against a table it never pushed.
   policyState.anyPushed = false
   coverageState.declarations = []
+  // #1237: a test that flips this to check the unreadable wording would
+  // otherwise leave the next test's dark boundaries reading "unreadable"
+  // instead of "dark".
+  coverageState.unreadable = false
   // The host register is a module-level singleton too (#1016), so a test
   // that seeds a quiet host would otherwise leave it quiet for the next.
   hostsState.hosts = []
@@ -3118,6 +3122,22 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     const acts = [...card.querySelectorAll('.acts button')].map((b) => b.textContent?.trim())
     expect(acts).toEqual(['declare quiet on purpose ▸', 'rules ▸', 'stream ▸'])
     expect(card.querySelector('.form')).toBeNull() // the form is behind the pin
+  })
+
+  // #1237: "dark — nothing logs this boundary" is a positive claim about
+  // the boundary having no declaration. When the last read of the
+  // declarations store failed, MikroView has no evidence for that claim
+  // -- the boundary could be declared quiet on purpose and just unread.
+  it('says the declarations are unreadable, not "dark", when the last read failed', () => {
+    guestDark()
+    coverageState.unreadable = true
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = openCard(container)
+    const text = card.textContent?.replace(/\s+/g, ' ') ?? ''
+    expect(text).toContain('coverage declarations unreadable · checks again in five seconds')
+    expect(text).not.toContain('dark — nothing logs this boundary')
   })
 
   it('opens the declare form on the pin, with both directions checked and who it will be signed by', () => {
