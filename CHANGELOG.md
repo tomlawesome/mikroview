@@ -18,6 +18,23 @@ rewritten.
 
 ### Added
 
+- **A router backup can be kept, so retention and low-space cycling
+  leave it alone** (#1126). Mark any stored generation kept from
+  Settings' router-backups group, with a comment saying why (`before
+  the 7.16 upgrade`) — required, one line, up to 120 characters. A kept
+  generation moves into a pool of its own per router: it stops
+  counting towards the ten generations retention keeps, and low-space
+  cycling (#1125) never reaches it either. There is no limit on how
+  many a router keeps. Releasing one puts it back into the cycling
+  ten, in its place by age — the only way to free vault space by hand.
+  `POST`/`DELETE`/`PATCH
+  /api/router-backups/{device}/{generation}/protect` do the keeping,
+  releasing and comment-editing; `GET /api/router-backups` gains a
+  `protected` array alongside the existing `lowSpace` flag. The
+  comment lives in the vault's sealed index and is never logged; the
+  audit log records only who kept, released or re-worded which
+  generation (`router_backup.protected`, `router_backup.unprotected`,
+  `router_backup.comment_changed`).
 - **A flag's drawer now has a note box: record why you called it what
   you called it** (#1232). It sits across the bottom of the drawer,
   above the verdict buttons, and grows as you type. Write whatever you

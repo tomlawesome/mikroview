@@ -1463,6 +1463,11 @@ export interface RouterBackupsResponse {
   // backup.enabled is false.
   port?: string
   lock: VaultLock
+  // True while the vault's own filesystem is nearly full (#1125): every
+  // arrival now replaces the oldest generation instead of adding one.
+  // Nothing is refused while it is true -- releasing a kept backup is
+  // the one thing an admin can do here to free space (#1126).
+  lowSpace?: boolean
 }
 
 // One router's block (round 44's per-router strip). IntervalSeconds/
@@ -1472,6 +1477,10 @@ export interface RouterBackupsResponse {
 export interface RouterBackupRouter {
   device: string
   generations: RouterBackupGeneration[] // oldest first
+  // The kept pool (#1126), oldest first as well: generations an admin
+  // marked with a comment saying why. They are not in generations, do
+  // not count towards the ten, and only a release takes one out.
+  protected?: RouterBackupGeneration[]
   intervalKnown: boolean
   intervalSeconds?: number
   lastArrival?: string
@@ -1491,6 +1500,11 @@ export interface RouterBackupGeneration {
   // The .backup's header label ("plain" or "encrypted"), absent until
   // that half of this generation has arrived.
   header?: string
+  // Carried only by an entry in a router's `protected` array (#1126):
+  // why this one is kept, when that was said and by whom.
+  comment?: string
+  protectedAt?: string
+  protectedBy?: string
 }
 
 // GET /api/droplist (#1225, #461): the router-pulled block list, third
