@@ -78,7 +78,7 @@
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { dossierState } from '../lib/dossier.svelte'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
-  import { watchlistState } from '../lib/watchlist.svelte'
+  import { isWatchBroken, watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
@@ -3368,8 +3368,12 @@
     ariaLabel: string
   }
 
+  // #1156: the one predicate lib/watchlist.svelte.ts's brokenCount/
+  // heldCount now use too, so this panel and the dial's arc (watcherBroken,
+  // derived from watchlistState.brokenCount below) can never disagree
+  // about which watches are broken again.
   function watchIsBroken(e: WatchlistEntry): boolean {
-    return e.enabled && (watchlistState.coverage[e.id] === 'no-logging' || !!e.ring?.broken)
+    return isWatchBroken(e, watchlistState.coverage)
   }
 
   function watchBoundary(e: WatchlistEntry): string {
