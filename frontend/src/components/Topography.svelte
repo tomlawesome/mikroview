@@ -1990,6 +1990,17 @@
   // reason form makes it taller.
   let offCard = $state<{ key: string } | null>(null)
   let offCardPinned = $state(false)
+  // #1227: which rib's badge to highlight on hover/focus, tracked by
+  // key rather than left to CSS. Before #1180 the badge text lived
+  // inside .edge-g itself, so a plain `.edge-g:hover .edge-badge` rule
+  // did this with no JS at all; #1180 moved the badge markup into the
+  // sibling `.detail` group to fix the tab order, which orphaned that
+  // rule (the two are siblings now, and every rib's `.edge-g` paints
+  // before every rib's `.detail` -- a sibling combinator would light up
+  // every badge at once on any hover, not just the one you're over).
+  // Set from the rib's own pointer/focus handlers below and read by the
+  // matching badge's `class:hover-t` in the label pass.
+  let hoveredRibKey = $state<string | null>(null)
   let offCardEl = $state<HTMLDivElement>()
   let offCardPlace = $state<Placement | null>(null)
   let offCardTick = $state(0)
@@ -5121,10 +5132,22 @@
                   descendRib(d.r.from, d.r.to)
                 }
               }}
-              onpointerenter={nb ? () => openOffCard(d.r.key) : undefined}
-              onpointerleave={nb ? releaseOffCard : undefined}
-              onfocus={nb ? () => openOffCard(d.r.key) : undefined}
-              onblur={nb ? releaseOffCard : undefined}
+              onpointerenter={() => {
+                hoveredRibKey = d.r.key
+                if (nb) openOffCard(d.r.key)
+              }}
+              onpointerleave={() => {
+                if (hoveredRibKey === d.r.key) hoveredRibKey = null
+                if (nb) releaseOffCard()
+              }}
+              onfocus={() => {
+                hoveredRibKey = d.r.key
+                if (nb) openOffCard(d.r.key)
+              }}
+              onblur={() => {
+                if (hoveredRibKey === d.r.key) hoveredRibKey = null
+                if (nb) releaseOffCard()
+              }}
             >
               <title>{realityLabel(d.r)}</title>
               <path class="edge-hit" d={whole ? edgePath(d.line) : halfPath(d.line)} />
@@ -5280,7 +5303,14 @@
             >
               <title>{realityLabel(d.r)}</title>
               <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-              <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
+              <text
+                class="edge-badge"
+                class:alarm-t={d.r.verdict === 'unplanned'}
+                class:hover-t={hoveredRibKey === d.r.key}
+                x={badge.x}
+                y={badge.y}
+                text-anchor="middle"
+              >
                 {realityBadge(d.r)}
               </text>
             </g>
@@ -8444,7 +8474,13 @@
     font-size: 9.5px;
   }
 
-  .edge-g:hover .edge-badge {
+  /* #1227: the rib's own hover/focus highlights its badge -- restored
+     via `hoveredRibKey` (set from .edge-g's pointer/focus handlers)
+     rather than the plain `.edge-g:hover .edge-badge` this replaces,
+     which went dead when #1180 moved the badge out of .edge-g into the
+     sibling .detail group for the tab-order fix. `-t` matches this
+     file's other text-colour modifiers (.alarm-t, .ghost-t). */
+  .edge-badge.hover-t {
     fill: var(--accent);
   }
 
