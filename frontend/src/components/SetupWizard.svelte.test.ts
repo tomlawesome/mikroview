@@ -1279,6 +1279,66 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(container.textContent).toContain('scoped to that one router and to this drop box')
   })
 
+  // #1220: the router timing out mid-upload read as a stalled transfer
+  // rather than an unreachable port -- the step names the port next to
+  // the script it hands over, reading it from the same GET /api/router-
+  // backups response the group in Settings already uses (portOf(resp.port)).
+  it('names the drop box port next to the script it hands over (#1220)', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true, port: ':47022' }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.textContent).toContain('reach this host on port 47022')
+  })
+
+  it('says nothing about a port when the server reports none', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.textContent).not.toContain('reach this host on port')
+  })
+
   // With more than one router known, the picker stands in for "entry"
   // (mintToken's own reasoning): the operator picks which router this
   // token speaks for before anything is minted.
