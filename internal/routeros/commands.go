@@ -110,6 +110,67 @@ func CaTrustCommands(address, dialect string) string {
 	}, "\n")
 }
 
+// WizardVersion stamps every push block with which wizard wrote the
+// script a router is running (#1241). **Bump it whenever any block this
+// package pastes changes** -- a line added, removed or reworded in
+// CaTrustCommands, SyslogCommands, RuleTaggingCommands, PushBlock,
+// ScheduleCommands or the backup blocks. That is the whole contract: a
+// router reports the number its pasted script carries, and mikroview
+// compares it against this one to say whether the setup on that router
+// is behind the current wizard -- without ever connecting to the router
+// to look (docs/decisions/upgrade-framework.md).
+//
+// Deliberately not the release version. Two releases whose pasted
+// blocks are identical share a wizard version, and a router is not
+// behind merely because mikroview was upgraded around it.
+const WizardVersion = 1
+
+// LoggingSetup is what the current wizard's SyslogCommands leaves on a
+// router, in the router's own vocabulary: the mikroview logging
+// action's remote, remote-port and remote-log-format, and the topics of
+// the rule that feeds it. Exactly the fields #1241 counts as drift, and
+// no others -- a router may have any amount of other logging
+// configuration and none of it is mikroview's business.
+//
+// This is the "what the current wizard would push" half of the
+// comparison; internal/setup holds the reported half and does the
+// comparing. An empty Remote or RemotePort means this instance does not
+// know its own answer yet (no operator-set address, no syslog
+// listener), in which case that field is not compared at all rather
+// than compared against "".
+//
+// src-address is named in #1241's drift list but is absent here on
+// purpose: the ratified page on #1206 carries exactly six action fields
+// and src-address is not one of them, so there is nothing reported to
+// compare. It joins this struct the day the page carries it, not
+// before.
+type LoggingSetup struct {
+	Remote          string
+	RemotePort      string
+	RemoteLogFormat string
+	Topics          []string
+}
+
+// wizardLogFormat/wizardTopics are the two constants SyslogCommands and
+// WizardLogging both read, so the commands the wizard pastes and the
+// setup it later checks for cannot say different things.
+const (
+	wizardLogFormat = "syslog"
+	wizardTopics    = "firewall,info"
+)
+
+// WizardLogging is what SyslogCommands would leave on a router for this
+// instance's address and syslog port -- the same two values that block
+// is rendered from, read back as fields rather than as command text.
+func WizardLogging(address, syslogPort, dialect string) LoggingSetup {
+	return LoggingSetup{
+		Remote:          Hostname(address),
+		RemotePort:      PortOf(syslogPort),
+		RemoteLogFormat: wizardLogFormat,
+		Topics:          strings.Split(wizardTopics, ","),
+	}
+}
+
 // SyslogCommands is step 2: point the router's logging at mikroview,
 // over the configured syslog port rather than an assumed one.
 //
@@ -125,8 +186,7 @@ func CaTrustCommands(address, dialect string) string {
 // which is why the action branches to `set` on the existing one rather
 // than leaving it as it was the day it was first created.
 func SyslogCommands(address, syslogPort, dialect string) string {
-	host := Hostname(address)
-	port := PortOf(syslogPort)
+	want := WizardLogging(address, syslogPort, dialect)
 	// host and port are placed bare, not inside a quoted string -- the
 	// handler validates address/syslogPort's charset before either
 	// reaches here (#1095), so there is nothing for quote() to do.
@@ -135,10 +195,10 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 	// header, so a burst of matching lines arriving at once is read as
 	// separate lines rather than one garbled one (#614). Keep this
 	// identical to docs/routeros-setup.md's block.
-	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=syslog check-certificate=yes`, host, port)
+	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
 	return strings.Join([]string{
 		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
-		`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }`,
+		fmt.Sprintf(`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=%s action=mikroview }`, strings.Join(want.Topics, ",")),
 	}, "\n")
 }
 
@@ -258,6 +318,9 @@ var blockSpecs = map[string]blockSpec{
 // /api/ingest/routeros. Returns "" for a kind blockSpecs does not know,
 // so PushScript can simply skip it.
 func PushBlock(address, token, kind, dialect string) string {
+	if kind == string(loggingKind) {
+		return loggingPushBlock(address, token, dialect)
+	}
 	spec, ok := blockSpecs[kind]
 	if !ok {
 		return ""
@@ -270,11 +333,12 @@ func PushBlock(address, token, kind, dialect string) string {
 		fmt.Sprintf(`  :local rec %s`, spec.record),
 		fmt.Sprintf(`  :set %s ($%s, {$rec})`, recs, recs),
 		`}`,
-		// routerosVersion rides the payload rather than a record: it
-		// describes the router, not a row of any table (#408 carrying
-		// #436's derived version source). Optional server-side, and the
-		// same line in every block.
-		fmt.Sprintf(`:local %s [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$%s}]`, payload, kind, recs),
+		// routerosVersion and wizardVersion ride the payload rather than a
+		// record: both describe the router's own setup, not a row of any
+		// table (#408 carrying #436's derived version source; #1241 the
+		// script stamp). Optional server-side, and the same line in every
+		// block.
+		fmt.Sprintf(`:local %s [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=%d; "records"=$%s}]`, payload, kind, WizardVersion, recs),
 		// address sits inside url="...", so it goes through quote();
 		// token in the Bearer header is placed bare, relying on the
 		// handler's Token validation to keep it well-formed (#1095).
@@ -288,11 +352,67 @@ func PushBlock(address, token, kind, dialect string) string {
 func PushScript(address, token string, kinds []string, dialect string) string {
 	var blocks []string
 	for _, kind := range kinds {
+		// The logging block is not one of the operator's tables, and is
+		// appended below whether or not it is asked for -- skipped here so
+		// a caller that does name it does not get it twice.
+		if kind == string(loggingKind) {
+			continue
+		}
 		if b := PushBlock(address, token, kind, dialect); b != "" {
 			blocks = append(blocks, b)
 		}
 	}
+	// #1241's setup report goes in every push script, unconditionally:
+	// it is not a table the operator chooses to send, it is the script
+	// saying what the wizard left on this router and which version of
+	// the wizard left it. A script that could be rendered without it
+	// would be a script mikroview cannot tell is out of date, which is
+	// the whole problem the page exists to solve.
+	blocks = append(blocks, loggingPushBlock(address, token, dialect))
 	return strings.Join(blocks, "\n\n")
+}
+
+// loggingKind is the ingest kind #1241's page arrives under. Spelled
+// here rather than imported from internal/ingest: this package renders
+// commands and has never imported the schema they feed.
+const loggingKind = "logging"
+
+// loggingPushBlock renders #1241's setup report: the mikroview logging
+// action and every /system logging rule pointing at it, in one page of
+// the same shape as the table blocks above, stamped with the wizard
+// version that wrote this script.
+//
+// Both menus are printed whole and filtered in the script with :if,
+// rather than with a `print ... where` predicate. `print as-value` and
+// `:if` are the two forms already proven on a real router by every
+// other block this package renders; a `where` on `print` is not, and a
+// predicate that silently matched nothing would push an empty page,
+// which reads exactly like a router with no mikroview logging at all.
+//
+// Nothing else from /system logging is sent -- not the other actions,
+// not the rules feeding them. What the operator logs elsewhere is not
+// mikroview's business, and the only question this page answers is
+// whether the wizard's own setup is still what the wizard would write.
+func loggingPushBlock(address, token, dialect string) string {
+	return strings.Join([]string{
+		`:local logRecs [:toarray ""]`,
+		`:foreach i,v in=[/system/logging/action print as-value] do={`,
+		`  :if (($v->"name") = "mikroview") do={`,
+		`    :local rec {"type"="action"; "name"=($v->"name"); "target"=($v->"target"); "remote"=($v->"remote"); ` +
+			`"remotePort"=($v->"remote-port"); "remoteProtocol"=($v->"remote-protocol"); ` +
+			`"remoteLogFormat"=($v->"remote-log-format"); "checkCertificate"=($v->"check-certificate")}`,
+		`    :set logRecs ($logRecs, {$rec})`,
+		`  }`,
+		`}`,
+		`:foreach i,v in=[/system/logging print as-value] do={`,
+		`  :if (($v->"action") = "mikroview") do={`,
+		`    :local rec {"type"="rule"; "topics"=($v->"topics"); "action"=($v->"action"); "disabled"=($v->"disabled")}`,
+		`    :set logRecs ($logRecs, {$rec})`,
+		`  }`,
+		`}`,
+		fmt.Sprintf(`:local logPayload [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=%d; "records"=$logRecs}]`, loggingKind, WizardVersion),
+		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), token),
+	}, "\n")
 }
 
 // PushScriptPolicy is the policy mv-push is saved and scheduled under:
