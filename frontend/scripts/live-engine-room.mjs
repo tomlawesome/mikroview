@@ -54,7 +54,7 @@ await goTo(page, 'Settings')
 // backups, drop list is the order EngineRoom.svelte's own comment
 // states, and this list is a copy of the DOM order, not an independent
 // decision, so it has to keep up with what the page mounts.
-const GROUP_ORDER = ['ingest', 'keys', 'detection', 'memory', 'disk', 'router backups', 'drop list', 'account', 'people']
+const GROUP_ORDER = ['ingest', 'new settings', 'keys', 'detection', 'memory', 'disk', 'router backups', 'drop list', 'account', 'people']
 const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(groupNames) === JSON.stringify(GROUP_ORDER),

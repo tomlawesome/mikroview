@@ -57,6 +57,7 @@
     fetchDroplist,
   } from '../lib/api'
   import { duplicateDrift, duplicateDriftMessage, duplicateCleanupCommand } from '../lib/ingestDuplicates'
+  import ConfigUpgrade from './ConfigUpgrade.svelte'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
@@ -942,6 +943,21 @@
           {/if}
         </div>
       </div>
+
+      <!-- #1218: the settings this version understands that the running
+           config.yaml does not set, as YAML ready to paste. Mounted
+           straight after ingest rather than further down because an
+           operator who has just upgraded is the reader it exists for,
+           and admin-only because it names configuration. It renders its
+           own reassuring line when there is nothing new, so the group
+           itself is always here and Settings' order never depends on
+           what the config happens to be missing. -->
+      {#if isAdmin}
+        <div class="stsection wide" id="engineroom-new-settings">
+          <h3>new settings</h3>
+          <ConfigUpgrade />
+        </div>
+      {/if}
 
       {#if isAdmin}
         <div class="stsection" id="keys">
