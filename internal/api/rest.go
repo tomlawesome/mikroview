@@ -457,6 +457,20 @@ func parseScope(v string) store.Scope {
 	}
 }
 
+// writeUnauthorized answers a 401 with the WWW-Authenticate header RFC 9110
+// §15.5.2 requires on every 401. Without it, RouterOS's /tool fetch refuses
+// to parse the response at all ("ERROR parsing http: 401 should contain
+// www-authenticate header") instead of surfacing the refusal -- so this
+// covers session-cookie paths too, not just bearer-token ingest, even
+// though only the ingest paths are ever fetched by RouterOS itself.
+// "Bearer" is the scheme regardless of which credential actually failed;
+// unlike "Basic" it never triggers a browser login prompt, so it's safe on
+// session-gated routes.
+func writeUnauthorized(w http.ResponseWriter, msg string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="mikroview"`)
+	http.Error(w, msg, http.StatusUnauthorized)
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

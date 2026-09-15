@@ -165,6 +165,13 @@ func TestIngestRouteRejectsARevokedToken(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
+	// #1118: without WWW-Authenticate, RouterOS's /tool fetch -- the
+	// actual caller of this route -- refuses to parse the 401 at all
+	// ("ERROR parsing http: 401 should contain www-authenticate
+	// header") instead of reporting the refusal, per RFC 9110 §15.5.2.
+	if got := resp.Header.Get("WWW-Authenticate"); got != `Bearer realm="mikroview"` {
+		t.Errorf(`expected WWW-Authenticate: Bearer realm="mikroview", got %q`, got)
+	}
 }
 
 func TestIngestRouteRejectsAnInvalidPayload(t *testing.T) {
