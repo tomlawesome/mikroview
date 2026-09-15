@@ -1,8 +1,14 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent } from '../lib/types'
-  import { formatAddr, formatTimeMs, rawTooltip } from '../lib/format'
+  import { countryFlag, formatAddr, formatTimeMs, isPublicIp, rawTooltip } from '../lib/format'
   import { appState } from '../lib/state.svelte'
+  // #1200: both dropped from the row by #644's rewrite, restored here.
+  // IpInvestigateButton is the same component EventDetailSheet.svelte
+  // already mounts for its Source/Destination rows -- reused, not
+  // reimplemented, so the popover it opens (lib/ipLookup.svelte) stays
+  // the one instance both surfaces share.
+  import IpInvestigateButton from './IpInvestigateButton.svelte'
   // #729: LiveTable and this component share one flat CSS Grid (`.row` is
   // `display: contents`, so these cells become direct grid items, not
   // children of a row element the grid can reason about on its own) --
@@ -94,6 +100,16 @@
   // way -- authState.canEdit does not change mid-row -- so this only
   // removes redundant bookkeeping, not behaviour.
   const editAvailable = $derived(nameEditorState.available)
+
+  // #1200: the flag emoji beside Source/Destination's address, restored
+  // after #644 left only a bare two-letter code and only when the
+  // hostname was missing. countryFlag() already returns '' for an
+  // unresolved/missing code (#1198 explains why elsewhere -- a country
+  // filter select and a settings line, not a per-row guess), so `{#if
+  // srcFlag}` below is enough; there is no separate "unknown" case to
+  // render here.
+  const srcFlag = $derived(countryFlag(event.srcCountry))
+  const dstFlag = $derived(countryFlag(event.dstCountry))
 
   // Which Filters field (if either) a NAT token's translated address
   // belongs to (#438's NAT-parity section). Only the two dedicated NAT
@@ -301,10 +317,14 @@
 
   <!-- Source and Destination each split into a name column and a dim
        address column (#644): the name column shows the resolved host
-       name when one exists, otherwise the bare address itself (dim, with
-       the country code appended) -- and the address column then repeats
-       nothing, showing the raw IP only where the name column is showing
-       a name, an em dash otherwise. -->
+       name when one exists, otherwise the bare address itself (dim) --
+       and the address column then repeats nothing, showing the raw IP
+       only where the name column is showing a name, an em dash
+       otherwise. The country flag (#1200, restoring what #644's rewrite
+       dropped) sits beside that name-column token either way -- with a
+       resolved hostname too, not only on a bare address -- and the
+       manual IP lookup trigger (also #1200) follows the copy/edit
+       affordances, shown whenever the address is public. -->
   {#snippet sourceAddrCell()}
     {#if event.srcIp}
       <span class="cell addr">
@@ -316,13 +336,14 @@
           title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
           use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
         >
-          {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
-            <span class="geo">{event.srcCountry}</span>{/if}
+          {event.srcHostName || event.srcIp}{#if srcFlag}
+            <span class="geo">{srcFlag}</span>{/if}
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
@@ -382,13 +403,14 @@
           title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
           use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
         >
-          {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
-            <span class="geo">{event.dstCountry}</span>{/if}
+          {event.dstHostName || event.dstIp}{#if dstFlag}
+            <span class="geo">{dstFlag}</span>{/if}
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
@@ -566,13 +588,14 @@
           title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
           use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
         >
-          {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
-            <span class="geo">{event.srcCountry}</span>{/if}
+          {event.srcHostName || event.srcIp}{#if srcFlag}
+            <span class="geo">{srcFlag}</span>{/if}
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
@@ -607,13 +630,14 @@
           title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
           use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
         >
-          {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
-            <span class="geo">{event.dstCountry}</span>{/if}
+          {event.dstHostName || event.dstIp}{#if dstFlag}
+            <span class="geo">{dstFlag}</span>{/if}
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
@@ -912,8 +936,8 @@
   }
 
   /* The name columns: a resolved host name reads bright; a bare address
-     standing in for one reads dim (the-whole.html's .host / .geo split),
-     with its country code dimmer and smaller beside it. */
+     standing in for one reads dim (the-whole.html's .host / .geo split).
+     The country flag (#1200) rides beside either, dimmer and smaller. */
   .cell.addr {
     display: flex;
     align-items: center;
