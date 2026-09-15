@@ -209,6 +209,10 @@ func readRawConfigYAML(path string) []byte {
 	if path == "" {
 		return nil
 	}
+	// #nosec G703 -- this deployment's own config path, from
+	// MIKROVIEW_CONFIG or -config, and already opened and parsed by
+	// config.LoadWithProblems before any caller reaches here. It never
+	// comes from a request.
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
