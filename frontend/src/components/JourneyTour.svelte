@@ -13,6 +13,15 @@
   // actual rolling -- journeyState.nextCard() only ever sets appState.view,
   // exactly like clicking the roll rail. This overlay draws the rings and
   // the progress bar on top of it.
+  //
+  // #1235: the bar also carries the current card's sentences -- one per
+  // ring, from each stop's own `says` in lib/tourHighlights.ts -- above
+  // the progress line. The bar is the one fixed thing on screen that
+  // never covers what a ring points at (the rings sit inside the
+  // cards; the bar hangs below them), so the sentence lives there
+  // rather than beside its ring, where a line of prose would cover the
+  // very thing it names. Several rings on one card are explained
+  // together, as their rings already are (#1215 item 7).
   import { journeyState } from '../lib/journey.svelte'
   import { TOUR_HIGHLIGHTS, fitRing } from '../lib/tourHighlights'
 
@@ -133,13 +142,25 @@
     </div>
 
     <div class="bar">
-      <span class="progress">
-        {card.name.toUpperCase()} · {journeyState.cardIndex + 1} OF {total}
-      </span>
-      <button type="button" class="next" onclick={() => journeyState.nextCard()}>
-        {isLast ? 'finish ▸' : 'next ▸'}
-      </button>
-      <button type="button" class="leave" onclick={() => journeyState.leaveTour()}>leave the tour</button>
+      {#if highlights.length > 0}
+        <!-- aria-live so a screen reader hears the new card's sentences
+             on next, the way a sighted operator reads them; polite, so
+             it never talks over the button that was just pressed. -->
+        <ul class="says" aria-live="polite">
+          {#each highlights as h (h.label)}
+            <li>{h.says}</li>
+          {/each}
+        </ul>
+      {/if}
+      <div class="controls">
+        <span class="progress">
+          {card.name.toUpperCase()} · {journeyState.cardIndex + 1} OF {total}
+        </span>
+        <button type="button" class="next" onclick={() => journeyState.nextCard()}>
+          {isLast ? 'finish ▸' : 'next ▸'}
+        </button>
+        <button type="button" class="leave" onclick={() => journeyState.leaveTour()}>leave the tour</button>
+      </div>
     </div>
   </div>
 {/if}
@@ -199,6 +220,11 @@
       0 0 4px var(--bg);
   }
 
+  /* #1235: the bar grew a row of sentences above the progress line, so
+     it is a rounded panel now rather than a pill -- a 999px radius on a
+     two-row box reads as a capsule, not a bar. It still fits its
+     content and stays centred, so a one-sentence card gives a narrow
+     panel and the fall's three give a wider one. */
   .bar {
     position: fixed;
     left: 0;
@@ -206,17 +232,70 @@
     bottom: 24px;
     z-index: 46;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
     margin: 0 auto;
     width: fit-content;
-    max-width: 90vw;
-    padding: 10px 18px;
+    max-width: min(90vw, 760px);
+    padding: 12px 18px;
     background: var(--bg-elevated);
     border: 1px solid var(--hair-2, var(--border));
-    border-radius: 999px;
+    border-radius: 14px;
     box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.45);
+  }
+
+  /* One line per ring, each led by a dot in the ring's own cyan so the
+     sentence reads as belonging to the spotlight, not to the chrome.
+     Prose, so the app's sans face rather than the mono the tags and
+     the progress line use; 12px, above the bar's own 10.5/11px floor.
+     Never nowrap: on a phone a sentence wraps to a second line rather
+     than pushing the bar past the viewport. */
+  .says {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .says li {
+    position: relative;
+    padding-left: 14px;
+    font: 400 12px/1.4 var(--font-sans);
+    color: var(--fg);
+    text-align: left;
+  }
+
+  .says li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--tour-ring);
+  }
+
+  /* The progress line and its two buttons, as they were: one row,
+     centred. Allowed to wrap so a narrow phone folds "leave the tour"
+     under the others instead of clipping it -- font sizes below do not
+     shrink at any width (legibility floor). */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px 16px;
+  }
+
+  @media (max-width: 700px) {
+    .bar {
+      max-width: calc(100vw - 24px);
+      padding: 10px 14px;
+    }
   }
 
   .progress {

@@ -29,8 +29,20 @@
 // Selectors are scoped to their own card because the deck keeps every
 // card mounted: a bare `span.switch` matches both metrics and the
 // docket, and the ring would measure whichever came first.
+//
+// #1235: the label is the ring's tag, a few words; `says` is the
+// sentence -- what this is and what it is for, in the app's own voice.
+// It lives here with the stop rather than in JourneyTour so the copy
+// for a stop is one line, next to what it names. JourneyTour shows the
+// current card's sentences in the bar at the foot of the screen, the
+// one place that never covers the thing being pointed at; the fall's
+// three are shown together, the way its three rings already are
+// (#1215 item 7). tourHighlights.test.ts holds the rules each
+// sentence keeps to.
 export interface TourHighlight {
   label: string
+  // #1235: one sentence, under ~90 characters, ending in a full stop.
+  says: string
   // Measured off the live render when present; the four values below
   // are the fallback for when it matches nothing.
   selector?: string
@@ -50,30 +62,30 @@ export interface TourHighlight {
 
 export const TOUR_HIGHLIGHTS: Record<string, TourHighlight[]> = {
   fall: [
-    { label: 'the brink — now arrives here', selector: '.card[data-card="fall"] line.nowline', top: '9%', left: '4%', width: '92%', height: '7%' },
-    { label: 'a band per boundary — click reaches in', selector: '.card[data-card="fall"] g.band-head', top: '18%', left: '4%', width: '16%', height: '34%' },
-    { label: 'the held hour — scroll looks back', selector: '.card[data-card="fall"] div.fall-foot', top: '80%', left: '4%', width: '18%', height: '9%' },
+    { label: 'the brink — now arrives here', says: 'each event lands on this line as it happens, then falls into the hour below.', selector: '.card[data-card="fall"] line.nowline', top: '9%', left: '4%', width: '92%', height: '7%' },
+    { label: 'a band per boundary — click reaches in', says: 'one band per firewall crossing; click a band to open its traffic in the stream.', selector: '.card[data-card="fall"] g.band-head', top: '18%', left: '4%', width: '16%', height: '34%' },
+    { label: 'the held hour — scroll looks back', says: 'the last hour is held beneath the line; scroll down to read back through it.', selector: '.card[data-card="fall"] div.fall-foot', top: '80%', left: '4%', width: '18%', height: '9%' },
   ],
   topography: [
     // rect.isl.waist paints its own fill and stroke (app.css: fill
     // var(--bg-elevated), stroke var(--border)) -- a drawn card, not a
     // bare click target, so the ring traces it rather than standing off.
-    { label: 'the router as the waist — subnets below, the internet above', selector: '.card[data-card="topography"] rect.isl.waist', box: true, top: '30%', left: '38%', width: '24%', height: '30%' },
+    { label: 'the router as the waist — subnets below, the internet above', says: 'the router sits at the waist, with your subnets below it and the internet above.', selector: '.card[data-card="topography"] rect.isl.waist', box: true, top: '30%', left: '38%', width: '24%', height: '30%' },
   ],
   metrics: [
-    { label: 'one hour, three views — seismograph, register, table', selector: '.card[data-card="metrics"] span.switch', top: '10%', left: '6%', width: '40%', height: '10%' },
+    { label: 'one hour, three views — seismograph, register, table', says: 'the same hour of traffic drawn three ways; switch to whichever reads best.', selector: '.card[data-card="metrics"] span.switch', top: '10%', left: '6%', width: '40%', height: '10%' },
   ],
   live: [
-    { label: 'every event, live — search and filter as it fills', selector: '.card[data-card="live"] .filterline', top: '12%', left: '55%', width: '38%', height: '9%' },
+    { label: 'every event, live — search and filter as it fills', says: 'every event as it arrives; type here to keep only the lines that match.', selector: '.card[data-card="live"] .filterline', top: '12%', left: '55%', width: '38%', height: '9%' },
   ],
   docket: [
-    { label: 'flags, watchlist and audit — one card, three tabs', selector: '.card[data-card="docket"] span.switch', top: '10%', left: '6%', width: '50%', height: '9%' },
+    { label: 'flags, watchlist and audit — one card, three tabs', says: 'what MikroView flagged, what it is watching for, and who changed what.', selector: '.card[data-card="docket"] span.switch', top: '10%', left: '6%', width: '50%', height: '9%' },
   ],
   entities: [
-    { label: 'routers, named entities, and what MikroView has discovered', selector: '.card[data-card="entities"] .og:first-of-type', top: '10%', left: '6%', width: '55%', height: '9%' },
+    { label: 'routers, named entities, and what MikroView has discovered', says: 'the routers that push here, what you have named, and what MikroView found on its own.', selector: '.card[data-card="entities"] .og:first-of-type', top: '10%', left: '6%', width: '55%', height: '9%' },
   ],
   engineroom: [
-    { label: 'the shelf — deck order, ingest, detection, memory, account', selector: '.card[data-card="engineroom"] .stshelf', top: '10%', left: '6%', width: '55%', height: '9%' },
+    { label: 'the shelf — deck order, ingest, detection, memory, account', says: 'drag cards to reorder your deck; the shelves below set what comes in and what is kept.', selector: '.card[data-card="engineroom"] .stshelf', top: '10%', left: '6%', width: '55%', height: '9%' },
   ],
 }
 
