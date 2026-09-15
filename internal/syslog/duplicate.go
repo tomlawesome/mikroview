@@ -98,6 +98,14 @@ type sourceDupState struct {
 	sightings      uint64
 	lastSightingAt time.Time // zero means no sighting yet in this episode
 	multiplicity   [dupMultiplicityBuckets]uint64
+
+	// lastLineAt is when this source last sent anything at all, not
+	// just a duplicate. dupStateFor reads it to decide which entry to
+	// drop when the cap is full: without it, the first 256 addresses to
+	// arrive would hold the map for the process's lifetime and a real
+	// router connecting later -- after a restart, or behind them in a
+	// burst -- would never be tracked at all.
+	lastLineAt time.Time
 }
 
 var (
@@ -109,7 +117,7 @@ var (
 // host hasn't been seen before and the cap allows it. Returns nil past
 // dupTrackedSourcesCap for a source not already tracked -- see its
 // doc comment.
-func dupStateFor(host string) *sourceDupState {
+func dupStateFor(host string, now time.Time) *sourceDupState {
 	dupSourcesMu.Lock()
 	defer dupSourcesMu.Unlock()
 
@@ -117,9 +125,26 @@ func dupStateFor(host string) *sourceDupState {
 		return st
 	}
 	if len(dupSources) >= dupTrackedSourcesCap {
-		return nil
+		// Full. Drop the source that has been quiet longest and take
+		// its place, rather than refusing the newcomer: a cap that
+		// only ever refuses is a cap the first 256 addresses to arrive
+		// can hold forever, which would let a burst of one-line
+		// senders lock the operator's own router out of detection for
+		// as long as the process runs. Evicting loses that source's
+		// episode, which is the right thing to lose -- it has not been
+		// heard from since.
+		stalest, stalestAt := "", time.Time{}
+		for h, st := range dupSources {
+			st.mu.Lock()
+			at := st.lastLineAt
+			st.mu.Unlock()
+			if stalest == "" || at.Before(stalestAt) {
+				stalest, stalestAt = h, at
+			}
+		}
+		delete(dupSources, stalest)
 	}
-	st := &sourceDupState{}
+	st := &sourceDupState{lastLineAt: now}
 	dupSources[host] = st
 	return st
 }
@@ -149,16 +174,28 @@ func fnv1aHash64(data []byte) uint64 {
 // write, one map lookup (only a new source ever inserts), no per-line
 // allocation.
 func noteDuplicateLine(host string, data []byte) {
-	st := dupStateFor(host)
-	if st == nil {
+	// Declared sources only, the same gate oversizedIsSetupDrift applies
+	// to #1205's sibling warning. The TLS listener asks for no client
+	// certificate, so anyone who can reach the syslog port can send the
+	// same line twice twenty times over and otherwise have Settings tell
+	// the operator that *their* address has duplicate mikroview logging
+	// rules -- advice about a router mikroview has never been told
+	// about, which would also displace a true warning about one it has.
+	if !isConfiguredSource(host) {
 		return
 	}
 
 	now := lossNow()
+	st := dupStateFor(host, now)
+	if st == nil {
+		return
+	}
+
 	hash := fnv1aHash64(data)
 
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	st.lastLineAt = now
 
 	multiplicity := 1
 	for _, e := range st.ring {

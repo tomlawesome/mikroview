@@ -220,7 +220,13 @@ func quoteAttrValue(s string) string {
 	if s == "" {
 		return `""`
 	}
-	needsQuote := strings.ContainsAny(s, " \"=") || strings.ContainsFunc(s, unicode.IsControl)
+	// unsafeForTerminal, not unicode.IsControl: this package already
+	// treats format characters as unsafe everywhere else (see Printable),
+	// and a right-to-left override in an attribute value would reorder
+	// the rest of the line in the operator's terminal without being a
+	// control character. An attribute can carry a hostname or a fragment
+	// of a syslog line, so the value is not always ours.
+	needsQuote := strings.ContainsAny(s, " \"=") || strings.ContainsFunc(s, unsafeForTerminal)
 	if !needsQuote {
 		return s
 	}

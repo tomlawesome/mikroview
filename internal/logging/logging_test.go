@@ -287,3 +287,15 @@ func TestPrintableLeavesOrdinaryTextAlone(t *testing.T) {
 		}
 	}
 }
+
+// A bidirectional override in an attribute value must be escaped like
+// any other character that would rearrange the operator's terminal.
+// strconv.Quote escapes it once quoting is triggered; the check that
+// triggers quoting is what this guards, since unicode.IsControl alone
+// lets U+202E through untouched.
+func TestAttrValueQuotesABidiOverride(t *testing.T) {
+	got := quoteAttrValue("host‮evil")
+	if strings.Contains(got, "‮") {
+		t.Errorf("quoteAttrValue left a bidi override unescaped: %q", got)
+	}
+}

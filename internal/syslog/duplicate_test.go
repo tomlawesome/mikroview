@@ -30,9 +30,11 @@ func TestDuplicateSightingsFromOneSourceReportDrift(t *testing.T) {
 	t.Cleanup(func() {
 		setLossClock(nil)
 		clearDuplicateState()
+		SetConfiguredSources(nil)
 	})
 
 	host := "198.51.100.10"
+	SetConfiguredSources([]string{host})
 	for i := 0; i < dupSightingsToReportDrift; i++ {
 		line := []byte(fmt.Sprintf("event %d", i))
 		noteDuplicateLine(host, line) // the original
@@ -65,9 +67,11 @@ func TestDuplicateBurstUnderSightingThresholdDoesNotReportDrift(t *testing.T) {
 	t.Cleanup(func() {
 		setLossClock(nil)
 		clearDuplicateState()
+		SetConfiguredSources(nil)
 	})
 
 	host := "198.51.100.40"
+	SetConfiguredSources([]string{host})
 	for i := 0; i < dupSightingsToReportDrift-1; i++ {
 		line := []byte(fmt.Sprintf("event %d", i))
 		noteDuplicateLine(host, line)
@@ -93,10 +97,12 @@ func TestDuplicateContentFromTwoSourcesDoesNotReportDrift(t *testing.T) {
 	t.Cleanup(func() {
 		setLossClock(nil)
 		clearDuplicateState()
+		SetConfiguredSources(nil)
 	})
 
 	hostA := "198.51.100.30"
 	hostB := "198.51.100.31"
+	SetConfiguredSources([]string{hostA, hostB})
 	for i := 0; i < dupSightingsToReportDrift*2; i++ {
 		line := []byte(fmt.Sprintf("shared event %d", i))
 		noteDuplicateLine(hostA, line)
@@ -120,9 +126,11 @@ func TestDuplicateRingIsFixedSizeAndWraps(t *testing.T) {
 	t.Cleanup(func() {
 		setLossClock(nil)
 		clearDuplicateState()
+		SetConfiguredSources(nil)
 	})
 
 	host := "198.51.100.20"
+	SetConfiguredSources([]string{host})
 	original := []byte("original line")
 	noteDuplicateLine(host, original)
 
@@ -163,6 +171,7 @@ func TestClearLossResetsDuplicateState(t *testing.T) {
 	t.Cleanup(func() {
 		setLossClock(nil)
 		clearDuplicateState()
+		SetConfiguredSources(nil)
 	})
 
 	// DuplicateSightings is an all-time total, like Dropped/Oversized
@@ -171,6 +180,7 @@ func TestClearLossResetsDuplicateState(t *testing.T) {
 	before := tcpDuplicateSightingsTotal.Load()
 
 	host := "198.51.100.50"
+	SetConfiguredSources([]string{host})
 	for i := 0; i < dupSightingsToReportDrift; i++ {
 		line := []byte(fmt.Sprintf("event %d", i))
 		noteDuplicateLine(host, line)
@@ -208,5 +218,75 @@ func TestClearLossResetsDuplicateState(t *testing.T) {
 	noteDuplicateLine(host, []byte("post-clear line"))
 	if loss := Stats().Loss.Duplicate; loss.Active {
 		t.Errorf("one post-clear duplicate pair should not already report drift, got %+v", loss)
+	}
+}
+
+// An undeclared sender must not be able to have Settings tell the
+// operator that it -- or anything else -- has duplicate logging rules.
+// The syslog listener asks for no client certificate, so anyone who can
+// reach the port could otherwise send one line twice, twenty times, and
+// put advice about a router mikroview has never heard of in front of
+// the operator, displacing a true warning about one it has.
+func TestDuplicateDriftIgnoresAnUndeclaredSource(t *testing.T) {
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() {
+		setLossClock(nil)
+		clearDuplicateState()
+		SetConfiguredSources(nil)
+	})
+
+	SetConfiguredSources([]string{"198.51.100.60"})
+	for i := 0; i < dupSightingsToReportDrift*2; i++ {
+		line := []byte(fmt.Sprintf("event %d", i))
+		noteDuplicateLine("203.0.113.9", line)
+		noteDuplicateLine("203.0.113.9", line)
+		now = now.Add(time.Millisecond)
+	}
+
+	if loss := Stats().Loss.Duplicate; loss.Active {
+		t.Errorf("an undeclared source was reported as drifting: %+v", loss)
+	}
+}
+
+// The tracked-source cap evicts whichever source has been quiet longest
+// rather than refusing every newcomer, so a burst of one-line senders
+// cannot hold the map for the process's lifetime and lock a router that
+// connects later out of detection entirely.
+func TestDuplicateSourceCapEvictsTheQuietestSource(t *testing.T) {
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() {
+		setLossClock(nil)
+		clearDuplicateState()
+		SetConfiguredSources(nil)
+	})
+
+	declared := make([]string, 0, dupTrackedSourcesCap+1)
+	for i := 0; i < dupTrackedSourcesCap; i++ {
+		declared = append(declared, fmt.Sprintf("198.51.100.%d", i))
+	}
+	latecomer := "203.0.113.77"
+	declared = append(declared, latecomer)
+	SetConfiguredSources(declared)
+
+	// Fill the cap, each source one line, oldest first.
+	for i := 0; i < dupTrackedSourcesCap; i++ {
+		noteDuplicateLine(declared[i], []byte("filler"))
+		now = now.Add(time.Millisecond)
+	}
+
+	// The latecomer arrives with the map already full, and must still
+	// be tracked well enough to be reported.
+	for i := 0; i < dupSightingsToReportDrift; i++ {
+		line := []byte(fmt.Sprintf("late event %d", i))
+		noteDuplicateLine(latecomer, line)
+		noteDuplicateLine(latecomer, line)
+		now = now.Add(time.Millisecond)
+	}
+
+	loss := Stats().Loss.Duplicate
+	if !loss.Active || loss.Host != latecomer {
+		t.Errorf("a source arriving after the cap filled was not tracked: %+v", loss)
 	}
 }
