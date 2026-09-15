@@ -48,6 +48,7 @@
     notObserved,
     NO_COMMAND_HEADING,
     NO_ADDRESS_LINE,
+    portOf,
     prose,
     sourceSplits,
     arrivingAddresses,
@@ -1104,6 +1105,16 @@
                     <p class="note token-note">
                       The token is shown once. Anyone who can read the script on the router can read it,
                       so it is scoped to that one router and to this drop box.
+                    </p>
+                  {/if}
+                  {#if wizardState.backups?.port}
+                    <!-- #1220: the router timing out mid-upload read as a
+                         stalled transfer, not an unreachable port -- this
+                         is the one thing the script itself cannot say. -->
+                    <p class="note token-note">
+                      The router has to reach this host on port {portOf(wizardState.backups.port)} for the
+                      push to land — publish it in docker-compose.yml's <code>ports:</code> (commented in,
+                      beside the others) if you have not already.
                     </p>
                   {/if}
                   <div class="paste">
