@@ -515,6 +515,21 @@ describe('backupStep', () => {
     expect(s.state).toBe('waiting')
   })
 
+  // #1220: an unreachable drop-box port times out partway through the
+  // upload, which reads as a stalled push rather than a network
+  // problem. Naming the port here is the cheap hint available without
+  // a live connection-attempt signal.
+  it('hints at the drop box port while waiting, when the server reports one', () => {
+    const s = backupStep(backups({ routers: [], port: ':47022' }))
+    expect(s.state).toBe('waiting')
+    expect(s.detail).toContain('port 47022')
+  })
+
+  it('waits with the plain wording when no port is reported', () => {
+    const s = backupStep(backups({ routers: [] }))
+    expect(s.detail).not.toContain('port')
+  })
+
   it('reads done, with the newest pair in the detail, once something has arrived', () => {
     const b = backups({
       routers: [
