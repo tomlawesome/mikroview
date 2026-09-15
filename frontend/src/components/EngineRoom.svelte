@@ -45,6 +45,7 @@
   import { deckCards } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
   import { versionState } from '../lib/version.svelte'
+  import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
   import {
@@ -55,6 +56,8 @@
     fetchRouterBackups,
     fetchDroplist,
   } from '../lib/api'
+  import { duplicateDrift, duplicateDriftMessage, duplicateCleanupCommand } from '../lib/ingestDuplicates'
+  import ConfigUpgrade from './ConfigUpgrade.svelte'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
@@ -88,6 +91,7 @@
       })
     detectorSettingsState.refresh().catch(() => {})
     versionState.ensureLoaded().catch(() => {})
+    geoipState.ensureLoaded().catch(() => {})
     // 403s for a non-admin (see persistenceState's own doc comment) --
     // the disk group's `state` row is simply left out for that caller,
     // same swallow-and-degrade shape as fetchSetupStatus above.
@@ -472,6 +476,13 @@
     const oversized = appState.stats?.syslog?.loss?.oversized
     return oversized?.setupDrift ? oversized.host : undefined
   })
+  // #1234: the same shape as the line above, for the other router-side
+  // fault an upgraded install carries -- the wizard's logging block
+  // pasted more than once, so every line arrives two or three times
+  // over. Detection is server-side too (internal/syslog/duplicate.go);
+  // the wording lives in lib/ingestDuplicates.
+  const ingestDuplicates = $derived(duplicateDrift(appState.stats?.syslog))
+
   const ROUTEROS_SETUP_DOCS_URL =
     'https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md'
 
@@ -858,6 +869,19 @@
             <span>who may speak</span>
             <span class="ov">holders of an ingest key — the keys group below</span>
           </div>
+          {#if geoipState.enabled === false}
+            <!-- #1198: matches the country filter's own disabled row --
+                 same fact, same wording, so a reader who has seen one
+                 recognises the other. Only shown when off: a database
+                 that is working needs no line here. -->
+            <div class="orow">
+              <span>geoip</span>
+              <span class="ov"
+                >no GeoIP database — <a href={GEOIP_DOCS_URL} target="_blank" rel="noopener noreferrer">see docs ▸</a
+                ></span
+              >
+            </div>
+          {/if}
           {#if appState.stats?.syslog}
             {@const syslog = appState.stats.syslog}
             <div class="orow">
@@ -901,6 +925,15 @@
                 </span>
               </div>
             {/if}
+            {#if ingestDuplicates}
+              <div class="orow sub">
+                <span>duplicate logging rules</span>
+                <span class="ov ink-caution">
+                  {duplicateDriftMessage(ingestDuplicates)} — run
+                  <code>{duplicateCleanupCommand}</code> on it, then paste the wizard's step 1 block again
+                </span>
+              </div>
+            {/if}
             <div class="orow sub">
               <span>not shown in this tab</span>
               <span class="ov" class:ink-info={ingestLoss.wsDropped > 0}>
@@ -910,6 +943,21 @@
           {/if}
         </div>
       </div>
+
+      <!-- #1218: the settings this version understands that the running
+           config.yaml does not set, as YAML ready to paste. Mounted
+           straight after ingest rather than further down because an
+           operator who has just upgraded is the reader it exists for,
+           and admin-only because it names configuration. It renders its
+           own reassuring line when there is nothing new, so the group
+           itself is always here and Settings' order never depends on
+           what the config happens to be missing. -->
+      {#if isAdmin}
+        <div class="stsection wide" id="engineroom-new-settings">
+          <h3>new settings</h3>
+          <ConfigUpgrade />
+        </div>
+      {/if}
 
       {#if isAdmin}
         <div class="stsection" id="keys">

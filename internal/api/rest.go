@@ -32,6 +32,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// output, not for a client that wants to keep counting locally.
 		"uptimeSeconds": int64(time.Since(s.StartTime).Seconds()),
 		"version":       s.Version,
+		// geoip (#1198): whether a country database is open, so the
+		// country filter select and the Settings > ingest card can tell
+		// "no database configured" apart from "no public traffic yet"
+		// instead of both just showing no flags.
+		"geoip": s.GeoIP,
 	})
 }
 

@@ -47,6 +47,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -174,15 +175,49 @@ func versionBootMessage(prev, current string) string {
 // persistence in this codebase (see flags.Open's doc comment), a
 // read/write failure is never fatal -- it just means upgrade detection
 // silently doesn't work until the underlying path issue is fixed.
-func logVersionAndMigration(logger *slog.Logger) {
+//
+// newSettingsCount is #1218's other half: how many settings this build
+// understands that the running config does not set (config.MissingSettings,
+// computed once by the caller). It only ever gets a line of its own on
+// the boot that actually crosses a version -- not a routine restart,
+// and not repeated on every later boot at the same version -- because a
+// log line cannot be dismissed the way Settings ▸ Upgrade can, and one
+// operators cannot make stop is one they learn to ignore.
+func logVersionAndMigration(logger *slog.Logger, newSettingsCount int) {
 	prev, err := os.ReadFile(versionMarkerPath)
 	if err != nil && !os.IsNotExist(err) {
 		logger.Warn(fmt.Sprintf("reading version marker: %v", err))
 	}
-	logger.Info(versionBootMessage(string(prev), version))
+	prevVersion := strings.TrimSpace(string(prev))
+	logger.Info(versionBootMessage(prevVersion, version))
+	if prevVersion != "" && prevVersion != version && newSettingsCount > 0 {
+		logger.Info(fmt.Sprintf("%d new setting(s) are available -- see Settings ▸ Upgrade to review and copy them in", newSettingsCount))
+	}
 	if err := os.WriteFile(versionMarkerPath, []byte(version), 0o600); err != nil {
 		logger.Warn(fmt.Sprintf("writing version marker: %v (upgrade detection won't work on the next restart)", err))
 	}
+}
+
+// readRawConfigYAML reads the operator's config file bytes for
+// config.MissingSettings, treating no path or an unreadable one as "no
+// keys set" rather than fatal -- config.LoadWithProblems has already
+// read and validated this same file moments before any caller reaches
+// this, so a failure here only means the "new settings available"
+// notice cannot be computed this boot, not that anything is actually
+// wrong.
+func readRawConfigYAML(path string) []byte {
+	if path == "" {
+		return nil
+	}
+	// #nosec G703 -- this deployment's own config path, from
+	// MIKROVIEW_CONFIG or -config, and already opened and parsed by
+	// config.LoadWithProblems before any caller reaches here. It never
+	// comes from a request.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // securityHeaders wraps next, setting baseline defense-in-depth headers
@@ -553,8 +588,21 @@ func main() {
 	// in place, not a per-logger setting fixed at New() time.
 	logging.SetLevel(cfg.Log.Level)
 
+	// #1218: every optional top-level setting this build understands
+	// that config.yaml does not set, computed once here since neither
+	// input (this binary, the running config) changes before the next
+	// restart -- both the boot log line below and GET /api/config/upgrade
+	// read the same slice rather than recomputing it. A failure just
+	// means the notice can't be shown this boot; see readRawConfigYAML's
+	// own comment for why that's never treated as fatal.
+	missingSettings, err := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(os.Getenv("MIKROVIEW_CONFIG")))
+	if err != nil {
+		configLog.Warn(fmt.Sprintf("checking for newly available settings: %v", err))
+		missingSettings = nil
+	}
+
 	logging.PrintBanner()
-	logVersionAndMigration(logging.New("mikroview"))
+	logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
 	// Before anything is built on top of them (#536). Checked here
 	// rather than at each store's first write so the operator gets one
@@ -590,6 +638,16 @@ func main() {
 	geo, err := geoip.Open(cfg.GeoIP.DBPath)
 	if err != nil {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
+	}
+	// One info line on every start, not just on a failed open (#1198): the
+	// unset and the opened-fine cases were both silent before this, so the
+	// owner had no way to tell from the logs whether geoip.dbPath had
+	// actually taken. A failed open still gets the Warn above as well --
+	// this line only adds the two cases that previously said nothing.
+	if geo.Configured() {
+		geoLog.Info(fmt.Sprintf("%s opened", cfg.GeoIP.DBPath))
+	} else if cfg.GeoIP.DBPath == "" {
+		geoLog.Info("no database configured (country flags off)")
 	}
 	defer geo.Close()
 	// rep: always built (AbuseIPDBKey empty just means that one source
@@ -1223,6 +1281,18 @@ func main() {
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
+
+	// #1218: which "N new settings are available" notice an operator has
+	// already dismissed -- the notice's own content (missingSettings,
+	// computed above) is never persisted, only this. Same optional-
+	// persistence contract as setupStore just above.
+	configDriftLog := logging.New("configdrift")
+	configDriftBackend, err := persistence.backendFor(bootCtx, "config_drift", cfg.ConfigDrift.StorePath)
+	if err != nil {
+		configDriftLog.Warn(err.Error())
+	}
+	configDriftStore, err := configdrift.OpenWithBackend(configDriftBackend)
+	mustOpenStore(configDriftLog, err)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
 	// #600: the registry answers device display names through the same
 	// resolver, so a rename stored by one operator is what every
@@ -1626,14 +1696,17 @@ func main() {
 			BackupPort: routerBackupPort(cfg),
 			Candidates: setupAddressCandidates(cfg.Listen.HTTP),
 		},
-		OIDC:              oidcClient,
-		OIDCState:         oidcState,
-		OIDCPolicy:        oidcPolicy,
-		StartTime:         time.Now(),
-		Version:           version,
-		ThirdPartyNotices: thirdPartyNotices,
-		ConfigProblems:    configProblems,
-		Persistence:       persistenceInfo,
+		OIDC:                  oidcClient,
+		OIDCState:             oidcState,
+		OIDCPolicy:            oidcPolicy,
+		StartTime:             time.Now(),
+		Version:               version,
+		GeoIP:                 geo.Configured(),
+		ThirdPartyNotices:     thirdPartyNotices,
+		ConfigProblems:        configProblems,
+		Persistence:           persistenceInfo,
+		ConfigUpgradeSettings: missingSettings,
+		ConfigDrift:           configDriftStore,
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
@@ -2021,6 +2094,21 @@ func runValidateConfig(args []string) int {
 	}
 	_ = args
 	_ = cfg
+
+	// #1218's item 4: the same "N new settings are available" list the
+	// server itself would log on its next restart if this were an
+	// upgrade, so it can be checked before one. Informational only --
+	// never itself a reason for a non-zero exit, since every setting
+	// here is optional by definition.
+	if missing, mErr := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(path)); mErr != nil {
+		fmt.Fprintf(os.Stderr, "checking for newly available settings: %v\n", mErr)
+	} else if len(missing) > 0 {
+		fmt.Printf("%d new setting(s) understood by this build are not set:\n", len(missing))
+		for _, m := range missing {
+			fmt.Printf("  %s\n", m.Key)
+		}
+		fmt.Println("  (see deploy/config.example.yaml, or Settings ▸ Upgrade once running, for the exact YAML to paste)")
+	}
 
 	if !result.HasProblems() {
 		if path == "" {

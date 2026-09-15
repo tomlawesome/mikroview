@@ -40,6 +40,15 @@ func Open(path string) (*Lookup, error) {
 	return &Lookup{db: db}, nil
 }
 
+// Configured reports whether a database is actually open -- true only for
+// a Lookup returned by Open with a non-empty, successfully-parsed path.
+// Used to answer the "is GeoIP on" question for callers that never see
+// the path or the Open error themselves: the status payload's `geoip`
+// field (#1198) and main.go's own startup log line.
+func (l *Lookup) Configured() bool {
+	return l != nil && l.db != nil
+}
+
 // Close releases the underlying database file, if one is open.
 //
 // geoip2 v2's Close returns an error where v1's did not. It is dropped

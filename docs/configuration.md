@@ -1134,7 +1134,9 @@ you to create your own free account to obtain one.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
-error.
+error. The UI says so too rather than leaving a reader to guess why every
+flag is blank: the country filter's select carries a disabled "no GeoIP
+database" row, and Settings ▸ ingest states the same fact in one line.
 
 ## IP reputation lookup (optional)
 
@@ -1918,6 +1920,46 @@ duplicates and neither replaces the other: the audit entry is history
 and stays there even after the evidence eventually arrives and the step
 turns green, while the ledger holds current state and clears itself the
 moment evidence outranks the decision.
+
+## Upgrade notice (issue #1218, optional)
+
+On the first boot after an upgrade (the version stamped into the binary
+differs from the one recorded in the data directory's `version` marker
+file), MikroView checks which settings this build understands that your
+`config.yaml` does not set at all, and logs how many it found:
+
+```
+5 new setting(s) are available -- see Settings ▸ Upgrade to review and copy them in
+```
+
+**Settings ▸ Upgrade** shows the actual YAML for each one -- comment and
+all, in the same order and style as `deploy/config.example.yaml` --
+ready to paste under your own `devices:` line. It never rewrites
+`config.yaml` itself: the compose file mounts it read-only, and even
+writably, reordering an operator's keys and dropping their own comments
+was rejected as worse than leaving the file alone (see the issue's
+ruling). The list is worked out fresh every time the page is opened, not
+just on the boot that logged it, so it stays reachable for as long as
+something is genuinely missing.
+
+Dismissing it is per version: once you've reviewed it (or decided you
+don't need any of it) for version X, it stops showing for X but comes
+back the moment a later version adds something new.
+
+```yaml
+configDrift:
+  # Where the dismissal is persisted, as a small JSON file. Same
+  # optional-persistence contract as setup.storePath above: left unset,
+  # the notice still works, a dismissal just doesn't survive a restart.
+  storePath: "/var/lib/mikroview/config-drift.json"
+```
+
+The reverse direction -- a key your config sets that this version no
+longer understands -- is issue #1207's unknown-key check: it refuses to
+start rather than silently ignoring the key, naming what replaced it
+when something did. That happens before this notice (or anything else
+in the app) could ever show it, so there is nothing for this screen to
+add on that side.
 
 ## Watchlist (optional)
 

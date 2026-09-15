@@ -28,6 +28,29 @@ func TestOpenMissingFileStillUsable(t *testing.T) {
 	}
 }
 
+// #1198: Configured is how main.go and Server.GeoIP tell "no database"
+// apart from "no public traffic yet" -- both the empty-path and the
+// failed-open cases (still a usable, disabled Lookup) must report false.
+func TestConfigured(t *testing.T) {
+	empty, err := Open("")
+	if err != nil {
+		t.Fatalf("Open(\"\") returned an error: %v", err)
+	}
+	if empty.Configured() {
+		t.Error("Configured() = true for an unconfigured (empty-path) Lookup, want false")
+	}
+
+	failed, _ := Open("/nonexistent/does-not-exist.mmdb")
+	if failed.Configured() {
+		t.Error("Configured() = true for a Lookup whose Open failed, want false")
+	}
+
+	var nilLookup *Lookup
+	if nilLookup.Configured() {
+		t.Error("Configured() = true for a nil *Lookup, want false")
+	}
+}
+
 func TestIsPublic(t *testing.T) {
 	cases := []struct {
 		ip   string

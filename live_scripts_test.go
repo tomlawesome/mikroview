@@ -58,6 +58,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"decommission":  {"engine", "decommissionStorePath"},
 		"audit":         {"audit", "storePath"},
 		"setup":         {"setup", "storePath"},
+		"config_drift":  {"configDrift", "storePath"},
 		"settings":      {"store", "settingsStorePath"},
 		"suggestions":   {"watchlist", "suggestionsStorePath"},
 		"match_log":     {"watchlist", "matchLogPath"},

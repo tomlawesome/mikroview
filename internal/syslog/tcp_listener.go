@@ -458,6 +458,14 @@ type ListenerStats struct {
 	// address to look at rather than leaving that half of its own copy
 	// unfillable. Empty until the first oversized message.
 	OversizedHost string `json:"oversizedHost"`
+	// DuplicateSightings is issue #1234's all-time total: how many
+	// arriving raw lines matched one already seen from the same source
+	// within dupSightingWindow (see duplicate.go). Paired with
+	// Loss.Duplicate the same way Dropped/Oversized are paired with
+	// their own Loss entries -- this is the plain running count for
+	// Settings, Loss.Duplicate is the windowed "is this still
+	// happening, and from where" view.
+	DuplicateSightings uint64 `json:"duplicateSightings"`
 	// Loss is issue #1015's freshness signal for the four counters
 	// above: per-counter "is this still happening", not just "has this
 	// ever happened". Nothing existing above changes shape -- this is
@@ -507,14 +515,25 @@ type LossCounterStats struct {
 	// flag every wizard before 2026-09-12 omitted. Only ever set on the
 	// oversized entry -- see oversizedIsSetupDrift.
 	SetupDrift bool `json:"setupDrift,omitempty"`
+	// CopyCount is issue #1234's apparent copy count: the most common
+	// multiplicity (2, 3, ...) among a drifting source's recent
+	// duplicate sightings -- see duplicate.go. Only ever set on the
+	// duplicate entry.
+	CopyCount uint64 `json:"copyCount,omitempty"`
 }
 
-// LossStats is ListenerStats.Loss's shape -- issue #1015.
+// LossStats is ListenerStats.Loss's shape -- issue #1015 (plus
+// Duplicate, added by #1234).
 type LossStats struct {
 	Dropped            LossCounterStats `json:"dropped"`
 	RejectedConfigured LossCounterStats `json:"rejectedConfigured"`
 	Rejected           LossCounterStats `json:"rejected"`
 	Oversized          LossCounterStats `json:"oversized"`
+	// Duplicate is issue #1234's detection of a router whose mikroview
+	// logging block has been pasted more than once: Host names the
+	// source currently sending each line more than once, CopyCount the
+	// apparent number of copies. See duplicate.go.
+	Duplicate LossCounterStats `json:"duplicate"`
 }
 
 // lossCounterStats builds one LossCounterStats entry from a freshness
@@ -551,6 +570,7 @@ func lossStats() LossStats {
 		RejectedConfigured: rejectedConfigured,
 		Rejected:           lossCounterStats(&tcpRejectedFreshness, lossWindowRejected, now),
 		Oversized:          oversized,
+		Duplicate:          duplicateLossCounterStats(now),
 	}
 }
 
@@ -572,26 +592,30 @@ func oversizedIsSetupDrift(declared, active bool, runs uint64) bool {
 }
 
 // ClearLossResult is what ClearLoss hands its caller for an audit entry
-// -- the four totals as they stood immediately before the reset.
+// -- the totals as they stood immediately before the reset.
 type ClearLossResult struct {
 	Dropped            uint64
 	RejectedConfigured uint64
 	Rejected           uint64
 	Oversized          uint64
+	// DuplicateSightings is issue #1234's all-time total -- see
+	// ListenerStats.DuplicateSightings.
+	DuplicateSightings uint64
 }
 
 // ClearLoss zeroes every ingest-loss counter this package tracks: the
-// four monotonic totals, their episodes and lastAt, and both host
-// records (rejectedConfiguredHosts and tcpOversizedHost) -- issue
-// #1015's "Clear all". It does not affect InUse/Capacity/
-// ReservedForConfigured, which are current listener state, not loss
-// history.
+// monotonic totals, their episodes and lastAt, and every host record
+// (rejectedConfiguredHosts, tcpOversizedHost, and #1234's duplicate
+// rings) -- issue #1015's "Clear all". It does not affect InUse/
+// Capacity/ReservedForConfigured, which are current listener state,
+// not loss history.
 func ClearLoss() ClearLossResult {
 	result := ClearLossResult{
 		Dropped:            tcpDropped.Load(),
 		RejectedConfigured: tcpRejectedConfigured.Load(),
 		Rejected:           tcpRejected.Load(),
 		Oversized:          tcpOversized.Load(),
+		DuplicateSightings: tcpDuplicateSightingsTotal.Load(),
 	}
 
 	tcpDropped.Store(0)
@@ -599,6 +623,7 @@ func ClearLoss() ClearLossResult {
 	tcpRejected.Store(0)
 	tcpOversized.Store(0)
 	tcpOversizedRuns.Store(0)
+	tcpDuplicateSightingsTotal.Store(0)
 
 	tcpDroppedFreshness.clear()
 	tcpRejectedConfiguredFreshness.clear()
@@ -615,6 +640,8 @@ func ClearLoss() ClearLossResult {
 	tcpOversizedHostLastAt = time.Time{}
 	tcpOversizedHostMu.Unlock()
 
+	clearDuplicateState()
+
 	return result
 }
 
@@ -630,6 +657,7 @@ func Stats() ListenerStats {
 		Oversized:               tcpOversized.Load(),
 		RejectedConfiguredHosts: rejectedConfiguredHostsSnapshot(),
 		OversizedHost:           oversizedHostSnapshot(),
+		DuplicateSightings:      tcpDuplicateSightingsTotal.Load(),
 		Loss:                    lossStats(),
 	}
 }
@@ -1256,6 +1284,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 		if len(data) == 0 {
 			return
 		}
+		noteDuplicateLine(host, data)
 		cp := make([]byte, len(data))
 		copy(cp, data)
 

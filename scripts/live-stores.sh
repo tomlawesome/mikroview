@@ -46,6 +46,7 @@ hosts: {storePath: $dir/hosts.json}
 baseline: {storePath: $dir/baseline.json}
 audit: {storePath: $dir/audit.json}
 setup: {storePath: $dir/setup.json}
+configDrift: {storePath: $dir/config-drift.json}
 droplist: {storePath: $dir/droplist.json}
 watchlist:
   matchLogPath: $dir/matchlog.jsonl
