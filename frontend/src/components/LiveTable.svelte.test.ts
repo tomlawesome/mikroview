@@ -9,6 +9,7 @@ import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
 import { countryFlag } from '../lib/format'
 import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
@@ -1147,6 +1148,67 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
     flushSync()
 
     expect(container.querySelector('[title="cleared-flag-row"]')?.classList.contains('flagged')).toBe(false)
+  })
+})
+
+// #1201 (owner ask, 2026-09-12): the ⚑ was inert -- clicking it did
+// nothing, and its title only said a flag existed. It is now a real
+// button (native, not the file's usual role="button" span, so it is
+// keyboard-reachable for free) that opens the flag it points at, reusing
+// #724's own dial-to-docket handoff (topologyNavState.pendingFlagId) for
+// the one-flag case and a new sibling slot (pendingFlagsFilter) when
+// there is more than one honest choice.
+describe('The ⚑ mark opens the flag it points at (#1201)', () => {
+  function openFlag(id: string, target: string, firstSeen = '2026-01-01T00:00:00Z'): Flag {
+    return { id, type: 'port_scan', target, detail: '', count: 1, firstSeen, lastSeen: firstSeen, cleared: false }
+  }
+
+  beforeEach(() => {
+    appState.view = 'live'
+    topologyNavState.pendingFlagId = null
+    topologyNavState.pendingFlagsFilter = null
+  })
+
+  it('is a real button, reachable by keyboard, with the single-flag title', () => {
+    flagsState.list = [openFlag('f1', '203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    const mark = container.querySelector('.rmk')
+    expect(mark?.tagName).toBe('BUTTON')
+    expect(mark?.getAttribute('title')).toBe("open this source's flag ▸")
+  })
+
+  it('sets pendingFlagId and switches to the flags tab when the source has exactly one open flag', async () => {
+    flagsState.list = [openFlag('f1', '203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    await fireEvent.click(container.querySelector('.rmk') as HTMLElement)
+    flushSync()
+
+    expect(topologyNavState.pendingFlagId).toBe('f1')
+    expect(topologyNavState.pendingFlagsFilter).toBeNull()
+    expect(appState.view).toBe('flags')
+  })
+
+  it('sets the source address filter, not a single flag, when the source has several open flags', async () => {
+    flagsState.list = [
+      openFlag('older', '203.0.113.9', '2026-01-01T00:00:00Z'),
+      openFlag('newest', '203.0.113.9', '2026-01-01T01:00:00Z'),
+    ]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    const mark = container.querySelector('.rmk')
+    expect(mark?.getAttribute('title')).toBe('2 open flags for this source ▸')
+
+    await fireEvent.click(mark as HTMLElement)
+    flushSync()
+
+    expect(topologyNavState.pendingFlagId).toBeNull()
+    expect(topologyNavState.pendingFlagsFilter).toBe('203.0.113.9')
+    expect(appState.view).toBe('flags')
   })
 })
 
