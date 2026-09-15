@@ -74,6 +74,21 @@ rewritten.
   already filled in. The Settings group and setup card that render these
   for an operator are the other half of #1225.
 
+- **Your data directory now records which schema it is on, and MikroView
+  refuses to start on data a newer build wrote** (#1238). The JSON files
+  gain what the database has had since #131: one numbered list of
+  migrations covering both, and a `schema.json` beside the stores saying
+  which of them have run and which build ran them. A missing file means
+  schema 0, so every existing install is stamped on its next start and
+  nothing else changes — there are no data migrations yet. Start an older
+  MikroView on a newer install's data and it now stops before it writes
+  anything, naming the version that wrote the data and telling you to
+  run that one or later, rather than quietly rewriting every document in
+  shapes it does not understand. Migrations land one at a time and are
+  stamped as they land, so an upgrade interrupted half-way — power cut,
+  `docker kill` — resumes at the first one that did not finish with the
+  old documents untouched. `docs/upgrades.md` has the whole contract.
+
 ### Changed
 
 - **A flag's confidence is now a rating in its drawer, not a number on
