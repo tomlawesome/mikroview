@@ -43,8 +43,8 @@ services:
       # inside the container), so it needs no Linux capabilities at all.
       - ALL
     # The root filesystem is read-only; every path MikroView actually
-    # writes to is a mount. /var/lib/mikroview is the named volume
-    # below, and the distroless image has no shell or package manager
+    # writes to is a mount. /var/lib/mikroview is the mikroview/data
+    # bind mount below, and the distroless image has no shell or package manager
     # that would need to write anywhere else. Note it does NOT need a
     # /tmp tmpfs: every persisted store writes its temp file alongside
     # the real one inside /var/lib/mikroview (see the atomic
@@ -58,32 +58,24 @@ services:
       start_period: 10s
       retries: 3
     volumes:
-      - ./config.yaml:/etc/mikroview/config.yaml:ro
-      # Optional -- see docs/configuration.md's GeoIP section. Requires
-      # your own MaxMind GeoLite2 database; uncomment both this and the
-      # env var below once you have one. Like every file mounted here it
-      # must be readable by the container's user (uid 1000); it is not a
-      # secret, so `chmod 644 GeoLite2-Country.mmdb` is enough.
-      # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the new-device MAC
-      # registry/the engine's persisted baseline state/the TLS cert
-      # across container recreation, not just restarts -- see README.md's
-      # "Persistent data" section for what this is and the bind-mount
-      # alternative below.
-      - mikroview-data:/var/lib/mikroview
-      # Alternative to the named volume above: a bind mount, if you want
-      # to browse/back up the files directly from the host. Comment out
-      # the line above and uncomment this one instead (not both) -- see
-      # README.md's "Persistent data" section for the permissions step
-      # this needs first.
-      # Switching between this and the named volume later, either
-      # direction, is a supported move -- run `mikroview -migrate-data`
-      # rather than hand-copying files. See docs/configuration.md's
-      # "Moving the data directory" section.
-      # - ./data:/var/lib/mikroview
+      # One app folder on the host, two mounts: read-only for what you
+      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
+      # Sample config: deploy/config.example.yaml -- copy it to
+      # mikroview/config.yaml (see README.md's "Persistent data" section
+      # for the permissions step data/ needs first).
+      - ./mikroview:/etc/mikroview:ro
+      - ./mikroview/data:/var/lib/mikroview
+      # Mounting each file separately instead -- config.yaml,
+      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or the
+      # mikroview-data named volume -- is the old way and still works: a
+      # path set in config.yaml or the environment always wins over the
+      # folder default. See docs/configuration.md.
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
+      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
+      # file into mikroview/ is the old way and still works -- see
+      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
@@ -103,8 +95,9 @@ services:
       #   chmod 644 tls.crt && chmod 600 tls.key
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
       # - MIKROVIEW_TLS_HOSTS=192.168.1.50,mikroview.local
-      # - MIKROVIEW_TLS_CERT_FILE=/etc/mikroview/tls.crt
-      # - MIKROVIEW_TLS_KEY_FILE=/etc/mikroview/tls.key
+      # Naming MIKROVIEW_TLS_CERT_FILE/MIKROVIEW_TLS_KEY_FILE explicitly
+      # instead of dropping certs/tls.crt + certs/tls.key into mikroview/
+      # is the old way and still works -- see docs/configuration.md.
       # Read docs/configuration.md's "TLS" section before using this --
       # only safe if this port is unreachable except from your own
       # isolated-network reverse proxy.
@@ -178,6 +171,3 @@ services:
     #
     # If you are unsure, stay on the JSON files. Going the other way
     # later is easy; coming back is not possible.
-
-volumes:
-  mikroview-data:
