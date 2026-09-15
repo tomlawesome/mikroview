@@ -42,6 +42,18 @@
      nothing to do with a packet's fate. */
   --now: #e8b05a;
 
+  /* The guided tour's ring (owner, 2026-09-13, #1215): "a bright colour,
+     cyan maybe" -- a spotlight, not chrome, so it is fixed like --now
+     and --alarm rather than riding the active colorway. That matters
+     here specifically: the "frequency" colorway's own --accent
+     (#22d3ee below) is already a cyan close to the obvious pick, so a
+     ring sharing that hue would all but vanish under it. Pushed to full
+     saturation and near-maximum lightness -- well past any colorway's
+     accent -- and JourneyTour.svelte's own ring styling (full opacity,
+     a 2px border, an outer glow) carries the rest of the distinction so
+     it reads as a spotlight even beside "frequency". */
+  --tour-ring: #22f3ff;
+
   --accept: #3ecf7e;
   --accept-bg: rgba(62, 207, 126, 0.12);
   --drop: #f5a623;
