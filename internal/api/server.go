@@ -704,6 +704,13 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
 		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
 
+		// The kept pool (#1126): an admin marks one stored backup as
+		// one to hold on to, with a comment saying why, and it stops
+		// counting towards the ten the vault cycles.
+		{http.MethodPost, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupProtect},
+		{http.MethodDelete, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupUnprotect},
+		{http.MethodPatch, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupComment},
+
 		// The vault's optional admin passphrase (#956). Reading a backup
 		// needs the passphrase once one is set; a backup still arrives
 		// without it.
