@@ -85,6 +85,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   hostsState.hosts = []
   hostsState.error = null
+  hostsState.unreadable = false
 })
 
 describe('hostsState', () => {
@@ -105,6 +106,28 @@ describe('hostsState', () => {
     await hostsState.refresh()
 
     expect(hostsState.hosts).toHaveLength(1)
+  })
+
+  // #1236: a failed read must be distinguishable from a genuinely empty
+  // register, or the host card cannot tell "not registered" from
+  // "unknown" apart.
+  it('refresh flags the register unreadable when the read fails, without touching hosts', async () => {
+    hostsState.hosts = [host()]
+    vi.mocked(fetchHosts).mockRejectedValue(new Error('503'))
+
+    await hostsState.refresh()
+
+    expect(hostsState.unreadable).toBe(true)
+    expect(hostsState.hosts).toHaveLength(1)
+  })
+
+  it('refresh clears the unreadable flag once a read succeeds again', async () => {
+    hostsState.unreadable = true
+    vi.mocked(fetchHosts).mockResolvedValue([host()])
+
+    await hostsState.refresh()
+
+    expect(hostsState.unreadable).toBe(false)
   })
 
   it('mark sends the kind and reason, then re-reads', async () => {
