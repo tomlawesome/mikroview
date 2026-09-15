@@ -3138,6 +3138,10 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
     const text = card.textContent?.replace(/\s+/g, ' ') ?? ''
     expect(text).toContain('coverage declarations unreadable · checks again in five seconds')
     expect(text).not.toContain('dark — nothing logs this boundary')
+    // The reverse direction's own line makes the same "dark" claim
+    // (cardBackLine) and must be caught by the same flag.
+    expect(text).toContain('the internet → Guest · coverage declarations unreadable · checks again in five seconds')
+    expect(text).not.toContain('the internet → Guest · dark — nothing logs it')
   })
 
   it('opens the declare form on the pin, with both directions checked and who it will be signed by', () => {
