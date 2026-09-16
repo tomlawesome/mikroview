@@ -3,10 +3,12 @@
 // Settings' "router backups" group at the component (#394, round 44):
 // the no-key and nothing-yet statements, a router's receipt at rest,
 // the amber missed-push receipt and its "is it gone?" link, the
-// download links round 44's newest-pair line offers, and #1115's vault
+// download links round 44's newest-pair line offers, #1115's vault
 // passphrase row -- all four states, its forms, the ratified copy, and
-// the download gate.
-import { describe, expect, it, vi } from 'vitest'
+// the download gate -- and #1126's kept backups: the keep form, the
+// earlier expander, the kept group, the release question, the low-space
+// line and the viewer's read-only view of all of it.
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 vi.mock('../lib/api', () => ({
@@ -19,6 +21,9 @@ vi.mock('../lib/api', () => ({
   setRouterBackupPassphrase: vi.fn(),
   removeRouterBackupPassphrase: vi.fn(),
   changeRouterBackupPassphrase: vi.fn(),
+  keepRouterBackup: vi.fn(),
+  releaseRouterBackup: vi.fn(),
+  setRouterBackupComment: vi.fn(),
 }))
 
 // Blob/URL.createObjectURL are unreliable in jsdom -- faked at the
@@ -33,11 +38,15 @@ vi.mock('../lib/export', () => ({
 import {
   changeRouterBackupPassphrase,
   fetchRouterBackups,
+  keepRouterBackup,
   lockRouterBackupVault,
+  releaseRouterBackup,
   removeRouterBackupPassphrase,
+  setRouterBackupComment,
   setRouterBackupPassphrase,
   unlockRouterBackupVault,
 } from '../lib/api'
+import { authState } from '../lib/auth.svelte'
 import { downloadFromUrl } from '../lib/export'
 import RouterBackups from './RouterBackups.svelte'
 import type { RouterBackupsResponse, VaultLock } from '../lib/types'
@@ -65,6 +74,13 @@ function resp(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse 
     ...over,
   }
 }
+
+// The keep controls are admin-only on screen as well as on the server
+// (#1126's viewer clause), and authState is a module-level singleton --
+// so every test states the role it is rendering as.
+beforeEach(() => {
+  authState.role = 'admin'
+})
 
 const router = {
   device: 'rb5009',
@@ -202,8 +218,10 @@ describe('the vault passphrase (#1115)', () => {
     expect(screen.queryByRole('button', { name: 'download .backup' })).toBeNull()
     expect(screen.queryByRole('button', { name: '.rsc' })).toBeNull()
     expect(screen.getByText('locked — the vault passphrase opens downloads')).toBeTruthy()
-    // Sizes are not hidden while locked, only the links.
-    expect(screen.getByText('402 KiB')).toBeTruthy()
+    // Sizes are not hidden while locked, only the links -- and keeping
+    // a backup is not a read of it, so keep… stays (#1126).
+    expect(screen.getByText(/402 KiB/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'keep…' })).toBeTruthy()
   })
 
   it('unlocked elsewhere: offers unlock only, with the other-sign-in copy on the router block', () => {
@@ -287,5 +305,186 @@ describe('the vault passphrase (#1115)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'unlock' }))
     expect(unlockRouterBackupVault).toHaveBeenCalledWith('the-vault-passphrase')
     expect(await screen.findByText('unlocked')).toBeTruthy()
+  })
+})
+
+// --- kept backups (#1126) ------------------------------------------------
+
+const keptGeneration = {
+  id: 'g0',
+  backupArrivedAt: '2026-08-24T03:00:00Z',
+  rscArrivedAt: '2026-08-24T03:00:05Z',
+  backupBytes: 412000,
+  rscBytes: 38000,
+  header: 'plain',
+  comment: 'before the 7.16 upgrade',
+  protectedAt: '2026-09-12T10:00:00Z',
+  protectedBy: 'tom',
+}
+
+/** A router holding one kept backup and nothing in the cycling ten. */
+const routerWithKept = {
+  device: 'rb5009',
+  generations: [],
+  protected: [keptGeneration],
+  intervalKnown: false,
+  missed: 0,
+}
+
+/** A router with three cycling generations, for the earlier expander. */
+const routerWithThree = {
+  device: 'rb5009',
+  generations: [
+    { id: 'g0', backupArrivedAt: '2026-09-10T04:00:00Z', backupBytes: 400000 },
+    { id: 'g1', backupArrivedAt: '2026-09-11T04:00:00Z', backupBytes: 410000 },
+    {
+      id: 'g2',
+      backupArrivedAt: '2026-09-12T04:00:00Z',
+      backupBytes: 420000,
+      rscArrivedAt: '2026-09-12T04:00:05Z',
+      rscBytes: 38000,
+    },
+  ],
+  intervalKnown: false,
+  missed: 0,
+}
+
+describe('keeping a backup', () => {
+  it('offers keep… on the newest line and sends the typed reason', async () => {
+    vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
+    await fireEvent.input(screen.getByLabelText('why keep this one'), {
+      target: { value: 'before the 7.16 upgrade' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
+
+    expect(keepRouterBackup).toHaveBeenCalledWith('rb5009', 'g0', 'before the 7.16 upgrade')
+    // The block the call answered with is what is drawn, without waiting
+    // for the parent's own poll to come round again.
+    expect(await screen.findByText('kept', { selector: 'p' })).toBeTruthy()
+    expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
+  })
+
+  it('will not keep one without a reason', async () => {
+    vi.mocked(keepRouterBackup).mockClear()
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
+    expect(screen.getByText('say why you are keeping it')).toBeTruthy()
+    expect(keepRouterBackup).not.toHaveBeenCalled()
+  })
+})
+
+describe('the earlier generations', () => {
+  it('are behind earlier…, and each can be kept', async () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithThree] }), onopenlost: vi.fn() } })
+
+    // Only the newest line is drawn until the expander is used.
+    expect(screen.queryByRole('button', { name: '.backup' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'earlier…' }))
+
+    // The other two, newest first: g1 then g0.
+    expect(screen.getAllByRole('button', { name: '.backup' }).length).toBe(2)
+    // One keep… for the newest line and one for each earlier line.
+    expect(screen.getAllByRole('button', { name: 'keep…' }).length).toBe(3)
+  })
+
+  it('is not offered when a router has only the one generation', () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    expect(screen.queryByRole('button', { name: 'earlier…' })).toBeNull()
+  })
+})
+
+describe('the kept group', () => {
+  it('states the reason beside the pair, with edit… and release…', () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    expect(screen.getByText('kept', { selector: 'p' })).toBeTruthy()
+    expect(screen.getByText(/✱/)).toBeTruthy()
+    expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '.backup' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '.rsc' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'edit…' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'release…' })).toBeTruthy()
+  })
+
+  it('edit… opens the same field with the reason already in it', async () => {
+    const rewritten = { ...routerWithKept, protected: [{ ...keptGeneration, comment: 'before the office move' }] }
+    vi.mocked(setRouterBackupComment).mockResolvedValue(rewritten)
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'edit…' }))
+    const field = screen.getByLabelText('why keep this one') as HTMLInputElement
+    expect(field.value).toBe('before the 7.16 upgrade')
+    await fireEvent.input(field, { target: { value: 'before the office move' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
+
+    expect(setRouterBackupComment).toHaveBeenCalledWith('rb5009', 'g0', 'before the office move')
+    expect(await screen.findByText(/before the office move/)).toBeTruthy()
+  })
+
+  it('release… asks once, and says what releasing costs', async () => {
+    vi.mocked(releaseRouterBackup).mockResolvedValue({
+      ...routerWithKept,
+      protected: [],
+      generations: [keptGeneration],
+    })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'release…' }))
+    expect(screen.getByText(/release this one\? it goes back into the ten and the oldest may go/)).toBeTruthy()
+    await fireEvent.click(screen.getByRole('button', { name: 'release' }))
+    expect(releaseRouterBackup).toHaveBeenCalledWith('rb5009', 'g0')
+    await waitFor(() => expect(screen.queryByText('kept', { selector: 'p' })).toBeNull())
+  })
+
+  it('cancel leaves the kept backup alone', async () => {
+    vi.mocked(releaseRouterBackup).mockClear()
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'release…' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+    expect(releaseRouterBackup).not.toHaveBeenCalled()
+    expect(screen.getByText('kept', { selector: 'p' })).toBeTruthy()
+  })
+})
+
+describe('a disk that is getting low', () => {
+  it('says so above the routers, and names the one thing that frees space', () => {
+    render(RouterBackups, {
+      props: { resp: resp({ routers: [routerWithKept], lowSpace: true }), onopenlost: vi.fn() },
+    })
+    expect(
+      screen.getByText(
+        'disk is getting low · the vault is cycling the ten · releasing a kept backup is the one way to free space here',
+      ),
+    ).toBeTruthy()
+  })
+
+  it('is absent when the disk is fine', () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    expect(screen.queryByText(/disk is getting low/)).toBeNull()
+  })
+})
+
+describe('the hint line', () => {
+  it('says a kept backup stays out of the ten', () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    expect(screen.getByText(/a kept backup stays out of the ten until you release it/)).toBeTruthy()
+  })
+})
+
+describe('a viewer', () => {
+  it('reads the kept backups and is offered none of the three controls', () => {
+    authState.role = 'viewer'
+    render(RouterBackups, {
+      props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() },
+    })
+    expect(screen.getByText('kept', { selector: 'p' })).toBeTruthy()
+    expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'keep…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'edit…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'release…' })).toBeNull()
   })
 })

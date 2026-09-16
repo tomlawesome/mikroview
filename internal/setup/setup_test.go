@@ -218,6 +218,27 @@ func TestSetAddressRejectsEmptyAndOverlong(t *testing.T) {
 // all, from a fresh Store opened against the same file -- the same
 // simulation of a restart persist's own contract tests use, since the
 // witness lives in the same on-disk document as marks.
+// TestSetBackupTransportRefusesAnythingElse: the store is what must
+// never hold a third value (#955), since handleSetupCommands renders a
+// script from it and has no "unrenderable" state to fall back on.
+func TestSetBackupTransportRefusesAnythingElse(t *testing.T) {
+	s := New()
+	for _, bad := range []string{"", "SFTP", "ftp", "https ", "scp"} {
+		if s.SetBackupTransport(bad) {
+			t.Errorf("SetBackupTransport(%q) was accepted", bad)
+		}
+	}
+	if got := s.BackupTransport(); got != BackupTransportSFTP {
+		t.Errorf("BackupTransport() = %q, want the sftp default -- every attempt above should have been refused", got)
+	}
+	if !s.SetBackupTransport(BackupTransportHTTPS) {
+		t.Fatal("SetBackupTransport refused https")
+	}
+	if got := s.BackupTransport(); got != BackupTransportHTTPS {
+		t.Errorf("BackupTransport() = %q, want https", got)
+	}
+}
+
 func TestWitnessSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "setup.json")
 	now := time.Unix(1_757_000_000, 0)

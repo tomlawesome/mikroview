@@ -158,6 +158,18 @@ var authzMatrix = []routeExpectation{
 		"downloads one generation's .backup or .rsc -- a router's whole configuration, credentials included, so " +
 			"this is admin-only and every call writes an audit entry with the admin's name (#394)"},
 
+	{http.MethodPost, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
+		"marks one stored backup as kept, with a comment saying why (#1126) -- admin-only like the list and the " +
+			"download beside it: it is a decision about what this instance holds on its own disk, and the comment " +
+			"is an operator's note about their own network"},
+	{http.MethodDelete, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
+		"releases a kept backup back into the cycling ten, where the oldest may then go -- same tier as keeping " +
+			"one, deliberately: this is the only control in the group that can cost the operator a stored " +
+			"configuration"},
+	{http.MethodPatch, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
+		"rewrites a kept backup's comment (#1126) -- same tier as the two above, since it edits the same " +
+			"sealed index entry and nothing else reaches it"},
+
 	{http.MethodPost, "/api/router-backups/unlock", accessAdmin,
 		"opens the vault's optional passphrase lock for the calling session (#956) -- admin-only for the same " +
 			"reason the download is, and the unlock is bound to the session that made this call, so the same " +
@@ -402,6 +414,8 @@ var authzMatrix = []routeExpectation{
 		"writes to the setup wizard's claim ledger and to the audit log (#487) -- #490 keeps \"Run setup…\" absent for viewers and there is no read-only wizard, so a viewer has neither a way to reach this nor any business recording a decision under their own name"},
 	{http.MethodPost, "/api/setup/address", accessAdmin,
 		"writes the wizard header field's answer -- what address a router can reach this instance on (#1213) -- persisted beside the claim ledger's own marks. Same tier as POST /api/setup/mark just above, for the same reason: no read-only wizard reaches this, and every RouterOS command the wizard renders downstream is written against whatever this stores"},
+	{http.MethodPut, "/api/setup/backup-transport", accessAdmin,
+		"chooses how step 6's router script delivers its backup -- over SFTP to the drop box, or in slices through the ingest channel for an HTTPS-only install (#955). Same tier as POST /api/setup/address just above and for the same reason: it is a property of the deployment, stored beside the address, and it decides what every operator is told to paste into their router"},
 	{http.MethodPost, "/api/tune-logging/analyse", accessUser,
 		"reads an uploaded RouterOS export and reports which filter rules cross a dark boundary (#435) -- user tier, same as the operational writes above: it changes nothing on the instance or the router, but a viewer may not act on what mikroview is watching, and choosing which rules to tune logging on is exactly that kind of operational decision, made concrete once the operator actually renders it below"},
 	{http.MethodPost, "/api/tune-logging/render", accessUser,

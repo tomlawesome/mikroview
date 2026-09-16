@@ -841,7 +841,12 @@ func (v *Vault) storedSlots() []slot {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for device, rm := range v.meta.Routers {
-		for _, g := range rm.Generations {
+		// The protected pool is re-sealed with the rest (#1126).
+		// Leaving it out of a conversion would strand a kept backup in
+		// the old scheme -- and on the way back off a passphrase, that
+		// is a file nothing can open once the key pair is gone, which
+		// is the one thing the pool exists to prevent.
+		for _, g := range append(append([]*generationMeta{}, rm.Generations...), rm.Protected...) {
 			if !g.BackupArrivedAt.IsZero() {
 				slots = append(slots, slot{device, g.ID, KindBackup})
 			}
