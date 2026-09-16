@@ -712,6 +712,12 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/config/upgrade", s.handleConfigUpgrade},
 		{http.MethodPost, "/api/config/upgrade/dismiss", s.handleConfigUpgradeDismiss},
 
+		// The upgrade notice (#1240): which build this data directory
+		// last ran, how much of the fleet is still on the old setup, and
+		// the admin's "done". See upgrade.go.
+		{http.MethodGet, "/api/upgrade", s.handleUpgrade},
+		{http.MethodPost, "/api/upgrade/acknowledge", s.handleUpgradeAcknowledge},
+
 		// Router-backup vault (#394): the Settings group's list and the
 		// download an admin uses to actually restore a dead router.
 		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
