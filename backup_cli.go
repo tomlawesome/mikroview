@@ -469,7 +469,8 @@ func runBackup(args []string) int {
 	// "nothing to carry" reasoning as every other store here -- os.Stat
 	// via os.ReadFile's os.IsNotExist just skips it rather than erroring.
 	schemaPath := filepath.Join(dataDir(cfg), persist.SchemaDocumentName)
-	schemaData, err := os.ReadFile(schemaPath) // #nosec G304 -- this deployment's own data directory, from config
+	// #nosec G304 G703 -- this deployment's own data directory, from config, not from a request.
+	schemaData, err := os.ReadFile(schemaPath)
 	if err != nil && !os.IsNotExist(err) {
 		logger.Error(fmt.Sprintf("reading %s: %v", schemaPath, err))
 		return 1
@@ -692,6 +693,7 @@ func runRestore(args []string) int {
 			}
 		}
 		if haveSchema {
+			// #nosec G703 -- this deployment's own data directory, from config, not from a request.
 			if _, err := os.Stat(schemaPath); err == nil {
 				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
 					"state. Re-run with --force once you are sure", schemaPath, schemaStoreName))
