@@ -239,6 +239,36 @@ func TestOutrunCountsWhatTheRingWrappedPast(t *testing.T) {
 	}
 }
 
+// TestForgetStartsLevelAfterADeliberateReset -- the test-only reset
+// route empties the store on purpose and tells the engine so; the
+// engine then starts level with the store and carries no outrun, rather
+// than counting the wipe as a flood (which TestOutrunCountsAStoreReset
+// shows is what a bare Reset looks like from here).
+func TestForgetStartsLevelAfterADeliberateReset(t *testing.T) {
+	e, st := newEngineOnStore(t, 100)
+	d := &fakeDef{id: "d1", kind: "declarative"}
+	e.Register(d)
+
+	for i := 0; i < 10; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+	e.cursor.Store(3) // 1..3 evaluated, 4..10 not yet
+	e.outrun.Store(5) // residue from an earlier flood
+	st.Reset()
+	e.Forget()
+	for i := 0; i < 2; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 11, 12
+	}
+	e.evaluateBatch(time.Time{})
+
+	if behind, _, outrun := e.Lag(); outrun != 0 || behind != 0 {
+		t.Fatalf("Lag() = (behind %d, outrun %d) after Forget, want (0, 0)", behind, outrun)
+	}
+	if got := d.calls.Load(); got != 2 {
+		t.Fatalf("definition saw %d events, want the 2 stored after the reset", got)
+	}
+}
+
 // TestOutrunCountsAStoreReset -- Reset empties the ring without rewinding
 // its IDs (see store.Store.Reset), so events the engine had not reached
 // are gone exactly as an eviction would leave them, and must be counted

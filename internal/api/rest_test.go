@@ -988,6 +988,7 @@ type lagStub struct {
 }
 
 func (l lagStub) Lag() (uint64, float64, uint64) { return l.behind, l.behindSeconds, l.outrun }
+func (l lagStub) Forget()                        {}
 
 // #1109: checking reads forward from the event store by cursor, so it
 // can run late (behind/behindSeconds) without anything being lost, and
