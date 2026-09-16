@@ -57,6 +57,7 @@ not stop at the first red job.
 |------------------------------------------------------|-----------------------|
 | `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml` |
 | `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` and `live-check.Dockerfile` |
+| `test:install-line`                                  | the above, plus `install.sh` (#1242 -- root-level, so none of the other lists' globs see it) |
 | `test:go`, `test:frontend`                           | not covered -- already cheap enough (#1066) |
 
 The four `gate:scenarios` shards share one input set even though each only
