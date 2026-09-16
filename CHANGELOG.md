@@ -18,6 +18,16 @@ rewritten.
 
 ### Added
 
+- **Every release is now checked against a real database it wrote, not
+  just real files** (#1247). Alongside the recorded data directory each
+  release already gets, there is now a `pg_dump` per schema version --
+  taken from the first release that carried that migration, v0.1.0,
+  v0.2.0 and v0.3.0 today -- restored and opened by the current build on
+  every change. Tagging a release records both halves automatically
+  instead of waiting for someone to remember, so the next change is
+  tested against the release that just shipped. See
+  [docs/upgrades.md](docs/upgrades.md), "How this is tested".
+
 - **After an upgrade, MikroView says so and tells you what to paste
   again** (#1240). A calm line at the top of the page -- `upgraded from
   v0.4.0 · paste step 1 of the setup again on each router` -- with
