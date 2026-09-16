@@ -305,7 +305,7 @@ live-routeros-container:
 engines-check:
 	test -n "$(MV_URL)" || { echo "MV_URL required -- an already-standing instance, reachable from a container (host LAN address, not 127.0.0.1)" >&2; exit 1; }
 	docker run --rm -v $(CURDIR):/repo:ro -w /repo/frontend -e MV_URL=$(MV_URL) \
-	  mcr.microsoft.com/playwright:v1.62.0-noble node scripts/live-door-engines.mjs
+	  mcr.microsoft.com/playwright:v1.63.0-noble node scripts/live-door-engines.mjs
 
 .PHONY: engines-check
 
