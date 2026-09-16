@@ -1231,7 +1231,7 @@ perf:promotion:
 security:semgrep:
   stage: security
   tags: [light]
-  image: semgrep/semgrep:1.176.1
+  image: semgrep/semgrep:1.177.0
   <<: *dev_or_mr_code
   variables:
     # The whole history, as gitleaks below. On a merge request the scan
