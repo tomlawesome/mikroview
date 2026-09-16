@@ -97,13 +97,15 @@ func devicesSetup(t *testing.T, s *Server) map[string]deviceSetupReport {
 // behind, one that has never sent the page at all.
 func TestHandleDevicesReportsRouterSetupStanding(t *testing.T) {
 	s := setupReportServer(t)
+	pushingRouter(t, s, "lab-crs", "203.0.113.9/24")
+	pushingRouter(t, s, "old-hex", "198.51.100.1/24")
 	s.Devices.Resolve("203.0.113.9", time.Now())
 	s.Devices.Resolve("198.51.100.1", time.Now())
 
 	noteReport(t, s, "core", routeros.WizardVersion, "firewall,info")
-	noteReport(t, s, "203.0.113.9", routeros.WizardVersion-1, "firewall,info")
-	// 198.51.100.1 reports nothing: a router still running a script
-	// pasted before the page existed.
+	noteReport(t, s, "lab-crs", routeros.WizardVersion-1, "firewall,info")
+	// old-hex reports nothing: a router still running a script pasted
+	// before the page existed.
 
 	got := devicesSetup(t, s)
 	if got["core"].Standing != string(setup.StandingCurrent) {
@@ -112,16 +114,16 @@ func TestHandleDevicesReportsRouterSetupStanding(t *testing.T) {
 	if got["core"].CurrentVersion != routeros.WizardVersion {
 		t.Errorf("core's currentVersion = %d, want %d", got["core"].CurrentVersion, routeros.WizardVersion)
 	}
-	behind := got["203.0.113.9"]
+	behind := got["lab-crs"]
 	if behind.Standing != string(setup.StandingBehind) {
-		t.Errorf("203.0.113.9's standing = %q, want %q", behind.Standing, setup.StandingBehind)
+		t.Errorf("lab-crs's standing = %q, want %q", behind.Standing, setup.StandingBehind)
 	}
 	if behind.ScriptVersion != routeros.WizardVersion-1 || behind.CurrentVersion != routeros.WizardVersion {
-		t.Errorf("203.0.113.9 reported script v%d against current v%d, want v%d and v%d",
+		t.Errorf("lab-crs reported script v%d against current v%d, want v%d and v%d",
 			behind.ScriptVersion, behind.CurrentVersion, routeros.WizardVersion-1, routeros.WizardVersion)
 	}
-	if got["198.51.100.1"].Standing != string(setup.StandingNeverReported) {
-		t.Errorf("198.51.100.1's standing = %q, want %q", got["198.51.100.1"].Standing, setup.StandingNeverReported)
+	if got["old-hex"].Standing != string(setup.StandingNeverReported) {
+		t.Errorf("old-hex's standing = %q, want %q", got["old-hex"].Standing, setup.StandingNeverReported)
 	}
 }
 

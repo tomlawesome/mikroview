@@ -1134,6 +1134,12 @@ func main() {
 	// ErrRouterOwn) -- see internal/droplist.OwnRanges and
 	// routerstate.Store.OwnPrefixes.
 	droplistStore.SetOwnRanges(routerState)
+	// #1170 attribution step (b): a syslog source the operator never
+	// declared is attributed to the one router that has pushed that
+	// address as its own. Wired here rather than at NewRegistry for the
+	// same reason SetNames is wired later -- the store it reads is built
+	// here, long after the registry the ingest path needs.
+	devices.SetAddressTables(routerState)
 
 	// Everything the engine evaluates, registered from the one
 	// definitions document and kept in step with it (issues #405/#406/
