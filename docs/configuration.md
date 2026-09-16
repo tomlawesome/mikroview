@@ -41,9 +41,22 @@ uid it is actually running as instead.
 
 ## config.yaml
 
-Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
-`docker-compose.yml` mounts that path into the container at
-`/etc/mikroview/config.yaml`.
+Put the file at `mikroview/config.yaml` and restart: copy
+`deploy/config.example.yaml` there and edit it.
+[`docker-compose.yml`](../deploy/docker-compose.yml) mounts the whole
+`mikroview/` folder read-only at `/etc/mikroview`, and with nothing
+naming a config file MikroView reads `/etc/mikroview/config.yaml` from
+it — so a bare `docker run` with the folder mounted needs no
+`MIKROVIEW_CONFIG`. The file is optional: a fresh install with an empty
+folder starts and runs on defaults. See
+[docs/decisions/app-folder.md](decisions/app-folder.md) for the folder
+layout and why.
+
+Naming a config file somewhere else — `MIKROVIEW_CONFIG` — is the older,
+still-supported way, and wins over the folder. One difference between
+them: a path you name and get wrong stops MikroView starting, because a
+typo is a mistake rather than a choice, while the folder's own
+`config.yaml` simply not being there is not an error at all.
 
 ```yaml
 listen:
@@ -301,11 +314,13 @@ the wizard says it can never show it to you again.
   has to mean the history is actually gone, or the setting is a lie.
   That applies to the control in the app as well: the files are gone
   before the change is confirmed on screen.
-- `history.keyFile` — path to a master key file that you generate and
-  mount, e.g.:
+- `history.keyFile` — path to a master key file that you generate.
+  **Put it at `mikroview/keys/history.key` and restart** — MikroView
+  finds it there with nothing else set:
 
   ```
-  head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+  mkdir -p mikroview/keys
+  head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
   ```
 
   Mounted files have to be readable by the user MikroView runs as, or it
@@ -314,9 +329,11 @@ the wizard says it can never show it to you again.
   Generating the key as some other account is the usual way to get this
   wrong.
 
-  The file must hold at least 32 bytes. This is a path, never the key
-  itself — there is deliberately no environment variable carrying key
-  material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+  Naming the path explicitly instead — `MIKROVIEW_HISTORY_KEY_FILE`, or
+  `history.keyFile` pointing somewhere else — works and keeps working;
+  it wins over the folder. The file must hold at least 32 bytes either
+  way. This is a path, never the key itself — there is deliberately no
+  environment variable carrying key material.
 
   Or let the app generate it: with no key mounted, the setup wizard's
   step 6 hands you a key of exactly this shape, with the commands to
@@ -324,9 +341,13 @@ the wizard says it can never show it to you again.
   in your browser and never sent to the server, so save it when it is
   shown — nothing can reprint it.
 
-  **It must be mounted outside the data directory.** A key kept beside
-  the files it protects is decoration: whoever copies the directory
-  copies both, and now has everything needed to read it.
+  **The key must not live inside the data store.** A key kept among the
+  files it protects is decoration: whoever copies the directory copies
+  both, and now has everything needed to read it. `mikroview/keys/`
+  beside `mikroview/data/` satisfies that — nothing MikroView writes,
+  and no backup of `data/` alone, ever carries the key. A copy of the
+  *whole* `mikroview/` folder is a copy of the key too: back up `data/`
+  on its own when the key must stay behind.
 
   **There is no unencrypted mode.** `history.enabled: true` with no key
   file set does not mean "retain, unencrypted" — it means nothing is
@@ -1134,12 +1155,15 @@ you to create your own free account to obtain one.
 1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
    and download `GeoLite2-Country.mmdb` (or generate a license key and use
    their `geoipupdate` tool to keep it current).
-2. Mount the `.mmdb` file into the container and point MikroView at it
-   with `MIKROVIEW_GEOIP_DB_PATH` (or `geoip.dbPath` in `config.yaml`, or
-   `-geoip-db` for local development). It has to be readable by the user
-   MikroView runs as — see
+2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
+   MikroView finds it there with nothing else set. It has to be readable
+   by the user MikroView runs as — see
    [Files you mount into the container](#files-you-mount-into-the-container).
    A GeoIP database is not a secret, so `chmod 644` is fine here.
+
+   Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
+   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development
+   — works and keeps working; it wins over the folder.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
@@ -3720,12 +3744,27 @@ tls:
   ingest is unaffected either way: `listen.syslogTls` loads its own
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
-- **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set. Both are mounted files, so both
-  have to be readable by the user MikroView runs as — see
+- **`certFile`/`keyFile`** — your own certificate, instead of the
+  self-generated one. **Put the files at `mikroview/certs/tls.crt` and
+  `mikroview/certs/tls.key` and restart** — MikroView finds them there
+  with nothing else set, and skips local-CA generation entirely. Both
+  are mounted files, so both have to be readable by the user MikroView
+  runs as — see
   [Files you mount into the container](#files-you-mount-into-the-container);
   the private key should stay `600`, the certificate can be `644`. See
   "Renewing your own certificate" below if something renews it for you.
+
+  **Both or neither.** One of the two in the folder without the other is
+  a startup error naming the file that is missing. The alternative would
+  be to start on MikroView's own certificate instead, which is the
+  failure an operator half-way through installing their own would notice
+  last — the name they expected their certificate to serve, served by a
+  different one.
+
+  Naming `certFile`/`keyFile` explicitly elsewhere, or the
+  `MIKROVIEW_TLS_CERT_FILE`/`MIKROVIEW_TLS_KEY_FILE` env vars, works and
+  keeps working; either wins over the folder, and setting just one of
+  them behaves exactly as it always has.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
