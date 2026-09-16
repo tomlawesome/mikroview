@@ -35,6 +35,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/seen"
 	"github.com/tomlawesome/mikroview/internal/settings"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -212,6 +213,14 @@ type Server struct {
 	// returns a usable, empty, unpersisted register), same always-usable
 	// convention as Hosts above.
 	Baseline *baseline.Register
+	// SeenValues is the register of values the feed has actually shown
+	// for the two filter fields with no option list anywhere else --
+	// protocol and interface (issue #1226). Backs GET /api/seen-values
+	// (see seen.go), which is what turns the stream's Proto and
+	// Interface free-text boxes into pickers. Always non-nil
+	// (internal/seen.Open("") returns a usable, empty, unpersisted
+	// register), same always-usable convention as Baseline above.
+	SeenValues *seen.Register
 	// HostQuietAfter is how long a host may be silent before the map
 	// draws it quiet (config baseline.hostQuietAfter, 24 hours by owner
 	// ratification on 2026-09-07). Served to the browser on
@@ -639,6 +648,10 @@ func (s *Server) apiRoutes() []route {
 		// today's off-baseline lines are reachable -- there is
 		// deliberately no endpoint serving the established ones, see
 		// handleBaselineOff.
+		// The seen-values register (issue #1226) -- see seen.go. One
+		// route for both fields; the response is keyed by field name.
+		{http.MethodGet, "/api/seen-values", s.handleSeenValues},
+
 		{http.MethodGet, "/api/baseline/off", s.handleBaselineOff},
 		{http.MethodPut, "/api/baseline/{key}/expected", s.handleBaselineExpectedPut},
 		{http.MethodDelete, "/api/baseline/{key}/expected", s.handleBaselineExpectedDelete},

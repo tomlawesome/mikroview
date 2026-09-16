@@ -44,6 +44,7 @@ const { appState } = await import('../lib/state.svelte')
 const { emptyFilters } = await import('../lib/types')
 const { retentionState } = await import('../lib/retention.svelte')
 const { geoipState } = await import('../lib/geoip.svelte')
+const { seenValuesState } = await import('../lib/seenValues.svelte')
 
 // The box div carries no role -- it holds the chips' own remove buttons,
 // and a screen reader flattens the contents of anything with
@@ -479,5 +480,81 @@ describe("FilterBar, the country select's no-GeoIP row (#1198)", () => {
 
     const select = screen.getByLabelText('Source country') as HTMLSelectElement
     expect(Array.from(select.options).some((o) => o.textContent?.includes('no GeoIP database'))).toBe(false)
+  })
+})
+
+// #1226: Proto and Interface were the only two controls in the strip
+// with no list behind them -- free-text boxes an operator typed `tcp`
+// into and hoped. They are now pickers over what this instance has
+// actually seen, which is a store and an endpoint away (internal/seen,
+// GET /api/seen-values), read here through seenValuesState.
+//
+// The load-bearing test is the last one. A picker that refused an unseen
+// value would be worse than the box it replaced: a filter you cannot set
+// up until the traffic arrives cannot be used to watch for traffic that
+// has not arrived, which is most of what an operator wants one for. So
+// the list is a suggestion, never a closed set -- a <datalist> combo,
+// the same idiom the watchers station's scope boxes already use, not a
+// <select>.
+//
+// mount's ensureLoaded() call cannot reach a server here and is caught,
+// so what these tests put on the state is what the strip draws.
+describe('FilterBar, the Proto and Interface pickers (#1226)', () => {
+  afterEach(() => {
+    seenValuesState.reset()
+  })
+
+  function optionsOf(id: string): string[] {
+    const list = document.getElementById(id)
+    expect(list?.tagName.toLowerCase()).toBe('datalist')
+    return Array.from(list?.querySelectorAll('option') ?? []).map((o) => (o as HTMLOptionElement).value)
+  }
+
+  it('offers the protocols this instance has actually seen, not a hardcoded set', async () => {
+    seenValuesState.proto = ['udp', 'tcp', 'gre']
+    render(FilterBar)
+    await expandRow()
+
+    const input = screen.getByLabelText('Protocol') as HTMLInputElement
+    expect(input.getAttribute('list')).toBe('fb-seen-protos')
+    expect(optionsOf('fb-seen-protos')).toEqual(['udp', 'tcp', 'gre'])
+  })
+
+  it('offers one interface list for both directions, because there is one interface filter', async () => {
+    seenValuesState.interfaces = ['ether1', 'bridge-lan', 'wg0']
+    render(FilterBar)
+    await expandRow()
+
+    const input = screen.getByLabelText('Interface') as HTMLInputElement
+    expect(input.getAttribute('list')).toBe('fb-seen-interfaces')
+    expect(optionsOf('fb-seen-interfaces')).toEqual(['ether1', 'bridge-lan', 'wg0'])
+  })
+
+  it('leaves both boxes usable on a fresh instance that has seen nothing yet', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    expect(optionsOf('fb-seen-protos')).toEqual([])
+    expect(optionsOf('fb-seen-interfaces')).toEqual([])
+
+    const proto = screen.getByLabelText('Protocol') as HTMLInputElement
+    expect(proto.disabled).toBe(false)
+    expect(proto.tagName.toLowerCase()).toBe('input')
+  })
+
+  it('still accepts a value that has never been seen -- typing is not restricted to the list', async () => {
+    seenValuesState.proto = ['tcp', 'udp']
+    seenValuesState.interfaces = ['ether1']
+    render(FilterBar)
+    await expandRow()
+
+    // Neither value is in either list: this is the operator setting a
+    // filter up before the traffic they are waiting for has arrived.
+    await fireEvent.input(screen.getByLabelText('Protocol'), { target: { value: 'sctp' } })
+    await fireEvent.input(screen.getByLabelText('Interface'), { target: { value: 'ether9' } })
+    flushSync()
+
+    expect(appState.filters.protocol).toBe('sctp')
+    expect(appState.filters.interface).toBe('ether9')
   })
 })

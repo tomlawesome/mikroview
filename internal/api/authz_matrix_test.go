@@ -358,6 +358,9 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/baseline/{key}/expected", accessUser,
 		"withdraws that statement, putting the line back to whatever its own recurrence says it is -- same tier as making it, exactly as DELETE /api/hosts/{key}/mark sits at its sibling's tier"},
 
+	{http.MethodGet, "/api/seen-values", accessViewer,
+		"the values this instance has actually seen for the two filter fields with no list anywhere else -- protocol and interface (#1226). Same viewer-tier read as GET /api/hosts above and for a sharper version of the same reason: this is what a non-admin needs to set a filter at all, and refusing it would leave them with the free-text box the issue exists to replace. It records nothing and decides nothing. Deliberately not on readOnlyRoutes, same line as GET /api/hosts: the interface list is a partial inventory of the operator's network shape, which no bearer token has ever been able to read"},
+
 	{http.MethodGet, "/api/suggestions", accessUser,
 		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become. Widened from admin to user tier by #653, same as the definitions surface"},
 	{http.MethodPost, "/api/suggestions/{id}/accept", accessUser,

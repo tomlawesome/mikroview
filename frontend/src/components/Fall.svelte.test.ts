@@ -40,6 +40,7 @@ vi.mock('../lib/api', () => ({
 }))
 
 import { fetchEventsWindow } from '../lib/api'
+import { formatHM } from '../lib/format'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { appState } from '../lib/state.svelte'
@@ -850,5 +851,106 @@ describe('band header text stays inside its own band (#1114)', () => {
     const { container } = await renderFall({ boundaries })
     const head = container.querySelector('.band-head')
     expect(head?.getAttribute('aria-label')).toContain(longLabel)
+  })
+})
+
+// ── #1204: the fall's composition ─────────────────────────────────────
+// Fable's ruling of 2026-09-15 on the three faults the owner's
+// full-width screenshot showed: a caption stranded two thirds of the way
+// down an empty lane, a chip row cut off by the top of the screen, and
+// an axis whose labels came from three sources with no shared rhythm.
+// The chip row is a layout fact and is pinned in the browser instead
+// (frontend/scripts/live-fall-composition.mjs); the two below are claims
+// about the drawing itself.
+
+// The rig's own geometry, restated here because these tests are about
+// exactly those coordinates: the pour runs FALL_TOP..FALL_BOT, and the
+// 15 m span divides it into 60 bucket rows.
+const FALL_TOP = 196
+const FALL_BOT = 760
+const BUCKET_H = (FALL_BOT - FALL_TOP) / 60
+// The ruling's own figure: a label is dropped when it would sit within
+// 12 rig units of one that outranks it.
+const LABEL_GAP = 12
+
+function annoYs(container: HTMLElement, selector: string): number[] {
+  return [...container.querySelectorAll(selector)].map((el) => Number(el.getAttribute('y')))
+}
+
+describe('a band caption sits at the head of the pour (#1204)', () => {
+  it('states "quiet, not dark" in the pour\'s first rows, not two thirds of the way down it', async () => {
+    const { container } = await renderFall({ boundaries: [boundary()], events: [] })
+    const ys = annoYs(container, '.quiet-anno')
+    expect(ys).toHaveLength(2)
+    // Under the NOW line (186) and inside the pour, within its first
+    // couple of bucket rows -- the whole point of the ruling is that an
+    // all-quiet estate states itself in the first screenful. The value
+    // this replaces was y=420, nearly half the rig below the head.
+    for (const y of ys) {
+      expect(y).toBeGreaterThan(FALL_TOP)
+      expect(y).toBeLessThanOrEqual(FALL_TOP + 3 * BUCKET_H)
+    }
+    // One two-line plate, not two sentences that happen to be near each
+    // other: the second line rides the plate's own leading.
+    expect(ys[1] - ys[0]).toBe(14)
+  })
+
+  it("puts the dark band's caption on the same two lines, so the two read as one row", async () => {
+    const boundaries = [
+      boundary(),
+      boundary({ key: 'forward|guest|bridge9', inInterface: 'guest', outInterface: 'bridge9', label: 'guest → bridge9', coverage: 'dark' }),
+    ]
+    const { container } = await renderFall({ boundaries, events: [] })
+    expect(annoYs(container, '.dark-anno')).toEqual(annoYs(container, '.quiet-anno'))
+  })
+})
+
+describe('one label column, one rhythm (#1204)', () => {
+  // Every time label in the gutter, as drawn.
+  function gutter(container: HTMLElement): { y: number; text: string; brink: boolean }[] {
+    return [...container.querySelectorAll('.tlab')].map((el) => ({
+      y: Number(el.getAttribute('y')),
+      text: el.textContent ?? '',
+      brink: el.classList.contains('now-t'),
+    }))
+  }
+
+  it('keeps the brink and drops an alarm row landing within 12 rig units of it', async () => {
+    // A flag that fired seconds ago lands in the pour's first bucket,
+    // roughly 4 units under the brink's own label. Rank says the brink
+    // wins: it is the one label on this axis that always means "now".
+    const target = '198.51.100.44'
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', srcIp: target })]
+    const flags = [makeFlag('new_device', target, { firstSeen: new Date(Date.now() - 1000).toISOString() })]
+    const { container } = await renderFall({ boundaries: [boundary()], events, flags })
+
+    const head = gutter(container).filter((l) => l.y < FALL_TOP + LABEL_GAP)
+    expect(head).toHaveLength(1)
+    expect(head[0].brink).toBe(true)
+    // The flag's moment is not lost with its label: the horizon still
+    // draws its line through every band.
+    expect(container.querySelectorAll('.horizon').length).toBeGreaterThan(0)
+  })
+
+  it('keeps an alarm row and drops the rail tick it lands on', async () => {
+    // A flag fired exactly on one of the rail's own 3-minute ticks, far
+    // enough down the pour to be clear of the brink. The minute is
+    // printed once, by the alarm row, rather than twice.
+    const step = 3 * 60 * 1000
+    const tick = Math.floor((Date.now() - 4 * 60 * 1000) / step) * step
+    const hm = formatHM(new Date(tick).toISOString())
+    const target = '198.51.100.45'
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', srcIp: target })]
+    const flags = [makeFlag('new_device', target, { firstSeen: new Date(tick).toISOString() })]
+    const { container } = await renderFall({ boundaries: [boundary()], events, flags })
+
+    const onTheMinute = gutter(container).filter((l) => l.text === hm)
+    expect(onTheMinute).toHaveLength(1)
+    expect(onTheMinute[0].brink).toBe(false)
+    // And it is the alarm row's own y, not the rail's: the two agree to
+    // within half a bucket, so this only pins that the label survived
+    // somewhere in the pour rather than being dropped with the tick.
+    expect(onTheMinute[0].y).toBeGreaterThan(FALL_TOP)
+    expect(onTheMinute[0].y).toBeLessThan(FALL_BOT)
   })
 })

@@ -188,6 +188,17 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		s.refreshDecommissionCoverage()
 	}
 
+	// #1241's setup report: the one page that is not router data at all
+	// but the router's account of what the wizard left on it. Kept in
+	// the setup ledger rather than in RouterState, because it must
+	// survive a restart -- a router whose script predates the page never
+	// sends one, and with nothing on disk mikroview could not tell that
+	// router from one whose next push is simply not due yet. Keyed by
+	// the token's own device, like everything else here.
+	if payload.Kind == ingest.KindLogging && s.Setup != nil {
+		s.Setup.NoteLoggingReport(tok.Device, payload, now)
+	}
+
 	// #186 step 5: never persist a raw payload wholesale. RouterState
 	// above is in-memory only by design, and nothing here logs the
 	// decoded records themselves either -- only their shape -- for the
