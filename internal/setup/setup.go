@@ -75,6 +75,12 @@ type Store struct {
 	// forcing the same step, and must never itself displace what the
 	// operator decided. Keyed by step number; lazily created.
 	witnessed map[int]Mark
+	// reports is the last logging page each device pushed (#1241) --
+	// what the wizard left on that router, and which wizard wrote it.
+	// Keyed by device id, persisted beside the marks; see
+	// routersetup.go for why this one is written down when the
+	// observations above are not.
+	reports map[string]LoggingReport
 	// address is the operator's own answer to "what address can your
 	// router reach mikroview on?" (#1213) -- see SetAddress. Persisted
 	// beside the marks, for the same reason: a restart mid-wizard must
@@ -115,6 +121,7 @@ func New() *Store {
 		caFetched:  make(map[string]time.Time),
 		syslogSeen: make(map[string]syslogObservation),
 		prefixes:   make(map[string]prefixHealth),
+		reports:    make(map[string]LoggingReport),
 	}
 }
 
@@ -168,6 +175,16 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			}
 		}
 		s.address = file.Address
+		s.reports = make(map[string]LoggingReport, len(file.Reports))
+		for _, r := range file.Reports {
+			// Filtered on the way in like the marks above: a document
+			// written by another build, or edited by hand, must not put a
+			// deviceless report into the map the device API reads.
+			if r.Device == "" {
+				continue
+			}
+			s.reports[r.Device] = r
+		}
 		return nil
 	})
 	if err != nil {
@@ -405,6 +422,10 @@ type storeFile struct {
 	// yet" case, so an old document without this field round-trips
 	// unchanged.
 	Address string `json:"address,omitempty"`
+	// Reports is #1241's router setup reports, one per device that has
+	// sent one. Omitted when empty so a ledger written before this
+	// existed round-trips unchanged.
+	Reports []LoggingReport `json:"reports,omitempty"`
 }
 
 // NoteMark records one step decision, replacing any previous mark for
@@ -466,6 +487,7 @@ func (s *Store) persistLocked() {
 	data, err := json.MarshalIndent(storeFile{
 		Marks:   append(s.marksLocked(), s.witnessedLocked()...),
 		Address: s.address,
+		Reports: s.reportsLocked(),
 	}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding the setup ledger for persistence failed: %v -- this decision exists only in memory and will be lost on restart", err))
