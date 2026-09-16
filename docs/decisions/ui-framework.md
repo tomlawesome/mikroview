@@ -100,8 +100,9 @@ is re-derived the original way: measured + ~15%.
 
 - **Visual component libraries** (Skeleton, Flowbite-Svelte,
   shadcn-svelte ports, and kin). Screened before taste: copyleft or
-  share-alike licensing conflicts with the commercial licence for
-  anything shipped; the survivors arrive with a runtime, an icon set
+  share-alike licensing conflicted with the commercial licence then on
+  offer (withdrawn 2026-09-16, #1229 — the dependency-light reason
+  stands on its own); the survivors arrive with a runtime, an icon set
   and a theming engine — a large swing against a stated product value
   (dependency-light) — and their components would have to be bent to
   match interaction specs the owner has already ratified.
