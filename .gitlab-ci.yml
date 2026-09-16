@@ -671,6 +671,13 @@ test:postgres:
       [ "$ready" = 1 ] || { echo "postgres never became ready"; false; }
   script:
     - *reuse_gate
+    # The recorded upgrade fixtures (#1247), exactly as test:go fetches
+    # them: the pg_dump per schema version this job restores lives in the
+    # same generic package as the file backend's tarballs, and
+    # internal/persist/upgrade_postgres_test.go has nothing to open
+    # without it. After the reuse gate, so a reused run does not pay for
+    # downloads it will not use.
+    - scripts/fetch-upgrade-fixtures.sh
     # internal/matchlog alongside internal/persist (#243 slice 6): its
     # Postgres backend is a second, independent SQL sink with its own
     # table and needs the same real-database coverage.
@@ -1640,6 +1647,90 @@ sync:mirror-to-github:
     # A tag refused as already existing means GitHub has a different
     # commit under that name -- a release that was never made here.
     - git push github "HEAD:$MIRROR_REF"
+
+# ---------------------------------------------------------------------------
+# RECORD:UPGRADE-FIXTURE — #1247, the second half of the upgrade
+# framework (docs/decisions/upgrade-framework.md). Every release needs a
+# recording of what it actually wrote, so the next release's gate can
+# open it; without this job someone has to remember to run
+# scripts/record-upgrade-fixture.sh by hand after every tag, and a
+# release nobody remembered is a release nothing tests.
+#
+# The wait is the whole reason this is a job of its own. The recording
+# boots the *released image*, which .github/workflows/docker.yml publishes
+# to GHCR from the same tag — so at the moment this pipeline starts, the
+# image usually does not exist yet. It polls for it rather than assuming
+# an ordering between two CI systems.
+#
+# allow_failure: true, deliberately. A release that builds slowly, a GHCR
+# outage, or an image that never appears must not turn a tag pipeline
+# red: the tag is already cut and the artefacts already published by
+# then, so there is nothing to fix by failing. A red-but-allowed job says
+# "run scripts/record-upgrade-fixture.sh <tag> by hand", which is exactly
+# the remedy.
+#
+# Stage `sync`, beside the GitHub mirror: it is the same kind of work —
+# something published outside this pipeline once the commit is final. The
+# two stages after it exist only for the scheduled CHR and Renovate
+# lanes, which a release job has no business sitting in. `needs: []`
+# because it waits on GHCR, not on this pipeline's lint and test.
+#
+# Uploads use CI_JOB_TOKEN. That token can write a package and nothing
+# else — it cannot push a branch or open a merge request — which is why
+# the manifest is uploaded beside the recording rather than committed
+# (#1247's decision, 2026-09-16). Committing it stays a review step;
+# scripts/fetch-upgrade-fixtures.sh and the two upgrade tests already
+# prefer the committed copy and fall back to the uploaded one, so dev's
+# next run tests the new release either way.
+# ---------------------------------------------------------------------------
+
+record:upgrade-fixture:
+  stage: sync
+  # Light lane (#949): it waits, then runs three short-lived containers.
+  tags: [light]
+  # Same image and socket as test:container -- read that job's header for
+  # what the runner's shared rootless daemon does and does not allow.
+  # Nothing here publishes a port, which is what makes that work: the
+  # recording drives the released container from inside its own network
+  # namespace (scripts/upgrade-fixture-session.py).
+  image: docker:29-cli
+  needs: []
+  # #952: this job uploads packages -- never cut mid-write.
+  interruptible: false
+  allow_failure: true
+  # 45 minutes of polling plus three container starts and a pg_dump.
+  timeout: 1h
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  script:
+    # bash because both scripts are `#!/usr/bin/env bash` and Alpine
+    # ships ash; python3 for the manifest the recording writes; curl for
+    # the package upload; coreutils for `sort -V`, which busybox's sort
+    # does not have and the script's version comparison needs. No
+    # postgresql-client: pg_dump runs inside the Postgres container
+    # itself, so the client is always the server's own major version.
+    - apk add --no-cache bash coreutils curl python3 >/dev/null
+    - |
+      image="ghcr.io/tomlawesome/mikroview:$CI_COMMIT_TAG"
+      echo "waiting for $image on GHCR (every 60s, up to 45 minutes)"
+      found=0
+      for attempt in $(seq 1 45); do
+        if docker manifest inspect "$image" >/dev/null 2>&1; then found=1; break; fi
+        echo "  attempt $attempt/45: not published yet"
+        [ "$attempt" = 45 ] || sleep 60
+      done
+      [ "$found" = 1 ] || { echo "$image never appeared -- record it by hand with scripts/record-upgrade-fixture.sh $CI_COMMIT_TAG"; exit 1; }
+      echo "$image is published"
+    # The file backend's recording: uploads the tarball and the manifest.
+    - bash scripts/record-upgrade-fixture.sh "$CI_COMMIT_TAG"
+    # The database's: the same scripted session against a throwaway
+    # postgres:18-alpine, uploaded as a gzip'd pg_dump. Recorded on every
+    # tag even where the schema version has not moved -- the job cannot
+    # know that it has not, and a spare dump costs kilobytes, while a
+    # missing one costs a hand step nobody will remember.
+    - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
 
 # ---------------------------------------------------------------------------
 # CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under
