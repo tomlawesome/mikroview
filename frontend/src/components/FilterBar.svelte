@@ -28,6 +28,19 @@
   import { columnState } from '../lib/columns.svelte'
   import { geoipState } from '../lib/geoip.svelte'
   import { seenValuesState } from '../lib/seenValues.svelte'
+  import {
+    acceptsTypedValue,
+    backspaceAction,
+    fieldItems,
+    lastTokenKey,
+    tokenPatch,
+    typedValueHint,
+    valueItems,
+    type TokenField,
+    type TokenMenuItem,
+    type TokenSources,
+  } from '../lib/tokenBar'
+  import type { Filters } from '../lib/types'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
   import { onMount } from 'svelte'
 
@@ -130,6 +143,10 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
+    // #1246: one Escape closes whatever the box has opened -- the token
+    // menu and the strip together, rather than making an operator press
+    // it twice to get back to a plain box.
+    if (menuOpen) closeMenu({ suppress: true })
     if (drawerOpen) drawerOpen = false
     if (expanded) {
       expanded = false
@@ -159,8 +176,15 @@
   // going on to unmount.
   function onWindowClick(e: MouseEvent) {
     const path = e.composedPath()
-    if (viewportState.isMobile || !expanded) return
-    if ((fboxEl && path.includes(fboxEl)) || (barEl && path.includes(barEl))) return
+    if (viewportState.isMobile || (!expanded && !menuOpen)) return
+    const inBox = fboxEl && path.includes(fboxEl)
+    const inBar = barEl && path.includes(barEl)
+    // #1246: the token menu lives inside the box and hangs over the strip
+    // below it, so anything outside the box closes it -- reaching for the
+    // strip's named fields is not using the menu, and leaving it open over
+    // them would cover the field being reached for.
+    if (!inBox && menuOpen) closeMenu()
+    if (inBox || inBar) return
     expanded = false
   }
 
@@ -209,6 +233,159 @@
         appState.setFilter('rule', '')
         break
     }
+  }
+
+  // ---------------------------------------------------------------
+  // #1246 (round 57): the box's third face, the token bar.
+  //
+  // Face one is the named-field strip below, face two the chip summary
+  // above; this is the third -- a field menu on focus, then that field's
+  // own values, committing to the very same appState.filters both other
+  // faces read. Nothing below holds a filter of its own: pendingField
+  // and pendingValue are the half-made token between picking a field and
+  // choosing its value, and they are gone the moment it commits. Which
+  // list belongs to which field, and what a pick means, live in
+  // lib/tokenBar.ts.
+  let menuOpen = $state(false)
+  let pendingField = $state<TokenField | null>(null)
+  let pendingValue = $state('')
+  // Which item the keyboard is on; -1 is "the caret is still in the box"
+  // -- ArrowDown enters the list on the first item (round 57's scene 03).
+  let menuIndex = $state(-1)
+  // Escape closes the menu with the caret still in the box, so the focus
+  // handler must not re-open it under the operator's hands. Cleared by
+  // the next click in the box, or by focus arriving afresh.
+  let menuSuppressed = false
+
+  const tokenSources = $derived<TokenSources>({
+    devices: appState.devices,
+    chains: appState.chainOptions,
+    // Verdict 1 on round 57 ("it should grow a real list of what it has
+    // seen over time, and be persisted"): these two are #1226's
+    // persisted register, never a scrape of what happens to be on screen.
+    protos: seenValuesState.proto,
+    interfaces: seenValuesState.interfaces,
+    srcCountries: appState.srcCountryOptions,
+    dstCountries: appState.dstCountryOptions,
+  })
+
+  const menuItems = $derived(pendingField ? valueItems(pendingField, tokenSources) : fieldItems(tokenSources))
+  // The line under a value menu for the fields that also take typing
+  // (port, and either side's address); '' for the ones that only take a
+  // pick, which renders nothing.
+  const menuTypedHint = $derived(pendingField ? typedValueHint(pendingField) : '')
+
+  // The one input serves both jobs: the free-text rule search, and the
+  // value of whichever field is pending. Which one it is showing is
+  // pendingField, and nothing else -- so plain typing with no pending
+  // field always lands in free text, and is never swallowed by the menu.
+  const boxValue = $derived(pendingField ? pendingValue : appState.filters.rule)
+
+  function openMenu() {
+    menuSuppressed = false
+    menuOpen = true
+    menuIndex = -1
+  }
+
+  function closeMenu({ suppress = false } = {}) {
+    menuOpen = false
+    pendingField = null
+    pendingValue = ''
+    menuIndex = -1
+    menuSuppressed = suppress
+  }
+
+  function onBoxFocus() {
+    if (menuOpen || menuSuppressed) return
+    openMenu()
+  }
+
+  function pickField(field: TokenField) {
+    pendingField = field
+    pendingValue = ''
+    menuIndex = -1
+    menuOpen = true
+    hintEl?.focus()
+  }
+
+  // Writes the token through setFilter, one field at a time, exactly as
+  // the strip and EventRow's click-to-filter do -- the chip the box then
+  // draws is buildFilterChips' own, not a second rendering of the same
+  // term. Closes suppressed: the click that committed took focus off the
+  // input, and putting it back must not re-open the field menu.
+  function commitToken(field: TokenField, value: string) {
+    for (const [key, v] of Object.entries(tokenPatch(field, value)) as [keyof Filters, never][]) {
+      appState.setFilter(key, v)
+    }
+    closeMenu({ suppress: true })
+    hintEl?.focus()
+  }
+
+  function chooseMenuItem(item: TokenMenuItem) {
+    if (pendingField) commitToken(pendingField, item.value)
+    else pickField(item.value as TokenField)
+  }
+
+  // Enter on a field that takes typing. A side's typed text is its
+  // address sub-field, so it joins the same composite token any scope or
+  // country already picked is in.
+  function commitTypedValue() {
+    const text = pendingValue.trim()
+    if (!pendingField || !text) return
+    commitToken(pendingField, pendingField === 'port' ? text : `query:${text}`)
+  }
+
+  function removeLastToken() {
+    const key = lastTokenKey(filterChips)
+    const chip = filterChips.find((c) => c.key === key)
+    if (chip) clearChip(chip)
+  }
+
+  function onBoxKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!menuOpen) openMenu()
+      menuIndex = Math.min(menuIndex + 1, menuItems.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      // Back past the first item is back to the box itself, not a wrap
+      // to the end -- the caret has somewhere to be here.
+      menuIndex = Math.max(menuIndex - 1, -1)
+      return
+    }
+    if (e.key === 'Backspace') {
+      // Verdict 3 on round 57 ("character you just typed"): one key, one
+      // meaning, in whichever box holds the caret.
+      const action = backspaceAction(pendingField, boxValue)
+      if (action === 'character') return
+      e.preventDefault()
+      if (action === 'cancel-pending') {
+        pendingField = null
+        menuIndex = -1
+        menuOpen = true
+        return
+      }
+      removeLastToken()
+      return
+    }
+    if (e.key !== 'Enter') return
+    if (menuOpen && menuIndex >= 0 && menuIndex < menuItems.length) {
+      e.preventDefault()
+      chooseMenuItem(menuItems[menuIndex])
+      return
+    }
+    if (pendingField && acceptsTypedValue(pendingField) && pendingValue.trim() !== '') {
+      e.preventDefault()
+      commitTypedValue()
+      return
+    }
+    // The button this replaces opened natively on Enter or Space; Space
+    // must stay a literal space while typing a term, but Enter carries no
+    // other meaning here (there is no form to submit), so it keeps the
+    // keyboard's way into the strip.
+    expanded = true
   }
 
   // The stream's SPAN control (#703). It sets the same display window
@@ -319,10 +496,15 @@
       bind:this={fboxEl}
       onclick={() => {
         expanded = true
+        // #1246: a click in the box is also the pointer's way into the
+        // field menu -- focus alone opens it, but a click arriving at an
+        // already-focused box fires no focus event of its own.
+        menuSuppressed = false
+        if (!menuOpen) openMenu()
         hintEl?.focus()
       }}
     >
-      {#if filterChips.length > 0}
+      {#if filterChips.length > 0 || pendingField}
         <span class="fchips">
           {#each filterChips as chip (chip.key)}
             <span class="chip"
@@ -343,6 +525,13 @@
               </button></span
             >
           {/each}
+          <!-- #1246: the half-made token -- a field picked, its value not
+               chosen yet. Quiet and caret-tipped rather than a fourth
+               committed chip, so the box never claims a filter that is
+               not yet active (round 57, scene 03). -->
+          {#if pendingField}
+            <span class="chip pending">{pendingField}:<span class="tm-caret" aria-hidden="true"></span></span>
+          {/if}
         </span>
       {/if}
       <!-- #734: the always-visible free-text term. It reads/writes the
@@ -372,14 +561,18 @@
         aria-expanded={expanded}
         aria-controls="filterbar-strip"
         bind:this={hintEl}
-        bind:value={appState.filters.rule}
-        onkeydown={(e) => {
-          // The button this replaces opened natively on Enter or Space;
-          // Space must stay a literal space while typing a term, but
-          // Enter carries no other meaning here (there is no form to
-          // submit), so it keeps the keyboard's way into the strip.
-          if (e.key === 'Enter') expanded = true
+        value={boxValue}
+        oninput={(e) => {
+          // #1246: no longer a plain bind, because this one input is both
+          // the free-text rule search and the value box of a pending
+          // token. Which it is writing to is pendingField and nothing
+          // else -- see boxValue above.
+          const next = e.currentTarget.value
+          if (pendingField) pendingValue = next
+          else appState.filters.rule = next
         }}
+        onfocus={onBoxFocus}
+        onkeydown={onBoxKeydown}
       />
       <!-- Round 37's `saved ▾`, at the box's own right end (its
            `margin-left: auto` puts it there). Inside the box, not
@@ -387,6 +580,45 @@
            contained so reaching for one does not also unfold the strip
            this box discloses -- see the component. -->
       <FilterPresetsMenu />
+
+      <!-- #1246 (round 57): the field menu, and then the picked field's
+           own value menu, in FilterPresetsMenu's floating dress (elevated
+           panel, hairline border, radius, the same shadow) rather than a
+           second kind of popup -- anchored to the box's left edge instead
+           of the trigger's right. Each item stops its own click: picking
+           a value is not "click inside the box", which would re-open the
+           menu over the token just committed. -->
+      {#if menuOpen}
+        <div
+          class="token-menu"
+          class:tm-values={pendingField !== null}
+          role="listbox"
+          aria-label={pendingField ? `Pick a value for ${pendingField}` : 'Choose a field to filter on'}
+        >
+          {#if pendingField}
+            <div class="tm-crumb">‹ {pendingField}</div>
+          {/if}
+          {#each menuItems as item, i (item.value)}
+            <button
+              type="button"
+              class="tm-item"
+              class:focused={i === menuIndex}
+              role="option"
+              aria-selected={i === menuIndex}
+              onclick={(e) => {
+                e.stopPropagation()
+                chooseMenuItem(item)
+              }}
+            >
+              <span class="tm-name">{item.label}</span>
+              {#if item.hint}<span class="tm-hint">{item.hint}</span>{/if}
+            </button>
+          {/each}
+          {#if menuTypedHint}
+            <p class="tm-typed">{menuTypedHint}</p>
+          {/if}
+        </div>
+      {/if}
     </div>
     <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
       {#each SPANS as span (span.key)}
@@ -706,6 +938,9 @@
         class="tf-fold"
         onclick={() => {
           expanded = false
+          // #1246: fold means put it away -- the focus this hands back to
+          // the box must not pop the token menu open in the strip's place.
+          closeMenu({ suppress: true })
           hintEl?.focus()
         }}
         aria-label="Fold filters back into the box"
@@ -774,6 +1009,8 @@
     font: 12px var(--font-mono);
     color: var(--fg-muted);
     cursor: pointer;
+    /* #1246: the token menu hangs off the box's own left edge. */
+    position: relative;
   }
 
   .fbox:hover {
@@ -820,6 +1057,135 @@
 
   .chip-x:hover {
     color: var(--alarm);
+  }
+
+  /* #1246: the pending token and its caret -- the committed chip's own
+     markup, quieter, with no value and no ⌫ because there is nothing to
+     remove yet. */
+  .chip.pending {
+    color: var(--fg-muted);
+  }
+
+  .tm-caret {
+    display: inline-block;
+    width: 1px;
+    height: 12px;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: -2px;
+    animation: tm-blink 1s step-end infinite;
+  }
+
+  @keyframes tm-blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  /* #1246 (round 57): the field and value menus. FilterPresetsMenu's own
+     floating-panel dress -- same elevated background, hairline border,
+     radius, shadow and z-index -- so the box's two popups read as one
+     kind of thing; anchored left, where the box's own content starts,
+     and wide enough to carry a field name plus its one-line hint. */
+  .token-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    width: 360px;
+    max-width: 92vw;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 0;
+    z-index: 40;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    cursor: default;
+    animation: tm-in 0.16s ease-out;
+  }
+
+  /* A value is one short word; only the field menu carries hints wide
+     enough to need the full panel. */
+  .token-menu.tm-values {
+    width: 220px;
+  }
+
+  @keyframes tm-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .token-menu {
+      animation: none;
+    }
+
+    .tm-caret {
+      animation: none;
+    }
+  }
+
+  /* Which field's values these are -- the way back, said once at the top
+     rather than repeated on every row. */
+  .tm-crumb {
+    padding: 4px 14px 6px;
+    font: 500 9px var(--font-mono);
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+  }
+
+  .tm-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 7px 14px;
+    cursor: pointer;
+  }
+
+  .tm-item:hover,
+  .tm-item.focused {
+    background: var(--bg-hover);
+  }
+
+  .tm-name {
+    font: 12px var(--font-mono);
+    color: var(--fg-muted);
+  }
+
+  .tm-item:hover .tm-name,
+  .tm-item.focused .tm-name {
+    color: var(--fg);
+  }
+
+  .tm-hint {
+    font: 10.5px var(--font-sans);
+    color: var(--fg-dim);
+  }
+
+  .tm-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  /* Where the keyboard is, distinct from where the pointer is hovering. */
+  .tm-item.focused {
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  /* The fields that take typing as well as a pick (port, either side's
+     address) say so at the foot of their own menu. */
+  .tm-typed {
+    margin: 0;
+    padding: 6px 14px 2px;
+    font: 10.5px var(--font-sans);
+    color: var(--fg-dim);
   }
 
   /* The empty box still says what it is (#697) -- round 29's box only
@@ -968,6 +1334,17 @@
     bottom: 0;
     z-index: 31;
     flex-direction: column;
+    /* Round 57's "noticed, unverified", checked against this file's own
+       rules and confirmed (#1246): the drawer's content is far taller
+       than 80vh on any phone -- every input and select in here is
+       min-height 44px and full width (issue #85's touch target), which is
+       ~44px a row for nine fields, three rows each for the two address
+       groups, and a wrapped column list of thirteen more. With `.bar`'s
+       flex-wrap: wrap left on, a column that tall does not scroll: it
+       opens a second column beside the first and overflow-y has nothing
+       to do. nowrap is what makes max-height + overflow-y below mean
+       what they say. */
+    flex-wrap: nowrap;
     max-height: 80vh;
     overflow-y: auto;
     border-radius: 16px 16px 0 0;
