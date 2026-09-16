@@ -40,7 +40,7 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatLastHeard } from '../lib/format'
-  import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { deviceState, multihomedEcho, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import GhostRows from './GhostRows.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
@@ -117,6 +117,12 @@
                      step 2 owns the diagnosis and the command; this card
                      only says the pair is visible and where the fix is. -->
                 <div class="frow dim">{multihomedEcho(d)}</div>
+              {/if}
+              {#if setupEcho(d)}
+                <!-- The router's own report of the setup the wizard left
+                     on it (#1241): this line and no more -- the fuller
+                     upgrade notice is #1240's. -->
+                <div class="frow dim">{setupEcho(d)}</div>
               {/if}
               {#if d.sourceIp}
                 <div class="frow dim">syslog from <span class="mono">{d.sourceIp}</span></div>

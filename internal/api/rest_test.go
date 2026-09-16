@@ -31,6 +31,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/seen"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 )
@@ -61,6 +62,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	cs, _ := coverage.Open("")
 	ds, _ := droplist.Open("")
 	hr, _ := hosts.Open("")
+	sv, _ := seen.Open("")
 	as, _ := audit.Open("")
 	ss, _ := suggest.Open("")
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
@@ -82,6 +84,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Coverage:      cs,
 		Droplist:      ds,
 		Hosts:         hr,
+		SeenValues:    sv,
 		Audit:         as,
 		Suggest:       ss,
 		MatchLog:      ml,

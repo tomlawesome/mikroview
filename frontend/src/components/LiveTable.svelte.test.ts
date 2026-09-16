@@ -1149,6 +1149,45 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
 
     expect(container.querySelector('[title="cleared-flag-row"]')?.classList.contains('flagged')).toBe(false)
   })
+
+  // #1117 (reopened twice: !1029, !1051). The release screenshot at
+  // 1600x900 showed a flagged row's time as "0:28:02.838" -- the leading
+  // "2" gone, the mark sitting where the digit should be. jsdom applies
+  // no stylesheet here (see this file's own note on componentSource/
+  // eventRowSource, top of file), so textContent on the time cell would
+  // read the full, un-clipped string either way and prove nothing --
+  // the bug was always visual, never a string the DOM ever held. What
+  // *is* provable without a browser: .time used to share one flex line
+  // (`gap: 6px`, `justify-content: flex-end`) between the timestamp and
+  // the mark, so a flagged row's mark competed with the digits for
+  // whatever width the column had, and a right-anchored line spills its
+  // overflow off the *left* -- the significant digits -- with no
+  // ellipsis, since text-overflow only ever truncates the inline end.
+  // Widening the column twice (both prior MRs) never fixed that: the
+  // mark still rode in the same line. It now draws in a fixed
+  // padding-right gutter of .time's own, taken out of that flex line
+  // entirely (position: absolute) -- structurally unable to cost the
+  // timestamp any width, flagged or not.
+  it("reserves the mark its own gutter instead of sharing the timestamp's flex line (#1117)", () => {
+    const timeRule = eventRowSource.match(/\n\s*\.time\s*\{([^}]*)\}/)
+    expect(timeRule).toBeTruthy()
+    expect(timeRule![1]).toMatch(/padding-right:\s*\d/)
+
+    const rmkRule = eventRowSource.match(/\n\s*\.rmk\s*\{([^}]*)\}/)
+    expect(rmkRule).toBeTruthy()
+    expect(rmkRule![1]).toMatch(/position:\s*absolute/)
+
+    // Still true, and still worth pinning at the DOM level (#685/#691's
+    // own test above already covers this): the mark is a sibling that
+    // follows the timestamp, not a character inside it.
+    const flaggedSourceEvent = makeEvent('gutter-row', { srcIp: '203.0.113.9' })
+    flagsState.list = [activeFlag('203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [flaggedSourceEvent] } })
+    flushSync()
+
+    const timeBtn = container.querySelector('[title="gutter-row"] .time-btn')
+    expect(timeBtn?.textContent).not.toMatch(/⚑/)
+  })
 })
 
 // #1201 (owner ask, 2026-09-12): the ⚑ was inert -- clicking it did
