@@ -93,6 +93,14 @@ type setupInstance struct {
 	// points for the field above -- never as a value sent on the
 	// operator's behalf.
 	AddressCandidates []string `json:"addressCandidates"`
+	// BackupTransport is how step 6's script delivers its backup
+	// (#955): "sftp" through the drop box, or "https" in slices over
+	// the ingest channel for a deployment reachable only through its
+	// reverse proxy. Never empty -- an install that has never chosen
+	// reads as "sftp", the same answer POST /api/setup/commands renders
+	// against, so the wizard draws the pair from one value rather than
+	// keeping a default of its own.
+	BackupTransport string `json:"backupTransport"`
 }
 
 type setupDevice struct {
@@ -196,8 +204,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	address := ""
+	backupTransport := setup.BackupTransportSFTP
 	if s.Setup != nil {
 		address = s.Setup.Address()
+		backupTransport = s.Setup.BackupTransport()
 	}
 	writeJSON(w, http.StatusOK, setupStatus{
 		Instance: setupInstance{
@@ -207,6 +217,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			SyslogEnabled:     s.SetupInstance.SyslogPort != "",
 			Address:           address,
 			AddressCandidates: nonNilStrings(s.SetupInstance.Candidates),
+			BackupTransport:   backupTransport,
 		},
 		Sources:   sources,
 		Devices:   devices,
@@ -396,6 +407,60 @@ func (s *Server) handleSetupAddress(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Audit.Record(auditActor(r), "setup.address_set", req.Address, "")
 	writeJSON(w, http.StatusOK, setupAddressResponse{Address: req.Address})
+}
+
+// setupBackupTransportRequest is step 6's one choice (#955): "sftp" or
+// "https".
+type setupBackupTransportRequest struct {
+	Transport string `json:"transport"`
+}
+
+// setupBackupTransportResponse echoes the stored value back, the same
+// shape GET /api/setup/status's Instance.BackupTransport reports it in.
+type setupBackupTransportResponse struct {
+	Transport string `json:"transport"`
+}
+
+// handleSetupBackupTransport records how step 6's script is to deliver
+// its backup: over SFTP to the drop box (#394) or in /file read slices
+// through the ingest channel (#955), for a deployment whose only open
+// way in is its HTTPS reverse proxy.
+//
+// Stored server-side beside the address rather than in the browser,
+// because it is a property of the deployment and not of whoever is
+// looking at the wizard: an operator opening it on a second machine has
+// to be offered the step their install actually uses, and the
+// commands endpoint renders whichever is stored without being told
+// again.
+//
+// Admin-only, the same gate as handleSetupAddress above and for the
+// same reason: there is no read-only wizard, and this changes what
+// every operator is told to paste into their router.
+//
+// The accepted set lives in internal/setup (SetBackupTransport), not
+// here: it is the store that must never hold a third value, since
+// handleSetupCommands renders a script from it with no "unrenderable"
+// state to fall back on.
+func (s *Server) handleSetupBackupTransport(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	var req setupBackupTransportRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if s.Setup == nil {
+		http.Error(w, "setup observations are not available", http.StatusServiceUnavailable)
+		return
+	}
+	if !s.Setup.SetBackupTransport(req.Transport) {
+		http.Error(w, "transport must be sftp or https", http.StatusBadRequest)
+		return
+	}
+	s.Audit.Record(auditActor(r), "setup.backup_transport_set", req.Transport, "")
+	writeJSON(w, http.StatusOK, setupBackupTransportResponse{Transport: req.Transport})
 }
 
 // SetupInstance is the running configuration the wizard needs to write
