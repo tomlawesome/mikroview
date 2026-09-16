@@ -192,7 +192,15 @@
   // #697/#700): the same appState.filters, read as chips, always on
   // screen rather than only while a filter existed -- see the comment on
   // FILTERS_TRIGGER_ENABLED below for what that replaced.
-  const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
+  //
+  // Minus the rule chip since #1246: the rule search is the free text in
+  // this same box, so round 57 draws it once, as the text, never also as
+  // a token beside it -- `rule:iot ✕ | iot` said the same thing twice and
+  // offered a remover for something Backspace already edits. The drawer
+  // and the strip still show the Rule field itself.
+  const filterChips = $derived(
+    buildFilterChips(appState.filters, appState.devices).filter((c) => c.key !== 'rule'),
+  )
 
   // Removes one chip's own term(s), leaving the rest of the filter
   // untouched -- the mockup's own per-chip ⌫ ("drop this term"), not one
