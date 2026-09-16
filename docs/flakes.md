@@ -81,7 +81,7 @@ each, recorded together because the cause is shared (#831's contention):
 
 ## live-log-every-rule: goTo("Log every rule") times out (10 s) on the runner
 
-- 2026-09-16 · 51dc2834 (chore/deps-2026-09-16, !1062) · pipeline 1179, gate:scenarios 3/4, job 14955 · `timed out waiting for card "log-every-rule"` with the card present in the deck at offset 3600; pipeline 1180 was running alongside. Retried as job 14984.
+- 2026-09-16 · 51dc2834 (chore/deps-2026-09-16, !1062) · pipeline 1179, gate:scenarios 3/4, job 14955 · `timed out waiting for card "log-every-rule"` with the card present in the deck at offset 3600. **Not a flake:** the retry (job 14984) failed identically and the fault reproduced locally under Playwright 1.63 alone — a `scrollend` from an interrupted roll ended the new roll early. Fixed in #1248 (Deck: scrollend only ends a roll once the deck has arrived). Kept here so the symptom is findable.
 
 ## TestRunMigrateDataEndToEnd: refuses a destination it just emptied
 

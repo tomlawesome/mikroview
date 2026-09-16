@@ -287,15 +287,15 @@
     },
     {
       "name": "Semgrep static analysis scanner",
-      "reference": "semgrep/semgrep:1.176.0",
+      "reference": "semgrep/semgrep:1.177.0",
       "shipped": false,
       "license": "LGPL-2.1-only",
       "source": "https://github.com/semgrep/semgrep",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-09-16",
+      "reviewBy": "2026-11-16"
     },
     {
       "name": "gosec static analysis scanner",
