@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,55 +95,43 @@ func repoRoot(t *testing.T) string {
 }
 
 // TestUpgradeFixtures opens every recorded, fetched release with the
-// current build and checks it against its own committed manifest. It
-// skips -- naming scripts/fetch-upgrade-fixtures.sh -- when
-// .upgrade-fixtures/ is absent or holds nothing for any recorded
-// version, which is the ordinary state of a local checkout: CI fetches
+// current build and checks it against its manifest. It skips -- naming
+// scripts/fetch-upgrade-fixtures.sh -- when .upgrade-fixtures/ is absent
+// or empty, which is the ordinary state of a local checkout: CI fetches
 // first (see .gitlab-ci.yml's test:go job).
+//
+// The recordings themselves are what it iterates, not the committed
+// manifests under testdata/upgrade/. That is the difference #1247 needed:
+// a release recorded by the tag job has a recording in the registry
+// before anyone has committed its manifest, and iterating testdata would
+// silently never test it. loadUpgradeManifest resolves the manifest for
+// each -- committed first, the fetched registry copy otherwise.
 func TestUpgradeFixtures(t *testing.T) {
 	root := repoRoot(t)
-	testdataDir := filepath.Join(root, "testdata", "upgrade")
 	fixtureDir := filepath.Join(root, ".upgrade-fixtures")
 
-	versionDirs, err := os.ReadDir(testdataDir)
+	tarballs, err := filepath.Glob(filepath.Join(fixtureDir, "upgrade-fixture-*.tar.gz"))
 	if err != nil {
-		t.Fatalf("reading %s: %v", testdataDir, err)
+		t.Fatalf("looking for recorded fixtures: %v", err)
 	}
-
-	ran := 0
-	for _, v := range versionDirs {
-		if !v.IsDir() {
-			continue
-		}
-		version := v.Name()
-		tarPath := filepath.Join(fixtureDir, "upgrade-fixture-"+version+".tar.gz")
-		if _, err := os.Stat(tarPath); err != nil {
-			continue
-		}
-		ran++
-		t.Run(version, func(t *testing.T) {
-			testOneFixture(t, testdataDir, version, tarPath)
-		})
-	}
-
-	if ran == 0 {
+	if len(tarballs) == 0 {
 		t.Skip("no recorded fixtures found under .upgrade-fixtures/ -- run scripts/fetch-upgrade-fixtures.sh first")
+	}
+
+	for _, tarPath := range tarballs {
+		base := filepath.Base(tarPath)
+		version := strings.TrimSuffix(strings.TrimPrefix(base, "upgrade-fixture-"), ".tar.gz")
+		t.Run(version, func(t *testing.T) {
+			testOneFixture(t, root, version, tarPath)
+		})
 	}
 }
 
-func testOneFixture(t *testing.T, testdataDir, version, tarPath string) {
+func testOneFixture(t *testing.T, root, version, tarPath string) {
 	t.Helper()
 	ctx := context.Background()
 
-	manifestPath := filepath.Join(testdataDir, version, "manifest.json")
-	manifestBytes, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatalf("reading %s: %v", manifestPath, err)
-	}
-	var manifest upgradeManifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		t.Fatalf("parsing %s: %v", manifestPath, err)
-	}
+	manifest := loadUpgradeManifest(t, root, version)
 
 	unpackDir := t.TempDir()
 	extractTarGz(t, tarPath, unpackDir)
@@ -153,10 +142,11 @@ func testOneFixture(t *testing.T, testdataDir, version, tarPath string) {
 
 	var key *retention.Key
 	if manifest.HistoryKeyEncrypted {
-		key, err = retention.LoadKey(filepath.Join(unpackDir, "history.key"))
+		loaded, err := retention.LoadKey(filepath.Join(unpackDir, "history.key"))
 		if err != nil {
 			t.Fatalf("loading history.key: %v", err)
 		}
+		key = loaded
 	}
 	backendFor := func(name string, encrypted bool) persist.Backend {
 		realPath := filepath.Join(dataDir, name)
