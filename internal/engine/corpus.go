@@ -106,7 +106,7 @@ type CorpusWindow struct {
 // A var, not a const, so a test can shrink it to exercise multi-page
 // pagination (the BeforeID cursor, and reassembly into chronological
 // order) without needing thousands of events -- same convention as
-// queueSize/maxTrackedKeys elsewhere in this package.
+// batchSize/maxTrackedKeys elsewhere in this package.
 var corpusPageSize = 5000
 
 // maxCorpusEvents bounds how many events a single Replay call will ever

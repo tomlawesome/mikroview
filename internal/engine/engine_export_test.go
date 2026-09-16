@@ -67,7 +67,7 @@ func waitForRunning(t *testing.T, e *Engine) {
 }
 
 func TestEngineExportStateCoversOnlySnapshottedDefinitions(t *testing.T) {
-	e := New()
+	e := New(nil)
 	e.Register(newSnapshottedDef("carries_state", "before"))
 	e.Register(&fakeDef{id: "carries_nothing", kind: "declarative"})
 
@@ -90,7 +90,7 @@ func TestEngineExportStateCoversOnlySnapshottedDefinitions(t *testing.T) {
 func TestEngineExportStateSurvivesOneDefinitionFailing(t *testing.T) {
 	broken := newSnapshottedDef("broken", "")
 	broken.exportErr = errors.New("cannot render its state")
-	e := New()
+	e := New(nil)
 	e.Register(broken)
 	e.Register(newSnapshottedDef("healthy", "kept"))
 
@@ -111,7 +111,7 @@ func TestEngineExportStateSurvivesOneDefinitionFailing(t *testing.T) {
 }
 
 func TestEngineImportStateRoundTripsThroughTheDefinitionIDs(t *testing.T) {
-	source := New()
+	source := New(nil)
 	source.Register(newSnapshottedDef("a", "state-a"))
 	source.Register(newSnapshottedDef("b", "state-b"))
 	raw, err := source.ExportState()
@@ -120,7 +120,7 @@ func TestEngineImportStateRoundTripsThroughTheDefinitionIDs(t *testing.T) {
 	}
 
 	restoredA, restoredB := newSnapshottedDef("a", ""), newSnapshottedDef("b", "")
-	target := New()
+	target := New(nil)
 	target.Register(restoredA)
 	target.Register(restoredB)
 
@@ -142,7 +142,7 @@ func TestEngineImportStateSkipsUnknownIDsAndSurvivesABadPart(t *testing.T) {
 	broken.importErr = errors.New("state it cannot make sense of")
 	healthy := newSnapshottedDef("healthy", "")
 
-	e := New()
+	e := New(nil)
 	e.Register(broken)
 	e.Register(healthy)
 	e.Register(&fakeDef{id: "carries_nothing", kind: "declarative"})
@@ -168,7 +168,7 @@ func TestEngineImportStateSkipsUnknownIDsAndSurvivesABadPart(t *testing.T) {
 }
 
 func TestEngineImportStateRejectsAMalformedDocument(t *testing.T) {
-	e := New()
+	e := New(nil)
 	e.Register(newSnapshottedDef("a", ""))
 	if err := e.ImportState(json.RawMessage(`{"definitions":`), exportStart, exportStart); err == nil {
 		t.Fatal("expected a truncated document to be an error")
@@ -177,7 +177,7 @@ func TestEngineImportStateRejectsAMalformedDocument(t *testing.T) {
 
 func TestEngineImportStateIsRefusedOnceEventsHaveBeenEvaluated(t *testing.T) {
 	restored := newSnapshottedDef("a", "cold")
-	e := New()
+	e := New(nil)
 	e.Register(restored)
 
 	// One event through the same path Run drives, so the engine has
@@ -220,18 +220,21 @@ func TestEngineExportImportAreNilSafe(t *testing.T) {
 func TestEngineExportStateIsSafeWhileRunEvaluates(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	d := newShippedActivitySpikeDefinition(t, fs, nil, Scope{})
-	e := New()
+	st := store.New(4096, time.Hour)
+	e := New(st)
 	e.Register(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go e.Run(ctx)
+	waitForRunning(t, e)
 
 	ingested := make(chan struct{})
 	go func() {
 		defer close(ingested)
 		for i := 0; i < 2000; i++ {
-			e.Enqueue(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
+			st.Insert(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
 				ReceivedAt: exportStart.Add(time.Duration(i) * 10 * time.Millisecond)})
+			e.Nudge()
 		}
 	}()
 	for i := 0; i < 50; i++ {
@@ -265,7 +268,7 @@ func TestEngineExportStateIsSafeWhileRunEvaluates(t *testing.T) {
 
 func TestEngineImportStateIsRefusedWhileRunning(t *testing.T) {
 	restored := newSnapshottedDef("a", "cold")
-	e := New()
+	e := New(nil)
 	e.Register(restored)
 
 	ctx, cancel := context.WithCancel(context.Background())
