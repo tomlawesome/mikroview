@@ -310,7 +310,7 @@ func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request
 	}
 	sessionID := requestSessionID(r)
 	if sessionID == "" {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 
@@ -378,7 +378,7 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 	}
 	sessionID := requestSessionID(r)
 	if sessionID == "" {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 

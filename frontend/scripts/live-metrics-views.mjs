@@ -227,6 +227,18 @@ const minuteKey = (iso) => Math.floor(new Date(iso).getTime() / 60000)
 const since = statsForAxis.liveSince ? minuteKey(statsForAxis.liveSince) : null
 const countedLen = since === null ? axisLen : axis.filter((b) => minuteKey(b.time) >= since).length
 
+// The page polls stats every five seconds, so its drum can be one poll
+// behind the axis just fetched -- and when a minute boundary falls in
+// that gap the server counts one minute more than the page has drawn
+// (pipeline 1146 twice: "outer 1, counted 2"). Give the page its next
+// poll before reading, rather than comparing two different moments.
+await page
+  .waitForFunction(
+    ([sel, want]) => document.querySelectorAll(`${sel} line.stroke.outer`).length === want,
+    [SEISMOGRAPH, countedLen],
+    { timeout: 10_000 },
+  )
+  .catch(() => {})
 const outerCount = await page.locator(`${SEISMOGRAPH} line.stroke.outer`).count()
 const innerCount = await page.locator(`${SEISMOGRAPH} line.stroke.inner`).count()
 check(

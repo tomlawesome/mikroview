@@ -73,7 +73,7 @@ func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	caller := userFromContext(r)
 	if caller == nil {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 	// Already SSO-only: there is no local password left to convert, and
