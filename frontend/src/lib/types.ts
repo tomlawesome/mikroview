@@ -112,6 +112,24 @@ export interface Device {
   // the name so a reader gets the fact and the reason together, the way
   // GET /api/naming/provenance reports a host name's origin.
   nameSource?: NameSource
+  // setup (#1241) is the router-side half of the upgrade contract: what
+  // this router last reported of the logging setup the wizard pasted on
+  // it, judged against what the current wizard would paste. Mirrors
+  // internal/setup.RouterSetup. Absent only on a server built without a
+  // setup ledger -- "never reported" is itself an answer, never a
+  // missing field.
+  setup?: RouterSetupReport
+}
+
+// Mirrors internal/setup.RouterSetup (#1241). scriptVersion is what the
+// router's own script reported (0 when it never has); currentVersion is
+// routeros.WizardVersion, so a reader can say "script v3, current v5"
+// without asking a second question.
+export interface RouterSetupReport {
+  standing: 'current' | 'behind' | 'never reported'
+  scriptVersion: number
+  currentVersion: number
+  reportedAt?: string
 }
 
 // Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
