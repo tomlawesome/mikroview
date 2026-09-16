@@ -8,9 +8,13 @@ import { deckOrderState } from './deckOrder.svelte'
 import { matchesCountry, UNKNOWN_COUNTRY } from './countryMatch'
 import { countryFlag, isPublicIp } from './format'
 import {
+  EMPTY_LOSS_EPISODE,
   EMPTY_WS_DROPPED_EPISODE,
+  lossEpisodeActive as isLossEpisodeActive,
+  noteLossEpisode,
   noteWsDropped,
   wsDroppedActive as isWsDroppedActive,
+  type LossEpisode,
   type WsDroppedEpisode,
 } from './ingestLossBanners'
 import { matchesPortQuery } from './portMatch'
@@ -146,6 +150,13 @@ class AppState {
   // total the server has never seen. wsDroppedActive is declared below,
   // beside `now`, which it depends on -- see that field's own comment.
   wsDroppedEpisode = $state<WsDroppedEpisode>(EMPTY_WS_DROPPED_EPISODE)
+  // #1109: the same treatment for the engine's `outrun` total -- events
+  // that left the buffer before checking reached them. The server reports
+  // it as a lifetime count with no freshness of its own, so "still
+  // happening" is worked out here, from successive stats polls (see
+  // setStats). outrunActive is declared below beside `now`, for the same
+  // reason wsDroppedActive is.
+  outrunEpisode = $state<LossEpisode>(EMPTY_LOSS_EPISODE)
   // ruleMatches holds the ids matching the current regex pattern, or
   // null when there is nothing usable to filter by. Kept here rather than
   // inside the Worker so eviction is handled where eviction already
@@ -305,6 +316,9 @@ class AppState {
   // that stopped dropping events falls quiet on the next tick without
   // needing a new WS message to tell it to.
   wsDroppedActive = $derived(isWsDroppedActive(this.wsDroppedEpisode, this.now))
+  // #1109: outrun's `active`, on the same rule and against the same
+  // clock, so a flood that has passed stops being reported as ongoing.
+  outrunActive = $derived(isLossEpisodeActive(this.outrunEpisode, this.now))
 
   private pendingBuffer: ClientEvent[] = []
 
@@ -724,7 +738,7 @@ class AppState {
       ])
       this.setInitialEvents(events)
       this.devices = devices
-      this.stats = stats
+      this.setStats(stats)
       this.fetchFailed = false
     } catch (err) {
       // Left the buffer exactly as it was (empty, on first load) rather
@@ -762,6 +776,16 @@ class AppState {
   async refreshDevicesAndStats() {
     const [devices, stats] = await Promise.all([fetchDevices(), fetchStats()])
     this.devices = devices
+    this.setStats(stats)
+  }
+
+  // #1109: every stats poll folds the engine's cumulative outrun total
+  // into its episode, which is what turns a lifetime number into "this is
+  // still happening" -- the freshness the server gives its own four
+  // ingest-loss counters, computed here because this counter arrives
+  // without it.
+  setStats(stats: Stats) {
+    this.outrunEpisode = noteLossEpisode(this.outrunEpisode, stats.engine?.outrun ?? 0, this.now)
     this.stats = stats
   }
 
@@ -821,6 +845,7 @@ class AppState {
     this.filters = emptyFilters()
     this.devices = []
     this.stats = null
+    this.outrunEpisode = EMPTY_LOSS_EPISODE
     this.ruleMatches = null
     this.ruleMatchStatus = 'idle'
     this.matchedPattern = ''

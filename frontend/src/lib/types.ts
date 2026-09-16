@@ -237,15 +237,15 @@ export interface Stats {
   liveSince?: string
   restoredTo?: string
   connectedClients: number
-  // What the detection engine never evaluated (#1107). Under a burst
-  // the engine sheds events it cannot keep up with: they are still
-  // stored and still broadcast, so the stream looks normal, but no
+  // How detection is keeping up, and what it never saw at all (#1109).
+  // The engine checks events straight out of the event buffer, in order,
+  // so falling behind loses nothing -- behind/behindSeconds is a backlog
+  // it will work through, and the readout says so. outrun is the real
+  // gap: events that left the buffer before checking reached them, so no
   // detector ever saw them and no flag could be raised from them.
   // Optional because a server built without an engine omits it, and
-  // because zero is a real answer that such a server cannot give. How
-  // this should be shown to an operator is #1109 -- nothing reads it
-  // yet.
-  engine?: { droppedFromEvaluation: number }
+  // because zeros are a real answer that such a server cannot give.
+  engine?: { behind: number; behindSeconds: number; outrun: number }
   // The event buffer's budget, the range it may be moved within, and
   // what the process is actually costing (#796) -- mirrors
   // internal/api.StoreSettings. Optional so a test fixture or an older

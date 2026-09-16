@@ -941,6 +941,29 @@
               </span>
             </div>
           {/if}
+          {#if appState.stats?.engine}
+            {@const engine = appState.stats.engine}
+            <!-- #1109: checking reads events straight out of the buffer
+                 in order, so being behind is late, not lost -- the first
+                 row says which of the two it is in those words, and the
+                 second appears only when something really was missed.
+                 Outside the syslog block above because these are facts
+                 about checking, not about the listener. -->
+            <div class="orow sub">
+              <span>Checking:</span>
+              <span class="ov">
+                {engine.behind === 0
+                  ? 'caught up'
+                  : `${engine.behind.toLocaleString()} ${engine.behind === 1 ? 'event' : 'events'} behind (${Math.round(engine.behindSeconds)} s)`}
+              </span>
+            </div>
+            {#if engine.outrun > 0}
+              <div class="orow sub">
+                <span>Outrun:</span>
+                <span class="ov ink-warn">{engine.outrun.toLocaleString()}</span>
+              </div>
+            {/if}
+          {/if}
         </div>
       </div>
 
