@@ -7,6 +7,7 @@
 package routeros
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -113,9 +114,11 @@ func TestSyslogCommandsAreIdempotent(t *testing.T) {
 }
 
 func TestPushScriptEmbedsTokenInEveryBlock(t *testing.T) {
+	// Three, not two: #1241's logging block rides along with every push
+	// script whether or not it was asked for (see PushScript).
 	script := PushScript("192.0.2.10:8080", "tok-123", []string{"filter-rule", "arp"}, "a")
-	if n := strings.Count(script, "Bearer tok-123"); n != 2 {
-		t.Errorf("pushScript embedded the token %d times, want 2: %s", n, script)
+	if n := strings.Count(script, "Bearer tok-123"); n != 3 {
+		t.Errorf("pushScript embedded the token %d times, want 3: %s", n, script)
 	}
 	if placeholders.MatchString(script) {
 		t.Errorf("pushScript leaked a placeholder: %s", script)
@@ -167,8 +170,8 @@ func TestLogPrefixForAction(t *testing.T) {
 
 func TestPushScriptReportsVersionOnThePayloadNotARecord(t *testing.T) {
 	script := PushScript("h", "t", []string{"filter-rule", "arp"}, "a")
-	if n := strings.Count(script, `"routerosVersion"=[/system/resource get version]`); n != 2 {
-		t.Errorf("pushScript carried the version marker %d times, want 2:\n%s", n, script)
+	if n := strings.Count(script, `"routerosVersion"=[/system/resource get version]`); n != 3 {
+		t.Errorf("pushScript carried the version marker %d times, want 3:\n%s", n, script)
 	}
 	// On the envelope beside kind/page/pages -- never inside the
 	// per-record map, which describes a rule and not the router.
@@ -690,5 +693,90 @@ func TestBackupScriptEscapesQuotedToken(t *testing.T) {
 	}
 	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
 		t.Errorf("BackupScript unescaped quote count = %d, want %d (same structure as a benign token):\n%s", got, want, tricky)
+	}
+}
+
+// #1241: the setup report block. It is not a table of router data but
+// what the wizard left on the router -- the mikroview logging action and
+// the rules feeding it, and nothing else from /system logging.
+func TestPushBlockSendsTheMikroviewLoggingSetup(t *testing.T) {
+	block := PushBlock("h", "t", "logging", "a")
+	for _, want := range []string{
+		`/system/logging/action print as-value`,
+		`:if (($v->"name") = "mikroview")`,
+		`"type"="action"`,
+		`"remotePort"=($v->"remote-port")`,
+		`"remoteProtocol"=($v->"remote-protocol")`,
+		`"remoteLogFormat"=($v->"remote-log-format")`,
+		`"checkCertificate"=($v->"check-certificate")`,
+		`/system/logging print as-value`,
+		`:if (($v->"action") = "mikroview")`,
+		`"type"="rule"`,
+		`"topics"=($v->"topics")`,
+		`"disabled"=($v->"disabled")`,
+		`"kind"="logging"`,
+		// The wrapping that makes it a list of records rather than one
+		// merged map -- silently wrong without it.
+		`{$rec}`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("pushBlock(logging) missing %q:\n%s", want, block)
+		}
+	}
+	// Nothing else from the router's logging config: the block reads the
+	// two menus it needs and no others.
+	for _, unwanted := range []string{"/system/logging/action add", "/log print"} {
+		if strings.Contains(block, unwanted) {
+			t.Errorf("pushBlock(logging) reaches further than the mikroview setup (%q):\n%s", unwanted, block)
+		}
+	}
+}
+
+// The logging block rides along with every push script, asked for or
+// not: a script that could be rendered without it is a script mikroview
+// cannot tell is out of date.
+func TestPushScriptAlwaysCarriesTheLoggingBlock(t *testing.T) {
+	unasked := PushScript("h", "t", []string{"filter-rule"}, "a")
+	if n := strings.Count(unasked, `"kind"="logging"`); n != 1 {
+		t.Errorf("pushScript carried the logging block %d times without being asked, want 1:\n%s", n, unasked)
+	}
+	asked := PushScript("h", "t", []string{"filter-rule", "logging"}, "a")
+	if n := strings.Count(asked, `"kind"="logging"`); n != 1 {
+		t.Errorf("pushScript carried the logging block %d times when asked for it, want 1:\n%s", n, asked)
+	}
+}
+
+// Every block carries the wizard stamp beside the RouterOS version, so
+// whichever block a router manages to send says which script sent it.
+func TestPushScriptStampsEveryBlockWithTheWizardVersion(t *testing.T) {
+	script := PushScript("h", "t", []string{"filter-rule", "arp"}, "a")
+	stamp := fmt.Sprintf(`"wizardVersion"=%d`, WizardVersion)
+	if n := strings.Count(script, stamp); n != 3 {
+		t.Errorf("pushScript carried %q %d times, want 3 (two tables plus the logging block):\n%s", stamp, n, script)
+	}
+	if !strings.Contains(script, `"routerosVersion"=[/system/resource get version]; "wizardVersion"=`) {
+		t.Errorf("the wizard stamp is not on the envelope beside routerosVersion:\n%s", script)
+	}
+}
+
+// WizardLogging is what the comparer holds up a router's report against,
+// so it must be the same values SyslogCommands actually pastes -- the
+// one place these two could drift apart is the one place it would be
+// invisible.
+func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
+	want := WizardLogging("192.0.2.10:8443", "6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8443", "6514", "a")
+	if want.Remote != "192.0.2.10" || want.RemotePort != "6514" {
+		t.Fatalf("WizardLogging = %+v, want the host and port split out", want)
+	}
+	for _, fragment := range []string{
+		"remote=" + want.Remote,
+		"remote-port=" + want.RemotePort,
+		"remote-log-format=" + want.RemoteLogFormat,
+		"topics=" + strings.Join(want.Topics, ","),
+	} {
+		if !strings.Contains(cmd, fragment) {
+			t.Errorf("syslogCommands does not paste %q:\n%s", fragment, cmd)
+		}
 	}
 }

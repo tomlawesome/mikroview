@@ -16,6 +16,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 )
@@ -106,6 +107,19 @@ type deviceView struct {
 	// out-rank; "entity" is a stored rename; "none" means the raw id is
 	// what shows.
 	NameSource string `json:"nameSource"`
+	// Setup is #1241's router-side drift answer: whether what this
+	// router last reported of the wizard's logging setup is what the
+	// current wizard would leave on it -- "current", "behind" (with the
+	// script version it reported and the current one), or "never
+	// reported" for a router still running a script pasted before the
+	// page existed. Read from internal/setup, which holds the reported
+	// half, against internal/routeros, which holds what the wizard would
+	// write.
+	//
+	// Omitted only on a Server built without a setup store: "never
+	// reported" is itself an answer, never an absence, so a client must
+	// not read a missing field as one.
+	Setup *setup.RouterSetup `json:"setup,omitempty"`
 }
 
 // multihomedCandidatesByDevice indexes Registry.MultihomedCandidates by
@@ -127,6 +141,13 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	infos := s.Devices.List()
 	multihomed := multihomedCandidatesByDevice(s.Devices)
+	// What the current wizard would leave on a router for this instance
+	// -- derived once for the whole list, since it depends on the
+	// instance's own address and syslog port, not on any device.
+	var wantLogging routeros.LoggingSetup
+	if s.Setup != nil {
+		wantLogging = routeros.WizardLogging(s.Setup.Address(), s.SetupInstance.SyslogPort, defaultDialect())
+	}
 	views := make([]deviceView, 0, len(infos))
 	for _, info := range infos {
 		v := deviceView{
@@ -138,6 +159,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			// rather than re-deriving the name here, so the two can
 			// never disagree.
 			NameSource: s.Naming.DeviceProvenance(info.ID).Source,
+		}
+		if s.Setup != nil {
+			reported := s.Setup.RouterSetup(info.ID, wantLogging)
+			v.Setup = &reported
 		}
 		if version, ok := s.effectiveRouterOSVersion(info); ok {
 			v.RouterOSVersion = version

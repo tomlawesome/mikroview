@@ -94,6 +94,21 @@
   // still clear of RIG_H below.
   const QUIETER_Y = PORTLAB_Y + 16
   const RIG_H = 800
+  // ── A band's own caption sits at the head of the pour (#1204) ───────
+  // Fable's ruling of 2026-09-15: every lane shares one time axis, so a
+  // quiet lane cannot be shorter than a busy one without breaking the
+  // reading that a mark at the same height happened at the same moment.
+  // Lanes keep equal height; what moves is the caption. It used to sit
+  // at y=420, two thirds of the way down, with ~400 units of black above
+  // it -- an all-quiet estate then said nothing in the first screenful
+  // and the eye had to go looking for the sentence. Here, just under the
+  // NOW line and inside the pour's first rows, the estate states itself
+  // straight away and the black below is honest empty time.
+  // Both captions ride these two lines -- "quiet, not dark" on a logged
+  // band that caught nothing, "blank because nothing is logged" on a
+  // dark one -- so the two read as one row across the rig.
+  const ANNO_HEAD_Y1 = FALL_TOP + 12
+  const ANNO_HEAD_Y2 = ANNO_HEAD_Y1 + 14 // the plate's own 14-unit leading
   const DASH_W = 2.4 // a carrier dash's width — thin, never a fill
   const HIT_W = 14 // a carrier's invisible click/focus target width
 
@@ -722,7 +737,11 @@
     const spanLen = windowEnd - windowStart
     for (let t = Math.ceil(windowStart / stepMs) * stepMs; t < windowEnd - stepMs * 0.08; t += stepMs) {
       const y = FALL_TOP + ((windowEnd - t) / spanLen) * (FALL_BOT - FALL_TOP)
-      if (y < FALL_TOP + 12 || y > FALL_BOT - 4) continue
+      // Only the floor is the rail's own business now: a tick crowding
+      // the brink at the top is dropped by rank below (#1204), not by a
+      // guard of the rail's own that the other two label sources knew
+      // nothing about.
+      if (y > FALL_BOT - 4) continue
       const d = new Date(t)
       const label =
         span === '14d'
@@ -873,6 +892,65 @@
       for (const m of slot.band.flagMarks)
         list.push({ y: bucketY(m.idx) + bucketH / 2, hm: m.hm, type: m.type, bx: slot.bx, n: m.n })
     return list
+  })
+
+  // ── One label column, one rhythm (#1204) ────────────────────────────
+  // The rail's ticks already land on clock multiples of the step (:00,
+  // :03, :06 … at the 15 m span) -- see railLines above. The unevenness
+  // Fable's 2026-09-15 ruling names ("09:07, 09:06, then 09:03, 09:00")
+  // is not the rail's rhythm at all: it is three sources printing into
+  // the same column at once -- the brink (the NOW row), an alarm row,
+  // and a rail tick -- with each source guarding only itself.
+  //
+  // The rule is rank, not order of drawing: brink > alarm row > rail
+  // tick, and a label is dropped when it would sit within LABEL_MIN_GAP
+  // rig units of one that outranks it. The brink suppresses a rail
+  // label beside it, and an alarm row at 09:03 replaces the rail's
+  // 09:03 rather than doubling it. Equal rank never suppresses: two
+  // alarm rows a few units apart are two different moments, and both
+  // are theirs to state.
+  //
+  // The build had the rank backwards at the top of the axis: the brink
+  // stood down for any flag within 16 units of it, which is the one
+  // label on this axis that always means "now".
+  //
+  // Ink is not part of the rank: round 30 draws every gutter time in
+  // the same quiet dim (`.gut`, the-whole.html #s2) and only the brink
+  // carries its own colour, so this loop varies `now-t` and nothing
+  // else.
+  const LABEL_MIN_GAP = 12
+  const LABEL_RANK = { brink: 0, alarm: 1, rail: 2 } as const
+  type AxisRank = keyof typeof LABEL_RANK
+  interface AxisLabel {
+    y: number // the text's own baseline, in rig units
+    text: string
+    rank: AxisRank
+  }
+
+  const axisLabels = $derived.by(() => {
+    const candidates: AxisLabel[] = [
+      { y: FALL_TOP + 4, text: formatHM(new Date(windowEnd || Date.now()).toISOString()), rank: 'brink' },
+    ]
+    // One column means one label per moment: a flag horizon is carried
+    // once per band it crosses, and those are all the same minute.
+    const seen = new Set<string>()
+    for (const f of flagHorizons) {
+      const key = `${Math.round(f.y)}|${f.hm}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push({ y: f.y + 3, text: f.hm, rank: 'alarm' })
+    }
+    for (const l of railLines) candidates.push({ y: l.y + 3, text: l.label, rank: 'rail' })
+
+    const kept: AxisLabel[] = []
+    for (const rank of ['brink', 'alarm', 'rail'] as const)
+      for (const c of candidates)
+        if (
+          c.rank === rank &&
+          !kept.some((k) => LABEL_RANK[k.rank] < LABEL_RANK[c.rank] && Math.abs(k.y - c.y) < LABEL_MIN_GAP)
+        )
+          kept.push(c)
+    return kept
   })
 
   // The same identity join bandsData's own flagsByKey uses (a flag names
@@ -1139,17 +1217,12 @@
           </linearGradient>
         </defs>
 
-        <!-- ══ the time gutter (a flag's moment outranks a colliding
-             time label or now label) -- round 30 draws no grid at all,
-             here or between bands: the labels are the only marks in
-             this margin (#700). ══ -->
-        {#if !flagHorizons.some((f) => Math.abs(f.y - (FALL_TOP + 4)) < 16)}
-          <text class="tlab now-t" x={RAIL - 14} y={FALL_TOP + 4} text-anchor="end">{formatHM(new Date(windowEnd || Date.now()).toISOString())}</text>
-        {/if}
-        {#each railLines as l (l.y)}
-          {#if !flagHorizons.some((f) => Math.abs(f.y - l.y) < 12)}
-            <text class="tlab" x={RAIL - 14} y={l.y + 3} text-anchor="end">{l.label}</text>
-          {/if}
+        <!-- ══ the time gutter: one label column, ranked brink > alarm
+             row > rail tick (#1204, axisLabels above) -- round 30 draws
+             no grid at all, here or between bands: the labels are the
+             only marks in this margin (#700). ══ -->
+        {#each axisLabels as l (`${l.rank}|${l.y}|${l.text}`)}
+          <text class="tlab" class:now-t={l.rank === 'brink'} x={RAIL - 14} y={l.y} text-anchor="end">{l.text}</text>
         {/each}
 
         {#each rig.slots as slot (slot.band.key)}
@@ -1235,9 +1308,9 @@
             <g class="waterfall">
               {#if b.coverage === 'dark'}
                 <rect class="darkband" x={slot.bx} y={FALL_TOP} width={bandW} height={FALL_BOT - FALL_TOP} />
-                <text class="anno bad-anno strong" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
+                <text class="anno bad-anno strong dark-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y1} text-anchor="middle"
                   >blank because nothing is logged</text>
-                <text class="anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
+                <text class="anno dark-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y2} text-anchor="middle"
                   >— not because nothing is sent</text>
               {:else}
                 {#if b.dropShare > 0.5 && b.total > 0}
@@ -1331,9 +1404,9 @@
                      "15 m": the sentence counts the window it is drawn
                      over. -->
                 {#if b.coverage === 'observed' && b.total === 0 && b.carriers.length === 0}
-                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
+                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y1} text-anchor="middle"
                     >nothing in these {spanDef.label}</text>
-                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
+                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y2} text-anchor="middle"
                     >logged — quiet, not dark</text>
                 {/if}
               {/if}
@@ -1376,16 +1449,10 @@
 
         <!-- ══ flag horizons: the line through every band ══ -->
         {#each flagHorizons as f, fi (fi)}
+          <!-- The line only: this moment's time is printed by the one
+               ranked label column above (#1204), which is what keeps an
+               alarm row from doubling a rail tick on the same minute. -->
           <line class="horizon" x1={RAIL} y1={f.y} x2={rig.width - 14} y2={f.y} />
-          <!-- Round 30 draws every gutter time in the same quiet dim ink
-               (the-whole.html #s2's `.gut`) -- no per-minute colouring
-               and no mark beside a flagged minute's label, even though
-               the horizon line through the bands still shows where it
-               fired. This label used to ride `.flag-t` (alarm-coloured,
-               bold, with a trailing ◉) as a leftover of the pre-round-30
-               build; that read as if some minutes were flagged red/pink
-               and others weren't, which round 30 never draws. -->
-          <text class="tlab" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm}</text>
         {/each}
 
         <!-- ══ the NOW edge ══ -->
@@ -1441,7 +1508,21 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    overflow-y: auto;
+    /* The rig is the only thing that scrolls (#1204). This box used to
+       carry `overflow-y: auto`, which made the whole scene a second
+       scrolling box wrapped around the first, with the alert chip row
+       inside it -- so anything that scrolled the scene carried the chips
+       up off the top of the screen, which is the clipping the owner
+       reported. Honest about what was measured: with the demo estate
+       live-fall-composition.mjs seeds, the chips were never actually cut
+       at 1920×1080 or 1366×768; the scene only overflows (and the chips
+       only become scrollable out of view) once the window is short
+       enough that the rig's own floor no longer fits, which that
+       scenario pins at 1366×420. The rule stands either way -- the head
+       of the fall is a fixed frame around the pour: the bar and the
+       chips stay put, and `.rig` below scrolls to its own foot inside it
+       (#1141's scroll-not-scale, unchanged). */
+    overflow: hidden;
     height: 100%;
     background: var(--fall-canvas);
   }
@@ -1617,7 +1698,13 @@
   /* ── the rig ─────────────────────────────────────────────────────── */
   .rig {
     flex: 1;
-    min-height: 320px;
+    /* Whatever height is left, and no more (#1204). A floor here used to
+       be harmless because the scene itself scrolled; with the scene
+       fixed, a floor taller than the space available would push the
+       fall's own foot off the bottom of a short window instead. The rig
+       scrolls inside itself, so even a short one reaches all of its
+       own drawing. */
+    min-height: 0;
     display: flex;
     justify-content: center;
     /* The rig is drawn at its own pixel size, 800 units tall, which is

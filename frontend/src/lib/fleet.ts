@@ -91,3 +91,24 @@ export function multihomedEcho(d: Device): string | null {
     `on another of its addresses, Run setup… step 2 shows the one-line fix.`
   )
 }
+
+// setupEcho (#1241) is the one line a router card carries about its own
+// setup: the router reports what the wizard left on it, and mikroview
+// compares that against what the current wizard would leave. Behind
+// names the remedy, because the remedy is the same one every time --
+// paste step 1 again, which updates what is already there in place.
+// Never reported is the router still running a script pasted before it
+// said anything at all.
+//
+// Deliberately this line and no more: the fuller upgrade notice is
+// #1240's, and a card is not the place to explain an upgrade.
+export function setupEcho(d: Device): string | null {
+  switch (d.setup?.standing) {
+    case 'behind':
+      return 'setup behind · paste step 1 again'
+    case 'never reported':
+      return 'setup never reported'
+    default:
+      return null
+  }
+}

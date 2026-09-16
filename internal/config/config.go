@@ -406,6 +406,25 @@ type Hosts struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Seen configures internal/seen's register of values the feed has
+// actually shown for the two filter fields with no option list anywhere
+// else -- protocol and interface (issue #1226). StorePath left empty is
+// a fully supported, deliberate choice, same optional-persistence
+// contract as Hosts.StorePath above: the register still works, the
+// menus just rebuild from the feed after a restart, so a protocol or
+// interface that has been quiet since the last restart is missing from
+// them until it is seen again. Typing a value that is not in the list
+// has always worked, so an unpersisted register costs discoverability,
+// not reach.
+//
+// There is deliberately no retention setting here. How long a value is
+// kept (90 days) and how many are kept per field (200) are constants in
+// internal/seen -- see MaxAge and MaxValues, and #1226 for why they are
+// not a knob.
+type Seen struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Baseline configures internal/baseline's line register (issue #1016,
 // round 49): which source/destination/port/protocol lines the feed has
 // shown, on which of the last few days, so the map can draw a line that
@@ -1124,6 +1143,7 @@ type Config struct {
 	Entities    Entities    `yaml:"entities"`
 	Coverage    Coverage    `yaml:"coverage"`
 	Hosts       Hosts       `yaml:"hosts"`
+	Seen        Seen        `yaml:"seen"`
 	Baseline    Baseline    `yaml:"baseline"`
 	Audit       Audit       `yaml:"audit"`
 	Setup       Setup       `yaml:"setup"`
@@ -1274,6 +1294,9 @@ func defaults() Config {
 		},
 		Hosts: Hosts{
 			StorePath: DefaultDataDir + "/hosts.json",
+		},
+		Seen: Seen{
+			StorePath: DefaultDataDir + "/seen-values.json",
 		},
 		Baseline: Baseline{
 			StorePath: DefaultDataDir + "/baseline.json",
@@ -1747,6 +1770,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_HOSTS_STORE_PATH"); v != "" {
 		cfg.Hosts.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_SEEN_STORE_PATH"); v != "" {
+		cfg.Seen.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_BASELINE_STORE_PATH"); v != "" {
 		cfg.Baseline.StorePath = v
