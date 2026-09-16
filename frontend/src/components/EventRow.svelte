@@ -61,7 +61,9 @@
     // took one out; that ruling is superseded (#691's round-30 audit).
     // The mark rides after the time, never before it -- ahead of the
     // figures it pushes the first digit right and breaks the left edge
-    // the tabular numerals line up on.
+    // the tabular numerals line up on. #1117: DOM order alone does not
+    // keep it there -- see .time/.rmk below for why the mark draws in
+    // its own reserved gutter instead of sharing the timestamp's box.
     flagged = false,
     expandable = false,
     expanded = false,
@@ -907,12 +909,29 @@
      width: 100%` for a text cell filling its grid track, and would pull
      the mark off the end of the time it rides beside (#691's round-30
      audit: its position there does not move). */
+  /* #1117 (reopened twice: !1029, !1051): the mark used to be a plain
+     flex sibling of .time-btn, sharing one flex line with `gap: 6px`.
+     On a flagged row that line's total content -- timestamp plus gap
+     plus mark -- ran wider than the time column, and because the line
+     was right-anchored (`.time`'s `justify-content: flex-end`) the
+     overflow spilled off the *left*: the leading, most significant
+     digit, not the mark. Nothing ellipted to say so -- text-overflow
+     only ever truncates the inline end (the right side), never the
+     start -- so the digit was simply gone, and widening the column
+     twice (both prior MRs) never fixed it because the mark was still
+     competing for the same shrinking line. It now draws absolutely
+     positioned inside `.time`'s own padding-right gutter (below),
+     entirely out of that flex line, so it can never again cost the
+     timestamp any width. */
   .rmk {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
     font: inherit;
     font-style: normal;
     font-size: 11px;
     color: var(--alarm);
-    margin-left: 8px;
     background: none;
     border: none;
     padding: 0;
@@ -964,8 +983,16 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 6px;
     font-variant-numeric: tabular-nums;
+    /* #1117: a fixed gutter for .rmk (position: absolute, below),
+       reserved whether or not this row is flagged -- not extra flex
+       width a flagged row's mark used to share with the timestamp (see
+       .rmk's own comment). Sticky already makes this a valid
+       containing block for the mark's absolute position, so no
+       wrapper element is needed. Constant on every row means the
+       timestamp's own box is identical whether the row is flagged or
+       not, rather than reflowing based on flag state. */
+    padding-right: 26px;
   }
 
   .row.banded .time {
@@ -1065,7 +1092,7 @@
     color: var(--fg-muted);
   }
 
-  /* #1150: below ~1500px the middle columns scroll out of reach and the
+  /* #1150 (breakpoint revised to ~1600px by #1117): below it the middle columns scroll out of reach and the
      pinned Rule column went with them, so a row could be read but not
      attributed to the rule that made it. Rule sticks to the right edge
      the way the time cell sticks to the left, leaving the row's two

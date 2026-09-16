@@ -49,6 +49,20 @@ rewritten.
   next sees the way this deployment actually works; and the `https`
   script does not wait for `backup.enabled`, because it needs no drop
   box.
+- **Proto and Interface are pickers now, over the values this instance
+  has actually seen** (#1226). They were the last two filters in the
+  stream's strip with no list behind them: you typed `tcp`, or your best
+  guess at an interface name, and hoped. MikroView now keeps the list
+  itself -- every event records its protocol and its in and out
+  interface names, with when each was first and last seen -- and both
+  boxes offer what has actually arrived. Nothing is guessed and nothing
+  is asked of your network. **Typing still works**: the menus are
+  suggestions, not a closed set, so you can still set a filter up before
+  the traffic you are waiting for appears. The list survives a restart
+  (`seen.storePath`) and travels in `-backup` envelopes. A value is kept
+  while it has been seen in the last 90 days, at most 200 per field with
+  the one seen longest ago dropped first -- fixed in MikroView, not
+  settings. Read via `GET /api/seen-values`.
 
 - **A flag's drawer now has a note box: record why you called it what
   you called it** (#1232). It sits across the bottom of the drawer,

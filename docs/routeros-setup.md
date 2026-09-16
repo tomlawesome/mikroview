@@ -659,6 +659,50 @@ And paste the source with `<mikroview-host>` and the token already
 filled in — the dialog saves placeholders without complaint, and the
 failure only surfaces later as `failure:` lines in `/log print`.
 
+### 4f. What the script tells MikroView about your own setup
+
+One block of the push script is not router data at all. It reports back
+what the setup wizard left on this router, so MikroView can tell when a
+router is running an out-of-date copy of it.
+
+It sends exactly two things, once per push:
+
+- the `mikroview` logging action — where it sends logs (`remote`,
+  `remote-port`), how (`target`, `remote-protocol`,
+  `remote-log-format`, `check-certificate`);
+- every `/system logging` rule pointing at that action — its `topics`,
+  and whether it is disabled.
+
+Plus one number: which version of the wizard wrote the script you
+pasted.
+
+Nothing else from your logging configuration is sent. Your other
+logging actions, your other rules, and everything else the router logs
+stay on the router — MikroView asks only about its own setup.
+
+Why it needs telling: the script on your router is a copy, and MikroView
+never connects to a router to look at it (that is a design rule, not a
+missing feature). So the router is the only thing that can say what it
+has. With the report, each router's card in MikroView says one of:
+
+- nothing at all — what the router has is what the current wizard would
+  write;
+- `setup behind · paste step 1 again` — an older wizard wrote this
+  script, or the action or its rules no longer match what the wizard
+  writes;
+- `setup never reported` — the script predates this report entirely, so
+  the router has never said.
+
+Only four things count as a mismatch: where the logs are sent
+(`remote`, `remote-port`), the format they are sent in
+(`remote-log-format`), and the rules' `topics`. Anything else you have
+changed on the action is yours, and MikroView leaves it alone.
+
+The fix in every case is the same: **your account menu ▸ Run setup…**,
+and paste the blocks again. The logging block updates what is already
+there rather than adding a second copy of it, so re-pasting a router
+that is already correct changes nothing.
+
 ## 5. Verify
 
 On the router, confirm entries are being generated and sent:

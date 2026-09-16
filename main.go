@@ -69,6 +69,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/seen"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/snapshot"
@@ -792,6 +793,23 @@ func main() {
 	hostRegister, err := hosts.OpenWithBackend(hostsBackend)
 	mustOpenStore(hostsLog, err)
 
+	// The seen-values register (issue #1226): which protocols and which
+	// interface names this instance has actually observed, so the
+	// stream's Proto and Interface filters can be pickers over a real
+	// list instead of free-text boxes the operator has to guess into.
+	// Sits beside the two registers above because it is fed from the
+	// same place on the same terms -- one map update per ingested event,
+	// a rate-limited encode, never a disk write on that path. Retention
+	// (90 days, 200 values a field) is internal/seen's own, applied at
+	// write time, so nothing here schedules anything.
+	seenLog := logging.New("seen")
+	seenBackend, err := persistence.backendFor(bootCtx, "seen_values", cfg.Seen.StorePath)
+	if err != nil {
+		seenLog.Warn(err.Error())
+	}
+	seenRegister, err := seen.OpenWithBackend(seenBackend)
+	mustOpenStore(seenLog, err)
+
 	// The baseline line register (issue #1016, round 49): which
 	// source/destination/port/protocol lines the feed has shown and on
 	// which of the last few days, so the map can draw a line off the
@@ -1352,7 +1370,7 @@ func main() {
 	// process runs. See history_runtime.go.
 	hist := newHistoryRuntime(logging.New("history"), cfg, settingsStore, st)
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister, seenRegister)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
 	// one goroutine at the finest cadence any shipped definition
@@ -1667,6 +1685,7 @@ func main() {
 		Coverage:                coverageStore,
 		Hosts:                   hostRegister,
 		Baseline:                baselineRegister,
+		SeenValues:              seenRegister,
 		HostQuietAfter:          cfg.Baseline.HostQuietAfter,
 		Naming:                  names,
 		Rules:                   ru,
@@ -1993,7 +2012,7 @@ func main() {
 	// Best-effort: each store already logs its own save failures, so a
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister, seenRegister)
 
 	// One last snapshot, for the same reason and under the same budget
 	// (#795). Ingest and evaluation have both stopped by now, so this
@@ -2696,14 +2715,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister, seenRegister)
 		}
 	}
 }
@@ -2714,7 +2733,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2847,6 +2866,12 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		outcome = baseline.OutcomeDrop
 	}
 	baselineRegister.Observe(stored.InInterface, stored.SrcIP, stored.DstIP, stored.DstPort, stored.Protocol, outcome, stored.ReceivedAt)
+	// The seen-values register (issue #1226), on the same terms as the
+	// two registers above: one mutex-protected map update, never a disk
+	// write here. Both interface names go in, because the stream's
+	// interface filter matches an event on either (store.Query.Interface)
+	// -- one filter, one list.
+	seenRegister.Observe(stored.Protocol, stored.InInterface, stored.OutInterface, stored.ReceivedAt)
 }
 
 // resolveTransferTarget works out which account admin is moving to,

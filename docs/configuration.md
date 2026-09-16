@@ -41,9 +41,16 @@ uid it is actually running as instead.
 
 ## config.yaml
 
-Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
-`docker-compose.yml` mounts that path into the container at
-`/etc/mikroview/config.yaml`.
+Put the file at `mikroview/config.yaml` and restart: copy
+`deploy/config.example.yaml` there (`deploy/mikroview/config.yaml` for
+the from-source compose file) and edit it —
+[`docker-compose.yml`](../deploy/docker-compose.yml) mounts the whole
+`mikroview/` folder read-only at `/etc/mikroview`, so that is the path
+MikroView reads. `config.yaml` is optional; a fresh install runs on
+defaults without one. See
+[docs/decisions/app-folder.md](decisions/app-folder.md) for the folder
+layout and why. Naming a config file explicitly elsewhere —
+`MIKROVIEW_CONFIG`, or `-config` — is the older, still-supported way.
 
 ```yaml
 listen:
@@ -301,11 +308,14 @@ the wizard says it can never show it to you again.
   has to mean the history is actually gone, or the setting is a lie.
   That applies to the control in the app as well: the files are gone
   before the change is confirmed on screen.
-- `history.keyFile` — path to a master key file that you generate and
-  mount, e.g.:
+- `history.keyFile` — path to a master key file that you generate.
+  **Put it at `mikroview/keys/history.key` and restart** — from the
+  release that carries #1243, MikroView finds it there with nothing
+  else set:
 
   ```
-  head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+  mkdir -p mikroview/keys
+  head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
   ```
 
   Mounted files have to be readable by the user MikroView runs as, or it
@@ -314,9 +324,11 @@ the wizard says it can never show it to you again.
   Generating the key as some other account is the usual way to get this
   wrong.
 
-  The file must hold at least 32 bytes. This is a path, never the key
-  itself — there is deliberately no environment variable carrying key
-  material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+  Naming the path explicitly instead — `MIKROVIEW_HISTORY_KEY_FILE`, or
+  `history.keyFile` pointing somewhere else — works today and keeps
+  working; it wins over the folder default when set. The file must hold
+  at least 32 bytes either way. This is a path, never the key itself —
+  there is deliberately no environment variable carrying key material.
 
   Or let the app generate it: with no key mounted, the setup wizard's
   step 6 hands you a key of exactly this shape, with the commands to
@@ -324,9 +336,13 @@ the wizard says it can never show it to you again.
   in your browser and never sent to the server, so save it when it is
   shown — nothing can reprint it.
 
-  **It must be mounted outside the data directory.** A key kept beside
-  the files it protects is decoration: whoever copies the directory
-  copies both, and now has everything needed to read it.
+  **The rule is that the key must not live inside the data store, not
+  that it must sit outside the app folder.** `mikroview/keys/` beside
+  `mikroview/data/` satisfies it: what MikroView writes to, and what a
+  backup of `data/` alone carries, never includes the key. A copy of the
+  *whole* `mikroview/` folder is a copy of the key too — back up
+  `data/` on its own when the key must stay behind, and back up the
+  whole folder only when you mean to carry the key with it.
 
   **There is no unencrypted mode.** `history.enabled: true` with no key
   file set does not mean "retain, unencrypted" — it means nothing is
@@ -686,7 +702,7 @@ and hostnames.
 1000) — see
 [Files you mount into the container](#files-you-mount-into-the-container).
 If `config.yaml` isn't readable by that user, the container will fail to
-start with a permission error. `chmod 644 deploy/config.yaml` after
+start with a permission error. `chmod 644 mikroview/config.yaml` after
 editing it is the simplest fix here, since a config file is not a secret.
 
 ### Problem codes
@@ -1150,12 +1166,17 @@ you to create your own free account to obtain one.
 1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
    and download `GeoLite2-Country.mmdb` (or generate a license key and use
    their `geoipupdate` tool to keep it current).
-2. Mount the `.mmdb` file into the container and point MikroView at it
-   with `MIKROVIEW_GEOIP_DB_PATH` (or `geoip.dbPath` in `config.yaml`, or
-   `-geoip-db` for local development). It has to be readable by the user
-   MikroView runs as — see
+2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
+   from the release that carries #1243, MikroView finds it there with
+   nothing else set. It has to be readable by the user MikroView runs
+   as — see
    [Files you mount into the container](#files-you-mount-into-the-container).
    A GeoIP database is not a secret, so `chmod 644` is fine here.
+
+   Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
+   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development —
+   works today and keeps working; it wins over the folder default when
+   set.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
@@ -1668,6 +1689,68 @@ with a pipe, e.g. `bridge-lan|10.0.10.5` -- the same key style as a
 coverage declaration. `GET` is open to any signed-in user; the two writes
 are user tier and audit-logged, since saying a silence is deliberate
 carries the same weight as any other authored explanation.
+
+## Seen filter values (issue #1226, optional)
+
+Every filter on the live view is a picker over something known -- except
+two. `Proto` and `Interface` had no list behind them anywhere in the app,
+so both were free-text boxes: you typed `tcp`, or your best guess at an
+interface name, and hoped.
+
+MikroView now keeps the list itself. Every event that arrives records its
+protocol and its in and out interface names, with when each value was
+first and last seen, and the filter strip offers those as menus. Nothing
+is guessed and nothing is asked of your network: a value is in the menu
+only because a log line carrying it arrived.
+
+**Typing still works.** The menus are suggestions, not a closed set -- you
+can type a value MikroView has never seen, which is what lets you set a
+filter up *before* the traffic you are waiting for appears.
+
+There is one interface list, not one for inbound and one for outbound,
+because there is one interface filter: it matches an event whose in *or*
+out interface is the value you picked.
+
+```yaml
+seen:
+  # Where the list is persisted, as a small JSON file. Same
+  # optional-persistence contract as hosts.storePath above: left unset,
+  # the list still works, it just starts empty after a restart and
+  # refills as traffic arrives -- so a protocol or interface that has
+  # been quiet since the restart is missing from the menu until it is
+  # seen again. Typing an unlisted value is unaffected. If you set this
+  # in the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/seen-values.json"
+```
+
+### How long a value stays in the menu
+
+**A value is kept while it has been seen in the last 90 days, and each
+field keeps at most 200 values -- when it is full, the one seen longest
+ago is dropped.**
+
+Neither figure is a setting. Both are fixed in MikroView.
+
+Three months is the line because a menu's whole usefulness is that
+everything in it is worth picking. Something that has arrived at all this
+quarter is traffic you may still want to filter on; something that has
+not is a stale entry between you and the one you wanted. The 200 cap is
+the safety half: protocol and interface names both arrive inside a log
+line, so a misconfigured or hostile feed could otherwise invent new
+interface names indefinitely and grow the list without bound.
+
+Ageing-out happens when a new value is recorded, not on a timer. An
+instance that stops receiving events stops expiring values, which is the
+honest behaviour -- nothing was observed, so nothing changed.
+
+Writes go to disk behind the scenes, never on the path an event takes
+through the app, the same way the host presence register above is
+written.
+
+The list is read via `GET /api/seen-values` (see [API
+reference](#api-reference)), and is carried in `-backup` envelopes with
+every other store.
 
 ## Device dossier (issue #410)
 
@@ -3746,12 +3829,19 @@ tls:
   ingest is unaffected either way: `listen.syslogTls` loads its own
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
-- **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set. Both are mounted files, so both
-  have to be readable by the user MikroView runs as — see
+- **`certFile`/`keyFile`** — your own certificate, instead of the
+  self-generated one. **Put the files at `mikroview/certs/tls.crt` and
+  `mikroview/certs/tls.key` and restart** — from the release that
+  carries #1243, MikroView finds them there with nothing else set, both
+  present or neither used. Both are mounted files, so both have to be
+  readable by the user MikroView runs as — see
   [Files you mount into the container](#files-you-mount-into-the-container);
   the private key should stay `600`, the certificate can be `644`. See
   "Renewing your own certificate" below if something renews it for you.
+  Naming `certFile`/`keyFile` explicitly elsewhere, or the
+  `MIKROVIEW_TLS_CERT_FILE`/`MIKROVIEW_TLS_KEY_FILE` env vars, works
+  today and keeps working; either wins over the folder default when
+  set.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
@@ -3914,6 +4004,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_HOSTS_STORE_PATH` | `hosts.storePath` (see [Host presence register](#host-presence-register-issue-1016-optional)) |
+| `MIKROVIEW_SEEN_STORE_PATH` | `seen.storePath` (see [Seen filter values](#seen-filter-values-issue-1226-optional)) |
 | `MIKROVIEW_BASELINE_STORE_PATH` | `baseline.storePath` (see [Baseline line register](#baseline-line-register-issue-1016-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
@@ -4248,6 +4339,7 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/baseline/off` | open to any signed-in user (see [Baseline line register](#baseline-line-register-issue-1016-optional)): today's off-baseline lines, the establishment threshold that judged them, and the configured host-quiet window. Not reachable with a read-only API token: it is a partial inventory of your private address space, with destinations and ports attached |
 | `PUT /api/baseline/{key}/expected` | user tier: say the line at `key` is meant to be there, taking `{"reason": "..."}` in the JSON body. `reason` is required; empty is refused. 400 on an invalid key, 404 if no event has ever registered it. Audit-logged as `baseline.expected` |
 | `DELETE /api/baseline/{key}/expected` | user tier: take the mark off the line at `key`, putting it back to whatever its own recurrence says it is. 404 if there is no mark there. Audit-logged as `baseline.unexpected` |
+| `GET /api/seen-values` | open to any signed-in user (see [Seen filter values](#seen-filter-values-issue-1226-optional)): the values this instance has actually observed for the two filter fields that have no list anywhere else. Answers `{"fields": {"proto": [...], "interface": [...]}}`, each entry carrying `value`, `firstSeen` and `lastSeen`, most recently seen first. One call serves both menus. Anything past the 90-day retention is already left out. Not reachable with a read-only API token: the interface list is a partial inventory of your network's shape |
 | `GET /api/decommission` | viewer tier: every pending segment-retirement offer and every live watch over one (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) -- one response for both, since an offer and a ghost on the map are the same object one decision apart |
 | `POST /api/decommission/watches` | user tier: answer a pending offer with yes, creating a watch that keeps the retiring segment on the map as a ghost until its clean window elapses. Only reachable against a departure MikroView actually observed, never an arbitrary range. Audit-logged |
 | `POST /api/decommission/dismiss` | user tier: answer a pending offer with no -- the segment leaves the map at once and no watch is created. Audit-logged |

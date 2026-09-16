@@ -1400,6 +1400,38 @@ export interface Host {
   mark?: HostMark
 }
 
+/** One value this instance has actually observed for a filter field
+ *  (#1226), and the window it has been seen across. */
+export interface SeenValue {
+  value: string
+  firstSeen: string
+  lastSeen: string
+}
+
+/** The seen-values register's two lists. `interface` is one list, not
+ *  two: the interface filter matches an event on its in *or* out
+ *  interface, so there is one filter and one menu behind it. */
+export interface SeenValues {
+  proto: SeenValue[]
+  interface: SeenValue[]
+}
+
+// fetchSeenValues: the values this instance has actually seen for the
+// two filter fields that have no list anywhere else (#1226). Open to any
+// signed-in user, same tier as fetchHosts below -- a viewer needs it to
+// set a filter at all.
+//
+// Both fields come back in one response: the lists are small, the filter
+// strip draws both menus at once, and a second round trip for the second
+// menu would buy nothing.
+export async function fetchSeenValues(): Promise<SeenValues> {
+  const res = await fetch('/api/seen-values')
+  if (!res.ok) throw new ApiError(`fetchSeenValues: ${res.status}`, res.status)
+  const body = await res.json()
+  const fields = body.fields ?? {}
+  return { proto: fields.proto ?? [], interface: fields.interface ?? [] }
+}
+
 // fetchHosts/putHostMark/deleteHostMark: the host presence register
 // (#1016). Reading is open to any signed-in user, same tier as
 // fetchCoverageDeclarations above; both writes are user tier
