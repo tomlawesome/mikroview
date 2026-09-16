@@ -45,16 +45,49 @@ func evt(srcIP string) store.Event {
 	return store.Event{SrcIP: srcIP, ReceivedAt: time.Now()}
 }
 
-// withQueueSize/withDrainTimeout shrink the package-level tuning vars
+// withBatchSize/withDrainTimeout shrink the package-level tuning vars
 // for the duration of a test -- same convention as
 // internal/detect.maxTrackedSources: a var rather than a const purely so
 // tests can shrink it, restored via t.Cleanup so tests never leak state
 // into each other.
-func withQueueSize(t *testing.T, n int) {
+func withBatchSize(t *testing.T, n int) {
 	t.Helper()
-	orig := queueSize
-	queueSize = n
-	t.Cleanup(func() { queueSize = orig })
+	orig := batchSize
+	batchSize = n
+	t.Cleanup(func() { batchSize = orig })
+}
+
+// newEngineOnStore builds an engine reading from its own ring, which is
+// how main.go builds the real one -- the store is the engine's source of
+// events now, so a test that drives evaluation drives it through a store.
+func newEngineOnStore(t *testing.T, capacity int) (*Engine, *store.Store) {
+	t.Helper()
+	st := store.New(capacity, time.Hour)
+	return New(st), st
+}
+
+// storeAndNudge stores n events and rings the doorbell after each,
+// exactly as main.go's ingest goroutine does.
+func storeAndNudge(e *Engine, st *store.Store, n int) {
+	for i := 0; i < n; i++ {
+		st.Insert(evt("198.51.100.1"))
+		e.Nudge()
+	}
+}
+
+// waitFor polls until cond holds, failing the test if it never does --
+// the engine evaluates on its own goroutine, so every "it got there"
+// assertion in this file is eventually-true rather than immediate.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }
 
 func withDrainTimeout(t *testing.T, d time.Duration) {
@@ -64,86 +97,259 @@ func withDrainTimeout(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { drainTimeout = orig })
 }
 
-// ---- queue / backpressure ----
+// ---- cursor / nudge ----
 
-func TestEnqueueDropsOnFullQueueAndCounts(t *testing.T) {
-	withQueueSize(t, 2)
-	e := New()
-
-	// Fill the queue without a consumer running -- Run is never started
-	// in this test, so nothing ever drains it.
-	e.Enqueue(evt("198.51.100.1"))
-	e.Enqueue(evt("198.51.100.2"))
-	if got := e.Dropped(); got != 0 {
-		t.Fatalf("Dropped() = %d before any overflow, want 0", got)
-	}
-
-	const extra = 5
-	for i := 0; i < extra; i++ {
-		e.Enqueue(evt("198.51.100.3"))
-	}
-	if got := e.Dropped(); got != extra {
-		t.Fatalf("Dropped() = %d, want %d", got, extra)
-	}
-}
-
-func TestEnqueueNeverBlocksOnFullQueue(t *testing.T) {
-	withQueueSize(t, 1)
-	e := New()
-	e.Enqueue(evt("198.51.100.1")) // fills the size-1 queue
+// TestNudgeNeverBlocksHoweverOftenItIsRung is the property that replaced
+// the old queue's drop policy: ingest must never wait on evaluation, and
+// with nothing consuming the doorbell there is still nothing to wait for.
+func TestNudgeNeverBlocksHoweverOftenItIsRung(t *testing.T) {
+	e, st := newEngineOnStore(t, 100)
 
 	done := make(chan struct{})
 	go func() {
-		e.Enqueue(evt("198.51.100.2")) // must drop, not block
-		close(done)
+		defer close(done)
+		storeAndNudge(e, st, 1000) // Run is never started here: nothing answers
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Enqueue blocked on a full queue instead of dropping")
+		t.Fatal("Nudge blocked with no engine running, want a non-blocking doorbell")
 	}
-	if got := e.Dropped(); got != 1 {
-		t.Fatalf("Dropped() = %d, want 1", got)
+	// Nothing was evaluated, and nothing was lost either -- every one of
+	// them is still in the store waiting for a cursor to reach it.
+	if behind, _, outrun := e.Lag(); behind != 1000 || outrun != 0 {
+		t.Fatalf("Lag() = (behind %d, outrun %d), want (1000, 0)", behind, outrun)
 	}
 }
 
-// ---- lifecycle ----
-
-func TestRunDeliversEnqueuedEventsToDefinitions(t *testing.T) {
-	e := New()
+// TestRunEvaluatesEveryStoredEventAndAdvancesTheCursor is the core of
+// #1109: what is evaluated is what the store holds past the cursor, and
+// the cursor ends up on the newest event rather than anywhere short of
+// it.
+func TestRunEvaluatesEveryStoredEventAndAdvancesTheCursor(t *testing.T) {
+	e, st := newEngineOnStore(t, 1000)
 	d := &fakeDef{id: "d1", kind: "declarative"}
 	e.Register(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go e.Run(ctx)
-	// Stop and join before returning -- an unjoined Run goroutine would
-	// outlive this test and could still be inside drain() reading
-	// drainTimeout when a later test's withDrainTimeout writes it,
-	// which is exactly the cross-test data race this guards against.
 	defer func() {
 		cancel()
 		<-e.Done()
 	}()
+	waitForRunning(t, e)
 
 	const n = 10
-	for i := 0; i < n; i++ {
-		e.Enqueue(evt("198.51.100.1"))
-	}
+	storeAndNudge(e, st, n)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if d.calls.Load() == n {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	waitFor(t, "every stored event to be evaluated", func() bool { return d.calls.Load() == n })
+	if got := e.cursor.Load(); got != uint64(n) {
+		t.Fatalf("cursor = %d after %d events, want %d", got, n, n)
 	}
-	t.Fatalf("definition saw %d of %d events", d.calls.Load(), n)
+	behind, _, outrun := e.Lag()
+	if behind != 0 || outrun != 0 {
+		t.Fatalf("Lag() = (behind %d, outrun %d) once caught up, want (0, 0)", behind, outrun)
+	}
 }
 
-func TestRunClosesDonePromptlyWhenQueueAlreadyEmpty(t *testing.T) {
+// TestOneNudgeCatchesUpOnAWholeBurst is what makes the doorbell safe: a
+// nudge that arrives while the engine is busy is coalesced away, so
+// "caught up" has to mean the store is empty past the cursor, not that
+// every ring has been answered individually. Nudged exactly once for a
+// thousand events, across several batch boundaries.
+func TestOneNudgeCatchesUpOnAWholeBurst(t *testing.T) {
+	withBatchSize(t, 64)
+	e, st := newEngineOnStore(t, 2000)
+	d := &fakeDef{id: "d1", kind: "declarative"}
+	e.Register(d)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	defer func() {
+		cancel()
+		<-e.Done()
+	}()
+	waitForRunning(t, e)
+
+	const n = 1000
+	for i := 0; i < n; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+	e.Nudge()
+
+	waitFor(t, "one nudge to cover the whole burst", func() bool { return d.calls.Load() == n })
+}
+
+// TestRunDoesNotReplayAStoreItInherited -- the cursor starts at the
+// store's newest ID, so a warm restart (a restored ring, or an engine
+// started after ingest) evaluates what arrives next rather than raising
+// the whole retention window again.
+func TestRunDoesNotReplayAStoreItInherited(t *testing.T) {
+	e, st := newEngineOnStore(t, 100)
+	d := &fakeDef{id: "d1", kind: "declarative"}
+	e.Register(d)
+	for i := 0; i < 5; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	defer func() {
+		cancel()
+		<-e.Done()
+	}()
+	waitForRunning(t, e)
+
+	storeAndNudge(e, st, 1)
+	waitFor(t, "the one new event to be evaluated", func() bool { return d.calls.Load() == 1 })
+	if _, _, outrun := e.Lag(); outrun != 0 {
+		t.Fatalf("outrun = %d for a store the engine simply started level with, want 0", outrun)
+	}
+	if got := d.calls.Load(); got != 1 {
+		t.Fatalf("definition saw %d events, want only the one that arrived after Run started", got)
+	}
+}
+
+// ---- outrun: the only loss left ----
+
+// TestOutrunCountsWhatTheRingWrappedPast is the replacement for the old
+// queue-full drop count, and the reason it is a different measure: it
+// takes a flood big enough to overrun the whole retention window, not one
+// big enough to overrun 4096 queue slots.
+func TestOutrunCountsWhatTheRingWrappedPast(t *testing.T) {
+	e, st := newEngineOnStore(t, 10)
+	d := &fakeDef{id: "d1", kind: "declarative"}
+	e.Register(d)
+
+	for i := 0; i < 30; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 21..30 survive
+	}
+	e.evaluateBatch(time.Time{})
+
+	if got := d.calls.Load(); got != 10 {
+		t.Fatalf("definition saw %d events, want the 10 the ring still held", got)
+	}
+	behind, _, outrun := e.Lag()
+	if outrun != 20 {
+		t.Fatalf("outrun = %d, want the 20 events evicted before the engine reached them", outrun)
+	}
+	if behind != 0 {
+		t.Fatalf("behind = %d after catching up on what survived, want 0", behind)
+	}
+}
+
+// TestOutrunCountsAStoreReset -- Reset empties the ring without rewinding
+// its IDs (see store.Store.Reset), so events the engine had not reached
+// are gone exactly as an eviction would leave them, and must be counted
+// the same way rather than silently skipped.
+func TestOutrunCountsAStoreReset(t *testing.T) {
+	e, st := newEngineOnStore(t, 100)
+	d := &fakeDef{id: "d1", kind: "declarative"}
+	e.Register(d)
+
+	for i := 0; i < 10; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+	e.cursor.Store(3) // 1..3 evaluated, 4..10 not yet
+	st.Reset()
+	for i := 0; i < 2; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 11, 12
+	}
+	e.evaluateBatch(time.Time{})
+
+	if _, _, outrun := e.Lag(); outrun != 7 {
+		t.Fatalf("outrun = %d after a Reset over 7 unevaluated events, want 7", outrun)
+	}
+	if got := d.calls.Load(); got != 2 {
+		t.Fatalf("definition saw %d events, want the 2 stored after the Reset", got)
+	}
+}
+
+// TestOutrunCountsAShrinkingResize -- lowering store.maxMemory evicts
+// oldest-first, the same direction an ordinary wrap does, so it reads as
+// the same loss to a cursor that was behind the new capacity.
+func TestOutrunCountsAShrinkingResize(t *testing.T) {
+	e, st := newEngineOnStore(t, 100)
+	d := &fakeDef{id: "d1", kind: "declarative"}
+	e.Register(d)
+
+	for i := 0; i < 60; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+	e.cursor.Store(3)
+	if kept, evicted := st.Resize(10); kept != 10 || evicted != 50 {
+		t.Fatalf("Resize(10) kept %d evicted %d, want 10 and 50", kept, evicted)
+	}
+	e.evaluateBatch(time.Time{})
+
+	if _, _, outrun := e.Lag(); outrun != 47 {
+		t.Fatalf("outrun = %d after shrinking past 47 unevaluated events, want 47", outrun)
+	}
+	if got := d.calls.Load(); got != 10 {
+		t.Fatalf("definition saw %d events, want the 10 that survived the shrink", got)
+	}
+
+	// Growing loses nothing, so it adds nothing to the count.
+	st.Resize(200)
+	for i := 0; i < 5; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+	e.evaluateBatch(time.Time{})
+	if _, _, outrun := e.Lag(); outrun != 47 {
+		t.Fatalf("outrun = %d after growing the ring, want it unchanged at 47", outrun)
+	}
+}
+
+// ---- lag ----
+
+// TestLagReportsHowFarBehindAndHowLate covers what /api/stats serves: a
+// backlog is late, not lost, and the two numbers say so in the terms the
+// Engine Room readout uses.
+func TestLagReportsHowFarBehindAndHowLate(t *testing.T) {
+	e, st := newEngineOnStore(t, 100)
+
+	if behind, seconds, outrun := e.Lag(); behind != 0 || seconds != 0 || outrun != 0 {
+		t.Fatalf("Lag() on a fresh engine = (%d, %v, %d), want all zero", behind, seconds, outrun)
+	}
+
+	old := store.Event{SrcIP: "198.51.100.1", ReceivedAt: time.Now().Add(-4 * time.Second)}
+	st.Insert(old)
+	for i := 0; i < 2; i++ {
+		st.Insert(evt("198.51.100.1"))
+	}
+
+	behind, seconds, _ := e.Lag()
+	if behind != 3 {
+		t.Fatalf("behind = %d with three unevaluated events, want 3", behind)
+	}
+	if seconds < 3 || seconds > 60 {
+		t.Fatalf("behindSeconds = %v, want roughly the 4s age of the oldest unevaluated event", seconds)
+	}
+
+	e.evaluateBatch(time.Time{})
+	behind, seconds, _ = e.Lag()
+	if behind != 0 || seconds != 0 {
+		t.Fatalf("Lag() = (behind %d, %v s) once caught up, want (0, 0)", behind, seconds)
+	}
+}
+
+// TestLagIsNilSafe -- /api/stats holds the engine behind a narrow
+// interface that is commonly nil (see api.Server.Evaluation), and the
+// nil-receiver convention Nudge and Tick follow applies here too.
+func TestLagIsNilSafe(t *testing.T) {
+	var e *Engine
+	if behind, seconds, outrun := e.Lag(); behind != 0 || seconds != 0 || outrun != 0 {
+		t.Fatalf("Lag() on a nil engine = (%d, %v, %d), want all zero", behind, seconds, outrun)
+	}
+	e.Nudge() // must not panic either
+}
+
+// ---- lifecycle ----
+
+func TestRunClosesDonePromptlyWhenAlreadyCaughtUp(t *testing.T) {
 	withDrainTimeout(t, 2*time.Second) // a large bound the test must NOT have to wait out
-	e := New()
+	e, _ := newEngineOnStore(t, 100)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go e.Run(ctx)
@@ -152,25 +358,28 @@ func TestRunClosesDonePromptlyWhenQueueAlreadyEmpty(t *testing.T) {
 	select {
 	case <-e.Done():
 	case <-time.After(1 * time.Second):
-		t.Fatal("Done() did not close promptly for an already-empty queue")
+		t.Fatal("Done() did not close promptly for an engine with nothing to evaluate")
 	}
 }
 
-func TestRunDrainsQueuedEventsOnShutdownWithinBound(t *testing.T) {
+func TestRunDrainsTheBacklogOnShutdownWithinBound(t *testing.T) {
 	withDrainTimeout(t, 500*time.Millisecond)
-	e := New()
+	e, st := newEngineOnStore(t, 100)
 	d := &fakeDef{id: "d1", kind: "declarative"}
 	e.Register(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	waitForRunning(t, e)
 
+	// Stored but never announced, so the backlog is still there when ctx
+	// is cancelled -- drain has to go and look rather than rely on having
+	// been told.
 	const n = 5
 	for i := 0; i < n; i++ {
-		e.Enqueue(evt("198.51.100.1"))
+		st.Insert(evt("198.51.100.1"))
 	}
-
-	go e.Run(ctx)
-	cancel() // cancel immediately -- Run must still drain what's queued
+	cancel()
 
 	select {
 	case <-e.Done():
@@ -178,27 +387,28 @@ func TestRunDrainsQueuedEventsOnShutdownWithinBound(t *testing.T) {
 		t.Fatal("Run did not stop within the drain bound")
 	}
 	if got := d.calls.Load(); got != n {
-		t.Fatalf("definition saw %d of %d queued events drained on shutdown", got, n)
+		t.Fatalf("definition saw %d of %d backlogged events drained on shutdown", got, n)
 	}
 }
 
 func TestRunStopsWithinDrainTimeoutUnderSustainedBacklog(t *testing.T) {
 	const drainBound = 100 * time.Millisecond
 	withDrainTimeout(t, drainBound)
-	e := New()
+	e, st := newEngineOnStore(t, 4096)
 	// A definition too slow (5ms/event) to drain a 4096-deep backlog
 	// (~20s unbounded) within a 100ms bound -- proves drain() actually
-	// stops instead of running until the queue empties no matter how
-	// long that takes.
+	// stops instead of evaluating everything the store holds no matter
+	// how long that takes, including part-way through a batch.
 	d := &fakeDef{id: "slow", kind: "declarative", delay: 5 * time.Millisecond}
 	e.Register(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	waitForRunning(t, e)
 	const n = 4096
 	for i := 0; i < n; i++ {
-		e.Enqueue(evt("198.51.100.1"))
+		st.Insert(evt("198.51.100.1"))
 	}
-	go e.Run(ctx)
 	cancel()
 
 	start := time.Now()
@@ -218,7 +428,7 @@ func TestRunStopsWithinDrainTimeoutUnderSustainedBacklog(t *testing.T) {
 // ---- panic isolation ----
 
 func TestEvaluateContainsAPanicWithoutCrashing(t *testing.T) {
-	e := New()
+	e := New(nil)
 	d := &fakeDef{id: "d1", kind: "declarative"}
 	d.shouldPanic.Store(true)
 	e.Register(d)
@@ -239,37 +449,36 @@ func TestEvaluateContainsAPanicWithoutCrashing(t *testing.T) {
 }
 
 func TestRunSurvivesPanickingDefinitions(t *testing.T) {
-	e := New()
+	e, st := newEngineOnStore(t, 100)
 	d := &fakeDef{id: "d1", kind: "declarative"}
 	d.shouldPanic.Store(true)
 	e.Register(d)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go e.Run(ctx)
-	// See TestRunDeliversEnqueuedEventsToDefinitions for why this joins
-	// rather than just cancelling.
+	// Stop and join before returning -- an unjoined Run goroutine would
+	// outlive this test and could still be inside drain() reading
+	// drainTimeout when a later test's withDrainTimeout writes it, which
+	// is exactly the cross-test data race this guards against.
 	defer func() {
 		cancel()
 		<-e.Done()
 	}()
+	waitForRunning(t, e)
 
 	const n = 20
-	for i := 0; i < n; i++ {
-		e.Enqueue(evt("198.51.100.1"))
-	}
+	storeAndNudge(e, st, n)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(e.queue) == 0 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("Run appears to have stopped consuming after a panic -- %d events still queued", len(e.queue))
+	// Caught up, not merely alive: the cursor reaching the newest event
+	// is what proves the panics did not stall the loop.
+	waitFor(t, "the cursor to reach the newest event after a run of panics", func() bool {
+		behind, _, _ := e.Lag()
+		return behind == 0
+	})
 }
 
 func TestThreeConsecutivePanicsFaultDefinitionAndSkipIt(t *testing.T) {
-	e := New()
+	e := New(nil)
 	d := &fakeDef{id: "flaky", kind: "programmatic"}
 	d.shouldPanic.Store(true)
 	e.Register(d)
@@ -302,7 +511,7 @@ func TestThreeConsecutivePanicsFaultDefinitionAndSkipIt(t *testing.T) {
 }
 
 func TestSuccessfulEvaluationResetsConsecutivePanicCount(t *testing.T) {
-	e := New()
+	e := New(nil)
 	d := &fakeDef{id: "flaky", kind: "programmatic"}
 	e.Register(d)
 
@@ -323,7 +532,7 @@ func TestSuccessfulEvaluationResetsConsecutivePanicCount(t *testing.T) {
 }
 
 func TestClearFaultReArmsDefinition(t *testing.T) {
-	e := New()
+	e := New(nil)
 	d := &fakeDef{id: "flaky", kind: "programmatic"}
 	d.shouldPanic.Store(true)
 	e.Register(d)

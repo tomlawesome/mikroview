@@ -17,7 +17,7 @@ import (
 // attacker chooses (a source IP, in particular) could grow that state
 // without bound. A var, not a const, so tests can shrink it without
 // needing thousands of distinct keys -- same convention as
-// internal/detect.maxTrackedSources and this package's own queueSize.
+// internal/detect.maxTrackedSources and this package's own batchSize.
 //
 // One cap, applied independently by every Keyed[V] a definition
 // constructs: a definition that tracks rings, evidence and a baseline

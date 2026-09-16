@@ -246,7 +246,7 @@ func TestShippedNetClassReinforcesAFlagRaisedByTheSameEvent(t *testing.T) {
 	reinforcer := newShippedNetClassDefinition(t, fs, nc)
 	portScan := newShippedPortScanDefinition(t, fs, Scope{})
 
-	eng := New()
+	eng := New(nil)
 	eng.Register(reinforcer) // registered FIRST, deliberately
 	eng.Register(portScan)
 
