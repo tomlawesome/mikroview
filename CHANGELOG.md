@@ -33,6 +33,26 @@ rewritten.
   admins see it. `GET /api/upgrade` and `POST /api/upgrade/acknowledge`;
   see [docs/upgrades.md](docs/upgrades.md).
 
+- **Drop a file into the app folder and restart — no setting to change**
+  (#1243, the contract ruled on in #1209). When nothing in config or the
+  environment names a path, MikroView now looks in `/etc/mikroview`:
+  `config.yaml`, `GeoLite2-Country.mmdb` for country flags,
+  `keys/history.key` for history encryption, and `certs/tls.crt` +
+  `certs/tls.key` for your own certificate. So `/etc/mikroview/config.yaml`
+  is the built-in default as well as the compose default — a bare
+  `docker run` with the folder mounted needs no `MIKROVIEW_CONFIG` — and
+  an empty folder is not an error: the container starts and runs on
+  defaults. Every boot logs one line per file, saying found or not found
+  and the path it looked at, so a file put one directory too deep shows
+  up as a line rather than as a feature that stayed off.
+
+  Nothing changes for an install that already sets these. A value in
+  config or the environment always wins over the folder, so old per-file
+  mounts keep working exactly as before and there is nothing to migrate.
+  The one new refusal is half a certificate pair: `certs/tls.crt`
+  without `certs/tls.key`, or the reverse, stops startup naming the file
+  that is missing, rather than quietly serving MikroView's own
+  certificate under the name yours was meant to serve.
 - **Proto and Interface are pickers now, over the values this instance
   has actually seen** (#1226). They were the last two filters in the
   stream's strip with no list behind them: you typed `tcp`, or your best
