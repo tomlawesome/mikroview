@@ -101,12 +101,14 @@ func TestUpgradeIsSilentOnAFreshInstall(t *testing.T) {
 func TestUpgradeRouterCountReflectsTheSetupLedger(t *testing.T) {
 	s := upgradeServer(t)
 	s.Setup.NoteUpgrade("v0.4.0", "v0.5.0", time.Now())
-	s.Devices.Resolve("203.0.113.9", time.Now())
-	s.Devices.Resolve("198.51.100.1", time.Now())
+	// Two routers known only from their own pushes (#1170: a syslog
+	// source is never a router; a push is what puts one in the list).
+	s.Devices.Ensure("edge", time.Now())
+	s.Devices.Ensure("branch", time.Now())
 
 	noteReport(t, s, "core", routeros.WizardVersion, "firewall,info")
-	noteReport(t, s, "203.0.113.9", routeros.WizardVersion, "firewall")
-	// 198.51.100.1 says nothing at all.
+	noteReport(t, s, "edge", routeros.WizardVersion, "firewall")
+	// branch says nothing at all.
 
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
@@ -125,8 +127,8 @@ func TestUpgradeRouterCountReflectsTheSetupLedger(t *testing.T) {
 
 	// Every router caught up: the count falls to zero, which is what
 	// clears the notice without anyone pressing done.
-	noteReport(t, s, "203.0.113.9", routeros.WizardVersion, "firewall,info")
-	noteReport(t, s, "198.51.100.1", routeros.WizardVersion, "firewall,info")
+	noteReport(t, s, "edge", routeros.WizardVersion, "firewall,info")
+	noteReport(t, s, "branch", routeros.WizardVersion, "firewall,info")
 	if after := getUpgrade(t, adminClient, ts.URL).Routers; after.Behind != 0 || after.Reported != 3 {
 		t.Errorf("after every router reported the current setup: %+v, want behind 0 of 3 reported", after)
 	}
