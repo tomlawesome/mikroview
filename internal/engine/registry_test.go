@@ -32,6 +32,15 @@ import (
 // wired together the way main.go wires them, with a real flag store
 // behind the shipped definitions' sinks so a raised flag is observable.
 func newTestRegistry(t *testing.T) (*Engine, *DefinitionsStore, *Registry) {
+	eng, _, defs, reg := newTestRegistryOnStore(t)
+	return eng, defs, reg
+}
+
+// newTestRegistryOnStore is the same, for the one test that has to drive
+// events through the engine rather than only register definitions on it:
+// the engine reads what it evaluates from a store (#1109), so a test
+// producing load needs the store it reads from.
+func newTestRegistryOnStore(t *testing.T) (*Engine, *store.Store, *DefinitionsStore, *Registry) {
 	t.Helper()
 	defs, err := OpenDefinitionsStore("")
 	if err != nil {
@@ -40,7 +49,8 @@ func newTestRegistry(t *testing.T) (*Engine, *DefinitionsStore, *Registry) {
 	if err := SeedShippedDefinitions(defs, DefaultDetectorSettings(), DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
-	eng := New()
+	st := store.New(4096, time.Hour)
+	eng := New(st)
 	ml, err := matchlog.Open(t.TempDir()+"/matchlog.jsonl", 1000)
 	if err != nil {
 		t.Fatalf("matchlog.Open: %v", err)
@@ -64,7 +74,7 @@ func newTestRegistry(t *testing.T) (*Engine, *DefinitionsStore, *Registry) {
 		// break the edit that triggered the rebuild.
 		reg.Sync()
 	})
-	return eng, defs, reg
+	return eng, st, defs, reg
 }
 
 // countingDefinition is a stand-in for a real definition that only
@@ -267,7 +277,7 @@ func registeredEvaluated(t *testing.T, eng *Engine, id string) Evaluated {
 // live definition, it builds new objects and swaps registrations through
 // Engine.Register.
 func TestRegistrySyncIsSafeUnderEventLoad(t *testing.T) {
-	eng, defs, _ := newTestRegistry(t)
+	eng, st, defs, _ := newTestRegistryOnStore(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go eng.Run(ctx)
@@ -297,17 +307,19 @@ func TestRegistrySyncIsSafeUnderEventLoad(t *testing.T) {
 			// Yields between events rather than spinning flat out.
 			// Without this the producer starves the editor of the
 			// definitions store's lock under -race and the test measures
-			// scheduling luck instead of correctness -- the queue is
-			// bounded and lossy by design (see Enqueue), so an
-			// unthrottled producer proves nothing extra.
+			// scheduling luck instead of correctness -- the ring is
+			// bounded and evicts oldest-first by design (see
+			// store.Store.Since), so an unthrottled producer proves
+			// nothing extra.
 			runtime.Gosched()
-			eng.Enqueue(store.Event{
+			st.Insert(store.Event{
 				SrcIP:      fmt.Sprintf("203.0.113.%d", i%250+1),
 				SrcMAC:     "aa:bb:cc:dd:ee:ff",
 				DstIP:      "10.0.0.1",
 				DstPort:    22 + i%40,
 				ReceivedAt: now.Add(time.Duration(i) * time.Millisecond),
 			})
+			eng.Nudge()
 		}
 	}()
 

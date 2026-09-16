@@ -3,9 +3,8 @@
 // Package engine is the evaluation chassis described in
 // docs/decisions/evaluation-engine.md -- the machine internal/detect and
 // internal/watchlist each build by hand today, unified into one place.
-// This first slice (#398) is deliberately just the plumbing: an ingest
-// queue with one backpressure policy, one run/shutdown lifecycle, and
-// one panic boundary. It carries no evaluation semantics at all --
+// This first slice (#398) is deliberately just the plumbing: one way in
+// from ingest, one run/shutdown lifecycle, and one panic boundary. It carries no evaluation semantics at all --
 // there is no such thing as a detection or an expectation yet, only an
 // Evaluated definition, the minimal shape #399/#401 grow into
 // declarative and programmatic definitions. Until something registers a
@@ -63,49 +62,50 @@ import (
 
 var logger = logging.New("engine")
 
-// queueSize bounds the engine's ingest queue (see Enqueue/Run). This is
-// the one place that reasoning is stated now -- it used to be written
-// twice, independently, by detect.observeQueueSize and
-// watchlist.evalQueueSize, the latter's own comment noting it "mirrors
-// internal/detect.observeQueueSize's own sizing reasoning exactly".
-//
-// Sized to the same tier as main.go's raw syslog channel (4096), since
-// Enqueue is offered once per stored event -- the same rate as ingestion
-// itself, unlike internal/notify's much smaller queue, which only
-// receives newly-raised flags, a far rarer event. It is a generous burst
-// absorber, not a guarantee against sustained overload: nothing bounded
-// can be one.
+// batchSize is how many events one Since call copies out of the store
+// (see Run). It is a lock-hold bound, not a backpressure bound: the
+// store hands the batch over under its read lock, which the sole ingest
+// writer waits on, so the batch is kept small enough that an engine
+// catching up on a deep backlog never holds that lock for a visible
+// stretch -- it takes the backlog in slices instead, releasing the lock
+// between each. Nothing is lost by stopping at 512: the events stay in
+// the ring and the very next iteration reads on from the same cursor.
 //
 // A var, not a const, so tests can shrink it -- same convention as
-// internal/detect.maxTrackedSources -- without needing thousands of
-// events to fill the queue.
-var queueSize = 4096
+// internal/detect.maxTrackedSources -- without needing hundreds of
+// events to reach a batch boundary.
+var batchSize = 512
 
-// dropLogInterval rate-limits the overload log line Enqueue emits on a
-// full queue. Unifies detect.observeQueueDropLogInterval and
+// logFloodInterval rate-limits the log lines this package emits from
+// conditions that repeat at event rate -- the store outrunning the
+// engine (see recordOutrun) and the match log failing (see
+// matchlog_sink.go). Unifies detect.observeQueueDropLogInterval and
 // watchlist.evalQueueDropLogInterval, which stated the same 30-second
-// reasoning twice: logging every single drop would itself add load
-// during exactly the sustained-overload condition being reported, so a
-// periodic summary is enough to make an otherwise-invisible "evaluation
-// silently fell behind" condition observable without that cost.
-const dropLogInterval = 30 * time.Second
+// reasoning twice: logging every single occurrence would itself add load
+// during exactly the overload condition being reported, so a periodic
+// summary is enough to make an otherwise-invisible condition observable
+// without that cost.
+const logFloodInterval = 30 * time.Second
 
-// drainTimeout bounds how long Run keeps draining the queue after ctx is
-// cancelled, before drain gives up and Run returns anyway.
+// drainTimeout bounds how long Run keeps reading batches forward after
+// ctx is cancelled, before drain gives up and Run returns anyway.
 //
-// This is a decision, not a detail: draining forever ("finish
-// everything queued, however long that takes") can hang process exit on
-// an unbounded backlog, and dropping everything the instant ctx cancels
-// throws away events that were already accepted and are typically cheap
-// to finish evaluating. A short bounded window gets the common case (a
-// queue that is mostly empty, or catches up in milliseconds) fully
-// drained, while capping worst-case shutdown latency to something in
-// the same order as the rest of mikroview's shutdown sequence -- see
-// main.go's own 5-second graceful-shutdown budget for httpServer.
+// This is a decision, not a detail: draining forever ("evaluate
+// everything still held, however long that takes") can hang process exit
+// on a backlog the size of the whole retention window, and stopping the
+// instant ctx cancels throws away events that are already stored and are
+// typically cheap to finish evaluating. A short bounded window gets the
+// common case (an engine that is caught up, or catches up in
+// milliseconds) fully drained, while capping worst-case shutdown latency
+// to something in the same order as the rest of mikroview's shutdown
+// sequence -- see main.go's own 5-second graceful-shutdown budget for
+// httpServer. What is left unevaluated is not lost bookkeeping: the
+// cursor is not persisted, so a restart starts at the store's newest ID
+// (see Run).
 //
 // A var, not a const, so lifecycle tests can shrink it and stay fast
 // rather than actually waiting out the production bound -- same
-// convention as queueSize above.
+// convention as batchSize above.
 var drainTimeout = 2 * time.Second
 
 // faultThreshold is the repeat-panic policy decided on issue #398 itself
@@ -300,15 +300,48 @@ type registration struct {
 	fault    *Fault
 }
 
-// Engine is the chassis: one ingest queue, one backpressure policy, one
+// Source is where Run reads events from: the ring store itself in
+// production (internal/store.Store.Since), which is what makes the
+// engine's reach the whole retention window instead of a second bounded
+// copy of the stream (#1109).
+//
+// An interface rather than a *store.Store so the chassis keeps the same
+// "no opinion about where events come from" posture it had when it was
+// fed a channel -- and so a test can hand it a source it controls
+// precisely.
+type Source interface {
+	// Since returns the held events with ID > afterID in ascending ID
+	// order, up to max of them, plus the oldest and newest IDs the source
+	// still holds. See store.Store.Since for the full contract.
+	Since(afterID uint64, max int) ([]store.Event, uint64, uint64)
+}
+
+// Engine is the chassis: one cursor over the event store, one
 // run/shutdown lifecycle, one panic boundary per evaluated definition.
 // See the package doc comment for what it deliberately does not do yet.
 type Engine struct {
-	queue chan store.Event
-	done  chan struct{}
+	src  Source
+	done chan struct{}
 
-	dropped  atomic.Uint64
-	dropGate *logging.Limiter
+	// nudge is the "there is something new" doorbell, not a queue: one
+	// slot, non-blocking send (see Nudge), so any number of inserts
+	// arriving while Run is busy coalesce into a single wake-up and the
+	// ingest goroutine never waits on evaluation. What to evaluate is
+	// read from src, never carried through here.
+	nudge chan struct{}
+
+	// cursor is the last ID this engine evaluated. Written only by the
+	// evaluation goroutine, read by Lag from whichever goroutine serves
+	// /api/stats, hence atomic.
+	cursor atomic.Uint64
+
+	// outrun counts events the store evicted before the engine reached
+	// them -- the only loss left once evaluation reads from the store
+	// rather than from a queue of its own, and a much rarer thing than
+	// the queue overflow it replaces: it takes a flood that outruns the
+	// entire retention window, not one that outruns 4096 slots.
+	outrun     atomic.Uint64
+	outrunGate *logging.Limiter
 
 	// evaluatedEvents counts events that have reached evaluateEvent --
 	// the one thing ImportState needs to know to refuse a warm-restart
@@ -338,15 +371,20 @@ type Engine struct {
 	running bool
 }
 
-// New constructs an Engine with an empty queue and no registered
+// New constructs an Engine reading from src, with no registered
 // definitions -- evaluating nothing until something registers one.
-func New() *Engine {
+//
+// A nil src is valid and means "no events ever arrive": Run still serves
+// tasks and shuts down normally, which is what callers that only exercise
+// the definition set (tests, ExportState) want.
+func New(src Source) *Engine {
 	return &Engine{
-		queue:    make(chan store.Event, queueSize),
-		done:     make(chan struct{}),
-		tasks:    make(chan func()),
-		dropGate: logging.NewLimiter(dropLogInterval),
-		defs:     make(map[string]*registration),
+		src:        src,
+		done:       make(chan struct{}),
+		nudge:      make(chan struct{}, 1),
+		tasks:      make(chan func()),
+		outrunGate: logging.NewLimiter(logFloodInterval),
+		defs:       make(map[string]*registration),
 	}
 }
 
@@ -401,77 +439,176 @@ func (e *Engine) reorderLocked() {
 	})
 }
 
-// Enqueue hands ev off to the evaluation goroutine (see Run) without
-// ever blocking the caller -- a non-blocking select/default send,
-// dropping ev if the queue is full. mikroview's ingest goroutine calls
-// this the same way it calls detect.Detector.Enqueue and
-// watchlist.Evaluator.Enqueue: a dropped event is still stored and
-// broadcast normally, it just never reaches evaluation.
+// Nudge tells the evaluation goroutine there is something new in the
+// store, without handing it anything and without ever blocking the
+// caller: a non-blocking send on a one-slot channel, so a doorbell rung
+// while the engine is already busy costs nothing and is not lost -- the
+// engine reads forward from its cursor when it next looks, and a cursor
+// does not care how many times it was rung.
 //
-// A nil *Engine is a valid no-op, same convention
-// watchlist.Evaluator.Enqueue uses for a nil receiver -- callers (tests
-// in particular) that don't need the chassis at all can pass nil rather
-// than constructing one solely to satisfy the signature.
-func (e *Engine) Enqueue(ev store.Event) {
+// mikroview's ingest goroutine calls this once per stored event, right
+// after store.Insert. Missing a nudge cannot lose an event, only delay
+// it: the next nudge, from the next arrival, still finds everything
+// behind the cursor.
+//
+// A nil *Engine is a valid no-op, same convention Tick and ExportState
+// use for a nil receiver -- callers (tests in particular) that don't need
+// the chassis at all can pass nil rather than constructing one solely to
+// satisfy the signature.
+func (e *Engine) Nudge() {
 	if e == nil {
 		return
 	}
 	select {
-	case e.queue <- ev:
+	case e.nudge <- struct{}{}:
 	default:
-		e.recordDropped()
+		// Already rung and not yet answered: one wake-up covers both.
 	}
 }
 
-// recordDropped tracks an Enqueue drop and logs a rate-limited summary
-// that says what was actually lost -- detection/evaluation for those
-// events, not merely "queue full". #380's first item is why this
-// matters: the observable symptom of a starved evaluator is otherwise
-// silence, and silence reads as "nothing is wrong" rather than as the
-// coverage gap it is.
-func (e *Engine) recordDropped() {
-	total := e.dropped.Add(1)
-	if _, ok := e.dropGate.Allow(); ok {
-		logger.Warn(fmt.Sprintf("engine queue full -- %d event(s) dropped, detection/evaluation skipped for them (still stored/broadcast normally)", total))
+// Lag reports how far behind the store's newest event this engine is
+// (behind), how old the oldest thing it has not evaluated yet is
+// (behindSeconds), and how many events it never got to at all because
+// the store evicted them first (outrun, a lifetime count).
+//
+// The first two are a "late" measure and the third is a "lost" measure,
+// which is the whole distinction this design bought: being behind is a
+// backlog that will be worked through, and only outrun is a coverage
+// gap. /api/stats reports all three (see internal/api/rest.go) so the UI
+// can say so in those terms.
+//
+// behindSeconds reads the next unevaluated event's ReceivedAt rather
+// than timing evaluation itself: "the oldest thing not yet looked at is
+// 4 seconds old" is a statement an operator can act on, where a rate is
+// not. Zero when caught up -- there is no next event to be late for.
+func (e *Engine) Lag() (behind uint64, behindSeconds float64, outrun uint64) {
+	if e == nil {
+		return 0, 0, 0
 	}
+	cursor := e.cursor.Load()
+	next, _, newestHeld := e.read(cursor, 1)
+	if newestHeld > cursor {
+		behind = newestHeld - cursor
+	}
+	if len(next) > 0 {
+		if age := time.Since(next[0].ReceivedAt).Seconds(); age > 0 {
+			behindSeconds = age
+		}
+	}
+	return behind, behindSeconds, e.outrun.Load()
 }
 
-// Dropped reports how many events Enqueue has dropped since the engine
-// was constructed, so a later issue can surface it (e.g. "dropped N
-// events in the last hour") rather than leaving it visible only in the
-// rate-limited log line above.
-func (e *Engine) Dropped() uint64 {
-	return e.dropped.Load()
+// read is Source.Since with the nil-source case folded in, so every
+// caller below can read unconditionally. A nil source reports an empty
+// held range, which is also what "no events, none evicted" looks like.
+func (e *Engine) read(afterID uint64, max int) ([]store.Event, uint64, uint64) {
+	if e.src == nil {
+		return nil, 0, 0
+	}
+	return e.src.Since(afterID, max)
 }
 
-// Run drains the queue, evaluating each event against every registered
-// definition in turn, until ctx is done -- at which point it drains
-// whatever is already queued for up to drainTimeout before stopping.
-// Meant to run in its own goroutine, separate from whatever goroutine
-// calls Enqueue, the same shape as detect.Detector.Run and
-// watchlist.Evaluator.Run.
+// Run evaluates every event the store holds past this engine's cursor,
+// against every registered definition in turn, waking on a Nudge and
+// reading forward in batches until it is caught up -- then waiting for
+// the next one. When ctx is done it keeps reading for up to drainTimeout
+// before stopping. Meant to run in its own goroutine, separate from
+// whatever goroutine calls Nudge, the same shape the queue-fed version
+// had.
+//
+// The cursor starts at the store's newest ID, not at zero: whatever the
+// store already holds either has been evaluated (this process's own
+// earlier events) or belongs to a previous process, and re-raising a
+// restored warm store's flags on every restart would be a worse answer
+// than starting level. That also means the first batch can never look
+// like eviction outran the engine, because there is nothing before the
+// cursor to have been evicted.
 //
 // Run closes the channel Done returns exactly once, on its way out --
 // so a caller (main.go) can join on the engine having actually stopped
 // rather than firing and forgetting.
 func (e *Engine) Run(ctx context.Context) {
 	defer close(e.done)
+	_, _, newestHeld := e.read(0, 0)
+	e.cursor.Store(newestHeld)
+	// Set after the cursor, not before: running is what tells the rest of
+	// the engine that evaluation has begun (see setRunning), so it must
+	// not be true for the window in which the cursor still says zero.
 	e.setRunning(true)
 	defer e.setRunning(false)
 	for {
 		select {
-		case ev := <-e.queue:
-			e.evaluateEvent(ev)
+		case <-e.nudge:
+			e.catchUp()
 		case fn := <-e.tasks:
 			// Work another goroutine needs done with this one's
 			// exclusive access to definition state -- see
-			// runOnEvaluationGoroutine. Serviced between events, exactly
-			// like an event, so it can never interleave with one.
+			// runOnEvaluationGoroutine. Serviced between batches, exactly
+			// like an event was, so it can never interleave with one.
 			fn()
 		case <-ctx.Done():
 			e.drain()
 			return
 		}
+	}
+}
+
+// catchUp reads batches forward from the cursor until one comes back
+// empty -- "caught up" is a fact about the store, not about how many
+// nudges have been answered, so a burst of 100,000 inserts behind one
+// doorbell is evaluated in full.
+func (e *Engine) catchUp() {
+	for e.evaluateBatch(time.Time{}) {
+	}
+}
+
+// evaluateBatch reads one batch forward from the cursor, evaluates it in
+// ingest order and advances the cursor across it, reporting whether the
+// batch held anything (i.e. whether there may be more behind it).
+//
+// A non-zero deadline stops it part-way through a batch; only shutdown
+// passes one (see drain), because only shutdown has a reason not to
+// finish what it has already copied out of the store.
+func (e *Engine) evaluateBatch(deadline time.Time) bool {
+	cursor := e.cursor.Load()
+	events, oldestHeld, _ := e.read(cursor, batchSize)
+	if oldestHeld > cursor+1 {
+		// The ring wrapped -- or was reset, or resized smaller -- past
+		// events this engine had not reached. Eviction only ever takes
+		// from the oldest end, so everything from the cursor up to the
+		// oldest survivor is gone for good, and the honest move is to
+		// count it and carry on from what is left rather than pretend the
+		// cursor is still meaningful.
+		e.recordOutrun(oldestHeld - 1 - cursor)
+		e.cursor.Store(oldestHeld - 1)
+	}
+	if len(events) == 0 {
+		return false
+	}
+	for _, ev := range events {
+		e.evaluateEvent(ev)
+		// Per event, not per batch: the cursor is what Lag reads and what
+		// a cut-short drain resumes nothing from, so it should never
+		// claim more evaluation than has actually happened.
+		e.cursor.Store(ev.ID)
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return false
+		}
+	}
+	return true
+}
+
+// recordOutrun counts n events the store evicted before the engine
+// reached them, and logs a rate-limited summary that says what was
+// actually lost -- detection for those events, not merely "the buffer
+// wrapped". #380's first item is why this matters: the observable
+// symptom of an evaluator that never saw an event is otherwise silence,
+// and silence reads as "nothing is wrong" rather than as the coverage
+// gap it is.
+func (e *Engine) recordOutrun(n uint64) {
+	total := e.outrun.Add(n)
+	if _, ok := e.outrunGate.Allow(); ok {
+		logger.Warn(fmt.Sprintf("events arrived faster than they could be checked and left the memory window first -- %d event(s) never checked (they were stored and broadcast normally); raise store.maxMemory or find what is flooding", total))
 	}
 }
 
@@ -534,20 +671,16 @@ func (e *Engine) Done() <-chan struct{} {
 	return e.done
 }
 
-// drain evaluates whatever is already sitting in the queue when Run's
-// ctx is cancelled, stopping as soon as the queue is empty or
-// drainTimeout elapses, whichever comes first -- see drainTimeout's doc
-// comment for why neither "drain everything" nor "drop everything" is
-// the right unconditional answer.
+// drain keeps reading batches forward when Run's ctx is cancelled,
+// stopping as soon as the engine is caught up or drainTimeout elapses,
+// whichever comes first -- see drainTimeout's doc comment for why
+// neither "evaluate everything held" nor "stop at once" is the right
+// unconditional answer. The deadline is passed down into the batch so a
+// single slow definition cannot overrun it by a whole batch's worth of
+// events.
 func (e *Engine) drain() {
 	deadline := time.Now().Add(drainTimeout)
-	for {
-		select {
-		case ev := <-e.queue:
-			e.evaluateEvent(ev)
-		default:
-			return
-		}
+	for e.evaluateBatch(deadline) {
 		if time.Now().After(deadline) {
 			return
 		}
@@ -747,7 +880,7 @@ func (e *Engine) Faults() []Fault {
 //
 // No per-event cost: this is read only from admin API handlers, never
 // from evaluateEvent's own hot path. A nil *Engine answers ok=false,
-// same convention as Enqueue/Tick above, so a caller need not nil-check
+// same convention as Nudge/Tick above, so a caller need not nil-check
 // before calling.
 func (e *Engine) Learning(id string, now time.Time) (LearningState, bool) {
 	if e == nil {
