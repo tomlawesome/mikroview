@@ -161,6 +161,21 @@ rewritten.
   already filled in. The Settings group and setup card that render these
   for an operator are the other half of #1225.
 
+- **Your data directory now records which schema it is on, and MikroView
+  refuses to start on data a newer build wrote** (#1238). The JSON files
+  gain what the database has had since #131: one numbered list of
+  migrations covering both, and a `schema.json` beside the stores saying
+  which of them have run and which build ran them. A missing file means
+  schema 0, so every existing install is stamped on its next start and
+  nothing else changes — there are no data migrations yet. Start an older
+  MikroView on a newer install's data and it now stops before it writes
+  anything, naming the version that wrote the data and telling you to
+  run that one or later, rather than quietly rewriting every document in
+  shapes it does not understand. Migrations land one at a time and are
+  stamped as they land, so an upgrade interrupted half-way — power cut,
+  `docker kill` — resumes at the first one that did not finish with the
+  old documents untouched. `docs/upgrades.md` has the whole contract.
+
 ### Changed
 
 - **A router that only ever pushed is now in the same device list
@@ -234,6 +249,16 @@ rewritten.
 
 ### Fixed
 
+- **`-backup`/`-restore` now carry the data directory's schema number**
+  (`schema.json`, #1244). It was never on the bundled list, so a restore
+  into an empty data directory read as schema 0 — indistinguishable from
+  an install that predates #1238 — and the first real file migration
+  would have run again on the next start, over data already in the new
+  shape. A restore now carries whatever schema its stores were actually
+  at; a bundle stamped newer than this build knows is refused the same
+  way opening one directly is. A backup taken by a build before #1238
+  never had a `schema.json` to carry and still restores as schema 0,
+  which is correct for it.
 - **The setup wizard no longer switches logging on for your
   established/related accept rule** (#1230). Step 3's bulk tagging used
   to tag every accept rule and then take it back off that one with
@@ -305,6 +330,14 @@ rewritten.
   silently send logs nowhere. It's now a field in the wizard's header
   that every command reads from, defaulting to a real address on this
   instance when one can be detected.
+- **A 401 now always carries `WWW-Authenticate`, so RouterOS can read
+  it** (#1118). RouterOS's own `/tool fetch` — the client behind the
+  drop-list pull and the ingest routes — refused to parse any 401 that
+  omitted the header ("ERROR parsing http: 401 should contain
+  www-authenticate header"), per RFC 9110 §15.5.2, and reported that
+  parse failure instead of the actual refusal. Every 401 MikroView sends
+  now carries `WWW-Authenticate: Bearer realm="mikroview"`, including
+  session-gated routes.
 
 ## [0.5.1] - 2026-09-11
 
