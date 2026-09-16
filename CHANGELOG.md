@@ -188,6 +188,19 @@ rewritten.
 
 ### Changed
 
+- **Detection no longer gives up on a burst** (#1109). Checking used to
+  be fed from a 4,096-slot queue, and anything that arrived while it was
+  full was stored and shown but never checked -- 500 port scans in one
+  burst raised no flags at all (#1107). Checking now reads events
+  straight out of the event buffer, in order, keeping a marker of where
+  it got to, so a burst is checked late rather than never. The Engine
+  Room's ingest group says which it is -- `Checking: caught up`, or how
+  far behind and how old the oldest unchecked event is. The one gap left
+  is a flood so large that events leave the buffer before checking
+  reaches them; that gets its own count, `Outrun`, and a banner telling
+  you to raise the memory setting or find what is flooding. `/api/stats`
+  reports `engine` as `{behind, behindSeconds, outrun}` in place of
+  `droppedFromEvaluation`.
 - **A router that only ever pushed is now in the same device list
   everything counts from** (#1170). Before this, a push from an
   undeclared router's ingest token had no effect on that list at all, so

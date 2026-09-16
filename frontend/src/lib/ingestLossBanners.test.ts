@@ -24,13 +24,19 @@ function inactive(): SyslogIngestLoss {
   }
 }
 
-function rowInputs(overrides: Partial<SyslogIngestLoss> = {}, wsDropped = { recent: 0, active: false }): IngestLossRowInputs {
-  return { loss: { ...inactive(), ...overrides }, wsDropped }
+function rowInputs(
+  overrides: Partial<SyslogIngestLoss> = {},
+  wsDropped = { recent: 0, active: false },
+  outrun = { recent: 0, active: false },
+): IngestLossRowInputs {
+  return { loss: { ...inactive(), ...overrides }, outrun, wsDropped }
 }
 
 describe('selectIngestLossRows', () => {
   it('returns nothing when loss is absent -- stats not loaded yet, or an older server', () => {
-    expect(selectIngestLossRows({ wsDropped: { recent: 0, active: false } })).toEqual([])
+    expect(
+      selectIngestLossRows({ outrun: { recent: 0, active: false }, wsDropped: { recent: 0, active: false } }),
+    ).toEqual([])
   })
 
   it('returns nothing when every counter is inactive, however large its total was', () => {
@@ -265,6 +271,40 @@ describe('selectIngestLossRows', () => {
   it('demotes the feed-drop notice: wsDropped is info, never warn', () => {
     const [row] = selectIngestLossRows(rowInputs({}, { recent: 5, active: true }))
     expect(row.severity).toBe('info')
+  })
+
+  // #1109: checking reads events out of the buffer in order, so the only
+  // way one goes unchecked is the buffer wrapping past it first. The row
+  // says exactly that, in the ratified words, and says what to do.
+  describe('outrun (#1109)', () => {
+    it('renders the ratified copy for events that were never checked', () => {
+      const [row] = selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 4200, active: true }))
+      expect(row.id).toBe('outrun')
+      expect(row.label).toBe('More events arrived than the memory window holds before checking caught up')
+      expect(row.detail).toBe("4,200 never checked. Raise the memory setting or find the flood's source.")
+    })
+
+    it('points at the ingest group, as every real-loss row does', () => {
+      const [row] = selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 1, active: true }))
+      expect(row.details).toBe('engineroom/ingest')
+      expect(row.severity).toBe('warn')
+    })
+
+    it('shows nothing once the flood has passed, however large the total was', () => {
+      expect(selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 98000, active: false }))).toEqual([])
+    })
+
+    it('shows nothing when nothing was ever outrun', () => {
+      expect(selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 0, active: true }))).toEqual([])
+    })
+
+    it('has no row for a backlog: late is not lost, so only outrun is reported', () => {
+      // The stats block also carries behind/behindSeconds, and they
+      // deliberately reach no banner at all -- there is nothing an
+      // operator needs to do about checking that is catching up.
+      const rows = selectIngestLossRows(rowInputs())
+      expect(rows).toEqual([])
+    })
   })
 })
 
