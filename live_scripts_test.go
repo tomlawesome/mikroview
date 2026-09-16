@@ -51,6 +51,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"entities":      {"entities", "storePath"},
 		"coverage":      {"coverage", "storePath"},
 		"hosts":         {"hosts", "storePath"},
+		"seen_values":   {"seen", "storePath"},
 		"baseline":      {"baseline", "storePath"},
 		"mac_registry":  {"deviceMac", "storePath"},
 		"engine_state":  {"engine", "storePath"},
