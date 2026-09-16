@@ -538,6 +538,15 @@ test:go:
   # Dockerfile runs USER 1000:1000). See
   # docs/decisions/gitlab-ci-root-in-container-test-failure.md.
   script:
+    # Every recorded upgrade fixture (#1239) into .upgrade-fixtures/,
+    # gitignored, so internal/persist/upgrade_test.go has something to
+    # open -- CI_JOB_TOKEN authenticates against the generic package
+    # registry the fixtures were recorded and uploaded to (see
+    # scripts/record-upgrade-fixture.sh). Run before the chown below so
+    # the fetched files end up owned by ci-test along with everything
+    # else, and before the useradd/su split so a fetch failure fails the
+    # job at the step that actually failed rather than inside `su`.
+    - scripts/fetch-upgrade-fixtures.sh
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
     - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
