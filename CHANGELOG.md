@@ -153,6 +153,16 @@ rewritten.
 
 ### Fixed
 
+- **`-backup`/`-restore` now carry the data directory's schema number**
+  (`schema.json`, #1244). It was never on the bundled list, so a restore
+  into an empty data directory read as schema 0 — indistinguishable from
+  an install that predates #1238 — and the first real file migration
+  would have run again on the next start, over data already in the new
+  shape. A restore now carries whatever schema its stores were actually
+  at; a bundle stamped newer than this build knows is refused the same
+  way opening one directly is. A backup taken by a build before #1238
+  never had a `schema.json` to carry and still restores as schema 0,
+  which is correct for it.
 - **The setup wizard no longer switches logging on for your
   established/related accept rule** (#1230). Step 3's bulk tagging used
   to tag every accept rule and then take it back off that one with

@@ -3002,9 +3002,13 @@ One gzipped file holding every store: accounts, API tokens, recovery-key
 digests, flags, rule usage, detector settings, entities, the MAC
 registry, the audit log, the event-buffer size an admin set from
 Settings (`store.settingsStorePath`), the watchlist, watchlist
-suggestions, the watchlist match log, and the router-backup vault
-(`backup.vaultDir`, #394) — every generation still encrypted exactly as
-it sits on disk, so a restore never needs the retention key to move it.
+suggestions, the watchlist match log, the data directory's schema
+number (`schema.json`, #1238 / #1244) — so a restore comes back stamped
+at the schema it was actually taken at, rather than reading as a fresh,
+unmigrated install and re-running migrations that already landed — and
+the router-backup vault (`backup.vaultDir`, #394) — every generation
+still encrypted exactly as it sits on disk, so a restore never needs the
+retention key to move it.
 
 Three things are deliberately left out, and always have been:
 

@@ -52,6 +52,14 @@ migration numbers are the same list for both, so "schema 3" means the
 same thing either way, even though some migrations only have work to do
 on one of them.
 
+`-backup` and `-restore` (see docs/configuration.md, "Backing up and
+restoring") carry `schema.json` along with every other store, so a
+restore comes back stamped at the schema it was actually taken at rather
+than reading as a fresh, unmigrated install and repeating migrations
+that already landed. A backup taken by a build from before this existed
+has no `schema.json` to carry, and restores as schema 0 — correct for
+data that old.
+
 The refusal in step 2 above looks like this, with the paths and versions
 of your install:
 
