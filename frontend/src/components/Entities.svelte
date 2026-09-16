@@ -94,15 +94,24 @@
     fetchRules,
     fetchSetupStatus,
     fetchSetupCommands,
+    fetchUnattributedSources,
     type RouterFilterRule,
   } from '../lib/api'
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
-  import { deviceState, multihomedEcho, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import {
+    deviceState,
+    multihomedEcho,
+    setupEcho,
+    sortedDevices,
+    ratePerSecond,
+    unattributedLabel,
+    UNATTRIBUTED_FIX,
+  } from '../lib/fleet'
   import { portOf } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
-  import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
+  import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus, UnattributedSource } from '../lib/types'
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
   const routerRows = $derived(sortedDevices(appState.devices))
@@ -127,6 +136,28 @@
   // field Fleet and Topography already read.
   const registeredRouters = $derived(routerRows.filter((d) => d.configured))
   const unregisteredRouters = $derived(routerRows.filter((d) => !d.configured))
+
+  // The registry's other list (#1170): syslog sources no router has
+  // claimed -- no configured sourceIp matches them, and no single
+  // router's pushed address table carries them. The server stopped
+  // inventing a device row for one, so they arrive alongside the
+  // devices rather than among them, and they are drawn as sources here,
+  // never as routers.
+  //
+  // Re-read whenever the fleet moves: a source stops being
+  // unattributed the moment config.yaml names it or exactly one
+  // router's address table claims it. A failed read just leaves the
+  // list empty -- these cards explain something, and an explanation is
+  // not worth an error state on this page.
+  let unattributed = $state<UnattributedSource[]>([])
+  $effect(() => {
+    void appState.devices
+    fetchUnattributedSources()
+      .then((list) => {
+        unattributed = list
+      })
+      .catch(() => {})
+  })
 
   // Renaming is an edit, so the viewer tier does not get the affordance
   // and its names stop looking clickable. Nothing on this page says why:
@@ -679,9 +710,38 @@
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
               </div>
               <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>
+              {#if setupEcho(d)}
+                <!-- #1241's line belongs here too: a router discovered by
+                     its own push and never declared is the common case,
+                     and Fleet.svelte shows this on every card. Leaving it
+                     off here hid the one card most likely to need it. -->
+                <div class="frow dim">{setupEcho(d)}</div>
+              {/if}
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
+            </div>
+          {/each}
+          {#each unattributed as s (s.address)}
+            <!-- #1170: a source, not a router. Its own card and its own
+                 quiet vocabulary -- deliberately not .unreg, which means
+                 a router that pushes without being registered. Nothing
+                 here may count it as a router. -->
+            <div class="fcard unattr" role="group" aria-label={unattributedLabel(s)}>
+              <div class="fhead">
+                <b>unattributed · {s.address}</b><span class="fstate quiet">◌ NOT A ROUTER</span>
+              </div>
+              <div class="frow">syslog from an address no router has claimed</div>
+              <div class="frow dim">
+                {s.lines} line{s.lines === 1 ? '' : 's'} seen · first seen {formatHM(s.firstSeen)}
+              </div>
+              {#if s.explanation}
+                <!-- Present only where two routers have both pushed this
+                     address as their own, so nothing can say which of
+                     them sent the lines. -->
+                <div class="frow dim">{s.explanation}</div>
+              {/if}
+              <div class="frow dim">{UNATTRIBUTED_FIX}</div>
             </div>
           {/each}
           <div class="fcard berth" class:open={berthOpen}>
@@ -1032,6 +1092,16 @@
      way. No new colour is introduced for it. */
   .fcard.unreg {
     border-color: color-mix(in srgb, var(--now) 45%, transparent);
+  }
+
+  /* An unattributed source (#1170) is not a router, so it does not wear
+     .unreg's --now border: nothing about it is asking to be looked at
+     now. It takes the dim ink its own state chip uses (.fstate.quiet),
+     dashed like the berth to say the slot is not a real router either.
+     No new colour. */
+  .fcard.unattr {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--fg-dim) 40%, transparent);
   }
 
   /* The empty berth (#718): a further grid cell in .fcards, same

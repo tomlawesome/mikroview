@@ -132,6 +132,23 @@ export interface RouterSetupReport {
   reportedAt?: string
 }
 
+// Mirrors an entry of GET /api/devices' `unattributed` list (#1170):
+// a syslog source no router has claimed -- it matches no configured
+// devices[].sourceIp, and no single router's pushed /ip/address table
+// carries it. Deliberately NOT a Device and never widened into one: it
+// is a source, not a router, so nothing here may count it as one.
+// `lines` is how many lines have arrived from that address. explanation
+// is present only in the one case that needs a sentence -- two routers
+// have both pushed the address as their own, so nothing can tell which
+// of them sent those lines.
+export interface UnattributedSource {
+  address: string
+  lines: number
+  firstSeen: string
+  lastSeen: string
+  explanation?: string
+}
+
 // Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
 // issue #675) -- one persisted MAC address' first/last-seen history and
 // the IP it was last paired with. lastIp is what the Entities page's

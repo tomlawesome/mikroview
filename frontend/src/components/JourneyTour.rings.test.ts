@@ -59,6 +59,8 @@ vi.mock('../lib/api', () => ({
   upsertEntity: vi.fn(async (): Promise<string | null> => null),
   deleteEntity: vi.fn(),
   fetchDeviceMACs: vi.fn(async () => []),
+  // #1170: Entities' own read of GET /api/devices' `unattributed` list.
+  fetchUnattributedSources: vi.fn(async () => []),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRules: vi.fn(async (): Promise<RuleUsage[]> => []),
   fetchSetupStatus: vi.fn(async () => ({

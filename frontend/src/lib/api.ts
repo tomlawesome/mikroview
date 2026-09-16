@@ -15,6 +15,7 @@ import type {
   DefinitionParamSchema,
   DetectorScope,
   Device,
+  UnattributedSource,
   DroplistEntry,
   DroplistResponse,
   Entity,
@@ -313,6 +314,18 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// fetchUnattributedSources serves the other half of the one device
+// registry (#1170): GET /api/devices' `unattributed` list -- the syslog
+// sources no router has claimed, which the server no longer invents a
+// device row for. fetchDevices above deliberately keeps its exact
+// signature, so every existing caller and test mock stays untouched.
+export async function fetchUnattributedSources(): Promise<UnattributedSource[]> {
+  const res = await fetch('/api/devices')
+  if (!res.ok) throw new ApiError(`fetchUnattributedSources: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.unattributed ?? []
 }
 
 // fetchDeviceMACs serves the persisted MAC-registry history (issue #675:
