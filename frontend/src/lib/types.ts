@@ -1567,6 +1567,11 @@ export interface DroplistResponse {
   setup: DroplistSetup
 }
 
+// BackupTransport is how the router hands its backup over (#955) --
+// the two values internal/setup will store and internal/routeros can
+// render a script for.
+export type BackupTransport = 'sftp' | 'https'
+
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
 // router, so "did that step work" is answered by what arrived, not by
@@ -1590,6 +1595,14 @@ export interface SetupStatus {
     // field above, alongside the browser's own host -- never sent on
     // the operator's behalf.
     addressCandidates: string[]
+    // How step 6's router script delivers its backup (#955): 'sftp'
+    // through the drop box, or 'https' in /file read slices over the
+    // ingest channel, for an install reachable only through its reverse
+    // proxy. Stored server-side beside the address, because it is a
+    // property of the deployment rather than of the browser looking at
+    // the wizard. Never empty -- an install that has never chosen reads
+    // as 'sftp'.
+    backupTransport: BackupTransport
   }
   sources: {
     source: string
