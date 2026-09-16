@@ -752,6 +752,87 @@ test:container:
       - ci-reuse-evidence/
     expire_in: 1 week
 
+# The one-line pastable install (#1242) tested against a real daemon,
+# beside test:container above -- same image, same rootless-daemon-on-the-
+# runner-host caveats, so read that job's header first.
+#
+# Ports: install.sh's docker run really publishes -p on the daemon's own
+# host (unlike test:container, which never publishes), so two jobs on one
+# runner would collide on a fixed port. $CI_JOB_ID picks a pair in
+# 20000-39999 per job instead -- never 443/6514/8080 (what a real install
+# uses) and never the workstation's own live-test ranges.
+#
+# No curl in this image on purpose: install.sh's own healthz wait then
+# just says so and skips, which is the real behaviour for an operator who
+# hasn't got curl either -- the network-namespace trick below (same as
+# test:container's) is what actually asserts health here.
+#
+# Reuse gate: kept, like test:container's. install.sh isn't under
+# scripts/ or any tree test:container's IMAGE_PATHS already watches, so
+# scripts/ci-reuse-inputs.js gets its own INSTALL_LINE_PATHS (IMAGE_PATHS
+# plus install.sh) rather than reusing IMAGE_PATHS unchanged -- otherwise
+# an install.sh-only push would wrongly stand on an earlier run that
+# never touched it.
+test:install-line:
+  stage: test
+  tags: [light]
+  image: docker:29-cli
+  <<: *dev_or_mr_code
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    APP: mikroview-install-$CI_JOB_ID
+    IMG: mikroview-install-image-$CI_JOB_ID
+  script:
+    - apk add --no-cache nodejs >/dev/null
+    - *reuse_gate
+    - docker build --tag "$IMG" .
+    - |
+      HTTPS_PORT=$((20000 + CI_JOB_ID % 20000))
+      SYSLOG_PORT=$((HTTPS_PORT + 1))
+      echo "test:install-line: using ports https=$HTTPS_PORT syslog=$SYSLOG_PORT"
+      export MIKROVIEW_IMAGE="$IMG" MIKROVIEW_CONTAINER="$APP" \
+        MIKROVIEW_HTTPS_PORT="$HTTPS_PORT" MIKROVIEW_SYSLOG_PORT="$SYSLOG_PORT"
+    - sh install.sh
+    - |
+      for attempt in $(seq 1 20); do
+        if docker run --rm --network "container:$APP" alpine:3.22 \
+             wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8080/api/healthz; then
+          echo "healthz answered on attempt $attempt"
+          break
+        fi
+        sleep 1
+        if [ "$attempt" = 20 ]; then
+          echo "healthz never answered; container log follows"
+          docker logs "$APP"
+          exit 1
+        fi
+      done
+    - id1="$(docker container inspect --format '{{.Id}}' "$APP")"
+    # The same line is also the upgrade line (#1240) -- running it twice
+    # must stop and remove the first container, re-creating it on the
+    # same two named volumes, not just leave it be.
+    - echo "test:install-line -- running install.sh a second time"
+    - sh install.sh
+    - |
+      id2="$(docker container inspect --format '{{.Id}}' "$APP")"
+      [ "$id1" != "$id2" ] || { echo "test:install-line: container was not re-created on the second run"; exit 1; }
+      for vol in "${APP}-data" "${APP}-etc"; do
+        if ! docker volume ls --format '{{.Name}}' | grep -Fxq "$vol"; then
+          echo "test:install-line: missing volume $vol after re-create"
+          exit 1
+        fi
+      done
+      echo "test:install-line: re-create verified, both named volumes survived"
+    - *reuse_evidence
+  after_script:
+    - docker rm --force "$APP" >/dev/null 2>&1 || true
+    - docker volume rm "${APP}-data" "${APP}-etc" >/dev/null 2>&1 || true
+    - docker image rm "$IMG" >/dev/null 2>&1 || true
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
+
 # ---------------------------------------------------------------------------
 # GATE — the live-check gate, sharded (#1004).
 #
@@ -975,6 +1056,7 @@ gate:scripts:
     - scripts/wait-quiet-host.test.sh
     - scripts/assert-ui-built.test.sh
     - scripts/check-release-surfaces.test.sh
+    - scripts/install.test.sh
   artifacts:
     when: always
     paths:
