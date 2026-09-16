@@ -149,16 +149,16 @@ type Server struct {
 	Learning interface {
 		Learning(id string, now time.Time) (engine.LearningState, bool)
 	}
-	// Evaluation reports how many events the engine accepted, stored and
-	// broadcast but never evaluated for detection, because its queue was
-	// full when they arrived (#1107). Narrow and purpose-named for the
-	// same reason as Learning above. Nil is valid and common (tests, and
-	// any Server built before the engine exists), and the field is then
-	// omitted rather than reported as zero: zero is a real answer --
-	// "nothing was skipped" -- and a Server with no engine cannot
-	// honestly give it.
+	// Evaluation reports how far behind the engine's cursor is, how old
+	// the oldest thing it has not checked yet is, and how many events the
+	// store evicted before it reached them at all (#1109). Narrow and
+	// purpose-named for the same reason as Learning above. Nil is valid
+	// and common (tests, and any Server built before the engine exists),
+	// and the field is then omitted rather than reported as zeros: all
+	// zeros is a real answer -- "caught up, nothing missed" -- and a
+	// Server with no engine cannot honestly give it.
 	Evaluation interface {
-		Dropped() uint64
+		Lag() (behind uint64, behindSeconds float64, outrun uint64)
 	}
 	// Suggest is the persisted pool of watchlist entries suggested from
 	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
