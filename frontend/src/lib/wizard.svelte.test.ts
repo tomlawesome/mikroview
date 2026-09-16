@@ -21,6 +21,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
       syslogEnabled: true,
       address: '',
       addressCandidates: [],
+      backupTransport: 'sftp',
     },
     sources: [],
     devices: [],

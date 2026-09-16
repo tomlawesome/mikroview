@@ -54,6 +54,7 @@ const STATUS = {
     syslogEnabled: true,
     address: '',
     addressCandidates: [],
+    backupTransport: 'sftp' as const,
   },
   sources: [],
   devices: [],

@@ -141,6 +141,7 @@ describe('journeyState', () => {
         syslogEnabled: true,
         address: '',
         addressCandidates: [],
+        backupTransport: 'sftp',
       },
       sources: [],
       devices: [],

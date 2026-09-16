@@ -18,6 +18,21 @@ rewritten.
 
 ### Added
 
+- **The setup wizard now offers the HTTPS-only way of sending a router
+  backup** (#955). Step 6 has one new line above the script — *The
+  router sends its backup* `sftp · https`. Pick `https` and the step
+  prints the script that reads the backup in small pieces and posts them
+  to the address your router already reaches, instead of the SFTP upload
+  that needs a second port open. That is the whole point of it: an
+  install behind a reverse proxy, with nothing but HTTPS reachable, can
+  now be set up from the wizard rather than by pasting the script out of
+  [routeros-setup.md](docs/routeros-setup.md) by hand. The choice is
+  kept on the MikroView side (`PUT /api/setup/backup-transport`,
+  admin-only, audited), not in your browser, so whoever opens the wizard
+  next sees the way this deployment actually works; and the `https`
+  script does not wait for `backup.enabled`, because it needs no drop
+  box.
+
 - **A flag's drawer now has a note box: record why you called it what
   you called it** (#1232). It sits across the bottom of the drawer,
   above the verdict buttons, and grows as you type. Write whatever you
