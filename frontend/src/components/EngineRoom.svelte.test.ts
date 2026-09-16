@@ -917,4 +917,78 @@ describe('The settings shelf (#633)', () => {
 
     expect(screen.queryByText('router setup out of date')).toBeNull()
   })
+
+  // #1109: checking reads events straight out of the buffer by cursor, so
+  // the ingest group has to say which of two very different things is
+  // true -- running late on a backlog it will work through, or events
+  // that left the buffer before it ever reached them. Read off the whole
+  // row rather than one span, because the copy is the row.
+  describe('checking (#1109)', () => {
+    function ingestRow(label: string): string | null {
+      const section = document.querySelector('#engineroom-ingest')!
+      for (const row of section.querySelectorAll('.orow')) {
+        const first = row.querySelector('span')
+        if (first?.textContent?.trim() === label) {
+          return (row.textContent ?? '').replace(/\s+/g, ' ').trim()
+        }
+      }
+      return null
+    }
+
+    it('says checking is caught up when the cursor is on the newest event', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 0, behindSeconds: 0, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBe('Checking: caught up')
+    })
+
+    it('says how far behind and how late it is while it catches up', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 4200, behindSeconds: 3.4, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBe('Checking: 4,200 events behind (3 s)')
+    })
+
+    it('says "event" for one, not "events"', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 1, behindSeconds: 0.2, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBe('Checking: 1 event behind (0 s)')
+    })
+
+    it('shows the outrun count only once something really went unchecked', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 0, behindSeconds: 0, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+      expect(ingestRow('Outrun:')).toBeNull()
+
+      cleanup()
+      appState.stats = stats({ engine: { behind: 12, behindSeconds: 1, outrun: 12000 } })
+      render(EngineRoom)
+      await settle()
+      expect(ingestRow('Outrun:')).toBe('Outrun: 12,000')
+    })
+
+    it('says nothing at all against a server that reports no engine', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats()
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBeNull()
+      expect(ingestRow('Outrun:')).toBeNull()
+    })
+  })
 })
