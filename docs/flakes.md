@@ -75,6 +75,14 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
 
+## test:go: flushForTest and a backupvault race time out on a loaded runner
+
+- 2026-09-16 · 65fadaab (feature/1247-upgrade-fixtures-postgres, !1063) · pipeline 1180, test:go job 14963 · `internal/flags` ×4 (`TestSizedExpectationPersistenceRoundTrip`, `TestPermittedRecordSurvivesReload`, `TestClearedCountSurvivesReload`, `TestSetVerdictPersistsAndSurvivesReload`: `flushForTest: context deadline exceeded`) and `internal/backupvault` `TestUnlockRacingRemovePassphraseDoesNotRevive` (`returned <nil>, want ErrNoPassphrase`); `internal/api` took 214 s. Pipeline 1179's gate:image build was running alongside. Retry 14983 on the same commit passed.
+
+## live-log-every-rule: goTo("Log every rule") times out (10 s) on the runner
+
+- 2026-09-16 · 51dc2834 (chore/deps-2026-09-16, !1062) · pipeline 1179, gate:scenarios 3/4, job 14955 · `timed out waiting for card "log-every-rule"` with the card present in the deck at offset 3600; pipeline 1180 was running alongside. Retried as job 14984.
+
 ## TestRunMigrateDataEndToEnd: refuses a destination it just emptied
 
 - 2026-09-14 · b0cf5bb1 (feature/wizard-upgrade-safety, local, `go test ./...`) · full-suite run · failed once; 23 reruns at the same commit (`go test . -count=3` and `-run TestRunMigrateDataEndToEnd -count=20`) all passed. Two agents were running the suite on this workstation at the same time.
