@@ -860,7 +860,9 @@ for the trust caveat below.
 
 Set `backup.enabled: true` in `config.yaml` and restart — this opens a
 second listening port (`backup.listen`, default `:47022`), only once
-you have decided to use it. Nothing here needs the wizard, but the
+you have decided to use it. Skip this section entirely if you are
+taking the HTTPS-only path in 7c-ii: it needs no second port, and so
+nothing to turn on here. Nothing here needs the wizard, but the
 wizard's step 6 is what actually prints the script below with your own
 values filled in, which is the easier path for most people.
 
@@ -947,9 +949,15 @@ declared plus eight retries, and is abandoned if more arrive; a piece
 naming a transfer MikroView is not holding — one already finished, given
 up on, or never announced — costs a request like any other push.
 
-The wizard does not offer this step yet — 4b's token is still what
-authenticates it once it does. Until it does, this is a paste-it-yourself
-step:
+The wizard offers this path. On step 6, the line above the script reads
+**The router sends its backup sftp · https** — pick `https` and the step
+prints the script below and its scheduler entry with your own address and
+token already in them. The choice is stored on the MikroView side rather
+than in your browser, so whoever opens the wizard next, on any machine,
+is offered the same one; and it does not wait on 7a, since there is no
+drop box to open. 4b's token is still what authenticates it.
+
+To paste it by hand instead:
 
 ```
 /system backup save name=mv-backup dont-encrypt=yes
@@ -1031,6 +1039,16 @@ its usual interval shows an amber receipt there — MikroView learns the
 interval from the pushes themselves, never from this scheduler line,
 since an operator could change that on the router without MikroView
 knowing.
+
+A `keep…` link on a router's newest generation marks it kept, with a
+comment saying why (`before the 7.16 upgrade`); its other generations
+sit behind an `earlier…` expander, and every kept one for that router
+gets its own line below, with `edit…` and `release…` beside it. A kept
+generation costs nothing to hold — it stops counting towards the ten
+generations retention keeps and is never touched by low-space cycling
+— but releasing one is the one way to free vault space by hand: it
+goes back into the ordinary ten, in its own place by age, where the
+oldest may then be dropped as normal.
 
 Restoring is your own act on the replacement router
 (`/system backup load`) — MikroView never connects to a router to apply

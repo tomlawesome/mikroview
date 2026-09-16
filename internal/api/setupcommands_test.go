@@ -15,6 +15,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 // testRetentionKey builds a usable retention key for tests that need
@@ -381,6 +382,60 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
+	}
+}
+
+// TestHandleSetupCommandsHTTPSTransport covers #955's ruling: with
+// "https" stored, step 6's two blocks are the slice-push script and its
+// scheduler entry instead of the SFTP pair -- and they are not held back
+// by the drop box's own preconditions, because the push goes through the
+// ingest channel that is already open. Its only precondition beyond the
+// address is the token, the same one step 4 has.
+func TestHandleSetupCommandsHTTPSTransport(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// The default, with nothing chosen: the SFTP pair, which needs the
+	// drop box turned on, a retention key and a device -- none of which
+	// this fixture has.
+	sftp := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443", Token: "tok-123"})
+	if !slicesEqual(sftp.Steps.Backup.Blocked, []string{"backups-off", "no-retention-key", "no-device"}) {
+		t.Errorf("Backup.Blocked on the default transport = %v, want the drop box's own preconditions", sftp.Steps.Backup.Blocked)
+	}
+
+	if !s.Setup.SetBackupTransport(setup.BackupTransportHTTPS) {
+		t.Fatal("SetBackupTransport refused https")
+	}
+	https := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443", Token: "tok-123"})
+	if len(https.Steps.Backup.Blocked) != 0 || len(https.Steps.BackupSchedule.Blocked) != 0 {
+		t.Errorf("Backup.Blocked = %v / BackupSchedule.Blocked = %v, want none: the HTTPS push waits on nothing the drop box needs",
+			https.Steps.Backup.Blocked, https.Steps.BackupSchedule.Blocked)
+	}
+	if !strings.Contains(https.Steps.Backup.Commands, "https://10.0.40.5:8443/api/ingest/router-backup") ||
+		!strings.Contains(https.Steps.Backup.Commands, "Bearer tok-123") {
+		t.Errorf("backup commands = %q, want the ingest URL and token embedded", https.Steps.Backup.Commands)
+	}
+	if strings.Contains(https.Steps.Backup.Commands, "mode=sftp") {
+		t.Errorf("backup commands = %q, want no SFTP upload in the HTTPS script", https.Steps.Backup.Commands)
+	}
+	if !strings.Contains(https.Steps.BackupSchedule.Commands, "mv-backup-https") {
+		t.Errorf("backup schedule commands = %q, want the mv-backup-https scheduler entry", https.Steps.BackupSchedule.Commands)
+	}
+
+	// The token is the one thing it does still wait on, the same as
+	// step 4 -- and the address, which every block here needs.
+	noToken := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443"})
+	if !slicesEqual(noToken.Steps.Backup.Blocked, []string{"no-token"}) {
+		t.Errorf("Backup.Blocked with no token = %v, want just [no-token]", noToken.Steps.Backup.Blocked)
+	}
+	noAddress := postSetupCommands(t, ts.URL, setupCommandsRequest{Token: "tok-123"})
+	if !slicesEqual(noAddress.Steps.Backup.Blocked, []string{"no-address"}) {
+		t.Errorf("Backup.Blocked with no address = %v, want just [no-address]", noAddress.Steps.Backup.Blocked)
+	}
+	if noAddress.Steps.Backup.Commands != "" {
+		t.Errorf("backup commands with no address = %q, want blank", noAddress.Steps.Backup.Commands)
 	}
 }
 

@@ -34,13 +34,21 @@
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import { newestGeneration } from '../lib/backups'
-  import { HOW_TO_MOUNT_URL, KEY_FILE_PATH, newHistoryKey } from '../lib/history'
+  import {
+    HOW_TO_MOUNT_URL,
+    KEY_DIR,
+    KEY_FILE_CONTAINER_PATH,
+    KEY_FILE_PATH,
+    newHistoryKey,
+  } from '../lib/history'
   import {
     announceStep,
     backupBlockedLines,
     backupLead,
     backupReceiptForDevice,
     BACKUP_NO_SCRIPT_HEADING,
+    BACKUP_PORT_NOTE_HTTPS,
+    BACKUP_TRANSPORTS,
     BACKUP_WAITING_NO_SCRIPT,
     deviceStanza,
     finishHeadline,
@@ -275,6 +283,10 @@
           token,
           tokenDevice,
           wizardState.pickedVersion,
+          // The stored transport (#955) decides which of step 6's two
+          // scripts the server renders, so a switch has to re-request
+          // the blocks -- nothing in the request itself carries it.
+          wizardState.backupTransport,
         ])
       : '',
   )
@@ -345,9 +357,13 @@
   // The steps under the field, one block each, in the order they have to
   // happen. Constants so the copy buttons, the tests and the scenario
   // all quote the same text.
-  const KEY_SAVE_COMMAND = `umask 077 && cat > ${KEY_FILE_PATH}`
-  const KEY_MOUNT_COMMAND = `services:\n  mikroview:\n    volumes:\n      - ${KEY_FILE_PATH}:${KEY_FILE_PATH}:ro`
-  const KEY_CONFIG_COMMAND = `history:\n  keyFile: ${KEY_FILE_PATH}`
+  const KEY_SAVE_COMMAND = `mkdir -p ${KEY_DIR} && umask 077 && cat > ${KEY_FILE_PATH}`
+  // The app folder's two mount lines, not a mount per file (#1209,
+  // #1243): the key is one of several things that now arrive by being
+  // put in the folder, so the block an operator pastes has to be the
+  // one that carries all of them, or the next feature asks them to
+  // paste a different one.
+  const KEY_MOUNT_COMMAND = `services:\n  mikroview:\n    volumes:\n      - ./mikroview:/etc/mikroview:ro\n      - ./mikroview/data:/var/lib/mikroview`
   const KEY_RESTART_COMMAND = 'docker compose up -d'
 
   // Step 6's own three departures from every other step's fixed
@@ -572,6 +588,34 @@
         {/if}
       </p>
     {/each}
+  {/if}
+{/snippet}
+
+<!-- Step 6's one choice (#955): how the router hands its backup over.
+     Drawn as the pair the wizard already uses for a two-way choice --
+     the answer in ink, the alternative as the link that switches to it
+     -- and sat directly above the script block, because it is what the
+     block below is. Stored server-side, so it is the deployment's
+     answer and not this browser's: an operator opening the wizard on
+     another machine is offered the step their install actually uses. -->
+{#snippet backupTransportPair()}
+  <p class="note transport" role="group" aria-label="How the router sends its backup">
+    The router sends its backup
+    {#each BACKUP_TRANSPORTS as t, i (t.value)}
+      {#if i > 0}&nbsp;·{/if}
+      <button
+        type="button"
+        class="olink"
+        class:on={wizardState.backupTransport === t.value}
+        aria-pressed={wizardState.backupTransport === t.value}
+        onclick={() => wizardState.setBackupTransport(t.value)}
+      >
+        {t.label}
+      </button>
+    {/each}
+  </p>
+  {#if wizardState.backupTransportError}
+    <p class="load-error">{wizardState.backupTransportError}</p>
   {/if}
 {/snippet}
 
@@ -1006,8 +1050,9 @@
                     the key and everything kept under it, backups included, is unreadable.
                   </p>
                   <p class="note">
-                    Write it to a secret file, outside the data directory — a key kept beside the
-                    files it protects travels with any copy of them:
+                    Write it into the app folder's <code>keys/</code>, beside <code>data/</code> and
+                    never inside it — a key kept among the files it protects travels with any copy
+                    of them:
                   </p>
                   <pre>{KEY_SAVE_COMMAND}</pre>
                   <button type="button" class="copy" onclick={() => copy(KEY_SAVE_COMMAND, 'keysave')}>
@@ -1017,20 +1062,19 @@
                     Paste the key at the prompt, then press Ctrl-D. It goes in on standard input, so
                     it never reaches your shell history or a process list.
                   </p>
-                  <p class="note">Mount the file into the container, read-only:</p>
+                  <p class="note">Mount the whole folder into the container, read-only:</p>
                   <pre>{KEY_MOUNT_COMMAND}</pre>
                   <button type="button" class="copy" onclick={() => copy(KEY_MOUNT_COMMAND, 'keymount')}>
                     {copied === 'keymount' ? 'Copied' : 'Copy'}
                   </button>
                   <p class="note">Running MikroView directly on the host instead? Skip this one.</p>
-                  <p class="note">Point MikroView at it, in config.yaml:</p>
-                  <pre>{KEY_CONFIG_COMMAND}</pre>
-                  <button type="button" class="copy" onclick={() => copy(KEY_CONFIG_COMMAND, 'keyconfig')}>
-                    {copied === 'keyconfig' ? 'Copied' : 'Copy'}
-                  </button>
                   <p class="note">
-                    Or <code>MIKROVIEW_HISTORY_KEY_FILE={KEY_FILE_PATH}</code> — both name the path,
-                    and no setting anywhere carries the key itself.
+                    There is nothing to set: MikroView reads
+                    <code>{KEY_FILE_CONTAINER_PATH}</code> from the folder on its own. Naming the
+                    path yourself still works and still wins —
+                    <code>history.keyFile</code> in config.yaml, or
+                    <code>MIKROVIEW_HISTORY_KEY_FILE</code> — and no setting anywhere carries the
+                    key itself.
                   </p>
                   <p class="note">Then restart:</p>
                   <pre>{KEY_RESTART_COMMAND}</pre>
@@ -1085,6 +1129,7 @@
                        instance), no-device/no-token are named for
                        completeness. No input box, no Copy button: there
                        is nothing behind either to copy. -->
+                  {@render backupTransportPair()}
                   <div class="no-script">
                     <h4>{BACKUP_NO_SCRIPT_HEADING}</h4>
                     <ul>
@@ -1107,16 +1152,21 @@
                       so it is scoped to that one router and to this drop box.
                     </p>
                   {/if}
-                  {#if wizardState.backups?.port}
+                  {#if wizardState.backupTransport === 'https'}
+                    <p class="note token-note">{BACKUP_PORT_NOTE_HTTPS}</p>
+                  {:else if wizardState.backups?.port}
                     <!-- #1220: the router timing out mid-upload read as a
                          stalled transfer, not an unreachable port -- this
-                         is the one thing the script itself cannot say. -->
+                         is the one thing the script itself cannot say.
+                         Only the drop box has a port to publish: the
+                         HTTPS push (#955) says the opposite, above. -->
                     <p class="note token-note">
                       The router has to reach this host on port {portOf(wizardState.backups.port)} for the
                       push to land — publish it in docker-compose.yml's <code>ports:</code> (commented in,
                       beside the others) if you have not already.
                     </p>
                   {/if}
+                  {@render backupTransportPair()}
                   <div class="paste">
                     <pre class="script scrollbar">{wizardState.commands?.steps.backup.commands ?? ''}</pre>
                     {#if !viewportState.isMobile}
@@ -1976,7 +2026,8 @@
      (#394, round 45) read the same way, the last two as real <a>
      elements rather than buttons since they navigate. */
   button.link,
-  a.olink {
+  a.olink,
+  button.olink {
     display: inline;
     border: none;
     padding: 0;
@@ -1985,6 +2036,21 @@
     text-decoration: underline;
     font-size: inherit;
     cursor: pointer;
+  }
+
+  /* Step 6's transport pair (#955). The chosen side is the answer, not
+     a link: body ink, no underline, and nothing to click towards --
+     which leaves exactly one thing on the line that looks clickable,
+     the one that would change something. */
+  button.olink.on {
+    color: var(--fg);
+    text-decoration: none;
+    font-weight: 600;
+    cursor: default;
+  }
+
+  .note.transport {
+    margin-top: 2px;
   }
 
   button:disabled {

@@ -408,7 +408,7 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 		// handleIngestRouterOS's identical guard: droplistPullRoutes is
 		// only ever dispatched to from requireAuth's droplist-pull-token
 		// branch, which always sets this first.
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeUnauthorized(w, "unauthorized")
 		return
 	}
 

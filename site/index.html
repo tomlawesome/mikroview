@@ -322,10 +322,8 @@ footer strong{color:var(--fg-muted);font-weight:600}
   <div class="wrap">
     <p class="step">step 1 of 2 · start it</p>
     <h3 id="h-qs" style="margin:0 0 16px;font-size:26px;font-weight:600">Quickstart</h3>
-    <pre class="term" tabindex="0"><span class="pr">$</span> docker run -d --name mikroview \
-    <span class="fl">-p</span> <span class="va">6514:6514/tcp</span> <span class="fl">-p</span> <span class="va">443:8080</span> \
-    <span class="fl">-v</span> <span class="va">mikroview-data:/var/lib/mikroview</span> \
-    ghcr.io/tomlawesome/mikroview:latest</pre>
+    <pre class="term" tabindex="0"><span class="pr">$</span> curl -fsSL <span class="va">https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh</span> | sh</pre>
+    <p class="note">It pulls the image. It starts one container with two named volumes and two ports. It prints the address to open. Short enough to read before you run it: <a href="https://github.com/tomlawesome/mikroview/blob/main/install.sh">install.sh</a> on GitHub.</p>
     <p class="step">step 2 of 2 · point the router at it</p>
     <p class="note">Sign in, and the built-in wizard writes every RouterOS command with your values already filled in — syslog over TLS (RouterOS 7.18+). Paste it once; the picture builds itself. <code>latest</code> is the most recent release; each release is also tagged <code>v&lt;version&gt;</code> if you'd rather pin one. Reference: <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a> and <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/reading-the-fall.md">docs/reading-the-fall.md</a>.</p>
   </div>

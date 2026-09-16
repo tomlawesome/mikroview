@@ -679,12 +679,13 @@ check(
 
 const keyBlocks = await page.$$eval('.setup-wizard .body pre', (els) => els.map((e) => e.textContent ?? ''))
 check(
-  keyBlocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key')),
-  'the steps say how to write the key to a file outside the data directory',
+  keyBlocks.some((b) => b.includes('cat > mikroview/keys/history.key')),
+  'the steps say how to write the key into the app folder, beside the data store and not inside it',
 )
 check(
-  keyBlocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key')),
-  'and how to point mikroview at it',
+  keyBlocks.some((b) => b.includes('./mikroview:/etc/mikroview:ro')) &&
+    keyBlocks.some((b) => b.includes('./mikroview/data:/var/lib/mikroview')),
+  'and the compose block is the app folder\'s two mount lines (#1209, #1243)',
 )
 check(
   keyBlocks.every((b) => !b.includes(copiedKey)),

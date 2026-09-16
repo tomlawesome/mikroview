@@ -37,17 +37,29 @@
   import {
     changeRouterBackupPassphrase,
     fetchRouterBackups,
+    keepRouterBackup,
     lockRouterBackupVault,
+    releaseRouterBackup,
     removeRouterBackupPassphrase,
     routerBackupDownloadUrl,
+    setRouterBackupComment,
     setRouterBackupPassphrase,
     unlockRouterBackupVault,
   } from '../lib/api'
+  import { authState } from '../lib/auth.svelte'
   import { downloadFromUrl } from '../lib/export'
-  import { isGone, newestGeneration, oldestArrival, receiptLine, MAX_GENERATIONS } from '../lib/backups'
+  import {
+    isGone,
+    newestGeneration,
+    oldestArrival,
+    receiptLine,
+    MAX_GENERATIONS,
+    MAX_KEEP_COMMENT,
+  } from '../lib/backups'
+  import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
   import { portOf } from '../lib/setupsteps'
-  import type { RouterBackupsResponse, VaultLock } from '../lib/types'
+  import type { RouterBackupGeneration, RouterBackupRouter, RouterBackupsResponse, VaultLock } from '../lib/types'
 
   let {
     resp,
@@ -58,6 +70,61 @@
      * lost-router shape (round 45), reached only from here. */
     onopenlost: (device: string) => void
   } = $props()
+
+  // routers is kept locally for the same reason lock is: a keep control
+  // answers with the router's whole block, and the screen shows that
+  // straight away rather than waiting up to a minute for the parent's
+  // own poll to come round again.
+  let routers = $state<RouterBackupRouter[]>(resp.routers)
+  $effect(() => {
+    routers = resp.routers
+  })
+
+  function applyRow(row: RouterBackupRouter) {
+    routers = routers.map((r) => (r.device === row.device ? row : r))
+  }
+
+  // canKeep is the viewer floor: a viewer reads the kept list and the
+  // comments on it, and is offered none of the three controls.
+  const canKeep = $derived(authState.role === 'admin')
+
+  /** arrivedAt is whichever half of the pair landed, most recently --
+   * the same rule the server orders generations by. */
+  function arrivedAt(g: RouterBackupGeneration): string | null {
+    if (g.rscArrivedAt && (!g.backupArrivedAt || g.rscArrivedAt > g.backupArrivedAt)) return g.rscArrivedAt
+    return g.backupArrivedAt ?? g.rscArrivedAt ?? null
+  }
+
+  /** when writes a generation's own line-opening date: "12 Sep 04:00". */
+  function when(g: RouterBackupGeneration): string {
+    const at = arrivedAt(g)
+    return at ? `${formatDayMonth(at)} ${formatHM(at)}` : '—'
+  }
+
+  /** sizeOf is the .backup's size, the figure round 44's newest line
+   * already shows -- or the .rsc's, for a generation the export alone
+   * opened. */
+  function sizeOf(g: RouterBackupGeneration): string {
+    return formatSize(g.backupBytes ?? g.rscBytes ?? 0)
+  }
+
+  /** earlier is a router's cycling generations bar the newest, newest
+   * first so the oldest sits last. */
+  function earlier(router: RouterBackupRouter): RouterBackupGeneration[] {
+    return router.generations.slice(0, -1).reverse()
+  }
+
+  /** keptOf is a router's kept pool, newest first. The server sends it
+   * oldest first, like the cycling set. */
+  function keptOf(router: RouterBackupRouter): RouterBackupGeneration[] {
+    return (router.protected ?? []).slice().reverse()
+  }
+
+  // Which routers have their earlier generations expanded, and which
+  // kept backup is being asked about -- both are this tab's own state,
+  // not the vault's.
+  let expanded = $state<Record<string, boolean>>({})
+  let releasing = $state<{ device: string; generation: string } | null>(null)
 
   // strip renders round 44's ten-slot generation strip: filled slots for
   // what is kept, the newest at the right, each a touch darker than the
@@ -92,8 +159,13 @@
   // (locked) or another of the admin's own sign-ins does.
   const gated = $derived(lock.passphraseSet && !lock.unlockedForYou)
 
-  type FormKind = 'set' | 'change' | 'remove' | 'unlock' | null
+  // 'keep' and 'edit' are the same one-field form (#1126): keeping a
+  // backup and rewriting why it is kept are the same sentence, typed
+  // in the same place.
+  type FormKind = 'set' | 'change' | 'remove' | 'unlock' | 'keep' | 'edit' | null
   let openKind = $state<FormKind>(null)
+  let keepTarget = $state<{ device: string; generation: string } | null>(null)
+  let keepComment = $state('')
   let newPassphrase = $state('')
   let confirmPassphrase = $state('')
   let currentPassphrase = $state('')
@@ -104,6 +176,8 @@
 
   function openForm(kind: FormKind) {
     openKind = kind
+    keepTarget = null
+    keepComment = ''
     newPassphrase = ''
     confirmPassphrase = ''
     currentPassphrase = ''
@@ -203,6 +277,55 @@
     closeForm()
   }
 
+  // openKeepForm opens the keep/edit field against one generation.
+  // Releasing is not a form: it is one question asked in place, on the
+  // line it is about.
+  function openKeepForm(kind: 'keep' | 'edit', device: string, generation: string, comment: string) {
+    releasing = null
+    openForm(kind)
+    keepTarget = { device, generation }
+    keepComment = comment
+  }
+
+  async function submitKeep() {
+    formError = null
+    if (!keepTarget) return
+    const comment = keepComment.trim()
+    if (comment.length === 0) {
+      formError = 'say why you are keeping it'
+      return
+    }
+    if (runeCount(comment) > MAX_KEEP_COMMENT) {
+      formError = `at most ${MAX_KEEP_COMMENT} characters`
+      return
+    }
+    submitting = true
+    const result =
+      openKind === 'edit'
+        ? await setRouterBackupComment(keepTarget.device, keepTarget.generation, comment)
+        : await keepRouterBackup(keepTarget.device, keepTarget.generation, comment)
+    submitting = false
+    if (typeof result === 'string') {
+      formError = result
+      return
+    }
+    applyRow(result)
+    closeForm()
+  }
+
+  async function doRelease(device: string, generation: string) {
+    formError = null
+    submitting = true
+    const result = await releaseRouterBackup(device, generation)
+    submitting = false
+    if (typeof result === 'string') {
+      formError = result
+      return
+    }
+    applyRow(result)
+    releasing = null
+  }
+
   async function doLock() {
     formError = null
     submitting = true
@@ -282,7 +405,13 @@
   </div>
 {:else}
   <div class="wleft">
-    {#each resp.routers as router (router.device)}
+    {#if resp.lowSpace}
+      <p class="oghint brwarn brlow">
+        disk is getting low · the vault is cycling the ten · releasing a kept backup is the one way to free space
+        here
+      </p>
+    {/if}
+    {#each routers as router (router.device)}
       {@const receipt = receiptLine(router, oldestArrival(router))}
       {@const newest = newestGeneration(router)}
       {@const kept = router.generations.length}
@@ -327,6 +456,11 @@
             {#if isGone(router)}
               · <button type="button" class="olink" onclick={() => onopenlost(router.device)}>is it gone?</button>
             {/if}
+            {#if canKeep}
+              · <button type="button" class="olink" onclick={() => openKeepForm('keep', router.device, newest.id, '')}>
+                keep…
+              </button>
+            {/if}
           </p>
           {#if gated}
             <p class="oghint brnewest">
@@ -334,11 +468,101 @@
             </p>
           {/if}
         {/if}
+        {#if router.generations.length > 1}
+          <p class="oghint brnewest">
+            <button
+              type="button"
+              class="olink"
+              onclick={() => (expanded = { ...expanded, [router.device]: !expanded[router.device] })}
+            >
+              earlier…
+            </button>
+          </p>
+          {#if expanded[router.device]}
+            {#each earlier(router) as g (g.id)}
+              <p class="oghint brnewest">
+                {when(g)} · {sizeOf(g)}
+                {#if !gated}
+                  {#if g.backupArrivedAt}
+                    · <button type="button" class="olink" onclick={() => download(router.device, g.id, 'backup')}>
+                      .backup
+                    </button>
+                  {/if}
+                  {#if g.rscArrivedAt}
+                    · <button type="button" class="olink" onclick={() => download(router.device, g.id, 'rsc')}>
+                      .rsc
+                    </button>
+                  {/if}
+                {/if}
+                {#if canKeep}
+                  · <button type="button" class="olink" onclick={() => openKeepForm('keep', router.device, g.id, '')}>
+                    keep…
+                  </button>
+                {/if}
+              </p>
+            {/each}
+          {/if}
+        {/if}
+        {#if keptOf(router).length > 0}
+          <p class="oghint brkept">kept</p>
+          {#each keptOf(router) as g (g.id)}
+            <p class="oghint brnewest">
+              ✱ {when(g)} · {sizeOf(g)} · {g.comment}
+              {#if !gated}
+                {#if g.backupArrivedAt}
+                  · <button type="button" class="olink" onclick={() => download(router.device, g.id, 'backup')}>
+                    .backup
+                  </button>
+                {/if}
+                {#if g.rscArrivedAt}
+                  · <button type="button" class="olink" onclick={() => download(router.device, g.id, 'rsc')}>
+                    .rsc
+                  </button>
+                {/if}
+              {/if}
+              {#if canKeep}
+                ·
+                <button
+                  type="button"
+                  class="olink"
+                  onclick={() => openKeepForm('edit', router.device, g.id, g.comment ?? '')}
+                >
+                  edit…
+                </button>
+                ·
+                <button
+                  type="button"
+                  class="olink"
+                  onclick={() => {
+                    formError = null
+                    releasing = { device: router.device, generation: g.id }
+                  }}
+                >
+                  release…
+                </button>
+              {/if}
+            </p>
+            {#if releasing && releasing.device === router.device && releasing.generation === g.id}
+              <p class="oghint brnewest">
+                release this one? it goes back into the ten and the oldest may go ·
+                <button type="button" class="olink" disabled={submitting} onclick={() => doRelease(router.device, g.id)}>
+                  release
+                </button>
+                /
+                <button type="button" class="olink" disabled={submitting} onclick={() => (releasing = null)}>
+                  cancel
+                </button>
+                {#if formError}<span class="oghint err" role="alert">{formError}</span>{/if}
+              </p>
+            {/if}
+          {/each}
+        {/if}
       </div>
     {/each}
     <p class="oghint">
       each push is a pair — the binary .backup that restores the router whole, and the .rsc export it can be read
-      from · the eleventh pair lets the oldest go · a download is written to the audit log with your name
+      from · the eleventh pair lets the oldest go · a download is written to the audit log with your name · a kept
+      backup stays out of the ten until you release it
     </p>
   </div>
 
@@ -407,6 +631,17 @@
         vault passphrase
         <input type="password" autocomplete="current-password" disabled={submitting} bind:value={unlockPassphraseText} />
       </label>
+    {:else if openKind === 'keep' || openKind === 'edit'}
+      <label class="lab">
+        <input
+          type="text"
+          aria-label="why keep this one"
+          placeholder="why keep this one"
+          maxlength={MAX_KEEP_COMMENT}
+          disabled={submitting}
+          bind:value={keepComment}
+        />
+      </label>
     {/if}
     {#if formError}<p class="oghint err" role="alert">{formError}</p>{/if}
     <span class="acts">
@@ -424,6 +659,10 @@
       {:else if openKind === 'unlock'}
         <button type="button" class="olink" disabled={submitting} onclick={submitUnlock}>
           {submitting ? 'unlocking…' : 'unlock'}
+        </button>
+      {:else if openKind === 'keep' || openKind === 'edit'}
+        <button type="button" class="olink" disabled={submitting} onclick={submitKeep}>
+          {submitting ? 'keeping…' : 'keep'}
         </button>
       {/if}
     </span>
@@ -483,6 +722,21 @@
 
   .brwarn {
     color: var(--now);
+  }
+
+  /* The low-space line sits above the routers, with room under it so it
+     reads as a statement about the whole group rather than the first
+     router's own receipt. */
+  .brlow {
+    margin-bottom: 6px;
+  }
+
+  /* The `kept` label: the quietest thing on the block, since the lines
+     under it carry the ✱ that says what they are. */
+  .brkept {
+    margin-top: 4px;
+    font-style: normal;
+    letter-spacing: 0.04em;
   }
 
   .olink {

@@ -33,6 +33,63 @@ rewritten.
   admins see it. `GET /api/upgrade` and `POST /api/upgrade/acknowledge`;
   see [docs/upgrades.md](docs/upgrades.md).
 
+- **One line to install and run MikroView** (#1242): `curl -fsSL
+  https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh
+  | sh` pulls the image, starts one container on two named volumes (data
+  and the #1243 app folder), and prints the address to open — the same
+  line is also the upgrade line. `docs/install.md` has the no-script
+  `docker run` form.
+- **Drop a file into the app folder and restart — no setting to change**
+  (#1243, the contract ruled on in #1209). When nothing in config or the
+  environment names a path, MikroView now looks in `/etc/mikroview`:
+  `config.yaml`, `GeoLite2-Country.mmdb` for country flags,
+  `keys/history.key` for history encryption, and `certs/tls.crt` +
+  `certs/tls.key` for your own certificate. So `/etc/mikroview/config.yaml`
+  is the built-in default as well as the compose default — a bare
+  `docker run` with the folder mounted needs no `MIKROVIEW_CONFIG` — and
+  an empty folder is not an error: the container starts and runs on
+  defaults. Every boot logs one line per file, saying found or not found
+  and the path it looked at, so a file put one directory too deep shows
+  up as a line rather than as a feature that stayed off.
+
+  Nothing changes for an install that already sets these. A value in
+  config or the environment always wins over the folder, so old per-file
+  mounts keep working exactly as before and there is nothing to migrate.
+  The one new refusal is half a certificate pair: `certs/tls.crt`
+  without `certs/tls.key`, or the reverse, stops startup naming the file
+  that is missing, rather than quietly serving MikroView's own
+  certificate under the name yours was meant to serve.
+- **A router backup can be kept, so retention and low-space cycling
+  leave it alone** (#1126). Mark any stored generation kept from
+  Settings' router-backups group, with a comment saying why (`before
+  the 7.16 upgrade`) — required, one line, up to 120 characters. A kept
+  generation moves into a pool of its own per router: it stops
+  counting towards the ten generations retention keeps, and low-space
+  cycling (#1125) never reaches it either. There is no limit on how
+  many a router keeps. Releasing one puts it back into the cycling
+  ten, in its place by age — the only way to free vault space by hand.
+  `POST`/`DELETE`/`PATCH
+  /api/router-backups/{device}/{generation}/protect` do the keeping,
+  releasing and comment-editing; `GET /api/router-backups` gains a
+  `protected` array alongside the existing `lowSpace` flag. The
+  comment lives in the vault's sealed index and is never logged; the
+  audit log records only who kept, released or re-worded which
+  generation (`router_backup.protected`, `router_backup.unprotected`,
+  `router_backup.comment_changed`).
+- **The setup wizard now offers the HTTPS-only way of sending a router
+  backup** (#955). Step 6 has one new line above the script — *The
+  router sends its backup* `sftp · https`. Pick `https` and the step
+  prints the script that reads the backup in small pieces and posts them
+  to the address your router already reaches, instead of the SFTP upload
+  that needs a second port open. That is the whole point of it: an
+  install behind a reverse proxy, with nothing but HTTPS reachable, can
+  now be set up from the wizard rather than by pasting the script out of
+  [routeros-setup.md](docs/routeros-setup.md) by hand. The choice is
+  kept on the MikroView side (`PUT /api/setup/backup-transport`,
+  admin-only, audited), not in your browser, so whoever opens the wizard
+  next sees the way this deployment actually works; and the `https`
+  script does not wait for `backup.enabled`, because it needs no drop
+  box.
 - **Proto and Interface are pickers now, over the values this instance
   has actually seen** (#1226). They were the last two filters in the
   stream's strip with no list behind them: you typed `tcp`, or your best
@@ -103,6 +160,21 @@ rewritten.
   the pull key now also returns the scheduler command with the real key
   already filled in. The Settings group and setup card that render these
   for an operator are the other half of #1225.
+
+- **Your data directory now records which schema it is on, and MikroView
+  refuses to start on data a newer build wrote** (#1238). The JSON files
+  gain what the database has had since #131: one numbered list of
+  migrations covering both, and a `schema.json` beside the stores saying
+  which of them have run and which build ran them. A missing file means
+  schema 0, so every existing install is stamped on its next start and
+  nothing else changes — there are no data migrations yet. Start an older
+  MikroView on a newer install's data and it now stops before it writes
+  anything, naming the version that wrote the data and telling you to
+  run that one or later, rather than quietly rewriting every document in
+  shapes it does not understand. Migrations land one at a time and are
+  stamped as they land, so an upgrade interrupted half-way — power cut,
+  `docker kill` — resumes at the first one that did not finish with the
+  old documents untouched. `docs/upgrades.md` has the whole contract.
 
 ### Changed
 
@@ -177,6 +249,16 @@ rewritten.
 
 ### Fixed
 
+- **`-backup`/`-restore` now carry the data directory's schema number**
+  (`schema.json`, #1244). It was never on the bundled list, so a restore
+  into an empty data directory read as schema 0 — indistinguishable from
+  an install that predates #1238 — and the first real file migration
+  would have run again on the next start, over data already in the new
+  shape. A restore now carries whatever schema its stores were actually
+  at; a bundle stamped newer than this build knows is refused the same
+  way opening one directly is. A backup taken by a build before #1238
+  never had a `schema.json` to carry and still restores as schema 0,
+  which is correct for it.
 - **The setup wizard no longer switches logging on for your
   established/related accept rule** (#1230). Step 3's bulk tagging used
   to tag every accept rule and then take it back off that one with
@@ -248,6 +330,14 @@ rewritten.
   silently send logs nowhere. It's now a field in the wizard's header
   that every command reads from, defaulting to a real address on this
   instance when one can be detected.
+- **A 401 now always carries `WWW-Authenticate`, so RouterOS can read
+  it** (#1118). RouterOS's own `/tool fetch` — the client behind the
+  drop-list pull and the ingest routes — refused to parse any 401 that
+  omitted the header ("ERROR parsing http: 401 should contain
+  www-authenticate header"), per RFC 9110 §15.5.2, and reported that
+  parse failure instead of the actual refusal. Every 401 MikroView sends
+  now carries `WWW-Authenticate: Bearer realm="mikroview"`, including
+  session-gated routes.
 
 ## [0.5.1] - 2026-09-11
 

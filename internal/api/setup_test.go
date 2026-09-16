@@ -373,6 +373,120 @@ func TestSetupAddressPersistsAndSurvivesReload(t *testing.T) {
 	}
 }
 
+// TestSetupBackupTransportAdminOnly pins handleSetupBackupTransport's
+// gate (#955): the same tier as handleSetupAddress beside it, since this
+// decides what every operator is told to paste into their router.
+func TestSetupBackupTransportAdminOnly(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	resp := putJSON(t, viewerClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer PUT /api/setup/backup-transport = %d, want 403", resp.StatusCode)
+	}
+
+	anonReq, err := http.NewRequest(http.MethodPut, ts.URL+"/api/setup/backup-transport", strings.NewReader(`{"transport":"https"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonReq.Header.Set("Content-Type", "application/json")
+	anonReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	anonResp, err := http.DefaultClient.Do(anonReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonResp.Body.Close()
+	if anonResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("signed-out PUT /api/setup/backup-transport = %d, want 401", anonResp.StatusCode)
+	}
+
+	if s.Setup.BackupTransport() != setup.BackupTransportSFTP {
+		t.Errorf("transport = %q, want the sftp default -- neither refused caller should have been able to write it", s.Setup.BackupTransport())
+	}
+
+	// An admin may, and anything outside the two renderable values is
+	// refused for them too.
+	bad := putJSON(t, adminClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "ftp"})
+	defer bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Errorf("admin PUT with transport=ftp = %d, want 400", bad.StatusCode)
+	}
+	ok := putJSON(t, adminClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
+	defer ok.Body.Close()
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("admin PUT /api/setup/backup-transport = %d, want 200", ok.StatusCode)
+	}
+	if s.Setup.BackupTransport() != setup.BackupTransportHTTPS {
+		t.Errorf("transport = %q, want https", s.Setup.BackupTransport())
+	}
+}
+
+// TestSetupBackupTransportPersistsAndSurvivesReload is #955's "the
+// choice is a property of the deployment, not the browser": stored
+// beside the address, read back by GET /api/setup/status and rendered by
+// POST /api/setup/commands without being told again, and still there
+// after a restart.
+func TestSetupBackupTransportPersistsAndSurvivesReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	before, err := setup.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	s := newAuthTestServer(t)
+	s.Setup = before
+	ts := httptest.NewServer(s.Routes())
+	adminClient := setUpAdmin(t, ts)
+
+	if got := getSetupStatus(t, adminClient, ts.URL); got.Instance.BackupTransport != setup.BackupTransportSFTP {
+		t.Errorf("Instance.BackupTransport before any choice = %q, want sftp", got.Instance.BackupTransport)
+	}
+
+	resp := putJSON(t, adminClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /api/setup/backup-transport = %d, want 200", resp.StatusCode)
+	}
+
+	if got := getSetupStatus(t, adminClient, ts.URL); got.Instance.BackupTransport != setup.BackupTransportHTTPS {
+		t.Errorf("Instance.BackupTransport = %q, want the value just stored", got.Instance.BackupTransport)
+	}
+
+	// The commands endpoint renders whichever is stored, with no field
+	// in the request saying so.
+	cmdsResp := postJSON(t, adminClient, ts.URL+"/api/setup/commands", setupCommandsRequest{Address: "10.0.40.5:8443", Token: "tok-123"})
+	defer cmdsResp.Body.Close()
+	if cmdsResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/commands = %d, want 200", cmdsResp.StatusCode)
+	}
+	var cmds setupCommandsResponse
+	if err := json.NewDecoder(cmdsResp.Body).Decode(&cmds); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmds.Steps.Backup.Commands, "/api/ingest/router-backup") {
+		t.Errorf("backup commands = %q, want the HTTPS push script", cmds.Steps.Backup.Commands)
+	}
+	ts.Close()
+
+	// The "restart": a brand new Store, opened against the same document.
+	after, err := setup.Open(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	if got := after.BackupTransport(); got != setup.BackupTransportHTTPS {
+		t.Errorf("transport after reopening = %q, want it to have survived the restart", got)
+	}
+}
+
 // getSetupStatus is the shared GET /api/setup/status round trip these
 // witness tests all need.
 func getSetupStatus(t *testing.T, client *http.Client, baseURL string) setupStatus {

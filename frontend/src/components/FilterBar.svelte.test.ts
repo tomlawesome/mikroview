@@ -45,6 +45,7 @@ const { emptyFilters } = await import('../lib/types')
 const { retentionState } = await import('../lib/retention.svelte')
 const { geoipState } = await import('../lib/geoip.svelte')
 const { seenValuesState } = await import('../lib/seenValues.svelte')
+const { presetState } = await import('../lib/presets.svelte')
 
 // The box div carries no role -- it holds the chips' own remove buttons,
 // and a screen reader flattens the contents of anything with
@@ -556,5 +557,298 @@ describe('FilterBar, the Proto and Interface pickers (#1226)', () => {
 
     expect(appState.filters.protocol).toBe('sctp')
     expect(appState.filters.interface).toBe('ether9')
+  })
+})
+
+// #1246 (round 57, ratified): the box's third face. A field menu on
+// focus, a value menu under the field picked, and a committed token that
+// is the chip face two already drew -- same markup, same aria-label, same
+// appState.filters. Nothing here is a second filter store, so every
+// assertion below reads the filter back off appState.
+//
+// The strip's own named-field controls are untouched by all of this, and
+// so is the mobile drawer: this face is the wide-screen box only.
+describe('FilterBar, the token bar (#1246)', () => {
+  function menu() {
+    return document.querySelector('.token-menu')
+  }
+
+  function menuNames(): string[] {
+    return Array.from(document.querySelectorAll('.token-menu .tm-name')).map((n) => n.textContent?.trim() ?? '')
+  }
+
+  function pick(label: string) {
+    const item = Array.from(document.querySelectorAll('.token-menu .tm-item')).find(
+      (el) => el.querySelector('.tm-name')?.textContent?.trim() === label,
+    )
+    expect(item).toBeTruthy()
+    return fireEvent.click(item as HTMLElement)
+  }
+
+  // The menu opens on focus, which a click into the box also causes.
+  async function focusBox() {
+    await fireEvent.focus(getBox())
+    flushSync()
+  }
+
+  // Once a token commits the menu gets out of the way, with the caret
+  // still in the box -- so a second token starts from a click, the
+  // pointer's own way back in.
+  async function clickBox() {
+    await fireEvent.click(getBox())
+    flushSync()
+  }
+
+  afterEach(() => {
+    seenValuesState.reset()
+    for (const p of [...presetState.presets]) presetState.remove(p.name)
+  })
+
+  it('opens the field menu on focus, listing the eight token fields', async () => {
+    render(FilterBar)
+    expect(menu()).toBeNull()
+
+    await focusBox()
+    expect(menu()).toBeTruthy()
+    expect(menuNames()).toEqual(['device', 'action', 'chain', 'proto', 'interface', 'port', 'source', 'destination'])
+  })
+
+  // The menu goes with the focus: it hangs over the table's first
+  // columns, so left open after the caret has gone it covers rows the
+  // reader is trying to reach (live-token-copy's row hover found it).
+  it('closes the menu when focus leaves the box, but not when it moves to a menu item', async () => {
+    render(FilterBar)
+    await focusBox()
+    expect(menu()).toBeTruthy()
+
+    // Into the menu's own item: still the box's business, stays open.
+    const item = document.querySelector('.token-menu .tm-item') as HTMLElement
+    await fireEvent.focusOut(getBox(), { relatedTarget: item })
+    flushSync()
+    expect(menu()).toBeTruthy()
+
+    // Out to nothing (a blur, a tab away): closes.
+    await fireEvent.focusOut(getBox(), { relatedTarget: null })
+    flushSync()
+    expect(menu()).toBeNull()
+  })
+
+  it('shortens the action hint to a count, and leaves the full list to the value menu (verdict 2)', async () => {
+    render(FilterBar)
+    await focusBox()
+
+    const action = Array.from(document.querySelectorAll('.token-menu .tm-item')).find(
+      (el) => el.querySelector('.tm-name')?.textContent?.trim() === 'action',
+    )
+    expect(action?.querySelector('.tm-hint')?.textContent?.trim()).toBe('7 values')
+
+    await pick('action')
+    expect(menuNames()).toEqual(['Accept', 'Drop', 'Reject', 'Log', 'Marked (mangle)', 'Natted (NAT)', 'Unknown'])
+  })
+
+  it('shows a pending token and the field\'s own values once a field is picked', async () => {
+    appState.devices = [
+      { id: 'dev-cam', name: 'cam-porch' },
+      { id: 'dev-nas', name: 'nas' },
+    ] as unknown as (typeof appState)['devices']
+    render(FilterBar)
+    await focusBox()
+    await pick('device')
+
+    // Pending, not committed: the box must not claim a filter that is not
+    // yet active.
+    expect(document.querySelector('.chip.pending')?.textContent?.replace(/\s+/g, '')).toBe('device:')
+    expect(appState.filters.device).toBe('')
+    expect(menuNames()).toEqual(['cam-porch', 'nas'])
+  })
+
+  it('commits a value as the chip face two already draws, writing the same appState.filters', async () => {
+    appState.devices = [{ id: 'dev-cam', name: 'cam-porch' }] as unknown as (typeof appState)['devices']
+    render(FilterBar)
+    await focusBox()
+    await pick('device')
+    await pick('cam-porch')
+    flushSync()
+
+    expect(appState.filters.device).toBe('dev-cam')
+    expect(document.querySelector('.chip.pending')).toBeNull()
+    const chip = screen.getByLabelText('Remove the device filter')
+    expect(chip.tagName).toBe('BUTTON')
+    expect(chip.parentElement?.textContent?.replace(/\s+/g, '')).toBe('device:cam-porch⌫')
+  })
+
+  it('removes a token from its own chip, the way the strip already does', async () => {
+    appState.devices = [{ id: 'dev-cam', name: 'cam-porch' }] as unknown as (typeof appState)['devices']
+    appState.filters = { ...emptyFilters(), device: 'dev-cam', action: 'drop' }
+    render(FilterBar)
+
+    await fireEvent.click(screen.getByLabelText('Remove the device filter'))
+    flushSync()
+    expect(appState.filters.device).toBe('')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('offers proto and interface only what this instance has really seen (verdict 1)', async () => {
+    seenValuesState.proto = ['tcp', 'udp']
+    render(FilterBar)
+    await focusBox()
+    await pick('proto')
+
+    expect(menuNames()).toEqual(['tcp', 'udp'])
+    await pick('udp')
+    flushSync()
+    expect(appState.filters.protocol).toBe('udp')
+  })
+
+  it('takes a port as typed text, committed on Enter', async () => {
+    render(FilterBar)
+    await focusBox()
+    await pick('port')
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: '8291' } })
+    flushSync()
+    // A pending value is not the rule search: free text is untouched
+    // while a field is waiting for its value.
+    expect(appState.filters.rule).toBe('')
+
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    flushSync()
+    expect(appState.filters.port).toBe('8291')
+    expect(document.querySelector('.chip.pending')).toBeNull()
+  })
+
+  it('commits a side to ONE composite token, however many of its parts are picked', async () => {
+    appState.events = [
+      evt({ id: 1, sourceIp: '185.220.101.34', srcIp: '185.220.101.34', srcCountry: 'DE' }),
+    ] as unknown as (typeof appState)['events']
+    render(FilterBar)
+    await focusBox()
+    await pick('source')
+
+    expect(menuNames()).toEqual(['internal', 'external', '🇩🇪 DE'])
+    await pick('external')
+    flushSync()
+    expect(appState.filters.srcScope).toBe('external')
+
+    // A second part of the same side lands in the same chip, not a
+    // second one -- sideValue() joins what is set.
+    await clickBox()
+    await pick('source')
+    await pick('🇩🇪 DE')
+    flushSync()
+    expect(appState.filters.srcCountry).toBe('DE')
+    expect(document.querySelectorAll('.chip').length).toBe(1)
+    expect(screen.getByLabelText('Remove the source filter').parentElement?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'source:external · DE⌫',
+    )
+  })
+
+  it('takes a typed address for a side on Enter, into the same composite token', async () => {
+    render(FilterBar)
+    await focusBox()
+    await pick('destination')
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: '10.0.40.5' } })
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    flushSync()
+    expect(appState.filters.dstQuery).toBe('10.0.40.5')
+    expect(appState.filters.rule).toBe('')
+  })
+
+  it('never swallows plain typing -- it lands in free text, beside the tokens', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    await focusBox()
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: 'iot-to-lan' } })
+    flushSync()
+    expect(appState.filters.rule).toBe('iot-to-lan')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('enters the menu on ArrowDown with the first item focused, and picks it on Enter', async () => {
+    render(FilterBar)
+    await focusBox()
+    const box = getBox()
+
+    await fireEvent.keyDown(box, { key: 'ArrowDown' })
+    flushSync()
+    const focused = document.querySelector('.token-menu .tm-item.focused')
+    expect(focused?.querySelector('.tm-name')?.textContent?.trim()).toBe('device')
+    expect(focused?.getAttribute('aria-selected')).toBe('true')
+
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    flushSync()
+    expect(document.querySelector('.chip.pending')?.textContent?.replace(/\s+/g, '')).toBe('device:')
+  })
+
+  it('closes the menu on Escape', async () => {
+    render(FilterBar)
+    await focusBox()
+    expect(menu()).toBeTruthy()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    flushSync()
+    expect(menu()).toBeNull()
+  })
+
+  it('deletes the last token on Backspace in an empty free-text box', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop', chain: 'input' }
+    render(FilterBar)
+    await focusBox()
+
+    await fireEvent.keyDown(getBox(), { key: 'Backspace' })
+    flushSync()
+    expect(appState.filters.chain).toBe('')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('leaves the free-text term alone -- Backspace takes the last token, never the rule search', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop', rule: 'iot-to-lan' }
+    render(FilterBar)
+    // The box is not empty: it holds the rule search, so Backspace is
+    // editing that character-by-character and reaches no token at all.
+    await fireEvent.keyDown(getBox(), { key: 'Backspace' })
+    flushSync()
+    expect(appState.filters.rule).toBe('iot-to-lan')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('never reaches past a half-typed value to the last token (verdict 3)', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    await focusBox()
+    await pick('port')
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: '829' } })
+    await fireEvent.keyDown(box, { key: 'Backspace' })
+    flushSync()
+    // The character is the browser's to delete; the token stands.
+    expect(appState.filters.action).toBe('drop')
+    expect(document.querySelector('.chip.pending')).toBeTruthy()
+  })
+
+  it('applies a saved filter as individually removable tokens, not one opaque named one', async () => {
+    presetState.save('WAN scans', { ...emptyFilters(), action: 'drop', chain: 'input', srcCountry: 'DE' })
+    render(FilterBar)
+
+    await fireEvent.click(document.querySelector('.fbox .fsaved') as HTMLElement)
+    flushSync()
+    await fireEvent.click(document.querySelector('.fpname') as HTMLElement)
+    flushSync()
+
+    expect(screen.getByLabelText('Remove the action filter')).toBeTruthy()
+    expect(screen.getByLabelText('Remove the chain filter')).toBeTruthy()
+    expect(screen.getByLabelText('Remove the source filter')).toBeTruthy()
+    expect(screen.queryByText('WAN scans', { selector: '.chip' })).toBeNull()
+
+    await fireEvent.click(screen.getByLabelText('Remove the chain filter'))
+    flushSync()
+    expect(appState.filters.chain).toBe('')
+    expect(appState.filters.action).toBe('drop')
   })
 })

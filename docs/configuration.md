@@ -42,15 +42,21 @@ uid it is actually running as instead.
 ## config.yaml
 
 Put the file at `mikroview/config.yaml` and restart: copy
-`deploy/config.example.yaml` there (`deploy/mikroview/config.yaml` for
-the from-source compose file) and edit it —
+`deploy/config.example.yaml` there and edit it.
 [`docker-compose.yml`](../deploy/docker-compose.yml) mounts the whole
-`mikroview/` folder read-only at `/etc/mikroview`, so that is the path
-MikroView reads. `config.yaml` is optional; a fresh install runs on
-defaults without one. See
+`mikroview/` folder read-only at `/etc/mikroview`, and with nothing
+naming a config file MikroView reads `/etc/mikroview/config.yaml` from
+it — so a bare `docker run` with the folder mounted needs no
+`MIKROVIEW_CONFIG`. The file is optional: a fresh install with an empty
+folder starts and runs on defaults. See
 [docs/decisions/app-folder.md](decisions/app-folder.md) for the folder
-layout and why. Naming a config file explicitly elsewhere —
-`MIKROVIEW_CONFIG`, or `-config` — is the older, still-supported way.
+layout and why.
+
+Naming a config file somewhere else — `MIKROVIEW_CONFIG` — is the older,
+still-supported way, and wins over the folder. One difference between
+them: a path you name and get wrong stops MikroView starting, because a
+typo is a mistake rather than a choice, while the folder's own
+`config.yaml` simply not being there is not an error at all.
 
 ```yaml
 listen:
@@ -330,9 +336,8 @@ the wizard says it can never show it to you again.
   That applies to the control in the app as well: the files are gone
   before the change is confirmed on screen.
 - `history.keyFile` — path to a master key file that you generate.
-  **Put it at `mikroview/keys/history.key` and restart** — from the
-  release that carries #1243, MikroView finds it there with nothing
-  else set:
+  **Put it at `mikroview/keys/history.key` and restart** — MikroView
+  finds it there with nothing else set:
 
   ```
   mkdir -p mikroview/keys
@@ -346,10 +351,10 @@ the wizard says it can never show it to you again.
   wrong.
 
   Naming the path explicitly instead — `MIKROVIEW_HISTORY_KEY_FILE`, or
-  `history.keyFile` pointing somewhere else — works today and keeps
-  working; it wins over the folder default when set. The file must hold
-  at least 32 bytes either way. This is a path, never the key itself —
-  there is deliberately no environment variable carrying key material.
+  `history.keyFile` pointing somewhere else — works and keeps working;
+  it wins over the folder. The file must hold at least 32 bytes either
+  way. This is a path, never the key itself — there is deliberately no
+  environment variable carrying key material.
 
   Or let the app generate it: with no key mounted, the setup wizard's
   step 6 hands you a key of exactly this shape, with the commands to
@@ -357,13 +362,13 @@ the wizard says it can never show it to you again.
   in your browser and never sent to the server, so save it when it is
   shown — nothing can reprint it.
 
-  **The rule is that the key must not live inside the data store, not
-  that it must sit outside the app folder.** `mikroview/keys/` beside
-  `mikroview/data/` satisfies it: what MikroView writes to, and what a
-  backup of `data/` alone carries, never includes the key. A copy of the
-  *whole* `mikroview/` folder is a copy of the key too — back up
-  `data/` on its own when the key must stay behind, and back up the
-  whole folder only when you mean to carry the key with it.
+  **The key must not live inside the data store.** A key kept among the
+  files it protects is decoration: whoever copies the directory copies
+  both, and now has everything needed to read it. `mikroview/keys/`
+  beside `mikroview/data/` satisfies that — nothing MikroView writes,
+  and no backup of `data/` alone, ever carries the key. A copy of the
+  *whole* `mikroview/` folder is a copy of the key too: back up `data/`
+  on its own when the key must stay behind.
 
   **There is no unencrypted mode.** `history.enabled: true` with no key
   file set does not mean "retain, unencrypted" — it means nothing is
@@ -531,6 +536,22 @@ off by default; the controls live in Settings' router-backups group, and
 the same operations are in the API table below. The passphrase must
 be at least 12 characters, and it protects a file an attacker could
 carry away and attack at their leisure, so pick accordingly.
+
+**A generation can be kept, taking it out of the ten-generation cycle
+above.** An admin marks one with a comment saying why (`before the
+7.16 upgrade`) — required, one line, 1 to 120 characters — and it
+moves into a pool of its own per router: it stops counting towards the
+ten, ordinary retention never evicts it, and the low-space cycling
+above never reaches it either. There is no limit on how many a router
+keeps. Releasing one puts it back into the cycling ten, in its place
+by age, where the oldest may then be dropped as normal — the only way
+an admin can free vault space by hand. Kept generations download
+through the same route as any other, and are re-sealed along with the
+rest whenever the vault passphrase is set, changed or removed. The
+comment lives in the vault's sealed index like the rest of the
+metadata; it is never logged or written to an audit entry, only that a
+generation was kept, released or had its comment changed (see [Audit
+log](#audit-log-admin-action-accountability-optional)).
 
 **Only on a network you trust.** RouterOS's SFTP client never verifies
 this server's host key (measured on RouterOS 7.23.3) — an attacker on
@@ -707,7 +728,7 @@ and hostnames.
 1000) — see
 [Files you mount into the container](#files-you-mount-into-the-container).
 If `config.yaml` isn't readable by that user, the container will fail to
-start with a permission error. `chmod 644 mikroview/config.yaml` after
+start with a permission error. `chmod 644 deploy/config.yaml` after
 editing it is the simplest fix here, since a config file is not a secret.
 
 ### Problem codes
@@ -1172,16 +1193,14 @@ you to create your own free account to obtain one.
    and download `GeoLite2-Country.mmdb` (or generate a license key and use
    their `geoipupdate` tool to keep it current).
 2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
-   from the release that carries #1243, MikroView finds it there with
-   nothing else set. It has to be readable by the user MikroView runs
-   as — see
+   MikroView finds it there with nothing else set. It has to be readable
+   by the user MikroView runs as — see
    [Files you mount into the container](#files-you-mount-into-the-container).
    A GeoIP database is not a secret, so `chmod 644` is fine here.
 
    Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
-   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development —
-   works today and keeps working; it wins over the folder default when
-   set.
+   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development
+   — works and keeps working; it wins over the folder.
 
 If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
@@ -1962,6 +1981,16 @@ device-attributed exception:
   naming the router, generation and which half of the pair -- a
   router's whole configuration, credentials included, is never an
   unaccountable read.
+- Keeping a generation (`POST
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.protected`; releasing one (`DELETE
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.unprotected`; rewriting its comment (`PATCH
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.comment_changed`. Each names the router and
+  generation; the comment itself is never in the detail -- like a
+  flag's note above, it lives only where it was written, in the
+  vault's sealed index.
 - The optional vault passphrase lock (see [Router backups over
   SFTP](#router-backups-over-sftp-optional-off-by-default)) logs each of
   its own changes: `router_backup.locked`, `router_backup.unlocked`,
@@ -3106,9 +3135,13 @@ One gzipped file holding every store: accounts, API tokens, recovery-key
 digests, flags, rule usage, detector settings, entities, the MAC
 registry, the audit log, the event-buffer size an admin set from
 Settings (`store.settingsStorePath`), the watchlist, watchlist
-suggestions, the watchlist match log, and the router-backup vault
-(`backup.vaultDir`, #394) — every generation still encrypted exactly as
-it sits on disk, so a restore never needs the retention key to move it.
+suggestions, the watchlist match log, the data directory's schema
+number (`schema.json`, #1238 / #1244) — so a restore comes back stamped
+at the schema it was actually taken at, rather than reading as a fresh,
+unmigrated install and re-running migrations that already landed — and
+the router-backup vault (`backup.vaultDir`, #394) — every generation
+still encrypted exactly as it sits on disk, so a restore never needs the
+retention key to move it.
 
 Three things are deliberately left out, and always have been:
 
@@ -3826,17 +3859,25 @@ tls:
   it directly rather than through your reverse proxy.
 - **`certFile`/`keyFile`** — your own certificate, instead of the
   self-generated one. **Put the files at `mikroview/certs/tls.crt` and
-  `mikroview/certs/tls.key` and restart** — from the release that
-  carries #1243, MikroView finds them there with nothing else set, both
-  present or neither used. Both are mounted files, so both have to be
-  readable by the user MikroView runs as — see
+  `mikroview/certs/tls.key` and restart** — MikroView finds them there
+  with nothing else set, and skips local-CA generation entirely. Both
+  are mounted files, so both have to be readable by the user MikroView
+  runs as — see
   [Files you mount into the container](#files-you-mount-into-the-container);
   the private key should stay `600`, the certificate can be `644`. See
   "Renewing your own certificate" below if something renews it for you.
+
+  **Both or neither.** One of the two in the folder without the other is
+  a startup error naming the file that is missing. The alternative would
+  be to start on MikroView's own certificate instead, which is the
+  failure an operator half-way through installing their own would notice
+  last — the name they expected their certificate to serve, served by a
+  different one.
+
   Naming `certFile`/`keyFile` explicitly elsewhere, or the
-  `MIKROVIEW_TLS_CERT_FILE`/`MIKROVIEW_TLS_KEY_FILE` env vars, works
-  today and keeps working; either wins over the folder default when
-  set.
+  `MIKROVIEW_TLS_CERT_FILE`/`MIKROVIEW_TLS_KEY_FILE` env vars, works and
+  keeps working; either wins over the folder, and setting just one of
+  them behaves exactly as it always has.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
@@ -4370,12 +4411,16 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what MikroView has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
+| `PUT /api/setup/backup-transport` | admin-only (#955): how step 6's router script delivers its backup -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
 | `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
-| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's kept generations (arrival times, sizes, `.backup` header), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
+| `POST /api/router-backups/{device}/{generation}/protect` | admin-only: mark a generation kept, given `{"comment": "..."}` -- required, one line, 1 to 120 characters, control characters refused. Moves it out of the ten-generation cycle into a pool of its own for that router, with no limit on how many it holds. 400 for a missing or over-length comment, 404 if the vault holds no such router or generation, 409 if it is already kept. Answers with the router's whole block (both lists), so the screen renders what the vault now holds. Audited as `router_backup.protected` |
+| `DELETE /api/router-backups/{device}/{generation}/protect` | admin-only: release a kept generation back into the cycling ten, in its place by age -- the one way to free vault space by hand. 404 if it is not kept. Same response shape as keeping it above. Audited as `router_backup.unprotected` |
+| `PATCH /api/router-backups/{device}/{generation}/protect` | admin-only: rewrite a kept generation's comment, given `{"comment": "..."}` -- same 400/404 as keeping it above. Same response shape. Audited as `router_backup.comment_changed` |
 | `POST /api/router-backups/unlock` | admin-only: opens the vault passphrase lock for the calling session, given `{"passphrase": "..."}` -- the unlock belongs to this session/tab, not the account, and lasts until it is locked, the session ends, or fifteen minutes pass with no download. Rate-limited through the same limiter as login. A wrong passphrase is a 403, audited as `router_backup.unlock_failed`; success is audited as `router_backup.unlocked` |
 | `POST /api/router-backups/lock` | admin-only: closes the vault again, from any admin session regardless of who opened it. Audited as `router_backup.locked`; a 409 if no passphrase is set |
 | `POST /api/router-backups/passphrase` | admin-only: turns the lock on, given `{"passphrase": "..."}` (at least 12 characters) -- generates an X25519 key pair, re-seals every stored backup to the public half, and leaves the vault open for the session that set it. Audited as `router_backup.passphrase_set`; a 500 if a file could not be re-sealed, which is still audited and named in the response |
@@ -4386,7 +4431,7 @@ starting the server. `mikroview -h` lists them too. See
 | `DELETE /api/droplist/{cidr}` | admin-only: remove the entry for `cidr` (e.g. `DELETE /api/droplist/203.0.113.0/24`). 204 on success, 404 if no entry matches |
 | `POST /api/droplist/key` | admin-only: mint the droplist-pull key a router's scheduled fetch presents at `GET /api/droplist.rsc` -- an optional body `{"address": "..."}` (empty body still allowed, same fallback to Host as `GET /api/droplist`'s `address` parameter) sets what the returned `scheduler` command fetches from. Returns `{"key": "...", "createdAt": ..., "scheduler": "..."}`, the raw key and the filled-in scheduler command both shown exactly once (#1225). Minting again **replaces** any existing key rather than adding a second one, since every router fetches the same feed with the same credential; audited as `droplist.key_minted` |
 | `DELETE /api/droplist/key` | admin-only: revoke the droplist-pull key. 204 on success, 404 if none exists. Audited as `droplist.key_revoked` |
-| `GET /api/droplist.rsc` | droplist-pull-token-only, not session-gated and not reachable with any other token kind (#1224) -- the RouterOS-importable script a router's own scheduled `/tool fetch` pulls: a staging-list build followed by a live-list swap, so a fetch or import failure never leaves the live list empty (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)). `Cache-Control: no-store`; 401 with no key or an invalid/revoked one, 429 over the same per-token rate limit ingest pushes use. Never audited per pull -- the key's own `lastUsedAt` (visible on `GET /api/droplist`) is the record |
+| `GET /api/droplist.rsc` | droplist-pull-token-only, not session-gated and not reachable with any other token kind (#1224) -- the RouterOS-importable script a router's own scheduled `/tool fetch` pulls: a staging-list build followed by a live-list swap, so a fetch or import failure never leaves the live list empty (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)). `Cache-Control: no-store`; 401 (carrying `WWW-Authenticate: Bearer realm="mikroview"`, RFC 9110 §15.5.2, so RouterOS's own `/tool fetch` can parse the refusal instead of erroring on the missing header) with no key or an invalid/revoked one, 429 over the same per-token rate limit ingest pushes use. Never audited per pull -- the key's own `lastUsedAt` (visible on `GET /api/droplist`) is the record |
 | `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |

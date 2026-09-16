@@ -224,6 +224,25 @@ func unwrapFromEnvelope(name string, raw []byte) ([]byte, error) {
 // and runRestore.
 const vaultStoreName = "router_backup_vault"
 
+// schemaStoreName is the data directory's schema document (#1238,
+// internal/persist/schema.go) in the envelope, added by #1244.
+//
+// Like vaultStoreName just above, it is deliberately not a
+// backedUpStores entry: its path is derived from dataDir(cfg), not a
+// config.Config *Path field on its own, so it never trips
+// backup_coverage_test.go's reflection walk either. Without it, a
+// restore into an empty data directory read as schema 0 -- indistinguishable
+// from an install that predates #1238 -- and the next start ran every
+// migration again over data that was already in the new shape. Carrying
+// schema.json with the rest of the bundle means a restore comes back
+// stamped at the schema it was actually taken at.
+//
+// A backup taken by a build before #1238 never had a schema.json to
+// carry, so its envelope simply lacks this entry -- runRestore treats
+// that the same way a missing document always has: schema 0, correct
+// for data that old.
+const schemaStoreName = "schema"
+
 // vaultBundle is the router-backup vault's envelope shape: every file
 // under the vault directory, keyed by its path relative to it (a
 // forward-slash path regardless of host OS, so a backup taken on one
@@ -441,6 +460,26 @@ func runBackup(args []string) int {
 		stores[vaultStoreName] = encoded
 	}
 
+	// schema.json (#1238) is not a document backedUpStores' loop above
+	// reads through persist.LoadDocument -- see schemaStoreName's own
+	// doc comment for why it is not one of that list's entries. Carried
+	// as-is, like every other store already written in the clear: it
+	// holds no operator data, so it needs no encryption pass even when
+	// history.keyFile is configured. A build before #1238 never wrote
+	// one, and that missing-document case is folded into the same
+	// "nothing to carry" reasoning as every other store here -- os.Stat
+	// via os.ReadFile's os.IsNotExist just skips it rather than erroring.
+	schemaPath := filepath.Join(dataDir(cfg), persist.SchemaDocumentName)
+	// #nosec G304 G703 -- this deployment's own data directory, from config, not from a request.
+	schemaData, err := os.ReadFile(schemaPath)
+	if err != nil && !os.IsNotExist(err) {
+		logger.Error(fmt.Sprintf("reading %s: %v", schemaPath, err))
+		return 1
+	}
+	if err == nil {
+		stores[schemaStoreName] = schemaData
+	}
+
 	if len(stores) == 0 {
 		logger.Error("no store files exist yet -- nothing to back up")
 		return 1
@@ -559,6 +598,30 @@ func runRestore(args []string) int {
 		}
 	}
 
+	// schemaStoreName is pulled out and validated here for the same two
+	// reasons as retainedEventsStore just above: it must not trip the
+	// known-store loop below (backedUpStores never lists it -- see its
+	// own doc comment), and the downgrade guard has to run in the same
+	// fully-validated-before-anything-is-touched pass as everything
+	// else -- a bundle stamped newer than this build knows gets the same
+	// refusal opening it directly would (persist.CheckFileSchema), with
+	// nothing yet written. A bundle with no schemaStoreName entry (taken
+	// by a build before #1238) is not an error: schemaData stays nil and
+	// nothing is written for it below, which restores as schema 0 --
+	// correct for data that old.
+	schemaPath := filepath.Join(dataDir(cfg), persist.SchemaDocumentName)
+	var schemaData []byte
+	haveSchema := false
+	if raw, ok := env.Stores[schemaStoreName]; ok {
+		haveSchema = true
+		delete(env.Stores, schemaStoreName)
+		if err := persist.CheckSchemaDocument(dataDir(cfg), raw); err != nil {
+			logger.Error(fmt.Sprintf("%v -- nothing has been changed", err))
+			return 1
+		}
+		schemaData = raw
+	}
+
 	known := map[string]string{}
 	for _, s := range backedUpStores(cfg) {
 		known[s.Name] = s.Path
@@ -630,6 +693,14 @@ func runRestore(args []string) int {
 				return 1
 			}
 		}
+		if haveSchema {
+			// #nosec G703 -- this deployment's own data directory, from config, not from a request.
+			if _, err := os.Stat(schemaPath); err == nil {
+				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
+					"state. Re-run with --force once you are sure", schemaPath, schemaStoreName))
+				return 1
+			}
+		}
 	}
 
 	// Write every store through its backend -- persist.Backend.Save
@@ -662,6 +733,17 @@ func runRestore(args []string) int {
 		}
 		if _, err := backend.Save(ctx, data, expect); err != nil {
 			logger.Error(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+			return 1
+		}
+	}
+	if haveSchema {
+		// Written raw, like it was read in runBackup: schema.json holds
+		// no operator data (see its own doc comment in
+		// internal/persist/schema.go), so there is no encryption pass to
+		// reverse here, only the same atomic-publish-by-rename every
+		// other document in the data directory gets.
+		if err := persist.WriteFileAtomic(schemaPath, schemaData, 0o600); err != nil {
+			logger.Error(fmt.Sprintf("writing %s (store %q): %v", schemaPath, schemaStoreName, err))
 			return 1
 		}
 	}

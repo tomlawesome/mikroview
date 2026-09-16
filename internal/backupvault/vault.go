@@ -146,6 +146,13 @@ type Generation struct {
 	// of this generation has not arrived (the `.rsc` came alone, or the
 	// backup upload is still pending).
 	Header HeaderLabel
+	// Comment, ProtectedAt and ProtectedBy are set only for a
+	// generation in this router's protected pool (#1126): the admin's
+	// note saying why it is being held, when they said so, and who
+	// they were. Empty for an ordinary cycling generation.
+	Comment     string
+	ProtectedAt time.Time
+	ProtectedBy string
 }
 
 // HasBackup/HasRsc report which half of the pair has arrived.
@@ -169,6 +176,13 @@ type generationMeta struct {
 	BackupSize      int64       `json:"backupSize,omitempty"`
 	RscSize         int64       `json:"rscSize,omitempty"`
 	Header          HeaderLabel `json:"header,omitempty"`
+	// The protected pool's own fields (#1126), persisted inside the
+	// sealed index like everything else here -- the comment is an
+	// admin's note about this router's configuration ("before the
+	// office move"), so it is never written anywhere unsealed.
+	Comment     string    `json:"comment,omitempty"`
+	ProtectedAt time.Time `json:"protectedAt,omitzero"`
+	ProtectedBy string    `json:"protectedBy,omitempty"`
 }
 
 func (g *generationMeta) toGeneration() Generation {
@@ -179,12 +193,24 @@ func (g *generationMeta) toGeneration() Generation {
 		BackupSize:      g.BackupSize,
 		RscSize:         g.RscSize,
 		Header:          g.Header,
+		Comment:         g.Comment,
+		ProtectedAt:     g.ProtectedAt,
+		ProtectedBy:     g.ProtectedBy,
 	}
 }
 
 // routerMeta is one router's generations, oldest first.
 type routerMeta struct {
 	Generations []*generationMeta `json:"generations"`
+	// Protected is this router's kept pool (#1126), also oldest first:
+	// generations an admin has marked, each with a comment saying why.
+	// They are out of Generations entirely, which is what makes every
+	// promise about them true at once -- they do not count towards
+	// MaxGenerations, ordinary retention cannot reach them, low-space
+	// cycling cannot reach them, and there is no limit on how many a
+	// router holds. Unprotecting puts one back, oldest-first by id,
+	// where the cap applies to it again.
+	Protected []*generationMeta `json:"protected,omitempty"`
 	// Anchor is the generation this router had newest when low-space
 	// mode was entered -- the safe copy from before anything was wrong.
 	// It is never the one cycled out while the mode lasts, and it is
@@ -321,27 +347,14 @@ func (v *Vault) repairIndexAgainstDisk() bool {
 	var changed bool
 	for device, rm := range v.meta.Routers {
 		dir := v.routerDir(device)
-		kept := rm.Generations[:0]
-		for _, g := range rm.Generations {
-			missing := ""
-			for kind, arrived := range map[string]time.Time{KindBackup: g.BackupArrivedAt, KindRsc: g.RscArrivedAt} {
-				if arrived.IsZero() {
-					continue
-				}
-				if _, err := os.Stat(filepath.Join(dir, v.fileName(g.ID, kind))); err != nil {
-					missing = kind
-				}
-			}
-			if missing == "" {
-				kept = append(kept, g)
-				continue
-			}
-			changed = true
-			v.log.Warn(fmt.Sprintf("repaired the vault index: dropped %s's generation %s, whose %s file is not on disk",
-				device, g.ID, missing))
-		}
-		rm.Generations = kept
-		if len(rm.Generations) == 0 {
+		var lostGeneration, lostProtected bool
+		// Both lists, on the same terms: a kept generation whose file
+		// has gone is still an entry the vault would list, offer and
+		// then 404 on, and being protected does not make it readable.
+		rm.Generations, lostGeneration = v.presentOnDisk(device, dir, rm.Generations, "generation")
+		rm.Protected, lostProtected = v.presentOnDisk(device, dir, rm.Protected, "kept generation")
+		changed = changed || lostGeneration || lostProtected
+		if len(rm.Generations) == 0 && len(rm.Protected) == 0 {
 			// Nothing left to hold: the router should not appear in
 			// Settings' list with an empty strip.
 			delete(v.meta.Routers, device)
@@ -350,13 +363,47 @@ func (v *Vault) repairIndexAgainstDisk() bool {
 		}
 		if rm.Anchor != "" && !generationsHave(rm.Generations, rm.Anchor) {
 			// The anchor went with a dropped generation. The newest
-			// copy the vault still has becomes the one low-space mode
-			// cycles around.
-			rm.Anchor = rm.Generations[len(rm.Generations)-1].ID
+			// cycling copy the vault still has becomes the one
+			// low-space mode cycles around -- never a protected one,
+			// which is not in the cycling set to be spared from it.
+			rm.Anchor = ""
+			if n := len(rm.Generations); n > 0 {
+				rm.Anchor = rm.Generations[n-1].ID
+			}
 			changed = true
 		}
 	}
 	return changed
+}
+
+// presentOnDisk drops the generations in gens whose files are not on
+// disk, and reports whether it dropped any. Only the halves the index
+// claims arrived are looked for: a generation whose `.rsc` never came
+// is complete as it stands. what names the list for the log line, since
+// losing a kept generation is worth reading differently from losing one
+// the vault was going to cycle out anyway.
+func (v *Vault) presentOnDisk(device, dir string, gens []*generationMeta, what string) ([]*generationMeta, bool) {
+	var changed bool
+	kept := gens[:0]
+	for _, g := range gens {
+		missing := ""
+		for kind, arrived := range map[string]time.Time{KindBackup: g.BackupArrivedAt, KindRsc: g.RscArrivedAt} {
+			if arrived.IsZero() {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(dir, v.fileName(g.ID, kind))); err != nil {
+				missing = kind
+			}
+		}
+		if missing == "" {
+			kept = append(kept, g)
+			continue
+		}
+		changed = true
+		v.log.Warn(fmt.Sprintf("repaired the vault index: dropped %s's %s %s, whose %s file is not on disk",
+			device, what, g.ID, missing))
+	}
+	return kept, changed
 }
 
 func generationsHave(gens []*generationMeta, id string) bool {
@@ -375,8 +422,11 @@ func generationsHave(gens []*generationMeta, id string) bool {
 func (v *Vault) removeUnreferencedFiles() {
 	referenced := make(map[string]map[string]bool, len(v.meta.Routers))
 	for device, rm := range v.meta.Routers {
-		names := make(map[string]bool, 2*len(rm.Generations))
-		for _, g := range rm.Generations {
+		names := make(map[string]bool, 2*(len(rm.Generations)+len(rm.Protected)))
+		// The protected pool counts as referenced exactly like the
+		// cycling set (#1126): a kept backup's whole point is that
+		// nothing sweeps it away.
+		for _, g := range append(append([]*generationMeta{}, rm.Generations...), rm.Protected...) {
 			names[v.fileName(g.ID, KindBackup)] = true
 			names[v.fileName(g.ID, KindRsc)] = true
 		}
@@ -920,11 +970,14 @@ func (v *Vault) Stats() Stats {
 	defer v.mu.Unlock()
 	var s Stats
 	for _, rm := range v.meta.Routers {
-		if len(rm.Generations) == 0 {
+		if len(rm.Generations) == 0 && len(rm.Protected) == 0 {
 			continue
 		}
 		s.Routers++
-		for _, g := range rm.Generations {
+		// Protected generations are counted here (#1126): the row is
+		// what the vault is holding on this disk, and a kept backup is
+		// as real a pair of files as any other.
+		for _, g := range append(append([]*generationMeta{}, rm.Generations...), rm.Protected...) {
 			s.Generations++
 			s.Bytes += g.BackupSize + g.RscSize
 		}
@@ -946,12 +999,10 @@ func (v *Vault) Open(device, generationID, kind string) ([]byte, error) {
 	rm := v.meta.Routers[device]
 	var found bool
 	if rm != nil {
-		for _, g := range rm.Generations {
-			if g.ID == generationID {
-				found = true
-				break
-			}
-		}
+		// Both lists: a protected generation is downloaded through the
+		// same route as any other (#1126), and being kept has never
+		// meant being unreadable.
+		found = generationsHave(rm.Generations, generationID) || generationsHave(rm.Protected, generationID)
 	}
 	v.mu.Unlock()
 	if !found {
@@ -1004,8 +1055,13 @@ func (v *Vault) Missed(device string, now time.Time) Missed {
 	if rm == nil {
 		return Missed{}
 	}
+	// Protected generations are arrivals like any other, and are read
+	// here as well (#1126): the newest push is exactly the one an admin
+	// reaches for `keep…` on, and leaving the pool out would make the
+	// router's last arrival look older than it is and put an amber
+	// "none since" receipt on a router that pushed this morning.
 	var arrivals []time.Time
-	for _, g := range rm.Generations {
+	for _, g := range append(append([]*generationMeta{}, rm.Generations...), rm.Protected...) {
 		if !g.BackupArrivedAt.IsZero() {
 			arrivals = append(arrivals, g.BackupArrivedAt)
 		}

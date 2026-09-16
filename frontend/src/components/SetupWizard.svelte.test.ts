@@ -33,10 +33,20 @@ vi.mock('../lib/api', () => ({
   createToken: vi.fn(),
   fetchRouterBackups: vi.fn(),
   saveSetupAddress: vi.fn(),
+  saveSetupBackupTransport: vi.fn(),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
-import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep, saveSetupAddress } from '../lib/api'
+import {
+  createToken,
+  fetchDevices,
+  fetchRouterBackups,
+  fetchSetupCommands,
+  fetchSetupStatus,
+  markSetupStep,
+  saveSetupAddress,
+  saveSetupBackupTransport,
+} from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { viewportState } from '../lib/viewport.svelte'
@@ -58,6 +68,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
       syslogEnabled: true,
       address: '',
       addressCandidates: [],
+      backupTransport: 'sftp',
     },
     sources: [],
     devices: [],
@@ -128,6 +139,7 @@ beforeEach(async () => {
   vi.mocked(fetchSetupCommands).mockResolvedValue(commandsFixture())
   vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture())
   vi.mocked(saveSetupAddress).mockResolvedValue(null)
+  vi.mocked(saveSetupBackupTransport).mockResolvedValue(null)
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -156,6 +168,11 @@ beforeEach(async () => {
   // for the no-address state itself set it back to '' explicitly.
   wizardState.address = 'localhost'
   wizardState.addressSaveError = null
+  // The transport (#955) is module-lifetime too, and the deployment's
+  // answer rather than this browser's -- each test starts on the sftp
+  // default the same way a fresh install reads.
+  wizardState.backupTransport = 'sftp'
+  wizardState.backupTransportError = null
 })
 
 describe('SetupWizard', () => {
@@ -1211,9 +1228,12 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     const { container } = await noKeyPane()
 
     const blocks = [...container.querySelectorAll('.body pre')].map((p) => p.textContent ?? '')
-    expect(blocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key'))).toBe(true)
-    expect(blocks.some((b) => b.includes('/run/secrets/mikroview-history.key:ro'))).toBe(true)
-    expect(blocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key'))).toBe(true)
+    expect(blocks.some((b) => b.includes('cat > mikroview/keys/history.key'))).toBe(true)
+    // The app folder's two mount lines (#1209, #1243), not a mount of
+    // this one file: the key arrives by being put in the folder, and so
+    // does everything else the compose block has to carry.
+    expect(blocks.some((b) => b.includes('./mikroview:/etc/mikroview:ro'))).toBe(true)
+    expect(blocks.some((b) => b.includes('./mikroview/data:/var/lib/mikroview'))).toBe(true)
     expect(blocks.some((b) => b.includes('docker compose up -d'))).toBe(true)
     expect(container.querySelectorAll('.body button.copy').length).toBe(blocks.length)
     // No block quotes the key: it goes in on standard input, which is
@@ -1337,6 +1357,106 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
 
     await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
     expect(container.textContent).not.toContain('reach this host on port')
+  })
+
+  // --- #955: the HTTPS-only transport, offered in the step ------------
+  //
+  // The last line of the issue's done-when. The pair is the whole
+  // control: one choice, above the block it decides, and the answer
+  // lives on the server so it is the deployment's and not the browser's.
+
+  // step6WithScript is the ordinary "a token exists, the script prints"
+  // state these three share, with the rendered blocks following whatever
+  // transport is currently chosen -- exactly as the server renders them
+  // from whichever it has stored.
+  async function step6WithScript(port = ':47022') {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true, port }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockImplementation(async () => {
+      const https = wizardState.backupTransport === 'https'
+      return commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: https ? 'HTTPS_PUSH_SCRIPT' : 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: https ? 'HTTPS_PUSH_SCHEDULE' : 'BACKUP_SCHEDULE', note: '' },
+        },
+      })
+    })
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(rendered.container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    return rendered
+  }
+
+  it('offers both ways of sending the backup, sitting on sftp until told otherwise', async () => {
+    await step6WithScript()
+
+    const sftp = screen.getByRole('button', { name: 'sftp' })
+    const https = screen.getByRole('button', { name: 'https' })
+    expect(sftp.getAttribute('aria-pressed')).toBe('true')
+    expect(https.getAttribute('aria-pressed')).toBe('false')
+    expect(saveSetupBackupTransport).not.toHaveBeenCalled()
+  })
+
+  it('switches the deployment to https, swapping the script and the port note with it', async () => {
+    const { container } = await step6WithScript()
+    expect(container.textContent).toContain('reach this host on port 47022')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'https' }))
+
+    // Stored server-side, not in this browser: the deployment's answer.
+    await waitFor(() => expect(saveSetupBackupTransport).toHaveBeenCalledWith('https'))
+    // The blocks swap, because the server re-renders from what it now
+    // holds -- nothing in the request says which.
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('HTTPS_PUSH_SCRIPT'))
+    expect(screen.getByRole('button', { name: 'https' }).getAttribute('aria-pressed')).toBe('true')
+    // No second port to open is the whole reason this transport exists.
+    expect(container.textContent).not.toContain('reach this host on port 47022')
+    expect(container.textContent).toContain('same HTTPS address the router already reaches')
+  })
+
+  // An HTTPS-only install is exactly the one whose drop box is off, so
+  // the pair has to be reachable from the no-script state too -- offering
+  // it only once SFTP works would put the alternative behind the
+  // precondition it exists to avoid.
+  it('still offers the pair when the drop box is not ready, which is where an HTTPS-only install starts', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: '', note: '', blocked: ['backups-off'] },
+          backupSchedule: { commands: '', note: '', blocked: ['backups-off'] },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = 6
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.no-script')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'https' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'https' }))
+    await waitFor(() => expect(saveSetupBackupTransport).toHaveBeenCalledWith('https'))
   })
 
   // With more than one router known, the picker stands in for "entry"

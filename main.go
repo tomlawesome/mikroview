@@ -600,6 +600,17 @@ func main() {
 	// in place, not a per-logger setting fixed at New() time.
 	logging.SetLevel(cfg.Log.Level)
 
+	// One line per optional file the app folder was asked for, found or
+	// not, naming the path (#1243). Said out loud at every boot because
+	// the whole contract is "drop the file in and restart": an operator
+	// who put the GeoIP database one directory too deep otherwise has
+	// only a feature that stayed off and nothing to compare against.
+	// Nothing is printed for a setting config or the environment
+	// already named -- the folder was not consulted for it.
+	for _, found := range configResult.AppFolder {
+		configLog.Info("app folder -- " + found.String())
+	}
+
 	// #1218: every optional top-level setting this build understands
 	// that config.yaml does not set, computed once here since neither
 	// input (this binary, the running config) changes before the next
@@ -607,13 +618,23 @@ func main() {
 	// read the same slice rather than recomputing it. A failure just
 	// means the notice can't be shown this boot; see readRawConfigYAML's
 	// own comment for why that's never treated as fatal.
-	missingSettings, err := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(os.Getenv("MIKROVIEW_CONFIG")))
+	missingSettings, err := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(configResult.ConfigPath))
 	if err != nil {
 		configLog.Warn(fmt.Sprintf("checking for newly available settings: %v", err))
 		missingSettings = nil
 	}
 
 	logging.PrintBanner()
+
+	// #1238: bring the data directory up to the schema this build knows,
+	// and refuse outright if a newer build wrote it. Before anything else
+	// touches the data directory -- including the version marker below --
+	// because the refusal's promise is that nothing was written.
+	if err := upgradeDataDirSchema(cfg); err != nil {
+		logging.New("schema").Error(err.Error())
+		os.Exit(1)
+	}
+
 	previousVersion := logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
 	// Before anything is built on top of them (#536). Checked here
@@ -2144,7 +2165,7 @@ func runValidateConfig(args []string) int {
 	// upgrade, so it can be checked before one. Informational only --
 	// never itself a reason for a non-zero exit, since every setting
 	// here is optional by definition.
-	if missing, mErr := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(path)); mErr != nil {
+	if missing, mErr := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(result.ConfigPath)); mErr != nil {
 		fmt.Fprintf(os.Stderr, "checking for newly available settings: %v\n", mErr)
 	} else if len(missing) > 0 {
 		fmt.Printf("%d new setting(s) understood by this build are not set:\n", len(missing))
@@ -2155,10 +2176,14 @@ func runValidateConfig(args []string) int {
 	}
 
 	if !result.HasProblems() {
-		if path == "" {
-			fmt.Println("No config file set (MIKROVIEW_CONFIG is empty) -- built-in defaults are valid.")
+		if result.ConfigPath == "" {
+			// Names the path it looked at, not just the env var: with
+			// #1243's app-folder default there are now two ways to
+			// have no config file, and an operator who mounted the
+			// folder needs to see which name MikroView expected.
+			fmt.Printf("No config file (MIKROVIEW_CONFIG is empty and there is no %s) -- built-in defaults are valid.\n", config.DefaultConfigPath())
 		} else {
-			fmt.Printf("%s: no problems found.\n", path)
+			fmt.Printf("%s: no problems found.\n", result.ConfigPath)
 		}
 		return validateConfigExitOK
 	}

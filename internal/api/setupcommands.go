@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 // setupCommandsRequest is what the wizard sends to render RouterOS
@@ -254,30 +255,56 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// time to find the other. Wording stays out of Go entirely -- the
 	// frontend owns every operator-facing sentence, same split #436
 	// already draws for the commands themselves.
+	//
+	// Which of the two step-6 scripts is rendered is the operator's
+	// stored answer, not a per-request field (#955): the transport is a
+	// property of the deployment, so it is read from the setup store
+	// here the same way the address above falls back to it.
+	backupTransport := setup.BackupTransportSFTP
+	if s.Setup != nil {
+		backupTransport = s.Setup.BackupTransport()
+	}
+	httpsTransport := backupTransport == setup.BackupTransportHTTPS
 	var backupBlockedKeys []string
 	if noAddress {
 		backupBlockedKeys = append(backupBlockedKeys, noAddressKey)
 	}
-	if s.SetupInstance.BackupPort == "" {
-		backupBlockedKeys = append(backupBlockedKeys, "backups-off")
-	}
-	if !s.Vault.Enabled() {
-		backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
-	}
-	if req.Device == "" {
-		backupBlockedKeys = append(backupBlockedKeys, "no-device")
+	// The drop box's own preconditions belong to the SFTP script alone.
+	// The HTTPS push needs none of them (#955's ruling): it goes through
+	// the ingest channel that is already open, so the only thing it
+	// waits on beyond the address is the token -- the same precondition
+	// step 4 has.
+	if !httpsTransport {
+		if s.SetupInstance.BackupPort == "" {
+			backupBlockedKeys = append(backupBlockedKeys, "backups-off")
+		}
+		if !s.Vault.Enabled() {
+			backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
+		}
+		if req.Device == "" {
+			backupBlockedKeys = append(backupBlockedKeys, "no-device")
+		}
 	}
 	if req.Token == "" {
 		backupBlockedKeys = append(backupBlockedKeys, "no-token")
 	}
 	backupCommands, backupScheduleCommands := "", ""
 	if len(backupBlockedKeys) == 0 {
-		// The drop box listens on its own port, not the HTTPS port
-		// req.Address carries -- same reasoning SyslogCommands' Hostname
-		// call gives for stripping the web port off before pairing it
-		// with the syslog port.
-		backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
-		backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
+		if httpsTransport {
+			// The whole address, port and all: this one is posted to
+			// mikroview's own HTTPS listener, the same value
+			// CaTrustCommands and PushBlock embed -- not the bare host
+			// the SFTP form below pairs with the drop box's port.
+			backupCommands = routeros.BackupPushScript(req.Address, req.Token, dialect)
+			backupScheduleCommands = routeros.BackupPushScheduleCommands(backupCommands, dialect)
+		} else {
+			// The drop box listens on its own port, not the HTTPS port
+			// req.Address carries -- same reasoning SyslogCommands' Hostname
+			// call gives for stripping the web port off before pairing it
+			// with the syslog port.
+			backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
+			backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, setupCommandsResponse{

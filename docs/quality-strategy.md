@@ -57,6 +57,7 @@ not stop at the first red job.
 |------------------------------------------------------|-----------------------|
 | `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml` |
 | `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` and `live-check.Dockerfile` |
+| `test:install-line`                                  | the above, plus `install.sh` (#1242 -- root-level, so none of the other lists' globs see it) |
 | `test:go`, `test:frontend`                           | not covered -- already cheap enough (#1066) |
 
 The four `gate:scenarios` shards share one input set even though each only
@@ -93,6 +94,36 @@ dedicated read-only token limits what a leak of it could reach.
 
 Until `CI_REUSE_TOKEN` exists, nothing changes: every candidate job runs
 exactly as it did before #1066. Creating it is what turns reuse on.
+
+## Upgrade fixtures (`testdata/upgrade/`, #1239)
+
+`test:go` opens one real recording per released version before it runs
+`go test ./...` -- see `internal/persist/upgrade_test.go` and
+`docs/upgrades.md`, "How this is tested", for what that proves and why.
+
+What lives where:
+
+- `testdata/upgrade/<version>/manifest.json` -- committed. What the
+  recording holds (usernames, an entity, a flag, ...), never a hash,
+  token or key.
+- The recording itself -- not committed, ever: a data directory holds
+  password/token hashes and a TLS key, made-up or not, and gitleaks
+  would flag every one. It lives in the project's generic package
+  registry (`upgrade-fixtures/<version>/`) and `.upgrade-fixtures/`
+  (gitignored) is where a fetched copy lands.
+- `scripts/fetch-upgrade-fixtures.sh` -- downloads every version listed
+  under `testdata/upgrade/` into `.upgrade-fixtures/`, skipping one
+  already present. `test:go` runs it first; nothing else in the gate
+  needs it, since `test:go` is the only job unaffected by the reuse gate
+  above that also runs the Go suite.
+- `scripts/record-upgrade-fixture.sh <version>` -- the other half, run by
+  hand: boots the released image, drives a small scripted session
+  against its own API, packs what it wrote, and uploads it. Booting an
+  old image happens here and nowhere else in the gate.
+
+To add a fixture for a new release: run
+`scripts/record-upgrade-fixture.sh v0.x.y`, check the manifest it wrote
+under `testdata/upgrade/v0.x.y/` holds no secret, and commit it.
 
 ## Pre-release reviews (`docs/reviews/`)
 

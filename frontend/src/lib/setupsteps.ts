@@ -14,7 +14,7 @@
 // wasn't" would be worse than no wizard at all.
 
 import { formatSize } from './memory'
-import type { Device, RouterBackupsResponse, SetupMark, SetupStatus, SetupWitness } from './types'
+import type { BackupTransport, Device, RouterBackupsResponse, SetupMark, SetupStatus, SetupWitness } from './types'
 
 // 'quiet' is #487's fifth reading, and the only one that is not a claim
 // about a router: a step with nothing to wait for (step 5's naming is
@@ -201,7 +201,10 @@ export function pushStep(status: SetupStatus): StepStatus {
 // on a session this modal would not otherwise be open on) -- read the
 // same way as "nothing has arrived", never as a claim about the key,
 // so this never states "no key" without having actually asked.
-export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
+export function backupStep(
+  backups: RouterBackupsResponse | null,
+  transport: BackupTransport = 'sftp',
+): StepStatus {
   if (backups && !backups.enabled) {
     return {
       state: 'blocked',
@@ -219,7 +222,11 @@ export function backupStep(backups: RouterBackupsResponse | null): StepStatus {
     // without a live connection-attempt signal (see backupReceipt/the
     // module doc above): the operator has something to check instead
     // of only waiting.
-    const port = backups?.port ? portOf(backups.port) : null
+    // ...and only when the drop box is the way in at all: an HTTPS-only
+    // install (#955) pushes over the address the router already reaches,
+    // so naming a drop box port here would send the operator to check
+    // something this deployment does not use.
+    const port = transport === 'sftp' && backups?.port ? portOf(backups.port) : null
     return {
       state: 'waiting',
       detail: port
@@ -604,6 +611,23 @@ export function backupLead(scriptExists: boolean): string {
   return scriptExists ? BACKUP_LEAD_INTRO + BACKUP_LEAD_SCRIPT_NOTE : BACKUP_LEAD_INTRO
 }
 
+// BACKUP_TRANSPORTS is step 6's one choice (#955), in the order it is
+// drawn: how the router hands its backup over. 'sftp' is the default --
+// the drop box #394 built -- and 'https' is for an install reachable
+// only through its reverse proxy, where the router reads its own backup
+// in slices and posts them through the channel that is already open.
+export const BACKUP_TRANSPORTS: { value: BackupTransport; label: string }[] = [
+  { value: 'sftp', label: 'sftp' },
+  { value: 'https', label: 'https' },
+]
+
+// BACKUP_PORT_NOTE_HTTPS replaces the drop box's "publish this port"
+// note when the router is pushing over HTTPS (#955): there is no second
+// port to open, which is the whole reason that transport exists.
+export const BACKUP_PORT_NOTE_HTTPS =
+  'Nothing new has to be opened: the script posts the backup to the same HTTPS address the router ' +
+  'already reaches, in slices, over the connection it already uses for its pushes.'
+
 // BACKUP_WAITING_NO_SCRIPT replaces backupStep's ordinary waiting line
 // when the backup block is blocked (#1217): "the script below runs once
 // at the end" is false with no script below, so the promise is dropped
@@ -685,6 +709,7 @@ export function buildLedger(
   devices: Device[],
   address: string,
   backups: RouterBackupsResponse | null = null,
+  backupTransport: BackupTransport = 'sftp',
 ): LedgerStep[] {
   const checks: StepStatus[] = [
     caStep(status, address),
@@ -692,7 +717,7 @@ export function buildLedger(
     rulesStep(status),
     pushStep(status),
     nameStep(devices),
-    backupStep(backups),
+    backupStep(backups, backupTransport),
   ]
   const receipts = [
     caReceipt(status),
