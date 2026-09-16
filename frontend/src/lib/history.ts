@@ -446,9 +446,17 @@ export function stateRow(info: PersistenceInfo | null): string | null {
 export const HOW_TO_MOUNT_URL =
   'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-optional-off-by-default'
 
-/** Where the wizard suggests the key file lives: a secret path, outside
- *  the data directory, exactly as docs/configuration.md requires. */
-export const KEY_FILE_PATH = '/run/secrets/mikroview-history.key'
+/** Where the wizard tells the operator to write the key, on the host:
+ *  the app folder's own keys/ (#1209, #1243). Beside data/, never inside
+ *  it -- the rule is that the key must not live in the data store, which
+ *  is what a backup of data/ alone carries. */
+export const KEY_DIR = 'mikroview/keys'
+export const KEY_FILE_PATH = `${KEY_DIR}/history.key`
+
+/** The same file seen from inside the container, where the app folder is
+ *  mounted read-only. MikroView reads this path with nothing set, so the
+ *  wizard only quotes it to say what `history.keyFile` would name. */
+export const KEY_FILE_CONTAINER_PATH = '/etc/mikroview/keys/history.key'
 
 /**
  * newHistoryKey mints a `history.keyFile` value in the browser: 32
