@@ -99,7 +99,7 @@
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
-  import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { deviceState, multihomedEcho, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
   import { portOf } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
@@ -659,6 +659,11 @@
                      sentence Fleet.svelte carries: the wizard's step 2
                      owns the diagnosis and the command. -->
                 <div class="frow dim">{multihomedEcho(d)}</div>
+              {/if}
+              {#if setupEcho(d)}
+                <!-- The same #1241 line Fleet.svelte carries: what this
+                     router reports of the wizard's own logging setup. -->
+                <div class="frow dim">{setupEcho(d)}</div>
               {/if}
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
             </div>

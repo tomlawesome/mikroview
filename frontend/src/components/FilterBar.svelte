@@ -27,6 +27,7 @@
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
   import { columnState } from '../lib/columns.svelte'
   import { geoipState } from '../lib/geoip.svelte'
+  import { seenValuesState } from '../lib/seenValues.svelte'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
   import { onMount } from 'svelte'
 
@@ -36,6 +37,11 @@
   // explainer row the moment it's known to be off.
   onMount(() => {
     geoipState.ensureLoaded().catch(() => {})
+    // #1226: the values this instance has actually seen, so Proto and
+    // Interface below are pickers rather than boxes an operator guesses
+    // into. Best-effort -- a failed fetch leaves both suggesting nothing
+    // and still accepting anything typed, which is what they did before.
+    seenValuesState.ensureLoaded().catch(() => {})
   })
 
   // Saved filters have a drawn home now (round 37: "saved filters are
@@ -487,10 +493,16 @@
       </select>
     </div>
 
+    <!-- #1226: a datalist combo, not a <select>. The list is what this
+         instance has actually seen (seenValues.svelte.ts); typing a
+         value that is not in it still works, which is what lets a filter
+         be set up before the traffic it is waiting for arrives. Same
+         idiom as the watchers station's scope boxes. -->
     <div class="fb-field">
       <span class="fb-label">Proto</span>
       <input
         type="text"
+        list="fb-seen-protos"
         placeholder={viewportState.isMobile ? 'Protocol (tcp, udp, icmp…)' : ''}
         bind:value={appState.filters.protocol}
         aria-label="Protocol"
@@ -610,10 +622,14 @@
       />
     </div>
 
+    <!-- One list for both directions, because there is one filter: it
+         matches an event whose in *or* out interface is the value
+         picked. Typing an unseen name works here too. -->
     <div class="fb-field">
       <span class="fb-label">Interface</span>
       <input
         type="text"
+        list="fb-seen-interfaces"
         placeholder={viewportState.isMobile ? 'Interface' : ''}
         bind:value={appState.filters.interface}
         aria-label="Interface"
@@ -698,6 +714,22 @@
     {/if}
   </div>
 {/if}
+
+<!-- #1226: one datalist per field for the whole strip, at the top level
+     rather than beside each input, so they survive the strip folding and
+     are not rebuilt every time it opens. A <datalist> whose input is not
+     on screen is inert, and an empty one simply offers nothing -- which
+     is what a fresh instance, or a failed fetch, correctly shows. -->
+<datalist id="fb-seen-protos">
+  {#each seenValuesState.proto as p (p)}
+    <option value={p}></option>
+  {/each}
+</datalist>
+<datalist id="fb-seen-interfaces">
+  {#each seenValuesState.interfaces as iface (iface)}
+    <option value={iface}></option>
+  {/each}
+</datalist>
 
 <style>
   /* Deck.svelte mounts the stream's own card-body as `<Whisper />
