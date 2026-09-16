@@ -213,7 +213,7 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 	written := store.New(64, time.Hour)
 	written.Insert(store.Event{Action: store.ActionDrop, RuleLabel: "wan-in"})
 	writtenDevices := device.NewRegistry(nil)
-	writtenDevices.Resolve("192.168.1.1", time.Now())
+	writtenDevices.Ensure("core", time.Now())
 	eng := engine.New()
 
 	parts := []snapshot.Part{written.SnapshotPart(), writtenDevices.SnapshotPart(), engineSnapshotPart{eng: eng}}
