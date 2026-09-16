@@ -45,25 +45,21 @@ services:
       start_period: 10s
       retries: 3
     volumes:
-      - ./config.yaml:/etc/mikroview/config.yaml:ro
-      # Optional -- see docs/configuration.md's GeoIP section. Requires
-      # your own MaxMind GeoLite2 database; uncomment both this and the
-      # env var below once you have one.
-      # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the new-device MAC
-      # registry/the TLS cert across container recreation, not just
-      # restarts -- see "Persistent data" below for what this is and
-      # the bind-mount alternative.
-      - mikroview-data:/var/lib/mikroview
-      # Alternative to the named volume above: a bind mount, if you want
-      # to browse/back up the files directly from the host. Comment out
-      # the line above and uncomment this one instead (not both) -- see
-      # "Persistent data" below for the permissions step this needs
-      # first.
-      # - ./data:/var/lib/mikroview
+      # One app folder on the host, two mounts: read-only for what you
+      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
+      - ./mikroview:/etc/mikroview:ro
+      - ./mikroview/data:/var/lib/mikroview
+      # Mounting each file separately instead -- config.yaml,
+      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or a
+      # named volume for data -- is the old way and still works: a path
+      # set in config.yaml or the environment always wins over the
+      # folder default. See docs/configuration.md.
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
+      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
+      # file into mikroview/ is the old way and still works -- see
+      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
@@ -73,8 +69,9 @@ services:
       # are only for customizing it.
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
       # - MIKROVIEW_TLS_HOSTS=192.168.1.50,mikroview.local
-      # - MIKROVIEW_TLS_CERT_FILE=/etc/mikroview/tls.crt
-      # - MIKROVIEW_TLS_KEY_FILE=/etc/mikroview/tls.key
+      # Naming MIKROVIEW_TLS_CERT_FILE/MIKROVIEW_TLS_KEY_FILE explicitly
+      # instead of dropping certs/tls.crt + certs/tls.key into mikroview/
+      # is the old way and still works -- see docs/configuration.md.
       # Read docs/configuration.md's "TLS" section before using this --
       # only safe if this port is unreachable except from your own
       # isolated-network reverse proxy.
@@ -88,21 +85,30 @@ services:
       # you don't want firewall events at all. Remove the "6514:6514/tcp"
       # port mapping above too if you do.
       # - MIKROVIEW_LISTEN_SYSLOG_TLS=
-
-volumes:
-  mikroview-data:
 ```
 
 **Image tags**: `latest` is the tag intended for general use -- the most recent release, promoted from `preview` after passing CI and a container smoke test. Every release is also published under its own immutable tag (`ghcr.io/tomlawesome/mikroview:v0.5.1`, matching the `v*` git tag and the [CHANGELOG](../CHANGELOG.md)), if you would rather pin one. `preview-<7-char-sha>` tags exist for every build off the `preview` branch, if you ever want to pin to a specific one rather than track `latest`. There is deliberately no `dev` tag: pushing to the `dev` branch never triggers a build at all, so nothing publishes from it -- if you ever see one referenced anywhere (including in your own `docker images` history), treat it as stale rather than a live channel, since nothing keeps it current.
 
-Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](../deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
+Create the `mikroview` folder next to the compose file first, with your config inside it (see [`deploy/config.example.yaml`](../deploy/config.example.yaml) for the full option reference):
+
+```
+mikroview/
+  config.yaml                   optional -- defaults run without it
+  GeoLite2-Country.mmdb         optional -- country flags appear when present
+  keys/history.key              optional -- history encryption on when present
+  certs/tls.crt, certs/tls.key  optional -- your own certificate instead of the self-signed one
+  data/                         MikroView's store; created for you
+```
+
+The folder is optional: the bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try. Drop a file into the folder once you want it -- from the release that carries #1243, MikroView finds it there and picks it up at the next restart with no compose or config change. Once the folder exists, `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
 
 ## From source
 
 ```sh
-cp deploy/config.example.yaml deploy/config.yaml
-# edit deploy/config.yaml with your router(s)' names/IPs, then:
-chmod 644 deploy/config.yaml
+mkdir -p deploy/mikroview
+cp deploy/config.example.yaml deploy/mikroview/config.yaml
+# edit deploy/mikroview/config.yaml with your router(s)' names/IPs, then:
+chmod 644 deploy/mikroview/config.yaml
 
 cd deploy
 docker compose up -d --build
@@ -121,39 +127,45 @@ own web UIs.
 
 ## Persistent data
 
-By default, both compose files above mount a **named volume** over
+The README's bare `docker run` mounts a **named volume** over
 `/var/lib/mikroview` -- where flags, local accounts, detector on/off
 toggles, the new-device detector's MAC registry, and the self-generated
-TLS certificate all persist. This is the default deliberately: once
+TLS certificate all persist. That no-folder default is deliberate: once
 you've set up authentication or have flags worth keeping, losing them
 on every `docker compose down` or image update -- not just a plain
 restart -- would be a bad surprise, not an edge case. Docker populates
 a fresh named volume from the image's own `/var/lib/mikroview` on first
-use, ownership included, so there's no setup step needed.
+use, ownership included, so there's no setup step needed. The tradeoff
+is that you can't `cat`/`cp`/back up the files directly from the host --
+you'd go through `docker run --rm -v mikroview-data:/data ...` or
+`docker cp` instead.
 
-The tradeoff is that you can't `cat`/`cp`/back up the files directly
-from the host the way you can with a bind mount -- you'd go through
-`docker run --rm -v mikroview-data:/data ...` or `docker cp` instead.
-If you want that direct host access, switch to the commented-out bind
-mount in either compose file (`./data:/var/lib/mikroview`) instead of
-the named volume -- but it needs one extra step first: MikroView runs
-as a fixed non-root user inside the container, **uid `1000`, gid
-`1000`** (the same identity used by the `--chown` in the Dockerfile,
-and the first account on most Linux hosts -- likely you), which can't
-chown a host directory the way a root-run container could. Pick one
-before starting:
+Both compose files above mount `mikroview/data/`, inside the app
+folder, instead -- a plain bind mount, so you can browse and back the
+files up directly from the host. It needs one extra step first:
+MikroView runs as a fixed non-root user inside the container, **uid
+`1000`, gid `1000`** (the same identity used by the `--chown` in the
+Dockerfile, and the first account on most Linux hosts -- likely you),
+which can't chown a host directory the way a root-run container could.
+Pick one before starting:
 
 ```sh
 # Preferred: exact uid/gid ownership, nothing broader
-mkdir -p data
-sudo chown 1000:1000 data
+mkdir -p mikroview/data
+sudo chown 1000:1000 mikroview/data
 ```
 
 ```sh
 # No root available on the host: open it up to everyone instead
-mkdir -p data
-chmod 777 data
+mkdir -p mikroview/data
+chmod 777 mikroview/data
 ```
+
+If you'd rather have the named volume's opaque, no-setup persistence
+instead of the bind-mounted folder, swap
+`./mikroview/data:/var/lib/mikroview` in the compose file for a named
+volume of your own -- naming paths explicitly like this is the old way
+and still works exactly as before; see docs/decisions/app-folder.md.
 
 The same fix applies to any other host path you bind-mount over a
 `/var/lib/mikroview/*` sub-path (e.g. `flags.storePath`, `auth.storePath`,
