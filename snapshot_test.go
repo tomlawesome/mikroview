@@ -214,7 +214,7 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 	written.Insert(store.Event{Action: store.ActionDrop, RuleLabel: "wan-in"})
 	writtenDevices := device.NewRegistry(nil)
 	writtenDevices.Ensure("core", time.Now())
-	eng := engine.New()
+	eng := engine.New(nil)
 
 	parts := []snapshot.Part{written.SnapshotPart(), writtenDevices.SnapshotPart(), engineSnapshotPart{eng: eng}}
 	writeSnapshot(log, snapshot.New(dir, 6, testSnapshotKey, parts...))
@@ -225,7 +225,7 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 	restored := store.New(64, time.Hour)
 	restoredDevices := device.NewRegistry(nil)
 	restoreSnapshot(log, dir, testSnapshotKey, time.Now(),
-		restored.SnapshotPart(), restoredDevices.SnapshotPart(), engineSnapshotPart{eng: engine.New()})
+		restored.SnapshotPart(), restoredDevices.SnapshotPart(), engineSnapshotPart{eng: engine.New(nil)})
 
 	line := buf.String()
 	if !strings.Contains(line, "warm start") {
@@ -251,7 +251,7 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 // The engine's key in the document is a name a later boot has to find
 // again, so it is pinned rather than left to the adapter's spelling.
 func TestEngineSnapshotPartIsNamedEngine(t *testing.T) {
-	if got := (engineSnapshotPart{eng: engine.New()}).Name(); got != "engine" {
+	if got := (engineSnapshotPart{eng: engine.New(nil)}).Name(); got != "engine" {
 		t.Errorf("engineSnapshotPart.Name() = %q, want \"engine\" -- changing it orphans every snapshot already on disk", got)
 	}
 }

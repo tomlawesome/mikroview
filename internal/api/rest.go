@@ -399,15 +399,22 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// means visible to nobody. See internal/syslog.ListenerStats.
 		"syslog": syslog.Stats(),
 	}
-	// What detection never saw (#1107). Same reasoning as the syslog
-	// counters above: the condition was previously visible only in a
-	// rate-limited log line, which means visible to nobody. Under a
-	// burst the engine sheds what it cannot evaluate while every event
-	// is still stored and broadcast, so the symptom is flags that were
-	// never raised -- silence, which reads as "nothing is wrong". How an
-	// operator should be told is #1109; this is only the number.
+	// How checking is keeping up, and what it never saw (#1109). Same
+	// reasoning as the syslog counters above: the condition was
+	// previously visible only in a rate-limited log line, which means
+	// visible to nobody. Three numbers rather than one because two of
+	// them are different facts: behind/behindSeconds say checking is
+	// running late on a backlog it will work through, and only outrun is
+	// a coverage gap -- events the store evicted before the engine
+	// reached them, so flags that will never be raised. Silence reads as
+	// "nothing is wrong", so the UI has to be able to tell the two apart.
 	if s.Evaluation != nil {
-		body["engine"] = map[string]any{"droppedFromEvaluation": s.Evaluation.Dropped()}
+		behind, behindSeconds, outrun := s.Evaluation.Lag()
+		body["engine"] = map[string]any{
+			"behind":        behind,
+			"behindSeconds": behindSeconds,
+			"outrun":        outrun,
+		}
 	}
 	// When the snapshot these counters came from was taken (#795), and
 	// only then. Absent on a cold start rather than null: the key's

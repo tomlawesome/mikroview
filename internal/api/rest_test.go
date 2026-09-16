@@ -979,21 +979,27 @@ func TestHandleStatsWarmRestartReportsRestoredTo(t *testing.T) {
 	}
 }
 
-// droppedStub reports a fixed count for the Evaluation interface, so the
+// lagStub reports fixed figures for the Evaluation interface, so the
 // stats endpoint can be tested without standing up a real engine.
-type droppedStub uint64
+type lagStub struct {
+	behind        uint64
+	behindSeconds float64
+	outrun        uint64
+}
 
-func (d droppedStub) Dropped() uint64 { return uint64(d) }
+func (l lagStub) Lag() (uint64, float64, uint64) { return l.behind, l.behindSeconds, l.outrun }
 
-// #1107: the engine sheds events it cannot evaluate under a burst --
-// they are stored and broadcast, so nothing looks wrong, and the only
-// symptom is flags that were never raised. This pins the number being
-// readable at all. Absent rather than zero when no engine is wired: a
-// Server without one cannot honestly say "nothing was skipped", and
-// zero is exactly that claim.
-func TestHandleStatsReportsWhatTheEngineNeverEvaluated(t *testing.T) {
+// #1109: checking reads forward from the event store by cursor, so it
+// can run late (behind/behindSeconds) without anything being lost, and
+// the only real gap left is a flood that outran the whole retention
+// window (outrun). Both are invisible without this: events are stored
+// and broadcast either way, and the only symptom is flags that were
+// never raised. Absent rather than zero when no engine is wired: a
+// Server without one cannot honestly say "caught up, nothing missed",
+// and zeros are exactly that claim.
+func TestHandleStatsReportsEngineLagAndOutrun(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.Evaluation = droppedStub(12000)
+	s.Evaluation = lagStub{behind: 4200, behindSeconds: 3.5, outrun: 12000}
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
@@ -1001,8 +1007,14 @@ func TestHandleStatsReportsWhatTheEngineNeverEvaluated(t *testing.T) {
 	if !ok {
 		t.Fatal(`body["engine"] missing or not an object`)
 	}
-	if got := eng["droppedFromEvaluation"].(float64); got != 12000 {
-		t.Errorf("droppedFromEvaluation = %v, want 12000", got)
+	if got := eng["behind"].(float64); got != 4200 {
+		t.Errorf("behind = %v, want 4200", got)
+	}
+	if got := eng["behindSeconds"].(float64); got != 3.5 {
+		t.Errorf("behindSeconds = %v, want 3.5", got)
+	}
+	if got := eng["outrun"].(float64); got != 12000 {
+		t.Errorf("outrun = %v, want 12000", got)
 	}
 }
 

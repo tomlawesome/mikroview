@@ -978,13 +978,18 @@ func main() {
 		defer ml.Close()
 	}
 	// eng is the evaluation chassis (issue #398, part of the v0.3.0
-	// unification -- see docs/decisions/evaluation-engine.md): one ingest
-	// queue, one backpressure policy, one lifecycle, one panic boundary.
+	// unification -- see docs/decisions/evaluation-engine.md): one
+	// lifecycle, one panic boundary, and one cursor over the ring store.
 	// internal/detect collapsed onto it and was deleted (issue #405);
 	// internal/watchlist's evaluator followed (issue #406), so this is
 	// now the only thing in the process that evaluates an ingested
 	// event at all.
-	eng := engine.New()
+	//
+	// It reads what it evaluates from st, the same ring the API and the
+	// live view read from (issue #1109): the events are already there, so
+	// a second bounded copy of the stream could only add a way to lose
+	// them under a burst that the store itself would have survived.
+	eng := engine.New(st)
 
 	// engineState (#399/#400) persists every definition's per-key
 	// Baseline state -- opened here, under the same fail-closed
@@ -2878,13 +2883,13 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// is the ordinary memory-only default and costs a nil check.
 	hist.Append(stored)
 	h.Broadcast(stored)
-	// Every definition, of either intent, evaluates off this one hand-off
-	// (issues #405 and #406): internal/detect's queue, worker and
-	// drop-log gate, and internal/watchlist's own duplicate of all three,
-	// are gone. The chassis's queue -- with one backpressure policy, one
-	// panic boundary and one fault report -- is what receives every
-	// stored event.
-	eng.Enqueue(stored)
+	// Every definition, of either intent, evaluates off this one doorbell
+	// (issues #405, #406 and #1109): internal/detect's queue, worker and
+	// drop-log gate, internal/watchlist's own duplicate of all three, and
+	// the chassis's own queue that replaced them, are all gone. The event
+	// is already in st above; this only tells the engine to look, and
+	// never blocks ingest for it.
+	eng.Nudge()
 	// Keeps internal/rules' long-lived per-rule usage record in sync with
 	// internal/store/ring.go's own totalByRule bump inside Insert above --
 	// same per-event trigger, so RuleUsage never drifts out of step with
