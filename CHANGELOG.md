@@ -59,6 +59,37 @@ rewritten.
   without `certs/tls.key`, or the reverse, stops startup naming the file
   that is missing, rather than quietly serving MikroView's own
   certificate under the name yours was meant to serve.
+- **A router backup can be kept, so retention and low-space cycling
+  leave it alone** (#1126). Mark any stored generation kept from
+  Settings' router-backups group, with a comment saying why (`before
+  the 7.16 upgrade`) — required, one line, up to 120 characters. A kept
+  generation moves into a pool of its own per router: it stops
+  counting towards the ten generations retention keeps, and low-space
+  cycling (#1125) never reaches it either. There is no limit on how
+  many a router keeps. Releasing one puts it back into the cycling
+  ten, in its place by age — the only way to free vault space by hand.
+  `POST`/`DELETE`/`PATCH
+  /api/router-backups/{device}/{generation}/protect` do the keeping,
+  releasing and comment-editing; `GET /api/router-backups` gains a
+  `protected` array alongside the existing `lowSpace` flag. The
+  comment lives in the vault's sealed index and is never logged; the
+  audit log records only who kept, released or re-worded which
+  generation (`router_backup.protected`, `router_backup.unprotected`,
+  `router_backup.comment_changed`).
+- **The setup wizard now offers the HTTPS-only way of sending a router
+  backup** (#955). Step 6 has one new line above the script — *The
+  router sends its backup* `sftp · https`. Pick `https` and the step
+  prints the script that reads the backup in small pieces and posts them
+  to the address your router already reaches, instead of the SFTP upload
+  that needs a second port open. That is the whole point of it: an
+  install behind a reverse proxy, with nothing but HTTPS reachable, can
+  now be set up from the wizard rather than by pasting the script out of
+  [routeros-setup.md](docs/routeros-setup.md) by hand. The choice is
+  kept on the MikroView side (`PUT /api/setup/backup-transport`,
+  admin-only, audited), not in your browser, so whoever opens the wizard
+  next sees the way this deployment actually works; and the `https`
+  script does not wait for `backup.enabled`, because it needs no drop
+  box.
 - **Proto and Interface are pickers now, over the values this instance
   has actually seen** (#1226). They were the last two filters in the
   stream's strip with no list behind them: you typed `tcp`, or your best

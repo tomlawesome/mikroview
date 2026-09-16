@@ -537,6 +537,22 @@ the same operations are in the API table below. The passphrase must
 be at least 12 characters, and it protects a file an attacker could
 carry away and attack at their leisure, so pick accordingly.
 
+**A generation can be kept, taking it out of the ten-generation cycle
+above.** An admin marks one with a comment saying why (`before the
+7.16 upgrade`) — required, one line, 1 to 120 characters — and it
+moves into a pool of its own per router: it stops counting towards the
+ten, ordinary retention never evicts it, and the low-space cycling
+above never reaches it either. There is no limit on how many a router
+keeps. Releasing one puts it back into the cycling ten, in its place
+by age, where the oldest may then be dropped as normal — the only way
+an admin can free vault space by hand. Kept generations download
+through the same route as any other, and are re-sealed along with the
+rest whenever the vault passphrase is set, changed or removed. The
+comment lives in the vault's sealed index like the rest of the
+metadata; it is never logged or written to an audit entry, only that a
+generation was kept, released or had its comment changed (see [Audit
+log](#audit-log-admin-action-accountability-optional)).
+
 **Only on a network you trust.** RouterOS's SFTP client never verifies
 this server's host key (measured on RouterOS 7.23.3) — an attacker on
 the path between the router and MikroView could pose as MikroView and
@@ -1965,6 +1981,16 @@ device-attributed exception:
   naming the router, generation and which half of the pair -- a
   router's whole configuration, credentials included, is never an
   unaccountable read.
+- Keeping a generation (`POST
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.protected`; releasing one (`DELETE
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.unprotected`; rewriting its comment (`PATCH
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.comment_changed`. Each names the router and
+  generation; the comment itself is never in the detail -- like a
+  flag's note above, it lives only where it was written, in the
+  vault's sealed index.
 - The optional vault passphrase lock (see [Router backups over
   SFTP](#router-backups-over-sftp-optional-off-by-default)) logs each of
   its own changes: `router_backup.locked`, `router_backup.unlocked`,
@@ -4381,12 +4407,16 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what MikroView has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
+| `PUT /api/setup/backup-transport` | admin-only (#955): how step 6's router script delivers its backup -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
 | `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
-| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's kept generations (arrival times, sizes, `.backup` header), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
+| `POST /api/router-backups/{device}/{generation}/protect` | admin-only: mark a generation kept, given `{"comment": "..."}` -- required, one line, 1 to 120 characters, control characters refused. Moves it out of the ten-generation cycle into a pool of its own for that router, with no limit on how many it holds. 400 for a missing or over-length comment, 404 if the vault holds no such router or generation, 409 if it is already kept. Answers with the router's whole block (both lists), so the screen renders what the vault now holds. Audited as `router_backup.protected` |
+| `DELETE /api/router-backups/{device}/{generation}/protect` | admin-only: release a kept generation back into the cycling ten, in its place by age -- the one way to free vault space by hand. 404 if it is not kept. Same response shape as keeping it above. Audited as `router_backup.unprotected` |
+| `PATCH /api/router-backups/{device}/{generation}/protect` | admin-only: rewrite a kept generation's comment, given `{"comment": "..."}` -- same 400/404 as keeping it above. Same response shape. Audited as `router_backup.comment_changed` |
 | `POST /api/router-backups/unlock` | admin-only: opens the vault passphrase lock for the calling session, given `{"passphrase": "..."}` -- the unlock belongs to this session/tab, not the account, and lasts until it is locked, the session ends, or fifteen minutes pass with no download. Rate-limited through the same limiter as login. A wrong passphrase is a 403, audited as `router_backup.unlock_failed`; success is audited as `router_backup.unlocked` |
 | `POST /api/router-backups/lock` | admin-only: closes the vault again, from any admin session regardless of who opened it. Audited as `router_backup.locked`; a 409 if no passphrase is set |
 | `POST /api/router-backups/passphrase` | admin-only: turns the lock on, given `{"passphrase": "..."}` (at least 12 characters) -- generates an X25519 key pair, re-seals every stored backup to the public half, and leaves the vault open for the session that set it. Audited as `router_backup.passphrase_set`; a 500 if a file could not be re-sealed, which is still audited and named in the response |

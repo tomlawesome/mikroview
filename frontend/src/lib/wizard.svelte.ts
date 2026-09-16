@@ -14,9 +14,17 @@
 // the modal fetches while open belongs to the component and stops with
 // it.
 
-import { fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep, saveSetupAddress } from './api'
+import {
+  fetchDevices,
+  fetchRouterBackups,
+  fetchSetupCommands,
+  fetchSetupStatus,
+  markSetupStep,
+  saveSetupAddress,
+  saveSetupBackupTransport,
+} from './api'
 import { buildLedger, firstOpenStep, silenceExplanation, STEP_COUNT } from './setupsteps'
-import type { Device, RouterBackupsResponse, SetupCommandsResponse, SetupMark, SetupStatus } from './types'
+import type { BackupTransport, Device, RouterBackupsResponse, SetupCommandsResponse, SetupMark, SetupStatus } from './types'
 
 // FINISH_PANE is the pane after the last step -- the ledger read back.
 // One past the count rather than a separate flag, so "which pane" stays
@@ -122,6 +130,39 @@ class WizardState {
   // charset check, #1095), read by the header field beside the input.
   addressSaveError = $state<string | null>(null)
 
+  // backupTransport is step 6's one choice (#955): how the router hands
+  // its backup over -- 'sftp' through the drop box, or 'https' in
+  // slices over the ingest channel, for an install whose only open way
+  // in is its reverse proxy. Mirrors what the server has stored rather
+  // than being this browser's own setting: the server is what
+  // /api/setup/commands renders from, so a value held only here could
+  // draw one choice above the other one's script.
+  backupTransport = $state<BackupTransport>('sftp')
+
+  // backupTransportInitialized guards the read-back against the 5s
+  // status poll, exactly as addressInitialized does above: a switch is
+  // applied here only once the server has accepted it, and a tick
+  // landing in between must not put the old answer back.
+  private backupTransportInitialized = false
+
+  // backupTransportError surfaces a switch the server refused, read by
+  // step 6 beside the pair.
+  backupTransportError = $state<string | null>(null)
+
+  // setBackupTransport switches the deployment over. The local value
+  // moves only after the server has taken it, so the pair and the
+  // script block below it never disagree: the block is re-requested off
+  // the back of this change (commandsKey in SetupWizard.svelte), and
+  // the server renders whichever transport it has stored.
+  async setBackupTransport(transport: BackupTransport): Promise<void> {
+    if (transport === this.backupTransport) return
+    const error = await saveSetupBackupTransport(transport)
+    this.backupTransportError = error
+    if (error) return
+    this.backupTransport = transport
+    this.backupTransportInitialized = true
+  }
+
   // saveAddress persists the header field's current value. Called on
   // blur/Enter rather than every keystroke, so typing stays purely
   // local (and every command block re-renders from it immediately,
@@ -139,7 +180,7 @@ class WizardState {
   // a second flag.
   get ledger() {
     if (!this.status) return []
-    return buildLedger(this.status, this.devices, this.address, this.backups)
+    return buildLedger(this.status, this.devices, this.address, this.backups, this.backupTransport)
   }
 
   // refreshBackups reads step 6's own evidence (#394): admin-only, so
@@ -195,6 +236,13 @@ class WizardState {
       if (!this.addressInitialized) {
         this.address = s.instance.address || window.location.host || s.instance.addressCandidates[0] || ''
         this.addressInitialized = true
+      }
+      // The stored transport (#955), read back the same guarded way:
+      // the deployment's answer, taken once so a poll tick cannot undo
+      // a switch the operator has just made.
+      if (!this.backupTransportInitialized) {
+        this.backupTransport = s.instance.backupTransport === 'https' ? 'https' : 'sftp'
+        this.backupTransportInitialized = true
       }
     } catch (e) {
       this.error = e instanceof Error ? e.message : String(e)

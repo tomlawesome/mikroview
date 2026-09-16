@@ -155,6 +155,38 @@ func TestAddressSurvivesARestart(t *testing.T) {
 	})
 }
 
+// TestBackupTransportSurvivesARestart pins #955's "the choice is a
+// property of the deployment, not the browser": it is stored beside the
+// address and read back after a restart, so an operator on an HTTPS-only
+// install is offered the step their install uses rather than the SFTP
+// one every time the process comes back.
+func TestBackupTransportSurvivesARestart(t *testing.T) {
+	eachSetupBackend(t, func(t *testing.T, open func() *Store) {
+		first := open()
+		if got := first.BackupTransport(); got != BackupTransportSFTP {
+			t.Fatalf("BackupTransport() on a fresh store = %q, want the %q default", got, BackupTransportSFTP)
+		}
+		if !first.SetBackupTransport(BackupTransportHTTPS) {
+			t.Fatal("SetBackupTransport refused https")
+		}
+
+		second := open()
+		if got := second.BackupTransport(); got != BackupTransportHTTPS {
+			t.Errorf("BackupTransport() after reopen = %q, want https", got)
+		}
+
+		// Switching back is one answer replacing another, not a second
+		// claim -- and the replacement survives the same way.
+		if !second.SetBackupTransport(BackupTransportSFTP) {
+			t.Fatal("SetBackupTransport refused sftp")
+		}
+		third := open()
+		if got := third.BackupTransport(); got != BackupTransportSFTP {
+			t.Errorf("BackupTransport() after switching back = %q, want sftp", got)
+		}
+	})
+}
+
 // TestChangedMindSurvivesAsOneMark. A step has exactly one outcome at a
 // time in memory; a restart must not resurrect the one it replaced.
 func TestChangedMindSurvivesAsOneMark(t *testing.T) {
