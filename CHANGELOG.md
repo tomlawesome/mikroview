@@ -18,6 +18,12 @@ rewritten.
 
 ### Added
 
+- **One line to install and run MikroView** (#1242): `curl -fsSL
+  https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh
+  | sh` pulls the image, starts one container on two named volumes (data
+  and the #1243 app folder), and prints the address to open — the same
+  line is also the upgrade line. `docs/install.md` has the no-script
+  `docker run` form.
 - **Drop a file into the app folder and restart — no setting to change**
   (#1243, the contract ruled on in #1209). When nothing in config or the
   environment names a path, MikroView now looks in `/etc/mikroview`:

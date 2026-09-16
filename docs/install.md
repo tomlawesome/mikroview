@@ -8,6 +8,27 @@ The README's quickstart is the one-line form of this; this page is the full one.
 docker pull ghcr.io/tomlawesome/mikroview:latest
 ```
 
+### The no-script form
+
+The README's quickstart (`curl ... | sh`) is
+[`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
+running this same `docker run`. If you'd rather run it yourself instead
+of fetching a script:
+
+```sh
+docker run -d --name mikroview \
+    -p 6514:6514/tcp -p 443:8080 \
+    -v mikroview-data:/var/lib/mikroview \
+    -v mikroview-etc:/etc/mikroview \
+    ghcr.io/tomlawesome/mikroview:latest
+```
+
+The `mikroview-etc` volume is the app folder #1243 introduced: an empty
+folder is fine, and dropping a config file, GeoIP database or
+certificate pair into it (`docker cp`, or swap the named volume for a
+bind mount) is picked up at the next restart with no other change. See
+"Persistent data" below.
+
 Or run it directly with Compose, without cloning the repo:
 
 ```yaml

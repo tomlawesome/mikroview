@@ -29,11 +29,15 @@ one Go binary with the interface built in.
 ## Quickstart
 
 ```sh
-docker run -d --name mikroview \
-    -p 6514:6514/tcp -p 443:8080 \
-    -v mikroview-data:/var/lib/mikroview \
-    ghcr.io/tomlawesome/mikroview:latest
+curl -fsSL https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh | sh
 ```
+
+It pulls the image. It starts one container with two named volumes (your
+data, and the app folder) and two ports. It prints the address to open.
+Running it again is the upgrade line: same volumes, latest image. The
+script is short enough to read before you run it —
+[`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
+on GitHub.
 
 Open `https://<docker-host>`, create the admin account, and the setup
 wizard writes every RouterOS command with your values already filled in
@@ -44,8 +48,9 @@ certificate on first visit, as any self-hosted admin interface does;
 own.
 
 `latest` is the most recent release; each release is also tagged
-`v<version>` if you would rather pin one. The full Compose file, image
-tags and where your data lives are in [docs/install.md](docs/install.md).
+`v<version>` if you would rather pin one (`sh -s -- v0.6.0`). The
+no-script `docker run` form, the full Compose file, image tags and where
+your data lives are in [docs/install.md](docs/install.md).
 
 ## Docs
 
