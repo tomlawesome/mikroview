@@ -50,6 +50,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
       syslogEnabled: true,
       address: '',
       addressCandidates: [],
+      backupTransport: 'sftp',
     },
     sources: [],
     devices: [],
@@ -87,7 +88,7 @@ describe('certificate cover check', () => {
 
   it('falls back to localhost/127.0.0.1 when tls.hosts is unset', () => {
     const s = status({
-      instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [] },
+      instance: { tlsEnabled: true, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [], backupTransport: 'sftp' },
     })
     expect(certificateCovers(s, '127.0.0.1:8080')).toBe(true)
     expect(certificateCovers(s, '192.168.1.5:8080')).toBe(false)
@@ -95,7 +96,7 @@ describe('certificate cover check', () => {
 
   it('is not a question when both HTTP TLS and syslog are off', () => {
     const s = status({
-      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false, address: '', addressCandidates: [] },
+      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
     })
     expect(certificateCovers(s, 'anything:8080')).toBe(true)
   })
@@ -109,7 +110,7 @@ describe('certificate cover check', () => {
   // tlsEnabled.
   it('still checks the host when HTTP TLS is off but syslog TLS is on', () => {
     const s = status({
-      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [] },
+      instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true, address: '', addressCandidates: [], backupTransport: 'sftp' },
     })
     expect(certificateCovers(s, '192.0.2.30:18084')).toBe(false)
   })
@@ -123,6 +124,7 @@ describe('certificate cover check', () => {
         syslogEnabled: true,
         address: '',
         addressCandidates: [],
+        backupTransport: 'sftp',
       },
     })
     expect(certificateCovers(s, '192.0.2.30:18084')).toBe(true)
@@ -153,7 +155,7 @@ describe('step status', () => {
   it('blocks the syslog step when the listener is switched off', () => {
     const s = syslogStep(
       status({
-        instance: { tlsEnabled: true, hosts: [], syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [] },
+        instance: { tlsEnabled: true, hosts: [], syslogPort: '', syslogEnabled: false, address: '', addressCandidates: [], backupTransport: 'sftp' },
       }),
     )
     expect(s.state).toBe('blocked')

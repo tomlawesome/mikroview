@@ -7,6 +7,7 @@ import type {
   ApiToken,
   AuditResult,
   AuthSession,
+  BackupTransport,
   CoverageEvidence,
   DecommissionResponse,
   DecommissionWatch,
@@ -1281,6 +1282,19 @@ export async function saveSetupAddress(address: string): Promise<string | null> 
   const res = await postJSON('/api/setup/address', { address })
   if (res.ok) return null
   return (await res.text()) || `saveSetupAddress: ${res.status}`
+}
+
+// saveSetupBackupTransport records how step 6's script delivers its
+// backup (#955): over SFTP to the drop box, or in slices through the
+// ingest channel for an HTTPS-only install. Admin-only server-side, the
+// same gate as saveSetupAddress above -- and stored there rather than in
+// this browser, because the choice belongs to the deployment: the next
+// operator to open the wizard, on any machine, is offered the step their
+// install actually uses.
+export async function saveSetupBackupTransport(transport: BackupTransport): Promise<string | null> {
+  const res = await putJSON('/api/setup/backup-transport', { transport })
+  if (res.ok) return null
+  return (await res.text()) || `saveSetupBackupTransport: ${res.status}`
 }
 
 // fetchConfigUpgrade is #1218's "N new settings are available" notice --
