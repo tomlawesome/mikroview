@@ -27,7 +27,10 @@
 - **Router backups**: an optional SFTP drop box (`backup:` in
   config.yaml, off by default) where the router's own nightly script
   pushes its binary `.backup` and plain-text `.rsc` export, so the
-  copies are still to hand when the router itself is gone. See
+  copies are still to hand when the router itself is gone. An admin
+  can mark a generation kept, with a comment saying why, so it sits
+  outside the usual ten-generation retention until released back into
+  it. See
   [docs/configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default).
 - **Behavioral flags**: watches for port scans, per-source activity
   spikes, repeated attempts against critical ports (SSH, RDP, Winbox,

@@ -36,6 +36,68 @@ On the Postgres backend the migrations are SQL, each in its own
 transaction, with the same effect: a migration either lands whole or
 not at all.
 
+## Where the schema version is kept
+
+On a file-backed install it is `schema.json` in the data directory, next
+to the stores — a number and the build that wrote it, in plain JSON. It
+holds no data of yours, so it is readable without a key: MikroView has to
+read it before it knows whether it may open anything else.
+
+A data directory with no `schema.json` is schema 0, which is every
+install from before this existed. Nothing to do: MikroView stamps it on
+the next start.
+
+On Postgres it is the `schema_version` table, as it has always been. The
+migration numbers are the same list for both, so "schema 3" means the
+same thing either way, even though some migrations only have work to do
+on one of them.
+
+`-backup` and `-restore` (see docs/configuration.md, "Backing up and
+restoring") carry `schema.json` along with every other store, so a
+restore comes back stamped at the schema it was actually taken at rather
+than reading as a fresh, unmigrated install and repeating migrations
+that already landed. A backup taken by a build from before this existed
+has no `schema.json` to carry, and restores as schema 0 — correct for
+data that old.
+
+The refusal in step 2 above looks like this, with the paths and versions
+of your install:
+
+```
+schema │ the data in /var/lib/mikroview is at schema version 4, but this build of MikroView
+         only knows schema version 3 -- it was last written by MikroView v0.6.0, so you need
+         that build or a newer one. Refusing to start rather than writing: an older build
+         would overwrite newer data in shapes it does not understand, and there is no way
+         back from that
+```
+
+Start the version it names (or anything later) and it comes up on the
+same data.
+
+## Interrupting an upgrade is safe
+
+Each migration publishes its new document by writing it alongside the old
+one and renaming it into place, and the schema version is stamped only
+once that has happened. So a MikroView killed mid-upgrade — a power cut,
+`docker kill`, an OOM — is always in one of two states per migration:
+finished and stamped, or not started as far as anything on disk can tell.
+The next start picks up at the first migration that did not finish. There
+is nothing to repair by hand, and no half-written document to find.
+
+A migration that fails (rather than being killed) stops the start, names
+itself, and leaves the data at the last version that did land.
+
+## A note for the curious: migrations carry their own copy of old shapes
+
+A migration that reads a document written by an older MikroView keeps its
+own frozen copy of what that document looked like, rather than reusing
+the store's current one. The store's shape is free to change with the
+next release; the migration's copy is not, so a migration written today
+still reads a 2026 document the way it was actually written. It is the
+rule that makes "any version to current" hold as the code moves on, and
+it is written at the top of the migration list in the source so it is
+read by whoever adds the next one.
+
 ## What you see afterwards
 
 After an upgrade, MikroView tells you in the interface that it upgraded,

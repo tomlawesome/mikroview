@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -287,6 +288,41 @@ func (s *storage) Close() {
 	if s != nil && s.pool != nil {
 		s.pool.Close()
 	}
+}
+
+// upgradeDataDirSchema runs the data directory's pending migrations and
+// records the schema version they left it at, before anything opens a
+// store (#1238).
+//
+// Two failures, treated differently because only one of them means the
+// data is not what this build thinks it is:
+//
+//   - Data written by a newer build (*persist.SchemaTooNewError) stops
+//     startup. Nothing was written on the way to that answer, and
+//     continuing would rewrite every document in this build's older
+//     shapes -- see docs/upgrades.md, "Going back".
+//   - Failing to *record* a schema version that needed no migration is a
+//     warning, not a refusal: nothing on disk changed, and the next
+//     start tries again. It means an unwritable data directory in
+//     practice, which checkStoresUsable names properly a moment later
+//     with the ownership and the command to fix it.
+//
+// Anything else -- a migration that failed, or one that landed and could
+// not be recorded -- stops startup too. A migration whose number was
+// never stamped would run a second time against data it has already
+// changed.
+func upgradeDataDirSchema(cfg config.Config) error {
+	dir := dataDir(cfg)
+	_, err := persist.MigrateFileSchema(context.Background(), dir, version)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, persist.ErrSchemaNotStamped) {
+		logging.New("schema").Warn(fmt.Sprintf("%v -- upgrades from this point will not be able to tell "+
+			"which build wrote this data until %s is writable", err, dir))
+		return nil
+	}
+	return err
 }
 
 // postgresAdoptedMarker records that this deployment has run on

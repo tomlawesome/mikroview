@@ -287,7 +287,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				droplistPull.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), droplistTokenContextKey, tok)))
 				return
 			}
-			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
+			writeUnauthorized(w, "invalid or revoked token")
 			return
 		}
 
@@ -302,7 +302,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 
 		user, ok := s.sessionUser(r, time.Now())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeUnauthorized(w, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
@@ -550,7 +550,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	user, err := s.Auth.Authenticate(req.Username, req.Password, now)
 	if err != nil {
 		// Reservations stay claimed -- that is what counts the failure.
-		http.Error(w, "invalid username or password", http.StatusUnauthorized)
+		writeUnauthorized(w, "invalid username or password")
 		return
 	}
 	// Only a success releases, so ordinary repeated logins never
@@ -586,7 +586,7 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	now := time.Now()
 	user, ok := s.sessionUser(r, now)
 	if !ok {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 
@@ -616,7 +616,7 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	}
 	if _, err := s.Auth.Authenticate(user.Username, req.CurrentPassword, now); err != nil {
 		// Reservation stays claimed: that is what counts the failure.
-		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+		writeUnauthorized(w, "current password is incorrect")
 		return
 	}
 	s.LoginLimiter.Release(userKey, now)
@@ -686,7 +686,7 @@ func (s *Server) handleAuthLogoutAll(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	user, ok := s.sessionUser(r, now)
 	if !ok {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 

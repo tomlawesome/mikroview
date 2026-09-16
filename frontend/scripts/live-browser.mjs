@@ -423,6 +423,17 @@ export async function unfoldStreamFilter(page) {
   // one part of the box that never stops that propagation -- the
   // "genuine control" FilterBar.svelte's own comment names it as.
   await box.locator('input.fbtype').click()
+  // #1246: that click also opens the token bar's field menu, which hangs
+  // over the strip and the first rows of the table until focus leaves
+  // the box or something outside it is clicked -- exactly as it does for
+  // an operator. A scenario that unfolds the strip wants the strip, not
+  // the menu, so hand focus on to the strip's own rule field: a click
+  // inside the bar keeps the strip open (FilterBar's onWindowClick) and
+  // closes the menu (its onBoxFocusOut). Without this, the next click on
+  // a row hits a menu item instead (live-stream-table, 2026-09-16).
+  const rule = page.locator('input.rule')
+  await rule.waitFor({ state: 'visible', timeout: 15000 })
+  await rule.click()
 }
 
 /**

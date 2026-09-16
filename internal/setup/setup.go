@@ -94,6 +94,15 @@ type Store struct {
 	// has never crossed a version. Persisted beside the address, for the
 	// reasons that file's header gives.
 	upgrade *Upgrade
+	// backupTransport is how the router is to deliver its backup
+	// (#955): "sftp" through the drop box, or "https" in /file read
+	// slices over the ingest channel, for a deployment whose only open
+	// way in is the reverse proxy. Empty means never answered, which
+	// reads as "sftp" -- see BackupTransport. Persisted beside the
+	// address above and for the same reason: it is a property of the
+	// deployment, not of the browser that last looked at the wizard, so
+	// every operator sees the step the install actually uses.
+	backupTransport string
 	// backend is where the marks are persisted, or nil when persistence
 	// is switched off. Only the marks go through it -- the observations
 	// above are re-made every run by definition.
@@ -181,6 +190,13 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			}
 		}
 		s.address = file.Address
+		// Filtered on the way in, like the marks above: a document from
+		// an older build has no value here at all, and one edited by
+		// hand must not put an unrenderable transport in front of
+		// handleSetupCommands.
+		if validBackupTransport(file.BackupTransport) {
+			s.backupTransport = file.BackupTransport
+		}
 		s.reports = make(map[string]LoggingReport, len(file.Reports))
 		for _, r := range file.Reports {
 			// Filtered on the way in like the marks above: a document
@@ -435,6 +451,11 @@ type storeFile struct {
 	// yet" case, so an old document without this field round-trips
 	// unchanged.
 	Address string `json:"address,omitempty"`
+	// BackupTransport is how step 6's script delivers its backup
+	// (#955) -- see Store.backupTransport. Omitted when unanswered, so
+	// a document written before this field existed round-trips
+	// unchanged and reads back as the "sftp" default.
+	BackupTransport string `json:"backupTransport,omitempty"`
 	// Reports is #1241's router setup reports, one per device that has
 	// sent one. Omitted when empty so a ledger written before this
 	// existed round-trips unchanged.
@@ -504,10 +525,11 @@ func (s *Store) persistLocked() {
 		return
 	}
 	data, err := json.MarshalIndent(storeFile{
-		Marks:   append(s.marksLocked(), s.witnessedLocked()...),
-		Address: s.address,
-		Reports: s.reportsLocked(),
-		Upgrade: s.upgrade,
+		Marks:           append(s.marksLocked(), s.witnessedLocked()...),
+		Address:         s.address,
+		BackupTransport: s.backupTransport,
+		Reports:         s.reportsLocked(),
+		Upgrade:         s.upgrade,
 	}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding the setup ledger for persistence failed: %v -- this decision exists only in memory and will be lost on restart", err))
@@ -660,4 +682,58 @@ func (s *Store) Address() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.address
+}
+
+// --- How the router delivers its backup (#955) ---------------------------
+//
+// The same kind of value as the address above, and stored beside it for
+// the same reasons: nothing arriving here says which way in a deployment
+// has, so it has to be asked, and the answer belongs to the install
+// rather than to one browser -- an operator opening the wizard on a
+// second machine must be offered the step their install actually uses.
+
+// BackupTransportSFTP is the default: step 6's script uploads to the
+// drop box (#394), which needs that port open.
+const BackupTransportSFTP = "sftp"
+
+// BackupTransportHTTPS is the HTTPS-only alternative (#955): the router
+// reads its own backup in slices and POSTs them through the ingest
+// channel, so nothing beyond the HTTPS port it already reaches has to
+// be open.
+const BackupTransportHTTPS = "https"
+
+// validBackupTransport is the whole accepted set -- two values, both of
+// which internal/routeros can render a script for. Anything else is
+// refused rather than stored, since a stored third value would leave
+// step 6 with no script and no way to say why.
+func validBackupTransport(transport string) bool {
+	return transport == BackupTransportSFTP || transport == BackupTransportHTTPS
+}
+
+// SetBackupTransport records which way round step 6 works, replacing any
+// previous answer -- a deployment has exactly one at a time, and
+// switching is not a second claim needing history. Reports whether the
+// value was accepted, so the caller can refuse to write an audit entry
+// for input it rejected.
+func (s *Store) SetBackupTransport(transport string) bool {
+	if !validBackupTransport(transport) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backupTransport = transport
+	s.persistLocked()
+	return true
+}
+
+// BackupTransport returns the stored answer, defaulting to
+// BackupTransportSFTP when nobody has chosen -- callers render a script
+// either way, so "unanswered" is not a third state they could show.
+func (s *Store) BackupTransport() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.backupTransport == "" {
+		return BackupTransportSFTP
+	}
+	return s.backupTransport
 }

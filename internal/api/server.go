@@ -688,6 +688,11 @@ func (s *Server) apiRoutes() []route {
 		// router can reach this instance on. Admin-only, same gate as
 		// the mark endpoint above.
 		{http.MethodPost, "/api/setup/address", s.handleSetupAddress},
+		// How step 6's script delivers its backup (#955): over SFTP to
+		// the drop box, or in slices through the ingest channel for an
+		// HTTPS-only install. A property of the deployment, stored
+		// beside the address above and admin-only for the same reason.
+		{http.MethodPut, "/api/setup/backup-transport", s.handleSetupBackupTransport},
 
 		// "Log every rule" (#435, named "Tune logging" until #1134,
 		// which left these two paths alone): upload a RouterOS export,
@@ -722,6 +727,13 @@ func (s *Server) apiRoutes() []route {
 		// download an admin uses to actually restore a dead router.
 		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
 		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
+
+		// The kept pool (#1126): an admin marks one stored backup as
+		// one to hold on to, with a comment saying why, and it stops
+		// counting towards the ten the vault cycles.
+		{http.MethodPost, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupProtect},
+		{http.MethodDelete, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupUnprotect},
+		{http.MethodPatch, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupComment},
 
 		// The vault's optional admin passphrase (#956). Reading a backup
 		// needs the passphrase once one is set; a backup still arrives
