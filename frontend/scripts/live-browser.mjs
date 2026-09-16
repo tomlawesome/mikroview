@@ -563,14 +563,17 @@ async function resetInstance(page) {
 /**
  * A desktop window, wider than every width-dependent rule the app has:
  * the docket's 1300px narrow breakpoint (lib/viewport.svelte.ts) and the
- * stream table's 1500px starting-columns one (lib/columns.svelte.ts).
+ * stream table's starting-columns one (lib/columns.svelte.ts), which
+ * #1117 moved from 1500 to 1600 -- and it is a max-width query, so 1600
+ * itself is the narrow side now. 1920x1080 is the common desktop the
+ * fifteen columns were re-measured against, and sits clear of both.
  *
  * Playwright's own default is 1280x720, which is below both, so a
  * scenario about a *desktop* surface has to say so rather than inherit a
  * width that now means "narrow". Pass it to session() as `viewport`; a
  * scenario testing the narrow side sets its own instead.
  */
-export const DESKTOP_VIEWPORT = { width: 1600, height: 900 }
+export const DESKTOP_VIEWPORT = { width: 1920, height: 1080 }
 
 export async function session({
   dismissSetup = true,

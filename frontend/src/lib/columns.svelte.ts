@@ -140,6 +140,14 @@ type Width = number | null
 //           cell is a flex row with no reserved gutter for the marker,
 //           so it crowded the digits off the left edge instead of the
 //           column growing. +36 for the marker's own gap/margin/glyph.
+//           Reopened: widening this alone did not fix it (the marker
+//           still shared the same flex line, so it still competed for
+//           whatever width was there -- see EventRow.svelte's .time/
+//           .rmk comments). The mark now draws in a reserved
+//           padding-right gutter instead, entirely out of that line,
+//           so this column carries only the bare timestamp again --
+//           140 (104 content + 10px left padding + 26px right gutter),
+//           down from 160.
 //   nat     `formatAddr`'s "ip:port" shape was bounded "like an IPv4
 //           address plus ':' plus up to 5 digits" from the day this
 //           column was restored (#717, this file's own comment above),
@@ -177,7 +185,15 @@ type Width = number | null
 // measured against the old, too-narrow numbers, and keeping them would
 // silently carry the squashed defaults forward as if they were a chosen
 // preference.
-const DEFAULT_WIDTHS: Width[] = [160, 150, 80, 90, 220, 150, 60, 168, 220, 150, 60, 210, 60, 220, null]
+//
+// v8 (#1117, reopened): only `time` changes here (160 -> 140, see the
+// comment above) -- the marker no longer needs flex width of its own,
+// so the column goes back to being sized for the bare timestamp. Bumped
+// anyway, same convention every prior shape/measurement change has
+// followed: a stored v7 array carrying the too-wide 160 is
+// indistinguishable in storage from a reader who genuinely dragged it
+// there.
+const DEFAULT_WIDTHS: Width[] = [140, 150, 80, 90, 220, 150, 60, 168, 220, 150, 60, 210, 60, 220, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
@@ -196,7 +212,9 @@ const MIN_WIDTH = 56
 // (copy, edit, the pushed-table lookup trigger) beside its text -- the
 // generic 96px floor left it pinched at the edge of usability, so it
 // gets a taller floor of its own.
-const FLEX_MIN_WIDTH = 140
+// Exported so a test can check Rule's real floor against the viewport
+// math directly (#1117) rather than duplicating the number.
+export const FLEX_MIN_WIDTH = 140
 // v5 (#685): the column measure changed shape, not just its numbers --
 // source/destination/address went from flexible to fixed and rule is
 // now the sole flexible column -- so a v4 array (three equal flex
@@ -216,7 +234,7 @@ const FLEX_MIN_WIDTH = 140
 // key still bumps, same as v5's shape-only change did, so every
 // installed v6 array -- chosen or default -- falls back to these wider
 // numbers instead.
-const STORAGE_KEY = 'mikroview-column-widths-v7'
+const STORAGE_KEY = 'mikroview-column-widths-v8'
 
 function loadInitial(): Width[] {
   try {
@@ -259,8 +277,22 @@ const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key
 // goes through toggleColumn/persistVisibility like any other choice the
 // picker makes -- one mechanism, not a second one for narrow screens.
 // Above the breakpoint nothing changes at all.
-const NARROW_BREAKPOINT = 1500
-const NARROW_DEFAULT_HIDDEN: readonly string[] = ['mac', 'iface']
+//
+// #1117 (reopened): 1500 was measured against the pre-#1149/#1197
+// defaults; every one of those grew since (this file's own comments
+// above), and 1500 was never re-derived against the new numbers. At
+// 1600 -- the width the reopened bug's own release screenshot used --
+// the fifteen-column default plus Rule's 140px floor plus Deck.svelte's
+// own chrome (its 30px roll-rail, its card-body's 14px+14px inset) ran
+// to well over 1600px even with MAC and Interfaces already hidden,
+// which is exactly why DST ADDRESS and RULE were still cut at the
+// "fixed" widths: this breakpoint, not the widths, was the part that
+// didn't reach 1600px. Raised to cover it, and NAT joins the hidden set
+// -- the same "restored, not essential to a fast read" reasoning #1150
+// already used for MAC and Interfaces (NAT is still one tap away in the
+// row's detail sheet). columns.svelte.test.ts pins the resulting sum.
+const NARROW_BREAKPOINT = 1600
+const NARROW_DEFAULT_HIDDEN: readonly string[] = ['mac', 'iface', 'nat']
 
 // Read once, at module load, and deliberately not tracked: this is where
 // a reader *starts*, not a live layout rule. A column disappearing
