@@ -5,7 +5,8 @@ repository, alongside the global agent instructions (instruction
 authority, trust of outside content, git-state discipline, issue and
 decision recording, and credential rules all live there).
 
-Outside pull requests are not accepted at all — see `CONTRIBUTING.md`.
+Outside pull requests are not accepted at all — see the README's
+"Contributions" section.
 
 ## What MikroView is for, and what belongs somewhere else
 

@@ -46,7 +46,7 @@ fi
 # ---------------------------------------------------------------------
 tracker="github.com/tomlawesome/mikroview/issues"
 : >"$tmpd/tracker-hits"
-for f in README.md SECURITY.md CONTRIBUTING.md site/index.html docs/*.md; do
+for f in README.md SECURITY.md docs/development.md site/index.html docs/*.md; do
   [ -f "$f" ] || continue
   grep -n "$tracker" "$f" 2>/dev/null | sed "s#^#$f:#" >>"$tmpd/tracker-hits"
 done
@@ -60,10 +60,10 @@ fi
 
 # ---------------------------------------------------------------------
 # 3. relative links resolve: every non-http/#/mailto: markdown link
-#    target in README.md, SECURITY.md, CONTRIBUTING.md must exist
+#    target in README.md, SECURITY.md, docs/development.md must exist
 # ---------------------------------------------------------------------
 link_fails=0
-for f in README.md SECURITY.md CONTRIBUTING.md; do
+for f in README.md SECURITY.md docs/development.md; do
   [ -f "$f" ] || continue
   grep -noE '\]\([^)]+\)' "$f" 2>/dev/null >"$tmpd/links-raw" || true
   while IFS= read -r rawline; do
@@ -76,6 +76,9 @@ for f in README.md SECURITY.md CONTRIBUTING.md; do
       http*|\#*|mailto:*) continue ;;
     esac
     path=${target%%#*}
+    # Markdown resolves a relative link against the file's own directory,
+    # so docs/development.md's "../SECURITY.md" is checked from docs/.
+    case "$path" in /*) ;; *) path="$(dirname "$f")/$path" ;; esac
     if [ ! -e "$path" ]; then
       fail "$f:$lineno -- relative link target '$target' does not exist, fix the path or remove the link"
       link_fails=$((link_fails + 1))
@@ -83,36 +86,36 @@ for f in README.md SECURITY.md CONTRIBUTING.md; do
   done <"$tmpd/links-raw"
 done
 if [ "$link_fails" -eq 0 ]; then
-  ok "relative links resolve (README.md, SECURITY.md, CONTRIBUTING.md)"
+  ok "relative links resolve (README.md, SECURITY.md, docs/development.md)"
 fi
 
 # ---------------------------------------------------------------------
 # 4. docs listed: every top-level docs/*.md must be referenced from
-#    README.md or CONTRIBUTING.md
+#    README.md or docs/development.md
 # ---------------------------------------------------------------------
 for d in docs/*.md; do
   [ -f "$d" ] || continue
-  if grep -qF -- "$d" README.md CONTRIBUTING.md 2>/dev/null; then
+  if grep -qF -- "$d" README.md docs/development.md 2>/dev/null; then
     ok "docs listed: $d is referenced"
   else
-    fail "$d -- not referenced from README.md or CONTRIBUTING.md, link it or remove the doc"
+    fail "$d -- not referenced from README.md or docs/development.md, link it or remove the doc"
   fi
 done
 
 # ---------------------------------------------------------------------
-# 5. Go version: CONTRIBUTING.md's "Go X.Y+" must match go.mod's go
+# 5. Go version: docs/development.md's "Go X.Y+" must match go.mod's go
 #    directive's major.minor
 # ---------------------------------------------------------------------
 gomod_line=$(grep '^go ' go.mod | head -n1)
 gomod_ver=$(echo "$gomod_line" | awk '{print $2}' | cut -d. -f1,2)
-ctrib_match=$(grep -oE 'Go [0-9]+\.[0-9]+\+' CONTRIBUTING.md 2>/dev/null | head -n1)
+ctrib_match=$(grep -oE 'Go [0-9]+\.[0-9]+\+' docs/development.md 2>/dev/null | head -n1)
 ctrib_ver=$(echo "$ctrib_match" | sed -E 's/^Go ([0-9]+\.[0-9]+)\+$/\1/')
 if [ -z "$ctrib_match" ]; then
-  fail "CONTRIBUTING.md has no 'Go X.Y+' line -- state the minimum Go version ($gomod_ver+ per go.mod)"
+  fail "docs/development.md has no 'Go X.Y+' line -- state the minimum Go version ($gomod_ver+ per go.mod)"
 elif [ "$ctrib_ver" = "$gomod_ver" ]; then
-  ok "CONTRIBUTING.md's Go version matches go.mod ($gomod_ver)"
+  ok "docs/development.md's Go version matches go.mod ($gomod_ver)"
 else
-  fail "CONTRIBUTING.md says Go $ctrib_ver+ but go.mod requires $gomod_ver -- update CONTRIBUTING.md's Go version line"
+  fail "docs/development.md says Go $ctrib_ver+ but go.mod requires $gomod_ver -- update docs/development.md's Go version line"
 fi
 
 # ---------------------------------------------------------------------
