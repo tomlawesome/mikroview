@@ -21,14 +21,25 @@
 //
 // Two devices, and the harness only declares one. The live-env.sh
 // config declares live-router on 127.0.0.1 and every feeder sends from
-// there, so the undeclared router this needs is fed from 127.0.0.9
-// instead (feedRaw's second argument). That leaves a discovered device
-// behind on the shared instance for every scenario sorting after this
-// one, which is safe in a way it was not before: Registry.List now
-// orders configured devices first and then by id (#600), so the
-// devices[0] a dozen scenarios read is still live-router. The entity
-// this scenario writes is deleted at the end, so the leftover device is
-// named after its own address again, exactly as it arrived.
+// there.
+//
+// #1170 changed how the second, undeclared router comes to exist: a
+// syslog source is never enough by itself any more, so 127.0.0.9
+// logging first only proves the other half of that ruling -- an
+// address nobody has declared or claimed sits in GET /api/devices'
+// `unattributed` list, never in `devices`. The router itself arrives
+// the way every push-discovered device now does: an ingest token
+// minted for a fresh id (UNDECLARED_ID, distinct from the address on
+// purpose) whose first push both Ensures the device and claims
+// 127.0.0.9 as its own /ip/address entry, so the syslog already
+// arriving from that address attributes to it from the next line on.
+// That leaves a push-created device behind on the shared instance for
+// every scenario sorting after this one, which is safe in a way it was
+// not before: Registry.List now orders configured devices first and
+// then by id (#600), so the devices[0] a dozen scenarios read is still
+// live-router. The entity this scenario writes is deleted at the end,
+// so the leftover device is named after its own id again, exactly as
+// it arrived.
 
 import {
   session,
@@ -46,9 +57,15 @@ const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
 const PASS = process.env.MV_PASS
 
-// The undeclared router: an address in 127.0.0.0/8 that nothing else
-// feeds from, so the device it creates is this scenario's alone.
+// The undeclared router's syslog address: in 127.0.0.0/8, nothing else
+// feeds from it, so it is this scenario's alone. #1170: this is no
+// longer the device's identity -- it is the address its own pushed
+// /ip/address table claims, which is a different thing on purpose.
 const UNDECLARED_IP = '127.0.0.9'
+// The undeclared router's actual identity: the id its ingest token
+// names. Deliberately not UNDECLARED_IP -- #1170's whole point is that
+// a device id is never merely a syslog source address.
+const UNDECLARED_ID = 'mv-rename-undeclared'
 // Neither label is a prefix of the other: the filter box matches on a
 // substring, so "live-device-rename" alone would show both routers'
 // rows and every locator below would be ambiguous.
@@ -67,6 +84,20 @@ async function api(client, method, path, body) {
   return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
 
+// push, unlike api() above, goes straight over fetch with a bearer
+// token rather than through the signed-in session's cookie jar --
+// there is no session-based path to the ingest endpoint at all (see
+// handleIngestRouterOS's own comment). Same shape as
+// live-fleet-setup-standing.mjs's push().
+async function push(token, payload) {
+  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return res.status
+}
+
 const line = (rule, dst) =>
   `firewall,info D|${rule}| forward: in:ether1 out:bridge1, connection-state:new, ` +
   `proto TCP (SYN), 203.0.113.60:51500->${dst}:8291, len 60`
@@ -75,49 +106,120 @@ async function devices(client) {
   return (await api(client, 'GET', '/api/devices')).body?.devices ?? []
 }
 
-// --- Both routers, as the server sees them -------------------------------
+// --- The declared router, as the server sees it ---------------------------
 
 feedRaw(line(RULE_DECLARED, '192.168.1.10'))
-feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 
-let undeclared = null
 let declared = null
-const deadline = Date.now() + 25000
-while (Date.now() < deadline && !undeclared) {
-  const list = await devices(page.request)
-  undeclared = list.find((d) => d.id === UNDECLARED_IP)
-  declared = list.find((d) => d.configured)
-  if (undeclared) break
-  await new Promise((r) => setTimeout(r, 2000))
-  feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
+{
+  const deadline = Date.now() + 25000
+  while (Date.now() < deadline && !declared) {
+    const list = await devices(page.request)
+    declared = list.find((d) => d.configured)
+    if (declared) break
+    await new Promise((r) => setTimeout(r, 1500))
+    feedRaw(line(RULE_DECLARED, '192.168.1.10'))
+  }
 }
-
 check(!!declared, `the harness's declared router is reported (${declared?.id})`)
 check(
   declared?.nameSource === 'config-device',
   `and says config.yaml decides its name (nameSource=${declared?.nameSource}, name="${declared?.name}")`,
 )
-check(!!undeclared, `an undeclared router appears once its own address logs (${UNDECLARED_IP})`)
+if (!declared) {
+  check(true, 'skipped -- the rename cannot be exercised without the declared-router baseline')
+  done()
+}
+
+// --- #1170: an unclaimed syslog source is not a router --------------------
+//
+// Fed before anything claims it as an address. This is the ruling this
+// scenario now proves for its "undeclared router" half: a source
+// address with no config.yaml entry and no router's own address table
+// naming it never becomes a device, however many lines it sends -- it
+// sits under GET /api/devices' `unattributed` list instead.
+
+feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
+
+let unattributedSrc = null
+{
+  const deadline = Date.now() + 25000
+  while (Date.now() < deadline && !unattributedSrc) {
+    const { body } = await api(page.request, 'GET', '/api/devices')
+    unattributedSrc = (body?.unattributed ?? []).find((s) => s.address === UNDECLARED_IP)
+    if (unattributedSrc) break
+    await new Promise((r) => setTimeout(r, 1500))
+    feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
+  }
+}
+check(
+  !!unattributedSrc,
+  `a syslog source nobody has declared or claimed shows up as unattributed, not a device (${UNDECLARED_IP})`,
+)
+check(
+  !(await devices(page.request)).some((d) => d.id === UNDECLARED_IP),
+  'and never appears in the devices array -- #1170: a syslog source alone never invents a router',
+)
+
+// --- The undeclared router arrives by push, not by syslog source ----------
+//
+// A device exists only because the operator minted an ingest token for
+// it (Ensure) or declared it in config.yaml. The token below names a
+// fresh device id, distinct from the address it will end up
+// attributed to; its first push both creates the device and claims
+// 127.0.0.9 as its own (an /ip/address table entry), so the syslog
+// already arriving from that address resolves to it from the next
+// line on.
+
+const undeclaredToken = await api(page.request, 'POST', '/api/tokens', {
+  name: 'live-device-rename-undeclared',
+  kind: 'ingest',
+  device: UNDECLARED_ID,
+})
+check(undeclaredToken.status === 201, `an ingest token is issued for ${UNDECLARED_ID} (${undeclaredToken.status})`)
+
+let undeclared = null
+if (undeclaredToken.status === 201 && undeclaredToken.body?.value) {
+  const pushStatus = await push(undeclaredToken.body.value, {
+    kind: 'ip-address',
+    page: 1,
+    pages: 1,
+    records: [{ address: `${UNDECLARED_IP}/32`, network: '', interface: '', comment: '' }],
+  })
+  check(pushStatus === 200, `the router's own address-table push is accepted (${pushStatus})`)
+
+  const list = await devices(page.request)
+  undeclared = list.find((d) => d.id === UNDECLARED_ID)
+}
+check(
+  !!undeclared,
+  `an undeclared router appears once it pushes its own state, not once its address logs (${UNDECLARED_ID})`,
+)
 if (!undeclared) {
   check(true, 'skipped -- the rename cannot be exercised without a device to rename')
   done()
 }
 check(
-  undeclared.name === UNDECLARED_IP && undeclared.nameSource === 'none',
-  `and arrives named after its raw address (name="${undeclared.name}", nameSource=${undeclared.nameSource})`,
+  undeclared.name === UNDECLARED_ID && undeclared.nameSource === 'none',
+  `and arrives named after its own device id (name="${undeclared.name}", nameSource=${undeclared.nameSource})`,
 )
 
 // --- The rename, from the live view --------------------------------------
+
+// Fed again now that 127.0.0.9 is claimed: Resolve attributes this
+// line, and everything after it, to UNDECLARED_ID instead of leaving
+// it as an unattributed source.
+feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 
 await page.fill('input.rule', RULE_UNDECLARED)
 
 let rowFound = true
 try {
-  await page.locator('.row', { hasText: UNDECLARED_IP }).first().waitFor({ timeout: 15000 })
+  await page.locator('.row', { hasText: UNDECLARED_ID }).first().waitFor({ timeout: 15000 })
 } catch {
   rowFound = false
 }
-check(rowFound, `a row from the undeclared router rendered, showing ${UNDECLARED_IP}`)
+check(rowFound, `a row from the undeclared router rendered, showing ${UNDECLARED_ID}`)
 if (!rowFound) {
   check(true, 'skipped -- the editor cannot be exercised on a row that never rendered')
   done()
@@ -165,12 +267,12 @@ check(renamedHere, `the row already on screen reads "${NEW_NAME}" -- no reload`)
 const entities = await api(page.request, 'GET', '/api/entities')
 check(
   (entities.body?.entities ?? []).some(
-    (e) => e.type === 'device' && e.key === UNDECLARED_IP && e.label === NEW_NAME,
+    (e) => e.type === 'device' && e.key === UNDECLARED_ID && e.label === NEW_NAME,
   ),
-  `the name is stored against the device id ${UNDECLARED_IP}, which is untouched`,
+  `the name is stored against the device id ${UNDECLARED_ID}, which is untouched`,
 )
 
-const served = (await devices(page.request)).find((d) => d.id === UNDECLARED_IP)
+const served = (await devices(page.request)).find((d) => d.id === UNDECLARED_ID)
 check(
   served?.name === NEW_NAME && served?.nameSource === 'entity',
   `GET /api/devices serves the new name to anyone who asks (name="${served?.name}", nameSource=${served?.nameSource})`,
@@ -215,7 +317,7 @@ try {
 }
 check(fleetSees, 'and reads it on the routers surface too, not just in the stream')
 
-const otherServed = (await devices(other.request)).find((d) => d.id === UNDECLARED_IP)
+const otherServed = (await devices(other.request)).find((d) => d.id === UNDECLARED_ID)
 check(
   otherServed?.name === NEW_NAME && otherServed?.sourceIp === UNDECLARED_IP,
   'the second session is served the same name over the same raw address',
@@ -285,18 +387,19 @@ check(
 //
 // run-scenarios.sh runs one shared instance in filename order, so an
 // entity left here is an input to every scenario after this one. The
-// discovered device itself cannot be removed and does not need to be:
-// with its label gone it is named after its own address again.
-await api(page.request, 'DELETE', '/api/entities', { type: 'device', key: UNDECLARED_IP })
+// push-created device itself cannot be removed and does not need to
+// be: with its label gone it is named after its own device id again --
+// it was never named after its address (#1170).
+await api(page.request, 'DELETE', '/api/entities', { type: 'device', key: UNDECLARED_ID })
 const leftovers = await api(page.request, 'GET', '/api/entities')
 check(
   !(leftovers.body?.entities ?? []).some((e) => e.type === 'device'),
   'no device entity is left behind for the next scenario to trip over',
 )
-const restored = (await devices(page.request)).find((d) => d.id === UNDECLARED_IP)
+const restored = (await devices(page.request)).find((d) => d.id === UNDECLARED_ID)
 check(
-  restored?.name === UNDECLARED_IP,
-  `and the device shows its raw address again (name="${restored?.name}")`,
+  restored?.name === UNDECLARED_ID,
+  `and the device shows its own id again (name="${restored?.name}")`,
 )
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)

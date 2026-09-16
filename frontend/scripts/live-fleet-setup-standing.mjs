@@ -15,17 +15,15 @@
 // Three standings, #1241's own "done when": never reported (a router
 // that has pushed other router state but not this page), current (the
 // page matches what today's wizard would leave), and behind (an older
-// wizard version). All three need a device that is actually resolved
-// -- GET /api/devices only reports on devices internal/device has
-// resolved from real syslog traffic, not merely on a device an ingest
-// token happens to name -- so each device below is seeded with one
-// syslog line before any push, the same discover-then-scope-a-token
-// order live-fall-composition.mjs and live-waterfall.mjs use and
-// explain: a token scoped to a device nothing has resolved yet is
-// refused, and a push under a token scoped to the wrong device attaches
-// to that device instead, silently.
+// wizard version). All three need a device that actually exists --
+// #1170 changed what that takes: GET /api/devices lists a device once
+// an ingest token has been minted for it and it has pushed (Ensure),
+// never merely because something logged. So each device below is
+// created by minting its own token and pushing under it, straight
+// away -- there is no syslog in this scenario at all any more, and no
+// discover-then-scope-a-token order to follow.
 
-import { session, feedRawFrom, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // PortOf(cfg.Listen.SyslogTLS) is what the instance's own wizard would
@@ -37,14 +35,11 @@ const URL_BASE = process.env.MV_URL
 // own doc comment: an unset address is not compared at all).
 const SYSLOG_TLS_PORT = process.env.MV_SYSLOG_TLS_PORT
 
-// 127.0.0.x, not a documentation-space address: feedRawFrom spoofs the
-// source by binding the outbound TLS socket's local address to it
-// (live-env.sh's send_tls), which only works for an address this host
-// can actually bind -- the whole 127.0.0.0/8 block, unlike a routable
-// range nothing here owns. live-device-rename.mjs's UNDECLARED_IP is
-// the precedent.
-const IP_NEVER = '127.0.0.241'
-const IP_CURRENT = '127.0.0.242'
+// The two devices this scenario needs, named directly rather than
+// discovered: #1170 made a device id whatever its ingest token names,
+// with no address of any kind required.
+const NEVER_ID = 'mv1241-never-reported'
+const CURRENT_ID = 'mv1241-current'
 
 const { page, consoleErrors } = await session()
 
@@ -55,22 +50,6 @@ async function api(method, path_, body) {
     data: body,
   })
   return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
-}
-
-/** discoverDevice waits for GET /api/devices to resolve the source IP fed to it, and returns its device id. */
-async function discoverDevice(sourceIp, rule, timeoutMs = 25000) {
-  const line =
-    `firewall,info A|${rule}| forward: in:bridge1 out:ether1, connection-state:new, ` +
-    `proto TCP (SYN), ${sourceIp}:41111->203.0.113.9:443, len 60`
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    feedRawFrom(sourceIp, line)
-    const { body } = await api('GET', '/api/devices')
-    const dev = body?.devices?.find((d) => d.sourceIp === sourceIp || d.id === sourceIp)
-    if (dev) return dev.id
-    await new Promise((r) => setTimeout(r, 1500))
-  }
-  return null
 }
 
 async function issueIngestToken(device, name) {
@@ -131,126 +110,126 @@ check(!!SYSLOG_TLS_PORT, `MV_SYSLOG_TLS_PORT is set (${SYSLOG_TLS_PORT}) -- the 
 
 // --- never reported: router state pushed, the logging page never sent ---
 
-const neverId = await discoverDevice(IP_NEVER, 'mv1241-neverreported')
-check(!!neverId, `the "never reported" device is resolved from real syslog traffic (${neverId})`)
+const neverToken = await issueIngestToken(NEVER_ID, 'mv1241-never-reported')
 
-if (neverId) {
-  const neverToken = await issueIngestToken(neverId, 'mv1241-never-reported')
-  if (neverToken) {
-    const arpStatus = await push(neverToken, {
-      kind: 'arp',
-      page: 1,
-      pages: 1,
-      records: [{ address: '192.168.1.50', mac: 'aa:bb:cc:dd:ee:ff' }],
-    })
-    check(arpStatus === 200, `an ARP table push (router state, not the logging page) is accepted (${arpStatus})`)
+if (neverToken) {
+  const arpStatus = await push(neverToken, {
+    kind: 'arp',
+    page: 1,
+    pages: 1,
+    records: [{ address: '192.168.1.50', mac: 'aa:bb:cc:dd:ee:ff' }],
+  })
+  check(arpStatus === 200, `an ARP table push (router state, not the logging page) is accepted (${arpStatus})`)
 
-    const neverSetup = await setupOf(neverId)
-    check(
-      neverSetup?.standing === 'never reported',
-      `a device that has pushed router state but never the logging page reports "never reported" (got ${JSON.stringify(neverSetup)})`,
-    )
-  } else {
-    check(false, 'skipped the "never reported" push -- no ingest token was issued')
-  }
+  const { body: afterArp } = await api('GET', '/api/devices')
+  check(
+    afterArp?.devices?.some((d) => d.id === NEVER_ID),
+    `the push Ensures ${NEVER_ID} into the device registry (#1170) -- no syslog required`,
+  )
+
+  const neverSetup = await setupOf(NEVER_ID)
+  check(
+    neverSetup?.standing === 'never reported',
+    `a device that has pushed router state but never the logging page reports "never reported" (got ${JSON.stringify(neverSetup)})`,
+  )
 } else {
-  check(false, 'skipped the "never reported" checks -- the device was never resolved')
+  check(false, 'skipped the "never reported" push -- no ingest token was issued')
 }
 
 // --- current, then behind: the same device's standing after each push ---
 
-const currentId = await discoverDevice(IP_CURRENT, 'mv1241-current')
-check(!!currentId, `the "current"/"behind" device is resolved from real syslog traffic (${currentId})`)
+const token = await issueIngestToken(CURRENT_ID, 'mv1241-setup-standing')
 
-if (currentId) {
-  const token = await issueIngestToken(currentId, 'mv1241-setup-standing')
-  if (token) {
-    const currentStatus = await push(token, loggingPayload(1))
-    check(currentStatus === 200, `a logging page at the current wizard version is accepted (${currentStatus})`)
+if (token) {
+  const currentStatus = await push(token, loggingPayload(1))
+  check(currentStatus === 200, `a logging page at the current wizard version is accepted (${currentStatus})`)
 
-    const current = await waitForStanding(currentId, 'current')
+  const { body: afterPush } = await api('GET', '/api/devices')
+  check(
+    afterPush?.devices?.some((d) => d.id === CURRENT_ID),
+    `the push Ensures ${CURRENT_ID} into the device registry (#1170) -- no syslog required`,
+  )
+
+  const current = await waitForStanding(CURRENT_ID, 'current')
+  check(
+    current?.standing === 'current',
+    `a router reporting the current wizard version and no drift stands "current" (got ${JSON.stringify(current)})`,
+  )
+  check(
+    current?.scriptVersion === 1 && current?.currentVersion === 1,
+    `scriptVersion and currentVersion both read 1 while current (got ${JSON.stringify(current)})`,
+  )
+
+  const behindStatus = await push(token, loggingPayload(0))
+  check(behindStatus === 200, `a second push at an older wizard version is accepted (${behindStatus})`)
+
+  const behind = await waitForStanding(CURRENT_ID, 'behind')
+  check(
+    behind?.standing === 'behind',
+    `the same router reporting an older wizard version now stands "behind" (got ${JSON.stringify(behind)})`,
+  )
+  check(
+    behind?.scriptVersion === 0 && behind?.currentVersion === 1,
+    `scriptVersion drops to 0 against currentVersion 1 while behind (got ${JSON.stringify(behind)})`,
+  )
+
+  // --- the same fact, read off a real card ------------------------------
+  //
+  // Entities' router row is split into registeredRouters/
+  // unregisteredRouters (Entities.svelte, gated on device.Info.Configured,
+  // which config.yaml sets once at startup and nothing live can flip) --
+  // a push-created device, like this one, always lands in the
+  // "unregistered" half, whose card is a deliberately different,
+  // narrower shape (`its lines are kept; it has no name and no zones
+  // until it is registered`) that does not print setupEcho() at all.
+  // Fleet.svelte carries the same line unconditionally, for every
+  // device regardless of registration -- "a stale router is *why* the
+  // log looks wrong" applies whether or not it's been named -- so a real
+  // viewer account, which lands on Fleet rather than Entities, is the
+  // surface that actually answers #1241's own done-when for a device
+  // like this one.
+  const VIEWER_USER = 'live-viewer-1241'
+  const VIEWER_PASS = 'live-viewer-1241-password'
+
+  await goTo(page, 'Settings')
+  await page.click('#people .ogfoot .olink')
+  await page.waitForSelector('#people .pform')
+  await page.fill('#people .pform input[aria-label="username"]', VIEWER_USER)
+  await page.fill('#people .pform input[aria-label="password"]', VIEWER_PASS)
+  await page.click('#people .pform button:has-text("can only look")')
+  await page.click('#people .pform button:has-text("let them in")')
+  await page.waitForSelector(`#people .prow:has-text("${VIEWER_USER}")`)
+  check(true, `the viewer account "${VIEWER_USER}" is created from the people door`)
+
+  let cardChecked = false
+  let viewerBrowser
+  try {
+    viewerBrowser = await launchBrowser()
+    const ctx = await viewerBrowser.newContext({ ignoreHTTPSErrors: true })
+    const vp = await ctx.newPage()
+    await vp.goto(URL_BASE, { waitUntil: 'networkidle' })
+    await vp.fill('input[autocomplete="username"]', VIEWER_USER)
+    await vp.fill('input[autocomplete="current-password"]', VIEWER_PASS)
+    await vp.click('button[type="submit"]')
+    await vp.waitForSelector('#main-content', { timeout: 15000 })
+    await goTo(vp, 'Fleet')
+
+    const card = vp.locator('.fcard', { hasText: CURRENT_ID })
+    await card.waitFor({ timeout: 15000 })
+    const cardText = (await card.textContent()) ?? ''
     check(
-      current?.standing === 'current',
-      `a router reporting the current wizard version and no drift stands "current" (got ${JSON.stringify(current)})`,
+      cardText.includes('setup behind · paste step 1 again'),
+      `a viewer's Fleet card for ${CURRENT_ID} carries "setup behind · paste step 1 again" (got: ${cardText.replace(/\s+/g, ' ').trim()})`,
     )
-    check(
-      current?.scriptVersion === 1 && current?.currentVersion === 1,
-      `scriptVersion and currentVersion both read 1 while current (got ${JSON.stringify(current)})`,
-    )
-
-    const behindStatus = await push(token, loggingPayload(0))
-    check(behindStatus === 200, `a second push at an older wizard version is accepted (${behindStatus})`)
-
-    const behind = await waitForStanding(currentId, 'behind')
-    check(
-      behind?.standing === 'behind',
-      `the same router reporting an older wizard version now stands "behind" (got ${JSON.stringify(behind)})`,
-    )
-    check(
-      behind?.scriptVersion === 0 && behind?.currentVersion === 1,
-      `scriptVersion drops to 0 against currentVersion 1 while behind (got ${JSON.stringify(behind)})`,
-    )
-
-    // --- the same fact, read off a real card ------------------------------
-    //
-    // Entities' router row is split into registeredRouters/
-    // unregisteredRouters (Entities.svelte, gated on device.Info.Configured,
-    // which config.yaml sets once at startup and nothing live can flip) --
-    // a device discovered from spoofed syslog traffic, like this one, always
-    // lands in the "unregistered" half, whose card is a deliberately
-    // different, narrower shape (`its lines are kept; it has no name and no
-    // zones until it is registered`) that does not print setupEcho() at
-    // all. Fleet.svelte carries the same line unconditionally, for every
-    // device regardless of registration -- "a stale router is *why* the
-    // log looks wrong" applies whether or not it's been named -- so a real
-    // viewer account, which lands on Fleet rather than Entities, is the
-    // surface that actually answers #1241's own done-when for a device
-    // like this one.
-    const VIEWER_USER = 'live-viewer-1241'
-    const VIEWER_PASS = 'live-viewer-1241-password'
-
-    await goTo(page, 'Settings')
-    await page.click('#people .ogfoot .olink')
-    await page.waitForSelector('#people .pform')
-    await page.fill('#people .pform input[aria-label="username"]', VIEWER_USER)
-    await page.fill('#people .pform input[aria-label="password"]', VIEWER_PASS)
-    await page.click('#people .pform button:has-text("can only look")')
-    await page.click('#people .pform button:has-text("let them in")')
-    await page.waitForSelector(`#people .prow:has-text("${VIEWER_USER}")`)
-    check(true, `the viewer account "${VIEWER_USER}" is created from the people door`)
-
-    let cardChecked = false
-    let viewerBrowser
-    try {
-      viewerBrowser = await launchBrowser()
-      const ctx = await viewerBrowser.newContext({ ignoreHTTPSErrors: true })
-      const vp = await ctx.newPage()
-      await vp.goto(URL_BASE, { waitUntil: 'networkidle' })
-      await vp.fill('input[autocomplete="username"]', VIEWER_USER)
-      await vp.fill('input[autocomplete="current-password"]', VIEWER_PASS)
-      await vp.click('button[type="submit"]')
-      await vp.waitForSelector('#main-content', { timeout: 15000 })
-      await goTo(vp, 'Fleet')
-
-      const card = vp.locator('.fcard', { hasText: currentId })
-      await card.waitFor({ timeout: 15000 })
-      const cardText = (await card.textContent()) ?? ''
-      check(
-        cardText.includes('setup behind · paste step 1 again'),
-        `a viewer's Fleet card for ${currentId} carries "setup behind · paste step 1 again" (got: ${cardText.replace(/\s+/g, ' ').trim()})`,
-      )
-      cardChecked = true
-    } catch (e) {
-      check(false, `could not read the viewer's Fleet card for ${currentId}: ${e}`)
-    } finally {
-      await viewerBrowser?.close().catch(() => {})
-    }
-    check(cardChecked, 'the Fleet card check ran to completion')
-  } else {
-    check(false, 'skipped the current/behind pushes -- no ingest token was issued')
+    cardChecked = true
+  } catch (e) {
+    check(false, `could not read the viewer's Fleet card for ${CURRENT_ID}: ${e}`)
+  } finally {
+    await viewerBrowser?.close().catch(() => {})
   }
+  check(cardChecked, 'the Fleet card check ran to completion')
 } else {
-  check(false, 'skipped the current/behind checks -- the device was never resolved')
+  check(false, 'skipped the current/behind pushes -- no ingest token was issued')
 }
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
