@@ -126,7 +126,7 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		// first. Guarded anyway rather than trusting that invariant
 		// silently -- the alternative is a nil-pointer panic on tok.ID
 		// below.
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeUnauthorized(w, "unauthorized")
 		return
 	}
 
