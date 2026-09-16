@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-city-reach: Escape does not restore the exact pan position
+
+- 2026-09-16 · 83b35730 (feature/m16-upgrade-guard-and-401, !1054) · pipeline 1168, `gate:scenarios 1/4` · `Escape restores the exact pan position (13.4 -> 19.3)` -- the mini-map viewport read 19.3 after the 900 ms settle instead of the 13.4 it started at; every other check in the scenario passed. The branch is backend-only (persist schema, a 401 header, `-backup`); the same scenario passed three times in a row locally at ebbce549, which contains that branch.
+
 ## live-topography-trace-list: a keyboard re-trace lands on no row
 
 - 2026-09-14 · 4a4655b2 (feature/wizard-upgrade-safety) · pipeline 1101, `gate:scenarios 4/4` · `the list stays open across a keyboard re-trace` and `the second row is now the traced one (-1)` -- `onIndex` came back `-1`, so the re-trace selected nothing rather than the wrong thing. The branch touches no topography code at all; `dev` passed the same scenario at e4296ef3 (pipeline 1100) an hour earlier, and the same branch passed it at bef16483 (pipeline 1102) with only banner-text and wizard changes in between.
