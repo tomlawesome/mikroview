@@ -675,6 +675,11 @@ func (s *Server) apiRoutes() []route {
 		// router can reach this instance on. Admin-only, same gate as
 		// the mark endpoint above.
 		{http.MethodPost, "/api/setup/address", s.handleSetupAddress},
+		// How step 6's script delivers its backup (#955): over SFTP to
+		// the drop box, or in slices through the ingest channel for an
+		// HTTPS-only install. A property of the deployment, stored
+		// beside the address above and admin-only for the same reason.
+		{http.MethodPut, "/api/setup/backup-transport", s.handleSetupBackupTransport},
 
 		// "Log every rule" (#435, named "Tune logging" until #1134,
 		// which left these two paths alone): upload a RouterOS export,

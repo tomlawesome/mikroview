@@ -816,7 +816,9 @@ for the trust caveat below.
 
 Set `backup.enabled: true` in `config.yaml` and restart — this opens a
 second listening port (`backup.listen`, default `:47022`), only once
-you have decided to use it. Nothing here needs the wizard, but the
+you have decided to use it. Skip this section entirely if you are
+taking the HTTPS-only path in 7c-ii: it needs no second port, and so
+nothing to turn on here. Nothing here needs the wizard, but the
 wizard's step 6 is what actually prints the script below with your own
 values filled in, which is the easier path for most people.
 
@@ -903,9 +905,15 @@ declared plus eight retries, and is abandoned if more arrive; a piece
 naming a transfer MikroView is not holding — one already finished, given
 up on, or never announced — costs a request like any other push.
 
-The wizard does not offer this step yet — 4b's token is still what
-authenticates it once it does. Until it does, this is a paste-it-yourself
-step:
+The wizard offers this path. On step 6, the line above the script reads
+**The router sends its backup sftp · https** — pick `https` and the step
+prints the script below and its scheduler entry with your own address and
+token already in them. The choice is stored on the MikroView side rather
+than in your browser, so whoever opens the wizard next, on any machine,
+is offered the same one; and it does not wait on 7a, since there is no
+drop box to open. 4b's token is still what authenticates it.
+
+To paste it by hand instead:
 
 ```
 /system backup save name=mv-backup dont-encrypt=yes
