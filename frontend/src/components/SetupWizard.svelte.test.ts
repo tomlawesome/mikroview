@@ -1211,9 +1211,12 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     const { container } = await noKeyPane()
 
     const blocks = [...container.querySelectorAll('.body pre')].map((p) => p.textContent ?? '')
-    expect(blocks.some((b) => b.includes('cat > /run/secrets/mikroview-history.key'))).toBe(true)
-    expect(blocks.some((b) => b.includes('/run/secrets/mikroview-history.key:ro'))).toBe(true)
-    expect(blocks.some((b) => b.includes('keyFile: /run/secrets/mikroview-history.key'))).toBe(true)
+    expect(blocks.some((b) => b.includes('cat > mikroview/keys/history.key'))).toBe(true)
+    // The app folder's two mount lines (#1209, #1243), not a mount of
+    // this one file: the key arrives by being put in the folder, and so
+    // does everything else the compose block has to carry.
+    expect(blocks.some((b) => b.includes('./mikroview:/etc/mikroview:ro'))).toBe(true)
+    expect(blocks.some((b) => b.includes('./mikroview/data:/var/lib/mikroview'))).toBe(true)
     expect(blocks.some((b) => b.includes('docker compose up -d'))).toBe(true)
     expect(container.querySelectorAll('.body button.copy').length).toBe(blocks.length)
     // No block quotes the key: it goes in on standard input, which is

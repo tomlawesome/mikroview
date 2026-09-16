@@ -1387,16 +1387,44 @@ func Load(configPath string, args []string) (Config, error) {
 func load(configPath string, args []string) (Config, Result, error) {
 	cfg := defaults()
 
+	// With nothing naming a config file, the app folder's own
+	// config.yaml is it (#1243), so a bare `docker run` with the folder
+	// mounted needs no MIKROVIEW_CONFIG. Missing is not an error there:
+	// defaults alone are a working deployment, and the folder is
+	// optional by design. A path somebody actually named and got wrong
+	// still fails, as it always has -- that one is a mistake, not a
+	// choice.
+	var folder []AppFolderLookup
+	if configPath == "" {
+		configPath = DefaultConfigPath()
+		found := appFolderFileExists(configPath)
+		folder = append(folder, AppFolderLookup{Key: "config file", Path: configPath, Found: found})
+		if !found {
+			configPath = ""
+		}
+	}
+
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
-			return Config{}, Result{}, fmt.Errorf("loading config file %s: %w", configPath, err)
+			return Config{}, Result{ConfigPath: configPath, AppFolder: folder}, fmt.Errorf("loading config file %s: %w", configPath, err)
 		}
 	}
 
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
-		return Config{}, Result{}, err
+		return Config{}, Result{ConfigPath: configPath, AppFolder: folder}, err
+	}
+
+	// The folder fills in only what none of the sources above set, so a
+	// value in config or the environment always wins and every install
+	// that already names its paths is untouched (#1209's answer 4).
+	// Before Validate, so a path the folder supplied is checked like any
+	// other.
+	lookups, err := applyAppFolder(&cfg)
+	folder = append(folder, lookups...)
+	if err != nil {
+		return Config{}, Result{ConfigPath: configPath, AppFolder: folder}, err
 	}
 
 	// Devices get their identity filled in before validation, so
@@ -1408,6 +1436,8 @@ func load(configPath string, args []string) (Config, Result, error) {
 	// a flag can fix a bad yaml value, so checking earlier would reject
 	// configurations that are actually fine.
 	result := cfg.Validate()
+	result.ConfigPath = configPath
+	result.AppFolder = folder
 	if err := result.Err(); err != nil {
 		// The result goes back even on failure. Returning Result{} here
 		// discarded every Problem the caller needed -- the code, the
