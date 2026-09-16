@@ -1653,6 +1653,68 @@ coverage declaration. `GET` is open to any signed-in user; the two writes
 are user tier and audit-logged, since saying a silence is deliberate
 carries the same weight as any other authored explanation.
 
+## Seen filter values (issue #1226, optional)
+
+Every filter on the live view is a picker over something known -- except
+two. `Proto` and `Interface` had no list behind them anywhere in the app,
+so both were free-text boxes: you typed `tcp`, or your best guess at an
+interface name, and hoped.
+
+MikroView now keeps the list itself. Every event that arrives records its
+protocol and its in and out interface names, with when each value was
+first and last seen, and the filter strip offers those as menus. Nothing
+is guessed and nothing is asked of your network: a value is in the menu
+only because a log line carrying it arrived.
+
+**Typing still works.** The menus are suggestions, not a closed set -- you
+can type a value MikroView has never seen, which is what lets you set a
+filter up *before* the traffic you are waiting for appears.
+
+There is one interface list, not one for inbound and one for outbound,
+because there is one interface filter: it matches an event whose in *or*
+out interface is the value you picked.
+
+```yaml
+seen:
+  # Where the list is persisted, as a small JSON file. Same
+  # optional-persistence contract as hosts.storePath above: left unset,
+  # the list still works, it just starts empty after a restart and
+  # refills as traffic arrives -- so a protocol or interface that has
+  # been quiet since the restart is missing from the menu until it is
+  # seen again. Typing an unlisted value is unaffected. If you set this
+  # in the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/seen-values.json"
+```
+
+### How long a value stays in the menu
+
+**A value is kept while it has been seen in the last 90 days, and each
+field keeps at most 200 values -- when it is full, the one seen longest
+ago is dropped.**
+
+Neither figure is a setting. Both are fixed in MikroView.
+
+Three months is the line because a menu's whole usefulness is that
+everything in it is worth picking. Something that has arrived at all this
+quarter is traffic you may still want to filter on; something that has
+not is a stale entry between you and the one you wanted. The 200 cap is
+the safety half: protocol and interface names both arrive inside a log
+line, so a misconfigured or hostile feed could otherwise invent new
+interface names indefinitely and grow the list without bound.
+
+Ageing-out happens when a new value is recorded, not on a timer. An
+instance that stops receiving events stops expiring values, which is the
+honest behaviour -- nothing was observed, so nothing changed.
+
+Writes go to disk behind the scenes, never on the path an event takes
+through the app, the same way the host presence register above is
+written.
+
+The list is read via `GET /api/seen-values` (see [API
+reference](#api-reference)), and is carried in `-backup` envelopes with
+every other store.
+
 ## Device dossier (issue #410)
 
 `GET /api/hosts/{ip}/dossier` answers "what is this thing?" for one
@@ -3888,6 +3950,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_HOSTS_STORE_PATH` | `hosts.storePath` (see [Host presence register](#host-presence-register-issue-1016-optional)) |
+| `MIKROVIEW_SEEN_STORE_PATH` | `seen.storePath` (see [Seen filter values](#seen-filter-values-issue-1226-optional)) |
 | `MIKROVIEW_BASELINE_STORE_PATH` | `baseline.storePath` (see [Baseline line register](#baseline-line-register-issue-1016-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
@@ -4222,6 +4285,7 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/baseline/off` | open to any signed-in user (see [Baseline line register](#baseline-line-register-issue-1016-optional)): today's off-baseline lines, the establishment threshold that judged them, and the configured host-quiet window. Not reachable with a read-only API token: it is a partial inventory of your private address space, with destinations and ports attached |
 | `PUT /api/baseline/{key}/expected` | user tier: say the line at `key` is meant to be there, taking `{"reason": "..."}` in the JSON body. `reason` is required; empty is refused. 400 on an invalid key, 404 if no event has ever registered it. Audit-logged as `baseline.expected` |
 | `DELETE /api/baseline/{key}/expected` | user tier: take the mark off the line at `key`, putting it back to whatever its own recurrence says it is. 404 if there is no mark there. Audit-logged as `baseline.unexpected` |
+| `GET /api/seen-values` | open to any signed-in user (see [Seen filter values](#seen-filter-values-issue-1226-optional)): the values this instance has actually observed for the two filter fields that have no list anywhere else. Answers `{"fields": {"proto": [...], "interface": [...]}}`, each entry carrying `value`, `firstSeen` and `lastSeen`, most recently seen first. One call serves both menus. Anything past the 90-day retention is already left out. Not reachable with a read-only API token: the interface list is a partial inventory of your network's shape |
 | `GET /api/decommission` | viewer tier: every pending segment-retirement offer and every live watch over one (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) -- one response for both, since an offer and a ghost on the map are the same object one decision apart |
 | `POST /api/decommission/watches` | user tier: answer a pending offer with yes, creating a watch that keeps the retiring segment on the map as a ghost until its clean window elapses. Only reachable against a departure MikroView actually observed, never an arbitrary range. Audit-logged |
 | `POST /api/decommission/dismiss` | user tier: answer a pending offer with no -- the segment leaves the map at once and no watch is created. Audit-logged |
