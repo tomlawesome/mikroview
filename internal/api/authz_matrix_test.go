@@ -139,6 +139,18 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/config/upgrade/dismiss", accessAdmin,
 		"dismisses that same notice for this version (#1218) -- same tier as POST /api/setup/mark and /api/setup/address, which persist beside it"},
 
+	{http.MethodGet, "/api/upgrade", accessViewer,
+		"the upgrade notice's facts (#1240): the version this data directory last ran, this one, and how many of " +
+			"the operator's declared routers are still on the old setup. Deliberately a tier below /api/config/upgrade " +
+			"above, which is admin-gated for the config keys and paths it carries: this discloses two version strings " +
+			"(the current one is already on every session's header) and a count of routers a viewer can see listed " +
+			"anyway. The notice it feeds is still an admin's -- only an admin can paste a script or press done, and " +
+			"UpgradeNotice.svelte draws it for nobody else"},
+	{http.MethodPost, "/api/upgrade/acknowledge", accessAdmin,
+		"the notice's `done` (#1240) -- an instance-wide, persisted statement that the routers have been dealt with, " +
+			"so it is the admin's to make, same tier as POST /api/setup/mark and /api/config/upgrade/dismiss, and " +
+			"audited as upgrade.acknowledged with the admin's name"},
+
 	{http.MethodGet, "/api/router-backups", accessAdmin,
 		"lists every router's kept generations and missed-push count (#394) -- admin-only like the disk group's " +
 			"own state/key rows beside it in Settings; a viewer never sees this group at all"},

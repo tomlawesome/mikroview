@@ -171,8 +171,18 @@ func versionBootMessage(prev, current string) string {
 	return fmt.Sprintf("version %s", current)
 }
 
-// logVersionAndMigration logs versionBootMessage's result and updates
-// the persisted marker for next time. Like every other optional
+// logVersionAndMigration logs versionBootMessage's result, updates the
+// persisted marker for next time, and returns the version that marker
+// held ("" on a first install, or when it could not be read).
+//
+// It returns it rather than only logging it because the marker is the
+// only record of what this data directory last ran, and it is gone the
+// moment this function overwrites it -- so the upgrade notice (#1240)
+// has to be handed the previous version from here or not at all. The
+// caller passes it to the setup ledger, which is where the crossing and
+// its acknowledgement are persisted; see setup.Store.NoteUpgrade.
+//
+// Like every other optional
 // persistence in this codebase (see flags.Open's doc comment), a
 // read/write failure is never fatal -- it just means upgrade detection
 // silently doesn't work until the underlying path issue is fixed.
@@ -184,7 +194,7 @@ func versionBootMessage(prev, current string) string {
 // and not repeated on every later boot at the same version -- because a
 // log line cannot be dismissed the way Settings ▸ Upgrade can, and one
 // operators cannot make stop is one they learn to ignore.
-func logVersionAndMigration(logger *slog.Logger, newSettingsCount int) {
+func logVersionAndMigration(logger *slog.Logger, newSettingsCount int) string {
 	prev, err := os.ReadFile(versionMarkerPath)
 	if err != nil && !os.IsNotExist(err) {
 		logger.Warn(fmt.Sprintf("reading version marker: %v", err))
@@ -197,6 +207,7 @@ func logVersionAndMigration(logger *slog.Logger, newSettingsCount int) {
 	if err := os.WriteFile(versionMarkerPath, []byte(version), 0o600); err != nil {
 		logger.Warn(fmt.Sprintf("writing version marker: %v (upgrade detection won't work on the next restart)", err))
 	}
+	return prevVersion
 }
 
 // readRawConfigYAML reads the operator's config file bytes for
@@ -603,7 +614,7 @@ func main() {
 	}
 
 	logging.PrintBanner()
-	logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
+	previousVersion := logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
 	// Before anything is built on top of them (#536). Checked here
 	// rather than at each store's first write so the operator gets one
@@ -1299,6 +1310,14 @@ func main() {
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
+
+	// #1240: the build this data directory last ran, read out of the
+	// version marker by logVersionAndMigration above before it was
+	// overwritten. A first install and an ordinary restart both record
+	// nothing; a crossing is recorded once and stays until an admin
+	// presses done, so the notice survives restarts rather than being
+	// re-raised by them.
+	setupStore.NoteUpgrade(previousVersion, version, time.Now())
 
 	// #1218: which "N new settings are available" notice an operator has
 	// already dismissed -- the notice's own content (missingSettings,
