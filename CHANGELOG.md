@@ -91,6 +91,15 @@ rewritten.
 
 ### Changed
 
+- **A router that only ever pushed is now in the same device list
+  everything counts from** (#1170). Before this, a push from an
+  undeclared router's ingest token had no effect on that list at all, so
+  the Watchlist header could name five routers while the Entities page
+  showed one. A syslog source address is now attributed to a router by
+  `devices[].sourceIp` first, then by the router's own pushed
+  `/ip/address` table if the address belongs to exactly one router's
+  table, and an address neither claims is shown as an unattributed
+  source instead of being counted as a router.
 - **A flag's confidence is now a rating in its drawer, not a number on
   its row** (#1231). Beside the type — `▲ ACTIVITY SPIKE 72`, one column
   away from COUNT's `26×` — the figure read as a count of events. It

@@ -97,7 +97,21 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		StartTime:     time.Now(),
 		Version:       "test-version",
 	}
+	// The wiring main does (#1170): the registry attributes a syslog
+	// source to the router that pushed that address as its own, so a
+	// test server answers the same way the app does.
+	s.Devices.SetAddressTables(s.RouterState)
 	return s, st
+}
+
+// pushingRouter is what a router looks like to the registry since
+// #1170: an ingest token names it on a push, and its own pushed
+// /ip/address table is what attributes its syslog. cidr is written the
+// way RouterOS writes one ("203.0.113.9/24").
+func pushingRouter(t *testing.T, s *Server, id, cidr string) {
+	t.Helper()
+	s.Devices.Ensure(id, time.Now())
+	pushIPAddresses(t, s, id, ingest.IPAddressEntry{Address: cidr})
 }
 
 func TestHandleHealthz(t *testing.T) {
@@ -308,7 +322,9 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 
 	// newTestServer's "core" device is configured but has never had
 	// Resolve called for it -- exactly the "never_seen" case.
-	s.Devices.Resolve("203.0.113.9", time.Now()) // an auto-discovered, currently-live device
+	pushingRouter(t, s, "lab-crs", "203.0.113.9/24") // a router that pushed, currently live
+	pushingRouter(t, s, "old-hex", "198.51.100.1/24")
+	s.Devices.Resolve("203.0.113.9", time.Now())
 	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute))
 	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute)) // same source, stays stale either way
 
@@ -338,11 +354,11 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 	if byID["core"] != "never_seen" {
 		t.Errorf("expected core's status = never_seen (configured, zero events), got %q", byID["core"])
 	}
-	if byID["203.0.113.9"] != "live" {
-		t.Errorf("expected 203.0.113.9's status = live (just resolved), got %q", byID["203.0.113.9"])
+	if byID["lab-crs"] != "live" {
+		t.Errorf("expected lab-crs's status = live (just resolved), got %q", byID["lab-crs"])
 	}
-	if byID["198.51.100.1"] != "stale" {
-		t.Errorf("expected 198.51.100.1's status = stale (last seen 30m ago, threshold 10m), got %q", byID["198.51.100.1"])
+	if byID["old-hex"] != "stale" {
+		t.Errorf("expected old-hex's status = stale (last seen 30m ago, threshold 10m), got %q", byID["old-hex"])
 	}
 }
 
@@ -1025,8 +1041,9 @@ func getStats(t *testing.T, base string) map[string]any {
 // that distinction before offering a field.
 func TestHandleDevicesServesTheStoredNameWithProvenance(t *testing.T) {
 	s, _ := newTestServer(t)
+	pushingRouter(t, s, "lab-crs", "203.0.113.9/24")
 	s.Devices.Resolve("203.0.113.9", time.Now())
-	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "203.0.113.9", Label: "lab crs"}); err != nil {
+	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "lab-crs", Label: "lab crs"}); err != nil {
 		t.Fatal(err)
 	}
 	// The wiring main does: one resolver, held by the registry and by
@@ -1057,8 +1074,8 @@ func TestHandleDevicesServesTheStoredNameWithProvenance(t *testing.T) {
 	for _, d := range body.Devices {
 		got[d.ID] = [2]string{d.Name, d.NameSource}
 	}
-	if got["203.0.113.9"] != [2]string{"lab crs", naming.SourceEntity} {
-		t.Errorf("discovered device = %v, want the stored rename reported as an entity name", got["203.0.113.9"])
+	if got["lab-crs"] != [2]string{"lab crs", naming.SourceEntity} {
+		t.Errorf("pushing device = %v, want the stored rename reported as an entity name", got["lab-crs"])
 	}
 	if got["core"] != [2]string{"Core", naming.SourceConfigDevice} {
 		t.Errorf("declared device = %v, want config.yaml's name reported as config-owned", got["core"])

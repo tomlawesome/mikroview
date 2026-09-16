@@ -10,7 +10,7 @@
 // "fleet" (round 23's verdict) -- this module is the "internal
 // code/state" the record allows to keep the name.
 import { prose } from './setupsteps'
-import type { ClientEvent, Device } from './types'
+import type { ClientEvent, Device, UnattributedSource } from './types'
 
 export const RECENT_WINDOW_MS = 5 * 60 * 1000
 
@@ -112,3 +112,19 @@ export function setupEcho(d: Device): string | null {
       return null
   }
 }
+
+// unattributedLabel (#1170) names a syslog source the registry could not
+// attribute to any router: no configured devices[].sourceIp matches it,
+// and no single router's pushed address table carries it. It reads as
+// what it is -- an address that arrived -- and never as a router, which
+// is the whole point of the server having stopped inventing a device row
+// for one. Same one-line-and-no-more rule as setupEcho above.
+export function unattributedLabel(s: UnattributedSource): string {
+  return `unattributed · ${s.address} — syslog from an address no router has claimed`
+}
+
+// The remedy, which is the same one every time: name the source in
+// config.yaml. Kept beside the label so the card that states the fact
+// and the line that fixes it never drift apart.
+export const UNATTRIBUTED_FIX =
+  "Declare it under devices: in config.yaml, or check that the router's pushed address table carries it — a NAT'd relay's never will, so config is the answer there."

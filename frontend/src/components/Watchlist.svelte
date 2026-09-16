@@ -994,12 +994,24 @@
   // visible candidates came from, in first-seen order. Falls back to a
   // shorter heading when nothing names a router, rather than printing
   // "from what  pushed".
+  //
+  // #1170: this heading names what GET /api/devices lists, and nothing
+  // else. It used to print c.routerDevice straight off the candidates,
+  // which named five routers while Entities drew one -- a candidate can
+  // carry an id the registry has never had, and a bare syslog source is
+  // no longer a router anywhere. So the ids set the order, the registry
+  // sets the names, and an id it does not list is dropped.
   const routerNames = $derived.by((): string[] => {
+    const byId = new Map(appState.devices.map((d) => [d.id, d.name || d.id]))
     const seen: string[] = []
+    const names: string[] = []
     for (const c of suggestState.candidates) {
-      if (c.routerDevice && !seen.includes(c.routerDevice)) seen.push(c.routerDevice)
+      if (!c.routerDevice || seen.includes(c.routerDevice)) continue
+      seen.push(c.routerDevice)
+      const name = byId.get(c.routerDevice)
+      if (name) names.push(name)
     }
-    return seen
+    return names
   })
 
   const suggestHeading = $derived(

@@ -93,6 +93,27 @@ devices:
   change it. A router you have not listed can be renamed in the app, and
   that name is stored on the server, so everyone signed in sees it.
 
+  **Which identity wins, and why.** A device exists because you declared
+  it under `devices` here, or because an ingest token named it on a
+  push — either way it lands in the one list everything in MikroView
+  counts from. What decides which device a syslog source address belongs
+  to, strongest evidence first: (a) a `devices[].sourceIp` you set above
+  — you said so, so that wins outright; (b) failing that, a router's own
+  pushed `/ip/address` table — an address counts as that router's if it
+  appears in exactly one router's table; (c) otherwise the address is
+  left unattributed rather than guessed at. An unattributed address keeps
+  logging exactly as before, stored under its own address, but it is not
+  counted as a router — `/api/devices` lists it separately, and the UI
+  shows it as a source, not a device. To fix that: declare it under
+  `devices` above, or check that the router it belongs to is actually
+  pushing that address in its own address table — a NAT'd syslog relay
+  sitting in front of several routers never will, so `devices` is the
+  only way to name one of those. If two routers both push the same
+  address, it stays unattributed either way: their own tables disagree,
+  so nothing can tell which one sent the lines. Mint one ingest token per
+  router — two tokens for one physical router are two devices as far as
+  MikroView is concerned.
+
 ### How events are stored
 
 There is no database. Every event MikroView has seen lives in one
