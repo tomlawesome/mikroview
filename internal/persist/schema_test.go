@@ -403,6 +403,46 @@ func TestCheckFileSchemaWritesNothing(t *testing.T) {
 	})
 }
 
+// CheckSchemaDocument is CheckFileSchema's guard applied to a document's
+// raw bytes rather than one already on disk -- what -restore needs
+// before it writes a bundled schema.json into a data directory (#1244).
+// A bundle stamped newer than this build knows must be refused the same
+// way opening it directly would be, before anything is written.
+func TestCheckSchemaDocument(t *testing.T) {
+	t.Run("valid, not newer", func(t *testing.T) {
+		body, err := json.Marshal(fileSchemaDocument{Schema: CurrentSchema(), Version: "v1.2.3"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckSchemaDocument("/some/data/dir", body); err != nil {
+			t.Fatalf("CheckSchemaDocument on a current-schema document: %v", err)
+		}
+	})
+
+	t.Run("newer than this build knows", func(t *testing.T) {
+		body, err := json.Marshal(fileSchemaDocument{Schema: CurrentSchema() + 1, Version: "v42.0.0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = CheckSchemaDocument("/some/data/dir", body)
+		var tooNew *SchemaTooNewError
+		if !errors.As(err, &tooNew) {
+			t.Fatalf("err = %v, want a *SchemaTooNewError", err)
+		}
+		if tooNew.Stored != CurrentSchema()+1 || tooNew.WrittenBy != "v42.0.0" {
+			t.Errorf("SchemaTooNewError = %+v, want Stored %d WrittenBy v42.0.0", tooNew, CurrentSchema()+1)
+		}
+	})
+
+	t.Run("not valid JSON", func(t *testing.T) {
+		err := CheckSchemaDocument("/some/data/dir", []byte("{not valid json"))
+		var startup *StartupError
+		if !errors.As(err, &startup) {
+			t.Fatalf("err = %v, want a *StartupError", err)
+		}
+	})
+}
+
 // A stamp that cannot be written where nothing else was changed is
 // recoverable -- the caller is told which case it is so it can carry on
 // (see main's upgradeDataDirSchema) rather than refusing to start over a

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // TestRestoreOverwritesACorruptStoreDocument is issue #378's other
@@ -123,6 +126,129 @@ func TestRestoreWithoutForceRefusesToOverwriteAnExistingCorruptFile(t *testing.T
 	}
 	if string(got) != string(corrupt) {
 		t.Error("the existing file was modified despite the refusal")
+	}
+}
+
+// TestBackupRestoreCarriesSchemaSoNoMigrationReruns is #1244's Done-when:
+// a deployment already migrated to this build's current schema must come
+// back out of a restore stamped at that same schema, not as an
+// unstamped (schema 0) fresh install -- schema.json was never on
+// backedUpStores' list, so a restore into an empty data directory used
+// to read as schema 0 and hand upgradeDataDirSchema a data directory
+// that looks like it has never been migrated.
+//
+// This pins both halves: the restored schema document matches what was
+// backed up, and the next start's upgrade check does not rewrite it --
+// there is nothing pending, because there is nothing to redo.
+func TestBackupRestoreCarriesSchemaSoNoMigrationReruns(t *testing.T) {
+	ctx := context.Background()
+	srcDir := t.TempDir()
+	authPath := filepath.Join(srcDir, "users.json")
+	if err := os.WriteFile(authPath, []byte(`{"users":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An ordinary, already-migrated deployment: stamped at this build's
+	// current schema before any backup is taken.
+	if _, err := persist.MigrateFileSchema(ctx, srcDir, version); err != nil {
+		t.Fatalf("MigrateFileSchema (seeding the source data directory): %v", err)
+	}
+	wantSchema, wantVersion, err := persist.ReadFileSchema(srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantSchema == 0 {
+		t.Fatal("test setup: the source data directory did not actually get stamped")
+	}
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	backupPath := filepath.Join(srcDir, "mikroview.backup")
+	if code := runBackup([]string{backupPath, "--force"}); code != 0 {
+		t.Fatalf("runBackup = %d, want 0", code)
+	}
+
+	// Restore into a fresh directory -- a disaster recovery onto a new
+	// host, or the same host with its data directory gone.
+	dstDir := t.TempDir()
+	newAuthPath := filepath.Join(dstDir, "users.json")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", newAuthPath)
+
+	if code := runRestore([]string{backupPath}); code != 0 {
+		t.Fatalf("runRestore = %d, want 0", code)
+	}
+
+	gotSchema, gotVersion, err := persist.ReadFileSchema(dstDir)
+	if err != nil {
+		t.Fatalf("ReadFileSchema after restore: %v", err)
+	}
+	if gotSchema != wantSchema || gotVersion != wantVersion {
+		t.Fatalf("restored schema = %d written by %q, want %d written by %q -- "+
+			"a restore of already-migrated stores must not read as a fresh, unstamped install",
+			gotSchema, gotVersion, wantSchema, wantVersion)
+	}
+
+	before, err := os.ReadFile(filepath.Join(dstDir, persist.SchemaDocumentName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradeDataDirSchema(cfg); err != nil {
+		t.Fatalf("upgradeDataDirSchema after restore: %v", err)
+	}
+
+	after, err := os.ReadFile(filepath.Join(dstDir, persist.SchemaDocumentName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("the next start's upgrade check rewrote schema.json after a restore that was already "+
+			"at the current schema -- it should have found nothing pending:\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+// TestRestoreRefusesASchemaDocumentNewerThanThisBuildKnows is the
+// downgrade guard applied to a restore rather than a boot (#1244):
+// restoring a bundle stamped by a newer build must be the same refusal
+// as opening one, with nothing written, not a silent adoption of a
+// schema number this build does not know how to interpret.
+func TestRestoreRefusesASchemaDocumentNewerThanThisBuildKnows(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	tooNew, err := json.Marshal(struct {
+		Schema  int64  `json:"schema"`
+		Version string `json:"version"`
+	}{Schema: persist.CurrentSchema() + 1, Version: "v42.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	if err := writeBackup(backupPath, true, map[string][]byte{
+		"auth":          []byte(`{"users":[]}`),
+		schemaStoreName: tooNew,
+	}); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code == 0 {
+		t.Fatal("runRestore with a schema document newer than this build knows succeeded, want a refusal")
+	}
+	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		t.Error("runRestore wrote the auth store despite refusing on the schema document -- nothing should have changed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, persist.SchemaDocumentName)); !os.IsNotExist(err) {
+		t.Error("runRestore wrote schema.json despite refusing")
 	}
 }
 

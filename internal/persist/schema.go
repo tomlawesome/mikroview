@@ -260,6 +260,24 @@ func guardSchema(dir string, stored int64, writtenBy string, known int64) error 
 	return &SchemaTooNewError{DataDir: dir, Stored: stored, Known: known, WrittenBy: writtenBy}
 }
 
+// CheckSchemaDocument is CheckFileSchema's guard applied to a schema
+// document's raw bytes rather than to one already sitting in dir --
+// what -restore needs before it writes a bundled schema.json into a data
+// directory (#1244). A bundle stamped newer than this build knows is
+// refused the same way opening it directly would be, before anything on
+// disk is touched; a bundle with no schema.json never reaches here,
+// since that restores as schema 0 without needing a check at all.
+//
+// dir names the data directory the bundle would land in, for the error
+// message only -- CheckSchemaDocument never reads or writes it.
+func CheckSchemaDocument(dir string, data []byte) error {
+	var doc fileSchemaDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return &StartupError{Store: "the schema document", Location: "the backup bundle", Err: err}
+	}
+	return guardSchema(dir, doc.Schema, doc.Version, CurrentSchema())
+}
+
 // MigrateFileSchema brings the data directory up to CurrentSchema and
 // records it, running each pending migration's file step in order.
 //
