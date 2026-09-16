@@ -25,9 +25,10 @@
 import { session, feedSyslog, check, done, waitForStreamRows, goTo, DESKTOP_VIEWPORT } from './live-browser.mjs'
 
 // #717's fifteen are the *desktop* set, and since #1150 that has a width:
-// below 1500px a reader who has never opened the picker starts with MAC
-// and Interfaces off, because at 1366 the fifteen measured 1762px into a
-// 1308px box and the right-hand end of the table ran off the edge.
+// at 1600px and below a reader who has never opened the picker starts
+// with MAC, Interfaces and NAT off (#1150 measured 1366: the fifteen ran
+// 1762px into a 1308px box; #1117 re-measured 1600 and found the same
+// overrun with two hidden, so the line moved up and NAT joined them).
 // Playwright's own default is 1280, so the width this half is about has
 // to be asked for; the narrow start is asserted on its own terms at the
 // foot of this file.
@@ -104,7 +105,7 @@ check((await sheet.textContent())?.includes('Chain') ?? false, 'the sheet still 
 await page.keyboard.press('Escape')
 await sheet.waitFor({ state: 'hidden', timeout: 5000 })
 
-// --- Below 1500px it starts with thirteen, and says so (#1150) ----------
+// --- At 1600px and below it starts with twelve, and says so (#1150, #1117)
 //
 // Not a second table and not a second mechanism: the width only decides
 // where a reader who has never opened `columns ▸` starts, and it is read
@@ -125,8 +126,9 @@ const narrowLabels = await page.$$eval('.grid .header-cell .label-text', (els) =
   els.map((e) => e.textContent.trim()),
 )
 check(
-  JSON.stringify(narrowLabels) === JSON.stringify(headerLabels.filter((l) => l !== 'MAC' && l !== 'Interfaces')),
-  `at 1366 the table starts with the desktop set less MAC and Interfaces, in the same order -- got ${JSON.stringify(narrowLabels)}`,
+  JSON.stringify(narrowLabels) ===
+    JSON.stringify(headerLabels.filter((l) => l !== 'MAC' && l !== 'Interfaces' && l !== 'NAT')),
+  `at 1366 the table starts with the desktop set less MAC, Interfaces and NAT, in the same order -- got ${JSON.stringify(narrowLabels)}`,
 )
 
 // #1197 (owner ruling, 2026-09-13): columns ▸ stands on the whisper's own
@@ -137,17 +139,18 @@ check(
 // no expand.
 check(await page.isHidden('#filterbar-strip'), 'the columns ▸ trigger is reached with the filter fold still closed')
 
-// Nothing silent about it: the picker draws both unticked, because every
-// checkbox in it reads the same isColumnVisible the table does.
+// Nothing silent about it: the picker draws all three unticked, because
+// every checkbox in it reads the same isColumnVisible the table does.
 // button.tf-columns finds it on the hand regardless -- the class travelled
 // with the trigger when it moved.
 await page.click('button.tf-columns')
 const macBox = page.locator('.col-panel input[aria-label="Source MAC column"]')
 const ifaceBox = page.locator('.col-panel input[aria-label="Interfaces column"]')
+const natBox = page.locator('.col-panel input[aria-label="NAT column"]')
 await macBox.waitFor({ timeout: 5000 })
 check(
-  !(await macBox.isChecked()) && !(await ifaceBox.isChecked()),
-  'the columns ▸ picker draws MAC and Interfaces unticked -- off, not missing',
+  !(await macBox.isChecked()) && !(await ifaceBox.isChecked()) && !(await natBox.isChecked()),
+  'the columns ▸ picker draws MAC, Interfaces and NAT unticked -- off, not missing',
 )
 
 // And ticking one back on is the ordinary path, not a narrow-screen one.
