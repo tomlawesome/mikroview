@@ -1,4 +1,8 @@
-# Contributing
+# Developing MikroView
+
+How to run, feed and test a checkout. Outside contributions are not
+accepted (see the README), so this is for the owner, the agents that
+work here, and anyone maintaining a fork.
 
 ## Local development
 
@@ -39,7 +43,7 @@ scripts/live-env.sh down
 
 For the real thing rather than fixtures, `make live-routeros-container`
 boots a genuine RouterOS CHR and points it at the shipped container --
-see `.claude/skills/live-check/SKILL.md`.
+see `../.claude/skills/live-check/SKILL.md`.
 
 ## Testing expectations
 
@@ -52,48 +56,22 @@ see `.claude/skills/live-check/SKILL.md`.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md).
-
-## Code contributions
-
-**MikroView doesn't accept outside pull requests.** That isn't hostility
-or a comment on anyone's code — it's simply that reviewing contributions
-properly takes time this project doesn't have, and reviewing them badly
-would be worse than not reviewing them at all.
-
-**There is no public bug tracker at present.** Development happens on a
-private GitLab and this repository is its mirror; GitHub Issues are
-switched off. Bug reports, feature requests and questions have nowhere
-to go for now — that may change, and this file will say so when it
-does. Security problems are the exception: report them privately, see
-[SECURITY.md](SECURITY.md#reporting-a-vulnerability).
-
-**You're free to fork.** The AGPL gives you that right and nothing here
-restricts it. If you want your own version, maintain it — you just need
-to keep it AGPL and publish your source (see [LICENSE](LICENSE)).
-
-If an exception is ever made and a pull request is accepted, then by
-submitting it you confirm the work is yours to contribute, and you
-license it under the AGPL v3.0 **and** additionally grant Tom Bridgwater-Lawson the
-right to license it under other terms. That second part is what keeps
-the commercial licence possible (see
-[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). You keep the copyright
-in your own work either way.
+See [SECURITY.md](../SECURITY.md).
 
 ## Security by design
 
 New features are researched before they are designed — including an
 explicit CVE search and a comparison against known secure and insecure
 implementations. See
-[docs/security-by-design.md](docs/security-by-design.md) for what that
+[docs/security-by-design.md](security-by-design.md) for what that
 requires and why.
 
 ## Project records
 
-- [docs/quality-strategy.md](docs/quality-strategy.md) — what the
+- [docs/quality-strategy.md](quality-strategy.md) — what the
   review and gate process is
-- [docs/flakes.md](docs/flakes.md) — the flake record: checks that
+- [docs/flakes.md](flakes.md) — the flake record: checks that
   failed and passed again on unchanged code
-- [docs/routeros-chr-exercise.md](docs/routeros-chr-exercise.md) — the
+- [docs/routeros-chr-exercise.md](routeros-chr-exercise.md) — the
   RouterOS CHR exercise the pipeline runs
-- [docs/decisions/](docs/decisions/) — design and delivery decisions
+- [docs/decisions/](decisions/) — design and delivery decisions

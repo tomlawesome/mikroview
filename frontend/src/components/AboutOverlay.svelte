@@ -88,14 +88,6 @@
           </a>.
         </p>
 
-        <p class="commercial">
-          A commercial licence is available if you want to use MikroView in a
-          way the AGPL doesn't permit — see
-          <a href="{SOURCE_URL}/blob/main/COMMERCIAL-LICENSE.md" target="_blank" rel="noopener noreferrer">
-            COMMERCIAL-LICENSE.md
-          </a>.
-        </p>
-
         <!--
           Third-party attribution, distinct from the AGPL notices above:
           those are MikroView's licence to you, this is the copyright and
@@ -181,12 +173,6 @@
     color: var(--fg-muted);
     font-family: var(--font-mono, monospace);
     font-size: 0.8rem;
-  }
-
-  .commercial {
-    color: var(--fg-muted);
-    border-top: 1px solid var(--border);
-    padding-top: 0.75rem;
   }
 
   .third-party {
