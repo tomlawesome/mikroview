@@ -18,6 +18,21 @@ rewritten.
 
 ### Added
 
+- **After an upgrade, MikroView says so and tells you what to paste
+  again** (#1240). A calm line at the top of the page -- `upgraded from
+  v0.4.0 · paste step 1 of the setup again on each router` -- with
+  **open setup**, which opens the wizard at step 1 with this version's
+  script, and **done**, which puts it away. The gap it closes is a real
+  one: an install upgraded through three releases said nothing, and the
+  router quietly stayed on the old setup (#1206). `done` is recorded on
+  the server, not in your browser, so one admin settles it for every
+  session and it stays settled across restarts. Once routers report
+  their own setup (#1241) the line counts them -- `2 of 3 routers still
+  on the old setup` -- and clears itself when the last one catches up,
+  with nothing to press. Nothing is shown on a first install, and only
+  admins see it. `GET /api/upgrade` and `POST /api/upgrade/acknowledge`;
+  see [docs/upgrades.md](docs/upgrades.md).
+
 - **Proto and Interface are pickers now, over the values this instance
   has actually seen** (#1226). They were the last two filters in the
   stream's strip with no list behind them: you typed `tcp`, or your best
@@ -91,6 +106,15 @@ rewritten.
 
 ### Changed
 
+- **A router that only ever pushed is now in the same device list
+  everything counts from** (#1170). Before this, a push from an
+  undeclared router's ingest token had no effect on that list at all, so
+  the Watchlist header could name five routers while the Entities page
+  showed one. A syslog source address is now attributed to a router by
+  `devices[].sourceIp` first, then by the router's own pushed
+  `/ip/address` table if the address belongs to exactly one router's
+  table, and an address neither claims is shown as an unattributed
+  source instead of being counted as a router.
 - **A flag's confidence is now a rating in its drawer, not a number on
   its row** (#1231). Beside the type — `▲ ACTIVITY SPIKE 72`, one column
   away from COUNT's `26×` — the figure read as a count of events. It

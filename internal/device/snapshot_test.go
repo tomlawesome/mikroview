@@ -20,6 +20,15 @@ func find(devices []Info, sourceIP string) (Info, bool) {
 	return Info{}, false
 }
 
+func findSource(sources []Source, address string) (Source, bool) {
+	for _, s := range sources {
+		if s.Address == address {
+			return s, true
+		}
+	}
+	return Source{}, false
+}
+
 // exportFrom builds the registry a previous process would have had and
 // returns its snapshot bytes plus the time the snapshot was taken.
 func exportFrom(t *testing.T, r *Registry) (json.RawMessage, time.Time) {
@@ -40,7 +49,8 @@ func TestSnapshotRoundTripKeepsFirstSeenAcrossARestart(t *testing.T) {
 	firstSeen := time.Now().Add(-90 * 24 * time.Hour).Truncate(time.Second)
 	before.Resolve("192.168.1.1", firstSeen)
 	before.Resolve("192.168.1.1", firstSeen.Add(time.Hour))
-	before.Resolve("10.0.0.5", firstSeen.Add(2*time.Hour))
+	before.Ensure("hap-ax3", firstSeen.Add(2*time.Hour))
+	before.Resolve("10.0.0.5", firstSeen.Add(3*time.Hour))
 
 	raw, taken := exportFrom(t, before)
 
@@ -51,7 +61,7 @@ func TestSnapshotRoundTripKeepsFirstSeenAcrossARestart(t *testing.T) {
 
 	devices := after.List()
 	if len(devices) != 2 {
-		t.Fatalf("registry holds %d devices (%+v), want the configured one and the discovered one", len(devices), devices)
+		t.Fatalf("registry holds %d devices (%+v), want the configured one and the one that pushed", len(devices), devices)
 	}
 
 	core, ok := find(devices, "192.168.1.1")
@@ -71,18 +81,64 @@ func TestSnapshotRoundTripKeepsFirstSeenAcrossARestart(t *testing.T) {
 		t.Errorf("identity = %+v, want config.yaml's ID, name and configured flag", core)
 	}
 
-	discovered, ok := find(devices, "10.0.0.5")
+	var pushed Info
+	for _, d := range devices {
+		if d.ID == "hap-ax3" {
+			pushed = d
+		}
+	}
+	if pushed.ID == "" {
+		t.Fatalf("the device an ingest token named is missing after the restore: %+v", devices)
+	}
+	if pushed.Configured {
+		t.Errorf("the pushing device came back configured: %+v", pushed)
+	}
+	if !pushed.FirstSeen.Equal(firstSeen.Add(2 * time.Hour)) {
+		t.Errorf("FirstSeen = %v, want the first push at %v", pushed.FirstSeen, firstSeen.Add(2*time.Hour))
+	}
+
+	// The unattributed source keeps its own dates and line count, and
+	// is still not a router (#1170).
+	src, ok := findSource(after.Unattributed(), "10.0.0.5")
 	if !ok {
-		t.Fatalf("the auto-discovered device is missing after the restore")
+		t.Fatalf("the unattributed source is missing after the restore: %+v", after.Unattributed())
 	}
-	if discovered.Configured {
-		t.Errorf("the discovered device came back configured: %+v", discovered)
+	if !src.FirstSeen.Equal(firstSeen.Add(3*time.Hour)) || src.Lines != 1 {
+		t.Errorf("restored source = %+v, want its own first-seen and one line", src)
 	}
-	if discovered.ID != "10.0.0.5" || discovered.Name != "10.0.0.5" {
-		t.Errorf("discovered identity = %+v, want the address, exactly as Resolve mints it", discovered)
+}
+
+// A snapshot written before #1170 holds every syslog source as a device
+// named after its own IP -- the row that issue removed. The restore
+// migrates it to the unattributed source it always was, history kept,
+// rather than resurrecting a row nothing in the app has a place for.
+func TestAPre1170DiscoveredRowComesBackAsASource(t *testing.T) {
+	taken := time.Now().Truncate(time.Second)
+	raw, err := json.Marshal(registryState{Devices: []Info{{
+		ID:         "172.23.0.1",
+		Name:       "172.23.0.1",
+		SourceIP:   "172.23.0.1",
+		FirstSeen:  taken.Add(-72 * time.Hour),
+		LastSeen:   taken.Add(-time.Minute),
+		EventCount: 412,
+	}}})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
 	}
-	if discovered.EventCount != 1 {
-		t.Errorf("EventCount = %d, want 1", discovered.EventCount)
+
+	r := NewRegistry(nil)
+	if err := r.SnapshotPart().Import(raw, taken, time.Now()); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if devices := r.List(); len(devices) != 0 {
+		t.Errorf("List() = %+v, want no devices: an address that merely sent lines is not a router", devices)
+	}
+	src, ok := findSource(r.Unattributed(), "172.23.0.1")
+	if !ok {
+		t.Fatalf("Unattributed() = %+v, want the migrated source", r.Unattributed())
+	}
+	if src.Lines != 412 || !src.FirstSeen.Equal(taken.Add(-72*time.Hour)) {
+		t.Errorf("migrated source = %+v, want its lines and first-seen carried over", src)
 	}
 }
 
@@ -90,21 +146,27 @@ func TestSnapshotRoundTripKeepsFirstSeenAcrossARestart(t *testing.T) {
 // the registry in a state the ingest path can carry on from, rather than
 // one that only reads correctly until the next event.
 func TestResolveKeepsCountingFromTheRestoredTotal(t *testing.T) {
-	before := NewRegistry(nil)
+	configured := []config.Device{{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"}}
+	before := NewRegistry(configured)
+	before.Resolve("192.168.1.1", time.Now().Add(-time.Hour))
+	before.Resolve("192.168.1.1", time.Now().Add(-time.Hour))
 	before.Resolve("10.0.0.5", time.Now().Add(-time.Hour))
 	before.Resolve("10.0.0.5", time.Now().Add(-time.Hour))
 	raw, taken := exportFrom(t, before)
 
-	after := NewRegistry(nil)
+	after := NewRegistry(configured)
 	if err := after.SnapshotPart().Import(raw, taken, time.Now()); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 	now := time.Now()
-	if id := after.Resolve("10.0.0.5", now); id != "10.0.0.5" {
+	if id := after.Resolve("192.168.1.1", now); id != "core" {
 		t.Errorf("Resolve = %q, want the restored device's own ID", id)
 	}
+	if id := after.Resolve("10.0.0.5", now); id != "10.0.0.5" {
+		t.Errorf("Resolve = %q, want the restored source's own address", id)
+	}
 
-	got, ok := find(after.List(), "10.0.0.5")
+	got, ok := find(after.List(), "192.168.1.1")
 	if !ok {
 		t.Fatalf("device missing")
 	}
@@ -113,6 +175,14 @@ func TestResolveKeepsCountingFromTheRestoredTotal(t *testing.T) {
 	}
 	if !got.LastSeen.Equal(now) {
 		t.Errorf("LastSeen = %v, want the event just resolved at %v", got.LastSeen, now)
+	}
+
+	src, ok := findSource(after.Unattributed(), "10.0.0.5")
+	if !ok {
+		t.Fatalf("source missing")
+	}
+	if src.Lines != 3 || !src.LastSeen.Equal(now) {
+		t.Errorf("restored source = %+v, want the 2 restored lines plus the 1 just resolved", src)
 	}
 }
 
@@ -142,11 +212,12 @@ func TestADeviceDroppedFromConfigIsNotResurrected(t *testing.T) {
 	}
 }
 
-// TestAPreviouslyDiscoveredDeviceTakesTheConfiguredIdentity is the
-// opposite direction: the operator has since declared a router that had
-// been auto-discovered, so config.yaml supplies the identity and the
-// snapshot supplies its history.
-func TestAPreviouslyDiscoveredDeviceTakesTheConfiguredIdentity(t *testing.T) {
+// TestAPreviouslyUnattributedSourceTakesTheConfiguredIdentity is the
+// opposite direction: the operator has since declared the address that
+// had been arriving unattributed, so config.yaml supplies the identity
+// and the snapshot supplies its history -- the declaration is the
+// answer to the question the unattributed row was asking.
+func TestAPreviouslyUnattributedSourceTakesTheConfiguredIdentity(t *testing.T) {
 	before := NewRegistry(nil)
 	seen := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
 	before.Resolve("10.0.0.5", seen)
@@ -165,33 +236,34 @@ func TestAPreviouslyDiscoveredDeviceTakesTheConfiguredIdentity(t *testing.T) {
 		t.Errorf("identity = %+v, want config.yaml's, which wins", got)
 	}
 	if !got.FirstSeen.Equal(seen) || got.EventCount != 1 {
-		t.Errorf("history = %+v, want the discovered device's first-seen and count", got)
+		t.Errorf("history = %+v, want the source's first-seen and line count", got)
+	}
+	if len(after.Unattributed()) != 0 {
+		t.Errorf("Unattributed() = %+v, want none: the address is declared now", after.Unattributed())
 	}
 }
 
-// TestImportRespectsTheDiscoveryCap: a snapshot must not be able to put
-// more discovered devices in the registry than a running one would hold,
-// since its contents ultimately come from whoever can reach the syslog
-// listener.
-func TestImportRespectsTheDiscoveryCap(t *testing.T) {
-	orig := maxDiscoveredDevices
-	maxDiscoveredDevices = 50
-	defer func() { maxDiscoveredDevices = orig }()
+// TestImportRespectsTheUnattributedCap: a snapshot must not be able to
+// put more unattributed sources in the registry than a running one
+// would hold, since its contents ultimately come from whoever can reach
+// the syslog listener.
+func TestImportRespectsTheUnattributedCap(t *testing.T) {
+	orig := maxUnattributedSources
+	maxUnattributedSources = 50
+	defer func() { maxUnattributedSources = orig }()
 
 	taken := time.Now()
-	devices := make([]Info, 0, 500)
+	sources := make([]Source, 0, 500)
 	for i := 0; i < 500; i++ {
 		ip := fmt.Sprintf("10.1.%d.%d", i/256, i%256)
-		devices = append(devices, Info{
-			ID:         ip,
-			Name:       ip,
-			SourceIP:   ip,
-			FirstSeen:  taken.Add(-time.Duration(i) * time.Minute),
-			LastSeen:   taken.Add(-time.Duration(i) * time.Minute),
-			EventCount: 1,
+		sources = append(sources, Source{
+			Address:   ip,
+			Lines:     1,
+			FirstSeen: taken.Add(-time.Duration(i) * time.Minute),
+			LastSeen:  taken.Add(-time.Duration(i) * time.Minute),
 		})
 	}
-	raw, err := json.Marshal(registryState{Devices: devices})
+	raw, err := json.Marshal(registryState{Sources: sources})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -200,24 +272,22 @@ func TestImportRespectsTheDiscoveryCap(t *testing.T) {
 	if err := r.SnapshotPart().Import(raw, taken, time.Now()); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	if held := len(r.List()); held > maxDiscoveredDevices {
-		t.Errorf("restored %d discovered devices against a cap of %d", held, maxDiscoveredDevices)
+	if held := len(r.Unattributed()); held > maxUnattributedSources {
+		t.Errorf("restored %d unattributed sources against a cap of %d", held, maxUnattributedSources)
 	}
 }
 
 // TestImportClampsTimestampsToWhenTheSnapshotWasTaken: nothing in a
 // snapshot can be newer than the snapshot, and a future LastSeen would
-// make an entry outlive every genuine device, since the discovery cap
-// evicts by oldest LastSeen.
+// make an entry outlive every genuine one, since the cap evicts by
+// oldest LastSeen.
 func TestImportClampsTimestampsToWhenTheSnapshotWasTaken(t *testing.T) {
 	taken := time.Now().Truncate(time.Second)
-	raw, err := json.Marshal(registryState{Devices: []Info{{
-		ID:         "10.0.0.5",
-		Name:       "10.0.0.5",
-		SourceIP:   "10.0.0.5",
-		FirstSeen:  taken.Add(-time.Hour),
-		LastSeen:   taken.Add(365 * 24 * time.Hour),
-		EventCount: 1,
+	raw, err := json.Marshal(registryState{Sources: []Source{{
+		Address:   "10.0.0.5",
+		FirstSeen: taken.Add(-time.Hour),
+		LastSeen:  taken.Add(365 * 24 * time.Hour),
+		Lines:     1,
 	}}})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -227,9 +297,9 @@ func TestImportClampsTimestampsToWhenTheSnapshotWasTaken(t *testing.T) {
 	if err := r.SnapshotPart().Import(raw, taken, time.Now()); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	got, ok := find(r.List(), "10.0.0.5")
+	got, ok := findSource(r.Unattributed(), "10.0.0.5")
 	if !ok {
-		t.Fatalf("device missing")
+		t.Fatalf("source missing")
 	}
 	if !got.LastSeen.Equal(taken) {
 		t.Errorf("LastSeen = %v, want it clamped to the snapshot's own taken time %v", got.LastSeen, taken)
@@ -249,8 +319,8 @@ func TestImportRefusesARegistryThatHasAlreadySeenTraffic(t *testing.T) {
 	if err := r.SnapshotPart().Import(raw, time.Now(), time.Now()); err == nil {
 		t.Errorf("Import over a live registry succeeded, want a refusal -- merging then would inflate live counts")
 	}
-	if len(r.List()) != 1 {
-		t.Errorf("the refused import still changed the registry: %+v", r.List())
+	if len(r.Unattributed()) != 1 || len(r.List()) != 0 {
+		t.Errorf("the refused import still changed the registry: %+v / %+v", r.List(), r.Unattributed())
 	}
 }
 
@@ -265,6 +335,7 @@ func TestExportIsStableAcrossCalls(t *testing.T) {
 	r := NewRegistry([]config.Device{{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"}})
 	for i := 0; i < 20; i++ {
 		r.Resolve(fmt.Sprintf("10.0.0.%d", i), time.Now())
+		r.Ensure(fmt.Sprintf("router-%d", i), time.Now())
 	}
 	first, err := r.SnapshotPart().Export()
 	if err != nil {

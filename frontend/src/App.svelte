@@ -16,6 +16,9 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
+  // The upgrade notice (#1240): directly under the config-problem banner
+  // in the same stack, and admin-only like it -- see the component.
+  import UpgradeNotice from './components/UpgradeNotice.svelte'
   import Fleet from './components/Fleet.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
@@ -347,6 +350,7 @@
       <ConnectionBanner />
       <IngestLossDrawer />
       <ConfigProblemBanner />
+      <UpgradeNotice />
       <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
         {#if journeyState.phase === 'attach'}
           <JourneyAttach />

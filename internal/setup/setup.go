@@ -88,6 +88,12 @@ type Store struct {
 	// written against this value once it is set, never against the
 	// browser's own host.
 	address string
+	// upgrade is the build crossing this instance is still living with
+	// (#1240) and whether an admin has said they have dealt with it --
+	// see upgrade.go. Nil on a first install and on every instance that
+	// has never crossed a version. Persisted beside the address, for the
+	// reasons that file's header gives.
+	upgrade *Upgrade
 	// backend is where the marks are persisted, or nil when persistence
 	// is switched off. Only the marks go through it -- the observations
 	// above are re-made every run by definition.
@@ -184,6 +190,13 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 				continue
 			}
 			s.reports[r.Device] = r
+		}
+		// Filtered on the way in like everything above: a crossing
+		// missing either end of it describes nothing, and a notice
+		// reading "upgraded from  ·" is worse than no notice.
+		if u := file.Upgrade; u != nil && u.Previous != "" && u.Current != "" && u.Previous != u.Current {
+			kept := *u
+			s.upgrade = &kept
 		}
 		return nil
 	})
@@ -426,6 +439,12 @@ type storeFile struct {
 	// sent one. Omitted when empty so a ledger written before this
 	// existed round-trips unchanged.
 	Reports []LoggingReport `json:"reports,omitempty"`
+	// Upgrade is #1240's build crossing and its acknowledgement -- see
+	// upgrade.go. A pointer, and omitted when absent, so "this instance
+	// has never crossed a version" stays distinguishable from a crossing
+	// with empty version strings, and an older document round-trips
+	// unchanged.
+	Upgrade *Upgrade `json:"upgrade,omitempty"`
 }
 
 // NoteMark records one step decision, replacing any previous mark for
@@ -488,6 +507,7 @@ func (s *Store) persistLocked() {
 		Marks:   append(s.marksLocked(), s.witnessedLocked()...),
 		Address: s.address,
 		Reports: s.reportsLocked(),
+		Upgrade: s.upgrade,
 	}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding the setup ledger for persistence failed: %v -- this decision exists only in memory and will be lost on restart", err))

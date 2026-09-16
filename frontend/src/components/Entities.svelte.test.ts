@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity, Flag, FlagType, RuleUsage } from '../lib/types'
+import type { Entity, Flag, FlagType, RuleUsage, UnattributedSource } from '../lib/types'
 import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
@@ -33,6 +33,9 @@ const fetchRouterRules = vi.fn(async (): Promise<{ available: boolean; rules: Ro
   available: false,
   rules: [],
 }))
+// #1170: GET /api/devices' second list, fetched on its own so
+// fetchDevices' signature (and every mock of it) stays as it was.
+const fetchUnattributedSources = vi.fn(async (): Promise<UnattributedSource[]> => [])
 
 vi.mock('../lib/api', () => ({
   fetchEntities: () => fetchEntities(),
@@ -42,6 +45,7 @@ vi.mock('../lib/api', () => ({
   fetchRouterRules: () => fetchRouterRules(),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRules: () => fetchRules(),
+  fetchUnattributedSources: () => fetchUnattributedSources(),
   fetchSetupStatus: vi.fn(
     async () =>
       ({
@@ -78,6 +82,7 @@ import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { authState } from '../lib/auth.svelte'
+import { UNATTRIBUTED_FIX, unattributedLabel } from '../lib/fleet'
 import Entities from './Entities.svelte'
 
 async function settle() {
@@ -93,6 +98,7 @@ beforeEach(() => {
   upsertEntity.mockResolvedValue(null)
   fetchRules.mockResolvedValue([])
   fetchRouterRules.mockResolvedValue({ available: false, rules: [] })
+  fetchUnattributedSources.mockResolvedValue([])
   appState.devices = []
   appState.events = []
   appState.initialLoadDone = true
@@ -678,6 +684,21 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
   })
 
+  // #1241: the setup line Fleet.svelte shows on every card was missing
+  // here, on exactly the card most likely to need it -- a router
+  // discovered by its own push and never declared in config.yaml is the
+  // common case, and it is the one that has only ever been set up by
+  // pasting the wizard's step 1.
+  it('carries the same setup line Fleet shows, when the router reports one behind (#1241)', async () => {
+    appState.devices = [
+      { ...unregistered[0], setup: { standing: 'behind', scriptVersion: 1, currentVersion: 2 } },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.unreg')?.textContent).toContain('setup behind · paste step 1 again')
+  })
+
   it('keeps the berth alongside it, collapsed, rather than giving way (#828)', async () => {
     appState.devices = unregistered
     const { container } = render(Entities)
@@ -976,5 +997,92 @@ describe('Entities ports view (#681, reachable again since #804)', () => {
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('syncthing'))
     expect(row).toBeTruthy()
     expect(row?.textContent).toContain('8384')
+  })
+})
+
+// #1170 (one device registry): a syslog source that matches no
+// configured devices[].sourceIp, and that no single router's pushed
+// address table claims, is no longer invented as a device row. It
+// arrives in GET /api/devices' `unattributed` list and is drawn here as
+// what it is -- a source, never a router. These tests are as much about
+// what the card is NOT (no .unreg, no router vocabulary, no router
+// count) as what it says.
+describe('Entities unattributed sources (#1170)', () => {
+  function source(over: Partial<UnattributedSource> = {}): UnattributedSource {
+    return {
+      address: '172.23.0.1',
+      lines: 412,
+      firstSeen: '2026-09-16T09:00:00Z',
+      lastSeen: '2026-09-16T10:00:00Z',
+      ...over,
+    }
+  }
+
+  it('draws one card per unattributed source: what it is, how many lines it sent, and the fix', async () => {
+    fetchUnattributedSources.mockResolvedValue([source()])
+    const { container } = render(Entities)
+    await settle()
+
+    const cards = [...container.querySelectorAll('.fcard.unattr')]
+    expect(cards).toHaveLength(1)
+    const text = cards[0].textContent ?? ''
+    // The card states the label's two halves in its own layout -- the
+    // head names the address, the row underneath says what it means.
+    expect(unattributedLabel(source())).toBe(
+      'unattributed · 172.23.0.1 — syslog from an address no router has claimed',
+    )
+    expect(cards[0].querySelector('.fhead b')?.textContent).toBe('unattributed · 172.23.0.1')
+    expect(text).toContain('syslog from an address no router has claimed')
+    expect(text).toContain('412 lines seen')
+    expect(text).toContain('first seen')
+    expect(text).toContain(UNATTRIBUTED_FIX)
+  })
+
+  it('says "1 line seen", never "1 lines seen"', async () => {
+    fetchUnattributedSources.mockResolvedValue([source({ lines: 1 })])
+    const { container } = render(Entities)
+    await settle()
+
+    const text = container.querySelector('.fcard.unattr')?.textContent ?? ''
+    expect(text).toContain('1 line seen')
+    expect(text).not.toContain('1 lines seen')
+  })
+
+  it('is not drawn as a router: no .unreg card, no router card, and the chip says so', async () => {
+    fetchUnattributedSources.mockResolvedValue([source()])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelectorAll('.fcard.unreg')).toHaveLength(0)
+    expect(container.querySelectorAll('.fcard.live')).toHaveLength(0)
+    const card = container.querySelector('.fcard.unattr') as HTMLElement
+    expect(card.classList.contains('unreg')).toBe(false)
+    expect(card.querySelector('.fstate')?.textContent).toContain('NOT A ROUTER')
+    expect(card.querySelector('.fstate')?.className).toContain('quiet')
+    // None of the registered/unregistered router vocabulary.
+    expect(card.textContent).not.toContain('PUSHING')
+    expect(card.textContent).not.toContain('RouterOS')
+  })
+
+  it('carries the conflict explanation only when the server sends one', async () => {
+    const explanation =
+      'border-rb5009 and lab-crs have both pushed this address as their own, so nothing here can tell which of them sent these lines.'
+    fetchUnattributedSources.mockResolvedValue([source({ explanation })])
+    const { container } = render(Entities)
+    await settle()
+    expect(container.querySelector('.fcard.unattr')?.textContent).toContain(explanation)
+
+    fetchUnattributedSources.mockResolvedValue([source()])
+    const plain = render(Entities)
+    await settle()
+    expect(plain.container.querySelector('.fcard.unattr')?.textContent).not.toContain('both pushed this address')
+  })
+
+  it('leaves the row out entirely when the read fails', async () => {
+    fetchUnattributedSources.mockRejectedValue(new Error('nope'))
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelectorAll('.fcard.unattr')).toHaveLength(0)
   })
 })

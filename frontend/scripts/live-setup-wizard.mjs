@@ -33,6 +33,15 @@ await waitForStreamRows(page, 20)
 // pick because the poll that produces these is the only thing that
 // refills it, and missing the last one would make the comparison itself
 // the flake.
+//
+// #1170 means a pre-pick response is no longer reliably version-less:
+// once earlier scenarios in the same shard (router-a, router-b,
+// router-burst) have pushed, they are real registry devices, and the
+// wizard can derive a RouterOS version from their pushes -- so every
+// commands request, pre-pick included, may carry `version` on its own.
+// The pick is identified by array position (commandsSeen.length at the
+// moment of the pick), not by an absence of `version` that #1170 no
+// longer guarantees.
 const commandsSeen = []
 page.on('response', (r) => {
   if (!r.url().includes('/api/setup/commands')) return
@@ -183,6 +192,24 @@ const pickedLabel = versionOptions.find((label, i) => i > 0)
 // what was actually picked -- not merely "some commands request
 // answered" -- is what ties the wait to the exchange this step needs.
 const pickedValue = await versionSelect.locator('option').nth(1).getAttribute('value')
+// commandsSeen is filled by a page.on('response') listener that reads
+// each response body over Playwright's own channel -- a separate trip
+// from the one the app's own fetch already resolved to render the step
+// blocks above, and sometimes the slower of the two. Waited for
+// explicitly here rather than assumed already landed, so the snapshot
+// below is never taken while that listener is still catching up on the
+// mount request.
+{
+  const deadline = Date.now() + 10000
+  while (commandsSeen.length === 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+// Snapshotted immediately before the pick fires: commandsSeen[seenBeforePick - 1]
+// is whatever response was last recorded, carrying whatever version it
+// carried -- see commandsSeen's own comment for why that can no longer
+// be assumed version-less under #1170.
+const seenBeforePick = commandsSeen.length
 const [pickResponse] = await Promise.all([
   page.waitForResponse(
     (r) => r.url().includes('/api/setup/commands') && r.request().postDataJSON()?.version === pickedValue,
@@ -222,11 +249,13 @@ check(reseen.length > 0, `the wizard still renders command blocks after picking 
 // dependency on which step happens to be open when a block is scraped.
 const DIALECT_STEPS = ['caTrust', 'syslog', 'ruleTagging', 'schedule']
 const dialectSteps = (body) => DIALECT_STEPS.map((k) => body.steps[k].commands)
-const beforePick = commandsSeen.filter((c) => !c.version).at(-1)
+const beforePick = seenBeforePick > 0 ? commandsSeen[seenBeforePick - 1] : undefined
 // Opening the modal issues one of these before anything is picked, and
-// the poll issues more while the step walk above runs, so this is only
-// ever absent if the wizard stopped asking at all -- worth failing on
-// rather than reading past.
+// the poll issues more while the step walk above runs, so seenBeforePick
+// is only ever 0 if the wizard stopped asking at all -- worth failing on
+// rather than reading past. Identified by position, not by the absence
+// of `version`: #1170 means an earlier scenario's pushed device can give
+// the wizard a version to report before the pick too.
 check(beforePick !== undefined, 'a commands response was recorded before the pick, to compare it against')
 if (beforePick) {
   const before = dialectSteps(beforePick.body)
