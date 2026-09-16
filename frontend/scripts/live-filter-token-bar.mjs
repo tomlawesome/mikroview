@@ -14,7 +14,7 @@
 // own rows cannot be confused with what a sibling scenario pushed through
 // the same shared instance.
 
-import { session, feedRaw, check, done, waitForStreamRows } from './live-browser.mjs'
+import { session, feedRaw, check, done, waitForStreamRows, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -180,6 +180,12 @@ await page.evaluate(() => {
 })
 await page.reload({ waitUntil: 'networkidle' })
 await page.waitForSelector('#main-content', { timeout: 15000 })
+// A bare reload lands back on the app's own default view (the fall,
+// since #616), not wherever the scenario last navigated to -- so the
+// Stream card has to be reached again, the same way live-filter-seen-
+// values.mjs does after its own reload, rather than assuming the reload
+// preserved the view.
+await goTo(page, 'Stream')
 await page.waitForSelector(TERM, { timeout: 15000 })
 await page.click(`${BOX} .fsaved`)
 await page.click(`${BOX} .fpname:text-is("mv1246 scans")`)
