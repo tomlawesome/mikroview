@@ -77,10 +77,9 @@ your data lives are in [docs/install.md](docs/install.md).
 
 MikroView is free and open source under the
 [GNU AGPL v3.0](LICENSE). You can use, modify and self-host it at no
-cost, including inside a business. If you want to bundle MikroView into
-a commercial product, offer it as a hosted service, or ship changes
-without publishing them, a commercial licence is available — see
-[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+cost. If you change it and offer it to others over a network, the AGPL
+asks you to publish your changes under the same licence. There is no
+other licence on offer.
 
 MikroView is an independent, community project, not affiliated with or
 endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.
