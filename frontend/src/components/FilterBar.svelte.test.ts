@@ -613,6 +613,26 @@ describe('FilterBar, the token bar (#1246)', () => {
     expect(menuNames()).toEqual(['device', 'action', 'chain', 'proto', 'interface', 'port', 'source', 'destination'])
   })
 
+  // The menu goes with the focus: it hangs over the table's first
+  // columns, so left open after the caret has gone it covers rows the
+  // reader is trying to reach (live-token-copy's row hover found it).
+  it('closes the menu when focus leaves the box, but not when it moves to a menu item', async () => {
+    render(FilterBar)
+    await focusBox()
+    expect(menu()).toBeTruthy()
+
+    // Into the menu's own item: still the box's business, stays open.
+    const item = document.querySelector('.token-menu .tm-item') as HTMLElement
+    await fireEvent.focusOut(getBox(), { relatedTarget: item })
+    flushSync()
+    expect(menu()).toBeTruthy()
+
+    // Out to nothing (a blur, a tab away): closes.
+    await fireEvent.focusOut(getBox(), { relatedTarget: null })
+    flushSync()
+    expect(menu()).toBeNull()
+  })
+
   it('shortens the action hint to a count, and leaves the full list to the value menu (verdict 2)', async () => {
     render(FilterBar)
     await focusBox()

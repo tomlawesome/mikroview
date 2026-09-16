@@ -308,6 +308,21 @@
     openMenu()
   }
 
+  // Focus leaving the box closes the menu, the same as a click away
+  // does (onWindowClick above): round 57 opens it on focus, so it goes
+  // with the focus. Without this, tabbing out -- or anything else that
+  // blurs the input with no click -- left the menu hanging over the
+  // first columns of the table underneath, covering rows nobody was
+  // filtering (found by live-token-copy, whose row hover it blocked).
+  // relatedTarget is where focus went: the menu's own items are
+  // buttons, so a pointer pick lands inside the box and is left alone.
+  function onBoxFocusOut(e: FocusEvent) {
+    if (!menuOpen) return
+    const to = e.relatedTarget
+    if (to instanceof Node && fboxEl?.contains(to)) return
+    closeMenu()
+  }
+
   function pickField(field: TokenField) {
     pendingField = field
     pendingValue = ''
@@ -502,6 +517,7 @@
       class:empty={filterChips.length === 0}
       class:open={expanded}
       bind:this={fboxEl}
+      onfocusout={onBoxFocusOut}
       onclick={() => {
         expanded = true
         // #1246: a click in the box is also the pointer's way into the
