@@ -224,6 +224,14 @@ rewritten.
   silently send logs nowhere. It's now a field in the wizard's header
   that every command reads from, defaulting to a real address on this
   instance when one can be detected.
+- **A 401 now always carries `WWW-Authenticate`, so RouterOS can read
+  it** (#1118). RouterOS's own `/tool fetch` — the client behind the
+  drop-list pull and the ingest routes — refused to parse any 401 that
+  omitted the header ("ERROR parsing http: 401 should contain
+  www-authenticate header"), per RFC 9110 §15.5.2, and reported that
+  parse failure instead of the actual refusal. Every 401 MikroView sends
+  now carries `WWW-Authenticate: Bearer realm="mikroview"`, including
+  session-gated routes.
 
 ## [0.5.1] - 2026-09-11
 
