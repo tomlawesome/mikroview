@@ -78,6 +78,7 @@ class API:
             headers["Cookie"] = self.cookie
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- base_url is the recording script's own https://127.0.0.1:<port>, not input from anyone else
             resp = urllib.request.urlopen(req, context=ssl_ctx, timeout=15)
         except urllib.error.HTTPError as e:
             return e.code, e.read(), e.headers
@@ -111,6 +112,7 @@ def wait_for_health(api_base, attempts=120, delay=0.5):
     for _ in range(attempts):
         try:
             req = urllib.request.Request(api_base + "/api/healthz", method="GET")
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- same fixed local address as API._req
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=5) as resp:
                 if resp.getcode() == 200:
                     return
