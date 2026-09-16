@@ -159,6 +159,10 @@ type Server struct {
 	// Server with no engine cannot honestly give it.
 	Evaluation interface {
 		Lag() (behind uint64, behindSeconds float64, outrun uint64)
+		// Forget is for handleTestReset only: the store was emptied on
+		// purpose, so the engine starts level with it and carries no
+		// outrun from before -- see engine.Engine.Forget.
+		Forget()
 	}
 	// Suggest is the persisted pool of watchlist entries suggested from
 	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST

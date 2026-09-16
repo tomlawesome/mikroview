@@ -466,6 +466,36 @@ func (e *Engine) Nudge() {
 	}
 }
 
+// Forget moves the cursor to the store's newest event and clears the
+// outrun count, for a caller that has just emptied the store on purpose
+// -- the test-only POST /api/test/reset, whose job is to hand the next
+// scenario an instance carrying no residue of its siblings (see
+// internal/api/testhooks.go). Without this, a Reset under a backlog
+// reads exactly like a flood the ring wrapped past (which is what it is,
+// from the engine's side: events it had not reached are gone), and the
+// next scenario inherits an outrun banner for a "flood" the harness
+// caused. Measured 2026-09-16: live-memory-slider leaves the engine
+// ~30,000 events behind, and live-nav-bottom-bar then failed on the
+// ingest-loss drawer's handle.
+//
+// Runs on the evaluation goroutine so it cannot interleave with a batch
+// in flight, which would otherwise write an older cursor back over this
+// one and count the difference as outrun on the next read. Not for
+// production paths: an operator has no way to empty the store, and
+// nothing else should ever make a loss disappear.
+func (e *Engine) Forget() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.runOnEvaluationGoroutine(func() {
+		_, _, newestHeld := e.read(0, 0)
+		e.cursor.Store(newestHeld)
+		e.outrun.Store(0)
+	})
+}
+
 // Lag reports how far behind the store's newest event this engine is
 // (behind), how old the oldest thing it has not evaluated yet is
 // (behindSeconds), and how many events it never got to at all because
