@@ -63,7 +63,7 @@ RUN printf 'export PATH=/usr/local/go/bin:$PATH\n' > /etc/profile.d/go.sh
 # above the engine are out of reach on any Linux host. It catches
 # engine-level differences, which is most of what bites, and nothing
 # beyond that should be claimed from it.
-ARG PLAYWRIGHT_VERSION=1.62.1
+ARG PLAYWRIGHT_VERSION=1.63.0
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -eux; \
     npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium firefox webkit; \
