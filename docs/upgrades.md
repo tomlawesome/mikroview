@@ -43,10 +43,43 @@ from which version, and what — if anything — you have to do by hand. The
 one recurring item is the router: the setup wizard's pasted script
 changes between versions, and the router does not update itself.
 
-The wizard's logging block is safe to paste again at any time: it updates
-what is already there in place. Paste step 1 again on each router after
-an upgrade, and the notice goes away once every router has reported the
-current setup.
+A line appears at the top of the page, under any connection or
+configuration banner:
+
+> upgraded from v0.4.0 · paste step 1 of the setup again on each router
+
+Once your routers report their own setup, it counts them:
+
+> upgraded from v0.4.0 · 2 of 3 routers still on the old setup · paste
+> step 1 again on each
+
+It has two controls. **open setup** takes you to step 1 of the setup
+wizard, with the script for this version ready to copy. The wizard's
+logging block is safe to paste again at any time: it updates what is
+already there in place, so pasting it on a router that is already set up
+changes nothing it should not.
+
+**done** says you have dealt with it, and the line goes for good. It is
+recorded on the server, not in your browser, so one admin pressing it
+settles it for everyone and it stays settled across restarts. The next
+upgrade raises a new line of its own; this one does not cover for it.
+
+Only an admin sees the line, because only an admin can act on it. There
+is no ✕ — `done` is the dismissal, and it says what it claims.
+
+You will not always need to press it. A router running a current script
+tells MikroView what the setup wizard left on it, so once every router
+reports the current setup the line clears itself and nobody has to
+confirm anything. While every router is reporting, `done` is not offered
+at all: the count is the real answer, and the remedy is the paste, not a
+dismissal. `done` stays available whenever some router has never
+reported — a router still running a script pasted before this reporting
+existed — because then MikroView genuinely cannot tell, and your word is
+the only thing that can settle it.
+
+The line never appears on a first install (there is no version to have
+upgraded from), and never for a downgrade — an older build refuses to
+start on newer data, as above.
 
 ## Going back
 
