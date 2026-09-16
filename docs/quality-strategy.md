@@ -95,35 +95,56 @@ dedicated read-only token limits what a leak of it could reach.
 Until `CI_REUSE_TOKEN` exists, nothing changes: every candidate job runs
 exactly as it did before #1066. Creating it is what turns reuse on.
 
-## Upgrade fixtures (`testdata/upgrade/`, #1239)
+## Upgrade fixtures (`testdata/upgrade/`, #1239, #1247)
 
-`test:go` opens one real recording per released version before it runs
-`go test ./...` -- see `internal/persist/upgrade_test.go` and
-`docs/upgrades.md`, "How this is tested", for what that proves and why.
+Two jobs open real recordings before running their tests. `test:go`
+opens one recorded data directory per released version; `test:postgres`
+restores one `pg_dump` per *schema* version into its own fresh database
+and opens that. See `internal/persist/upgrade_test.go`,
+`internal/persist/upgrade_postgres_test.go` and `docs/upgrades.md`, "How
+this is tested", for what that proves and why.
+
+Per schema version, not per release, for the database half: the Postgres
+migrations are numbered and checksummed, so two releases on the same
+schema version restore the same database. That is v0.1.0 (schema 1,
+`store_blob`), v0.2.0 (schema 2, `match_log`) and v0.3.0 (schema 3,
+`match_log.provisional`) today. Nothing in a dump is encrypted whatever
+the manifest says: #853's key encrypts what the *file* backend writes,
+and the Postgres path never consults it.
 
 What lives where:
 
 - `testdata/upgrade/<version>/manifest.json` -- committed. What the
   recording holds (usernames, an entity, a flag, ...), never a hash,
   token or key.
-- The recording itself -- not committed, ever: a data directory holds
-  password/token hashes and a TLS key, made-up or not, and gitleaks
-  would flag every one. It lives in the project's generic package
-  registry (`upgrade-fixtures/<version>/`) and `.upgrade-fixtures/`
-  (gitignored) is where a fetched copy lands.
-- `scripts/fetch-upgrade-fixtures.sh` -- downloads every version listed
-  under `testdata/upgrade/` into `.upgrade-fixtures/`, skipping one
-  already present. `test:go` runs it first; nothing else in the gate
-  needs it, since `test:go` is the only job unaffected by the reuse gate
-  above that also runs the Go suite.
-- `scripts/record-upgrade-fixture.sh <version>` -- the other half, run by
-  hand: boots the released image, drives a small scripted session
-  against its own API, packs what it wrote, and uploads it. Booting an
-  old image happens here and nowhere else in the gate.
+- The recordings themselves -- not committed, ever: a data directory
+  holds password/token hashes and a TLS key, made-up or not, and
+  gitleaks would flag every one. They live in the project's generic
+  package registry (`upgrade-fixtures/<version>/`, holding
+  `upgrade-fixture-<version>.tar.gz`, an optional
+  `upgrade-fixture-<version>-postgres.sql.gz`, and `manifest.json`), and
+  `.upgrade-fixtures/` (gitignored) is where fetched copies land.
+- `scripts/fetch-upgrade-fixtures.sh` -- downloads every version with a
+  committed manifest *and* every version the registry holds, skipping a
+  file already present. A missing Postgres dump is expected and logged,
+  not a failure. `test:go` and `test:postgres` both run it first.
+- `scripts/record-upgrade-fixture.sh [--postgres] <version>` -- the other
+  half: boots the released image, drives
+  `scripts/upgrade-fixture-session.py` against its own API, and keeps
+  either the data directory (a tarball) or a `pg_dump`. Booting an old
+  image happens here and nowhere else in the gate.
+- `record:upgrade-fixture` in `.gitlab-ci.yml` -- runs both of those on
+  every `v*` tag, after waiting up to 45 minutes for that version's
+  image to appear on GHCR. `allow_failure: true`, so a slow release
+  never reddens a tag pipeline; if it does fail, run the script by hand.
 
-To add a fixture for a new release: run
-`scripts/record-upgrade-fixture.sh v0.x.y`, check the manifest it wrote
-under `testdata/upgrade/v0.x.y/` holds no secret, and commit it.
+The registry copy of the manifest is the fallback, not the source. A job
+token can upload a package but cannot push or open a merge request, so
+the tag job uploads the manifest beside the recording and the tests read
+the committed copy where there is one (#1247's decision, 2026-09-16).
+Committing it is then a review step -- check `testdata/upgrade/v0.x.y/
+manifest.json` holds no secret and commit it -- rather than something
+the gate waits for.
 
 ## Pre-release reviews (`docs/reviews/`)
 

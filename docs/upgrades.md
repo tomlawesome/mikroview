@@ -156,14 +156,29 @@ one for you.
 
 For every released version there is a recorded data directory — what
 that version actually wrote after a scripted session, with made-up
-users and tokens. The recordings are not in the repository (a data
-directory holds password and token hashes and TLS keys, and a secrets
-scanner rightly cannot tell a made-up one from a real one); they live in
-the project's package registry, and CI fetches them before the test.
+users and tokens. There is also a database dump per schema version,
+taken from the first release that carried each migration, because the
+database's stages are the migrations rather than the releases. The
+recordings are not in the repository (a data directory holds password
+and token hashes and TLS keys, and a secrets scanner rightly cannot
+tell a made-up one from a real one); they live in the project's package
+registry, and CI fetches them before the test.
+
 Every change to MikroView opens each of them with the current build and
 checks the result: the migrations run, the users can still sign in, the
 watchlist, flags, entities and coverage declarations are still there
-and still mean what they meant.
+and still mean what they meant. The database dumps get the same
+treatment — each is restored into a database of its own, opened, and
+asked the same questions.
 
-A new release adds its own recording. The gate never boots an old
-image; that happens once, when the recording is made.
+Tagging a release records both halves by itself. The job waits for that
+version's image to be published, runs the recording, and uploads it to
+the package registry along with a small manifest saying what it
+created. It cannot commit that manifest — the credential CI runs with
+can write a package and nothing else — so the manifest travels with the
+recording and the tests read it from there until someone commits it.
+That keeps the next change tested against the release that just
+shipped, with nothing to remember.
+
+The gate never boots an old image; that happens once, when the
+recording is made.
