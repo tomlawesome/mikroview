@@ -70,8 +70,16 @@ your data lives are in [docs/install.md](docs/install.md).
   security properties the design commits to
 - [SECURITY.md](SECURITY.md) — threat model, hardening and how to report
   a vulnerability
-- [CONTRIBUTING.md](CONTRIBUTING.md) — branching model and local
-  development setup
+- [docs/development.md](docs/development.md) — running, feeding and
+  testing a checkout
+
+## Contributions
+
+Not accepted: no pull requests, and there is no public bug tracker —
+development happens on a private GitLab and this repository is its
+mirror. Security problems are the exception: report them privately, see
+[SECURITY.md](SECURITY.md#reporting-a-vulnerability). You are free to
+fork under the AGPL.
 
 ## License
 

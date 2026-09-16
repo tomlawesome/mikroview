@@ -66,7 +66,8 @@ EOF
   cat >"$dir/README.md" <<'EOF'
 # Example
 
-See [docs/x.md](docs/x.md) for details.
+See [docs/x.md](docs/x.md) for details and
+[docs/development.md](docs/development.md) to build it.
 
 ![screenshot](docs/screenshots/a.png)
 EOF
@@ -75,7 +76,7 @@ EOF
 
 Report privately, not via a public tracker.
 EOF
-  cat >"$dir/CONTRIBUTING.md" <<'EOF'
+  cat >"$dir/docs/development.md" <<'EOF'
 # Contributing
 
 Requires Go 1.21+.
@@ -164,14 +165,14 @@ check "$(case "$out" in *"FAIL: docs/orphan.md -- not referenced"*) echo true;; 
 # --- check 5: Go version ----------------------------------------------------
 c5="$TMP/case5-go"
 cp -r "$good" "$c5"
-cat >"$c5/CONTRIBUTING.md" <<'EOF'
+cat >"$c5/docs/development.md" <<'EOF'
 # Contributing
 
 Requires Go 1.20+.
 EOF
 run "$c5"
 check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a stale Go version claim fails (rc=$rc)"
-check "$(case "$out" in *"FAIL: CONTRIBUTING.md says Go 1.20+ but go.mod requires 1.21"*) echo true;; *) echo false;; esac)" \
+check "$(case "$out" in *"FAIL: docs/development.md says Go 1.20+ but go.mod requires 1.21"*) echo true;; *) echo false;; esac)" \
   "and names both versions"
 
 # --- check 6: screenshots fresh, all three states -------------------------
