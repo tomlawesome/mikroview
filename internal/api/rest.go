@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -128,13 +129,80 @@ type deviceView struct {
 func multihomedCandidatesByDevice(reg *device.Registry) map[string][]string {
 	out := map[string][]string{}
 	for _, c := range reg.MultihomedCandidates() {
-		arriving := make([]string, 0, len(c.Discovered))
-		for _, d := range c.Discovered {
-			arriving = append(arriving, d.SourceIP)
+		arriving := make([]string, 0, len(c.Unattributed))
+		for _, src := range c.Unattributed {
+			arriving = append(arriving, src.Address)
 		}
 		out[c.DeclaredID] = arriving
 	}
 	return out
+}
+
+// unattributedView is one syslog source address no router has claimed
+// (#1170): not declared under devices: in config.yaml, and not carried
+// by exactly one router's pushed /ip/address table. It is deliberately
+// not a device and is not in the devices array -- the whole point of
+// the issue is that mikroview stopped inventing a router named after an
+// address that merely sent it a line. Its lines are kept and are stored
+// under that address, which is what Lines counts.
+type unattributedView struct {
+	Address   string    `json:"address"`
+	Lines     uint64    `json:"lines"`
+	FirstSeen time.Time `json:"firstSeen"`
+	LastSeen  time.Time `json:"lastSeen"`
+	// Explanation is set only when the registry can say why it could
+	// not attribute rather than only that it could not: two or more
+	// routers have pushed this same address, so their own tables
+	// disagree. Named here, server-side, because the names are the
+	// registry's to resolve -- the client would otherwise have to
+	// re-derive a device display name it does not own.
+	Explanation string `json:"explanation,omitempty"`
+}
+
+// unattributedViews renders the registry's unclaimed sources for the
+// API, naming any conflicting claimants with the same display names the
+// devices array uses.
+func unattributedViews(sources []device.Source, infos []device.Info) []unattributedView {
+	names := make(map[string]string, len(infos))
+	for _, info := range infos {
+		names[info.ID] = info.Name
+	}
+	out := make([]unattributedView, 0, len(sources))
+	for _, src := range sources {
+		v := unattributedView{
+			Address:   src.Address,
+			Lines:     src.Lines,
+			FirstSeen: src.FirstSeen,
+			LastSeen:  src.LastSeen,
+		}
+		if len(src.Claimants) > 1 {
+			claimed := make([]string, 0, len(src.Claimants))
+			for _, id := range src.Claimants {
+				if name, ok := names[id]; ok && name != "" {
+					claimed = append(claimed, name)
+					continue
+				}
+				claimed = append(claimed, id)
+			}
+			v.Explanation = joinAnd(claimed) + " have both pushed this address as their own, so nothing here can tell which of them sent these lines."
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// joinAnd writes a list the way a sentence does: "a and b", "a, b and
+// c". Same shape as the frontend's own prose() helper, kept here
+// because this sentence is written server-side.
+func joinAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	}
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +240,13 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices": views,
+		// #1170: listed separately from the devices, because they are
+		// not devices. An operator sees the address, how many lines it
+		// has sent, and -- where two routers claim it -- which two.
+		"unattributed": unattributedViews(s.Devices.Unattributed(), infos),
+	})
 }
 
 // effectiveRouterOSVersion is the version to show for a device: an

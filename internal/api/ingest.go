@@ -168,6 +168,18 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #1170: the push is what puts this router in the one device
+	// registry every count reads. The token's own Device is the
+	// identity -- the operator minted it for one router and the wizard
+	// wrote it into that router -- so a router that pushes is a router
+	// mikroview knows about, whether or not its syslog has arrived yet
+	// and whether or not config.yaml declares it. Before this, a push
+	// had no effect on the list at all, and Watchlist could name five
+	// routers while Entities showed one.
+	if s.Devices != nil {
+		s.Devices.Ensure(tok.Device, now)
+	}
+
 	// Tell every open screen the pushed tables moved, so an answer
 	// derived from them refetches now instead of on its own poll. The
 	// visible one is watchlist coverage: before this, an operator who

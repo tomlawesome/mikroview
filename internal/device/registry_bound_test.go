@@ -10,15 +10,15 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 )
 
-// TestDiscoveredDevicesAreBounded: Resolve mints an entry for any
-// unseen syslog source IP, and over UDP that address is trivially
-// spoofable -- no connection, no handshake, no credentials. Unbounded,
-// a flood of forged sources exhausts memory. Proven before the fix:
-// 200,000 spoofed IPs produced 200,000 retained entries.
-func TestDiscoveredDevicesAreBounded(t *testing.T) {
-	prev := maxDiscoveredDevices
-	maxDiscoveredDevices = 100
-	t.Cleanup(func() { maxDiscoveredDevices = prev })
+// TestUnattributedSourcesAreBounded: Resolve records an entry for any
+// unseen syslog source IP, and the syslog listener takes no credentials
+// -- anyone who can reach the port can add their own address.
+// Unbounded, a flood of sources exhausts memory. Proven before the fix:
+// 200,000 addresses produced 200,000 retained entries.
+func TestUnattributedSourcesAreBounded(t *testing.T) {
+	prev := maxUnattributedSources
+	maxUnattributedSources = 100
+	t.Cleanup(func() { maxUnattributedSources = prev })
 
 	r := NewRegistry(nil)
 	now := time.Now()
@@ -26,19 +26,24 @@ func TestDiscoveredDevicesAreBounded(t *testing.T) {
 		r.Resolve(fmt.Sprintf("10.%d.%d.%d", byte(i>>16), byte(i>>8), byte(i)), now.Add(time.Duration(i)*time.Millisecond))
 	}
 
-	if got := len(r.List()); got > maxDiscoveredDevices {
-		t.Errorf("registry holds %d discovered devices, want <= %d", got, maxDiscoveredDevices)
+	if got := len(r.Unattributed()); got > maxUnattributedSources {
+		t.Errorf("registry holds %d unattributed sources, want <= %d", got, maxUnattributedSources)
+	}
+	if got := r.List(); len(got) != 0 {
+		t.Errorf("List() = %+v, want no devices: none of those addresses is a router", got)
 	}
 }
 
 // TestConfiguredDevicesSurviveASpoofFlood is the important half: the
 // cap must never evict a router the operator actually declared.
 // Otherwise an attacker could push the real devices out of the fleet
-// view with forged packets -- the attack succeeding by another route.
+// view with a flood of their own -- the attack succeeding by another
+// route. Since #1170 declared devices are not in the capped map at all,
+// which is what makes that structural rather than careful.
 func TestConfiguredDevicesSurviveASpoofFlood(t *testing.T) {
-	prev := maxDiscoveredDevices
-	maxDiscoveredDevices = 10
-	t.Cleanup(func() { maxDiscoveredDevices = prev })
+	prev := maxUnattributedSources
+	maxUnattributedSources = 10
+	t.Cleanup(func() { maxUnattributedSources = prev })
 
 	r := NewRegistry([]config.Device{{ID: "core", Name: "Core router", SourceIP: "192.168.1.1"}})
 	now := time.Now()
@@ -61,13 +66,13 @@ func TestConfiguredDevicesSurviveASpoofFlood(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("the configured router was evicted by a flood of spoofed sources; configured devices must never be evicted")
+		t.Error("the configured router was evicted by a flood of unclaimed sources; configured devices must never be evicted")
 	}
 }
 
-// TestDiscoveredDevicesShedLeavesHeadroomForTheNextSource: pruneLocked
-// used to evict back to exactly maxDiscoveredDevices, which left the
-// registry full -- so the very next newly-discovered source overflowed
+// TestUnattributedSourcesShedLeavesHeadroomForTheNextSource: pruneLocked
+// used to evict back to exactly maxUnattributedSources, which left the
+// registry full -- so the very next newly-seen source overflowed
 // again and paid the whole walk-and-sort once more, and so did every
 // one after that. Resolve runs synchronously on the single ingest
 // goroutine, keyed on the source IP off an unauthenticated TLS syslog
@@ -80,30 +85,30 @@ func TestConfiguredDevicesSurviveASpoofFlood(t *testing.T) {
 // mac_registry_test.go's TestMACRegistryShedsABatchSoTheNextNewMACIsFree.
 // Fails against the pre-#370 code (which lands at exactly the cap, no
 // headroom) and passes with the batched evict.DownTo shed. See #370.
-func TestDiscoveredDevicesShedLeavesHeadroomForTheNextSource(t *testing.T) {
-	prev := maxDiscoveredDevices
-	maxDiscoveredDevices = 800
-	t.Cleanup(func() { maxDiscoveredDevices = prev })
+func TestUnattributedSourcesShedLeavesHeadroomForTheNextSource(t *testing.T) {
+	prev := maxUnattributedSources
+	maxUnattributedSources = 800
+	t.Cleanup(func() { maxUnattributedSources = prev })
 
 	r := NewRegistry(nil)
 	now := time.Now()
-	for i := 0; i <= maxDiscoveredDevices; i++ { // one past the cap, forcing a shed
+	for i := 0; i <= maxUnattributedSources; i++ { // one past the cap, forcing a shed
 		r.Resolve(fmt.Sprintf("10.%d.%d.%d", byte(i>>16), byte(i>>8), byte(i)), now.Add(time.Duration(i)*time.Second))
 	}
 
-	after := len(r.List())
-	if after >= maxDiscoveredDevices {
+	after := len(r.Unattributed())
+	if after >= maxUnattributedSources {
 		t.Fatalf("the shed left the registry at %d against a cap of %d -- no headroom, so the next new source sheds again",
-			after, maxDiscoveredDevices)
+			after, maxUnattributedSources)
 	}
 
 	// Every insertion up to the headroom must now be free of a shed.
-	headroom := maxDiscoveredDevices - after
+	headroom := maxUnattributedSources - after
 	for i := 0; i < headroom; i++ {
 		r.Resolve(fmt.Sprintf("172.16.%d.%d", byte(i>>8), byte(i)), now.Add(time.Hour))
 	}
-	if got := len(r.List()); got != maxDiscoveredDevices {
+	if got := len(r.Unattributed()); got != maxUnattributedSources {
 		t.Errorf("filling the %d-entry headroom gave %d entries, want %d -- a shed ran that should not have",
-			headroom, got, maxDiscoveredDevices)
+			headroom, got, maxUnattributedSources)
 	}
 }
