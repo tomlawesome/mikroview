@@ -71,6 +71,14 @@ func (s *Server) handleRouterBackupText(w http.ResponseWriter, r *http.Request) 
 // neither is more "the" generation than the other -- the pair is the
 // subject, and a path would have to pick one to own the other.
 func (s *Server) handleRouterBackupDiff(w http.ResponseWriter, r *http.Request) {
+	// The role gate comes before the request is even read: a caller who
+	// may not be here is told so, rather than being told their query
+	// string was wrong -- which would answer a question they were never
+	// entitled to ask.
+	if !callerIsAdmin(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	device := r.PathValue("device")
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
