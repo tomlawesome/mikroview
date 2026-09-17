@@ -174,10 +174,19 @@ beforeEach(() => {
 })
 
 describe('LogEveryRule ephemerality', () => {
-  it('states the issue\'s own ephemerality sentence, verbatim', () => {
+  // Reworded by #895: "never stored" was always a statement about this
+  // helper, and once scheduled backups existed it read as a promise
+  // about them too. The sentence now says which of the two it means,
+  // and what happens to the other.
+  it('says the helper keeps nothing, and that a scheduled backup is a different thing', () => {
     const { container } = render(LogEveryRule)
-    expect(container.textContent).toContain(
-      'Your config is never stored — it runs through memory, and once you leave this page it is gone.',
+    const said = container.textContent?.replace(/\s+/g, ' ')
+    expect(said).toContain(
+      'This helper stores nothing you paste — it runs through memory, and once you leave this page it is gone.',
+    )
+    expect(said).toContain(
+      'Scheduled backups are a different thing: those are kept, with their secrets removed as they arrive, ' +
+        'and you can annotate one from here too.',
     )
   })
 })

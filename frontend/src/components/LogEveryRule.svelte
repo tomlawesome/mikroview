@@ -369,9 +369,17 @@
 
             <!-- The ephemerality sentence, verbatim from #435's issue
                  body. #1134 moved it here, under the zone, as the
-                 footnote it always was rather than the headline. -->
+                 footnote it always was rather than the headline.
+                 #895 reworded it once scheduled backups existed: "never
+                 stored" was true of this helper and only ever meant
+                 this helper, and leaving it at that would have read as
+                 a promise about a backup that is stored. So the
+                 sentence now says which of the two it is about, and
+                 names the other. -->
             <p class="note ephemeral">
-              Your config is never stored — it runs through memory, and once you leave this page it is gone.
+              This helper stores nothing you paste — it runs through memory, and once you leave this page it is
+              gone. Scheduled backups are a different thing: those are kept, with their secrets removed as they
+              arrive, and you can annotate one from here too.
             </p>
           </div>
 
