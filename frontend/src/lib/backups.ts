@@ -8,7 +8,7 @@
 // turns those numbers, and the generation list beside them, into the
 // sentence the drawing writes.
 
-import type { RouterBackupRouter } from './types'
+import type { RouterBackupGeneration, RouterBackupRouter } from './types'
 import { formatDayMonth, formatDurationShort, formatHM } from './format'
 
 /** MAX_GENERATIONS mirrors backupvault.MaxGenerations -- ten kept per
@@ -113,4 +113,29 @@ export function oldestArrival(router: RouterBackupRouter): string | null {
  * entry. */
 export function newestGeneration(router: RouterBackupRouter) {
   return router.generations.length > 0 ? router.generations[router.generations.length - 1] : null
+}
+
+/** readableGenerations is every generation of a router that has a `.rsc`
+ * half to read -- the cycling ten and the kept pool together, oldest
+ * first. "Previous" has to mean the one before in time, not the one
+ * before in whichever of the two lists the row happens to be drawn
+ * from: keeping a backup moves it between lists without moving it in
+ * the router's own history (#895). */
+export function readableGenerations(router: RouterBackupRouter): RouterBackupGeneration[] {
+  return [...router.generations, ...(router.protected ?? [])]
+    .filter((g) => !!g.rscArrivedAt)
+    .sort((a, b) => (a.rscArrivedAt ?? '').localeCompare(b.rscArrivedAt ?? ''))
+}
+
+/** previousGeneration is the readable generation immediately before the
+ * one named, or null when it is the oldest mikroview still holds --
+ * which is what makes "compare with previous" absent on that row rather
+ * than offered and then refused. */
+export function previousGeneration(
+  router: RouterBackupRouter,
+  generationID: string,
+): RouterBackupGeneration | null {
+  const all = readableGenerations(router)
+  const at = all.findIndex((g) => g.id === generationID)
+  return at > 0 ? all[at - 1] : null
 }
