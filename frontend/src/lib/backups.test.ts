@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest'
-import { cadencePhrase, isGone, newestGeneration, oldestArrival, receiptLine } from './backups'
+import {
+  cadencePhrase,
+  isGone,
+  newestGeneration,
+  oldestArrival,
+  previousGeneration,
+  readableGenerations,
+  receiptLine,
+} from './backups'
 import { formatDayMonth, formatDurationShort, formatHM } from './format'
 import type { RouterBackupRouter } from './types'
 
@@ -103,5 +111,41 @@ describe('oldestArrival / newestGeneration', () => {
     const r = router()
     expect(oldestArrival(r)).toBeNull()
     expect(newestGeneration(r)).toBeNull()
+  })
+})
+
+describe('previousGeneration (#895)', () => {
+  // Keeping a backup moves it into `protected` without moving it in the
+  // router's own history, so "the one before" has to be read across
+  // both lists in arrival order -- not off whichever list the row was
+  // drawn from.
+  const r = router({
+    generations: [
+      gen('g1', '2026-08-25T03:00:00Z', '2026-08-25T03:00:05Z'),
+      gen('g2', '2026-08-26T03:00:00Z', '2026-08-26T03:00:05Z'),
+    ],
+    protected: [gen('kept0', '2026-08-24T03:00:00Z', '2026-08-24T03:00:05Z')],
+  })
+
+  it('reads the two lists as one history, oldest first', () => {
+    expect(readableGenerations(r).map((g) => g.id)).toEqual(['kept0', 'g1', 'g2'])
+  })
+
+  it('finds the generation before, across the kept pool', () => {
+    expect(previousGeneration(r, 'g2')?.id).toBe('g1')
+    expect(previousGeneration(r, 'g1')?.id).toBe('kept0')
+  })
+
+  it('is null for the oldest one held, and for one it has never heard of', () => {
+    expect(previousGeneration(r, 'kept0')).toBeNull()
+    expect(previousGeneration(r, 'nope')).toBeNull()
+  })
+
+  it('skips a generation whose export never arrived -- there is nothing to compare', () => {
+    const half = router({
+      generations: [gen('g0', '2026-08-24T03:00:00Z'), gen('g1', '2026-08-25T03:00:00Z', '2026-08-25T03:00:05Z')],
+    })
+    expect(readableGenerations(half).map((g) => g.id)).toEqual(['g1'])
+    expect(previousGeneration(half, 'g1')).toBeNull()
   })
 })

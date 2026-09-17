@@ -1542,6 +1542,43 @@ export interface RouterBackupGeneration {
   protectedBy?: string
 }
 
+// GET /api/router-backups/{device}/{generation}/text (#895): one
+// generation's stored export, as mikroview kept it -- redacted at the
+// point it arrived, so there is nothing here to hide at display time.
+// `redacted` is the server saying its ingest pass had to take something
+// out, so the screen can say so without reading the marker comment out
+// of the text itself.
+export interface RouterBackupText {
+  device: string
+  generation: string
+  text: string
+  lines: number
+  redacted: boolean
+}
+
+// One line two stored exports do not share. `op` is '+' for a line the
+// newer export has and the older did not, '-' the other way round; a
+// line they share is not in the list at all. `line` is counted in
+// whichever side owns it.
+export interface RouterBackupDiffLine {
+  op: '+' | '-'
+  line: number
+  text: string
+}
+
+// GET /api/router-backups/{device}/diff?from=&to= (#895): what changed
+// between two of a router's stored exports, ignoring the date header
+// RouterOS stamps on every one of them. `same` is the empty case said
+// plainly, so the screen never has to read "no lines" as "nothing
+// changed" on its own.
+export interface RouterBackupDiff {
+  device: string
+  from: string
+  to: string
+  lines: RouterBackupDiffLine[]
+  same: boolean
+}
+
 // GET /api/droplist (#1225, #461): the router-pulled block list, third
 // of Settings' admin-only "what mikroview holds" groups alongside keys
 // and router backups. Mirrors internal/api's droplistResponse.
