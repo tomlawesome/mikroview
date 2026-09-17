@@ -732,6 +732,13 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
 		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
 
+		// Reading and comparing the redacted text export (#895). The
+		// `text` route is more specific than the `{kind}` download
+		// above it, so ServeMux picks it first; diff takes its pair as
+		// query parameters because neither generation owns the other.
+		{http.MethodGet, "/api/router-backups/{device}/{generation}/text", s.handleRouterBackupText},
+		{http.MethodGet, "/api/router-backups/{device}/diff", s.handleRouterBackupDiff},
+
 		// The kept pool (#1126): an admin marks one stored backup as
 		// one to hold on to, with a comment saying why, and it stops
 		// counting towards the ten the vault cycles.
