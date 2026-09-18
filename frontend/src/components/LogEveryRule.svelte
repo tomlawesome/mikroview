@@ -84,16 +84,9 @@
   // up after.
   let reconciledDevice: string | null = null
 
-  // One token per kind of request. Comparing the router name at the
-  // moment an answer lands is not enough: leave a router and come back
-  // to it while a request is in flight and the name matches again, so a
-  // stale answer passes for a fresh one. A token is retired by any
-  // later request of its kind and by any router change, so only the
-  // most recent one can ever write its result. Separate tokens because
-  // a render must not retire an analyse that is still legitimately on
-  // its way.
-  let analyseToken = 0
-  let renderToken = 0
+  // The request tokens these two use live on work, not here -- see
+  // logEveryRuleWork.svelte.ts. This component does not outlive a deck
+  // scroll; a request in flight does.
 
   $effect(() => {
     const pending = logEveryRuleNavState.consume()
@@ -154,10 +147,11 @@
       renderError = null
       copied = ''
       // A request still in flight was asked about the router we have
-      // just left. Retiring both tokens discards its answer wherever it
-      // lands, so this view is no longer waiting on anything.
-      analyseToken++
-      renderToken++
+      // just left. Retiring the tokens discards its answer wherever it
+      // lands -- including in an instance of this card that has since
+      // been unmounted -- so this view is no longer waiting on
+      // anything.
+      work.retireRequests()
       analysing = false
       rendering = false
       // The pre-selected pair came from a nav request naming the old
@@ -250,11 +244,11 @@
     // request already in flight resolves afterwards, and without this
     // it wrote the old router's rules -- or its error -- onto the new
     // router's view, which is the same fault one beat later.
-    const token = ++analyseToken
+    const token = ++work.analyseToken
     analysing = true
     analyseError = null
     const res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
-    if (token !== analyseToken) return
+    if (token !== work.analyseToken) return
     analysing = false
     if (typeof res === 'string') {
       analyseError = res
@@ -279,11 +273,11 @@
     // a file the operator downloads and pastes into a router, and a
     // stale one landing after a fresh one also resets resultSaved, so
     // the unsaved-work guard misreads what is on screen.
-    const token = ++renderToken
+    const token = ++work.renderToken
     rendering = true
     renderError = null
     const res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
-    if (token !== renderToken) return
+    if (token !== work.renderToken) return
     rendering = false
     if (typeof res === 'string') {
       renderError = res
