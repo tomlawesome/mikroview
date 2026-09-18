@@ -425,10 +425,18 @@ func TestRunStopsWithinDrainTimeoutUnderSustainedBacklog(t *testing.T) {
 	const drainBound = 100 * time.Millisecond
 	withDrainTimeout(t, drainBound)
 	e, st := newEngineOnStore(t, 4096)
-	// A definition too slow (5ms/event) to drain a 4096-deep backlog
-	// (~20s unbounded) within a 100ms bound -- proves drain() actually
-	// stops instead of evaluating everything the store holds no matter
-	// how long that takes, including part-way through a batch.
+	// A definition too slow (5ms/event) to catch up on a 4096-deep
+	// backlog (~20s unbounded) within a 100ms bound -- proves ctx
+	// cancellation reaches Run's select, and drain's own bound, promptly
+	// even while Run is genuinely deep in catchUp, not only once it
+	// finishes the whole backlog on its own.
+	//
+	// storeAndNudge, not a bare Insert loop, is what gets Run there in
+	// the first place: a nudge is what main.go's ingest goroutine sends
+	// after every store.Insert (see storeAndNudge), and it is what
+	// actually routes Run into catchUp rather than leaving it idle on
+	// its select until ctx.Done() and straight into drain(), which
+	// proves nothing about catchUp at all.
 	d := &fakeDef{id: "slow", kind: "declarative", delay: 5 * time.Millisecond}
 	e.Register(d)
 
@@ -436,9 +444,7 @@ func TestRunStopsWithinDrainTimeoutUnderSustainedBacklog(t *testing.T) {
 	go e.Run(ctx)
 	waitForRunning(t, e)
 	const n = 4096
-	for i := 0; i < n; i++ {
-		st.Insert(evt("198.51.100.1"))
-	}
+	storeAndNudge(e, st, n)
 	cancel()
 
 	start := time.Now()
