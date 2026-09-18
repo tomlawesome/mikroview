@@ -15,7 +15,7 @@ vi.mock('./api', () => ({
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { appState, applyFilters } from './state.svelte'
 import { matchingIds } from './ruleMatcher'
-import { emptyFilters, type FirewallEvent, type Filters } from './types'
+import { emptyFilters, type FirewallEvent, type Filters, type Stats } from './types'
 
 // Covers applyFilters's rule/ruleRegex branch specifically -- a
 // performance audit found the regex used to be constructed inside the
@@ -451,5 +451,76 @@ describe('relabel racing an in-flight refetch (#993)', () => {
     await appState.refetchWithFilters()
 
     expect(appState.events[0]?.srcHostName).toBe('android-dhcp')
+  })
+})
+
+// #1218 audit finding 10: outrunEpisode's two defects. outrun is a
+// server-side lifetime counter with no freshness of its own -- setStats
+// is what turns it into "is this still happening" -- and both bugs were
+// in that translation.
+describe('AppState.setStats and the outrun episode (#1109, #1218 finding 10)', () => {
+  function stats(overrides: Partial<Stats> = {}): Stats {
+    return {
+      total: 0,
+      byAction: {},
+      topRules: [],
+      timeSeries: [],
+      eventsPerSecond: 0,
+      capacity: 1000,
+      count: 0,
+      windowSeconds: 900,
+      oldestHeld: null,
+      connectedClients: 0,
+      ...overrides,
+    }
+  }
+
+  beforeEach(() => {
+    appState.reset()
+  })
+
+  // A lifetime counter that is already nonzero on the very first poll of
+  // a session accumulated over however long the server has been running,
+  // not in the last 60 seconds this tab has been open -- folding it
+  // straight into a brand-new episode used to raise a fresh outrun
+  // warning on every page load, however old the actual events were.
+  it('does not raise a fresh episode from an already-nonzero counter on the first poll', () => {
+    appState.setStats(stats({ engine: { behind: 0, behindSeconds: 0, outrun: 5000 } }))
+
+    expect(appState.outrunEpisode.recent).toBe(0)
+    expect(appState.outrunActive).toBe(false)
+    // The baseline is still recorded -- a *second* poll's growth past it
+    // is what should read as recent, which the next test covers.
+    expect(appState.outrunEpisode.total).toBe(5000)
+  })
+
+  it('reads a later increase past that seeded baseline as recent activity', () => {
+    appState.setStats(stats({ engine: { behind: 0, behindSeconds: 0, outrun: 5000 } }))
+    appState.setStats(stats({ engine: { behind: 0, behindSeconds: 0, outrun: 5010 } }))
+
+    expect(appState.outrunEpisode.recent).toBe(10)
+    expect(appState.outrunActive).toBe(true)
+  })
+
+  // tick()'s own comment: `now` is deliberately frozen while paused, for
+  // filteredEvents' display-duration cutoff. outrunActive used to be
+  // computed against that same frozen clock, so pausing the live view
+  // froze whether a flood read as "still happening" too -- a flood that
+  // had genuinely stopped stayed reported as active for as long as the
+  // tab stayed paused, however long that was.
+  it('keeps aging the outrun episode while paused', () => {
+    appState.setStats(stats({ engine: { behind: 0, behindSeconds: 0, outrun: 100 } }))
+    appState.setStats(stats({ engine: { behind: 0, behindSeconds: 0, outrun: 110 } }))
+    expect(appState.outrunActive).toBe(true)
+
+    appState.paused = true
+    const start = appState.wallNow
+    vi.spyOn(Date, 'now').mockReturnValue(start + 61_000)
+    appState.tick()
+
+    expect(appState.paused).toBe(true)
+    expect(appState.outrunActive).toBe(false)
+
+    vi.restoreAllMocks()
   })
 })
