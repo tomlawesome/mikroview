@@ -166,6 +166,70 @@ func TestDuplicateSightingsSurviveInterleavedEvents(t *testing.T) {
 	}
 }
 
+// TestDuplicateSightingsSurviveMoreEventsThanClusterSlots is the same
+// fault one step further out again. dupClusterSlots is a fixed bound,
+// and nothing stops a router duplicating more distinct events at once
+// than there are slots: a busy minute through a real router puts well
+// over eight distinct lines inside one 50ms window, and a pasted
+// logging block duplicates every one of them. The ninth takes a slot
+// from a cluster that has not finished, and that cluster's event then
+// reappears, recomputes its multiplicity from the ring and opens a
+// fresh entry at the higher bucket. With the evicted entry left in
+// place the event was weighted twice -- once at 2, once at 3 -- and
+// since ties favour the smaller figure, a source pasted three times
+// reported 2 again, which is the whole fault the cluster tracking
+// exists to stop. Nobody is attacking here; this is ordinary traffic.
+func TestDuplicateSightingsSurviveMoreEventsThanClusterSlots(t *testing.T) {
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() {
+		setLossClock(nil)
+		clearDuplicateState()
+		SetConfiguredSources(nil)
+	})
+
+	host := "198.51.100.13"
+	SetConfiguredSources([]string{host})
+	// Comfortably more distinct events than there are slots, so by the
+	// time the third copies arrive every cluster opened by a second
+	// copy has been evicted while still open. One more than the slots
+	// is not enough: only the events either side of the wrap lose
+	// their cluster, and the correct bucket still outweighs them.
+	// Twenty keeps all three copies of all of them inside the ring
+	// (dupRingSize is 64), so the multiplicities themselves stay right
+	// and only the histogram is under test.
+	const events = 20
+	for i := 0; i < dupSightingsToReportDrift; i++ {
+		lines := make([][]byte, events)
+		for e := range lines {
+			lines[e] = []byte(fmt.Sprintf("event %d %d", e, i))
+		}
+		// Interleaved the way a burst really arrives: every event's
+		// first copy, then every second copy, then every third, with
+		// the clock moving between lines. The moving clock is not
+		// decoration -- eviction takes the least recently seen slot,
+		// so lines that all share one timestamp keep evicting the same
+		// slot and leave the other seven clusters alone. Real lines
+		// arrive at different instants and the eviction spreads across
+		// every slot, which is what empties the histogram of correct
+		// entries.
+		for copies := 0; copies < 3; copies++ {
+			for _, line := range lines {
+				noteDuplicateLine(host, line)
+				now = now.Add(100 * time.Microsecond)
+			}
+		}
+	}
+
+	loss := Stats().Loss.Duplicate
+	if !loss.Active {
+		t.Fatalf("expected sustained triplication to be reported active, got %+v", loss)
+	}
+	if loss.CopyCount != 3 {
+		t.Errorf("loss.duplicate.copyCount = %d, want 3 (every one of the %d events arrived three times)", loss.CopyCount, events)
+	}
+}
+
 // TestDuplicateContentFromTwoSourcesDoesNotReportDrift guards the
 // other false-positive this rule must avoid: two different routers
 // that happen to log the same thing (e.g. both seeing the same

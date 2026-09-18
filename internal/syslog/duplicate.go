@@ -310,9 +310,23 @@ func (st *sourceDupState) openClusterLocked(hash uint64, now time.Time) int {
 
 // freeClusterLocked picks the slot a new cluster should take: an
 // unused one, else one whose cluster has gone stale, else the least
-// recently seen. Evicting the oldest only forfeits moving that event's
-// weight if it reappears -- the same behaviour the single slot had for
-// every event, now the rare case rather than the usual one.
+// recently seen -- retiring that last one's histogram weight on its
+// way out.
+//
+// The retirement is what keeps the bound honest, and it is not
+// symmetrical with the stale case. A stale cluster has finished: its
+// bucket is that event's final multiplicity and stays counted. A
+// still-open one has not finished, and its event's next copy
+// recomputes its multiplicity from the ring -- which still holds every
+// copy -- and opens a fresh entry at the higher bucket. Leaving the old
+// entry in place would weigh one event twice, once at a count it has
+// already passed, and ties favour the smaller multiplicity
+// (modalMultiplicityLocked), so that stale low entry is exactly what
+// makes a router pasted three times keep reporting 2. Widening one slot
+// to dupClusterSlots stopped that happening between two events; without
+// this it returns by another door as soon as more than dupClusterSlots
+// events duplicate at once, which an ordinary burst through a busy
+// router reaches with nobody attacking.
 func (st *sourceDupState) freeClusterLocked(now time.Time) int {
 	oldest := 0
 	for i := range st.clusters {
@@ -323,6 +337,9 @@ func (st *sourceDupState) freeClusterLocked(now time.Time) int {
 		if c.at.Before(st.clusters[oldest].at) {
 			oldest = i
 		}
+	}
+	if st.multiplicity[st.clusters[oldest].bucket] > 0 {
+		st.multiplicity[st.clusters[oldest].bucket]--
 	}
 	return oldest
 }
