@@ -276,10 +276,45 @@
     (wizardState.status?.instance.addressCandidates ?? []).filter((a) => a !== wizardState.address),
   )
 
+  // debouncedAddress (#1218 audit finding 11): wizardState.address is
+  // bound to the header field per keystroke, on purpose -- see its own
+  // doc comment, other command blocks read it live. commandsKey below
+  // used to include it directly, so every keystroke re-ran the effect
+  // and fired a fresh POST /api/setup/commands. Only the address needs
+  // this: every other commandsKey input (a token just minted, a version
+  // picked, a transport switch) is a discrete event this component and
+  // its tests both expect to answer promptly, not one that fires on
+  // every keystroke -- so the delay belongs here, on the one input that
+  // does, rather than in refreshCommands itself.
+  //
+  // Passed to refreshCommands explicitly below (opts.address), rather
+  // than left for it to read wizardState.address itself: refreshCommands
+  // reads that field synchronously, before its own first await, which
+  // means the effect *calling* it picks up wizardState.address as a
+  // dependency too, transitively, the same as if commandsKey had
+  // included it directly -- Svelte's dependency tracking follows any
+  // reactive read that happens during an effect's synchronous execution,
+  // including ones inside a function it calls. Passing debouncedAddress
+  // by value keeps the effect's only address dependency the debounced
+  // one.
+  const ADDRESS_DEBOUNCE_MS = 300
+  let debouncedAddress = $state(wizardState.address)
+  let addressDebounce: ReturnType<typeof setTimeout> | null = null
+  $effect(() => {
+    const address = wizardState.address
+    if (addressDebounce) clearTimeout(addressDebounce)
+    addressDebounce = setTimeout(() => {
+      debouncedAddress = address
+    }, ADDRESS_DEBOUNCE_MS)
+    return () => {
+      if (addressDebounce) clearTimeout(addressDebounce)
+    }
+  })
+
   const commandsKey = $derived(
     wizardState.status
       ? JSON.stringify([
-          wizardState.address,
+          debouncedAddress,
           wizardState.status.instance.syslogPort,
           wizardState.status.pushKinds,
           token,
@@ -295,7 +330,7 @@
 
   $effect(() => {
     if (!commandsKey) return
-    wizardState.refreshCommands({ token, device: tokenDevice })
+    wizardState.refreshCommands({ token, device: tokenDevice, address: debouncedAddress })
   })
 
   // The router-standing warning (#436): one line per router outside the
