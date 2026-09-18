@@ -933,6 +933,102 @@ func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
 	}
 }
 
+// TestRFC3164HeaderLenPRIBoundary pins rfc3164HeaderLen (and, through
+// it, nextHeaderStart) at every place a PRI's closing '>' can land --
+// including well past the 4-byte width any legal PRI allows. It exists
+// to prove that bounding how much of data gets scanned for '>' (see the
+// sec2 fix, rfc3164MaxHeaderBytes) doesn't change what counts as a
+// header, only how much work deciding that costs: every case here must
+// return the same thing whether the scan is bounded or not.
+func TestRFC3164HeaderLenPRIBoundary(t *testing.T) {
+	ts := "Aug 29 20:52:44"
+	validTail := ts + " chr a-live-in input: message"
+	// All-lowercase and no further '<': nothing in here can itself look
+	// like a header start (a bare header needs an uppercase first byte,
+	// and rfc3164HeaderLen's cheap reject rules out every digit and
+	// lowercase byte immediately). So if the PRI at offset 0 is
+	// rejected, there is genuinely no header anywhere in data -- what
+	// the invalid rows below need to make -1 the right answer for
+	// nextHeaderStart too, not just for rfc3164HeaderLen at offset 0.
+	invalidTail := " chr a-live-in input: message, nothing else here looks like a header"
+
+	tests := []struct {
+		name string
+		data string
+		want int // -1 means rejected
+	}{
+		{"gt_at_pos_1_empty_pri", "<>" + invalidTail, -1},
+		{"gt_at_pos_2_one_digit_pri", "<5>" + validTail, len("<5>" + ts)},
+		{"gt_at_pos_3_two_digit_pri", "<55>" + validTail, len("<55>" + ts)},
+		{"gt_at_pos_4_three_digit_pri", "<155>" + validTail, len("<155>" + ts)},
+		{"gt_at_pos_5_four_digit_pri_too_wide", "<1555>" + invalidTail, -1},
+		{"gt_at_pos_6_five_digit_pri_too_wide", "<15555>" + invalidTail, -1},
+		{"no_gt_within_20_bytes_of_lt", "<" + strings.Repeat("1", 20) + ">" + invalidTail, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rfc3164HeaderLen([]byte(tt.data)); got != tt.want {
+				t.Errorf("rfc3164HeaderLen(%q) = %d, want %d", tt.data, got, tt.want)
+			}
+
+			// nextHeaderStart at offset 0 over the same bytes must agree
+			// -- every case above starts with '<', so a header found at
+			// all is found right at 0.
+			wantStart := -1
+			if tt.want >= 0 {
+				wantStart = 0
+			}
+			if got := nextHeaderStart([]byte(tt.data), 0); got != wantStart {
+				t.Errorf("nextHeaderStart(%q, 0) = %d, want %d", tt.data, got, wantStart)
+			}
+		})
+	}
+}
+
+// TestNextHeaderStartBoundedOnLongLTRun is the sec2 regression check:
+// a client that sends a long run of '<' bytes with no '>' and no
+// newline must not make nextHeaderStart's per-offset scan cover the
+// rest of the buffer at every one of those offsets. Before the fix that
+// is quadratic in the run's length; after it, the scan at each offset
+// is bounded to the widest legal PRI (rfc3164MaxHeaderBytes-ish window),
+// so the whole call is linear. The budget below is a >10x margin on
+// both sides: the unfixed code measured around 20s on 1 MiB (extrapolated
+// from ~73ms/64KiB, quadratic), the fixed code takes milliseconds.
+func TestNextHeaderStartBoundedOnLongLTRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("quadratic-time regression check; skipped under -short")
+	}
+
+	data := bytes.Repeat([]byte{'<'}, 1<<20) // 1 MiB, no '>' anywhere, no '\n'
+
+	start := time.Now()
+	got := nextHeaderStart(data, 0)
+	elapsed := time.Since(start)
+
+	t.Logf("nextHeaderStart over 1 MiB of '<' bytes took %s", elapsed)
+
+	if got != -1 {
+		t.Errorf("nextHeaderStart = %d, want -1 (no '>' anywhere in data)", got)
+	}
+
+	const budget = 2 * time.Second
+	if elapsed > budget {
+		t.Errorf("nextHeaderStart over 1 MiB of '<' bytes took %s, want under %s -- the per-offset '>' scan looks unbounded again", elapsed, budget)
+	}
+}
+
+// BenchmarkNextHeaderStartAllLT records the cost of the pathological
+// input the sec2 fix is about: a buffer that is nothing but '<' bytes,
+// so every offset attempts a PRI match.
+func BenchmarkNextHeaderStartAllLT(b *testing.B) {
+	data := bytes.Repeat([]byte{'<'}, 1<<16) // 64 KiB
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		nextHeaderStart(data, 0)
+	}
+}
+
 // --- #914: a header still arriving must not end the message before it ----
 
 // scriptTimeout is the error a net.Conn returns when a read deadline

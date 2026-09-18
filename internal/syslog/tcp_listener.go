@@ -877,7 +877,20 @@ func rfc3164HeaderLen(data []byte) int {
 	}
 	i := 0
 	if data[0] == '<' {
-		end := bytes.IndexByte(data, '>')
+		// A legal PRI is at most "<191>": '<' plus up to 3 digits plus
+		// '>', 5 bytes wide. Bound the search for '>' to that window
+		// instead of scanning the rest of data -- otherwise a run of
+		// '<' bytes with no '>' anywhere (and no newline, so nothing
+		// else trims the buffer first) makes every such offset scan
+		// everything after it, turning one read into O(n^2) work. A
+		// '>' beyond this window was already rejected below (end > 4),
+		// so bounding the scan can't change which inputs are accepted.
+		const maxPRIWidth = 5
+		limit := len(data)
+		if limit > maxPRIWidth {
+			limit = maxPRIWidth
+		}
+		end := bytes.IndexByte(data[:limit], '>')
 		if end <= 0 || end > 4 {
 			return -1
 		}
