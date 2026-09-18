@@ -206,8 +206,8 @@ rewritten.
   only swaps it onto the live one in its last two lines, so a `/import`
   that aborts partway through — RouterOS's own documented behaviour on a
   bad line — leaves the live list exactly as it was, never emptied.
-  There is still no Settings group or setup card writing any of this
-  from the UI — that is #1225.
+  The Settings group and setup card writing this from the UI are the
+  next bullet.
 
 - **The drop list's router drift and setup scripts, on the backend**
   (#1225, stage 3's backend half): `GET /api/droplist` now says how many
@@ -218,7 +218,34 @@ rewritten.
   rendered for the address a router would reach mikroview on. Minting
   the pull key now also returns the scheduler command with the real key
   already filled in. The Settings group and setup card that render these
-  for an operator are the other half of #1225.
+  for an operator are the next bullet.
+
+- **The drop list's Settings group and setup card, and a block button in
+  the flag drawer** (#1225, the UI half): admins see, add and remove
+  drop-list entries with who/when/why, read one honest drift line per
+  router, mint or revoke the pull key and copy the setup scripts already
+  filled in — Settings ▸ Engine room's new drop list group. `block…` on
+  a flag prefills the add form from that flag's source and commits
+  nothing until you confirm.
+
+- **A router's stored export can be read and compared, not just
+  downloaded** (#895). `GET
+  /api/router-backups/{device}/{generation}/text` returns the redacted
+  export text and `GET /api/router-backups/{device}/diff?from=&to=`
+  returns the line-by-line difference between two generations — read on
+  the generation row, next to the existing download, behind the same
+  admin gate and vault passphrase. A stored export is now redacted a
+  second time on MikroView's own side, independent of RouterOS's own
+  `hide-sensitive`, so a secret RouterOS missed does not survive into a
+  comparison either. Both reads are audited: reading a configuration on
+  screen is reading it.
+
+- **The stream's filter box gains a token bar** (#1246). Focus it and a
+  field menu offers the eight bounded filters — device, action, chain,
+  proto, interface, port, source, destination — pick one and its own
+  values follow, committing into the same filters the named-field strip
+  and a row's click-to-filter already write. Free text in the same box
+  is still the rule search and never a token.
 
 - **Your data directory now records which schema it is on, and MikroView
   refuses to start on data a newer build wrote** (#1238). The JSON files
@@ -321,6 +348,16 @@ rewritten.
 
 ### Fixed
 
+- **Fall traffic now matches the rules that actually catch it** (#1196).
+  A pushed rule that did not name both interfaces exactly as the log
+  line prints them keyed differently from its own traffic, so almost
+  every lane read zero and nearly all traffic sat in "not in a pushed
+  table" — true of most rules on a real router, which are scoped by
+  address list, connection state or port rather than by naming both
+  interfaces. A blank interface on the rule side is now read as "any",
+  the same as RouterOS itself means it, and a boundary scoped by an
+  address list is now labelled as a list rather than the one machine it
+  happened to be named after.
 - **`-backup`/`-restore` now carry the data directory's schema number**
   (`schema.json`, #1244). It was never on the bundled list, so a restore
   into an empty data directory read as schema 0 — indistinguishable from
