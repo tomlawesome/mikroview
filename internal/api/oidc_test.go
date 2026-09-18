@@ -450,14 +450,17 @@ func TestOIDCLinkStartRefusesAnAlreadySSOOnlyAccount(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	// An ordinary user, because only a non-admin is left with no local
+	// password after a link (#1252): the admin keeps its own.
+	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
-	alice, _ := s.Auth.ByUsername("alice")
-	if err := s.Auth.LinkOIDCIdentity(alice.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
+	bob, _ := s.Auth.ByUsername("bob")
+	if err := s.Auth.LinkOIDCIdentity(bob.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
 		t.Fatalf("LinkOIDCIdentity: %v", err)
 	}
 	// The link above invalidated the session, so sign in via SSO-less
 	// means is no longer possible -- use a fresh session for the user.
-	sess := s.Sessions.Create(alice.ID, time.Now())
+	sess := s.Sessions.Create(bob.ID, time.Now())
 	linked := &http.Client{Jar: mustCookieJar(t)}
 	u, _ := url.Parse(ts.URL)
 	linked.Jar.SetCookies(u, []*http.Cookie{{Name: sessionCookieName, Value: sess.ID}})
@@ -538,11 +541,7 @@ func doOIDCLinkFlow(t *testing.T, ts *httptest.Server, client *http.Client) *htt
 	// LinkUserID, and the callback would then do an ordinary login --
 	// which is exactly what the first version of this helper did, and
 	// why it never reached completeOIDCLink at all.
-	// acknowledgeLastLocalAdmin is what SSOLinkOverlay's extra confirm
-	// sends (#1252). Carried here so these flow tests keep exercising a
-	// completed link whichever role the caller has -- the refusal
-	// without it has its own test below.
-	start := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{"acknowledgeLastLocalAdmin": true})
+	start := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
 	if start.StatusCode != http.StatusOK {
 		start.Body.Close()
 		t.Fatalf("starting the link flow returned %d, want 200", start.StatusCode)
@@ -635,8 +634,7 @@ func TestOIDCLinkRefusesWhenTheSessionChangedMidFlow(t *testing.T) {
 	// Start the link as alice, then become bob on the same browser
 	// before the callback lands -- the "signed out and back in as
 	// somebody else mid-flow" case completeOIDCLink's own comment names.
-	// alice is the admin, so the start carries #1252's acknowledgement.
-	start := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{"acknowledgeLastLocalAdmin": true})
+	start := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
 	var body struct {
 		URL string `json:"url"`
 	}

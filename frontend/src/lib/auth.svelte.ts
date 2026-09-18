@@ -71,6 +71,12 @@ class AuthState {
   // account provisioned through SSO, or one converted by linking --
   // gates whether "Connect SSO" is offered at all.
   hasLocalPassword = $state(true);
+  // Whether this account already has an SSO identity attached. The
+  // admin keeps its password when it connects (#1252), so this is what
+  // says there is nothing left to connect for that account -- offering
+  // it again could only mean a second identity, which the server
+  // refuses.
+  ssoConnected = $state(false);
   // Drives SSOLinkOverlay -- the confirm-and-warn step before an
   // irreversible conversion to SSO-only.
   // Whether the change-password dialog is open (#294 item 4), kept
@@ -191,12 +197,14 @@ class AuthState {
       // ever offers a link that the server would then refuse -- the
       // safe direction to be wrong in.
       this.hasLocalPassword = session.hasLocalPassword ?? true;
+      this.ssoConnected = session.ssoConnected ?? false;
       this.signedInSince = session.signedInSince ?? "";
     } else {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
       this.hasLocalPassword = true;
+      this.ssoConnected = false;
       this.mustChangePassword = false;
       this.signedInSince = "";
     }

@@ -18,6 +18,31 @@ rewritten.
 
 ### Added
 
+- **Your admin account keeps its password when you connect it to SSO**
+  (#1252). MikroView has exactly one admin, and it never signs in to
+  your identity provider on its own behalf -- so if the provider is
+  down, misconfigured after an upgrade, or has lost the admin's
+  directory entry, nobody gets in. The admin now keeps both ways in
+  permanently: single sign-on when the provider is there, the password
+  when it isn't. **Every other account still loses its password when it
+  connects** -- that is unchanged.
+
+  First run follows from the same rule. MikroView always asks for a
+  username and a password first, and never offers SSO instead. If your
+  OIDC details are already in the config file you are sent to your
+  provider right afterwards, and the identity you sign in with is
+  connected to the admin account you just made; if they are not,
+  MikroView says the account exists and where those details go.
+
+  **A local username can no longer be an email address.** Identity
+  providers send an email as the username, so keeping local names clear
+  of them means a local account and an SSO one can never be the same
+  name and MikroView never has to compare addresses -- it still stores
+  none. Accounts created before this keep working and still sign in;
+  only new ones are refused. See
+  [docs/configuration.md](docs/configuration.md), "SSO is additive: keep
+  a local admin".
+
 - **An admin can reset someone's password with a one-time code** (#1251).
   Somebody forgets their password, or you think someone else has learned
   it: Settings -> people -> "reset password" on their row. MikroView

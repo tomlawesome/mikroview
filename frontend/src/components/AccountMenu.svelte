@@ -106,7 +106,11 @@
           Change password
         </button>
       {/if}
-      {#if authState.ssoAvailable && authState.hasLocalPassword}
+      <!-- Offered while there is something to connect: a password to
+           convert, and no identity attached yet. The admin keeps its
+           password after connecting (#1252), so that alone no longer
+           answers it. -->
+      {#if authState.ssoAvailable && authState.hasLocalPassword && !authState.ssoConnected}
         <button class="row" role="menuitem" onclick={() => ((authState.showSSOLink = true), (open = false))}>
           Use single sign-on
         </button>

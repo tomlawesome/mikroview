@@ -3,7 +3,7 @@
 package api
 
 import (
-	"io"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,13 +12,22 @@ import (
 	"github.com/tomlawesome/mikroview/internal/audit"
 )
 
-// "SSO is additive; keep a local admin" (#1252, from #1245 decision 2).
-// mikroview holds exactly one admin, so the admin's link is the single
-// request in the API that can leave a deployment with no way in that
-// does not depend on the identity provider. The rule is enforced here
-// and not only in SSOLinkOverlay.svelte -- a browser is not the only
-// thing that can POST to this route.
-func TestOIDCLinkRefusesTheLastLocalAdminWithoutAnAcknowledgement(t *testing.T) {
+// "SSO is additive; keep a local admin" (#1252, from #1245 decision 2),
+// as the owner ruled it on 2026-09-18: the admin must always be able to
+// sign in, even with the identity provider down. mikroview holds
+// exactly one admin and never authenticates to the provider on its own
+// behalf, so a provider that cannot answer means nobody gets in --
+// unless that one account kept a password.
+//
+// The rule is an invariant in auth.Store.LinkOIDCIdentity rather than
+// something the handler arranges; these drive the whole HTTP flow, so
+// what is pinned is what a browser actually gets.
+//
+// (This file replaced an earlier set testing an acknowledgement the
+// admin had to send before linking, on the theory that linking cost the
+// deployment its last local way in. The ruling removed the cost, so it
+// removed the acknowledgement with it.)
+func TestCompletedAdminLinkKeepsTheLocalPassword(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
 	s := newOIDCTestServer(t, fp)
 	ts := httptest.NewServer(s.Routes())
@@ -27,56 +36,36 @@ func TestOIDCLinkRefusesTheLastLocalAdminWithoutAnAcknowledgement(t *testing.T) 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
 
-	resp := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
-	defer resp.Body.Close()
+	resp := doOIDCLinkFlow(t, ts, client)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("link callback = %d, want 302", resp.StatusCode)
+	}
 
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 for the last admin that can sign in without SSO", resp.StatusCode)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	// The refusal has to say the way back in, not just "no": this text
-	// is what somebody reads when they got here past the overlay.
-	if !strings.Contains(string(body), "-transfer-admin") {
-		t.Errorf("refusal = %q, want it to name the command that recovers a locked-out deployment", strings.TrimSpace(string(body)))
-	}
-	for _, c := range resp.Cookies() {
-		if c.Name == oidcFlowCookieName && c.Value != "" {
-			t.Error("a link flow was started anyway -- the refusal only changed the status code")
-		}
-	}
-	// Nothing about the account moved.
 	alice, _ := s.Auth.ByUsername("alice")
 	if !alice.LocalPassword() {
-		t.Error("the refused request removed the password it refused to remove")
+		t.Error("the linked admin reports no local password")
+	}
+	if alice.OIDCSubject == "" {
+		t.Error("the identity was not attached, so this proves nothing")
+	}
+	// The end the rule exists for: the provider is now irrelevant to
+	// getting in. A fresh client, because the link rotated the session.
+	fresh := &http.Client{Jar: mustCookieJar(t)}
+	login := postJSON(t, fresh, ts.URL+"/api/auth/login", credentialsRequest{Username: "alice", Password: "password123"})
+	defer login.Body.Close()
+	if login.StatusCode != http.StatusOK {
+		t.Errorf("signing in with the admin's password after linking = %d, want 200", login.StatusCode)
+	}
+	if !s.Auth.HasLocalAdmin() {
+		t.Error("the deployment lost the way in that does not need the identity provider")
 	}
 }
 
-// Refusing outright would be the wrong rule: an operator may genuinely
-// want an SSO-only deployment, and #1252 asks for a deliberate act
-// rather than a ban. The acknowledgement is that act.
-func TestOIDCLinkAllowsTheLastLocalAdminOnceAcknowledged(t *testing.T) {
-	fp := newFakeOIDCProvider(t)
-	s := newOIDCTestServer(t, fp)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
-
-	resp := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{"acknowledgeLastLocalAdmin": true})
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 once the admin has acknowledged what linking costs", resp.StatusCode)
-	}
-}
-
-// The extra confirm belongs to the account whose link costs the
-// deployment, not to everyone. An ordinary user linking their own
-// account leaves the admin's password exactly where it was, so asking
-// them to acknowledge a lock-out that cannot happen would teach people
-// to click past the one that can.
-func TestOIDCLinkAsksNothingExtraOfANonAdmin(t *testing.T) {
+// Every other role is unchanged: a successful link converts the account
+// to SSO-only, because keeping the weaker local way in alive on an
+// account that has moved past it is what linking exists to end.
+func TestCompletedNonAdminLinkStillRemovesTheLocalPassword(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
 	s := newOIDCTestServer(t, fp)
 	ts := httptest.NewServer(s.Routes())
@@ -89,19 +78,48 @@ func TestOIDCLinkAsksNothingExtraOfANonAdmin(t *testing.T) {
 	bob := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, bob, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"}).Body.Close()
 
-	resp := postJSON(t, bob, ts.URL+"/api/auth/oidc/link", map[string]any{})
-	defer resp.Body.Close()
+	resp := doOIDCLinkFlow(t, ts, bob)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("link callback = %d, want 302", resp.StatusCode)
+	}
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 -- a user's link cannot lock the deployment out", resp.StatusCode)
+	linked, _ := s.Auth.ByUsername("bob")
+	if linked.LocalPassword() {
+		t.Error("a user's link left the local password in place")
+	}
+	fresh := &http.Client{Jar: mustCookieJar(t)}
+	login := postJSON(t, fresh, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"})
+	defer login.Body.Close()
+	if login.StatusCode == http.StatusOK {
+		t.Error("the old password still signs the account in after linking")
 	}
 }
 
-// The audit log has to be able to answer "when did SSO become the only
-// way in?" afterwards. Recorded on the completed link, not on the
-// acknowledgement: a link that never came back from the provider
-// changed nothing.
-func TestCompletedLastLocalAdminLinkIsAudited(t *testing.T) {
+// Nothing extra is asked of the admin at the start of the flow. The
+// request carries no parameters at all -- the account is the session's
+// -- so an empty body is a complete request whoever sends it.
+func TestOIDCLinkStartAsksTheAdminForNothingExtra(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- the admin's link needs no acknowledgement any more", resp.StatusCode)
+	}
+}
+
+// The audit log has to be able to answer "what did that link cost the
+// account?" afterwards, now that the answer depends on the role.
+// Recorded on the completed link, not on the request that started it: a
+// link that never came back from the provider changed nothing.
+func TestCompletedLinkRecordsWhatItCostTheAccount(t *testing.T) {
 	fp := newFakeOIDCProvider(t)
 	s := newOIDCTestServer(t, fp)
 	ts := httptest.NewServer(s.Routes())
@@ -113,16 +131,48 @@ func TestCompletedLastLocalAdminLinkIsAudited(t *testing.T) {
 	resp := doOIDCLinkFlow(t, ts, client)
 	resp.Body.Close()
 
-	if s.Auth.HasLocalAdmin() {
-		t.Fatal("the admin still has a local password -- this test is not set up as it thinks")
-	}
 	var found bool
 	for _, e := range s.Audit.Query(audit.Query{}).Entries {
-		if e.Action == "account.link_sso" && strings.Contains(e.Detail, "no admin can sign in without SSO now") {
+		if e.Action == "account.link_sso" && strings.Contains(e.Detail, "local password kept (admin)") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("nothing in the audit log says the deployment lost its local way in")
+		t.Error("nothing in the audit log says the admin's link left its password in place")
+	}
+}
+
+// Once the admin is connected it has both a password and an identity,
+// so the only thing "connect SSO" could still mean is a second
+// identity. Refused at the start of the flow as well as in the store,
+// and the session says the account is connected so the app stops
+// offering it at all.
+func TestOIDCLinkRefusesASecondConnect(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	doOIDCLinkFlow(t, ts, client).Body.Close()
+
+	sessResp, err := client.Get(ts.URL + "/api/auth/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessResp.Body.Close()
+	var body sessionResponse
+	if err := json.NewDecoder(sessResp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Authenticated || !body.HasLocalPassword || !body.SSOConnected {
+		t.Fatalf("session = %+v, want an authenticated admin with both a password and an identity", body)
+	}
+
+	again := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
+	defer again.Body.Close()
+	if again.StatusCode != http.StatusConflict {
+		t.Errorf("second link start = %d, want 409", again.StatusCode)
 	}
 }

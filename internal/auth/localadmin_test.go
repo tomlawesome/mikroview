@@ -37,16 +37,22 @@ func TestHasLocalAdminFollowsTheAdminsPassword(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 
+	// Linking used to end it. Under #1252's ruling the admin keeps its
+	// password, so connecting SSO adds a way in rather than swapping
+	// one -- and the deployment still has a way in that the identity
+	// provider cannot take away.
 	if err := s.LinkOIDCIdentity(admin.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
 		t.Fatalf("LinkOIDCIdentity: %v", err)
 	}
-	if s.HasLocalAdmin() {
-		t.Error("the admin linked to SSO still counts as a local way in, so nothing would ever warn")
+	if !s.HasLocalAdmin() {
+		t.Error("linking the admin removed the local way in that #1252 exists to keep")
 	}
 }
 
 // An SSO-provisioned first account is an admin with no password, which
-// is exactly the state #1252 exists to keep a deployment out of.
+// is exactly the state #1252 exists to keep a deployment out of -- and,
+// since linking no longer costs the admin its password, the only way
+// left to reach it. main.go says so at every start while it holds.
 func TestHasLocalAdminIsFalseForAnSSOProvisionedAdmin(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {

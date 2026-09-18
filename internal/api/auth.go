@@ -402,6 +402,12 @@ type sessionResponse struct {
 	// by linking. The frontend uses it to decide whether "Connect SSO"
 	// is offered at all: there is nothing left to convert otherwise.
 	HasLocalPassword bool `json:"hasLocalPassword"`
+	// SSOConnected is true once this account has an SSO identity
+	// attached. Separate from HasLocalPassword since #1252: the admin
+	// keeps its password through a link, so "has a password" no longer
+	// answers "is there anything left to connect". The frontend uses
+	// both to decide whether to offer "Connect SSO".
+	SSOConnected bool `json:"ssoConnected"`
 	// MustChangePassword is true while this session may reach nothing
 	// but POST /api/auth/password -- an admin reset the account and it
 	// signed in with the one-time code (#1251). The frontend draws the
@@ -439,6 +445,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
 		resp.HasLocalPassword = user.LocalPassword()
+		resp.SSOConnected = user.OIDCSubject != ""
 		resp.MustChangePassword = user.MustChangePassword
 		// sessionUser already validated the cookie once (that is how
 		// user was resolved); re-reading it here just for IssuedAt
@@ -470,7 +477,12 @@ var authErrorMessages = map[error]string{
 	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
 	auth.ErrUsernameInvalid:    "that username contains characters that aren't allowed -- no control characters, and no leading or trailing spaces",
 	auth.ErrUsernameLength:     auth.ErrUsernameLength.Error(), // already phrased for an end user
-	auth.ErrInvalidRole:        `role must be "user" or "viewer"`,
+	// #1252: names created here are kept clear of email addresses, which
+	// is what identity providers send as preferred_username. The message
+	// says the rule and what to do instead, since "invalid" alone would
+	// read as a bug to someone typing the name they use everywhere.
+	auth.ErrUsernameIsEmail: "a MikroView username can't be an email address -- pick a plain name (SSO accounts are the ones named by their email)",
+	auth.ErrInvalidRole:     `role must be "user" or "viewer"`,
 }
 
 // writeAuthError translates err into a safe, user-facing message via
@@ -538,7 +550,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable
-		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength, auth.ErrUsernameIsEmail:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, r, err, status)
@@ -865,7 +877,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		switch err {
 		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
-		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrInvalidRole, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrInvalidRole, auth.ErrUsernameInvalid, auth.ErrUsernameLength, auth.ErrUsernameIsEmail:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, r, err, status)
