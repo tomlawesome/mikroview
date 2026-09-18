@@ -146,7 +146,17 @@ export async function downloadFromUrl(url: string, filename: string): Promise<'o
   }
   if (res.status === 403) return 'forbidden'
   if (!res.ok) return 'failed'
-  const blob = await res.blob()
+  // res.blob() keeps reading the body after the headers already came
+  // back ok, so a connection dropped mid-transfer rejects here rather
+  // than at the fetch above -- caught the same way, rather than left to
+  // reject this function's own promise, which every caller here treats
+  // as a status to show, never an exception to catch.
+  let blob: Blob
+  try {
+    blob = await res.blob()
+  } catch {
+    return 'failed'
+  }
   const objectUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = objectUrl
