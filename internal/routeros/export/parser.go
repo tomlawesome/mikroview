@@ -270,17 +270,11 @@ func unquote(raw string) string {
 }
 
 // Quote renders s the way RouterOS quotes a value: wrapped in double
-// quotes, with the same escaping routeros.QuoteScriptString applies --
-// '"' and '\' backslash-escaped, plus '$' as '\$', since RouterOS
-// expands `$name` and `$[cmd]` inside any double-quoted string it
-// parses, not only inside a script's own source="..." body. This
-// matters here because a rule's comment or log-prefix comes out of an
-// uploaded /export -- attacker-controlled by whoever can write a rule
-// on the router -- and POST /api/tune-logging/render's per-rule
-// `[find comment=...]` and `log-prefix=...` commands built from it
-// (internal/api/tunelogging.go) are meant to be pasted straight into a
-// RouterOS terminal by an admin; an unescaped `$[...]` there would run
-// as a command instead of merely matching or labelling text. Exported
+// quotes, escaped by routeros.QuoteScriptString -- '"', '\' and '$',
+// the last because RouterOS expands `$name` and `$[cmd]` inside any
+// double-quoted string, and a rule's comment comes out of an uploaded
+// /export written by whoever can edit rules on the router, then lands
+// in commands an admin pastes (POST /api/tune-logging/render). Exported
 // so that caller quotes a value the same way this package does, rather
 // than a second, possibly diverging implementation.
 func Quote(s string) string {
