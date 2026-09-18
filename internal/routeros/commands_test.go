@@ -8,6 +8,7 @@ package routeros
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -921,33 +922,55 @@ func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
 // Reading the doc rather than the generator is the point: the generator
 // was already right both times.
 func TestSetupDocAddsAreAllGuarded(t *testing.T) {
-	// Every doc, not just the one the finding named. Scoping the first
-	// version of this test to routeros-setup.md is what let the drop
-	// list's own block in configuration.md stay bare: the same mistake
-	// the test exists to catch, made by the test.
-	docs, err := filepath.Glob(filepath.Join("..", "..", "docs", "*.md"))
+	// Every markdown file under docs/, walked rather than globbed --
+	// docs/decisions/ and the rest are directories a glob steps over.
+	// Scoping the first version of this test to routeros-setup.md alone
+	// is what let the drop list's own block in configuration.md stay
+	// bare: the same mistake the test exists to catch, made by the
+	// test. Both times the scope was narrower than the claim above it.
+	var docs []string
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// docs/decisions holds dated records of what was decided and, in
+		// the spike notes, what was actually typed at a router during a
+		// verification run. Guarding those would falsify the record
+		// rather than protect anyone: nobody is told to paste them.
+		if d.IsDir() && d.Name() == "decisions" {
+			return fs.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".md") {
+			docs = append(docs, path)
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("listing docs: %v", err)
+		t.Fatalf("walking docs: %v", err)
 	}
 	for _, name := range []string{"README.md", "SECURITY.md"} {
-		docs = append(docs, filepath.Join("..", "..", name))
+		docs = append(docs, filepath.Join(root, name))
 	}
-	if len(docs) < 2 {
-		t.Fatalf("found %d docs to check, expected the whole docs/ directory", len(docs))
+	if len(docs) < 10 {
+		t.Fatalf("found %d docs to check, expected the whole docs/ tree", len(docs))
 	}
 
 	// The adds MikroView itself generates and hands the operator to
 	// paste. Each has to survive being pasted again, since RouterOS
 	// does not deduplicate any of them.
 	//
-	// `/ip firewall filter add` is deliberately not here. MikroView
-	// never generates one -- Log every rule emits `set` lines against
-	// rules that already exist -- and routeros-setup.md's blank-firewall
-	// section prints some as an illustrative example of the operator's
-	// own ruleset, saying in as many words that they are "not something
-	// to paste in blind". Guarding those would be wrong: a firewall rule
-	// has no name, and two accept rules with different match conditions
-	// are two rules, not a duplicate.
+	// `/ip firewall filter add` is not here, and the reason is narrower
+	// than it first looks. routeros-setup.md's blank-firewall section
+	// prints several as an illustrative example of the operator's own
+	// ruleset, saying in as many words that they are "not something to
+	// paste in blind" -- guarding those would be wrong, since two
+	// filter rules with different match conditions are two rules rather
+	// than a duplicate. But MikroView does generate one elsewhere:
+	// frontend/src/lib/compose.ts's composeCommand, copied straight out
+	// of the reach composer in Topography and City. That one is not
+	// printed into any doc, so this test would not have caught it
+	// either way -- see the issue filed against it.
 	adds := []string{
 		"/system script add",
 		"/system scheduler add",
@@ -963,7 +986,12 @@ func TestSetupDocAddsAreAllGuarded(t *testing.T) {
 		for i, line := range strings.Split(string(doc), "\n") {
 			trimmed := strings.TrimSpace(line)
 			for _, add := range adds {
-				if !strings.Contains(trimmed, add) {
+				// Only a line that *is* the command. Prose naming one
+				// inline ("the script is one `/system script add`
+				// whose source ...") and a command quoted inside a
+				// sample log line are describing it, not asking anyone
+				// to paste it.
+				if !strings.HasPrefix(trimmed, add) {
 					continue
 				}
 				// The guarded idiom puts the add inside a find check,
@@ -971,7 +999,11 @@ func TestSetupDocAddsAreAllGuarded(t *testing.T) {
 				if strings.HasPrefix(trimmed, ":if ([:len [") && strings.Contains(trimmed, "] = 0) do={") {
 					continue
 				}
-				t.Errorf("%s:%d has a bare %q; wrap it in the find guard SchedulerAdd/scriptAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", filepath.Base(path), i+1, add, trimmed)
+				shown, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					shown = path
+				}
+				t.Errorf("%s:%d has a bare %q; wrap it in the find guard SchedulerAdd/scriptAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", shown, i+1, add, trimmed)
 			}
 		}
 	}
