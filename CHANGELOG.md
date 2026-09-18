@@ -348,6 +348,44 @@ rewritten.
 
 ### Fixed
 
+- **Settings ▸ Upgrade's dismiss is now a plain close button** (#1218).
+  The old "dismiss for this version" button swapped itself for a note
+  saying it was dismissed, but never actually hid the list of unset
+  settings, so the same list came back every time Settings was reopened
+  regardless. What it did save was a versioned dismissal on the server
+  (`configDrift.storePath`), tied to the version that was current when
+  you clicked it. Owner ruling, verbatim: "Just have a close button.
+  It's simple." Closing it now hides the panel for this visit only,
+  with nothing saved and no server round trip; it shows again next time
+  you open Settings, or after a restart, for as long as something is
+  genuinely missing. The versioned dismissal state and its API are gone.
+
+- **The drop list is now persisted by default, so entries survive a
+  restart** (#853 addendum). It used to be memory-only unless
+  `history.keyFile` was configured -- the common case on a default
+  install -- so a restart silently emptied every operator-authored
+  entry. Worse, the RouterOS feed is a full sync (clear the address
+  list, then rebuild it from the store), so the next scheduled fetch
+  after that restart pushed an *empty* list and wiped whatever the
+  router still had, too. The drop list now persists the same way
+  accounts, tokens and recovery keys already do, with no key needed.
+  As a second, independent safeguard, `GET /api/droplist.rsc` now
+  refuses (503) to serve the feed when the store is both empty and was
+  never persisted, rather than handing a router back an empty block
+  list. See `docs/decisions/event-retention.md`'s addendum.
+
+- **The setup wizard's step 5 push script and step 6 backup script --
+  and both their scheduler entries -- are now safe to paste twice**
+  (#1266). This is separate from #1208's fix for step 1's logging
+  commands, below. Re-running step 5 or step 6 used to append a second
+  `/system script add` and a second `/system scheduler add` alongside
+  the one already there, so a router that had already been set up
+  ended up with two schedulers of the same name, both firing -- the
+  router pushed its tables, or ran its backup, twice as often as
+  configured. Both the script add and the scheduler add now update the
+  existing entry in place instead of adding a second one. The wizard
+  version is now 2, since the rendered block changed.
+
 - **Fall traffic now matches the rules that actually catch it** (#1196).
   A pushed rule that did not name both interfaces exactly as the log
   line prints them keyed differently from its own traffic, so almost
