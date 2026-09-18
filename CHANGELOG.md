@@ -361,7 +361,7 @@ rewritten.
   genuinely missing. The versioned dismissal state and its API are gone.
 
 - **The drop list is now persisted by default, so entries survive a
-  restart** (#853 addendum). It used to be memory-only unless
+  restart** (#1260; an addendum to #853). It used to be memory-only unless
   `history.keyFile` was configured -- the common case on a default
   install -- so a restart silently emptied every operator-authored
   entry. Worse, the RouterOS feed is a full sync (clear the address
