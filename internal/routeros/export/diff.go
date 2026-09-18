@@ -135,21 +135,51 @@ func wholesale(a, b []diffSide) []DiffLine {
 // maxDiffEdits, leaving Diff to answer wholesale rather than keep
 // paying for a comparison nobody could read.
 //
-// Each round of the search is snapshotted so the edit script can be
-// walked back out of it; a round only ever holds diagonals -d..d, so
-// the snapshots cost about d² ints in total rather than d×(n+m).
+// A round of the search only ever holds diagonals -d..d, so snapshotting
+// every round for backtracking costs about d² ints in total -- for a
+// pair whose edit distance turns out to exceed maxDiffEdits, that ran to
+// something like 39 MiB, built one round at a time and then thrown away
+// the moment the search gave up and Diff fell back to wholesale (#1269).
+// myersRun below finds the distance first, with no snapshot recorded at
+// all; only once that distance is known to be within budget is it run a
+// second time, up to that known depth, to build the trace worth having.
 func myers(a, b []diffSide) ([]DiffLine, bool) {
 	n, m := len(a), len(b)
 	limit := n + m
 	if limit > maxDiffEdits {
 		limit = maxDiffEdits
 	}
+
+	d, ok := myersRun(a, b, limit, nil)
+	if !ok {
+		return nil, false
+	}
+	trace := make([][]int, 0, d+1)
+	if _, ok := myersRun(a, b, d, &trace); !ok {
+		// Unreachable: myersRun is deterministic given the same inputs,
+		// so having already found a solution at round d, rerunning up
+		// to exactly d cannot fail to find it again. Guarded rather
+		// than trusted blindly.
+		return nil, false
+	}
+	return backtrack(trace, a, b, d), true
+}
+
+// myersRun performs the search up to `limit` rounds, returning the
+// round it found a solution at (and true), or false if none exists by
+// then. When trace is non-nil, each round's diagonal array is appended
+// to it first, exactly as myers used to record unconditionally -- the
+// snapshot a caller needs to backtrack from once it has decided the
+// answer is worth building.
+func myersRun(a, b []diffSide, limit int, trace *[][]int) (int, bool) {
+	n, m := len(a), len(b)
 	offset := n + m
 	v := make([]int, 2*(n+m)+1)
-	trace := make([][]int, 0, limit+1)
 
 	for d := 0; d <= limit; d++ {
-		trace = append(trace, append([]int(nil), v[offset-d:offset+d+1]...))
+		if trace != nil {
+			*trace = append(*trace, append([]int(nil), v[offset-d:offset+d+1]...))
+		}
 		for k := -d; k <= d; k += 2 {
 			var x int
 			if k == -d || (k != d && v[offset+k-1] < v[offset+k+1]) {
@@ -164,11 +194,11 @@ func myers(a, b []diffSide) ([]DiffLine, bool) {
 			}
 			v[offset+k] = x
 			if x >= n && y >= m {
-				return backtrack(trace, a, b, d), true
+				return d, true
 			}
 		}
 	}
-	return nil, false
+	return 0, false
 }
 
 // backtrack walks myers' snapshots from the end back to the start,
