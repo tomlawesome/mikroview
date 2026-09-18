@@ -396,10 +396,19 @@
   // mounted key file, so no later reload can want the old value back
   // and keeping it only leaves a plaintext key in the tab -- one that
   // survived a logout and rehydrated into the next login, potentially
-  // someone else's. A ledger that has not arrived yet decides nothing:
-  // forgetting on `undefined` would hand a mid-setup operator a fresh
-  // key on their next reload, which is the bug sessionStorage fixed.
-  const historyKeyStepState = $derived(ledger[5]?.status.state)
+  // someone else's. What has not been asked decides nothing: forgetting
+  // on `undefined` would hand a mid-setup operator a fresh key on their
+  // next reload, which is the bug sessionStorage fixed.
+  //
+  // `blocked` is only knowable once the backups GET has answered, and
+  // that request runs only while the modal is open (the poll above).
+  // Reading the step state alone, this said `waiting` on an ordinary
+  // reload with the wizard shut -- the step's own not-yet-pushed state,
+  // standing in for a question nothing had asked -- and cleared the key
+  // on it. Hence the null check ahead of the step state.
+  const historyKeyStepState = $derived(
+    wizardState.backups === null ? undefined : ledger[5]?.status.state,
+  )
   $effect(() => {
     if (historyKeyStepState === undefined) return
     if (historyKeyStepState === 'blocked') saveHistoryKeyForSession(historyKey)
