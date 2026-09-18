@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { dismissConfigUpgrade, fetchConfigUpgrade } from './api'
+import { fetchConfigUpgrade } from './api'
 import type { ConfigUpgradeSetting } from './configUpgrade'
 
 // #1218's "N new settings are available" notice -- its own small state
 // module, matching auditState's pattern: a thin reactive wrapper over
-// one read-only fetch, plus (unlike auditState) the one mutation this
-// screen has, dismissing the notice for whatever version the server
-// reports itself running.
+// one read-only fetch. No dismiss mutation: the panel's close is a
+// plain per-visit local toggle in ConfigUpgrade.svelte itself, not
+// state worth persisting here (owner ruling: "Just have a close
+// button. It's simple.").
 class ConfigUpgradeState {
   settings = $state<ConfigUpgradeSetting[]>([])
-  dismissed = $state(false)
   version = $state('')
   // False until a fetch resolves (success or failure) -- same
   // distinction auditState.loaded draws, so a failed fetch cannot read
@@ -23,24 +23,12 @@ class ConfigUpgradeState {
     try {
       const res = await fetchConfigUpgrade()
       this.settings = res.settings
-      this.dismissed = res.dismissed
       this.version = res.version
       this.error = null
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err)
     } finally {
       this.loaded = true
-    }
-  }
-
-  async dismiss() {
-    try {
-      const res = await dismissConfigUpgrade()
-      this.dismissed = res.dismissed
-      this.version = res.version
-      this.error = null
-    } catch (err) {
-      this.error = err instanceof Error ? err.message : String(err)
     }
   }
 }

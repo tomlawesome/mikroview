@@ -5,12 +5,11 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 // ConfigUpgrade.svelte itself makes no requests directly -- this stops
-// configUpgradeState.refresh()/dismiss() (called onMount / on click)
-// from reaching for the network under jsdom, the same guard
-// AuditLog.svelte.test.ts uses for auditState.
+// configUpgradeState.refresh() (called onMount) from reaching for the
+// network under jsdom, the same guard AuditLog.svelte.test.ts uses for
+// auditState.
 vi.mock('../lib/api', () => ({
   fetchConfigUpgrade: vi.fn(),
-  dismissConfigUpgrade: vi.fn(),
 }))
 // The Clipboard API is not implemented under jsdom -- mocked so a click
 // on Copy doesn't fall through to the legacy execCommand path and rely
@@ -19,7 +18,7 @@ vi.mock('../lib/clipboard', () => ({
   copyToClipboard: vi.fn(async () => true),
 }))
 
-import { fetchConfigUpgrade, dismissConfigUpgrade } from '../lib/api'
+import { fetchConfigUpgrade } from '../lib/api'
 import { copyToClipboard } from '../lib/clipboard'
 import type { ConfigUpgradeResponse } from '../lib/configUpgrade'
 import ConfigUpgrade from './ConfigUpgrade.svelte'
@@ -28,7 +27,6 @@ function response(overrides: Partial<ConfigUpgradeResponse> = {}): ConfigUpgrade
   return {
     version: 'v1.2.3',
     settings: [],
-    dismissed: false,
     ...overrides,
   }
 }
@@ -90,26 +88,24 @@ describe('ConfigUpgrade (#1218)', () => {
     expect(screen.getByRole('button', { name: 'copied' })).toBeTruthy()
   })
 
-  it('shows a Dismiss control when the notice has not been dismissed yet', async () => {
-    await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }], dismissed: false }))
-    expect(screen.getByRole('button', { name: /dismiss for this version/ })).toBeTruthy()
+  // #1218 follow-up: the versioned dismiss never actually hid anything
+  // (its one consumer was a self-referential button/note swap), so the
+  // owner ruled for a plain close instead -- no server round trip, and
+  // not remembered past this visit (a fresh mount, e.g. Settings
+  // scrolled back to, shows the panel again).
+  it('shows a close control alongside the settings', async () => {
+    await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }] }))
+    expect(screen.getByRole('button', { name: 'close' })).toBeTruthy()
   })
 
-  it('dismissing calls the API and replaces the button with a note', async () => {
-    await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }], dismissed: false }))
-    vi.mocked(dismissConfigUpgrade).mockResolvedValue(response({ dismissed: true }))
+  it('closing hides the panel without calling the API', async () => {
+    await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }] }))
 
-    await fireEvent.click(screen.getByRole('button', { name: /dismiss for this version/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'close' }))
     flushSync()
 
-    expect(dismissConfigUpgrade).toHaveBeenCalled()
-    expect(screen.getByText(/Dismissed for this version/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /^dismiss for this version$/ })).toBeNull()
-  })
-
-  it('already dismissed on load shows the note, not the Dismiss control', async () => {
-    await renderPanel(response({ settings: [{ key: 'geoip', block: '# geoip:' }], dismissed: true }))
-    expect(screen.getByText(/Dismissed for this version/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /dismiss for this version/ })).toBeNull()
+    expect(screen.queryByText(/setting.*understands/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'close' })).toBeNull()
+    expect(fetchConfigUpgrade).toHaveBeenCalledTimes(1)
   })
 })

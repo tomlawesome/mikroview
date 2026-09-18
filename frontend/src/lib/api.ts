@@ -1365,15 +1365,6 @@ export async function fetchConfigUpgrade(): Promise<ConfigUpgradeResponse> {
   return res.json()
 }
 
-// dismissConfigUpgrade marks that same notice dealt with, for the
-// version the server is currently running -- it comes back on its own
-// the moment a later version has something new to say.
-export async function dismissConfigUpgrade(): Promise<ConfigUpgradeResponse> {
-  const res = await postJSON('/api/config/upgrade/dismiss')
-  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
-  return res.json()
-}
-
 // CoverageDeclaration mirrors internal/coverage.Declaration -- an
 // admin's on-record statement that a given boundary-direction pair
 // (`key`, e.g. "ether1|bridge1") is intentionally, not accidentally,
@@ -1720,7 +1711,7 @@ export async function createDroplistEntry(req: {
 }
 
 export async function deleteDroplistEntry(cidr: string): Promise<string | null> {
-  const res = await deleteJSON('/api/droplist', { cidr })
+  const res = await deleteJSON(`/api/droplist/${encodeURIComponent(cidr)}`)
   if (res.ok) return null
   return (await res.text()).trim() || `deleteDroplistEntry: ${res.status}`
 }

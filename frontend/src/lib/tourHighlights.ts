@@ -87,6 +87,14 @@ export const TOUR_HIGHLIGHTS: Record<string, TourHighlight[]> = {
   engineroom: [
     { label: 'the shelf — deck order, ingest, detection, memory, account', says: 'drag cards to reorder your deck; the shelves below set what comes in and what is kept.', selector: '.card[data-card="engineroom"] .stshelf', top: '10%', left: '6%', width: '55%', height: '9%' },
   ],
+  'log-every-rule': [
+    // button.drop paints its own dashed border and elevated fill
+    // (LogEveryRule.svelte's .drop) -- a drawn field, so the ring
+    // traces it. One ring: Analyse and the results do not exist until
+    // an export is in, and the never-stored line stays a footnote by
+    // #1134's ruling, here as on the page.
+    { label: 'one drop zone — drop, click or paste the router export', says: 'the export comes back with logging switched on for every rule not logging yet.', selector: '.card[data-card="log-every-rule"] button.drop', box: true, top: '34%', left: '28%', width: '44%', height: '16%' },
+  ],
 }
 
 // ── ring geometry (#1215) ────────────────────────────────────────────

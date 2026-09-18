@@ -46,6 +46,8 @@ const { retentionState } = await import('../lib/retention.svelte')
 const { geoipState } = await import('../lib/geoip.svelte')
 const { seenValuesState } = await import('../lib/seenValues.svelte')
 const { presetState } = await import('../lib/presets.svelte')
+const { viewportState } = await import('../lib/viewport.svelte')
+const { COLUMNS, columnState } = await import('../lib/columns.svelte')
 
 // The box div carries no role -- it holds the chips' own remove buttons,
 // and a screen reader flattens the contents of anything with
@@ -850,5 +852,66 @@ describe('FilterBar, the token bar (#1246)', () => {
     flushSync()
     expect(appState.filters.chain).toBe('')
     expect(appState.filters.action).toBe('drop')
+  })
+})
+
+// #1218 audit finding 13: the mobile drawer's always-open column list
+// used to be FilterBar's own copy of ColumnChoice/PLAIN_COLUMNS/etc and
+// the columnCheckbox/columnCheckboxes snippets, byte-for-byte identical
+// to Whisper.svelte's desktop popover -- and unlike Whisper's, it had no
+// test at all. The checkbox logic itself is ColumnToggles.svelte now,
+// covered directly by ColumnToggles.svelte.test.ts; these check that
+// FilterBar actually mounts it, in the drawer, with the mobile touch
+// sizing, rather than re-covering the checkboxes here too.
+describe('FilterBar, the mobile drawer’s column chooser (#729/#1218 finding 13)', () => {
+  beforeEach(() => {
+    viewportState.isMobile = true
+    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+  })
+
+  afterEach(() => {
+    viewportState.isMobile = false
+    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+  })
+
+  // Mobile's own way into the drawer is the "Filters" trigger button,
+  // not the desktop box expandRow() elsewhere in this file clicks --
+  // {#if viewportState.isMobile} draws that button instead of the box.
+  async function openMobileDrawer() {
+    await fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    flushSync()
+  }
+
+  it('shows the always-open list, with a checkbox that writes through to columnState', async () => {
+    const { container } = render(FilterBar)
+    await openMobileDrawer()
+
+    const group = container.querySelector('.col-toggles[role="group"]')
+    expect(group).toBeTruthy()
+    expect(group?.getAttribute('aria-label')).toBe('Choose which columns the stream shows')
+
+    const device = screen.getByRole('checkbox', { name: 'Device column' })
+    await fireEvent.click(device)
+    flushSync()
+    expect(columnState.isColumnVisible('device')).toBe(false)
+  })
+
+  // The drawer's own 44px touch-target convention (issue #85) -- the
+  // component's `touch` prop, not a bare mount.
+  it('sizes the rows for touch, unlike Whisper’s compact desktop popover', async () => {
+    const { container } = render(FilterBar)
+    await openMobileDrawer()
+
+    const toggle = container.querySelector('.col-toggle')
+    expect(toggle).toBeTruthy()
+    expect(toggle?.classList.contains('touch')).toBe(true)
+  })
+
+  it('is not rendered at all off the mobile breakpoint', async () => {
+    viewportState.isMobile = false
+    const { container } = render(FilterBar)
+    await expandRow()
+
+    expect(container.querySelector('.columns-field')).toBeNull()
   })
 })

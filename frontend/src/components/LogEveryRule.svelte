@@ -31,10 +31,14 @@
   // The invariant this page exists to keep honest: the export never
   // leaves the browser except in the two POSTs it drives
   // (fetchTuneLoggingAnalyse/fetchTuneLoggingRender, lib/api.ts). Nothing
-  // here writes it to storage, a log, or anywhere that outlives this
-  // component -- exportText is plain component state, gone the moment
-  // this unmounts, which is what the ephemerality note below states in
-  // the operator's own words.
+  // here writes it to storage or a log -- the pasted export and whatever
+  // Analyse/Render made of it live in lib/logEveryRuleWork.svelte.ts, a
+  // module-lifetime store rather than this component's own state, so
+  // scrolling the deck away and back (Deck.svelte unmounts an
+  // off-screen card's scene) does not throw the operator's work away.
+  // It is still gone the moment the tab closes or reloads, which is
+  // what the ephemerality note below states in the operator's own
+  // words.
   //
   // The `TuneLogging*` names it imports keep theirs: they mirror the two
   // /api/tune-logging endpoints, and #1134 leaves those paths alone.
@@ -42,6 +46,7 @@
   import { policyState } from '../lib/policy.svelte'
   import { coverageState } from '../lib/coverage.svelte'
   import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
+  import { logEveryRuleWorkState as work } from '../lib/logEveryRuleWork.svelte'
   import { fetchTuneLoggingAnalyse, fetchTuneLoggingRender } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { downloadText } from '../lib/export'
@@ -55,7 +60,7 @@
     initialSelection,
     waitingMessage,
   } from '../lib/logEveryRule'
-  import type { TuneLoggingAnalyseResponse, TuneLoggingRenderResponse, TuneLoggingRule } from '../lib/types'
+  import type { TuneLoggingRule } from '../lib/types'
 
   // The pushed tables the dark-boundary set is computed from -- the same
   // two refreshes Topography.svelte runs, so the "dark" this page sends
@@ -65,7 +70,6 @@
     coverageState.refresh()
   })
 
-  let device = $state('')
   // The pair that prompted this visit, from the topography's coverage
   // lens (contract §6: "passes that pair's key so it is pre-selected").
   // Read once on mount and cleared -- see tuneLoggingNav.svelte.ts's own
@@ -75,7 +79,7 @@
   $effect(() => {
     const pending = logEveryRuleNavState.consume()
     if (!pending) return
-    device = pending.device
+    work.device = pending.device
     preselectedBoundary = pending.boundaryKey
   })
 
@@ -83,57 +87,32 @@
   // (contract §6: "device pick (if >1)"); the only known device is
   // picked for the operator otherwise.
   $effect(() => {
-    if (!device && appState.devices.length === 1) device = appState.devices[0].id
+    if (!work.device && appState.devices.length === 1) work.device = appState.devices[0].id
   })
 
-  let exportText = $state('')
-  // What the drop zone says it is holding. A dropped or chosen file is
-  // named by the file; a paste has no name of its own, so it says so.
-  let exportName = $state('')
   let dragging = $state(false)
   let fileInput = $state<HTMLInputElement | null>(null)
-  const ruleCount = $derived(exportText ? countFilterRules(exportText) : 0)
+  const ruleCount = $derived(work.exportText ? countFilterRules(work.exportText) : 0)
   // #1186: what is wrong with the text in the zone, said here rather
   // than left for Analyse to answer with the under-24h waiting line.
-  const problem = $derived(exportProblem(exportText))
+  const problem = $derived(exportProblem(work.exportText))
 
   let analysing = $state(false)
   let analyseError = $state<string | null>(null)
-  let result = $state<TuneLoggingAnalyseResponse | null>(null)
-  let selected = $state<Set<number>>(new Set())
-  // The non-dark group starts collapsed (contract §6): "the rest shown
-  // collapsed, unticked".
-  let showOther = $state(false)
 
   let rendering = $state(false)
   let renderError = $state<string | null>(null)
-  let renderResult = $state<TuneLoggingRenderResponse | null>(null)
-  // Whether the rendered result has been downloaded or copied at least
-  // once -- what the beforeunload guard below reads. Cleared whenever a
-  // fresh render arrives, since that is a new unsaved result.
-  let resultSaved = $state(false)
   let copied = $state('')
-
-  // A new or edited export invalidates whatever was derived from the
-  // old one -- an analyse result, a render, and the guard around it all
-  // describe text that is no longer what is in the box.
-  function resetDownstream() {
-    result = null
-    analyseError = null
-    selected = new Set()
-    showOther = false
-    renderResult = null
-    renderError = null
-    resultSaved = false
-  }
 
   // The one intake. Every door into the drop zone -- a dropped file, a
   // chosen file, a paste -- ends here, so a second export always lands
   // in exactly the state the first one did.
   function take(text: string, name: string) {
-    exportText = text
-    exportName = name
-    resetDownstream()
+    work.exportText = text
+    work.exportName = name
+    work.resetDownstream()
+    analyseError = null
+    renderError = null
   }
 
   async function onFile(e: Event) {
@@ -187,49 +166,49 @@
   const darkBoundaries = $derived(darkBoundaryKeys(policyState.edges, new Set(coverageState.byKey.keys())))
 
   async function analyse() {
-    if (!device || !exportText.trim() || problem || analysing) return
+    if (!work.device || !work.exportText.trim() || problem || analysing) return
     analysing = true
     analyseError = null
-    const res = await fetchTuneLoggingAnalyse({ device, export: exportText, darkBoundaries })
+    const res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
     analysing = false
     if (typeof res === 'string') {
       analyseError = res
       return
     }
-    result = res
-    selected = initialSelection(res.rules)
+    work.result = res
+    work.selected = initialSelection(res.rules)
   }
 
-  const grouped = $derived(result ? groupRules(result.rules) : { dark: [] as TuneLoggingRule[], other: [] as TuneLoggingRule[] })
+  const grouped = $derived(work.result ? groupRules(work.result.rules) : { dark: [] as TuneLoggingRule[], other: [] as TuneLoggingRule[] })
 
   function toggle(id: number) {
-    const next = new Set(selected)
+    const next = new Set(work.selected)
     if (next.has(id)) next.delete(id)
     else next.add(id)
-    selected = next
+    work.selected = next
   }
 
   async function render() {
-    if (!device || selected.size === 0 || rendering) return
+    if (!work.device || work.selected.size === 0 || rendering) return
     rendering = true
     renderError = null
-    const res = await fetchTuneLoggingRender({ device, export: exportText, selected: [...selected] })
+    const res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
     rendering = false
     if (typeof res === 'string') {
       renderError = res
       return
     }
-    renderResult = res
-    resultSaved = false
+    work.renderResult = res
+    work.resultSaved = false
   }
 
   // Download first, copy second (the record, contract §6): the page's
   // own command snippets overwrite the clipboard, so the file -- which
   // does not -- is the button that comes first.
   function download() {
-    if (!renderResult) return
-    downloadText(`${device}-logging.rsc`, renderResult.annotated)
-    resultSaved = true
+    if (!work.renderResult) return
+    downloadText(`${work.device}-logging.rsc`, work.renderResult.annotated)
+    work.resultSaved = true
   }
 
   async function copy(text: string, label: string) {
@@ -237,7 +216,7 @@
     if (ok) {
       copied = label
       setTimeout(() => (copied = ''), 1500)
-      resultSaved = true
+      work.resultSaved = true
     }
   }
 
@@ -252,17 +231,17 @@
   // existed anywhere in the frontend before this -- see lib/export.ts's
   // download-a-blob precedent this page's own download() reuses.
   $effect(() => {
-    if (!renderResult || resultSaved) return
+    if (!work.renderResult || work.resultSaved) return
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   })
 </script>
 
 {#snippet ruleRow(r: TuneLoggingRule)}
-  {@const ct = result ? counterText(r, result.observing.since) : null}
+  {@const ct = work.result ? counterText(r, work.result.observing.since) : null}
   {@const epn = everyPacketNote(r)}
   <label class="rule-row" class:highlight={preselectedBoundary !== null && r.boundary === preselectedBoundary}>
-    <input type="checkbox" checked={selected.has(r.id)} onchange={() => toggle(r.id)} />
+    <input type="checkbox" checked={work.selected.has(r.id)} onchange={() => toggle(r.id)} />
     <span class="rule-main">
       <span class="rule-title">
         {r.chain} · {r.action} · {r.inInterface || 'any'} → {r.outInterface || 'any'}{r.comment ? ` — ${r.comment}` : ''}
@@ -304,7 +283,7 @@
           {#if appState.devices.length > 1}
             <div class="field">
               <label for="ler-device">Router</label>
-              <select id="ler-device" bind:value={device}>
+              <select id="ler-device" bind:value={work.device}>
                 <option value="" disabled>Which router is this export from?…</option>
                 {#each appState.devices as d (d.id)}
                   <option value={d.id}>{d.name && d.name !== d.id ? `${d.name} (${d.id})` : d.id}</option>
@@ -322,7 +301,7 @@
               type="button"
               class="drop"
               class:dragging
-              class:filled={exportText.trim().length > 0}
+              class:filled={work.exportText.trim().length > 0}
               onclick={() => fileInput?.click()}
               ondragenter={(e) => {
                 e.preventDefault()
@@ -335,8 +314,8 @@
               ondragleave={() => (dragging = false)}
               ondrop={onDrop}
             >
-              {#if exportText.trim()}
-                <span class="drop-picked">{exportName}</span>
+              {#if work.exportText.trim()}
+                <span class="drop-picked">{work.exportName}</span>
                 <span class="drop-sub">
                   {ruleCount} firewall rule{ruleCount === 1 ? '' : 's'} in it — drop, click or paste another to replace
                   it
@@ -389,19 +368,19 @@
             type="button"
             class="primary"
             onclick={analyse}
-            disabled={!device || !exportText.trim() || problem !== null || analysing}
+            disabled={!work.device || !work.exportText.trim() || problem !== null || analysing}
           >
             {analysing ? 'Analysing…' : 'Analyse'}
           </button>
 
-          {#if result?.rejected}
-            <p class="load-error">{result.rejected.reason}</p>
-          {:else if result && !result.ready}
+          {#if work.result?.rejected}
+            <p class="load-error">{work.result.rejected.reason}</p>
+          {:else if work.result && !work.result.ready}
             <p class="observation waiting">
               <span class="dot" aria-hidden="true"></span>
-              {waitingMessage(result.observing.hours)}
+              {waitingMessage(work.result.observing.hours)}
             </p>
-          {:else if result}
+          {:else if work.result}
             <div class="rules">
               <h4>crosses a dark connection — ticked by default</h4>
               {#if grouped.dark.length === 0}
@@ -412,12 +391,12 @@
               {/each}
 
               {#if grouped.other.length > 0}
-                <button type="button" class="ghost" onclick={() => (showOther = !showOther)}>
-                  {showOther ? 'Hide' : 'Show'} the other {grouped.other.length} rule{grouped.other.length === 1
+                <button type="button" class="ghost" onclick={() => (work.showOther = !work.showOther)}>
+                  {work.showOther ? 'Hide' : 'Show'} the other {grouped.other.length} rule{grouped.other.length === 1
                     ? ''
                     : 's'}
                 </button>
-                {#if showOther}
+                {#if work.showOther}
                   {#each grouped.other as r (r.id)}
                     {@render ruleRow(r)}
                   {/each}
@@ -426,12 +405,12 @@
             </div>
 
             {#if renderError}<p class="load-error">{renderError}</p>{/if}
-            <button type="button" class="primary" onclick={render} disabled={rendering || selected.size === 0}>
-              {rendering ? 'Rendering…' : `Render (${selected.size} selected)`}
+            <button type="button" class="primary" onclick={render} disabled={rendering || work.selected.size === 0}>
+              {rendering ? 'Rendering…' : `Render (${work.selected.size} selected)`}
             </button>
 
-            {#if renderResult}
-              {@const rr = renderResult}
+            {#if work.renderResult}
+              {@const rr = work.renderResult}
               <div class="render-result">
                 <p class="note">
                   {rr.changed} rule{rr.changed === 1 ? '' : 's'} changed.
@@ -440,7 +419,7 @@
                      buttons overwrite the clipboard, so the file (which
                      does not) is the one to reach for first. -->
                 <button type="button" class="primary" onclick={download}>
-                  Download {device}-logging.rsc
+                  Download {work.device}-logging.rsc
                 </button>
                 <button type="button" onclick={() => copy(rr.annotated, 'annotated')}>
                   {copied === 'annotated' ? 'Copied' : 'Copy the annotated export'}

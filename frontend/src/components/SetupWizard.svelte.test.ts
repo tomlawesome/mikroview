@@ -37,6 +37,14 @@ vi.mock('../lib/api', () => ({
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
+// downloadFromUrl's own fetch-and-save path is unreliable in jsdom (see
+// RouterBackups.svelte.test.ts's identical guard) -- faked at the module
+// boundary so what is tested here is this component's own wiring: which
+// URL, and what the vault gate does to it (#1218 audit finding 16).
+vi.mock('../lib/export', () => ({
+  downloadFromUrl: vi.fn(),
+}))
+
 import {
   createToken,
   fetchDevices,
@@ -51,6 +59,7 @@ import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
+import { downloadFromUrl } from '../lib/export'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
 // Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
@@ -173,6 +182,11 @@ beforeEach(async () => {
   // default the same way a fresh install reads.
   wizardState.backupTransport = 'sftp'
   wizardState.backupTransportError = null
+  // The history key (#1218 audit finding 4) now survives a reload via
+  // sessionStorage -- cleared here so one test's mint or pasted key
+  // never leaks into the next, the same "start without one" rule the
+  // wizardState fields above already follow.
+  sessionStorage.clear()
 })
 
 describe('SetupWizard', () => {
@@ -674,6 +688,37 @@ describe('SetupWizard -- the address field (#1213)', () => {
       const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
       expect(last?.address).toBe('192.168.1.9:8443')
     })
+  })
+
+  // #1218 audit finding 11: the field is bound per keystroke, and
+  // commandsKey (this file's own effect below) includes
+  // wizardState.address -- before refreshCommands debounced its actual
+  // request, every one of these fired its own POST
+  // /api/setup/commands. fetchSetupCommands is called once already by
+  // the initial mount (asserted above in the previous test's own first
+  // line); this one keeps typing going and checks the traffic that
+  // follows collapses to one more call, not one per character.
+  it('collapses a run of keystrokes into a single request, not one per character', async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+    // Mount settles on its own (unrelated to the address field -- the
+    // status/token effects above can each fire their own initial
+    // request), so the baseline is however many calls that took, not an
+    // assumed 1 -- what this test actually checks is the *delta* a run
+    // of keystrokes adds.
+    const baseline = vi.mocked(fetchSetupCommands).mock.calls.length
+
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    for (const value of ['1', '19', '192', '192.', '192.1', '192.16', '192.168']) {
+      await fireEvent.input(input, { target: { value } })
+    }
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.address).toBe('192.168')
+    })
+    // One more call for the whole run, not one per character.
+    expect(vi.mocked(fetchSetupCommands).mock.calls.length - baseline).toBe(1)
   })
 
   it('persists on blur, not on every keystroke', async () => {
@@ -1216,6 +1261,31 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(keyField(container).value).toBe('a-key-of-my-own-that-i-already-had')
   })
 
+  // Reproduces #1218 audit finding 4: SetupWizard's own script runs
+  // fresh on a page reload, same as unmounting and remounting does here
+  // -- and step 6 stays `blocked` (this fixture's backupsFixture never
+  // flips enabled) exactly the way it would if the operator had saved
+  // the key but not yet updated config.yaml and restarted.
+  it('shows the same key after a remount, not a fresh one that would tell the operator to overwrite it', async () => {
+    const first = await noKeyPane()
+    const firstKey = keyField(first.container).value
+    first.unmount()
+
+    const second = await noKeyPane()
+    expect(keyField(second.container).value).toBe(firstKey)
+  })
+
+  it('remembers a Reroll across a remount too -- the operator\'s latest choice, not the first mint', async () => {
+    const first = await noKeyPane()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await tick()
+    const rerolled = keyField(first.container).value
+    first.unmount()
+
+    const second = await noKeyPane()
+    expect(keyField(second.container).value).toBe(rerolled)
+  })
+
   it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
     const { container } = await noKeyPane()
 
@@ -1538,36 +1608,93 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(createToken).not.toHaveBeenCalled()
   })
 
+  // Shared by the lost-router tests below: one router, one generation,
+  // and whatever lock the vault passphrase gate (#1115) should read.
+  function lostRouterBackups(lock?: Partial<import('../lib/types').VaultLock>) {
+    return backupsFixture({
+      enabled: true,
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [
+            { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
+          ],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900, ...lock },
+    })
+  }
+
   it('reaches the lost-router shape only through wizardState.openLostRouter, never on its own', async () => {
-    vi.mocked(fetchRouterBackups).mockResolvedValue(
-      backupsFixture({
-        enabled: true,
-        routers: [
-          {
-            device: 'rb5009',
-            generations: [
-              { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
-            ],
-            intervalKnown: false,
-            missed: 0,
-          },
-        ],
-      }),
-    )
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('ok')
     wizardState.openLostRouter('rb5009')
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.textContent).toContain('rb5009 is gone'))
-    expect(screen.getByRole('link', { name: /download the newest \.backup/ })).toHaveProperty(
-      'href',
-      expect.stringContaining('/api/router-backups/rb5009/g0/backup'),
-    )
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+    expect(downloadFromUrl).toHaveBeenCalledWith('/api/router-backups/rb5009/g0/backup', 'rb5009.backup')
     expect(screen.getByRole('button', { name: 'done — the replacement is pushing' })).toBeTruthy()
     // No skip on this footer -- there is nothing to skip past.
     expect(screen.queryByRole('button', { name: 'Skip this step' })).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'done — the replacement is pushing' }))
     expect(wizardState.lostRouterDevice).toBeNull()
+  })
+
+  // #1218 audit finding 16: the download used to be a plain <a href>,
+  // so it ignored #1115's vault passphrase gate entirely -- a locked
+  // vault meant the browser navigated the whole tab to whatever the
+  // server's 403 answered with, rather than reading it as gated the way
+  // RouterBackups.svelte's own downloads (the same endpoint) already do.
+  it('gates the download behind a locked vault, with no link to click', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups({ passphraseSet: true, locked: true }))
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    expect(screen.getByText(/locked — the vault passphrase opens downloads/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download the newest \.backup/ })).toBeNull()
+    expect(downloadFromUrl).not.toHaveBeenCalled()
+  })
+
+  it('names the other case too -- unlocked elsewhere, not here', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(
+      lostRouterBackups({ passphraseSet: true, locked: false, unlockedForYou: false }),
+    )
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    expect(screen.getByText(/unlocked by another of your sign-ins/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download the newest \.backup/ })).toBeNull()
+  })
+
+  it('reports a failed download instead of doing nothing', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('failed')
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+
+    expect(await screen.findByText('The download failed. Try again.')).toBeTruthy()
+  })
+
+  it('re-reads the vault lock instead of the client’s own clock when a download 403s', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValueOnce(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('forbidden')
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    vi.mocked(fetchRouterBackups).mockResolvedValueOnce(lostRouterBackups({ passphraseSet: true, locked: true }))
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+
+    expect(await screen.findByText(/locked — the vault passphrase opens downloads/)).toBeTruthy()
   })
 })
 
