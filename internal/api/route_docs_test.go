@@ -102,3 +102,23 @@ func TestDroplistFieldCommentMatchesReality(t *testing.T) {
 		t.Fatal("found no /api/droplist route registration in server.go -- this test is not looking where it thinks it is")
 	}
 }
+
+// TestRequireAuthCommentNamesOnlyTheOneExemptLogoutRoute covers a
+// v0.6.0 audit finding (#1267) against requireAuth's own doc comment:
+// it claimed "the two logout-shaped routes" stay reachable during the
+// reset-code gate (#1251), but resetCodeSessionOpenPaths in
+// authz_matrix_test.go -- and TestResetCodeSessionReachesNothingButThe
+// ChangePasswordRoute, which walks the whole matrix against it -- show
+// only one of the two logout-shaped routes, /api/auth/logout, is
+// actually exempt. /api/auth/logout-all needs a session it is not free
+// to trust yet, so it 403s like everything else. Comment only; the
+// behaviour this pins was already correct and already tested.
+func TestRequireAuthCommentNamesOnlyTheOneExemptLogoutRoute(t *testing.T) {
+	source, err := os.ReadFile("auth.go")
+	if err != nil {
+		t.Fatalf("reading auth.go: %v", err)
+	}
+	if bytes.Contains(source, []byte("the two logout-shaped routes")) {
+		t.Error("requireAuth's doc comment still claims two logout-shaped routes stay reachable during the reset-code gate, but only /api/auth/logout does -- /api/auth/logout-all requires a session")
+	}
+}
