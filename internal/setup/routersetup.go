@@ -201,7 +201,7 @@ func driftsFrom(report LoggingReport, want routeros.LoggingSetup) bool {
 			if want.Remote != "" && rec.Remote != want.Remote {
 				return true
 			}
-			if want.RemotePort != "" && rec.RemotePort != want.RemotePort {
+			if want.RemotePort != "" && string(rec.RemotePort) != want.RemotePort {
 				return true
 			}
 			if want.RemoteLogFormat != "" && rec.RemoteLogFormat != want.RemoteLogFormat {

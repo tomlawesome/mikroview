@@ -388,13 +388,19 @@ type LoggingEntry struct {
 	// Name/Target and the four remote-* fields are the action's;
 	// Topics/Action/Disabled are a rule's. Disabled is shared -- an
 	// action has no disabled property, a rule does.
-	Name             string       `json:"name"`
-	Target           string       `json:"target"`
-	Remote           string       `json:"remote"`
-	RemotePort       string       `json:"remotePort"`
-	RemoteProtocol   string       `json:"remoteProtocol"`
-	RemoteLogFormat  string       `json:"remoteLogFormat"`
-	CheckCertificate RouterOSFlag `json:"checkCertificate"`
+	Name   string `json:"name"`
+	Target string `json:"target"`
+	Remote string `json:"remote"`
+	// RemotePort is a single port, the same shape as DstPort above:
+	// RouterOS's :serialize to=json emits it as a JSON number (e.g.
+	// 6514.000000), not the JSON string a self-authored fixture had
+	// this decoding as before (v0.6.0 pre-release audit -- confirmed
+	// against a real router, the same landmine RouterOSPortSpec exists
+	// for generally).
+	RemotePort       RouterOSPortSpec `json:"remotePort"`
+	RemoteProtocol   string           `json:"remoteProtocol"`
+	RemoteLogFormat  string           `json:"remoteLogFormat"`
+	CheckCertificate RouterOSFlag     `json:"checkCertificate"`
 	// Topics is a set RouterOS renders as "firewall,info", so it takes
 	// RouterOSList like every other set-shaped field here and a caller
 	// reads a []string whichever shape arrived.
