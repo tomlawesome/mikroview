@@ -436,7 +436,7 @@ func TestScheduleCommands(t *testing.T) {
 	const source = ":local recs [:toarray \\\"\\\"]\n" +
 		":set recs (\\$recs, 1)"
 	want := ":if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=\"" + source + "\" } else={ /system script set [find name=mv-push] policy=read,test source=\"" + source + "\" }\n" +
-		"/system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\"\n" +
+		":if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event=\"/system script run mv-push\" }\n" +
 		"/system script run mv-push"
 	if cmd != want {
 		t.Errorf("scheduleCommands =\n%s\nwant\n%s", cmd, want)
@@ -493,6 +493,72 @@ func TestScheduleCommandsIsIdempotent(t *testing.T) {
 	if !strings.Contains(cmd, "/system script set [find name=mv-push]") {
 		t.Errorf("ScheduleCommands does not update an existing script on a second run: %s", cmd)
 	}
+	// The scheduler entry itself is the other half of #1266: an
+	// unguarded `/system scheduler add` used to leave a second mv-push
+	// entry on a re-paste, so the script it runs fired twice as often
+	// as intended.
+	if !strings.Contains(cmd, `[:len [/system scheduler find name=mv-push]] = 0`) {
+		t.Errorf("ScheduleCommands' scheduler add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler add name=mv-push") {
+		t.Errorf("ScheduleCommands lost the scheduler add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler set [find name=mv-push]") {
+		t.Errorf("ScheduleCommands does not update an existing scheduler entry on a second run: %s", cmd)
+	}
+}
+
+// TestBackupScheduleCommandsIsIdempotent is TestScheduleCommandsIsIdempotent's
+// twin for step 6's scheduler entry (#1266): re-pasting step 6 after a
+// wizard version bump used to leave a second mv-backup scheduler entry
+// on the router rather than the new one replacing the old.
+func TestBackupScheduleCommandsIsIdempotent(t *testing.T) {
+	cmd := BackupScheduleCommands("a")
+
+	if !strings.Contains(cmd, `[:len [/system scheduler find name=mv-backup]] = 0`) {
+		t.Errorf("BackupScheduleCommands' scheduler add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler add name=mv-backup") {
+		t.Errorf("BackupScheduleCommands lost the scheduler add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler set [find name=mv-backup]") {
+		t.Errorf("BackupScheduleCommands does not update an existing scheduler entry on a second run: %s", cmd)
+	}
+}
+
+// TestBackupPushScheduleCommandsIsIdempotent is the same check for step
+// 6b's mv-backup-https scheduler entry (#1266).
+func TestBackupPushScheduleCommandsIsIdempotent(t *testing.T) {
+	cmd := BackupPushScheduleCommands(BackupPushScript("192.0.2.10:8080", "tok", "a"), "a")
+
+	if !strings.Contains(cmd, `[:len [/system scheduler find name=mv-backup-https]] = 0`) {
+		t.Errorf("BackupPushScheduleCommands' scheduler add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler add name=mv-backup-https") {
+		t.Errorf("BackupPushScheduleCommands lost the scheduler add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler set [find name=mv-backup-https]") {
+		t.Errorf("BackupPushScheduleCommands does not update an existing scheduler entry on a second run: %s", cmd)
+	}
+}
+
+// TestBackupScriptIsIdempotent covers #1266 for BackupScript itself,
+// which used to build its own bare `/system script add` rather than
+// going through scriptAdd: re-pasting step 6 after a wizard version
+// bump left a second mv-backup script on the router rather than the
+// new one replacing the old.
+func TestBackupScriptIsIdempotent(t *testing.T) {
+	cmd := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123", "a")
+
+	if !strings.Contains(cmd, `[:len [/system script find name=mv-backup]] = 0`) {
+		t.Errorf("BackupScript's script add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script add name=mv-backup") {
+		t.Errorf("BackupScript lost the add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script set [find name=mv-backup]") {
+		t.Errorf("BackupScript does not update an existing script on a second run: %s", cmd)
+	}
 }
 
 // TestBackupScriptMatchesRound45 pins the wizard's step 6 script
@@ -506,14 +572,17 @@ func TestScheduleCommandsIsIdempotent(t *testing.T) {
 // and the two files' names say which is which.
 func TestBackupScriptMatchesRound45(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", `mvt-8f3a2c…c21e`, "a")
-	want := "/system script add name=mv-backup policy=read,write,test,sensitive source=\"\n" +
+	const source = "\n" +
 		"  /system backup save name=mv-backup dont-encrypt=yes\n" +
 		"  /export hide-sensitive file=mv-export\n" +
 		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n" +
 		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n" +
 		"  /file remove mv-backup.backup\n" +
-		"  /file remove mv-export.rsc\n" +
-		"\""
+		"  /file remove mv-export.rsc\n"
+	// The guard is #1266's plumbing (scriptAdd, same as every other
+	// saved script in this file); the source="..." body between the
+	// quotes is round 45's drawn script, unchanged.
+	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"" + source + "\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"" + source + "\" }"
 	if got != want {
 		t.Errorf("BackupScript =\n%s\nwant\n%s", got, want)
 	}
@@ -545,7 +614,7 @@ func TestBothNightlyScriptsExportHideSensitive(t *testing.T) {
 
 func TestBackupScheduleCommandsMatchesRound45(t *testing.T) {
 	got := BackupScheduleCommands("a")
-	want := "/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\"\n" +
+	want := ":if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" }\n" +
 		"/system script run mv-backup"
 	if got != want {
 		t.Errorf("BackupScheduleCommands =\n%s\nwant\n%s", got, want)
@@ -640,7 +709,7 @@ func TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom(t *testing.T) {
 	got := BackupPushScheduleCommands(body, "a")
 	const name = "mv-backup-https"
 	want := ":if ([:len [/system script find name=" + name + "]] = 0) do={ /system script add name=" + name + " policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" } else={ /system script set [find name=" + name + "] policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" }\n" +
-		"/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\"\n" +
+		":if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" }\n" +
 		"/system script run mv-backup-https"
 	if got != want {
 		t.Errorf("BackupPushScheduleCommands =\n%s\nwant\n%s", got, want)

@@ -627,7 +627,7 @@ same run.
 
 ```
 /system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
-/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"
+:if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" }
 /system script run mv-push
 ```
 
@@ -897,15 +897,22 @@ for this router, reuse it; nothing here needs a token of its own kind.
 ### 7c. The script
 
 ```
-/system script add name=mv-backup policy=read,write,test,sensitive source="
+:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="
   /system backup save name=mv-backup dont-encrypt=yes
   /export hide-sensitive file=mv-export
   /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
   /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
   /file remove mv-backup.backup
   /file remove mv-export.rsc
-"
-/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup"
+" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="
+  /system backup save name=mv-backup dont-encrypt=yes
+  /export hide-sensitive file=mv-export
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
+  /file remove mv-backup.backup
+  /file remove mv-export.rsc
+" }
+:if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" }
 /system script run mv-backup
 ```
 
@@ -1043,7 +1050,7 @@ To paste it by hand instead:
 
 ```
 /system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
-/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https"
+:if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" }
 /system script run mv-backup-https
 ```
 
