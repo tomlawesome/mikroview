@@ -91,8 +91,8 @@ func (s *Server) handleUpgradeAcknowledge(w http.ResponseWriter, r *http.Request
 	if !ok {
 		// Nothing to acknowledge: a first install, or a click that
 		// raced a restart onto a version with no crossing behind it. A
-		// genuine conflict, not a caller mistake, so 409 rather than a
-		// 4xx that would suggest the request itself was malformed --
+		// genuine conflict, not a caller mistake, so 409 rather than
+		// the 400 that would suggest the request itself was malformed --
 		// but still an error response, not the 200 upgradeResponse
 		// shape a GET returns: the frontend treats any non-2xx here
 		// alike (upgrade.svelte.ts's acknowledge), and no audit entry
