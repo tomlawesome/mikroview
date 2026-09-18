@@ -328,6 +328,40 @@ func TestTuneLoggingRenderProducesAnnotatedAndCommands(t *testing.T) {
 	}
 }
 
+// TestTuneLoggingRenderEscapesDollarInComment is the render-endpoint
+// half of the export.Quote security fix: a rule comment out of an
+// uploaded /export is attacker-controlled (whoever can write a rule on
+// the router), and POST /api/tune-logging/render's Commands are pasted
+// straight into a RouterOS terminal by an admin. RouterOS expands
+// `$[cmd]` inside any double-quoted string it parses, so a comment
+// containing one must come back with its `$` escaped, never as a raw
+// `$[` that would run as a command the moment it's pasted.
+func TestTuneLoggingRenderEscapesDollarInComment(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	text := "# 2026/09/01 10:00:00 by RouterOS 7.24.1\n" +
+		"/ip firewall filter\n" +
+		`add action=accept chain=forward comment="blocked $[/user add name=x]" in-interface=bridge1 out-interface=ether1` + "\n"
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: text, Selected: []int{0}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out tuneLoggingRenderResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Commands, `\$[`) {
+		t.Errorf("Commands = %q, want the comment's `$[` escaped as `\\$[`", out.Commands)
+	}
+	if strings.Contains(strings.ReplaceAll(out.Commands, `\$`, ``), `$[`) {
+		t.Errorf("Commands = %q, contains an unescaped `$[` an admin could paste straight into a RouterOS terminal", out.Commands)
+	}
+}
+
 // TestTuneLoggingRenderMatcherFallsBackToNumbers covers the "or else
 // numbers=" half of the matcher choice: two rules sharing a comment
 // cannot be addressed by it uniquely.
