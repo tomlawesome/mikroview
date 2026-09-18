@@ -169,7 +169,25 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			if e == nil {
 				continue
 			}
-			s.entries[e.CIDR.String()] = e
+			// Re-run through the same gate Add uses (v0.6.0 pre-release
+			// audit) rather than trusted verbatim: a loaded entry's CIDR
+			// must be canonicalised (Masked()) the same way Add's return
+			// value always is, or its map key here -- e.CIDR.String() --
+			// would never match the key Remove computes through
+			// parseCIDR().Masked(), leaving the entry unreachable by any
+			// client from the moment it loaded. own is nil: the router's
+			// own pushed ranges aren't wired until SetOwnRanges runs,
+			// after Open returns, and a check against them belongs at
+			// Add time (deciding whether a *new* entry is a mistake),
+			// not as a standing requirement a stored one must keep
+			// meeting after the router's own configuration moves.
+			p, err := Validate(e.CIDR.String(), nil)
+			if err != nil {
+				entryPersistLog.Warn(fmt.Sprintf("dropping a droplist entry loaded from disk that no longer validates (%v): %s", err, e.CIDR))
+				continue
+			}
+			e.CIDR = p
+			s.entries[p.String()] = e
 		}
 		return nil
 	})

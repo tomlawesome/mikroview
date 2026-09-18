@@ -4,6 +4,7 @@ package droplist
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -184,3 +185,67 @@ func TestPersistenceRoundTrip(t *testing.T) {
 }
 
 func ignoreEntry(_ Entry, err error) error { return err }
+
+// TestOpenCanonicalisesAnUnmaskedEntryLoadedFromDisk is the v0.6.0
+// pre-release audit's finding: OpenWithBackend's load loop indexed each
+// loaded entry by e.CIDR.String() verbatim, never through Validate the
+// way Add does -- so a file carrying an unmasked prefix (hand-edited,
+// or written by a version predating this canonicalisation) loaded with
+// that exact spelling as its map key. Remove always computes its key
+// through parseCIDR().Masked(), the canonical form, so it could never
+// match a key that never went through that same masking -- the entry
+// became permanently unreachable by any client the moment it was
+// loaded.
+func TestOpenCanonicalisesAnUnmaskedEntryLoadedFromDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "droplist.json")
+	raw := `{"entries":[{"cidr":"203.0.114.7/24","addedBy":"admin","addedAt":"2026-01-02T03:04:05Z","reason":"scanning our SSH port"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.List()
+	if len(got) != 1 || got[0].CIDR.String() != "203.0.114.0/24" {
+		t.Fatalf("List() = %+v, want the one entry masked to 203.0.114.0/24", got)
+	}
+
+	// The entry loaded from disk must be reachable by the same canonical
+	// key Add/Remove always use -- not the unmasked spelling the file
+	// happened to carry.
+	if err := s.Remove("admin", "203.0.114.7/24"); err != nil {
+		t.Errorf("Remove(unmasked spelling of a loaded entry) = %v, want success", err)
+	}
+	if len(s.List()) != 0 {
+		t.Errorf("List() after Remove = %v, want empty", s.List())
+	}
+}
+
+// TestOpenDropsAnEntryThatNoLongerValidates is the other half of the
+// same finding: a loaded entry must satisfy the same rules Add enforces
+// on the way in, not be trusted just because it is already on disk --
+// a file could predate a rule (or be hand-edited) and carry a range
+// Validate would refuse today.
+func TestOpenDropsAnEntryThatNoLongerValidates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "droplist.json")
+	raw := `{"entries":[
+		{"cidr":"10.0.0.0/24","addedBy":"admin","addedAt":"2026-01-02T03:04:05Z","reason":"private, never valid"},
+		{"cidr":"203.0.114.0/24","addedBy":"admin","addedAt":"2026-01-02T03:04:05Z","reason":"still good"}
+	]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.List()
+	if len(got) != 1 || got[0].CIDR.String() != "203.0.114.0/24" {
+		t.Errorf("List() = %+v, want only the entry that still validates", got)
+	}
+}
