@@ -1188,6 +1188,31 @@ describe('the drawer’s note (#1232, round 59)', () => {
     expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked', 'all on the block list already')
   })
 
+  // #1218 audit finding 8: the draft used to be deleted synchronously
+  // before the verdict call was even awaited, win or lose. judgeAndClear
+  // reverts the flag's own note on a failed call, so noteText(f) had
+  // nothing left to fall back to but the pre-verdict note -- what the
+  // operator typed was gone, with no way to recover it for a retry.
+  it('keeps what was typed in the box when the verdict call fails', async () => {
+    vi.mocked(setFlagVerdict).mockRejectedValue(new Error('network unreachable'))
+    const drawer = await openDrawer(testFlag({ id: 's1' }))
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    await fireEvent.input(box, { target: { value: 'still checking this one' } })
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    // The drawer collapses on the click regardless of outcome -- reopen
+    // it to read back what the box now holds.
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+    const reopened = document.querySelector('tr.drawer') as HTMLElement
+    expect((reopened.querySelector('#note-s1') as HTMLTextAreaElement).value).toBe('still checking this one')
+  })
+
   it('editing the note on an already-judged flag saves it on blur', async () => {
     vi.mocked(updateFlagNote).mockResolvedValue(testFlag({ id: 's1', note: 'reworded' }) as never)
     const drawer = await openDrawer(
