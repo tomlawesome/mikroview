@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -359,6 +360,38 @@ func TestTuneLoggingRenderEscapesDollarInComment(t *testing.T) {
 	}
 	if strings.Contains(strings.ReplaceAll(out.Commands, `\$`, ``), `$[`) {
 		t.Errorf("Commands = %q, contains an unescaped `$[` an admin could paste straight into a RouterOS terminal", out.Commands)
+	}
+}
+
+// TestTuneLoggingRenderRejectsControlCharInComment covers the other
+// half of the same class of bug Quote's dollar fix addressed: Quote
+// escapes only \, " and $, so a raw control character riding a rule
+// comment out of an uploaded /export -- here a literal carriage return
+// mid-value -- would otherwise reach Commands unescaped, and a CR in a
+// block an admin pastes into a RouterOS terminal can act as Enter.
+// export.Parse now refuses the upload outright (a *ControlCharError),
+// so the render endpoint must answer 400 with no raw 0x0D anywhere in
+// the response body.
+func TestTuneLoggingRenderRejectsControlCharInComment(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	text := "# 2026/09/01 10:00:00 by RouterOS 7.24.1\n" +
+		"/ip firewall filter\n" +
+		"add action=accept chain=forward comment=\"blocked\rEOF\" in-interface=bridge1 out-interface=ether1\n"
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: text, Selected: []int{0}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (comment carries a raw carriage return)", resp.StatusCode)
+	}
+	if bytes.ContainsRune(respBody, '\r') {
+		t.Errorf("response body %q carries a raw 0x0D, want the control character rejected before it reaches rendered command text", respBody)
 	}
 }
 
