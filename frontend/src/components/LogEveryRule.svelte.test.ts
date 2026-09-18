@@ -587,6 +587,59 @@ describe('LogEveryRule device pick', () => {
     expect(container.querySelector('.load-error')).toBeNull()
   })
 
+  // Clearing on the switch is not enough on its own. A request already
+  // in flight resolves afterwards, and it was asked about the router
+  // the operator has just left -- so its answer has to be dropped where
+  // it lands, not only cleared where it started. A render is the worse
+  // of the two: its result is a file that gets pasted into a router.
+  it('drops an analyse that resolves after the operator switched router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+
+    // edge-1's answer arrives now, after the switch.
+    settle(analyseResponse())
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+    expect(container.querySelectorAll('.rule-row').length).toBe(0)
+  })
+
+  it('drops a failed analyse that resolves after the operator switched router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+
+    settle('edge-1 has not been observed for long enough yet')
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(container.querySelector('.load-error')).toBeNull()
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first
