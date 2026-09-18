@@ -77,6 +77,24 @@
   // doc comment for why this is a separate slot from topologyNav's.
   let preselectedBoundary = $state<string | null>(null)
 
+  // The router this component has already settled everything against.
+  // null until it mounts. Compared rather than trusted: the picker, the
+  // nav request and the single-device auto-pick all write work.device,
+  // and only a change none of them has already handled needs clearing
+  // up after.
+  let reconciledDevice: string | null = null
+
+  // One token per kind of request. Comparing the router name at the
+  // moment an answer lands is not enough: leave a router and come back
+  // to it while a request is in flight and the name matches again, so a
+  // stale answer passes for a fresh one. A token is retired by any
+  // later request of its kind and by any router change, so only the
+  // most recent one can ever write its result. Separate tokens because
+  // a render must not retire an analyse that is still legitimately on
+  // its way.
+  let analyseToken = 0
+  let renderToken = 0
+
   $effect(() => {
     const pending = logEveryRuleNavState.consume()
     if (!pending) return
@@ -91,6 +109,11 @@
     if (pending.device !== work.device) work.reset()
     work.device = pending.device
     preselectedBoundary = pending.boundaryKey
+    // This effect has just reconciled everything to pending.device
+    // itself, the export included. Say so, or the router-change effect
+    // below sees a change it did not cause and clears the highlight
+    // this line has just set.
+    reconciledDevice = pending.device
   })
 
   // Device pick is only shown when there is a real choice to make
@@ -114,14 +137,27 @@
   // router change, not only one that drops an export: an error about
   // router A is never about router B.
   $effect(() => {
-    work.device
+    const device = work.device
     untrack(() => {
+      // Only a change this effect has not already accounted for. Its
+      // first run is the component mounting, which reconciles nothing
+      // -- the deck remounts this card on every scroll past it, and
+      // treating that as a router change would throw away the work
+      // #1134 exists to keep.
+      if (reconciledDevice === device) return
+      const mounting = reconciledDevice === null
+      reconciledDevice = device
+      if (mounting) return
+
       work.adoptDevice()
       analyseError = null
       renderError = null
+      copied = ''
       // A request still in flight was asked about the router we have
-      // just left, so this view is no longer waiting on anything. Its
-      // answer is discarded where it resolves, below.
+      // just left. Retiring both tokens discards its answer wherever it
+      // lands, so this view is no longer waiting on anything.
+      analyseToken++
+      renderToken++
       analysing = false
       rendering = false
       // The pre-selected pair came from a nav request naming the old
@@ -210,16 +246,15 @@
 
   async function analyse() {
     if (!work.device || !work.exportText.trim() || problem || analysing) return
-    // Which router this answer will be about. Clearing state when the
-    // picker moves is not enough on its own: a request already in
-    // flight resolves afterwards, and without this it wrote the old
-    // router's rules -- or its error -- onto the new router's view,
-    // which is the same fault one beat later.
-    const asked = work.device
+    // Clearing state when the picker moves is not enough on its own: a
+    // request already in flight resolves afterwards, and without this
+    // it wrote the old router's rules -- or its error -- onto the new
+    // router's view, which is the same fault one beat later.
+    const token = ++analyseToken
     analysing = true
     analyseError = null
-    const res = await fetchTuneLoggingAnalyse({ device: asked, export: work.exportText, darkBoundaries })
-    if (asked !== work.device) return
+    const res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
+    if (token !== analyseToken) return
     analysing = false
     if (typeof res === 'string') {
       analyseError = res
@@ -240,13 +275,15 @@
 
   async function render() {
     if (!work.device || work.selected.size === 0 || rendering) return
-    // Same reason as analyse: a stale render is worse still, since its
-    // result is a file the operator downloads and pastes into a router.
-    const asked = work.device
+    // Same reason as analyse, and it matters more here: the result is
+    // a file the operator downloads and pastes into a router, and a
+    // stale one landing after a fresh one also resets resultSaved, so
+    // the unsaved-work guard misreads what is on screen.
+    const token = ++renderToken
     rendering = true
     renderError = null
-    const res = await fetchTuneLoggingRender({ device: asked, export: work.exportText, selected: [...work.selected] })
-    if (asked !== work.device) return
+    const res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
+    if (token !== renderToken) return
     rendering = false
     if (typeof res === 'string') {
       renderError = res

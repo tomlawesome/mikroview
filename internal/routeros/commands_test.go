@@ -990,13 +990,10 @@ func TestSetupDocAddsAreAllGuarded(t *testing.T) {
 				// inline ("the script is one `/system script add`
 				// whose source ...") and a command quoted inside a
 				// sample log line are describing it, not asking anyone
-				// to paste it.
+				// to paste it -- and a guarded block leads with its
+				// `:if ([:len [...`, so it is skipped here too rather
+				// than needing an exemption of its own.
 				if !strings.HasPrefix(trimmed, add) {
-					continue
-				}
-				// The guarded idiom puts the add inside a find check,
-				// so the line leads with the check, not with the add.
-				if strings.HasPrefix(trimmed, ":if ([:len [") && strings.Contains(trimmed, "] = 0) do={") {
 					continue
 				}
 				shown, relErr := filepath.Rel(root, path)
