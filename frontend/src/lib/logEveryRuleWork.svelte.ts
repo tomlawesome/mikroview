@@ -62,7 +62,14 @@ class LogEveryRuleWorkState {
   // A new or edited export invalidates whatever was derived from the
   // old one -- an analyse result, a render, and the guard around it all
   // describe text that is no longer what is in the box.
+  //
+  // A request still in flight is derived from it too, and is the one
+  // piece that cannot simply be blanked: it lands later and repopulates
+  // exactly what this just cleared. So it is retired here, where the
+  // rule is already stated, rather than at each caller -- every way of
+  // invalidating the downstream state goes through this one method.
   resetDownstream() {
+    this.retireRequests()
     this.result = null
     this.selected = new Set()
     this.showOther = false
@@ -86,9 +93,6 @@ class LogEveryRuleWorkState {
     this.exportText = ''
     this.exportName = ''
     this.exportDevice = ''
-    // An answer still on its way was asked about the text being
-    // dropped here, so it describes nothing that is left.
-    this.retireRequests()
     this.resetDownstream()
   }
 
