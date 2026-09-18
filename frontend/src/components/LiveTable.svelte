@@ -7,7 +7,7 @@
   import { formatTime } from '../lib/format'
   import { columnState } from '../lib/columns.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
-  import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
+  import { flagsBySource, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import type { ClientEvent, FirewallEvent } from '../lib/types'
@@ -267,10 +267,14 @@
     return { kind: 'text', text: 'Waiting for events…' }
   })
 
-  // Sources carrying an active flag, for the row marker. Recomputed from
-  // the flag list rather than per row, so this is one pass rather than
-  // one lookup per rendered row.
-  const flagged = $derived(flaggedSources(flagsState.list))
+  // The open flag(s) each source carries, for the row marker -- what
+  // EventRow's ⚑ needs to know whether a row is flagged at all, which
+  // flag to open, and whether to say "N open flags" (#1269). Recomputed
+  // from the flag list rather than per row, so this is one pass rather
+  // than a filter of the whole flag list per rendered row -- EventRow
+  // used to do exactly that, independently, for every flagged row it
+  // drew (see flagsBySource's own comment in lib/grouping.ts).
+  const flagsBySourceMap = $derived(flagsBySource(flagsState.list))
 
   // The stream's foot band is gone (owner, round 36: "oh that thing, I
   // don't want that at all", closing #717's earlier "I hate it, remove
@@ -446,7 +450,7 @@
               event={group.head}
               deviceName={deviceName(group.head.deviceId)}
               count={group.count}
-              flagged={flagged.has(group.head.srcIp ?? '')}
+              sourceFlags={flagsBySourceMap.get(group.head.srcIp ?? '') ?? []}
               dimmed={isDimmed(group.head)}
               banded={gi % 2 === 1}
               expandable={group.count > 1}
@@ -469,7 +473,7 @@
                 <EventRow
                   event={member}
                   deviceName={deviceName(member.deviceId)}
-                  flagged={flagged.has(member.srcIp ?? '')}
+                  sourceFlags={flagsBySourceMap.get(member.srcIp ?? '') ?? []}
                   dimmed={isDimmed(member)}
                   member
                   onOpen={() => (selectedEvent = member)}
@@ -494,7 +498,7 @@
             <EventRow
               {event}
               deviceName={deviceName(event.deviceId)}
-              flagged={flagged.has(event.srcIp ?? '')}
+              sourceFlags={flagsBySourceMap.get(event.srcIp ?? '') ?? []}
               dimmed={isDimmed(event)}
               banded={i % 2 === 1}
               onOpen={() => (selectedEvent = event)}

@@ -25,7 +25,7 @@
 // That case is worth surfacing rather than hiding -- the same traffic
 // matching two different rules usually means a rule-ordering surprise.
 
-import type { FirewallEvent } from './types'
+import type { FirewallEvent, Flag } from './types'
 
 // EventGroup is one collapsed row. `events` holds the members in arrival
 // order, oldest first, and is what the drawer renders.
@@ -120,6 +120,29 @@ export function flaggedSources(flags: readonly { target: string; cleared: boolea
     // the part before it. Mirrors extractSourceIp in flags.svelte.ts.
     const addr = f.target.replace(/ -> port \d+$/, '')
     if (addr) out.add(addr)
+  }
+  return out
+}
+
+// flagsBySource (#1269) is flaggedSources' own one-pass walk, kept
+// alongside it rather than replacing it: the marker only ever needed
+// membership, but EventRow's ⚑ mark needs the actual open flag(s) a
+// source carries -- which flag to open, and how many to say "N open
+// flags" about. Before this, EventRow built that itself by filtering
+// the full flagsState.list once per flagged row it drew, so naming a
+// screenful of rows from the same handful of sources cost rows x flags
+// instead of the one pass this does. LiveTable builds this once and
+// hands each row its own slice, the same shape flaggedSources already
+// gets right for the boolean case.
+export function flagsBySource(flags: readonly Flag[]): Map<string, Flag[]> {
+  const out = new Map<string, Flag[]>()
+  for (const f of flags) {
+    if (f.cleared) continue
+    const addr = f.target.replace(/ -> port \d+$/, '')
+    if (!addr) continue
+    const existing = out.get(addr)
+    if (existing) existing.push(f)
+    else out.set(addr, [f])
   }
   return out
 }
