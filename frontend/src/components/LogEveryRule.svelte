@@ -152,8 +152,6 @@
       // been unmounted -- so this view is no longer waiting on
       // anything.
       work.retireRequests()
-      analysing = false
-      rendering = false
       // The pre-selected pair came from a nav request naming the old
       // router. Another router's rules can reuse the same boundary key
       // -- "bridge|ether1" says nothing about which router it is on --
@@ -170,10 +168,16 @@
   // than left for Analyse to answer with the under-24h waiting line.
   const problem = $derived(exportProblem(work.exportText))
 
-  let analysing = $state(false)
+  // Which request this card is waiting on, or 0 for none. Whether it is
+  // busy is derived from that rather than held beside it, so a retired
+  // request cannot leave the button claiming work that is not
+  // happening: retiring the token settles the label in the same move.
+  let analysingToken = $state(0)
+  const analysing = $derived(analysingToken !== 0 && analysingToken === work.analyseToken)
   let analyseError = $state<string | null>(null)
 
-  let rendering = $state(false)
+  let renderingToken = $state(0)
+  const rendering = $derived(renderingToken !== 0 && renderingToken === work.renderToken)
   let renderError = $state<string | null>(null)
   let copied = $state('')
 
@@ -245,11 +249,11 @@
     // it wrote the old router's rules -- or its error -- onto the new
     // router's view, which is the same fault one beat later.
     const token = ++work.analyseToken
-    analysing = true
+    analysingToken = token
     analyseError = null
     const res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
     if (token !== work.analyseToken) return
-    analysing = false
+    analysingToken = 0
     if (typeof res === 'string') {
       analyseError = res
       return
@@ -274,11 +278,11 @@
     // stale one landing after a fresh one also resets resultSaved, so
     // the unsaved-work guard misreads what is on screen.
     const token = ++work.renderToken
-    rendering = true
+    renderingToken = token
     renderError = null
     const res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
     if (token !== work.renderToken) return
-    rendering = false
+    renderingToken = 0
     if (typeof res === 'string') {
       renderError = res
       return
