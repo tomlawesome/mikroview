@@ -323,6 +323,49 @@ func TestSetCommentRewritesOnlyAKeptGenerationsNote(t *testing.T) {
 	}
 }
 
+// TestRscAttachesToAGenerationProtectedWhileItWasStillInFlight covers
+// #1262: Store's `.rsc`-attach step only ever looked at the last entry
+// of the cycling set (rm.Generations), because that is ordinarily where
+// an open generation (a `.backup` with no `.rsc` yet) lives. But Protect
+// does not check whether a generation's `.rsc` has arrived before
+// moving it into the protected pool -- an admin can protect a
+// generation the moment its `.backup` lands, before the wizard's script
+// gets to its second /tool fetch. When the `.rsc` then arrives, the
+// generation it belongs to is no longer the last (or even a member) of
+// rm.Generations, so the old code failed to find it and started a new,
+// permanently bare generation instead -- an orphaned `.rsc`, and the
+// protected generation left without its export forever.
+func TestRscAttachesToAGenerationProtectedWhileItWasStillInFlight(t *testing.T) {
+	v := openVault(t, testKey(t))
+	base := time.Now()
+
+	mustStore(t, v, "rb5009", 10, base)
+	ids := generationIDs(v, "rb5009")
+	if len(ids) != 1 {
+		t.Fatalf("got %d generations after one .backup, want 1", len(ids))
+	}
+	openID := ids[0]
+
+	if err := v.Protect("rb5009", openID, "protecting before the .rsc lands", "tom", base.Add(time.Minute)); err != nil {
+		t.Fatalf("Protect: %v", err)
+	}
+
+	if err := v.Store("rb5009", KindRsc, []byte("export text"), base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Store rsc: %v", err)
+	}
+
+	if got := generationIDs(v, "rb5009"); len(got) != 0 {
+		t.Errorf("cycling set = %v, want no orphaned generation from the .rsc", got)
+	}
+	kept := v.ProtectedGenerations("rb5009")
+	if len(kept) != 1 || kept[0].ID != openID {
+		t.Fatalf("protected pool = %+v, want exactly %s", kept, openID)
+	}
+	if !kept[0].HasBackup() || !kept[0].HasRsc() {
+		t.Errorf("protected generation %+v is missing a half -- the .rsc did not find its pair", kept[0])
+	}
+}
+
 func TestKeepControlsRefuseWithNoRetentionKey(t *testing.T) {
 	v := openVault(t, nil)
 	now := time.Now()
