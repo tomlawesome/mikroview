@@ -19,6 +19,7 @@ vi.mock('../lib/api', () => ({
 
 import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
 import { droplistNavState } from '../lib/droplistNav.svelte'
+import { wizardState } from '../lib/wizard.svelte'
 import Droplist from './Droplist.svelte'
 import type { DroplistResponse } from '../lib/types'
 
@@ -159,6 +160,25 @@ describe('the pull key', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'done' }))
     expect(screen.queryByText('the-fresh-key')).toBeNull()
+  })
+
+  // #1260: the mint call used to build the router's pull command from
+  // this browser tab's own window.location.host rather than
+  // wizardState.address (#1213 -- the operator's own saved answer to
+  // "what address can your router reach mikroview on?"), so a router
+  // ended up pointed at whatever host the admin happened to be browsing
+  // from rather than the address they actually saved.
+  it('mints the key against the operator saved address, not this tab\'s own host', async () => {
+    wizardState.address = 'operator-saved.example:8443'
+    vi.mocked(mintDroplistKey).mockResolvedValue({
+      key: 'the-fresh-key',
+      createdAt: '2026-09-14T00:00:00Z',
+      scheduler: '/system scheduler add name=mikroview-drop-pull ... the-fresh-key ...',
+    })
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    expect(mintDroplistKey).toHaveBeenCalledWith('operator-saved.example:8443')
   })
 })
 

@@ -155,6 +155,19 @@ func TestMarksAreOrderedByStep(t *testing.T) {
 // TestMarksRefuseWhatTheyCannotDescribe. The step numbers and outcomes
 // are the ratified design's, not free text: a mark on step 9 describes
 // nothing, and neither the ledger nor the audit log should carry it.
+// TestMarkAcceptsTheWizardsSixthStep covers #1267: maxStep was still 5
+// with a comment claiming "five steps, per the ratified design", but
+// round 45 (#394) added a sixth ("Back up the router") -- see
+// frontend/src/lib/setupsteps.ts's STEP_TITLES, the six-entry list this
+// package's step count must match. NoteMark refused any skip or force
+// decision on that sixth step until maxStep caught up.
+func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
+	s := New()
+	if _, ok := s.NoteMark(6, MarkSkipped, "tom", "", time.Now()); !ok {
+		t.Error("NoteMark refused step 6, but the wizard's setupsteps.ts carries six steps")
+	}
+}
+
 func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 	s := New()
 	now := time.Now()

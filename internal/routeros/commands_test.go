@@ -367,9 +367,11 @@ func unescapeRouterOS(t *testing.T, s string) string {
 }
 
 // scriptAddSource takes the source="..." value back out of a block
-// scriptAdd built: everything between the opening quote and the closing
-// one that ends the add, which is the quote immediately before the
-// scheduler line.
+// scriptAdd built: everything between the add branch's opening quote
+// and the closing one that ends it, which is the quote immediately
+// before the `} else={` that opens the set branch (#1266 guarded the
+// add with a find; both branches carry the same source, so either one
+// answers this).
 func scriptAddSource(t *testing.T, block string) (string, bool) {
 	t.Helper()
 	const open = `source="`
@@ -379,9 +381,9 @@ func scriptAddSource(t *testing.T, block string) (string, bool) {
 		return "", false
 	}
 	rest := block[i+len(open):]
-	j := strings.Index(rest, "\"\n/system scheduler")
+	j := strings.Index(rest, "\" } else={")
 	if j == -1 {
-		t.Errorf("the script add is not closed before the scheduler line:\n%s", block)
+		t.Errorf("the script add is not closed before the set branch:\n%s", block)
 		return "", false
 	}
 	return rest[:j], true
@@ -431,8 +433,9 @@ func TestScriptSourceLeavesNoBareVariableOrQuote(t *testing.T) {
 // operator to paste into anything.
 func TestScheduleCommands(t *testing.T) {
 	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
-	want := "/system script add name=mv-push policy=read,test source=\":local recs [:toarray \\\"\\\"]\n" +
-		":set recs (\\$recs, 1)\"\n" +
+	const source = ":local recs [:toarray \\\"\\\"]\n" +
+		":set recs (\\$recs, 1)"
+	want := ":if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=\"" + source + "\" } else={ /system script set [find name=mv-push] policy=read,test source=\"" + source + "\" }\n" +
 		"/system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\"\n" +
 		"/system script run mv-push"
 	if cmd != want {
@@ -450,8 +453,8 @@ func TestScheduleCommands(t *testing.T) {
 func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
 	body := PushScript("192.0.2.10:8080", "tok", []string{"filter-rule", "arp"}, "a")
 	got := ScheduleCommands(body, "a")
-	if !strings.HasPrefix(got, `/system script add name=mv-push policy=read,test source="`) {
-		t.Errorf("ScheduleCommands did not open with the script add:\n%s", got)
+	if !strings.HasPrefix(got, `:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("ScheduleCommands did not open with the guarded script add:\n%s", got)
 	}
 	if !strings.HasSuffix(got, "\n/system script run mv-push") {
 		t.Errorf("ScheduleCommands did not end by running it once:\n%s", got)
@@ -467,6 +470,28 @@ func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
 	}
 	if !strings.Contains(source, `\$ruleRecs`) {
 		t.Errorf("RouterOS variables reached the source unescaped, so the router would expand them away:\n%s", source)
+	}
+}
+
+// TestScheduleCommandsIsIdempotent covers #1266: scriptAdd used to
+// build a bare `/system script add`, so re-pasting an updated wizard
+// block (say, after a wizard version bump) left the router with a
+// second mv-push script rather than the newer one replacing the older
+// -- contrary to what docs/routeros-setup.md promises ("paste the
+// blocks again ... re-pasting a router that is already correct changes
+// nothing"). Guarded the same way SyslogCommands' action line already
+// is (TestSyslogCommandsAreIdempotent).
+func TestScheduleCommandsIsIdempotent(t *testing.T) {
+	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
+
+	if !strings.Contains(cmd, `[:len [/system script find name=mv-push]] = 0`) {
+		t.Errorf("ScheduleCommands' script add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script add name=mv-push") {
+		t.Errorf("ScheduleCommands lost the add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script set [find name=mv-push]") {
+		t.Errorf("ScheduleCommands does not update an existing script on a second run: %s", cmd)
 	}
 }
 
@@ -613,7 +638,8 @@ func TestBackupPushScriptGivesEachFileItsOwnVariables(t *testing.T) {
 func TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom(t *testing.T) {
 	body := BackupPushScript("192.0.2.10:8080", "tok", "a")
 	got := BackupPushScheduleCommands(body, "a")
-	want := "/system script add name=mv-backup-https policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\"\n" +
+	const name = "mv-backup-https"
+	want := ":if ([:len [/system script find name=" + name + "]] = 0) do={ /system script add name=" + name + " policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" } else={ /system script set [find name=" + name + "] policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" }\n" +
 		"/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\"\n" +
 		"/system script run mv-backup-https"
 	if got != want {

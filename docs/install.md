@@ -79,7 +79,11 @@ services:
       # set in config.yaml or the environment always wins over the
       # folder default. See docs/configuration.md.
     environment:
-      - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+      # Not needed: MikroView finds ./mikroview/config.yaml on its own
+      # and works fine without it too (defaults alone are a working
+      # deployment). Naming it here explicitly would make that file
+      # mandatory instead of optional -- see docs/configuration.md.
+      # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
       # file into mikroview/ is the old way and still works -- see
       # docs/configuration.md.

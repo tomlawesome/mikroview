@@ -20,6 +20,7 @@
   import { appState } from '../lib/state.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { droplistNavState } from '../lib/droplistNav.svelte'
+  import { wizardState } from '../lib/wizard.svelte'
   import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { formatRelative } from '../lib/format'
@@ -35,8 +36,6 @@
     onrefresh: () => Promise<void>
   } = $props()
 
-  const address = window.location.host
-
   const sortedEntries = $derived(
     [...resp.entries].sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime()),
   )
@@ -50,7 +49,13 @@
   async function mintKey() {
     keyError = null
     submittingKey = true
-    const result = await mintDroplistKey(address)
+    // wizardState.address (#1213) is the operator's own saved answer to
+    // "what address can your router reach mikroview on?", not this
+    // tab's own window.location.host -- see EngineRoom.svelte's
+    // copyRouterLines for the same rule applied to the ingest push
+    // script. Reading it live at mint time rather than once, since the
+    // operator may save it well after this card first mounted.
+    const result = await mintDroplistKey(wizardState.address)
     submittingKey = false
     if (typeof result === 'string') {
       keyError = result
