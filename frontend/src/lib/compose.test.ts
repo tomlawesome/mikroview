@@ -72,6 +72,26 @@ describe('composeCommand', () => {
     expect(cmd).toBeNull()
   })
 
+  it('refuses to compose when the protocol is not a plain RouterOS protocol name or number', () => {
+    expect(composeCommand({ ...base, proto: 'tcp action=drop dst-port=0 place-before=[find]' })).toBeNull()
+    expect(composeCommand({ ...base, proto: 'tcp;' })).toBeNull()
+    expect(composeCommand({ ...base, proto: '' })).toBeNull()
+    expect(composeCommand({ ...base, proto: 'ipv6-icmp' })).toContain('protocol=ipv6-icmp ')
+    expect(composeCommand({ ...base, proto: '47' })).toContain('protocol=47 ')
+  })
+
+  it('refuses to compose when the port is not a whole number in range', () => {
+    expect(composeCommand({ ...base, port: 1.5 })).toBeNull()
+    expect(composeCommand({ ...base, port: 70000 })).toBeNull()
+    expect(composeCommand({ ...base, port: '22 action=drop' as unknown as number })).toBeNull()
+  })
+
+  it('refuses to compose when a name carries a line break or control character', () => {
+    expect(composeCommand({ ...base, hostName: 'nas\n/system reset-configuration' })).toBeNull()
+    expect(composeCommand({ ...base, targetName: 'x\u2028y' })).toBeNull()
+    expect(composeCommand({ ...base, placeBefore: 'drop\r' })).toBeNull()
+  })
+
   it('still composes for a valid IPv4 address', () => {
     const cmd = composeCommand({ ...base, hostIp: '10.0.20.31', target: '10.0.40.10' })
     expect(cmd).toContain('src-address=10.0.20.31 dst-address=10.0.40.10')

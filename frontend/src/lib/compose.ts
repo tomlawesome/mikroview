@@ -70,10 +70,26 @@ function isRouterOsAddress(s: string): boolean {
   return false
 }
 
-// The pasteable RouterOS line, or null when either address fails
-// validation -- never a line with an unchecked value in it.
+// protocol= is bare too, and the value is the flow event's own
+// protocol field -- same wire origin as the addresses. RouterOS takes
+// a name (tcp, udp, ipv6-icmp, ipsec-esp) or a number.
+const PROTOCOL = /^([a-z][a-z0-9-]{0,15}|\d{1,3})$/
+
+// Line breaks, control characters and Unicode's own line/paragraph
+// separators have no business in anything pasted into a terminal: a
+// quoted string does not survive a newline, and the ingest-side
+// screen (validateFieldText) is a different program's promise.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+
+// The pasteable RouterOS line, or null when any value fails validation
+// -- never a line with an unchecked value in it. Every interpolation
+// below is either validated here (addresses, protocol, port), slugged
+// (log-prefix), constant (chain, action) or quoted (comments).
 export function composeCommand(c: ComposeInput): string | null {
   if (!isRouterOsAddress(c.hostIp) || !isRouterOsAddress(c.target)) return null
+  if (!PROTOCOL.test(c.proto)) return null
+  if (!Number.isInteger(c.port) || c.port < 0 || c.port > 65535) return null
+  if (CONTROL.test(c.hostName) || CONTROL.test(c.targetName) || CONTROL.test(c.placeBefore ?? '')) return null
   const src = c.direction === 'out' ? c.hostIp : c.target
   const dst = c.direction === 'out' ? c.target : c.hostIp
   const action = c.mode === 'allow' ? 'accept' : 'drop'
