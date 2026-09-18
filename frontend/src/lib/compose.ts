@@ -45,9 +45,7 @@ function slug(s: string): string {
 // one appears, so hostName/targetName/placeBefore -- all read from the
 // network (a DHCP lease name a LAN device picks for itself, or a synced
 // policy comment) -- get escaped the same way before landing inside
-// comment="..." or place-before=[find comment="..."]. Backend and
-// frontend both quote into the same router syntax, so this is that
-// same rule, not a second guess at it.
+// comment="..." or place-before=[find comment="..."].
 function quoteRouterOS(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')
 }
@@ -72,15 +70,8 @@ function isRouterOsAddress(s: string): boolean {
   return false
 }
 
-/**
- * Prints the pasteable RouterOS line, or null when either address fails
- * validation -- hostIp/target both come from network-observed data (a
- * DHCP-chosen name, a syslog-reported address), so a value that is not a
- * clean IPv4/IPv6 address or CIDR must never reach a printed
- * src-address=/dst-address=, and every value placed inside a double-quoted
- * string (comment, place-before's comment match) goes through
- * quoteRouterOS first.
- */
+// The pasteable RouterOS line, or null when either address fails
+// validation -- never a line with an unchecked value in it.
 export function composeCommand(c: ComposeInput): string | null {
   if (!isRouterOsAddress(c.hostIp) || !isRouterOsAddress(c.target)) return null
   const src = c.direction === 'out' ? c.hostIp : c.target
