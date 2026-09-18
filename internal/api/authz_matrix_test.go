@@ -410,6 +410,13 @@ var authzMatrix = []routeExpectation{
 		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only. #653 added a viewer role beneath that non-admin space and left this row exactly where it was -- account creation and the account list are the owner-level items #653's tiers deliberately keep out of user's reach too"},
 	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
 		"removes an account and revokes its sessions and API tokens"},
+	{http.MethodPost, "/api/auth/users/{id}/reset-password", accessAdmin,
+		"mints a one-time code that stands in for another account's password for 24 hours (#1251), kills that " +
+			"account's old password and every session it holds. Admin-only for the same reason account creation and " +
+			"deletion are: this is a credential handed to somebody, and a user or viewer able to mint one for a " +
+			"colleague's account would be able to take it over. The caller's own account and an SSO-only account are " +
+			"refused inside the handler, not here -- both are 409, which this matrix reads as allowed, because they " +
+			"are the right answer for a request that got through the gate"},
 	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
 	{http.MethodGet, "/api/tokens", accessAdmin,
 		"narrowed back from accessViewer (#657). #490 widened it to serve a viewer-readable settings page; #657 removed that page from a viewer's navigation, and ruled the doors station admin-only on the grounds that issuing keys is a setup task rather than using the product -- so the user tier deliberately loses metadata it could see before. The old reasoning (the raw value never appears here, so the read hands out no secret) is still true and no longer the point: the surface it was widened for is gone"},
@@ -736,5 +743,73 @@ func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 				"ingest token, which internal/auth.Token documents as readable by any RouterOS "+
 				"'read' user.", name, got, expect)
 		}
+	}
+}
+
+// resetCodeSessionOpenPaths is everything a session flagged
+// MustChangePassword (#1251) may still reach. Two kinds of thing are on
+// it: the route that lifts the flag, and the handful requireAuth exempts
+// from needing a session at all, which return before the gate is
+// reached.
+//
+// Deliberately a literal list rather than something derived from
+// exemptPaths -- the point of this test is that widening what a
+// half-authenticated session can touch has to be written down here as
+// well as done in the middleware.
+var resetCodeSessionOpenPaths = map[string]bool{
+	changePasswordPath:        true,
+	"/api/healthz":            true,
+	"/api/auth/session":       true,
+	"/api/auth/register":      true,
+	"/api/auth/login":         true,
+	"/api/auth/logout":        true,
+	"/api/auth/oidc/login":    true,
+	"/api/auth/oidc/callback": true,
+}
+
+// TestResetCodeSessionReachesNothingButTheChangePasswordRoute walks the
+// whole authorization matrix with a session established by a one-time
+// reset code, and requires a 403 from every row that is not on the short
+// list above -- including the admin-tier ones, since the account here is
+// an ordinary user, and including the plain reads a viewer could do.
+//
+// The matrix is walked rather than a handful of representative routes
+// for the reason authzMatrix itself exists: a gate that is only checked
+// on the endpoints somebody remembered would miss the next one added.
+func TestResetCodeSessionReachesNothingButTheChangePasswordRoute(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.TestHooks = true
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	admin := registerAdmin(t, ts)
+	postJSON(t, admin, ts.URL+"/api/auth/users",
+		createUserRequest{Username: "bilbo", Password: resetOldPassword, Role: "user"}).Body.Close()
+	var id string
+	for _, u := range s.Auth.List() {
+		if u.Username == "bilbo" {
+			id = u.ID
+		}
+	}
+	out := resetPassword(t, admin, ts, id)
+	flagged := loggedInClient(t, ts.URL, "bilbo", out.Code)
+
+	for _, r := range authzMatrix {
+		if resetCodeSessionOpenPaths[r.path] {
+			// The change-password route is the way out of this state and
+			// is covered by its own test; probing it here would clear the
+			// flag and make every later row meaningless. The rest return
+			// before the gate, without a session in play at all.
+			continue
+		}
+		t.Run(r.method+" "+r.path, func(t *testing.T) {
+			resp := doRouteRequest(t, flagged, ts.URL, r)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("a session holding nothing but a reset code got %d from %s %s, want 403.\n"+
+					"Until the person sets a password only they know, this session may reach %s and nothing else.",
+					resp.StatusCode, r.method, r.path, changePasswordPath)
+			}
+		})
 	}
 }
