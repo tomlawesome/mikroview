@@ -4,6 +4,7 @@ package export
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -311,6 +312,30 @@ func TestQuoteRoundTripsThroughUnquote(t *testing.T) {
 		if got := unquote(Quote(s)); got != s {
 			t.Errorf("unquote(Quote(%q)) = %q, want %q", s, got, s)
 		}
+	}
+}
+
+// TestQuoteEscapesDollar covers the security fix for #(export.Quote /
+// commands.quote drift): a rule comment or log-prefix out of an
+// uploaded /export is attacker-controlled (whoever can write a rule on
+// the router), and the result is pasted straight into a RouterOS
+// terminal by an admin. RouterOS expands `$[cmd]` and `$name` inside
+// any double-quoted string it parses, not only inside a script's own
+// source="..." body, so a comment of `blocked $[/user add name=x]`
+// must not reach the terminal with its `$` unescaped -- otherwise
+// pasting the generated `[find comment="..."]` command runs the
+// attacker's command instead of merely matching on it.
+func TestQuoteEscapesDollar(t *testing.T) {
+	s := `blocked $[/user add name=x] and $name too`
+	got := Quote(s)
+	if !strings.Contains(got, `\$[`) {
+		t.Errorf("Quote(%q) = %q, want an escaped `\\$[`", s, got)
+	}
+	if !strings.Contains(got, `\$name`) {
+		t.Errorf("Quote(%q) = %q, want an escaped `\\$name`", s, got)
+	}
+	if strings.Contains(strings.ReplaceAll(got, `\$`, ``), `$`) {
+		t.Errorf("Quote(%q) = %q, still contains an unescaped `$`", s, got)
 	}
 }
 
