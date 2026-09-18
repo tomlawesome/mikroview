@@ -97,8 +97,16 @@ func scriptAdd(name, policy, body string) string {
 // Exported because internal/droplist generates a scheduler entry of its
 // own, for the drop-list pull, and was pasting it bare -- the guard has
 // to be the same one or the two drift.
+//
+// The set branch names disabled=no because `set` changes only the
+// properties it names (v0.6.0 pre-release audit, Security stage). An
+// entry the operator had turned off -- the drop list's own EmptyList
+// renders `/system scheduler disable` -- otherwise stayed off through a
+// re-paste that reported success, so the schedule silently never ran
+// again. add needs no such thing: a new entry is enabled already.
+// A script has no disabled property, so scriptAdd has no equivalent.
 func SchedulerAdd(name, settings string) string {
-	return fmt.Sprintf(`:if ([:len [/system scheduler find name=%s]] = 0) do={ /system scheduler add name=%s %s } else={ /system scheduler set [find name=%s] %s }`, name, name, settings, name, settings)
+	return fmt.Sprintf(`:if ([:len [/system scheduler find name=%s]] = 0) do={ /system scheduler add name=%s %s } else={ /system scheduler set [find name=%s] %s disabled=no }`, name, name, settings, name, settings)
 }
 
 // Hostname strips a port. Certificate names never carry one, so this is

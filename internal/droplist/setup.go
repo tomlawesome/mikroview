@@ -84,10 +84,17 @@ func NewSetup(address, key string) Setup {
 	// DisableRule already matches on. place-before is placement, not a
 	// property, so it belongs to the add branch alone -- a rule that is
 	// already there keeps the position it already has.
+	//
+	// Both set branches name disabled=no (v0.6.0 pre-release audit,
+	// Security stage). `set` changes only the properties it names, and
+	// the two commands below are how an operator stops the drop list in
+	// an incident: re-pasting this card to resume it found the entry,
+	// set its properties, reported success, and left it disabled. The
+	// address list kept filling and nothing was dropped.
 	return Setup{
 		Scheduler: routeros.SchedulerAdd(ListName, fmt.Sprintf(`interval=5m on-event="%s"`,
 			routeros.QuoteScriptString(inner))),
-		Rule: fmt.Sprintf(`:if ([:len [/ip firewall raw find comment="%s"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=%s action=drop comment="%s" place-before=0 } else={ /ip firewall raw set [find comment="%s"] chain=prerouting src-address-list=%s action=drop }`,
+		Rule: fmt.Sprintf(`:if ([:len [/ip firewall raw find comment="%s"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=%s action=drop comment="%s" place-before=0 } else={ /ip firewall raw set [find comment="%s"] chain=prerouting src-address-list=%s action=drop disabled=no }`,
 			dropListRuleComment, ListName, dropListRuleComment, dropListRuleComment, ListName),
 		DisableRule: fmt.Sprintf(`/ip firewall raw disable [find comment="%s"]`, dropListRuleComment),
 		EmptyList: fmt.Sprintf(`/system scheduler disable [find name=%s]; /ip firewall address-list remove [find list=%s]`,
