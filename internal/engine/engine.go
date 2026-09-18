@@ -569,7 +569,7 @@ func (e *Engine) Run(ctx context.Context) {
 	for {
 		select {
 		case <-e.nudge:
-			e.catchUp()
+			e.catchUp(ctx)
 		case fn := <-e.tasks:
 			// Work another goroutine needs done with this one's
 			// exclusive access to definition state -- see
@@ -586,9 +586,26 @@ func (e *Engine) Run(ctx context.Context) {
 // catchUp reads batches forward from the cursor until one comes back
 // empty -- "caught up" is a fact about the store, not about how many
 // nudges have been answered, so a burst of 100,000 inserts behind one
-// doorbell is evaluated in full.
-func (e *Engine) catchUp() {
-	for e.evaluateBatch(time.Time{}) {
+// doorbell is evaluated in full -- unless ctx is cancelled first
+// (checked per event inside evaluateBatch) or Run's tasks channel has a
+// caller waiting (checked here, between batches): a deep backlog must
+// not make Run's ctx.Done() case, and everything downstream of it --
+// drain and its drainTimeout bound, ExportState, Forget -- wait for the
+// whole catch-up to finish, which is what the comment on Engine.tasks
+// promises ("Serviced between batches") and what the unfixed version of
+// this function did not honour.
+//
+// The tasks check is non-blocking: a task waiting is serviced at once,
+// same as an event would be, but catchUp never pauses waiting for one --
+// that would throttle catch-up throughput for no reason the caller asked
+// for.
+func (e *Engine) catchUp(ctx context.Context) {
+	for e.evaluateBatch(ctx, time.Time{}) {
+		select {
+		case fn := <-e.tasks:
+			fn()
+		default:
+		}
 	}
 }
 
@@ -596,10 +613,16 @@ func (e *Engine) catchUp() {
 // ingest order and advances the cursor across it, reporting whether the
 // batch held anything (i.e. whether there may be more behind it).
 //
-// A non-zero deadline stops it part-way through a batch; only shutdown
-// passes one (see drain), because only shutdown has a reason not to
-// finish what it has already copied out of the store.
-func (e *Engine) evaluateBatch(deadline time.Time) bool {
+// Checked once per event, in the same loop, are the two different ways a
+// caller may want to cut a batch short partway through: ctx.Done(),
+// catchUp's way of noticing Run's context was cancelled without waiting
+// out the rest of a slow batch; and a non-zero deadline, drain's own
+// wall-clock bound. Nothing ever needs both at once -- catchUp always
+// evaluates toward whatever ctx allows and passes a zero deadline; drain
+// runs deliberately past an already-cancelled ctx toward its own bound
+// and passes context.Background() so that cancellation is never seen
+// here -- so there is no ordering to decide between them.
+func (e *Engine) evaluateBatch(ctx context.Context, deadline time.Time) bool {
 	cursor := e.cursor.Load()
 	events, oldestHeld, _ := e.read(cursor, batchSize)
 	if oldestHeld > cursor+1 {
@@ -623,6 +646,11 @@ func (e *Engine) evaluateBatch(deadline time.Time) bool {
 		e.cursor.Store(ev.ID)
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		default:
 		}
 	}
 	return true
@@ -708,9 +736,14 @@ func (e *Engine) Done() <-chan struct{} {
 // unconditional answer. The deadline is passed down into the batch so a
 // single slow definition cannot overrun it by a whole batch's worth of
 // events.
+//
+// Passes context.Background(), not the cancelled ctx Run was called
+// with, to evaluateBatch: drain's whole purpose is to keep going for a
+// bounded while *after* that ctx is already done, so checking it here
+// would stop drain on its very first event, every time.
 func (e *Engine) drain() {
 	deadline := time.Now().Add(drainTimeout)
-	for e.evaluateBatch(deadline) {
+	for e.evaluateBatch(context.Background(), deadline) {
 		if time.Now().After(deadline) {
 			return
 		}
