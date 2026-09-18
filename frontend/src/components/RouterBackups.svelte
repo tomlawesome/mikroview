@@ -56,6 +56,7 @@
     oldestArrival,
     previousGeneration,
     receiptLine,
+    vaultGated,
     MAX_GENERATIONS,
     MAX_KEEP_COMMENT,
   } from '../lib/backups'
@@ -203,10 +204,7 @@
   }
   const passphraseState = $derived(passState(lock))
 
-  // gated is round 44's download gate: a passphrase is set and this
-  // session does not hold the unlock, whether nobody has it open
-  // (locked) or another of the admin's own sign-ins does.
-  const gated = $derived(lock.passphraseSet && !lock.unlockedForYou)
+  const gated = $derived(vaultGated(lock))
 
   // 'keep' and 'edit' are the same one-field form (#1126): keeping a
   // backup and rewriting why it is kept are the same sentence, typed
