@@ -45,7 +45,20 @@
   async function confirm() {
     error = null
     submitting = true
-    const result = await startSSOLink()
+    // startSSOLink answers a refusal as a string, but it is still a
+    // fetch and can throw outright -- a dropped connection, same as
+    // anywhere else. Left to propagate, it escapes confirm() with
+    // submitting still true: the button stays on "Redirecting…", no
+    // error is shown, and there is no way to try again without
+    // reloading. AuthSetup.svelte guards its own call to this function
+    // for the same reason (#1218 audit finding 7); this caller was
+    // missed.
+    let result: { url: string } | string
+    try {
+      result = await startSSOLink()
+    } catch (err) {
+      result = err instanceof Error ? err.message : String(err)
+    }
     if (typeof result === 'string') {
       error = result
       submitting = false
