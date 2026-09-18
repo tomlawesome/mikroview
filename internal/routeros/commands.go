@@ -375,10 +375,14 @@ func PushBlock(address, token, kind, dialect string) string {
 		// script stamp). Optional server-side, and the same line in every
 		// block.
 		fmt.Sprintf(`:local %s [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=%d; "records"=$%s}]`, payload, kind, WizardVersion, recs),
-		// address sits inside url="...", so it goes through quote();
-		// token in the Bearer header is placed bare, relying on the
-		// handler's Token validation to keep it well-formed (#1095).
-		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, token),
+		// address and token both sit inside a quoted string here (the
+		// fetch url= and the Bearer header respectively), so both go
+		// through quote() -- the same defence-in-depth
+		// backupPushHTTPSBlock below argues for: this package must not
+		// rely on the handler's Token validation (#1095) to keep this
+		// string well-formed, because that validator lives in a
+		// different package and this function has no way to see it.
+		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, quote(token)),
 	}, "\n")
 }
 
@@ -447,7 +451,10 @@ func loggingPushBlock(address, token, dialect string) string {
 		`  }`,
 		`}`,
 		fmt.Sprintf(`:local logPayload [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=%d; "records"=$logRecs}]`, loggingKind, WizardVersion),
-		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), token),
+		// Same reason as PushBlock's identical line above: token sits
+		// inside the Bearer header's quoted string, so it goes through
+		// quote() rather than being relied on to already be well-formed.
+		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), quote(token)),
 	}, "\n")
 }
 
@@ -522,13 +529,18 @@ const BackupScriptPolicy = "read,write,test,sensitive"
 // destination file stem, matching internal/backupsftp's
 // kindForFilename.
 func BackupScript(address, port, device, token, dialect string) string {
-	// address, port, device (user=/dst-path=) and token are placed bare
-	// here, inside a plain "..." string in the script body -- not yet
-	// the outer source="..." this whole body still has to sit inside.
-	// scriptAdd's scriptSource does that escaping now, over the body as
-	// a whole, the same as every other saved script in this file; it is
-	// what turns this bare password="%s" into the round-45 pin's
-	// password=\"...\", not a second hand-rolled wrapper here.
+	// address, port and device (user=/dst-path=) are placed bare here,
+	// relying on the handler's charset checks (#1095) to keep them
+	// well-formed at this level -- but token goes through quote(). The
+	// outer source="..." wrap scriptAdd's scriptSource applies below
+	// protects only the outer /system script add command line this
+	// whole body is pasted as; it says nothing about the inner
+	// password="..." string, which RouterOS parses fresh, a second
+	// time, when the saved script actually runs. Without quote() here a
+	// token carrying '"' would close that inner string early and turn
+	// the rest of the token into a second RouterOS command the moment
+	// the schedule fires -- the outer escaping never sees that boundary
+	// at all, so it cannot protect it (Security stage, v0.6.0 audit).
 	body := fmt.Sprintf(`
   /system backup save name=mv-backup dont-encrypt=yes
   /export hide-sensitive file=mv-export
@@ -536,7 +548,7 @@ func BackupScript(address, port, device, token, dialect string) string {
   /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password="%s" src-path=mv-export.rsc dst-path=%s.rsc
   /file remove mv-backup.backup
   /file remove mv-export.rsc
-`, address, port, device, token, device, address, port, device, token, device)
+`, address, port, device, quote(token), device, address, port, device, quote(token), device)
 	// Guarded by scriptAdd, same idiom and same reason as ScheduleCommands
 	// (#1266): this used to build its own unguarded `/system script add`,
 	// so re-pasting step 6 after a wizard version bump left a second
