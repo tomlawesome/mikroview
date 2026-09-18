@@ -390,7 +390,14 @@ rewritten.
   the same guard; they were left bare when the generated blocks were
   fixed, so an operator who set one up by hand and re-pasted it got a
   second script of that name with no way to tell which one the
-  scheduler ran.
+  scheduler ran. The drop list generates a scheduler entry and a raw
+  firewall rule of its own (#1225) and was missed by that fix entirely:
+  minting a pull key reprints the same block, so rotating a key and
+  pasting it again left two `mikroview-drop` schedulers -- the older
+  still fetching every five minutes with the key that had just been
+  replaced -- and a second identical raw rule. Both are guarded now, in
+  the commands MikroView generates and in the copy of them
+  `docs/configuration.md` prints.
 
 - **Fall traffic now matches the rules that actually catch it** (#1196).
   A pushed rule that did not name both interfaces exactly as the log

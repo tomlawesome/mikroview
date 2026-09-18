@@ -82,7 +82,7 @@ func scriptAdd(name, policy, body string) string {
 	return fmt.Sprintf(`:if ([:len [/system script find name=%s]] = 0) do={ /system script add name=%s policy=%s source="%s" } else={ /system script set [find name=%s] policy=%s source="%s" }`, name, name, policy, source, name, policy, source)
 }
 
-// schedulerAdd wraps a `/system scheduler add` in the same guarded
+// SchedulerAdd wraps a `/system scheduler add` in the same guarded
 // idiom scriptAdd uses for a script: add only when no entry of that
 // name exists yet, otherwise set the existing one to match. settings is
 // everything after `name=<name>` -- interval, start-time, policy and
@@ -94,7 +94,10 @@ func scriptAdd(name, policy, body string) string {
 // on the router when a wizard block was pasted a second time, so the
 // script it runs fired twice as often as intended rather than merely
 // twice at setup.
-func schedulerAdd(name, settings string) string {
+// Exported because internal/droplist generates a scheduler entry of its
+// own, for the drop-list pull, and was pasting it bare -- the guard has
+// to be the same one or the two drift.
+func SchedulerAdd(name, settings string) string {
 	return fmt.Sprintf(`:if ([:len [/system scheduler find name=%s]] = 0) do={ /system scheduler add name=%s %s } else={ /system scheduler set [find name=%s] %s }`, name, name, settings, name, settings)
 }
 
@@ -455,7 +458,7 @@ const PushScriptPolicy = "read,test"
 func ScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
 		scriptAdd("mv-push", PushScriptPolicy, body),
-		schedulerAdd("mv-push", fmt.Sprintf(`interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy)),
+		SchedulerAdd("mv-push", fmt.Sprintf(`interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy)),
 		`/system script run mv-push`,
 	}, "\n")
 }
@@ -539,7 +542,7 @@ func BackupScript(address, port, device, token, dialect string) string {
 // pass -- same "run once immediately" idiom as ScheduleCommands.
 func BackupScheduleCommands(dialect string) string {
 	return strings.Join([]string{
-		schedulerAdd("mv-backup", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy)),
+		SchedulerAdd("mv-backup", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy)),
 		`/system script run mv-backup`,
 	}, "\n")
 }
@@ -657,7 +660,7 @@ func BackupPushScript(address, token, dialect string) string {
 func BackupPushScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
 		scriptAdd("mv-backup-https", BackupScriptPolicy, body),
-		schedulerAdd("mv-backup-https", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy)),
+		SchedulerAdd("mv-backup-https", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy)),
 		`/system script run mv-backup-https`,
 	}, "\n")
 }
