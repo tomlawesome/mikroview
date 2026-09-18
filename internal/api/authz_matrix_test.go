@@ -158,6 +158,14 @@ var authzMatrix = []routeExpectation{
 		"downloads one generation's .backup or .rsc -- a router's whole configuration, credentials included, so " +
 			"this is admin-only and every call writes an audit entry with the admin's name (#394)"},
 
+	{http.MethodGet, "/api/router-backups/{device}/{generation}/text", accessAdmin,
+		"reads one generation's stored export on screen (#895) -- the same configuration the download beside it " +
+			"hands over as a file, so it sits at the same tier, behind the same vault passphrase gate, and writes " +
+			"the same kind of audit entry: reading it in a browser is not a lesser act than saving it"},
+	{http.MethodGet, "/api/router-backups/{device}/diff", accessAdmin,
+		"compares two of a router's stored exports (#895) -- it opens both, so it can disclose no less than the " +
+			"read above and is gated identically; one audit entry names the pair"},
+
 	{http.MethodPost, "/api/router-backups/{device}/{generation}/protect", accessAdmin,
 		"marks one stored backup as kept, with a comment saying why (#1126) -- admin-only like the list and the " +
 			"download beside it: it is a decision about what this instance holds on its own disk, and the comment " +

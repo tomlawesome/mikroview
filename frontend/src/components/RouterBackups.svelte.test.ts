@@ -13,6 +13,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 vi.mock('../lib/api', () => ({
   fetchRouterBackups: vi.fn(),
+  fetchRouterBackupText: vi.fn(),
+  fetchRouterBackupDiff: vi.fn(),
   routerBackupDownloadUrl: vi.fn(
     (device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`,
   ),
@@ -37,7 +39,9 @@ vi.mock('../lib/export', () => ({
 
 import {
   changeRouterBackupPassphrase,
+  fetchRouterBackupDiff,
   fetchRouterBackups,
+  fetchRouterBackupText,
   keepRouterBackup,
   lockRouterBackupVault,
   releaseRouterBackup,
@@ -486,5 +490,110 @@ describe('a viewer', () => {
     expect(screen.queryByRole('button', { name: 'keep…' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'edit…' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'release…' })).toBeNull()
+  })
+})
+
+// Reading one stored export and comparing two (#895). Both are pulled
+// through lib/api rather than navigated to, so both are mocked at the
+// same module boundary the download already is, and what is tested
+// here is this component's wiring: which generation it asks about,
+// which pair it compares, and what it draws with the answer.
+describe('reading one export, and comparing two', () => {
+  const twoGenerations = {
+    device: 'rb5009',
+    generations: [
+      { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z' },
+      { id: 'g1', backupArrivedAt: '2026-08-25T03:00:00Z', rscArrivedAt: '2026-08-25T03:00:05Z' },
+    ],
+    intervalKnown: false,
+    missed: 0,
+  }
+
+  it('offers read on the newest, and compare with previous once there are two', () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+    expect(screen.getByRole('button', { name: 'read' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'compare with previous' })).toBeTruthy()
+  })
+
+  it('offers no comparison on the only generation there is', () => {
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    expect(screen.getByRole('button', { name: 'read' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'compare with previous' })).toBeNull()
+  })
+
+  it('shows the stored export, and says when something was taken out of it', async () => {
+    vi.mocked(fetchRouterBackupText).mockResolvedValue({
+      device: 'rb5009',
+      generation: 'g1',
+      text: '# mikroview: 1 secret values removed at ingest (lines 4)\n/ppp secret\nadd password="<removed>"',
+      lines: 3,
+      redacted: true,
+    })
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'read' }))
+    await waitFor(() => expect(fetchRouterBackupText).toHaveBeenCalledWith('rb5009', 'g1'))
+    expect(await screen.findByText(/add password="<removed>"/)).toBeTruthy()
+    expect(screen.getByText(/this export arrived with secrets still in it/)).toBeTruthy()
+  })
+
+  it('compares against the generation before, and draws the two colours', async () => {
+    vi.mocked(fetchRouterBackupDiff).mockResolvedValue({
+      device: 'rb5009',
+      from: 'g0',
+      to: 'g1',
+      lines: [
+        { op: '-', line: 7, text: 'add action=drop chain=forward comment=old' },
+        { op: '+', line: 7, text: 'add action=drop chain=forward comment=new' },
+      ],
+      same: false,
+    })
+    const { container } = render(RouterBackups, {
+      props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'compare with previous' }))
+    // The older of the two is `from`: a comparison always reads
+    // forwards in time.
+    await waitFor(() => expect(fetchRouterBackupDiff).toHaveBeenCalledWith('rb5009', 'g0', 'g1'))
+    expect(await screen.findByText(/comment=new/)).toBeTruthy()
+    expect(container.querySelectorAll('.dadd').length).toBe(1)
+    expect(container.querySelectorAll('.ddel').length).toBe(1)
+  })
+
+  it('says so plainly when the only difference is the date the router stamped on it', async () => {
+    vi.mocked(fetchRouterBackupDiff).mockResolvedValue({
+      device: 'rb5009',
+      from: 'g0',
+      to: 'g1',
+      lines: [],
+      same: true,
+    })
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'compare with previous' }))
+    expect(await screen.findByText(/nothing changed between these two/)).toBeTruthy()
+  })
+
+  it('re-reads the lock when the vault refuses a read, rather than showing a stale unlock', async () => {
+    vi.mocked(fetchRouterBackupText).mockResolvedValue('the vault is locked -- unlock it with the vault passphrase first')
+    vi.mocked(fetchRouterBackups).mockResolvedValue(resp({ lock: lock({ passphraseSet: true, locked: true }) }))
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'read' }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
+    expect(await screen.findByText('locked')).toBeTruthy()
+  })
+
+  it('offers no read at all while the vault is locked', () => {
+    render(RouterBackups, {
+      props: {
+        resp: resp({ routers: [twoGenerations], lock: lock({ passphraseSet: true, locked: true }) }),
+        onopenlost: vi.fn(),
+      },
+    })
+    expect(screen.queryByRole('button', { name: 'read' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'compare with previous' })).toBeNull()
   })
 })

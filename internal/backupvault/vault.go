@@ -37,6 +37,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/retention"
+	"github.com/tomlawesome/mikroview/internal/routeros/export"
 )
 
 // MaxGenerations is how many generations the vault keeps per router
@@ -538,6 +539,23 @@ func (v *Vault) Store(device, kind string, data []byte, now time.Time) error {
 		header = label
 	case KindRsc:
 		header = HeaderText
+		// Redaction at ingest (#895), here rather than in either
+		// caller, because here is the last place both the SFTP drop box
+		// and the HTTPS slice channel still meet: whatever route a text
+		// export took, this is the only function that can write it
+		// down, so this is where the guarantee that an unredacted copy
+		// is never written can actually be made. Nothing below this
+		// line has ever seen the original.
+		//
+		// What went is logged as a count, never as a value, and the
+		// count only when there was one -- an ordinary hide-sensitive
+		// export redacts to nothing and has nothing to say.
+		redacted, red := export.Redact(string(data))
+		if red.Count > 0 {
+			v.log.Warn(fmt.Sprintf("%s's export carried %d secret values past /export hide-sensitive -- removed at ingest, before anything was stored",
+				device, red.Count))
+			data = []byte(redacted)
+		}
 	default:
 		v.log.Warn(fmt.Sprintf("refused a push from %s: unrecognised destination name kind %q", device, kind))
 		return ErrUnknownKind

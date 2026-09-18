@@ -474,18 +474,47 @@ func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
 // (docs/design/concepts/round-45/build.py's SCRIPT constant) byte for
 // byte -- the copy is drawn, not invented, and a builder must match it
 // word for word (AGENTS.md, "Building a ratified design").
+//
+// One line differs from the round deliberately, on #895's ruling: the
+// export is `hide-sensitive` into `mv-export.rsc`, so the readable half
+// of a stored backup is redacted by the router as well as at ingest,
+// and the two files' names say which is which.
 func TestBackupScriptMatchesRound45(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", `mvt-8f3a2c…c21e`, "a")
 	want := "/system script add name=mv-backup policy=read,write,test,sensitive source=\"\n" +
 		"  /system backup save name=mv-backup dont-encrypt=yes\n" +
-		"  /export file=mv-backup\n" +
+		"  /export hide-sensitive file=mv-export\n" +
 		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n" +
-		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.rsc dst-path=rb5009.rsc\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n" +
 		"  /file remove mv-backup.backup\n" +
-		"  /file remove mv-backup.rsc\n" +
+		"  /file remove mv-export.rsc\n" +
 		"\""
 	if got != want {
 		t.Errorf("BackupScript =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestBothNightlyScriptsExportHideSensitive is #895's item 3 on both
+// transports at once: whichever one a deployment uses, the text that
+// leaves the router has already been through RouterOS's own pass, and
+// the binary is pushed before the export so the pair shares one vault
+// generation.
+func TestBothNightlyScriptsExportHideSensitive(t *testing.T) {
+	for name, script := range map[string]string{
+		"sftp":  BackupScript("10.0.40.5", "47022", "rb5009", "tok-123", "a"),
+		"https": BackupPushScript("192.0.2.10:8080", "tok-123", "a"),
+	} {
+		if !strings.Contains(script, "/export hide-sensitive file=mv-export") {
+			t.Errorf("%s script does not export with hide-sensitive:\n%s", name, script)
+		}
+		if strings.Contains(script, "/export file=") {
+			t.Errorf("%s script still runs a plain /export:\n%s", name, script)
+		}
+		backup := strings.Index(script, "mv-backup.backup")
+		export := strings.Index(script, "mv-export.rsc")
+		if backup < 0 || export < 0 || backup > export {
+			t.Errorf("%s script pushes the export before the backup, so the two cannot share a generation:\n%s", name, script)
+		}
 	}
 }
 
@@ -543,7 +572,7 @@ func TestBackupPushScriptSlicesBothFilesThroughTheIngestEndpoint(t *testing.T) {
 		`"op"="slice"; "transferId"=$bakTransferId; "index"=$bakIndex; "data"=$bakData64`,
 		`"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64`,
 		`/file remove mv-backup.backup`,
-		`/file remove mv-backup.rsc`,
+		`/file remove mv-export.rsc`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("BackupPushScript missing %q:\n%s", want, script)
