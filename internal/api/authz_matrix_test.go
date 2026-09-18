@@ -203,8 +203,12 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/droplist", accessAdmin,
 		"adds an entry to block -- admin-only, since #461 settled that a droplist entry is always operator-" +
 			"authored and never written by anything else, including a lesser-tier caller"},
+	{http.MethodDelete, "/api/droplist", accessAdmin,
+		"removes an entry, CIDR taken from a JSON body -- same tier as adding one; this is the form the " +
+			"frontend actually sends (v0.6.0 pre-release audit)"},
 	{http.MethodDelete, "/api/droplist/{cidr...}", accessAdmin,
-		"removes an entry -- same tier as adding one"},
+		"removes an entry, CIDR taken from the path -- same tier as adding one, kept alongside the bodied " +
+			"form above for any caller still addressing an entry by its own URL"},
 	{http.MethodPost, "/api/droplist/key", accessAdmin,
 		"mints (or rotates) the droplist-pull key a router's own scheduled fetch presents at GET " +
 			"/api/droplist.rsc -- admin-only, mirroring POST /api/tokens: minting a bearer credential is a setup " +

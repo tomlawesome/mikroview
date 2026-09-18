@@ -112,6 +112,40 @@ func TestDroplistAddListShowsItThenRemoveGone(t *testing.T) {
 	}
 }
 
+// TestDroplistDeleteBodiedFormRemovesEntry is the frontend's actual
+// request shape (frontend/src/lib/api.ts's deleteDroplistEntry): a
+// bodied DELETE to the bare collection URL, CIDR in a JSON body, not on
+// the path -- the shape handleDroplistDelete's path-segment route
+// ({cidr...}) cannot answer at all (v0.6.0 pre-release audit: a bodied
+// DELETE /api/droplist 301-redirects to "/api/droplist/", losing the
+// body's the-only-copy CIDR to an empty PathValue and never removing
+// the entry).
+func TestDroplistDeleteBodiedFormRemovesEntry(t *testing.T) {
+	_, ts, admin := droplistTestServer(t)
+
+	postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "scanning our SSH port"}).Body.Close()
+
+	delResp := deleteJSON(t, admin, ts.URL+"/api/droplist", map[string]string{"cidr": "203.0.114.0/24"})
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(delResp.Body)
+		t.Fatalf("delete status = %d, want 204: %s", delResp.StatusCode, body)
+	}
+
+	listResp, err := admin.Get(ts.URL + "/api/droplist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listResp.Body.Close()
+	var list droplistListResponse
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Entries) != 0 {
+		t.Errorf("expected no entries after the bodied delete, got %+v", list.Entries)
+	}
+}
+
 func TestDroplistAddPrivateRangeRefused(t *testing.T) {
 	_, ts, admin := droplistTestServer(t)
 	resp := postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "10.0.0.0/24", Reason: "test"})
