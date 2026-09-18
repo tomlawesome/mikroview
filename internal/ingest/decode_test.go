@@ -817,6 +817,24 @@ func TestDecodeLoggingPageRoundTripsTheRatifiedDocument(t *testing.T) {
 	}
 }
 
+// TestDecodeLoggingPageAcceptsRemotePortAsANumber is the v0.6.0
+// pre-release audit's finding: RouterOS's own /system logging action
+// serialises remote-port the same way every other single-port property
+// here does -- a JSON number (:serialize to=json's usual float shape,
+// e.g. 6514.000000), not the JSON string the ratified document's own
+// fixture above happened to use. A LoggingEntry declaring RemotePort as
+// a plain string refuses that page outright (DisallowUnknownFields
+// doesn't even get a chance: json.Unmarshal fails on the type mismatch
+// first), so the setup-report page never decoded from a real router.
+func TestDecodeLoggingPageAcceptsRemotePortAsANumber(t *testing.T) {
+	p := decodeOK(t, `{"kind":"logging","page":1,"pages":1,"records":[
+	 {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":6514.000000,"remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"}
+	]}`)
+	if got := p.Logging[0].RemotePort; got != "6514" {
+		t.Errorf("RemotePort = %q, want %q", got, "6514")
+	}
+}
+
 // A yes/no field may arrive as a JSON boolean depending on how RouterOS
 // types the property -- the whole page must not be refused over a field
 // nothing compares. Normalised either way, so a reader never has to know

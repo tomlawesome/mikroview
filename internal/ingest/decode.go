@@ -517,7 +517,7 @@ func (e LoggingEntry) validate() error {
 	if err := validateFieldText("remote", e.Remote); err != nil {
 		return err
 	}
-	if err := validateFieldText("remotePort", e.RemotePort); err != nil {
+	if err := validateFieldText("remotePort", string(e.RemotePort)); err != nil {
 		return err
 	}
 	if err := validateFieldText("remoteProtocol", e.RemoteProtocol); err != nil {
