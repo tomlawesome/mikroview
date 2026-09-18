@@ -160,6 +160,32 @@ func (s *Server) vaultUnlockedFor(r *http.Request, now time.Time) bool {
 	return true
 }
 
+// requireVaultUnlocked is the passphrase half of the gate every read of
+// a stored export or backup goes through: with a passphrase set, only
+// the session that unlocked may proceed. It writes the refusal and
+// reports false, so a caller's only job is to stop.
+//
+// verb names the read this refusal is about ("download", "read") -- the
+// one word the two call sites' refusals differ by. Used to be two
+// hand-copied blocks, one in handleRouterBackupDownload and one in
+// routerbackuptext.go's readBackupText, identical but for that word
+// (#1262 audit finding): nothing stopped them drifting apart, and
+// nothing tested either. One function now backs both.
+func (s *Server) requireVaultUnlocked(w http.ResponseWriter, r *http.Request, verb string) bool {
+	if s.vaultUnlockedFor(r, time.Now()) {
+		return true
+	}
+	// The list reports `locked: false` while another admin's session
+	// holds the unlock, so "the vault is locked" would contradict what
+	// the caller just saw (#1124): say whose unlock it is not.
+	msg := "the vault is locked -- unlock it with the vault passphrase first"
+	if s.vaultUnlock.holder() != "" {
+		msg = fmt.Sprintf("another session holds the vault unlock -- unlock it in this session to %s", verb)
+	}
+	http.Error(w, msg, http.StatusForbidden)
+	return false
+}
+
 // expireVaultUnlock drops the unlock if whoever holds it has gone idle
 // or lost their session.
 func (s *Server) expireVaultUnlock(now time.Time) {
