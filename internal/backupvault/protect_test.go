@@ -188,6 +188,49 @@ func TestUnprotectPutsItBackWhereTheCapAppliesAgain(t *testing.T) {
 	}
 }
 
+// TestUnprotectNeverDeletesTheGenerationItReleases is the v0.6.0
+// pre-release audit's finding: the eviction loop below used to pick its
+// victim from the cycling set *after* the released generation had
+// already rejoined it, sorted by id like everything else. A kept backup
+// is exactly the kind that tends to be old -- "before the 7.16 upgrade",
+// "last config before the office move" -- so when the cycling set was
+// already full, releasing the oldest thing in the vault deleted the very
+// backup the release button just put back, the opposite of what
+// releasing is supposed to do. Eviction must only ever choose from what
+// was already cycling before this call.
+func TestUnprotectNeverDeletesTheGenerationItReleases(t *testing.T) {
+	v := openVault(t, testKey(t))
+	base := time.Now()
+	for i := 0; i < MaxGenerations; i++ {
+		mustStore(t, v, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	// The oldest generation in the vault -- kept while it is still the
+	// oldest, exactly the case an operator protecting an old backup
+	// produces.
+	held := generationIDs(v, "rb5009")
+	keptID := held[0]
+	if err := v.Protect("rb5009", keptID, "before the 7.16 upgrade", "tom", base); err != nil {
+		t.Fatalf("Protect: %v", err)
+	}
+	// Fill the cycling set back up to the cap without the kept one.
+	mustStore(t, v, "rb5009", 99, base.Add(time.Duration(MaxGenerations)*time.Hour))
+	if got := len(generationIDs(v, "rb5009")); got != MaxGenerations {
+		t.Fatalf("cycling set before the release = %d, want %d", got, MaxGenerations)
+	}
+
+	if err := v.Unprotect("rb5009", keptID); err != nil {
+		t.Fatalf("Unprotect: %v", err)
+	}
+
+	after := generationIDs(v, "rb5009")
+	if !contains(after, keptID) {
+		t.Errorf("cycling set = %v, want the just-released %s still among them", after, keptID)
+	}
+	if !fileIsThere(t, v, "rb5009", keptID, KindBackup) {
+		t.Errorf("%s's .backup was deleted by the release that just put it back", keptID)
+	}
+}
+
 // TestLowSpaceCyclingNeverReachesTheKeptPool is #1125 meeting #1126:
 // the mode replaces the oldest ordinary generation on every arrival,
 // and a kept one is not an ordinary generation.
