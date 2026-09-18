@@ -97,9 +97,18 @@ check(
 // --- The ephemerality sentence, verbatim from the issue body ----------
 // (#435 issue, "Never persisted": "your config is never stored -- it
 // runs through memory, and once you leave this page it is gone.")
-const ephemeral = ((await page.textContent('.note.ephemeral')) ?? '').trim()
+//
+// #895 reworded it: "never stored" was only ever true of this helper,
+// and once scheduled backups were stored it read as a promise about
+// those too. The sentence now names which of the two it means, and says
+// what happens to the other. It is wrapped over three source lines, so
+// the runs of whitespace are collapsed before comparing.
+const ephemeral = ((await page.textContent('.note.ephemeral')) ?? '').replace(/\s+/g, ' ').trim()
 check(
-  ephemeral === 'Your config is never stored — it runs through memory, and once you leave this page it is gone.',
+  ephemeral ===
+    'This helper stores nothing you paste — it runs through memory, and once you leave this page it is gone. ' +
+      'Scheduled backups are a different thing: those are kept, with their secrets removed as they arrive, ' +
+      'and you can annotate one from here too.',
   `the ephemerality sentence renders verbatim (${JSON.stringify(ephemeral)})`,
 )
 
