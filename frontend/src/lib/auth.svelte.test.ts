@@ -268,21 +268,27 @@ describe('AuthState reloads the page so nothing survives the account (#1083, 2a)
     authState.state = 'authenticated'
     vi.mocked(logout).mockResolvedValue(null)
     await authState.logout()
-    // Simulate the fresh page: in-memory flag gone, storage still set.
-    authState.justSignedOut = false
+    // The old page's login screen mounts before the reload lands and
+    // takes the in-memory flag only -- the storage key must outlive it.
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(sessionStorage.getItem('mikroview.justSignedOut')).toBe('1')
 
+    // The fresh page: in-memory flag gone, storage still set, read once.
     expect(authState.consumeJustSignedOut()).toBe(true)
     expect(authState.consumeJustSignedOut()).toBe(false)
   })
 })
 
 describe('AuthState.consumeJustSignedOut', () => {
-  it('reads and clears the flag logout() sets', async () => {
+  it('reads and clears the flag logout() sets, once per page', async () => {
     vi.mocked(logout).mockResolvedValue(null)
     await authState.logout()
 
+    // This page: the in-memory flag.
     expect(authState.consumeJustSignedOut()).toBe(true)
     expect(authState.justSignedOut).toBe(false)
+    // The reloaded page: the storage key, then nothing.
+    expect(authState.consumeJustSignedOut()).toBe(true)
     expect(authState.consumeJustSignedOut()).toBe(false)
   })
 

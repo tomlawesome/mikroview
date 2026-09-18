@@ -213,8 +213,16 @@ class AuthState {
   // calls this once at mount to decide whether to play the door's way-
   // out beat before its ordinary entrance.
   consumeJustSignedOut(): boolean {
-    const was = this.justSignedOut || sessionStorage.getItem(JUST_SIGNED_OUT_KEY) === "1";
-    this.justSignedOut = false;
+    // Two readers, one each: the old page's login screen mounts in the
+    // instant between logout() flipping the state and the reload landing,
+    // and it must take only the in-memory flag -- if it also stripped the
+    // storage key, the reloaded page (memory flag gone, only storage
+    // left) would find nothing and skip the way-out beat.
+    if (this.justSignedOut) {
+      this.justSignedOut = false;
+      return true;
+    }
+    const was = sessionStorage.getItem(JUST_SIGNED_OUT_KEY) === "1";
     sessionStorage.removeItem(JUST_SIGNED_OUT_KEY);
     return was;
   }

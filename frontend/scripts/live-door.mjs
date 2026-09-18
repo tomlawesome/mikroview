@@ -26,7 +26,13 @@ const { page, consoleErrors } = await session()
 // --- The way out: a real sign-out plays the reverse beat ----------------
 
 await openAccountMenu(page)
+// A sign-out reloads the page (#1083, so nothing of this account's state
+// outlives it), and the beat is judged on the page that comes back --
+// the old page's login screen shows for an instant first, so waiting
+// for `.screen` alone would read that one and race the reload.
+const reloaded = page.waitForEvent('load', { timeout: 10000 })
 await page.click('.account .menu button.row:text-is("Sign out")')
+await reloaded
 await page.waitForSelector('.screen', { timeout: 10000 })
 
 check(
