@@ -25,7 +25,7 @@ import {
   signOutEverywhere,
   fetchPersistence,
 } from './api'
-import { authState } from './auth.svelte'
+import { authState, pageReload } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
@@ -62,6 +62,9 @@ beforeEach(() => {
   authState.signedInSince = ''
   authState.mustChangePassword = false
   window.history.replaceState(null, '', '/')
+  // jsdom cannot navigate; the reload tests below assert on this spy.
+  sessionStorage.clear()
+  vi.spyOn(pageReload, 'now').mockImplementation(() => {})
 })
 
 describe('AuthState.check', () => {
@@ -226,6 +229,50 @@ describe('AuthState.signOutEverywhere', () => {
 
     expect(err).toBe('signOutEverywhere: 500')
     expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuthState reloads the page so nothing survives the account (#1083, 2a)', () => {
+  it('logout reloads once the server has ended the session', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue(null)
+
+    await authState.logout()
+
+    expect(pageReload.now).toHaveBeenCalledTimes(1)
+  })
+
+  it('logout does not reload when the server call failed -- a reload would sign the cookie back in', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue('network down')
+
+    await authState.logout()
+
+    expect(pageReload.now).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+  })
+
+  it('a 401 bounce reloads', () => {
+    authState.state = 'authenticated'
+    authState.handleUnauthorized()
+    expect(pageReload.now).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 401 while already signed out does not reload (no loop)', () => {
+    authState.state = 'unauthenticated'
+    authState.handleUnauthorized()
+    expect(pageReload.now).not.toHaveBeenCalled()
+  })
+
+  it('the way-out beat survives the reload via sessionStorage, once', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue(null)
+    await authState.logout()
+    // Simulate the fresh page: in-memory flag gone, storage still set.
+    authState.justSignedOut = false
+
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(authState.consumeJustSignedOut()).toBe(false)
   })
 })
 

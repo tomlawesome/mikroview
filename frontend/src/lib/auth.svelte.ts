@@ -21,6 +21,24 @@ import { persistenceState } from "./persistence.svelte";
 import { configProblemsState } from "./configProblems.svelte";
 import type { AuthSession } from "./types";
 
+// 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
+// bounce the page is reloaded, so nothing held in any module-level
+// singleton -- reset or not -- can reach the next account on this tab.
+// clearSessionState() still runs first: it keeps the tests honest about
+// what each store holds, and covers the one path that must not reload
+// (a failed logout, see AuthState.logout). Indirected through an object
+// so tests can stub it: jsdom cannot navigate.
+export const pageReload = {
+  now(): void {
+    location.reload();
+  },
+};
+
+// The way-out beat flag has to outlive the reload, so it rides in
+// sessionStorage (tab-scoped, like the wizard's history key) and is
+// consumed exactly once by consumeJustSignedOut().
+const JUST_SIGNED_OUT_KEY = "mikroview.justSignedOut";
+
 // #1083: signing out (or being bounced by a 401) must not leave this
 // account's events, filters, devices, stats or watchlist visible to the
 // next person who signs in on this tab -- these are module-level
@@ -195,8 +213,9 @@ class AuthState {
   // calls this once at mount to decide whether to play the door's way-
   // out beat before its ordinary entrance.
   consumeJustSignedOut(): boolean {
-    const was = this.justSignedOut;
+    const was = this.justSignedOut || sessionStorage.getItem(JUST_SIGNED_OUT_KEY) === "1";
     this.justSignedOut = false;
+    sessionStorage.removeItem(JUST_SIGNED_OUT_KEY);
     return was;
   }
 
@@ -274,7 +293,10 @@ class AuthState {
   // pressed Sign out must not be left looking signed in because the
   // request failed. The error is returned so the caller can say the
   // server-side session may still be live, which is the part that
-  // actually matters to them.
+  // actually matters to them -- and that is also why the reload only
+  // happens on success: with the cookie still valid, a reload would
+  // check() straight back into the account the user just tried to
+  // leave.
   async logout(): Promise<string | null> {
     const err = await logout();
     this.state = "unauthenticated";
@@ -283,7 +305,10 @@ class AuthState {
     this.mustChangePassword = false;
     this.justSignedOut = true;
     clearSessionState();
-    return err;
+    if (err) return err;
+    sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
+    pageReload.now();
+    return null;
   }
 
   // signOutEverywhere is #677's sessions row action. Unlike logout()
@@ -298,8 +323,9 @@ class AuthState {
   }
 
   // Called by any fetch wrapper that gets a 401 mid-session (an expired
-  // or reset-invalidated session) -- bounces straight to the login view
-  // without a full page reload.
+  // or reset-invalidated session). The state guard is what stops a
+  // burst of 401s from several in-flight polls reloading more than
+  // once.
   handleUnauthorized() {
     if (this.state === "authenticated" || this.state === "must-change-password") {
       this.state = "unauthenticated";
@@ -307,6 +333,7 @@ class AuthState {
       this.role = "";
       this.mustChangePassword = false;
       clearSessionState();
+      pageReload.now();
     }
   }
 }
