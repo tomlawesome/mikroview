@@ -439,7 +439,7 @@ func TestScheduleCommands(t *testing.T) {
 	const source = ":local recs [:toarray \\\"\\\"]\n" +
 		":set recs (\\$recs, 1)"
 	want := ":if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=\"" + source + "\" } else={ /system script set [find name=mv-push] policy=read,test source=\"" + source + "\" }\n" +
-		":if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event=\"/system script run mv-push\" }\n" +
+		":if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event=\"/system script run mv-push\" disabled=no }\n" +
 		"/system script run mv-push"
 	if cmd != want {
 		t.Errorf("scheduleCommands =\n%s\nwant\n%s", cmd, want)
@@ -617,7 +617,7 @@ func TestBothNightlyScriptsExportHideSensitive(t *testing.T) {
 
 func TestBackupScheduleCommandsMatchesRound45(t *testing.T) {
 	got := BackupScheduleCommands("a")
-	want := ":if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" }\n" +
+	want := ":if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" disabled=no }\n" +
 		"/system script run mv-backup"
 	if got != want {
 		t.Errorf("BackupScheduleCommands =\n%s\nwant\n%s", got, want)
@@ -712,7 +712,7 @@ func TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom(t *testing.T) {
 	got := BackupPushScheduleCommands(body, "a")
 	const name = "mv-backup-https"
 	want := ":if ([:len [/system script find name=" + name + "]] = 0) do={ /system script add name=" + name + " policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" } else={ /system script set [find name=" + name + "] policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" }\n" +
-		":if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" }\n" +
+		":if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" disabled=no }\n" +
 		"/system script run mv-backup-https"
 	if got != want {
 		t.Errorf("BackupPushScheduleCommands =\n%s\nwant\n%s", got, want)
@@ -1003,5 +1003,24 @@ func TestSetupDocAddsAreAllGuarded(t *testing.T) {
 				t.Errorf("%s:%d has a bare %q; wrap it in the find guard SchedulerAdd/scriptAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", shown, i+1, add, trimmed)
 			}
 		}
+	}
+}
+
+// TestSchedulerAddReEnablesAnExistingEntry covers the v0.6.0 fix-batch
+// audit's Security stage. #1266's guard converges an existing scheduler
+// entry by setting it, but RouterOS's `set` changes only the properties
+// named, and `disabled` was not one of them -- so an entry an operator
+// had turned off stayed off through a re-paste that reported success.
+// A script has no `disabled` property, so this is the scheduler's alone:
+// scriptAdd must not grow one.
+func TestSchedulerAddReEnablesAnExistingEntry(t *testing.T) {
+	cmd := SchedulerAdd("mv-push", `interval=1m on-event="mv-push"`)
+
+	_, elseBranch, found := strings.Cut(cmd, "} else={")
+	if !found {
+		t.Fatalf("SchedulerAdd has no else branch: %s", cmd)
+	}
+	if !strings.Contains(elseBranch, "disabled=no") {
+		t.Errorf("SchedulerAdd's else branch leaves a disabled entry disabled, so a re-paste reports success and the schedule never runs:\n%s", elseBranch)
 	}
 }

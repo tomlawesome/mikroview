@@ -1368,8 +1368,8 @@ key, say, which reprints the same block -- updates what is already there
 rather than leaving the router with two schedulers and two rules:
 
 ```
-:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" } else={ /system scheduler set [find name=mikroview-drop] interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" }
-:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop }
+:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" } else={ /system scheduler set [find name=mikroview-drop] interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" disabled=no }
+:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }
 ```
 
 The scheduler is what keeps the router current -- it re-runs the fetch

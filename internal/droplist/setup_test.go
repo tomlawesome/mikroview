@@ -17,12 +17,12 @@ func TestNewSetupRendersExactCommands(t *testing.T) {
 	got := NewSetup("mv.example:8443", "<DROP-LIST-KEY>")
 
 	onEvent := `interval=5m on-event="/tool fetch url=\"https://mv.example:8443/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <DROP-LIST-KEY>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc"`
-	wantScheduler := `:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop ` + onEvent + ` } else={ /system scheduler set [find name=mikroview-drop] ` + onEvent + ` }`
+	wantScheduler := `:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop ` + onEvent + ` } else={ /system scheduler set [find name=mikroview-drop] ` + onEvent + ` disabled=no }`
 	if got.Scheduler != wantScheduler {
 		t.Errorf("Scheduler =\n%s\nwant\n%s", got.Scheduler, wantScheduler)
 	}
 
-	wantRule := `:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop }`
+	wantRule := `:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }`
 	if got.Rule != wantRule {
 		t.Errorf("Rule = %q, want %q", got.Rule, wantRule)
 	}
@@ -68,7 +68,7 @@ func TestNewSetupEscapesAQuoteInTheAddress(t *testing.T) {
 	onEvent := `interval=5m on-event="/tool fetch url=\"https://mv.example\\\"evil:8443/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <DROP-LIST-KEY>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc"`
 	// The guard repeats the settings in both branches, so the escaping
 	// has to survive in both -- a re-paste runs the `set`, not the `add`.
-	want := `:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop ` + onEvent + ` } else={ /system scheduler set [find name=mikroview-drop] ` + onEvent + ` }`
+	want := `:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop ` + onEvent + ` } else={ /system scheduler set [find name=mikroview-drop] ` + onEvent + ` disabled=no }`
 	if got.Scheduler != want {
 		t.Errorf("Scheduler =\n%s\nwant\n%s", got.Scheduler, want)
 	}
@@ -114,5 +114,37 @@ func TestNewSetupCommandsAreSafeToPasteTwice(t *testing.T) {
 	}
 	if strings.Contains(after, "place-before") {
 		t.Errorf("the else branch re-places an existing rule; it should only set its properties:\n%s", after)
+	}
+}
+
+// TestRePasteResumesDisabledEnforcement covers the v0.6.0 fix-batch
+// audit's Security stage. #1260 made the setup card safe to paste twice
+// by guarding each add with a find and setting the existing entry
+// otherwise. But RouterOS's `set` touches only the properties it names,
+// and neither branch names `disabled` -- while MikroView itself renders
+// two commands that turn enforcement off: DisableRule for the raw rule,
+// EmptyList for the scheduler. An operator who stops the drop list
+// during an incident and then re-pastes the setup card to resume it got
+// no error, and no enforcement either: the rule and the scheduler stayed
+// disabled, with nothing in the app saying so.
+func TestRePasteResumesDisabledEnforcement(t *testing.T) {
+	got := NewSetup("mv.example:8443", "<DROP-LIST-KEY>")
+
+	for _, c := range []struct {
+		what    string
+		command string
+		off     string
+	}{
+		{"Scheduler", got.Scheduler, "EmptyList"},
+		{"Rule", got.Rule, "DisableRule"},
+	} {
+		_, elseBranch, found := strings.Cut(c.command, "} else={")
+		if !found {
+			t.Fatalf("%s has no else branch: %s", c.what, c.command)
+		}
+		if !strings.Contains(elseBranch, "disabled=no") {
+			t.Errorf("%s's else branch does not re-enable the entry, so re-pasting after %s reports success and leaves enforcement off:\n%s",
+				c.what, c.off, elseBranch)
+		}
 	}
 }
