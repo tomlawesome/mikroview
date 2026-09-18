@@ -986,35 +986,42 @@ func TestRFC3164HeaderLenPRIBoundary(t *testing.T) {
 	}
 }
 
-// TestNextHeaderStartBoundedOnLongLTRun is the sec2 regression check:
-// a client that sends a long run of '<' bytes with no '>' and no
-// newline must not make nextHeaderStart's per-offset scan cover the
-// rest of the buffer at every one of those offsets. Before the fix that
-// is quadratic in the run's length; after it, the scan at each offset
-// is bounded to the widest legal PRI (rfc3164MaxHeaderBytes-ish window),
-// so the whole call is linear. The budget below is a >10x margin on
-// both sides: the unfixed code measured around 20s on 1 MiB (extrapolated
-// from ~73ms/64KiB, quadratic), the fixed code takes milliseconds.
-func TestNextHeaderStartBoundedOnLongLTRun(t *testing.T) {
+// TestNextHeaderStartScalesLinearlyOnLongLTRun guards the sec2 fix
+// that bounded rfc3164HeaderLen's '>' scan: with the bound, a buffer
+// of nothing but '<' costs time proportional to its length; without
+// it every offset rescans the rest, so quadrupling the input costs
+// about sixteen times as long. The check is the ratio between two
+// sizes, not a wall-clock budget -- under -race on a shared CI runner
+// the fixed 1 MiB case took 2.2 s where it takes 11 ms here, and an
+// absolute budget failed on that (pipeline 1264, 2026-09-18). A ratio
+// cancels machine speed and the race detector alike.
+func TestNextHeaderStartScalesLinearlyOnLongLTRun(t *testing.T) {
 	if testing.Short() {
 		t.Skip("quadratic-time regression check; skipped under -short")
 	}
 
-	data := bytes.Repeat([]byte{'<'}, 1<<20) // 1 MiB, no '>' anywhere, no '\n'
-
-	start := time.Now()
-	got := nextHeaderStart(data, 0)
-	elapsed := time.Since(start)
-
-	t.Logf("nextHeaderStart over 1 MiB of '<' bytes took %s", elapsed)
-
-	if got != -1 {
-		t.Errorf("nextHeaderStart = %d, want -1 (no '>' anywhere in data)", got)
+	timeScan := func(n int) time.Duration {
+		data := bytes.Repeat([]byte{'<'}, n) // no '>' anywhere, no '\n'
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < 3; i++ {
+			start := time.Now()
+			if got := nextHeaderStart(data, 0); got != -1 {
+				t.Fatalf("nextHeaderStart = %d, want -1 (no '>' anywhere in data)", got)
+			}
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		return best
 	}
 
-	const budget = 2 * time.Second
-	if elapsed > budget {
-		t.Errorf("nextHeaderStart over 1 MiB of '<' bytes took %s, want under %s -- the per-offset '>' scan looks unbounded again", elapsed, budget)
+	small := timeScan(1 << 18) // 256 KiB
+	large := timeScan(1 << 20) // 1 MiB, four times as much
+	ratio := float64(large) / float64(max(small, time.Microsecond))
+	t.Logf("nextHeaderStart: 256 KiB %s, 1 MiB %s, ratio %.1f (linear ~4, quadratic ~16)", small, large, ratio)
+
+	if ratio > 10 {
+		t.Errorf("1 MiB took %.1fx the 256 KiB case, want about 4x -- the per-offset '>' scan looks unbounded again", ratio)
 	}
 }
 
