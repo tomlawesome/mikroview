@@ -108,6 +108,12 @@ async function waitForStanding(deviceId, standing, timeoutMs = 15000) {
 
 check(!!SYSLOG_TLS_PORT, `MV_SYSLOG_TLS_PORT is set (${SYSLOG_TLS_PORT}) -- the logging push below is built around it`)
 
+// The shipped wizard version, read back rather than hard-coded. The
+// backend fills currentVersion even for a router that has never
+// reported, and hard-coding it here meant a version bump failed this
+// scenario instead of being carried by it.
+let currentVersion = null
+
 // --- never reported: router state pushed, the logging page never sent ---
 
 const neverToken = await issueIngestToken(NEVER_ID, 'mv1241-never-reported')
@@ -128,6 +134,11 @@ if (neverToken) {
   )
 
   const neverSetup = await setupOf(NEVER_ID)
+  currentVersion = neverSetup?.currentVersion ?? null
+  check(
+    Number.isInteger(currentVersion) && currentVersion > 0,
+    `the shipped wizard version reads back as a whole number (got ${JSON.stringify(currentVersion)})`,
+  )
   check(
     neverSetup?.standing === 'never reported',
     `a device that has pushed router state but never the logging page reports "never reported" (got ${JSON.stringify(neverSetup)})`,
@@ -141,7 +152,7 @@ if (neverToken) {
 const token = await issueIngestToken(CURRENT_ID, 'mv1241-setup-standing')
 
 if (token) {
-  const currentStatus = await push(token, loggingPayload(1))
+  const currentStatus = await push(token, loggingPayload(currentVersion))
   check(currentStatus === 200, `a logging page at the current wizard version is accepted (${currentStatus})`)
 
   const { body: afterPush } = await api('GET', '/api/devices')
@@ -156,11 +167,11 @@ if (token) {
     `a router reporting the current wizard version and no drift stands "current" (got ${JSON.stringify(current)})`,
   )
   check(
-    current?.scriptVersion === 1 && current?.currentVersion === 1,
-    `scriptVersion and currentVersion both read 1 while current (got ${JSON.stringify(current)})`,
+    current?.scriptVersion === currentVersion && current?.currentVersion === currentVersion,
+    `scriptVersion and currentVersion both read ${currentVersion} while current (got ${JSON.stringify(current)})`,
   )
 
-  const behindStatus = await push(token, loggingPayload(0))
+  const behindStatus = await push(token, loggingPayload(currentVersion - 1))
   check(behindStatus === 200, `a second push at an older wizard version is accepted (${behindStatus})`)
 
   const behind = await waitForStanding(CURRENT_ID, 'behind')
@@ -169,8 +180,8 @@ if (token) {
     `the same router reporting an older wizard version now stands "behind" (got ${JSON.stringify(behind)})`,
   )
   check(
-    behind?.scriptVersion === 0 && behind?.currentVersion === 1,
-    `scriptVersion drops to 0 against currentVersion 1 while behind (got ${JSON.stringify(behind)})`,
+    behind?.scriptVersion === currentVersion - 1 && behind?.currentVersion === currentVersion,
+    `scriptVersion drops to ${currentVersion - 1} against currentVersion ${currentVersion} while behind (got ${JSON.stringify(behind)})`,
   )
 
   // --- the same fact, read off a real card ------------------------------
