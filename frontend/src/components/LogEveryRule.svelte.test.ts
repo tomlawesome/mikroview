@@ -33,6 +33,7 @@ import { appState } from '../lib/state.svelte'
 import { policyState } from '../lib/policy.svelte'
 import { coverageState } from '../lib/coverage.svelte'
 import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
+import { logEveryRuleWorkState } from '../lib/logEveryRuleWork.svelte'
 import type { Device, TuneLoggingAnalyseResponse, TuneLoggingRenderResponse } from '../lib/types'
 import LogEveryRule from './LogEveryRule.svelte'
 
@@ -171,6 +172,11 @@ beforeEach(() => {
   policyState.anyPushed = false
   coverageState.declarations = []
   logEveryRuleNavState.pending = null
+  // logEveryRuleWorkState is module-lifetime (that is the point of
+  // #1134's fix below), so it outlives any one test's render() the same
+  // way it outlives a component unmount -- reset explicitly, or a test
+  // that types an export leaks it into the next one.
+  logEveryRuleWorkState.reset()
 })
 
 describe('LogEveryRule ephemerality', () => {
@@ -478,5 +484,40 @@ describe('LogEveryRule device pick', () => {
     await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
     const select = container.querySelector('#ler-device') as HTMLSelectElement
     expect(select.value).toBe('edge-2')
+  })
+})
+
+// Deck.svelte unmounts a card's scene once it scrolls more than one
+// card from the active one (lib/deckMount.ts) -- ordinary navigation,
+// not the operator leaving the page. Before this fix that destroyed
+// whatever had been pasted, and any rendered-but-undownloaded result,
+// the moment the deck scrolled back: losing typed or pasted work is
+// never acceptable.
+describe('LogEveryRule survives the deck unmounting and remounting the card (#1134 follow-up)', () => {
+  it('keeps the pasted export across an unmount', async () => {
+    const first = render(LogEveryRule)
+    await typeExport(first.container)
+    expect(zoneOf(first.container).classList.contains('filled')).toBe(true)
+    first.unmount()
+
+    const second = render(LogEveryRule)
+    expect(second.container.querySelector('.drop-picked')?.textContent).toBe('pasted export')
+    expect(zoneOf(second.container).classList.contains('filled')).toBe(true)
+  })
+
+  it('keeps a rendered-but-not-yet-downloaded result across an unmount', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
+    const first = render(LogEveryRule)
+    await typeExport(first.container)
+    await clickAnalyse()
+    await waitFor(() => expect(first.container.querySelectorAll('.rule-row').length).toBe(1))
+    await fireEvent.click(screen.getByRole('button', { name: /^Render/ }))
+    await waitFor(() => expect(first.container.querySelector('.render-result')).toBeTruthy())
+    first.unmount()
+
+    const second = render(LogEveryRule)
+    await waitFor(() => expect(second.container.querySelector('.render-result')).toBeTruthy())
+    expect(second.container.querySelector('.render-result pre')?.textContent).toBe(renderResponse().commands)
   })
 })
