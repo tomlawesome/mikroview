@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -74,7 +75,7 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	key, keyErr := retention.LoadKey(cfg.History.KeyFile)
 	switch {
 	case keyErr == retention.ErrNoKey:
-		log.Info("no history.keyFile configured -- every JSON-file-backed store except accounts, tokens and recovery keys (flags, entities, watchlist, definitions and the rest), and the warm-restart snapshots, are memory-only and are lost on every restart; there is no unencrypted mode to fall back to for those (#853). Accounts, tokens and recovery keys keep persisting in plain JSON because they hold only one-way hashes (#853 rule 6)")
+		log.Info(fmt.Sprintf("no history.keyFile configured -- every JSON-file-backed store except %s (flags, entities, watchlist, definitions and the rest), and the warm-restart snapshots, are memory-only and are lost on every restart; there is no unencrypted mode to fall back to for those (#853). Those named keep persisting in plain JSON: accounts, tokens and recovery keys because they hold only one-way hashes (#853 rule 6), the drop list because losing it on a restart made the next scheduled fetch push an empty feed that wiped the router's own list (v0.6.0 pre-release audit)", plaintextWithoutKeyList()))
 	case keyErr != nil:
 		s.keyErr = keyErr
 		log.Warn(fmt.Sprintf("history.keyFile is set but could not be used (%v) -- the state store and warm-restart snapshots run exactly as if no key were configured (memory-only)", keyErr), "keyFile", cfg.History.KeyFile, "err", keyErr)
@@ -180,6 +181,41 @@ var plaintextWithoutKeyStores = map[string]bool{
 	"tokens":        true,
 	"recovery_keys": true,
 	"droplist":      true,
+}
+
+// plaintextStoreNames is what each of those is called in the no-key log
+// line below -- the one place an operator is told what does and does
+// not reach the disk unprotected. Kept next to the map, and asserted
+// against it, because the line had already gone stale once: droplist
+// was added to the exemption and the sentence still named only
+// accounts, tokens and recovery keys, so an operator reading it was
+// told their drop list was memory-only when it was being written in
+// the clear (v0.6.0 pre-release audit, Security stage).
+var plaintextStoreNames = map[string]string{
+	"auth":          "accounts",
+	"tokens":        "tokens",
+	"recovery_keys": "recovery keys",
+	"droplist":      "the drop list",
+}
+
+// plaintextWithoutKeyList names the exempt stores for the log line, in
+// a fixed order so the message does not shuffle between boots. Built
+// from the map rather than written out, so it cannot fall behind it.
+func plaintextWithoutKeyList() string {
+	keys := make([]string, 0, len(plaintextWithoutKeyStores))
+	for k := range plaintextWithoutKeyStores {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	names := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if n, ok := plaintextStoreNames[k]; ok {
+			names = append(names, n)
+		} else {
+			names = append(names, k)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // backendFor returns where the named store should persist, and adopts

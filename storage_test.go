@@ -212,3 +212,32 @@ func TestBackendForPersistsDroplistWithoutAKey(t *testing.T) {
 		t.Errorf("backendFor returned %T, want a plain *persist.FileBackend", backend)
 	}
 }
+
+// TestEveryPlaintextStoreIsNamedForTheOperator covers the v0.6.0
+// pre-release audit's Security stage. The no-key log line is the one
+// place an operator is told which stores reach the disk without
+// encryption, and it had gone stale: droplist was added to
+// plaintextWithoutKeyStores and the sentence still named only accounts,
+// tokens and recovery keys. An operator reading it concluded their drop
+// list was memory-only while it was being written in the clear.
+//
+// Adding a store to the exemption without naming it here now fails
+// rather than quietly shipping an incomplete notice.
+func TestEveryPlaintextStoreIsNamedForTheOperator(t *testing.T) {
+	for store := range plaintextWithoutKeyStores {
+		name, ok := plaintextStoreNames[store]
+		if !ok {
+			t.Errorf("store %q is exempt from encryption but has no name for the log line -- the operator would never be told it reaches the disk in the clear", store)
+			continue
+		}
+		if !strings.Contains(plaintextWithoutKeyList(), name) {
+			t.Errorf("store %q is named %q but that does not appear in the list the log line prints: %s", store, name, plaintextWithoutKeyList())
+		}
+	}
+
+	for store := range plaintextStoreNames {
+		if !plaintextWithoutKeyStores[store] {
+			t.Errorf("plaintextStoreNames still names %q, which is no longer exempt -- the log line would claim it is written in the clear when it is not", store)
+		}
+	}
+}
