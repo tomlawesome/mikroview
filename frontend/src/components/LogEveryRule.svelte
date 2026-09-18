@@ -119,6 +119,17 @@
       work.adoptDevice()
       analyseError = null
       renderError = null
+      // A request still in flight was asked about the router we have
+      // just left, so this view is no longer waiting on anything. Its
+      // answer is discarded where it resolves, below.
+      analysing = false
+      rendering = false
+      // The pre-selected pair came from a nav request naming the old
+      // router. Another router's rules can reuse the same boundary key
+      // -- "bridge|ether1" says nothing about which router it is on --
+      // and the row would light up as the pair that prompted a visit
+      // that never happened.
+      preselectedBoundary = null
     })
   })
 
@@ -199,9 +210,16 @@
 
   async function analyse() {
     if (!work.device || !work.exportText.trim() || problem || analysing) return
+    // Which router this answer will be about. Clearing state when the
+    // picker moves is not enough on its own: a request already in
+    // flight resolves afterwards, and without this it wrote the old
+    // router's rules -- or its error -- onto the new router's view,
+    // which is the same fault one beat later.
+    const asked = work.device
     analysing = true
     analyseError = null
-    const res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
+    const res = await fetchTuneLoggingAnalyse({ device: asked, export: work.exportText, darkBoundaries })
+    if (asked !== work.device) return
     analysing = false
     if (typeof res === 'string') {
       analyseError = res
@@ -222,9 +240,13 @@
 
   async function render() {
     if (!work.device || work.selected.size === 0 || rendering) return
+    // Same reason as analyse: a stale render is worse still, since its
+    // result is a file the operator downloads and pastes into a router.
+    const asked = work.device
     rendering = true
     renderError = null
-    const res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
+    const res = await fetchTuneLoggingRender({ device: asked, export: work.exportText, selected: [...work.selected] })
+    if (asked !== work.device) return
     rendering = false
     if (typeof res === 'string') {
       renderError = res
