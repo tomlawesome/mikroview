@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/routeros"
 )
 
 // filterSectionPath is /ip firewall filter, normalized to its
@@ -268,23 +270,21 @@ func unquote(raw string) string {
 }
 
 // Quote renders s the way RouterOS quotes a value: wrapped in double
-// quotes, with '"' and '\' backslash-escaped. Exported so a caller
-// building a matching `[find comment=...]` selector (POST
-// /api/tune-logging/render's per-rule commands) quotes a comment value
-// the same way this package does, rather than a second, possibly
-// diverging implementation.
+// quotes, with the same escaping routeros.QuoteScriptString applies --
+// '"' and '\' backslash-escaped, plus '$' as '\$', since RouterOS
+// expands `$name` and `$[cmd]` inside any double-quoted string it
+// parses, not only inside a script's own source="..." body. This
+// matters here because a rule's comment or log-prefix comes out of an
+// uploaded /export -- attacker-controlled by whoever can write a rule
+// on the router -- and POST /api/tune-logging/render's per-rule
+// `[find comment=...]` and `log-prefix=...` commands built from it
+// (internal/api/tunelogging.go) are meant to be pasted straight into a
+// RouterOS terminal by an admin; an unescaped `$[...]` there would run
+// as a command instead of merely matching or labelling text. Exported
+// so that caller quotes a value the same way this package does, rather
+// than a second, possibly diverging implementation.
 func Quote(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '"' || c == '\\' {
-			b.WriteByte('\\')
-		}
-		b.WriteByte(c)
-	}
-	b.WriteByte('"')
-	return b.String()
+	return `"` + routeros.QuoteScriptString(s) + `"`
 }
 
 func joinLines(lines []string) string {
