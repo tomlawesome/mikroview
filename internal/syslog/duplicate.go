@@ -90,6 +90,23 @@ type dupRingEntry struct {
 // sightings and a histogram of their multiplicities. One mutex guards
 // all of it, since a line's ring scan, ring write, and (if it's a
 // sighting) episode update must happen as a single step.
+// dupClusterSlots is how many duplicate clusters one source may have
+// in flight at once. A router's pasted-twice logging rule duplicates
+// every event it matches, so several distinct events are mid-cluster
+// at any moment; eight covers the interleaving seen in practice while
+// staying a fixed, per-source cost.
+const dupClusterSlots = 8
+
+// dupCluster is one open multiplicity-histogram entry: which event
+// (hash), which bucket its weight currently sits in, and when it was
+// last seen, so a stale slot can be reused.
+type dupCluster struct {
+	used   bool
+	hash   uint64
+	bucket int
+	at     time.Time
+}
+
 type sourceDupState struct {
 	mu   sync.Mutex
 	ring [dupRingSize]dupRingEntry
@@ -99,17 +116,21 @@ type sourceDupState struct {
 	lastSightingAt time.Time // zero means no sighting yet in this episode
 	multiplicity   [dupMultiplicityBuckets]uint64
 
-	// clusterOpen, clusterHash, clusterBucket and clusterAt track the
-	// duplicate cluster the most recent multiplicity-histogram entry
-	// belongs to -- the same dispatched event, seen one copy further
-	// along (see noteDuplicateLine's doc comment). Recognising a
-	// continuation moves that entry's weight to the new, higher bucket
-	// in place, rather than counting the event a second time at its
-	// old, lower one.
-	clusterOpen   bool
-	clusterHash   uint64
-	clusterBucket int
-	clusterAt     time.Time
+	// clusters tracks the duplicate clusters whose multiplicity-
+	// histogram entries are still open -- each one a dispatched event
+	// being seen one copy further along (see noteDuplicateLine's doc
+	// comment). Recognising a continuation moves that entry's weight to
+	// the new, higher bucket in place, rather than counting the event a
+	// second time at its old, lower one.
+	//
+	// There are several slots rather than one because a busy source
+	// interleaves them: two duplicated events arriving a1, b1, a2, b2,
+	// a3 are two clusters in flight at once. With a single slot, b2
+	// evicted A, so a3 could not find its own open entry and added a
+	// fresh one instead of moving A's -- leaving a stale count in the
+	// lower bucket and skewing the reported copy count back down, the
+	// very fault the cluster tracking was added to fix.
+	clusters [dupClusterSlots]dupCluster
 
 	// lastLineAt is when this source last sent anything at all, not
 	// just a duplicate. dupStateFor reads it to decide which entry to
@@ -227,7 +248,7 @@ func noteDuplicateLine(host string, data []byte) {
 	if st.lastSightingAt.IsZero() || now.Sub(st.lastSightingAt) > lossWindowOversized {
 		st.sightings = 0
 		st.multiplicity = [dupMultiplicityBuckets]uint64{}
-		st.clusterOpen = false
+		st.clusters = [dupClusterSlots]dupCluster{}
 	}
 	st.sightings++
 	st.lastSightingAt = now
@@ -251,18 +272,17 @@ func noteDuplicateLine(host string, data []byte) {
 	// that entry's weight to the new bucket instead of adding a second,
 	// independent one, so an N-times-pasted event ends up contributing
 	// exactly one histogram entry, at N.
-	sameCluster := st.clusterOpen && st.clusterHash == hash && now.Sub(st.clusterAt) <= dupSightingWindow
-	switch {
-	case sameCluster && bucket != st.clusterBucket:
-		st.multiplicity[st.clusterBucket]--
+	if i := st.openClusterLocked(hash, now); i >= 0 {
+		if bucket != st.clusters[i].bucket {
+			st.multiplicity[st.clusters[i].bucket]--
+			st.multiplicity[bucket]++
+		}
+		st.clusters[i].bucket = bucket
+		st.clusters[i].at = now
+	} else {
 		st.multiplicity[bucket]++
-	case !sameCluster:
-		st.multiplicity[bucket]++
+		st.clusters[st.freeClusterLocked(now)] = dupCluster{used: true, hash: hash, bucket: bucket, at: now}
 	}
-	st.clusterOpen = true
-	st.clusterHash = hash
-	st.clusterBucket = bucket
-	st.clusterAt = now
 
 	if st.sightings < dupSightingsToReportDrift {
 		return
@@ -272,6 +292,39 @@ func noteDuplicateLine(host string, data []byte) {
 		return
 	}
 	noteDuplicateDrift(host, modal, st.sightings, now)
+}
+
+// openClusterLocked returns the slot holding this event's still-open
+// histogram entry, or -1 when it has none: either it was never seen,
+// or its last copy is far enough back that the next one starts a fresh
+// cluster rather than continuing this one.
+func (st *sourceDupState) openClusterLocked(hash uint64, now time.Time) int {
+	for i := range st.clusters {
+		c := st.clusters[i]
+		if c.used && c.hash == hash && now.Sub(c.at) <= dupSightingWindow {
+			return i
+		}
+	}
+	return -1
+}
+
+// freeClusterLocked picks the slot a new cluster should take: an
+// unused one, else one whose cluster has gone stale, else the least
+// recently seen. Evicting the oldest only forfeits moving that event's
+// weight if it reappears -- the same behaviour the single slot had for
+// every event, now the rare case rather than the usual one.
+func (st *sourceDupState) freeClusterLocked(now time.Time) int {
+	oldest := 0
+	for i := range st.clusters {
+		c := st.clusters[i]
+		if !c.used || now.Sub(c.at) > dupSightingWindow {
+			return i
+		}
+		if c.at.Before(st.clusters[oldest].at) {
+			oldest = i
+		}
+	}
+	return oldest
 }
 
 // modalMultiplicityLocked returns the most common multiplicity seen in
