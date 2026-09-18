@@ -116,10 +116,15 @@ func TestNudgeNeverBlocksHoweverOftenItIsRung(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Nudge blocked with no engine running, want a non-blocking doorbell")
 	}
-	// Nothing was evaluated, and nothing was lost either -- every one of
-	// them is still in the store waiting for a cursor to reach it.
-	if behind, _, outrun := e.Lag(); behind != 1000 || outrun != 0 {
-		t.Fatalf("Lag() = (behind %d, outrun %d), want (1000, 0)", behind, outrun)
+	// The property worth guaranteeing here is exactly the one this test
+	// is named for: Nudge never blocked, however many times it was rung
+	// with nothing answering. It is not true that nothing was lost --
+	// the store's own capacity is 100, so it evicted 900 of these 1000
+	// events from its ring long before any engine could have reached
+	// them; TestOutrunCountsWhatTheRingWrappedPast is what actually
+	// exercises that loss being counted.
+	if _, oldestHeld, newestHeld := st.Since(0, 0); newestHeld-oldestHeld+1 != 100 {
+		t.Fatalf("store held %d event(s) after 1000 inserts into a 100-capacity ring, want exactly the 100 it can hold", newestHeld-oldestHeld+1)
 	}
 }
 
