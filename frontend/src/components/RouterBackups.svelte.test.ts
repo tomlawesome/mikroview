@@ -152,6 +152,31 @@ describe('a router at rest', () => {
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
     expect(await screen.findByText('locked')).toBeTruthy()
   })
+
+  // The button used to do nothing and say nothing on anything but a
+  // 403 -- a dropped connection or a 5xx looked identical to a click
+  // that never happened.
+  it('says so when a download fails outright, rather than doing nothing', async () => {
+    vi.mocked(downloadFromUrl).mockResolvedValue('failed')
+    render(RouterBackups, {
+      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('The download failed. Try again.')
+  })
+
+  it('clears a previous download error once a later download succeeds', async () => {
+    vi.mocked(downloadFromUrl).mockResolvedValueOnce('failed')
+    render(RouterBackups, {
+      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
+    expect(await screen.findByRole('alert')).toBeTruthy()
+
+    vi.mocked(downloadFromUrl).mockResolvedValueOnce('ok')
+    await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
 })
 
 describe('a router that has missed its usual push', () => {
