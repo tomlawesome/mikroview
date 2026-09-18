@@ -69,8 +69,17 @@ func scriptSource(body string) string {
 // `source="<paste the script above>"` in another, which asked the
 // operator to nest one clipboard inside another and to do the escaping
 // this function does.
+//
+// Guarded by a find, same idiom and same reason as SyslogCommands'
+// action line (#1266): docs/routeros-setup.md promises re-pasting a
+// wizard block is safe and changes nothing on a router that is already
+// correct. An unguarded add broke that promise -- re-pasting step 4 or
+// step 6b after a wizard version bump left the router with a second
+// mv-push or mv-backup-https script rather than the new one replacing
+// the old.
 func scriptAdd(name, policy, body string) string {
-	return fmt.Sprintf(`/system script add name=%s policy=%s source="%s"`, name, policy, scriptSource(body))
+	source := scriptSource(body)
+	return fmt.Sprintf(`:if ([:len [/system script find name=%s]] = 0) do={ /system script add name=%s policy=%s source="%s" } else={ /system script set [find name=%s] policy=%s source="%s" }`, name, name, policy, source, name, policy, source)
 }
 
 // Hostname strips a port. Certificate names never carry one, so this is
@@ -123,7 +132,7 @@ func CaTrustCommands(address, dialect string) string {
 // Deliberately not the release version. Two releases whose pasted
 // blocks are identical share a wizard version, and a router is not
 // behind merely because mikroview was upgraded around it.
-const WizardVersion = 1
+const WizardVersion = 2
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
