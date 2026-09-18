@@ -2096,17 +2096,11 @@ ruling). The list is worked out fresh every time the page is opened, not
 just on the boot that logged it, so it stays reachable for as long as
 something is genuinely missing.
 
-Dismissing it is per version: once you've reviewed it (or decided you
-don't need any of it) for version X, it stops showing for X but comes
-back the moment a later version adds something new.
-
-```yaml
-configDrift:
-  # Where the dismissal is persisted, as a small JSON file. Same
-  # optional-persistence contract as setup.storePath above: left unset,
-  # the notice still works, a dismissal just doesn't survive a restart.
-  storePath: "/var/lib/mikroview/config-drift.json"
-```
+It has a plain close button, nothing more: closing it puts it away for
+this visit and nothing is saved. The owner's ruling was verbatim "Just
+have a close button. It's simple." Navigate away from Settings and
+back, or restart MikroView, and it shows again for as long as something
+is genuinely missing.
 
 The reverse direction -- a key your config sets that this version no
 longer understands -- is issue #1207's unknown-key check: it refuses to
