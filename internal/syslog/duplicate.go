@@ -99,6 +99,18 @@ type sourceDupState struct {
 	lastSightingAt time.Time // zero means no sighting yet in this episode
 	multiplicity   [dupMultiplicityBuckets]uint64
 
+	// clusterOpen, clusterHash, clusterBucket and clusterAt track the
+	// duplicate cluster the most recent multiplicity-histogram entry
+	// belongs to -- the same dispatched event, seen one copy further
+	// along (see noteDuplicateLine's doc comment). Recognising a
+	// continuation moves that entry's weight to the new, higher bucket
+	// in place, rather than counting the event a second time at its
+	// old, lower one.
+	clusterOpen   bool
+	clusterHash   uint64
+	clusterBucket int
+	clusterAt     time.Time
+
 	// lastLineAt is when this source last sent anything at all, not
 	// just a duplicate. dupStateFor reads it to decide which entry to
 	// drop when the cap is full: without it, the first 256 addresses to
@@ -215,6 +227,7 @@ func noteDuplicateLine(host string, data []byte) {
 	if st.lastSightingAt.IsZero() || now.Sub(st.lastSightingAt) > lossWindowOversized {
 		st.sightings = 0
 		st.multiplicity = [dupMultiplicityBuckets]uint64{}
+		st.clusterOpen = false
 	}
 	st.sightings++
 	st.lastSightingAt = now
@@ -223,7 +236,33 @@ func noteDuplicateLine(host string, data []byte) {
 	if bucket >= dupMultiplicityBuckets {
 		bucket = dupMultiplicityBuckets - 1
 	}
-	st.multiplicity[bucket]++
+	// A router pasting its logging block N times dispatches the same
+	// event N times, so this line's own multiplicity climbs by one on
+	// each successive copy of it: 2 on the second copy, 3 on the third,
+	// and so on. Left alone, that scored one histogram sighting at each
+	// intermediate count -- 2, 3, ..., N -- spreading an N-times-pasted
+	// event's weight evenly across N-1 buckets, and since ties favor
+	// the smaller multiplicity (modalMultiplicityLocked), the modal
+	// count reported for it could never rise past 2, however many
+	// copies were actually pasted (v0.6.0 pre-release audit: "a router
+	// pasted three times reports 2, ... the multiplicity histogram is
+	// dead"). A line recognised as the same cluster the previous entry
+	// already counted -- same hash, still inside the window -- moves
+	// that entry's weight to the new bucket instead of adding a second,
+	// independent one, so an N-times-pasted event ends up contributing
+	// exactly one histogram entry, at N.
+	sameCluster := st.clusterOpen && st.clusterHash == hash && now.Sub(st.clusterAt) <= dupSightingWindow
+	switch {
+	case sameCluster && bucket != st.clusterBucket:
+		st.multiplicity[st.clusterBucket]--
+		st.multiplicity[bucket]++
+	case !sameCluster:
+		st.multiplicity[bucket]++
+	}
+	st.clusterOpen = true
+	st.clusterHash = hash
+	st.clusterBucket = bucket
+	st.clusterAt = now
 
 	if st.sightings < dupSightingsToReportDrift {
 		return
