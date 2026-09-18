@@ -184,7 +184,14 @@ func unattributedViews(sources []device.Source, infos []device.Info) []unattribu
 				}
 				claimed = append(claimed, id)
 			}
-			v.Explanation = joinAnd(claimed) + " have both pushed this address as their own, so nothing here can tell which of them sent these lines."
+			// Plain register, owner's own wording (v0.6.0 pre-release
+			// audit): the previous sentence said "have both pushed",
+			// which reads fine for two claimants but is wrong the
+			// moment a third router shares the same management or VRRP
+			// address -- joinAnd already lists any count correctly, the
+			// grammar around it just assumed there would only ever be
+			// two.
+			v.Explanation = joinAnd(claimed) + " are all using the same address, so MikroView can't tell what data came from where."
 		}
 		out = append(out, v)
 	}

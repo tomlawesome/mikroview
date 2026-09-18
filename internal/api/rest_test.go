@@ -408,6 +408,48 @@ func TestHandleDevicesReportsMultihomedCandidates(t *testing.T) {
 	}
 }
 
+// TestUnattributedViewsExplainsConflictingClaimantsForAnyCount is the
+// v0.6.0 pre-release audit's finding, owner-ruled: unattributedViews'
+// Explanation sentence was hard-wired to exactly two claimants ("X and
+// Y have both pushed..."), so three or more routers sharing a
+// management or VRRP address produced ungrammatical prose ("core, edge
+// and dmz have both pushed..."). Rewritten in the owner's own plain
+// register and checked here for both the two- and three-claimant case,
+// so it can never again silently stop generalising past two.
+func TestUnattributedViewsExplainsConflictingClaimantsForAnyCount(t *testing.T) {
+	infos := []device.Info{
+		{ID: "core", Name: "core"},
+		{ID: "edge", Name: "edge"},
+		{ID: "dmz", Name: "dmz"},
+	}
+
+	two := unattributedViews([]device.Source{
+		{Address: "10.0.0.1", Claimants: []string{"core", "edge"}},
+	}, infos)
+	if len(two) != 1 {
+		t.Fatalf("unattributedViews (two claimants) = %+v, want one view", two)
+	}
+	if got := two[0].Explanation; !strings.Contains(got, "core and edge") || strings.Contains(got, "both") {
+		t.Errorf("two-claimant explanation = %q, want it to name both without the word %q", got, "both")
+	}
+	if got := two[0].Explanation; !strings.Contains(got, "MikroView") {
+		t.Errorf("explanation = %q, want it to name the product as %q", got, "MikroView")
+	}
+
+	three := unattributedViews([]device.Source{
+		{Address: "10.0.0.2", Claimants: []string{"core", "edge", "dmz"}},
+	}, infos)
+	if len(three) != 1 {
+		t.Fatalf("unattributedViews (three claimants) = %+v, want one view", three)
+	}
+	if got := three[0].Explanation; !strings.Contains(got, "core, edge and dmz") {
+		t.Errorf("three-claimant explanation = %q, want it to name all three in a grammatical list", got)
+	}
+	if got := three[0].Explanation; strings.Contains(got, "both") {
+		t.Errorf("three-claimant explanation = %q, want no %q -- that only ever names two", got, "both")
+	}
+}
+
 // TestHandleDevicesOmitsMultihomedCandidatesOnceDeclaredDeviceSpeaks
 // guards the notice clearing itself: once the declared device receives
 // its own traffic there is no silent declared side, so nothing is paired
