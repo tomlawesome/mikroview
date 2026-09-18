@@ -262,8 +262,8 @@ func TestHandleSetupCommandsPushRendersOnlyWithTokenAndKinds(t *testing.T) {
 			tokenOnly.Steps.Schedule.Commands, kindsOnly.Steps.Schedule.Commands)
 	}
 	schedule := both.Steps.Schedule.Commands
-	if !strings.HasPrefix(schedule, `/system script add name=mv-push policy=read,test source="`) {
-		t.Errorf("schedule commands = %q, want the script add that saves the push script", schedule)
+	if !strings.HasPrefix(schedule, `:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("schedule commands = %q, want the guarded script add that saves the push script", schedule)
 	}
 	if !strings.Contains(schedule, "Bearer tok-123") || !strings.HasSuffix(schedule, "\n/system script run mv-push") {
 		t.Errorf("schedule commands = %q, want the push script inside it and one run now", schedule)

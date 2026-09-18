@@ -320,9 +320,13 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// Enforced here rather than in each handler for the same reason
 		// requireAuth exists at all: a gate that has to be remembered per
 		// endpoint is one forgotten endpoint away from not being a gate.
-		// GET /api/auth/session and the two logout-shaped routes stay
-		// reachable without a special case, because exemptPaths above has
-		// already returned by the time this runs.
+		// GET /api/auth/session and /api/auth/logout stay reachable
+		// without a special case, because exemptPaths above has already
+		// returned by the time this runs. /api/auth/logout-all is not on
+		// that list and gets no special case here either: ending every
+		// session but this one needs to trust whose sessions they are,
+		// which is exactly what a reset-code session does not have yet
+		// -- it 403s like everything else until the password is changed.
 		if user.MustChangePassword && r.URL.Path != changePasswordPath {
 			http.Error(w, "an administrator reset this account -- set a new password before going any further", http.StatusForbidden)
 			return

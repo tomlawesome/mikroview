@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/routeros/export"
@@ -120,16 +119,9 @@ func (s *Server) readBackupText(w http.ResponseWriter, r *http.Request, device, 
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return "", false
 	}
-	// Same gate, same words as handleRouterBackupDownload: with a
-	// passphrase set, only the session that unlocked may read, and the
-	// refusal says whose unlock it is not rather than contradicting
-	// what the list just showed (#1124).
-	if !s.vaultUnlockedFor(r, time.Now()) {
-		msg := "the vault is locked -- unlock it with the vault passphrase first"
-		if s.vaultUnlock.holder() != "" {
-			msg = "another session holds the vault unlock -- unlock it in this session to read"
-		}
-		http.Error(w, msg, http.StatusForbidden)
+	// Same gate handleRouterBackupDownload goes through (#1262:
+	// requireVaultUnlocked, not a second hand-copied copy of it).
+	if !s.requireVaultUnlocked(w, r, "read") {
 		return "", false
 	}
 	data, err := s.Vault.Open(device, generation, backupvault.KindRsc)

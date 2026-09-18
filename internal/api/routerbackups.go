@@ -179,16 +179,10 @@ func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Reque
 	// The passphrase gate sits ahead of the read (#956): with a
 	// passphrase set, only the session that unlocked may download, and
 	// an unlock that has gone idle or lost its session is dropped here
-	// rather than merely refused.
-	if !s.vaultUnlockedFor(r, time.Now()) {
-		// The list reports `locked: false` while another admin's session
-		// holds the unlock, so "the vault is locked" would contradict what
-		// the caller just saw (#1124): say whose unlock it is not.
-		msg := "the vault is locked -- unlock it with the vault passphrase first"
-		if s.vaultUnlock.holder() != "" {
-			msg = "another session holds the vault unlock -- unlock it in this session to download"
-		}
-		http.Error(w, msg, http.StatusForbidden)
+	// rather than merely refused. Shared with routerbackuptext.go's
+	// readBackupText (#1262) -- see requireVaultUnlocked's own doc
+	// comment for why this used to be two hand-copied blocks.
+	if !s.requireVaultUnlocked(w, r, "download") {
 		return
 	}
 

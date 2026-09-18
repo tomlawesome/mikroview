@@ -2,7 +2,10 @@
 
 package droplist
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestNewSetupRendersExactCommands is issue #1225's setup card content,
 // pinned exactly: an operator pastes these verbatim, so a stray
@@ -28,9 +31,28 @@ func TestNewSetupRendersExactCommands(t *testing.T) {
 		t.Errorf("DisableRule = %q, want %q", got.DisableRule, wantDisableRule)
 	}
 
-	wantEmptyList := `/ip firewall address-list remove [find list=mikroview-drop]`
+	wantEmptyList := `/system scheduler disable [find name=mikroview-drop]; /ip firewall address-list remove [find list=mikroview-drop]`
 	if got.EmptyList != wantEmptyList {
 		t.Errorf("EmptyList = %q, want %q", got.EmptyList, wantEmptyList)
+	}
+}
+
+// TestEmptyListAlsoDisablesTheScheduler covers #1260: EmptyList used to
+// only remove the live list's entries, but the router's own 5-minute
+// scheduler pulls mikroview's feed again on its own and refills the
+// list with whatever mikroview still has stored -- an emergency stop
+// that reversed itself within five minutes and left the operator
+// believing traffic was unblocked when it was not. EmptyList must also
+// disable the scheduler entry (by its Scheduler-assigned name) that
+// would otherwise undo it.
+func TestEmptyListAlsoDisablesTheScheduler(t *testing.T) {
+	got := NewSetup("mv.example:8443", "<DROP-LIST-KEY>")
+
+	if !strings.Contains(got.EmptyList, "/system scheduler disable [find name=mikroview-drop]") {
+		t.Errorf("EmptyList does not disable the scheduler that would refill it: %q", got.EmptyList)
+	}
+	if !strings.Contains(got.EmptyList, "/ip firewall address-list remove [find list=mikroview-drop]") {
+		t.Errorf("EmptyList lost the list removal: %q", got.EmptyList)
 	}
 }
 

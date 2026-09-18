@@ -416,6 +416,40 @@ func generationsHave(gens []*generationMeta, id string) bool {
 	return false
 }
 
+// openGeneration finds the generation a `.rsc` arrival should complete:
+// the one most recently started by a `.backup` that has no `.rsc` yet.
+// Searched across both the cycling set and the protected pool, not just
+// the cycling set's last entry -- Protect does not wait for a
+// generation's `.rsc` to arrive before moving it out of rm.Generations,
+// so an admin who protects a generation the moment its `.backup` lands
+// moves the very generation an in-flight `.rsc` is about to complete
+// (#1262). Without checking both pools, that `.rsc` finds nothing to
+// attach to and starts a second, permanently bare generation instead.
+//
+// Generation IDs are minted by nextGenerationID in arrival order and
+// are lexicographically sortable (its timestamp-prefixed form), so the
+// greatest id among open generations is the most recently opened one --
+// the same generation the old last-of-rm.Generations check picked, when
+// it was still there to pick.
+func openGeneration(rm *routerMeta) *generationMeta {
+	var open *generationMeta
+	consider := func(g *generationMeta) {
+		if g.BackupArrivedAt.IsZero() || !g.RscArrivedAt.IsZero() {
+			return
+		}
+		if open == nil || g.ID > open.ID {
+			open = g
+		}
+	}
+	for _, g := range rm.Generations {
+		consider(g)
+	}
+	for _, g := range rm.Protected {
+		consider(g)
+	}
+	return open
+}
+
 // removeUnreferencedFiles is reconcile's other half: every file under a
 // router directory that no generation in the (already repaired) index
 // refers to, including half-written temp files from a crashed
@@ -507,9 +541,11 @@ func (v *Vault) nextGenerationID(now time.Time) string {
 // A `.backup` always starts a new generation: the wizard's script always
 // sends it first (backup save, export, then two fetches), so treating it
 // as "a new run has started" is exactly what it means. A `.rsc` attaches
-// to the most recently opened generation that has no `.rsc` yet, or
-// starts a bare one of its own if none is open -- the case where mikroview
-// restarted between the two fetches of one run.
+// to the most recently opened generation that has no `.rsc` yet -- the
+// cycling set or the protected pool, wherever it now lives (#1262: it
+// can be protected before its `.rsc` arrives) -- see openGeneration --
+// or starts a bare one of its own if none is open, the case where
+// mikroview restarted between the two fetches of one run.
 //
 // Store never refuses an arrival because the disk is filling up (owner
 // ruling, #1125): when free space falls below lowSpaceFloor the vault
@@ -607,8 +643,8 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	case KindBackup:
 		newGen = &generationMeta{ID: v.nextGenerationID(now), BackupArrivedAt: now, BackupSize: int64(len(data)), Header: header}
 	case KindRsc:
-		if n := len(rm.Generations); n > 0 && rm.Generations[n-1].RscArrivedAt.IsZero() {
-			attach = rm.Generations[n-1]
+		if g := openGeneration(rm); g != nil {
+			attach = g
 		} else {
 			newGen = &generationMeta{ID: v.nextGenerationID(now)}
 		}
