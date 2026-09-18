@@ -20,6 +20,24 @@ import (
 // optional") crash-looped instead of starting on defaults, contrary to
 // what those docs promise. The compose file has to actually behave
 // that way, not merely be documented to.
+// TestInstallDocComposeConfigIsOptional holds docs/install.md's own
+// embedded compose block to the same rule as the file it mirrors. The
+// v0.6.0 audit un-pinned MIKROVIEW_CONFIG in deploy/docker-compose.yml
+// and guarded it above, but the doc that quotes that compose block went
+// on telling operators the opposite -- that config.yaml must exist
+// first or the container exits -- so the fix shipped half-done. The
+// prose is prose, but the block beside it is checkable, and it is the
+// part an operator copies.
+func TestInstallDocComposeConfigIsOptional(t *testing.T) {
+	data, err := os.ReadFile("docs/install.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`(?m)^\s*-\s*MIKROVIEW_CONFIG=`).Match(data) {
+		t.Error("docs/install.md's compose example sets MIKROVIEW_CONFIG unconditionally, which makes config.yaml mandatory and crash-loops a first run against an empty app folder -- leave it commented out, matching deploy/docker-compose.yml")
+	}
+}
+
 func TestDockerComposeConfigIsOptional(t *testing.T) {
 	data, err := os.ReadFile("deploy/docker-compose.yml")
 	if err != nil {
