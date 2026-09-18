@@ -8,6 +8,8 @@ package routeros
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -901,6 +903,40 @@ func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
 	} {
 		if !strings.Contains(cmd, fragment) {
 			t.Errorf("syslogCommands does not paste %q:\n%s", fragment, cmd)
+		}
+	}
+}
+
+// docs/routeros-setup.md offers a hand-paste alternative beside every
+// block the wizard prints, and promises throughout that re-pasting is
+// safe. scriptAdd and schedulerAdd keep that promise for the generated
+// blocks; nothing kept it for the ones written out by hand in the doc,
+// and two of them -- mv-push in step 4e and mv-backup-https in step
+// 7c-ii -- were still bare `add` after the guards landed everywhere
+// else, including on their own scheduler lines directly beneath them.
+// RouterOS does not deduplicate, so an operator who set one up by hand
+// and re-pasted it got a second script of the same name and no way to
+// tell which one the scheduler ran.
+//
+// Reading the doc rather than the generator is the point: the generator
+// was already right both times.
+func TestSetupDocAddsAreAllGuarded(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "routeros-setup.md"))
+	if err != nil {
+		t.Fatalf("reading docs/routeros-setup.md: %v", err)
+	}
+	for i, line := range strings.Split(string(doc), "\n") {
+		trimmed := strings.TrimSpace(line)
+		for _, add := range []string{"/system script add", "/system scheduler add"} {
+			if !strings.Contains(trimmed, add) {
+				continue
+			}
+			// The guarded idiom puts the add inside a find check, so
+			// the line starts with the check, not with the add.
+			if strings.HasPrefix(trimmed, ":if ([:len [/system") && strings.Contains(trimmed, "] = 0) do={") {
+				continue
+			}
+			t.Errorf("docs/routeros-setup.md:%d has a bare %q; wrap it in the find guard scriptAdd/schedulerAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", i+1, add, trimmed)
 		}
 	}
 }
