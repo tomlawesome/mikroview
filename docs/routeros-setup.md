@@ -37,8 +37,25 @@ traffic was there, but the run it arrived in was too long to read.
 **The fix:** re-paste the logging block in step 1 below. It's safe to
 run again — it adds the logging action if it's missing and updates it in
 place if it's already there, so this is exactly how an existing router
-picks up the missing flag. Nothing else in this guide needs
-re-running.
+picks up the missing flag.
+
+**If you ran step 3 before 2026-09-13, re-run that too.** Every wizard
+before that date switched logging *on* for your established/related
+accept rule and tried to undo it with an exact match RouterOS 7's own
+default firewall never satisfies (`connection-state=established,
+related,untracked`, not `established,related` — #1230) — so the undo
+silently did nothing and the router logged every packet of every open
+connection, not just the ones worth seeing. **Re-pasting step 1 alone
+does not fix this.** Re-run step 3 (safe to run again, same as step 1),
+or paste just the two repair lines from its end:
+
+```
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+```
+
+Both are safe on a router that was never bitten. Nothing else in this
+guide needs re-running.
 
 ## 1. Point RouterOS at the container over TLS
 

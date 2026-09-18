@@ -9,10 +9,11 @@
 // the loop) are a separate, unrelated feature living in
 // internal/blocklist.
 //
-// This stage is the store and its validation only: no API route, no UI,
-// and nothing pushed to RouterOS. See Validate (validate.go) for the
-// rules an Entry's CIDR must satisfy, and #1224/#1225 for what is
-// deliberately not here yet.
+// This package is the store and its validation only: no API route, no
+// UI, and no RouterOS handling live here -- those are internal/api (the
+// /api/droplist routes and the .rsc feed, #1224) and the frontend's
+// Settings group and setup card (#1225), both now shipped. See Validate
+// (validate.go) for the rules an Entry's CIDR must satisfy.
 //
 // Persistence follows the exact convention internal/suggest.Store and
 // internal/audit.Store already use: mutex-protected, optional atomic-

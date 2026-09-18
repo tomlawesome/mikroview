@@ -309,12 +309,14 @@ store:
 #     - spamhaus_drop
 #     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
 
-# The drop list (issue #1223, stage 1 of the design ratified on #461):
+# The drop list (issue #1223/#1224/#1225, the design ratified on #461):
 # operator-authored ranges to block, typed in directly or raised from a
 # flag's drawer -- unrelated to the fetched blocklist feeds above.
 # storePath already defaults to /var/lib/mikroview/droplist.json; only
-# uncomment this block to move that path. This stage has no API or UI
-# reading this store yet -- see #1224/#1225.
+# uncomment this block to move that path. Manage entries and fetch the
+# router setup commands from Settings > Engine room's drop list group,
+# or the /api/droplist routes directly -- see docs/configuration.md's
+# "Drop list" section.
 # droplist:
 #   storePath: /var/lib/mikroview/droplist.json
 

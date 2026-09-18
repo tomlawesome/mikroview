@@ -62,8 +62,8 @@ services:
       # own (config, keys, certs, GeoIP), read-write for what MikroView
       # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
       # Sample config: deploy/config.example.yaml -- copy it to
-      # mikroview/config.yaml (see README.md's "Persistent data" section
-      # for the permissions step data/ needs first).
+      # mikroview/config.yaml (see docs/install.md's "Persistent data"
+      # section for the permissions step data/ needs first).
       - ./mikroview:/etc/mikroview:ro
       - ./mikroview/data:/var/lib/mikroview
       # Mounting each file separately instead -- config.yaml,
