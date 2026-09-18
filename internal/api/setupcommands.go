@@ -349,7 +349,7 @@ func validateSetupCommandsRequest(req setupCommandsRequest) error {
 		return errors.New("syslogPort must be empty or a number from 1 to 65535")
 	}
 	if !validSetupToken(req.Token) {
-		return errors.New("token must be printable ASCII with no quotes, backslashes or whitespace, up to 256 characters")
+		return errors.New("token must be letters, digits, '_' or '-', up to 256 characters")
 	}
 	if !validSetupDevice(req.Device) {
 		return errors.New("device must be 1 to 64 characters from letters, digits, '.', '_' and '-'")
@@ -401,13 +401,15 @@ func validSetupDevice(device string) bool {
 // commands (#1095).
 const maxSetupTokenLen = 256
 
-// validSetupToken restricts Token to printable ASCII with no quote,
-// backslash, dollar or whitespace -- the charset both places Token
-// reaches in internal/routeros/commands.go need to stay well-formed:
-// BackupScript's password=\"...\" wrapper, and PushBlock's bare Bearer
-// header value. Dollar because RouterOS expands $name inside a
-// double-quoted string, so "$x" is not the literal token either. Tokens
-// internal/auth issues are hex, so nothing legitimate is refused.
+// validSetupToken restricts Token to [A-Za-z0-9_-] -- the alphabet
+// internal/auth actually mints tokens in, so nothing legitimate is
+// refused. Narrower than "printable ASCII, no quote/backslash/dollar/
+// whitespace" on purpose: Token also lands bare inside PushBlock and
+// loggingPushBlock's http-header-field=("Content-Type: ...,
+// Authorization: Bearer <token>") in internal/routeros/commands.go, and
+// RouterOS splits that value on commas into separate headers regardless
+// of quoting -- a comma in Token would add a header, which quoting
+// cannot prevent, so the alphabet itself is the gate.
 func validSetupToken(token string) bool {
 	if token == "" {
 		return true
@@ -417,7 +419,10 @@ func validSetupToken(token string) bool {
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if c <= ' ' || c >= 0x7f || c == '"' || c == '\\' || c == '$' {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_' || c == '-':
+		default:
 			return false
 		}
 	}

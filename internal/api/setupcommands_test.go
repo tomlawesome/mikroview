@@ -478,6 +478,13 @@ func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
 		{"token with a dollar", setupCommandsRequest{Address: "mv.example.com", Token: "abc$def"}},
 		{"token with a quote", setupCommandsRequest{Address: "mv.example.com", Token: `abc"def`}},
 		{"token with a backslash", setupCommandsRequest{Address: "mv.example.com", Token: `abc\def`}},
+		// A comma in Token reaches PushBlock/loggingPushBlock's
+		// http-header-field=("Content-Type: ...,Authorization: Bearer
+		// <token>") bare -- RouterOS splits that value on commas into
+		// separate headers regardless of quoting, so a comma there adds
+		// a header rather than merely appearing inside one's value.
+		{"token with a comma", setupCommandsRequest{Address: "mv.example.com", Token: "a,b"}},
+		{"token with a colon and comma, header-injection shaped", setupCommandsRequest{Address: "mv.example.com", Token: "a:b,X-Injected:1"}},
 		{"syslogPort non-numeric", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "abc"}},
 		{"syslogPort zero", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "0"}},
 		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},
@@ -532,6 +539,24 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("device %q: status = %d, want 200", device, resp.StatusCode)
+		}
+	}
+
+	// Tokens internal/auth actually mints are hex; validSetupToken's
+	// charset also allows '-' and '_' so a hand-entered or future token
+	// shape in that alphabet is not refused.
+	for _, token := range []string{"deadbeef1234567890abcdef12345678", "abc-123_XYZ"} {
+		body, err := json.Marshal(setupCommandsRequest{Address: "mv.example.com", Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("token %q: status = %d, want 200", token, resp.StatusCode)
 		}
 	}
 
