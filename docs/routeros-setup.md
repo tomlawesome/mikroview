@@ -380,8 +380,28 @@ carry an admin's browser session: `<your session cookie>` is the
 `mikroview_session=…` cookie `POST /api/auth/login` sets (see the
 [API reference](configuration.md#api-reference)). Copy it from your
 browser's developer tools, or sign in with curl first and let it keep
-the cookie for you — `curl -k -c jar -X POST …/api/auth/login -d …`,
-then `-b jar` on the call below in place of the placeholder.
+the cookie for you, then use `-b jar` on the call below in place of the
+placeholder.
+
+Keep the password off the command line when you do. Anything in `-d` is
+recorded in your shell history and is visible in the process list to
+every other account on that machine, for as long as the command runs.
+Read it into a variable instead, and send the body on standard input:
+
+```
+read -rsp 'mikroview password: ' MV_PASS && echo
+curl -k -c jar -X POST https://<mikroview-host>/api/auth/login \
+  -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+  --data-binary @- <<JSON
+{"username":"<your-admin-username>","password":"$MV_PASS"}
+JSON
+unset MV_PASS
+```
+
+`-k` is here because MikroView generates its own certificate on first
+run, which nothing else has signed. Drop it once you have put a
+certificate the machine trusts in front of MikroView — see
+[the TLS section](configuration.md#tls).
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
