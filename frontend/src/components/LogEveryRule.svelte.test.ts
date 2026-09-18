@@ -640,6 +640,61 @@ describe('LogEveryRule device pick', () => {
     expect(container.querySelector('.load-error')).toBeNull()
   })
 
+  // The highlight the topography hands over, guarded because clearing
+  // it on a router change killed it outright: the clearing effect runs
+  // once on mount, after the effect that sets it, so arriving from the
+  // coverage lens lit nothing at all. Nothing caught that -- no test
+  // looked for the highlight after a nav handoff.
+  it('highlights the pair the topography handed over', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBeGreaterThan(0))
+    expect(container.querySelectorAll('.rule-row.highlight').length).toBe(1)
+  })
+
+  // Comparing the router name where the answer lands is not enough. Go
+  // to another router and come back while a request is in flight and
+  // the name matches again, so the stale answer passes for a fresh one
+  // -- and lands *after* the fresh one, because it has been in flight
+  // longer. A render is the one that hurts: the operator downloads a
+  // file built from the older answer.
+  it('drops a request left in flight across a round trip back to the same router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settleFirst: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleFirst = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    await fireEvent.change(select, { target: { value: 'edge-1' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-1'))
+
+    // A second, current analyse for edge-1 answers first.
+    const fresh = analyseResponse()
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(fresh)
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(logEveryRuleWorkState.result).toEqual(fresh))
+
+    // The one from before the round trip arrives now, with a different
+    // answer. The router name matches, so only the token can tell.
+    settleFirst({ ...fresh, rules: [] })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-1'))
+    expect(logEveryRuleWorkState.result).toEqual(fresh)
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first
