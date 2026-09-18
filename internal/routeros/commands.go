@@ -82,6 +82,22 @@ func scriptAdd(name, policy, body string) string {
 	return fmt.Sprintf(`:if ([:len [/system script find name=%s]] = 0) do={ /system script add name=%s policy=%s source="%s" } else={ /system script set [find name=%s] policy=%s source="%s" }`, name, name, policy, source, name, policy, source)
 }
 
+// schedulerAdd wraps a `/system scheduler add` in the same guarded
+// idiom scriptAdd uses for a script: add only when no entry of that
+// name exists yet, otherwise set the existing one to match. settings is
+// everything after `name=<name>` -- interval, start-time, policy and
+// on-event -- passed identically to both branches so a re-paste
+// converges an existing entry rather than leaving it as it was.
+//
+// Guarded for the same reason scriptAdd is (#1266): an unguarded add
+// left a second mv-push, mv-backup or mv-backup-https scheduler entry
+// on the router when a wizard block was pasted a second time, so the
+// script it runs fired twice as often as intended rather than merely
+// twice at setup.
+func schedulerAdd(name, settings string) string {
+	return fmt.Sprintf(`:if ([:len [/system scheduler find name=%s]] = 0) do={ /system scheduler add name=%s %s } else={ /system scheduler set [find name=%s] %s }`, name, name, settings, name, settings)
+}
+
 // Hostname strips a port. Certificate names never carry one, so this is
 // what tls.hosts is compared against.
 func Hostname(hostPort string) string {
@@ -439,7 +455,7 @@ const PushScriptPolicy = "read,test"
 func ScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
 		scriptAdd("mv-push", PushScriptPolicy, body),
-		fmt.Sprintf(`/system scheduler add name=mv-push interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy),
+		schedulerAdd("mv-push", fmt.Sprintf(`interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy)),
 		`/system script run mv-push`,
 	}, "\n")
 }
@@ -495,22 +511,27 @@ const BackupScriptPolicy = "read,write,test,sensitive"
 // destination file stem, matching internal/backupsftp's
 // kindForFilename.
 func BackupScript(address, port, device, token, dialect string) string {
-	// address, port, device (user=/dst-path=) are placed bare inside the
-	// outer source="..." block, relying on the handler's Address/Device
-	// validation to keep their charset safe (#1095); port here is
-	// server config, never operator input. token sits inside its own
-	// hand-written \"...\" wrapper, so it goes through quote() -- the
-	// one value here that still needs escaping if it ever carries a
-	// quote or backslash.
-	tok := quote(token)
-	return fmt.Sprintf(`/system script add name=mv-backup policy=%s source="
+	// address, port, device (user=/dst-path=) and token are placed bare
+	// here, inside a plain "..." string in the script body -- not yet
+	// the outer source="..." this whole body still has to sit inside.
+	// scriptAdd's scriptSource does that escaping now, over the body as
+	// a whole, the same as every other saved script in this file; it is
+	// what turns this bare password="%s" into the round-45 pin's
+	// password=\"...\", not a second hand-rolled wrapper here.
+	body := fmt.Sprintf(`
   /system backup save name=mv-backup dont-encrypt=yes
   /export hide-sensitive file=mv-export
-  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.backup dst-path=%s.backup
-  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-export.rsc dst-path=%s.rsc
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password="%s" src-path=mv-backup.backup dst-path=%s.backup
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password="%s" src-path=mv-export.rsc dst-path=%s.rsc
   /file remove mv-backup.backup
   /file remove mv-export.rsc
-"`, BackupScriptPolicy, address, port, device, tok, device, address, port, device, tok, device)
+`, address, port, device, token, device, address, port, device, token, device)
+	// Guarded by scriptAdd, same idiom and same reason as ScheduleCommands
+	// (#1266): this used to build its own unguarded `/system script add`,
+	// so re-pasting step 6 after a wizard version bump left a second
+	// mv-backup script on the router rather than the new one replacing
+	// the old.
+	return scriptAdd("mv-backup", BackupScriptPolicy, body)
 }
 
 // BackupScheduleCommands is step 6's scheduler entry: nightly at 03:00,
@@ -518,7 +539,7 @@ func BackupScript(address, port, device, token, dialect string) string {
 // pass -- same "run once immediately" idiom as ScheduleCommands.
 func BackupScheduleCommands(dialect string) string {
 	return strings.Join([]string{
-		fmt.Sprintf(`/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy),
+		schedulerAdd("mv-backup", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy)),
 		`/system script run mv-backup`,
 	}, "\n")
 }
@@ -636,7 +657,7 @@ func BackupPushScript(address, token, dialect string) string {
 func BackupPushScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
 		scriptAdd("mv-backup-https", BackupScriptPolicy, body),
-		fmt.Sprintf(`/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy),
+		schedulerAdd("mv-backup-https", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy)),
 		`/system script run mv-backup-https`,
 	}, "\n")
 }
