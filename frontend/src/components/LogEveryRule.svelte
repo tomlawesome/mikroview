@@ -79,6 +79,15 @@
   $effect(() => {
     const pending = logEveryRuleNavState.consume()
     if (!pending) return
+    // Arriving for a different router than the one whose work is still
+    // held. That work outlives this component now (see
+    // logEveryRuleWork.svelte.ts), so without this the operator would
+    // see the previous router's pasted export, and the rules analysed
+    // from it, sitting under the new router's name -- and Render would
+    // pair this device with that export, producing an .rsc built from
+    // the wrong router's config. Same device, different boundary, is a
+    // second look at work in progress and is kept.
+    if (pending.device !== work.device) work.reset()
     work.device = pending.device
     preselectedBoundary = pending.boundaryKey
   })
