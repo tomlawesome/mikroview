@@ -3499,7 +3499,7 @@ Two accounts you cannot do this to:
 - **an account that signs in through SSO only.** Its password belongs to
   your identity provider; reset it there.
 
-The reset is recorded in the [audit log](#audit-log-admin-action-accountability)
+The reset is recorded in the [audit log](#audit-log-admin-action-accountability-optional)
 — who reset whom, and when the code expires. The code itself is never
 written down anywhere: not the audit log, not MikroView's own logs, not
 the accounts file.
