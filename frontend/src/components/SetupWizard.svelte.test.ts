@@ -1311,6 +1311,31 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     settled.unmount()
   })
 
+  // The first attempt at the fix above cleared the key on any state that
+  // was not `blocked` -- but `blocked` is only knowable once the backups
+  // GET has answered, and that request runs only while the modal is
+  // open. On an ordinary reload with the wizard closed the ledger still
+  // loads, step 6 reads `waiting` because nothing has been fetched yet,
+  // and the key was wiped on a question that had never been asked. The
+  // next reload then minted a fresh one -- the very bug sessionStorage
+  // exists to prevent.
+  it('keeps the key when nothing has yet asked whether the file is mounted', async () => {
+    const first = await noKeyPane()
+    const minted = keyField(first.container).value
+    expect(minted).toBeTruthy()
+    first.unmount()
+
+    // A reload with the wizard closed: status arrives, backups does not.
+    wizardState.backups = null
+    wizardState.open = false
+    const closed = render(SetupWizard)
+    await tick()
+    await tick()
+
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBe(minted)
+    closed.unmount()
+  })
+
   it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
     const { container } = await noKeyPane()
 
