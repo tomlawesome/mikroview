@@ -197,6 +197,40 @@ describe('LogEveryRule ephemerality', () => {
   })
 })
 
+describe('arriving from another router', () => {
+  // #1134 made the operator's work outlive the component, so scrolling
+  // away and back no longer throws away a paste. The same lifetime is a
+  // hazard across routers: a nav request names a device, but the export
+  // and everything analysed from it belong to whichever router was
+  // being looked at before. Left alone, the drop zone shows router A's
+  // export under router B's name, and Render pairs B with A's text.
+  it('clears the held export when the request names a different router', async () => {
+    logEveryRuleWorkState.device = 'r1'
+    logEveryRuleWorkState.exportText = '/ip firewall filter\nadd chain=forward action=drop'
+    logEveryRuleWorkState.exportName = 'r1-export.rsc'
+
+    logEveryRuleNavState.request('r2', 'r2:eth1>eth2')
+    render(LogEveryRule)
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('r2'))
+    expect(logEveryRuleWorkState.exportText).toBe('')
+    expect(logEveryRuleWorkState.exportName).toBe('')
+  })
+
+  // The other half: a second look at the same router is work in
+  // progress, not a new subject, so it must survive.
+  it('keeps the held export when the request names the same router', async () => {
+    logEveryRuleWorkState.device = 'r1'
+    logEveryRuleWorkState.exportText = '/ip firewall filter\nadd chain=forward action=drop'
+
+    logEveryRuleNavState.request('r1', 'r1:eth3>eth4')
+    render(LogEveryRule)
+
+    await waitFor(() => expect(logEveryRuleNavState.pending).toBeNull())
+    expect(logEveryRuleWorkState.exportText).toContain('action=drop')
+  })
+})
+
 describe('LogEveryRule says what it is for (#1134)', () => {
   it('leads with the ruling\'s own sentence, before any control', () => {
     const { container } = render(LogEveryRule)

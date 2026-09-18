@@ -41,9 +41,11 @@ class LogEveryRuleWorkState {
     this.resultSaved = false
   }
 
-  /** Clears the export itself too, not just what was derived from it --
-   * for tests, where this module's lifetime would otherwise outlive
-   * render() and leak one test's paste into the next. */
+  /** Clears the export itself too, not just what was derived from it.
+   * LogEveryRule.svelte calls this when a nav request names a
+   * different router, since this module's lifetime would otherwise
+   * carry one router's export into another's view. Tests call it for
+   * the same reason across renders. */
   reset() {
     this.device = ''
     this.exportText = ''
