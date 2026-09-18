@@ -117,6 +117,31 @@ type User struct {
 	// account, on both sides of it. For the audit trail and the UI only:
 	// authorization always reads Role, never this.
 	RoleChangedAt time.Time `json:"roleChangedAt,omitzero"`
+	// ResetCodeHash is the Argon2id hash of the one-time code an admin
+	// issued for this account (#1251) -- the same hash function and
+	// parameters a password gets, because for as long as it is live this
+	// *is* the account's password. The code itself is never stored,
+	// logged or audited anywhere: the single response to the admin's
+	// reset request is the only place it exists in clear, which is why a
+	// second click has to issue a new one rather than re-show the old.
+	//
+	// Empty whenever no reset is outstanding, and cleared again the
+	// moment the code is spent (single use) or a new password is set.
+	ResetCodeHash string `json:"resetCodeHash,omitempty"`
+	// ResetCodeExpiresAt ends an unspent code, 24 hours after it was
+	// issued (ResetCodeTTL). Checked against, never the only check --
+	// see User.resetCodeLive.
+	ResetCodeExpiresAt time.Time `json:"resetCodeExpiresAt,omitzero"`
+	// MustChangePassword is set by an admin reset and cleared by
+	// SetPassword. While it is true the account's session may reach
+	// nothing but the change-password route (see internal/api's
+	// requireAuth): the person signed in with a code somebody else
+	// chose, so they are not yet holding a credential only they know.
+	//
+	// Deliberately recorded on the account rather than on the session:
+	// the flag has to survive the login that redeems the code, outlive
+	// a restart (sessions do not), and be cleared in exactly one place.
+	MustChangePassword bool `json:"mustChangePassword,omitempty"`
 }
 
 // LocalPassword reports whether this account has a real, user-chosen
@@ -919,18 +944,41 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 // failed login takes the same time either way. The CPU-heavy Argon2id
 // comparison deliberately happens with the lock released -- only the
 // map/field reads and writes around it are synchronized.
+// While an admin-issued reset code is live (#1251) the code is what
+// this verifies, in place of the password -- that is what lets somebody
+// locked out type it into the password box and get in. Only one
+// Argon2id comparison ever runs, whichever credential is in play, so a
+// pending reset is not something an attacker can spot from how long a
+// failed attempt took. Nothing is lost by not also trying the password:
+// issuing a code replaces the stored password hash with an unmatchable
+// one, so the old password is already dead.
+//
+// A code is spent on the login that uses it (single use, per the
+// owner's ruling on #1245 question 21). MustChangePassword is *not*
+// cleared here -- only setting a new password does that -- so the
+// session this login goes on to create is still the restricted one.
 func (s *Store) Authenticate(username, password string, now time.Time) (*User, error) {
 	s.reloadIfStale()
 
 	s.mu.RLock()
 	id, known := s.byName[strings.ToLower(username)]
 	hash := dummyHash
+	viaResetCode := false
 	if known {
-		hash = s.byID[id].PasswordHash
+		u := s.byID[id]
+		if u.resetCodeLive(now) {
+			hash, viaResetCode = u.ResetCodeHash, true
+		} else {
+			hash = u.PasswordHash
+		}
 	}
 	s.mu.RUnlock()
 
-	valid := VerifyPassword(password, hash)
+	secret := password
+	if viaResetCode {
+		secret = NormaliseResetCode(password)
+	}
+	valid := VerifyPassword(secret, hash)
 	if !known || !valid {
 		return nil, ErrInvalidCredentials
 	}
@@ -945,6 +993,17 @@ func (s *Store) Authenticate(username, password string, now time.Time) (*User, e
 	u, ok := s.byID[id]
 	if !ok {
 		return nil, ErrInvalidCredentials
+	}
+	if viaResetCode {
+		// Re-checked under the write lock rather than trusted from the
+		// read above: a second reset in the window between them issues a
+		// new code and must kill this one, and a spend that landed first
+		// must not be honoured twice.
+		if !u.resetCodeLive(now) {
+			return nil, ErrInvalidCredentials
+		}
+		u.ResetCodeHash = ""
+		u.ResetCodeExpiresAt = time.Time{}
 	}
 	u.LastLogin = now
 	s.persistLocked()
@@ -1010,6 +1069,15 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	// OIDCIssuer, so a linked account (OIDC *and* a local password)
 	// isn't misread as SSO-only by the recovery tooling.
 	u.HasLocalPassword = true
+	// Setting a password ends any outstanding admin reset (#1251): the
+	// account now has a credential only its owner knows, so the code
+	// stops working and the forced-change gate lifts. Done here, inside
+	// the store, so every path that sets a password clears it -- the CLI
+	// recovery tool as much as the change-password route -- rather than
+	// each caller having to remember.
+	u.ResetCodeHash = ""
+	u.ResetCodeExpiresAt = time.Time{}
+	u.MustChangePassword = false
 	s.persistLocked()
 	return nil
 }
@@ -1025,6 +1093,11 @@ func (s *Store) List() []User {
 	for _, u := range s.byID {
 		cp := *u
 		cp.PasswordHash = ""
+		// The reset-code hash is a credential verifier too (#1251), and
+		// this list is the one that leaves the package on its way to an
+		// admin-facing API. Blanked for the same reason the password
+		// hash is, so neither can be serialized by accident.
+		cp.ResetCodeHash = ""
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
