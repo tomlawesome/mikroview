@@ -14,6 +14,11 @@ import { watchlistState } from "./watchlist.svelte";
 import { wizardState } from "./wizard.svelte";
 import { logEveryRuleWorkState } from "./logEveryRuleWork.svelte";
 import { forgetHistoryKeyForSession } from "./history";
+import { tokensState } from "./tokens.svelte";
+import { usersState } from "./users.svelte";
+import { auditState } from "./audit.svelte";
+import { persistenceState } from "./persistence.svelte";
+import { configProblemsState } from "./configProblems.svelte";
 import type { AuthSession } from "./types";
 
 // #1083: signing out (or being bounced by a 401) must not leave this
@@ -45,6 +50,18 @@ function clearSessionState() {
   wizardState.reset();
   logEveryRuleWorkState.reset();
   forgetHistoryKeyForSession();
+  // Same audit, same batch, still missed: tokensState, usersState,
+  // auditState, persistenceState and configProblemsState are all
+  // admin-only, module-lifetime singletons too. Between them they carry
+  // a live API/ingest bearer token, the admin account list, the
+  // admin-action log, this deployment's backend/disk info and its
+  // config diagnostics -- none of it meant for whoever signs in next on
+  // this tab.
+  tokensState.reset();
+  usersState.reset();
+  auditState.reset();
+  persistenceState.reset();
+  configProblemsState.reset();
 }
 
 // 'loading' only lasts for the initial check() call on app boot; after

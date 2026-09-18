@@ -43,6 +43,17 @@ class ConfigProblemsState {
   get hasProblems() {
     return this.problems.length > 0
   }
+
+  // #1083, v0.6.0 pre-release audit Security stage: configProblemsState
+  // was missed from the original batch. `loaded` is private and never
+  // reset on its own, so ConfigProblemBanner -- which has no role check
+  // of its own -- kept showing the previous admin's config diagnostics
+  // for whoever signed in next on this tab.
+  reset() {
+    this.problems = []
+    this.dismissed = false
+    this.loaded = false
+  }
 }
 
 export const configProblemsState = new ConfigProblemsState()
