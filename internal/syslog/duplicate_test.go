@@ -122,6 +122,50 @@ func TestDuplicateSightingsFromThreeCopiesReportsThreeNotTwo(t *testing.T) {
 	}
 }
 
+// TestDuplicateSightingsSurviveInterleavedEvents is the case a single
+// cluster slot could not hold. One source duplicating its logging rule
+// duplicates every event it matches, so two events arrive interleaved
+// -- a1, b1, a2, b2, a3, b3 -- and both are mid-cluster at once. With
+// one slot, B's second copy evicted A, so A's third copy could not
+// find its own open entry: it added a fresh count at the higher bucket
+// and left A's stale count sitting in the lower one. The histogram
+// then read a tie between 2 and 3 copies, and since ties favor the
+// smaller figure, a source pasted three times still reported 2 --
+// exactly the fault the cluster tracking was added to fix, one step
+// further out.
+func TestDuplicateSightingsSurviveInterleavedEvents(t *testing.T) {
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() {
+		setLossClock(nil)
+		clearDuplicateState()
+		SetConfiguredSources(nil)
+	})
+
+	host := "198.51.100.12"
+	SetConfiguredSources([]string{host})
+	for i := 0; i < dupSightingsToReportDrift; i++ {
+		a := []byte(fmt.Sprintf("event a %d", i))
+		b := []byte(fmt.Sprintf("event b %d", i))
+		// Interleaved, the way two matched events really arrive.
+		noteDuplicateLine(host, a)
+		noteDuplicateLine(host, b)
+		noteDuplicateLine(host, a)
+		noteDuplicateLine(host, b)
+		noteDuplicateLine(host, a)
+		noteDuplicateLine(host, b)
+		now = now.Add(time.Millisecond)
+	}
+
+	loss := Stats().Loss.Duplicate
+	if !loss.Active {
+		t.Fatalf("expected sustained triplication to be reported active, got %+v", loss)
+	}
+	if loss.CopyCount != 3 {
+		t.Errorf("loss.duplicate.copyCount = %d, want 3 (both events arrived three times, interleaved)", loss.CopyCount)
+	}
+}
+
 // TestDuplicateContentFromTwoSourcesDoesNotReportDrift guards the
 // other false-positive this rule must avoid: two different routers
 // that happen to log the same thing (e.g. both seeing the same
