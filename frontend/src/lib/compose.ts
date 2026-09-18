@@ -40,7 +40,49 @@ function slug(s: string): string {
   )
 }
 
-export function composeCommand(c: ComposeInput): string {
+// Mirrors internal/routeros/commands.go's QuoteScriptString exactly: a
+// RouterOS double-quoted string still expands `$name`/`$[cmd]` wherever
+// one appears, so hostName/targetName/placeBefore -- all read from the
+// network (a DHCP lease name a LAN device picks for itself, or a synced
+// policy comment) -- get escaped the same way before landing inside
+// comment="..." or place-before=[find comment="..."]. Backend and
+// frontend both quote into the same router syntax, so this is that
+// same rule, not a second guess at it.
+function quoteRouterOS(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')
+}
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/
+const IPV4_CIDR = /^\/(3[0-2]|[12]?\d)$/
+const IPV6 =
+  /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/
+const IPV6_CIDR = /^\/(12[0-8]|1[01]\d|[1-9]?\d)$/
+
+// Everything placed in src-address=/dst-address= comes straight off the
+// wire (a syslog line anyone reaching that port can send), unquoted and
+// unquotable in RouterOS's own syntax -- so instead of escaping it, this
+// rejects anything that is not a plain IPv4/IPv6 address or CIDR before
+// it ever reaches the printed line.
+function isRouterOsAddress(s: string): boolean {
+  const slash = s.indexOf('/')
+  const addr = slash === -1 ? s : s.slice(0, slash)
+  const suffix = slash === -1 ? '' : s.slice(slash)
+  if (IPV4.test(addr)) return suffix === '' || IPV4_CIDR.test(suffix)
+  if (IPV6.test(addr)) return suffix === '' || IPV6_CIDR.test(suffix)
+  return false
+}
+
+/**
+ * Prints the pasteable RouterOS line, or null when either address fails
+ * validation -- hostIp/target both come from network-observed data (a
+ * DHCP-chosen name, a syslog-reported address), so a value that is not a
+ * clean IPv4/IPv6 address or CIDR must never reach a printed
+ * src-address=/dst-address=, and every value placed inside a double-quoted
+ * string (comment, place-before's comment match) goes through
+ * quoteRouterOS first.
+ */
+export function composeCommand(c: ComposeInput): string | null {
+  if (!isRouterOsAddress(c.hostIp) || !isRouterOsAddress(c.target)) return null
   const src = c.direction === 'out' ? c.hostIp : c.target
   const dst = c.direction === 'out' ? c.target : c.hostIp
   const action = c.mode === 'allow' ? 'accept' : 'drop'
@@ -52,7 +94,7 @@ export function composeCommand(c: ComposeInput): string {
   const lines = [
     `/ip firewall filter add chain=forward src-address=${src} dst-address=${dst} \\`,
     `    protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${name}" \\`,
-    `    comment="${comment}"${c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${c.placeBefore}"]` : ''}`,
+    `    comment="${quoteRouterOS(comment)}"${c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${quoteRouterOS(c.placeBefore)}"]` : ''}`,
   ]
   return lines.join('\n')
 }
