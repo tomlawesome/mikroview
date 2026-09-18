@@ -46,6 +46,32 @@ func (e *SecretFieldError) Error() string {
 	return fmt.Sprintf("export: line %d sets %q, which /export hide-sensitive is documented to omit -- re-export with hide-sensitive", e.Line, e.Key)
 }
 
+// ControlCharError reports that Parse found a control character inside
+// an attribute value -- a rule comment or log-prefix parsed from an
+// uploaded /export lands verbatim in a rendered RouterOS command an
+// admin pastes into a terminal (POST /api/tune-logging/render), and
+// Quote escapes only `"`, `\` and `$`. A raw control byte would reach
+// that pasted text unescaped; a carriage return mid-value in
+// particular can act as Enter the moment it is pasted. Key and Line
+// (the source's 1-based line number) name where.
+type ControlCharError struct {
+	Key  string
+	Line int
+}
+
+func (e *ControlCharError) Error() string {
+	return fmt.Sprintf("export: line %d has a control character in %q's value", e.Line, e.Key)
+}
+
+// isControlRune reports whether r is a control character no attribute
+// value may carry: the C0 set (0x00-0x1F) and DEL (0x7F), C1 (0x80-0x9F,
+// e.g. NEL) -- a terminal can act on all of these the same way it acts
+// on CR/LF -- and the Unicode line and paragraph separators U+2028 and
+// U+2029, which split a line without being either.
+func isControlRune(r rune) bool {
+	return (r >= 0x00 && r <= 0x1F) || r == 0x7F || (r >= 0x80 && r <= 0x9F) || r == 0x2028 || r == 0x2029
+}
+
 // versionPattern reads the RouterOS version out of the export's header
 // comment, e.g. "# 2026/09/01 10:00:00 by RouterOS 7.24.1".
 var versionPattern = regexp.MustCompile(`by RouterOS (\S+)`)
@@ -91,6 +117,9 @@ func Parse(text string) (*Export, error) {
 		}
 
 		if err := scanForSecrets(toks, i+1); err != nil {
+			return nil, err
+		}
+		if err := scanForControlChars(toks, i+1); err != nil {
 			return nil, err
 		}
 
@@ -172,6 +201,27 @@ func scanForSecrets(toks []string, line int) error {
 			continue
 		}
 		return &SecretFieldError{Key: key, Line: line}
+	}
+	return nil
+}
+
+// scanForControlChars checks every key=value token's value -- quoted or
+// bare, unquoted the same way parseRule reads it -- for a control
+// character (isControlRune), refusing the whole parse on the first hit.
+// This is the one place every attribute value passes through in
+// Parse's main loop, so it covers every section's add lines, not only
+// /ip firewall filter's.
+func scanForControlChars(toks []string, line int) error {
+	for _, t := range toks {
+		key, raw, ok := strings.Cut(t, "=")
+		if !ok {
+			continue
+		}
+		for _, r := range unquote(raw) {
+			if isControlRune(r) {
+				return &ControlCharError{Key: key, Line: line}
+			}
+		}
 	}
 	return nil
 }

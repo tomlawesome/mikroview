@@ -410,3 +410,50 @@ func TestConnectionStateIsNotComparedExactly(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRejectsControlCharsInAttributeValues covers the fix for a
+// control character (CR, NUL, or a Unicode line/paragraph separator)
+// riding an attribute value out of an uploaded /export: Quote escapes
+// only \, " and $, so such a byte would reach a rendered command an
+// admin pastes into a RouterOS terminal unescaped -- a mid-value CR
+// could act as Enter. Each case is refused the same way a secret-shaped
+// key is: a *ControlCharError naming the offending key and line.
+func TestParseRejectsControlCharsInAttributeValues(t *testing.T) {
+	cases := []struct {
+		name, text, wantKey string
+	}{
+		{
+			name:    "carriage return mid-comment",
+			text:    "/ip firewall filter\nadd action=accept chain=forward comment=\"foo\rbar\"\n",
+			wantKey: "comment",
+		},
+		{
+			name:    "NUL byte",
+			text:    "/ip firewall filter\nadd action=accept chain=forward comment=\"foo\x00bar\"\n",
+			wantKey: "comment",
+		},
+		{
+			name:    "U+2028 line separator",
+			text:    "/ip firewall filter\nadd action=accept chain=forward log-prefix=\"foo bar\"\n",
+			wantKey: "log-prefix",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(tc.text)
+			if err == nil {
+				t.Fatalf("Parse succeeded with a control character present, want a *ControlCharError")
+			}
+			ctrlErr, ok := err.(*ControlCharError)
+			if !ok {
+				t.Fatalf("error = %v (%T), want a *ControlCharError", err, err)
+			}
+			if ctrlErr.Key != tc.wantKey {
+				t.Errorf("ControlCharError.Key = %q, want %q", ctrlErr.Key, tc.wantKey)
+			}
+			if ctrlErr.Line != 2 {
+				t.Errorf("ControlCharError.Line = %d, want 2", ctrlErr.Line)
+			}
+		})
+	}
+}
