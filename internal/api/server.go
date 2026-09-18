@@ -769,12 +769,7 @@ func (s *Server) apiRoutes() []route {
 		// literal segment regardless of declaration order.
 		{http.MethodPost, "/api/droplist/key", s.handleDroplistKeyCreate},
 		{http.MethodDelete, "/api/droplist/key", s.handleDroplistKeyDelete},
-		// Bodied form first (what the frontend sends -- see
-		// handleDroplistDelete's doc comment), path-segment form kept
-		// alongside it for any other caller still addressing an entry
-		// by its own URL.
-		{http.MethodDelete, "/api/droplist", s.handleDroplistDelete},
-		{http.MethodDelete, "/api/droplist/{cidr...}", s.handleDroplistDeleteByPath},
+		{http.MethodDelete, "/api/droplist/{cidr...}", s.handleDroplistDelete},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},

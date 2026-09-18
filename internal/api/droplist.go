@@ -255,55 +255,22 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// droplistDeleteRequest is DELETE /api/droplist's body: the CIDR to
-// remove, sent the same way POST /api/droplist takes it on create. This
-// is the form the frontend actually sends (v0.6.0 pre-release audit --
-// see handleDroplistDelete's doc comment for why the older path-segment
-// route could not answer it).
-type droplistDeleteRequest struct {
-	CIDR string `json:"cidr"`
-}
-
-// handleDroplistDelete removes one entry, CIDR taken from a JSON body
-// like handleEntitiesDelete's -- not the path. A bodied DELETE to a URL
-// with a trailing path segment (the pre-#1224-audit shape,
-// /api/droplist/{cidr...}) 301-redirects to add the trailing slash, and
-// Go's http.Client drops the body on that redirect, so the CIDR the
-// frontend sent was silently lost before it ever reached PathValue.
-// Keeping the CIDR off the path removes the redirect hop entirely: the
-// collection URL never has a segment to redirect away from.
+// handleDroplistDelete removes one entry, CIDR taken from the path as a
+// trailing wildcard ({cidr...}) since a CIDR's own "/" would otherwise
+// split across path segments. This is the route docs/configuration.md
+// documents and the only one frontend/src/lib/api.ts calls.
+//
+// A second, bodied DELETE /api/droplist route existed briefly: during
+// the v0.6.0 audit two fixes for the same contract mismatch landed from
+// different branches a minute apart, one moving the CIDR onto the path
+// and one adding a body for it. The bodied route reached no caller and
+// is gone. Do not re-add it without a caller that needs it.
 func (s *Server) handleDroplistDelete(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	var req droplistDeleteRequest
-	if err := decodeJSONBody(w, r, &req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	s.droplistRemove(w, r, req.CIDR)
-}
-
-// handleDroplistDeleteByPath is the original #1224 removal route, CIDR
-// taken from the path as a trailing wildcard ({cidr...}) since a CIDR's
-// own "/" would otherwise be split across path segments. Kept alongside
-// the bodied form above for any caller that still addresses one entry as
-// its own URL (e.g. a scripted DELETE with no client library to hand);
-// the frontend itself uses the bodied form exclusively.
-func (s *Server) handleDroplistDeleteByPath(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
-		return
-	}
-	s.droplistRemove(w, r, r.PathValue("cidr"))
-}
-
-// droplistRemove is the removal both handleDroplistDelete and
-// handleDroplistDeleteByPath share, differing only in where the CIDR
-// came from.
-func (s *Server) droplistRemove(w http.ResponseWriter, r *http.Request, cidr string) {
-	if err := s.Droplist.Remove(auditActor(r), cidr); err != nil {
+	if err := s.Droplist.Remove(auditActor(r), r.PathValue("cidr")); err != nil {
 		if errors.Is(err, droplist.ErrNotFound) {
 			http.Error(w, "no entry for that range", http.StatusNotFound)
 			return
