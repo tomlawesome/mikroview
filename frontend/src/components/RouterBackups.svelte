@@ -36,7 +36,9 @@
   // passphrase gates opening it, not knowing it arrived.
   import {
     changeRouterBackupPassphrase,
+    fetchRouterBackupDiff,
     fetchRouterBackups,
+    fetchRouterBackupText,
     keepRouterBackup,
     lockRouterBackupVault,
     releaseRouterBackup,
@@ -52,6 +54,7 @@
     isGone,
     newestGeneration,
     oldestArrival,
+    previousGeneration,
     receiptLine,
     MAX_GENERATIONS,
     MAX_KEEP_COMMENT,
@@ -59,7 +62,13 @@
   import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
   import { portOf } from '../lib/setupsteps'
-  import type { RouterBackupGeneration, RouterBackupRouter, RouterBackupsResponse, VaultLock } from '../lib/types'
+  import type {
+    RouterBackupDiffLine,
+    RouterBackupGeneration,
+    RouterBackupRouter,
+    RouterBackupsResponse,
+    VaultLock,
+  } from '../lib/types'
 
   let {
     resp,
@@ -356,7 +365,103 @@
     const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, kind), `${device}.${kind}`)
     if (outcome === 'forbidden') await refreshLock()
   }
+
+  // --- reading one export, and comparing two (#895) -----------------------
+  //
+  // One panel at a time, under the router it is about. Both answers are
+  // pulled rather than navigated to, because what comes back is read
+  // here: the stored export is the redacted copy the vault holds, so
+  // there is nothing on this screen the file did not already have.
+  type Viewer = {
+    /** Which request drew this panel -- see openViewer. */
+    seq: number
+    device: string
+    generation: string
+    /** What the panel is showing: one export, or the difference between
+     * two of them. */
+    mode: 'text' | 'diff'
+    /** The line above the panel, naming which generation(s) it is. */
+    title: string
+    loading: boolean
+    error: string | null
+    text: string
+    redacted: boolean
+    lines: RouterBackupDiffLine[]
+    same: boolean
+  }
+  let viewer = $state<Viewer | null>(null)
+
+  // openViewer hands back the number of the request it opened, not the
+  // object: `viewer` is a $state proxy, so the object read back out of
+  // it is never the one that was written in, and identity cannot say
+  // whether the panel is still the one that was opened.
+  let viewerSeq = 0
+
+  function openViewer(device: string, generation: string, mode: 'text' | 'diff', title: string): number {
+    viewerSeq += 1
+    viewer = {
+      seq: viewerSeq,
+      device,
+      generation,
+      mode,
+      title,
+      loading: true,
+      error: null,
+      text: '',
+      redacted: false,
+      lines: [],
+      same: false,
+    }
+    return viewerSeq
+  }
+
+  function closeViewer() {
+    viewer = null
+  }
+
+  // stillOpen guards against an answer arriving for a panel the reader
+  // has already closed or replaced -- the same race the keep controls
+  // avoid by replacing the row from their own reply.
+  function stillOpen(seq: number): boolean {
+    return viewer !== null && viewer.seq === seq
+  }
+
+  async function readExport(device: string, g: RouterBackupGeneration) {
+    const seq = openViewer(device, g.id, 'text', `the export of ${when(g)}`)
+    const result = await fetchRouterBackupText(device, g.id)
+    if (!stillOpen(seq) || !viewer) return
+    if (typeof result === 'string') {
+      viewer = { ...viewer, loading: false, error: result }
+      await refreshLock()
+      return
+    }
+    viewer = { ...viewer, loading: false, text: result.text, redacted: result.redacted }
+  }
+
+  async function compareWithPrevious(device: string, g: RouterBackupGeneration, prev: RouterBackupGeneration) {
+    const seq = openViewer(device, g.id, 'diff', `${when(prev)} → ${when(g)}`)
+    const result = await fetchRouterBackupDiff(device, prev.id, g.id)
+    if (!stillOpen(seq) || !viewer) return
+    if (typeof result === 'string') {
+      viewer = { ...viewer, loading: false, error: result }
+      await refreshLock()
+      return
+    }
+    viewer = { ...viewer, loading: false, lines: result.lines, same: result.same }
+  }
 </script>
+
+{#snippet readActions(router: RouterBackupRouter, g: RouterBackupGeneration)}
+  {#if g.rscArrivedAt}
+    {@const prev = previousGeneration(router, g.id)}
+    · <button type="button" class="olink" onclick={() => readExport(router.device, g)}>read</button>
+    {#if prev}
+      · <button type="button" class="olink" onclick={() => compareWithPrevious(router.device, g, prev)}>
+        compare with previous
+      </button>
+    {/if}
+  {/if}
+{/snippet}
 
 {#snippet passphraseRow()}
   <div class="orow">
@@ -452,6 +557,7 @@
               {#if newest.rscArrivedAt}
                 <button type="button" class="olink" onclick={() => download(router.device, newest.id, 'rsc')}>.rsc</button>
               {/if}
+              {@render readActions(router, newest)}
             {/if}
             {#if isGone(router)}
               · <button type="button" class="olink" onclick={() => onopenlost(router.device)}>is it gone?</button>
@@ -493,6 +599,7 @@
                       .rsc
                     </button>
                   {/if}
+                  {@render readActions(router, g)}
                 {/if}
                 {#if canKeep}
                   · <button type="button" class="olink" onclick={() => openKeepForm('keep', router.device, g.id, '')}>
@@ -519,6 +626,7 @@
                     .rsc
                   </button>
                 {/if}
+                {@render readActions(router, g)}
               {/if}
               {#if canKeep}
                 ·
@@ -557,12 +665,52 @@
             {/if}
           {/each}
         {/if}
+        {#if viewer && viewer.device === router.device}
+          <div class="brview">
+            <p class="oghint brvhead">
+              {viewer.mode === 'text' ? 'reading' : 'comparing'}
+              {viewer.title} ·
+              <button type="button" class="olink" onclick={closeViewer}>close</button>
+            </p>
+            {#if viewer.error}
+              <p class="oghint err" role="alert">{viewer.error}</p>
+            {:else if viewer.loading}
+              <p class="oghint">opening the vault…</p>
+            {:else if viewer.mode === 'text'}
+              {#if viewer.redacted}
+                <p class="oghint">
+                  this export arrived with secrets still in it — they were removed before anything was stored, and
+                  the line at the top says how many
+                </p>
+              {/if}
+              <pre class="brtext">{viewer.text}</pre>
+            {:else if viewer.same}
+              <p class="oghint">
+                nothing changed between these two, bar the date the router stamped on the newer one
+              </p>
+            {:else}
+              <div class="brdiff">
+                {#each viewer.lines as l, i (i)}
+                  <div class="dline" class:dadd={l.op === '+'} class:ddel={l.op === '-'}>
+                    <span class="dnum">{l.line}</span>
+                    <span class="dtext">{l.op} {l.text}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     {/each}
     <p class="oghint">
       each push is a pair — the binary .backup that restores the router whole, and the .rsc export it can be read
       from · the eleventh pair lets the oldest go · a download is written to the audit log with your name · a kept
       backup stays out of the ten until you release it
+    </p>
+    <p class="oghint">
+      what you read here is the redacted copy — every secret was taken out as the export arrived, so the readable
+      half of a backup never had one in it · reading one, and comparing two, are both written to the audit log
+      with your name
     </p>
   </div>
 
@@ -737,6 +885,74 @@
     margin-top: 4px;
     font-style: normal;
     letter-spacing: 0.04em;
+  }
+
+  /* The read/compare panel (#895): one at a time, under the router it
+     is about, set off by a rule rather than a box so it reads as more
+     of that router's block rather than a thing on top of it. */
+  .brview {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+
+  .brvhead {
+    color: var(--fg-muted);
+  }
+
+  /* 12px monospace: the size the group's other verbatim text already
+     uses, and not a size smaller -- this is a configuration file
+     somebody is actually reading. */
+  .brtext,
+  .brdiff {
+    margin: 4px 0 0;
+    max-height: 420px;
+    overflow: auto;
+    font: 12px/1.5 var(--font-mono);
+    color: var(--fg-muted);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px 10px;
+  }
+
+  .brtext {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Two colours and nothing cleverer: a line the newer export has, and
+     a line the older one had. Both tints are the app's existing
+     accept/reject tokens, so the diff reads in the same ink as
+     everything else here. */
+  .dline {
+    display: flex;
+    gap: 10px;
+    padding: 0 4px;
+    border-radius: 2px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .dnum {
+    flex: none;
+    min-width: 3.5ch;
+    text-align: right;
+    color: var(--fg-dim);
+  }
+
+  .dtext {
+    min-width: 0;
+  }
+
+  .dadd {
+    color: var(--accept);
+    background: var(--accept-bg);
+  }
+
+  .ddel {
+    color: var(--reject);
+    background: var(--reject-bg);
   }
 
   .olink {

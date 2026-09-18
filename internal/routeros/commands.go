@@ -463,9 +463,23 @@ const BackupScriptPolicy = "read,write,test,sensitive"
 
 // BackupScript is the wizard's step 6 script (round 45): one
 // `/system script add` whose source saves the binary backup unencrypted
-// (the restore copy), exports the plain config (no secrets, per #394's
-// reversed decision 38), pushes both to the drop box over SFTP with the
-// router's own name and ingest token, and removes both local files.
+// (the restore copy), exports the readable config, pushes both to the
+// drop box over SFTP with the router's own name and ingest token, and
+// removes both local files.
+//
+// The export is `hide-sensitive` into its own `mv-export.rsc` (#895),
+// not the plain `/export file=mv-backup` this used to run. Two reasons.
+// The flag is RouterOS's own pass, and saying it outright is the
+// router's half of the promise #895's ingest-time redaction makes --
+// mikroview's pass behind it is a second net, not the only one. And a
+// file stem of its own keeps the pair legible: `mv-backup.backup` is
+// the restore copy, `mv-export.rsc` is the readable one, and neither
+// name has to be read twice to work out which is which.
+//
+// The `.backup` is pushed first, and that ordering is load-bearing:
+// backupvault.Store opens a new generation on a `.backup` and attaches
+// a `.rsc` to the generation still waiting for one, so the pair shares
+// a generation only in this order (#895's item 2).
 // address is mikroview's own host (no port); port is the drop box's own
 // port (config's backup.listen, NOT the ingest/syslog ports the other
 // wizard steps use) -- device is both the SFTP username and the
@@ -482,11 +496,11 @@ func BackupScript(address, port, device, token, dialect string) string {
 	tok := quote(token)
 	return fmt.Sprintf(`/system script add name=mv-backup policy=%s source="
   /system backup save name=mv-backup dont-encrypt=yes
-  /export file=mv-backup
+  /export hide-sensitive file=mv-export
   /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.backup dst-path=%s.backup
-  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.rsc dst-path=%s.rsc
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-export.rsc dst-path=%s.rsc
   /file remove mv-backup.backup
-  /file remove mv-backup.rsc
+  /file remove mv-export.rsc
 "`, BackupScriptPolicy, address, port, device, tok, device, address, port, device, tok, device)
 }
 
@@ -588,12 +602,17 @@ func backupPushHTTPSBlock(address, token, localFile, kind, v string) string {
 // file's contents from a script, and the wire contract's sha256 field
 // is optional precisely so a script that cannot compute one can omit
 // it rather than fake it.
+//
+// It runs the same `/export hide-sensitive file=mv-export` the SFTP
+// script does, and pushes the same two files in the same order, for
+// the reasons given on BackupScript: the pair shares a vault
+// generation only if the `.backup` goes first.
 func BackupPushScript(address, token, dialect string) string {
 	return strings.Join([]string{
 		`/system backup save name=mv-backup dont-encrypt=yes`,
-		`/export file=mv-backup`,
+		`/export hide-sensitive file=mv-export`,
 		backupPushHTTPSBlock(address, token, "mv-backup.backup", "backup", "bak"),
-		backupPushHTTPSBlock(address, token, "mv-backup.rsc", "rsc", "rsc"),
+		backupPushHTTPSBlock(address, token, "mv-export.rsc", "rsc", "rsc"),
 	}, "\n\n")
 }
 

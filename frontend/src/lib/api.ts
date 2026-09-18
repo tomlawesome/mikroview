@@ -35,8 +35,10 @@ import type {
   PersistenceInfo,
   ReplayResult,
   ReputationResult,
+  RouterBackupDiff,
   RouterBackupRouter,
   RouterBackupsResponse,
+  RouterBackupText,
   RuleUsage,
   VaultLock,
   SetupCommandsRequest,
@@ -1551,6 +1553,34 @@ export async function fetchRouterBackups(): Promise<RouterBackupsResponse> {
 // when the request actually lands, not when the link is merely drawn.
 export function routerBackupDownloadUrl(device: string, generation: string, kind: 'backup' | 'rsc'): string {
   return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/${kind}`
+}
+
+// Reading one stored export, and comparing two (#895). Both are pulled
+// through this module rather than navigated to, unlike the download
+// above: the answer is shown on the page, not saved, so the caller
+// needs the body and the server's own words when it refuses. Same
+// `T | string` failure shape as the controls below.
+
+export async function fetchRouterBackupText(
+  device: string,
+  generation: string,
+): Promise<RouterBackupText | string> {
+  const res = await fetch(
+    `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/text`,
+  )
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `fetchRouterBackupText: ${res.status}`
+}
+
+export async function fetchRouterBackupDiff(
+  device: string,
+  from: string,
+  to: string,
+): Promise<RouterBackupDiff | string> {
+  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+  const res = await fetch(`/api/router-backups/${encodeURIComponent(device)}/diff?${q}`)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `fetchRouterBackupDiff: ${res.status}`
 }
 
 // The vault passphrase's four controls (#1115, #956): unlock, lock, set

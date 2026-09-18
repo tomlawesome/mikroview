@@ -848,7 +848,11 @@ the established-accept rules got above.
 
 Issue #394. A router can push a copy of its own configuration to
 MikroView every night — the binary `.backup` that restores it whole on
-a replacement, and the plain-text `.rsc` export kept for reading.
+a replacement, and the readable `.rsc` export you can open in Settings
+and compare against the night before (#895). The export has its secrets
+taken out twice over: once by RouterOS, as the script writes the file,
+and once by MikroView as it arrives, so the readable copy has never
+held a password.
 **MikroView is the place you turn to when the router is gone**, so this
 is worth setting up before that day, not after. See
 [configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default)
@@ -878,11 +882,11 @@ for this router, reuse it; nothing here needs a token of its own kind.
 ```
 /system script add name=mv-backup policy=read,write,test,sensitive source="
   /system backup save name=mv-backup dont-encrypt=yes
-  /export file=mv-backup
+  /export hide-sensitive file=mv-export
   /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.rsc dst-path=<device>.rsc
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
   /file remove mv-backup.backup
-  /file remove mv-backup.rsc
+  /file remove mv-export.rsc
 "
 /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup"
 /system script run mv-backup
@@ -892,10 +896,27 @@ for this router, reuse it; nothing here needs a token of its own kind.
 it must be the router's own device id, the same identity the token is
 scoped to. The binary save is asked for `dont-encrypt=yes` on purpose:
 that copy is the true restore copy and MikroView never holds a second
-password to open an encrypted one; the export is taken without
-`show-sensitive`, so it carries no secrets and is safe to read or scan
-later. The last line runs the script once immediately, so the first
-pair does not wait for 03:00.
+password to open an encrypted one.
+
+The export is taken with `hide-sensitive`, which is RouterOS's own pass
+over the text: passwords, pre-shared keys and private keys are left out
+of the file before it goes anywhere. MikroView runs a second pass of
+its own as the file arrives, and replaces anything that got past the
+first with `"<removed>"`, so the copy it stores has never had a secret
+in it. When that second pass finds something, the stored file gets a
+line at the top saying how many values went and on which lines — a
+removal you can see, rather than a silent gap. That readable copy is
+what **read** and **compare with previous** show you in Settings, and
+reading either is written to the audit log with your name.
+
+The two files have names of their own on purpose: `mv-backup.backup` is
+the restore copy and `mv-export.rsc` is the readable one, so neither
+line has to be read twice to tell which is which. **Push the binary
+first**, as written above: MikroView opens a new stored generation when
+a `.backup` arrives and attaches the `.rsc` to it, so sending them the
+other way round leaves you with two half-generations instead of one
+pair. The last line runs the script once immediately, so the first pair
+does not wait for 03:00.
 
 `policy=read,write,test,sensitive` is wider than the push script's
 `read,test` (4e): `write` and `sensitive` are what `/system backup
@@ -962,7 +983,7 @@ To paste it by hand instead:
 ```
 /system backup save name=mv-backup dont-encrypt=yes
 
-/export file=mv-backup
+/export hide-sensitive file=mv-export
 
 :local bakSize [/file get mv-backup.backup size]
 :local bakTotalSlices (($bakSize + 32767) / 32768)
@@ -983,7 +1004,7 @@ To paste it by hand instead:
 }
 /file remove mv-backup.backup
 
-:local rscSize [/file get mv-backup.rsc size]
+:local rscSize [/file get mv-export.rsc size]
 :local rscTotalSlices (($rscSize + 32767) / 32768)
 :local rscBegin [:serialize to=json value={"op"="begin"; "kind"="rsc"; "totalBytes"=$rscSize; "totalSlices"=$rscTotalSlices}]
 :local rscBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
@@ -993,14 +1014,14 @@ To paste it by hand instead:
 :while ($rscSent < $rscSize) do={
   :local rscTake ($rscSize - $rscSent)
   :if ($rscTake > 32768) do={ :set rscTake 32768 }
-  :local rscChunk [/file read file=mv-backup.rsc offset=$rscSent chunk-size=$rscTake as-value]
+  :local rscChunk [/file read file=mv-export.rsc offset=$rscSent chunk-size=$rscTake as-value]
   :local rscData64 [:convert ($rscChunk->"data") from=raw to=base64]
   :local rscSlice [:serialize to=json value={"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64}]
   /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
   :set rscSent ($rscSent + $rscTake)
   :set rscIndex ($rscIndex + 1)
 }
-/file remove mv-backup.rsc
+/file remove mv-export.rsc
 ```
 
 ```
@@ -1015,8 +1036,9 @@ unescaped `source="…"` would save it with every one of them expanded
 away. WinBox's **Source** field takes the script as printed above,
 unescaped.
 
-Same binary/export pair as 7c (unencrypted restore copy, secret-free
-export), just carried by `/tool fetch` POSTs instead of an SFTP upload:
+Same binary/export pair as 7c (unencrypted restore copy, `hide-sensitive`
+export into `mv-export.rsc`, binary sent first), just carried by
+`/tool fetch` POSTs instead of an SFTP upload:
 each file is read back in `<=32KiB` pieces (`/file read`'s own
 `chunk-size` cap), base64-encoded, and sent as its own JSON request --
 one `"op":"begin"` declaring the file's size and slice count, then one

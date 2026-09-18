@@ -156,14 +156,17 @@ func normalizeSection(logical string) string {
 // scanForSecrets checks every key=value token in toks against
 // secretKeys, refusing the whole parse on the first hit whose value is
 // non-empty. An empty value (RouterOS's own redaction, or simply an
-// unset property) is not a hit -- see secretKeys' doc comment.
+// unset property) is not a hit -- see secretKeys' doc comment. Neither
+// is mikroview's own removal marker (#895): Redact has already taken
+// the value out, and refusing the copy it produced would mean the
+// readable half of a stored backup could never be parsed at all.
 func scanForSecrets(toks []string, line int) error {
 	for _, t := range toks {
 		key, raw, ok := strings.Cut(t, "=")
 		if !ok || !secretKeys[key] {
 			continue
 		}
-		if unquote(raw) == "" {
+		if unquote(raw) == "" || raw == RemovedValue {
 			continue
 		}
 		return &SecretFieldError{Key: key, Line: line}
