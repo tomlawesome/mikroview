@@ -208,6 +208,7 @@ function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     inInterface: 'iot',
     outInterface: 'bridge1',
     srcAddressList: 'iot',
+    slugs: [],
     label: 'iot → bridge1',
     coverage: 'observed',
     epithet: '',
