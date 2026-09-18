@@ -36,22 +36,30 @@
     }, 1500)
   }
 
-  async function dismiss() {
-    await configUpgradeState.dismiss()
-  }
+  // Plain per-visit close, not a remembered dismissal (owner ruling,
+  // #1218 follow-up: "Just have a close button. It's simple.") -- local
+  // state rather than configUpgradeState's, so it resets whenever this
+  // component remounts, which is every time Settings is scrolled back
+  // to (Deck.svelte unmounts an off-screen card's scene, deckMount.ts).
+  let closed = $state(false)
 </script>
 
 <div class="config-upgrade">
-  {#if configUpgradeState.error}
+  {#if closed}
+    <!-- nothing: closed for this visit only -->
+  {:else if configUpgradeState.error}
     <p class="empty error">Could not check for new settings: {configUpgradeState.error}</p>
   {:else if configUpgradeState.loaded && configUpgradeState.settings.length === 0}
     <p class="empty">Nothing new -- every setting this version understands is already set.</p>
   {:else if configUpgradeState.loaded}
-    <p class="intro">
-      {configUpgradeState.settings.length} setting{configUpgradeState.settings.length === 1 ? '' : 's'} this
-      version understands {configUpgradeState.settings.length === 1 ? "isn't" : "aren't"} set in your config.yaml yet.
-      Paste whichever you want into <code>config.yaml</code>, at the top level, then restart mikroview.
-    </p>
+    <div class="head">
+      <p class="intro">
+        {configUpgradeState.settings.length} setting{configUpgradeState.settings.length === 1 ? '' : 's'} this
+        version understands {configUpgradeState.settings.length === 1 ? "isn't" : "aren't"} set in your config.yaml yet.
+        Paste whichever you want into <code>config.yaml</code>, at the top level, then restart mikroview.
+      </p>
+      <button type="button" class="close" onclick={() => (closed = true)} aria-label="close">×</button>
+    </div>
     {#each configUpgradeState.settings as setting (setting.key)}
       <div class="paste">
         <pre class="script">{setting.block}</pre>
@@ -60,11 +68,6 @@
         </button>
       </div>
     {/each}
-    {#if configUpgradeState.dismissed}
-      <p class="dismissed-note">Dismissed for this version -- it will come back once a later one adds something new.</p>
-    {:else}
-      <button type="button" class="dismiss" onclick={dismiss}>dismiss for this version</button>
-    {/if}
   {/if}
 </div>
 
@@ -76,12 +79,25 @@
     padding: 14px 16px;
   }
 
+  .head {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
   .intro {
     margin: 0;
     max-width: 70ch;
     font-size: 13px;
     color: var(--fg-muted);
     line-height: 1.5;
+  }
+
+  .close {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    line-height: 1;
+    font-size: 16px;
   }
 
   .intro code {
@@ -152,12 +168,5 @@
     align-self: stretch;
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
-  }
-
-  .dismissed-note {
-    margin: 0;
-    color: var(--fg-dim);
-    font-size: 12px;
-    font-style: italic;
   }
 </style>
