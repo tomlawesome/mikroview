@@ -3338,6 +3338,16 @@ MikroView.** After connecting:
 - If you lose access to that provider, MikroView can't recover the
   account for you — that includes the admin account, so read
   "Recovering the admin account" above before connecting the admin.
+
+**Don't connect the admin account.** MikroView holds exactly one admin,
+so connecting it deletes the deployment's last password and a provider
+outage then locks everybody out, not just the admin. The overlay says
+so, and asks for a separate confirmation on top of the ordinary one;
+without that confirmation the request is refused, whether it comes from
+the app or from `curl`. See [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin) — including why this is an
+interim rule that a later release lifts.
+
 - You stay signed in on the browser you did it from. Anywhere else
   you're signed in gets signed out.
 
@@ -3674,6 +3684,54 @@ oidc:
   terminating a real domain (`https://mikroview.example.com`).
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
+
+### SSO is additive: keep a local admin
+
+**Before you turn SSO on, make sure MikroView has an admin account with
+a password of its own, and leave that account unconnected to SSO.** That
+account is the way back in on the day your identity provider is down,
+misconfigured after an upgrade, or has lost the admin's directory entry.
+MikroView never signs in to your provider on its own behalf, so if the
+provider cannot answer, SSO cannot let anybody in.
+
+What this means in practice:
+
+- The first-run screen does not offer **Sign in with SSO**, even when
+  SSO is configured. The first account to exist becomes the admin, and
+  an admin created through SSO has no password. Create the admin with a
+  password first; SSO signs everyone in as usual once it exists.
+- **Do not connect the admin account to SSO.** Connecting an account to
+  SSO deletes its password (see [Connecting your account to
+  SSO](#connecting-your-account-to-sso)), so connecting the admin's
+  removes the deployment's last local way in. MikroView warns and asks
+  for a separate confirmation before it will do it, and refuses the
+  request outright if that confirmation is missing. This is an interim
+  rule: a later release lets a connected account keep its password
+  behind a second factor, and then the admin can be connected like any
+  other account.
+- Everybody else can connect their account freely. A regular user
+  connecting theirs costs the deployment nothing — the admin still has
+  a password.
+- If the admin already signs in through SSO only, MikroView says so in
+  its log at every start. Nothing breaks while the provider is up; the
+  warning is about the day it isn't.
+
+If you end up locked out — the provider is unreachable and no admin has
+a password — the way back in is the command line, on the machine
+MikroView runs on:
+
+```bash
+mikroview -transfer-admin <username>
+```
+
+It moves the admin role onto an account that does have a password, and
+asks for a [recovery key](#recovery-keys) first. Its sibling
+`mikroview -recover-admin-account` resets the admin's own password, and
+deliberately refuses an admin who signs in through SSO only — there is
+no password there to reset, which is why `-transfer-admin` is the one
+that helps. See [Handing admin to someone
+else](#handing-admin-to-someone-else) and [Recovering the admin
+account](#recovering-the-admin-account).
 
 ### Supported providers
 
@@ -4455,7 +4513,7 @@ starting the server. `mikroview -h` lists them too. See
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
-| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
+| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, which deletes that account's password -- see [Connecting your account to SSO](#connecting-your-account-to-sso). From the admin, refused (409) unless the body carries `{"acknowledgeLastLocalAdmin": true}`: that link leaves the whole deployment with no way in that does not need the identity provider. See [SSO is additive](#sso-is-additive-keep-a-local-admin) |
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what MikroView has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |

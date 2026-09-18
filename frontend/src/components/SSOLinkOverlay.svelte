@@ -8,16 +8,34 @@
   // rather than "OK" -- the same reasoning SECURITY.md applies to the
   // "skip auth" choice, which is likewise a permanent decision rather
   // than a default someone falls into.
+  //
+  // #1252 adds a second warning on top of the first, for the one
+  // account whose link costs the deployment rather than the person:
+  // mikroview holds exactly one admin (auth.Store.CreateUser), so an
+  // admin linking theirs leaves nobody who can sign in without the
+  // identity provider. That one needs its own acknowledgement -- an
+  // extra, deliberate act, not a second sentence in the same block
+  // somebody has already decided to click past. The server refuses the
+  // link without it (handleOIDCLinkStart), so this is the explanation,
+  // not the enforcement.
   import { authState } from '../lib/auth.svelte'
   import { startSSOLink } from '../lib/api'
 
   let error = $state<string | null>(null)
   let submitting = $state(false)
+  let acknowledged = $state(false)
+
+  // The caller is the deployment's break-glass account exactly when
+  // they are the admin: the route this overlay drives already refuses
+  // an account with no local password, so an admin reaching here is by
+  // definition the admin who still has one.
+  const lastLocalAdmin = $derived(authState.isAdmin)
 
   function close() {
     authState.showSSOLink = false
     error = null
     submitting = false
+    acknowledged = false
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -31,7 +49,7 @@
   async function confirm() {
     error = null
     submitting = true
-    const result = await startSSOLink()
+    const result = await startSSOLink(acknowledged)
     if (typeof result === 'string') {
       error = result
       submitting = false
@@ -69,6 +87,27 @@
           </p>
         </div>
 
+        {#if lastLocalAdmin}
+          <div class="warning">
+            <strong>This is the only account that can sign in without SSO.</strong>
+            <p>
+              You're the MikroView admin, and connecting SSO deletes the password
+              that lets you in when your identity provider can't be reached. After
+              this, a provider outage means nobody can sign in to MikroView at all
+              — getting back in needs <code>mikroview -transfer-admin</code> at the
+              command line, on the machine MikroView runs on.
+            </p>
+            <p>
+              Keep a local admin instead: give the admin role to another account
+              that has a password, and connect SSO on this one afterwards.
+            </p>
+            <label class="ack">
+              <input type="checkbox" bind:checked={acknowledged} />
+              <span>I understand SSO will be the only way in</span>
+            </label>
+          </div>
+        {/if}
+
         <p class="muted">
           You'll stay signed in here. Anywhere else you're signed in will be
           signed out.
@@ -81,7 +120,12 @@
 
       <div class="actions">
         <button type="button" class="cancel" onclick={close} disabled={submitting}>Cancel</button>
-        <button type="button" class="danger" onclick={confirm} disabled={submitting}>
+        <button
+          type="button"
+          class="danger"
+          onclick={confirm}
+          disabled={submitting || (lastLocalAdmin && !acknowledged)}
+        >
           {submitting ? 'Redirecting…' : 'Delete my password and connect SSO'}
         </button>
       </div>
@@ -170,6 +214,25 @@
 
   .warning strong {
     color: var(--reject);
+  }
+
+  .warning code {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 12px;
+  }
+
+  .ack {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--fg);
+    margin-top: 2px;
+  }
+
+  .ack input {
+    margin: 2px 0 0;
+    accent-color: var(--reject);
   }
 
   .muted {

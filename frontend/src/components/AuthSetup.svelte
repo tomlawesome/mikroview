@@ -15,9 +15,21 @@
   // journeyState.begin() starts the Attach beat the moment the account
   // exists, and only from here -- an ordinary later sign-in never calls
   // this, so a returning admin gets the plain app, not the walk.
+  //
+  // #1252: SSO is additive, so the setup door does not offer it even
+  // when it is configured. The first-ever sign-in creates the admin
+  // (auth.Store.FindOrCreateOIDCUser), and an admin created that way
+  // has no password -- a provider outage would then lock the whole
+  // deployment out, with only `mikroview -transfer-admin` left. Saying
+  // so here is the browser half; SECURITY.md carries the rule.
   import { authState } from '../lib/auth.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import AuthScreen from './AuthScreen.svelte'
+
+  const SSO_WITHHELD =
+    'SSO is additive, so it is not offered yet: this admin account needs a password of its own, ' +
+    'the one way back in if your identity provider is ever unreachable. Create it below — SSO signs ' +
+    'everyone in as usual once it exists.'
 
   let entered = $state(false)
 
@@ -36,6 +48,7 @@
     confirmPassword
     onsubmit={register}
     ssoAvailable={authState.ssoAvailable}
+    ssoWithheldReason={SSO_WITHHELD}
   />
 {:else}
   <AuthScreen gate onEnter={() => (entered = true)} />

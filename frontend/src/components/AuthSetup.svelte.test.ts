@@ -71,6 +71,21 @@ describe('AuthSetup', () => {
     await waitFor(() => expect(journeyState.phase).toBe('attach'))
   })
 
+  // #1252: "SSO is additive; keep a local admin". The first-ever
+  // sign-in creates the admin, and an admin created through SSO has no
+  // password -- so on this door, with no accounts yet, SSO is withheld
+  // rather than offered, and the reason is on screen.
+  it('does not offer SSO before an admin with a password exists', async () => {
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+
+    expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+    expect(screen.getByText(/sso is additive/i)).toBeTruthy()
+    expect(screen.getByText(/needs a password of its own/i)).toBeTruthy()
+  })
+
   it('never starts the journey when registration fails', async () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 

@@ -669,6 +669,26 @@ func (s *Store) Admin() *User {
 	return nil
 }
 
+// HasLocalAdmin reports whether the deployment still has a way in that
+// does not depend on an identity provider: an admin account that can
+// sign in with a local password.
+//
+// "SSO is additive; keep a local admin" (#1252, from #1245 decision 2)
+// is this predicate. mikroview holds exactly one admin at a time (see
+// CreateUser), so "at least one admin has a local password" and "the
+// admin has a local password" are the same question -- but the name
+// says the rule rather than the current cardinality, so a future second
+// admin would only change this method's body.
+//
+// It reuses User.LocalPassword() rather than re-deriving "has a
+// password" from the stored hash: an unmatchable hash is deliberately
+// indistinguishable from a real one (see FindOrCreateOIDCUser), so
+// HasLocalPassword is the only honest source.
+func (s *Store) HasLocalAdmin() bool {
+	admin := s.Admin()
+	return admin != nil && admin.LocalPassword()
+}
+
 // createLocked inserts a new account. guard, when non-nil, is evaluated
 // with the write lock already held and aborts the insert if it returns
 // an error -- that's the hook callers use to make a precondition
