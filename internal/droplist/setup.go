@@ -31,8 +31,13 @@ type Setup struct {
 	// DisableRule turns Rule off without deleting it, so re-enabling
 	// later needs no re-typing.
 	DisableRule string `json:"disableRule"`
-	// EmptyList clears every address ListName currently holds, without
-	// touching Rule or Scheduler.
+	// EmptyList clears every address ListName currently holds and
+	// disables Scheduler -- without disabling it too, the router's own
+	// 5-minute fetch would pull mikroview's feed again and refill the
+	// list with whatever mikroview still has stored, silently undoing
+	// the emergency stop within five minutes (#1260). Rule is left
+	// alone: the operator's other emergency command, DisableRule, is
+	// what stops enforcement.
 	EmptyList string `json:"emptyList"`
 }
 
@@ -70,6 +75,7 @@ func NewSetup(address, key string) Setup {
 		Rule: fmt.Sprintf(`/ip firewall raw add chain=prerouting src-address-list=%s action=drop comment="%s" place-before=0`,
 			ListName, dropListRuleComment),
 		DisableRule: fmt.Sprintf(`/ip firewall raw disable [find comment="%s"]`, dropListRuleComment),
-		EmptyList:   fmt.Sprintf(`/ip firewall address-list remove [find list=%s]`, ListName),
+		EmptyList: fmt.Sprintf(`/system scheduler disable [find name=%s]; /ip firewall address-list remove [find list=%s]`,
+			ListName, ListName),
 	}
 }
