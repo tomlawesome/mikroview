@@ -64,6 +64,7 @@ function fallBoundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     inInterface: 'ether9',
     outInterface: 'ether1',
     srcAddressList: 'iot',
+    slugs: [],
     label: 'iot → ether1',
     coverage: 'observed',
     epithet: '',

@@ -25,7 +25,7 @@
   import AccountMenu from './AccountMenu.svelte'
   import {
     fallState,
-    boundaryKeyOf,
+    boundaryMatcher,
     brokenWatchesByKey,
     laneColors,
     openBoundaryInStream as openInStream,
@@ -300,6 +300,10 @@
     // exact boundary -- empty on every band until an entry both names
     // this boundary and its ring actually breaks.
     brokenWatches: WatchlistEntry[]
+    // #1196: only ever true on the unmatched lane, and only when its
+    // traffic is there because of the interfaces rather than because
+    // nothing in its chain was pushed at all.
+    interfaceMiss: boolean
   }
 
   // portX maps carriers onto [10, 90] linearly by port number.
@@ -330,9 +334,6 @@
   // never one DOM node per event.
   const bandsData = $derived.by((): BandView[] => {
     const boundaries = fallState.boundaries
-    const byKey = new Map<string, FallBoundary>()
-    for (const b of boundaries) byKey.set(b.key, b)
-
     const bucketCount = buckets
     type PortMap = Map<number, Bucket[]>
     const portsByKey = new Map<string, PortMap>()
@@ -343,23 +344,31 @@
     for (const b of boundaries) portsByKey.set(b.key, new Map())
     let unmatchedPorts: PortMap | null = null
     let unmatchedTotal = 0
+    // #1196: true once some event in the unmatched lane is there for the
+    // narrower reason -- its chain IS in a pushed table, and no rule in
+    // that chain names the interfaces it came through. The lane says
+    // which of the two it is rather than one sentence for both.
+    let unmatchedInterfaceMiss = false
     const ipToKey = new Map<string, string>()
 
+    // #1196: a blank interface on the rule side is a wildcard, most
+    // specific match wins, a unique log-prefix slug outranks both. Built
+    // once per pass, not per event.
+    const matcher = boundaryMatcher(boundaries)
+
     for (const e of windowEvents) {
-      const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
-      let ports = portsByKey.get(key)
-      let isUnmatched = false
-      if (!ports) {
-        if (!byKey.has(key)) {
-          if (!unmatchedPorts) unmatchedPorts = new Map()
-          ports = unmatchedPorts
-          isUnmatched = true
-        } else {
-          continue
-        }
-      }
       const t = new Date(e.time).getTime()
       if (Number.isNaN(t)) continue
+      const key = matcher.keyFor(e)
+      const isUnmatched = key === ''
+      let ports: PortMap
+      if (isUnmatched) {
+        if (!unmatchedPorts) unmatchedPorts = new Map()
+        ports = unmatchedPorts
+        if (matcher.chainIsPushed(e.chain)) unmatchedInterfaceMiss = true
+      } else {
+        ports = portsByKey.get(key)!
+      }
       // The flag join: a flag names only its target IP, so a flag is
       // placed on the band its target actually appeared on this window
       // -- an honest join, never a guess. First sighting wins.
@@ -486,19 +495,21 @@
         deepestActive,
         flagMarks: flagsByKey.get(b.key) ?? [],
         brokenWatches: brokenByKey.get(b.key) ?? [],
+        interfaceMiss: false,
       }
     }
 
     const known = boundaries.map((b) => toView(b, portsByKey.get(b.key)!, totalByKey.get(b.key) ?? 0))
     if (unmatchedPorts)
-      known.push(
-        toView(
+      known.push({
+        ...toView(
           {
             key: '__unmatched__',
             chain: '',
             inInterface: '',
             outInterface: '',
             srcAddressList: '',
+            slugs: [],
             label: 'other traffic',
             coverage: 'unknown',
             epithet: '',
@@ -506,7 +517,8 @@
           unmatchedPorts,
           unmatchedTotal,
         ),
-      )
+        interfaceMiss: unmatchedInterfaceMiss,
+      })
     return known
   })
 
@@ -1042,11 +1054,13 @@
   // resolve a boundary label without being tied to bandsData's window
   // gating.
   const ipToBoundaryKey = $derived.by(() => {
-    const knownKeys = new Set(fallState.boundaries.map((b) => b.key))
+    // The same matcher bandsData buckets with (#1196), so a flag chip
+    // names the boundary its target's traffic was actually drawn on.
+    const matcher = boundaryMatcher(fallState.boundaries)
     const m = new Map<string, string>()
     for (const e of windowEvents) {
-      const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
-      if (!knownKeys.has(key)) continue
+      const key = matcher.keyFor(e)
+      if (!key) continue
       if (e.srcIp && !m.has(e.srcIp)) m.set(e.srcIp, key)
       if (e.dstIp && !m.has(e.dstIp)) m.set(e.dstIp, key)
     }
@@ -1114,10 +1128,19 @@
   // so the caption explains itself to a sighted reader too rather than
   // only to a screen reader.
   const UNMATCHED_EXPLANATION = 'events whose boundary is not in a pushed rule table yet'
+  // #1196: the narrower reason, when there is one. "Not in a pushed
+  // table" is true of both cases but only explains the first; an
+  // operator who can see their own forward rules right there needs to
+  // be told it is the interfaces that missed, not the chain.
+  const UNMATCHED_INTERFACE_EXPLANATION = 'their chain is in a pushed table, but no rule there names these interfaces'
+
+  function unmatchedExplanation(b: BandView): string {
+    return b.interfaceMiss ? UNMATCHED_INTERFACE_EXPLANATION : UNMATCHED_EXPLANATION
+  }
 
   function bandHeadSummary(b: BandView): string {
     const parts: string[] = [b.label]
-    if (b.key === '__unmatched__') parts.push(UNMATCHED_EXPLANATION)
+    if (b.key === '__unmatched__') parts.push(unmatchedExplanation(b))
     else if (b.coverage === 'dark') parts.push('dark -- blank because nothing is logged, not because nothing is sent')
     else if (b.coverage === 'unknown') parts.push('coverage unknown -- no router has pushed its rule table yet')
     else if (b.brokenWatches.length > 0) parts.push(watchBrokenSummary(b.brokenWatches[0]))
@@ -1328,7 +1351,7 @@
                 >{/if}
               {#if b.key === '__unmatched__'}
                 <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50"
-                  ><title>{UNMATCHED_EXPLANATION}</title>NOT IN A PUSHED TABLE</text
+                  ><title>{unmatchedExplanation(b)}</title>NOT IN A PUSHED TABLE</text
                 >
               {:else if b.coverage === 'dark'}
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
