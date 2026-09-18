@@ -1085,4 +1085,45 @@ describe('Entities unattributed sources (#1170)', () => {
 
     expect(container.querySelectorAll('.fcard.unattr')).toHaveLength(0)
   })
+
+  // #1269: App.svelte's global 5s device/stats poll reassigns
+  // appState.devices to a brand-new array every tick regardless of
+  // whether anything in it changed (a live router's rate/lastSeen
+  // update every cycle). Re-reading the effect straight off that array
+  // re-asked GET /api/devices a second time, every 5 seconds, purely to
+  // read the `unattributed` field of the very response the poll's own
+  // GET /api/devices had just downloaded.
+  it('does not re-ask for the unattributed list on a poll tick that changes nothing about the fleet', async () => {
+    const device = {
+      id: 'rb5009',
+      name: 'rb5009',
+      configured: true,
+      status: 'live',
+      lastSeen: new Date().toISOString(),
+      sourceIp: '10.0.0.1',
+      eventCount: 3,
+    }
+    fetchUnattributedSources.mockResolvedValue([source()])
+    appState.devices = [device] as unknown as (typeof appState)['devices']
+    render(Entities)
+    await settle()
+    expect(fetchUnattributedSources).toHaveBeenCalledTimes(1)
+
+    // A new array, same id/sourceIp/configured -- exactly what the
+    // poll's wholesale replacement looks like when nothing about the
+    // fleet moved (only eventCount changed here, which cannot turn a
+    // source attributed or not).
+    appState.devices = [{ ...device, eventCount: 4 }] as unknown as (typeof appState)['devices']
+    await settle()
+    expect(fetchUnattributedSources).toHaveBeenCalledTimes(1)
+
+    // A real fleet change -- a second router shows up -- still asks
+    // again.
+    appState.devices = [
+      device,
+      { ...device, id: 'rb5010', sourceIp: '10.0.0.2' },
+    ] as unknown as (typeof appState)['devices']
+    await settle()
+    expect(fetchUnattributedSources).toHaveBeenCalledTimes(2)
+  })
 })

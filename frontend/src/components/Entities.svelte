@@ -149,9 +149,22 @@
   // router's address table claims it. A failed read just leaves the
   // list empty -- these cards explain something, and an explanation is
   // not worth an error state on this page.
+  //
+  // "moves" is judged on this signature, not on appState.devices
+  // itself (#1269). App.svelte's global 5s poll reassigns
+  // appState.devices to a brand-new array every tick regardless of
+  // whether anything in it changed -- a live router's rate/lastSeen
+  // update every cycle -- so watching the array directly re-asked GET
+  // /api/devices a second time, every 5 seconds, for the very payload
+  // that poll had just downloaded. id/sourceIp/configured are the only
+  // fields that can turn a source from unattributed to attributed;
+  // collapsing them into one string means Svelte reruns this effect on
+  // that string's *value* changing, not on the array's identity, so a
+  // poll tick that alters none of them costs nothing here.
+  const deviceSignature = $derived(routerRows.map((d) => `${d.id}:${d.sourceIp}:${d.configured}`).join('|'))
   let unattributed = $state<UnattributedSource[]>([])
   $effect(() => {
-    void appState.devices
+    void deviceSignature
     fetchUnattributedSources()
       .then((list) => {
         unattributed = list
