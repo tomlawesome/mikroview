@@ -171,10 +171,22 @@
   // block since there is no settings object to render a control from.
   let routerBackupsUnanswered = $state(false)
 
+  // When the request behind the data in hand was issued -- not when it
+  // came back. RouterBackups holds its own optimistic writes until a
+  // refresh that started *after* the write returns, which is the only
+  // thing that proves the answer includes it; a poll already in flight
+  // when the write landed resolves afterwards with data from before it.
+  // Comparing the two rows instead cannot work: a row carries a
+  // missed-backup count and a timing estimate that move on their own,
+  // so it may never equal what was written.
+  let routerBackupsFetchedAt = $state(0)
+
   function refreshRouterBackups() {
+    const startedAt = Date.now()
     fetchRouterBackups()
       .then((r) => {
         routerBackups = r
+        routerBackupsFetchedAt = startedAt
         routerBackupsUnanswered = false
       })
       .catch(() => {
@@ -1376,7 +1388,7 @@
             class:dnodiagram={!routerBackups.enabled || routerBackups.routers.length === 0}
           >
             <h3>router backups</h3>
-            <RouterBackups resp={routerBackups} onopenlost={openLostRouter} />
+            <RouterBackups resp={routerBackups} fetchedAt={routerBackupsFetchedAt} onopenlost={openLostRouter} />
           </div>
         {:else if routerBackupsUnanswered}
           <!-- The disk group's own `dfail` idiom: one row, no control,

@@ -72,9 +72,14 @@
 
   let {
     resp,
+    fetchedAt,
     onopenlost,
   }: {
     resp: RouterBackupsResponse
+    /** When the request behind `resp` was issued (EngineRoom's own
+     * clock). An optimistic write is held until this passes the moment
+     * the write landed -- see the overrides note below. */
+    fetchedAt: number
     /** Round 44's "is it gone?" link: opens the wizard's step 6 in its
      * lost-router shape (round 45), reached only from here. */
     onopenlost: (device: string) => void
@@ -92,21 +97,27 @@
   //
   // overrides holds only what this tab wrote and the parent hasn't
   // confirmed back yet, keyed by device, laid over resp.routers for
-  // rendering. An override is dropped once resp's own row for that
-  // device structurally matches it -- both are server-issued
-  // RouterBackupRouter values, so equality there means the parent's
-  // poll has genuinely caught up, not merely that it looks similar --
-  // which is what lets a later change from a different admin through
-  // instead of pinning the row to this tab's copy forever.
-  let overrides = $state<Record<string, RouterBackupRouter>>({})
-  const routers = $derived(resp.routers.map((r) => overrides[r.device] ?? r))
+  // rendering. Each carries the moment it was written; it is dropped
+  // once the parent's data comes from a request issued after that,
+  // since only such a request can have seen the write.
+  //
+  // It used to drop an override when the polled row matched it as
+  // text. That cannot work: a row carries a missed-backup count and an
+  // interval estimate that move on their own, and a newly arrived
+  // backup changes it outright. Click keep at 02:50, let the nightly
+  // backup land at 03:00, and the polled row never equals the written
+  // one again -- so the override was never dropped, and that router's
+  // block sat frozen on this tab's copy, hiding the new backup, until
+  // the page was reloaded. Freshness is the real question; equality
+  // only ever approximated it.
+  let overrides = $state<Record<string, { row: RouterBackupRouter; at: number }>>({})
+  const routers = $derived(resp.routers.map((r) => overrides[r.device]?.row ?? r))
 
   $effect(() => {
-    const fresh = resp.routers
-    let next: Record<string, RouterBackupRouter> | undefined
+    const seenAt = fetchedAt
+    let next: Record<string, { row: RouterBackupRouter; at: number }> | undefined
     for (const device in overrides) {
-      const row = fresh.find((r) => r.device === device)
-      if (row && JSON.stringify(row) === JSON.stringify(overrides[device])) {
+      if (seenAt > overrides[device].at) {
         next ??= { ...overrides }
         delete next[device]
       }
@@ -115,7 +126,7 @@
   })
 
   function applyRow(row: RouterBackupRouter) {
-    overrides = { ...overrides, [row.device]: row }
+    overrides = { ...overrides, [row.device]: { row, at: Date.now() } }
   }
 
   // canKeep is the viewer floor: a viewer reads the kept list and the
@@ -176,11 +187,11 @@
   // for the parent's next poll -- and that write has to survive a poll
   // already in flight resolving with the pre-mutation lock a moment
   // later, not lose to it.
-  let lockOverride = $state<VaultLock | null>(null)
-  const lock = $derived(lockOverride ?? resp.lock)
+  let lockOverride = $state<{ lock: VaultLock; at: number } | null>(null)
+  const lock = $derived(lockOverride?.lock ?? resp.lock)
 
   $effect(() => {
-    if (lockOverride && JSON.stringify(resp.lock) === JSON.stringify(lockOverride)) lockOverride = null
+    if (lockOverride && fetchedAt > lockOverride.at) lockOverride = null
   })
 
   type PassState = 'off' | 'locked' | 'unlocked' | 'unlocked elsewhere'
@@ -253,7 +264,7 @@
       formError = result
       return
     }
-    lockOverride = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -283,7 +294,7 @@
       formError = result
       return
     }
-    lockOverride = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -297,7 +308,7 @@
       formError = result
       return
     }
-    lockOverride = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -311,7 +322,7 @@
       formError = result
       return
     }
-    lockOverride = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -373,7 +384,7 @@
       formError = result
       return
     }
-    lockOverride = result
+    lockOverride = { lock: result, at: Date.now() }
   }
 
   // refreshLock re-reads the lock object alone, off the back of the
@@ -384,7 +395,7 @@
   async function refreshLock() {
     try {
       const r = await fetchRouterBackups()
-      lockOverride = r.lock
+      lockOverride = { lock: r.lock, at: Date.now() }
     } catch {
       // the parent's own periodic refresh will catch up
     }
