@@ -253,8 +253,9 @@ type Server struct {
 	// (that half is wired directly into the engine, not here). Always
 	// non-nil (internal/droplist.Open("") returns a usable, empty,
 	// unpersisted store), same always-usable convention as Audit above.
-	// Nothing in this package reads or writes it yet -- no route exists
-	// until #1224.
+	// #1224 wired it up: GET/POST /api/droplist, DELETE
+	// /api/droplist/{cidr...}, the key routes and the RouterOS feed
+	// below all read and write through this store.
 	Droplist *droplist.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
