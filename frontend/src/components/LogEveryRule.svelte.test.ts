@@ -566,6 +566,27 @@ describe('LogEveryRule device pick', () => {
     expect(zoneOf(container).classList.contains('filled')).toBe(true)
   })
 
+  // The error lines are part of what is on screen about the old
+  // router. Clearing the export but leaving one up puts router A's
+  // failure under router B's name, which is the same wrong-router
+  // fault one line further down the card.
+  it('clears a failed analyse\'s error when the operator switches router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue('edge-1 has not been observed for long enough yet')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(container.querySelector('.load-error')).toBeTruthy())
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(container.querySelector('.load-error')).toBeNull()
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first

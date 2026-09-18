@@ -105,9 +105,21 @@
   // request does. work.adoptDevice decides what that means for the
   // export still being held; untrack keeps this watching the router
   // only, since adoptDevice writes the very state it reads.
+  //
+  // The two error lines go with it. They name what went wrong for the
+  // router that was selected when Analyse or Render was pressed, so
+  // leaving one up after a switch puts the old router's failure under
+  // the new router's name -- the same wrong-router-on-screen fault as
+  // the export itself, one line further down. They are cleared for any
+  // router change, not only one that drops an export: an error about
+  // router A is never about router B.
   $effect(() => {
     work.device
-    untrack(() => work.adoptDevice())
+    untrack(() => {
+      work.adoptDevice()
+      analyseError = null
+      renderError = null
+    })
   })
 
   let dragging = $state(false)
