@@ -108,10 +108,11 @@ func TestSetupMarkRecordsLedgerAndAudit(t *testing.T) {
 	}
 }
 
-// TestSetupMarkRejectsNonsense keeps the ledger to the five steps the
-// ratified design has and the two outcomes it defines. A mark outside
-// that is a client bug or a probe; either way it has nothing to
-// describe, and must not reach the audit log as though it did.
+// TestSetupMarkRejectsNonsense keeps the ledger to the six steps the
+// wizard has (round 45/#394 added the sixth) and the two outcomes it
+// defines. A mark outside that is a client bug or a probe; either way
+// it has nothing to describe, and must not reach the audit log as
+// though it did.
 func TestSetupMarkRejectsNonsense(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Setup = setup.New()
@@ -125,7 +126,7 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 		req  setupMarkRequest
 	}{
 		{"step zero", setupMarkRequest{Step: 0, Outcome: "skipped"}},
-		{"step past the last", setupMarkRequest{Step: 6, Outcome: "skipped"}},
+		{"step past the last", setupMarkRequest{Step: 7, Outcome: "skipped"}},
 		{"unknown outcome", setupMarkRequest{Step: 1, Outcome: "finished"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,6 +143,24 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 	}
 	if n := len(s.Audit.Query(audit.Query{}).Entries); n != 0 {
 		t.Errorf("%d audit entries written for refused requests, want 0", n)
+	}
+}
+
+// TestSetupMarkAcceptsTheSixthStep covers #1267: step 6 ("Back up the
+// router", round 45/#394) used to be refused with "step must be 1-5",
+// the same off-by-one TestSetupMarkRejectsNonsense's "past the last"
+// case pinned at Step 6 rather than 7.
+func TestSetupMarkAcceptsTheSixthStep(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: 6, Outcome: "skipped"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/setup/mark for step 6 = %d, want 200", resp.StatusCode)
 	}
 }
 
