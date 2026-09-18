@@ -167,22 +167,32 @@ func (v *Vault) Unprotect(device, generationID string) error {
 	comment, protectedAt, protectedBy := gen.Comment, gen.ProtectedAt, gen.ProtectedBy
 	rm.Protected = append(rm.Protected[:idx:idx], rm.Protected[idx+1:]...)
 	gen.Comment, gen.ProtectedAt, gen.ProtectedBy = "", time.Time{}, ""
-	rm.Generations = insertGeneration(rm.Generations, gen)
 
-	// Over the cap now, possibly by more than one if several were
-	// released at once. The index is written before the files go, the
-	// opposite order to storeLocked's: there the file has to exist
-	// before the index can name it, and here it has to stop being
-	// named before it can be deleted, so a crash in between leaves an
-	// unreferenced file that reconcile sweeps rather than an index
-	// entry pointing at nothing.
+	// Over the cap now that gen rejoins the cycling set, possibly
+	// because it was already full. Eviction candidates are drawn only
+	// from prevGenerations -- what was already cycling *before* this
+	// release -- never from gen itself, no matter where its id sorts
+	// once it rejoins: a kept backup is exactly the kind that tends to
+	// be old ("before the 7.16 upgrade"), so picking the victim after
+	// gen had already rejoined the set could -- and did -- pick gen,
+	// deleting the very backup the release just put back (v0.6.0
+	// pre-release audit). Releasing must never delete the thing being
+	// released.
+	//
+	// The index is written before the files go, the opposite order to
+	// storeLocked's: there the file has to exist before the index can
+	// name it, and here it has to stop being named before it can be
+	// deleted, so a crash in between leaves an unreferenced file that
+	// reconcile sweeps rather than an index entry pointing at nothing.
 	var evicted []*generationMeta
+	retained := prevGenerations
 	if !v.meta.LowSpace {
-		for len(rm.Generations) > MaxGenerations {
-			evicted = append(evicted, rm.Generations[0])
-			rm.Generations = rm.Generations[1:]
+		for len(retained) >= MaxGenerations {
+			evicted = append(evicted, retained[0])
+			retained = retained[1:]
 		}
 	}
+	rm.Generations = insertGeneration(retained, gen)
 
 	if err := v.persistMetaLocked(); err != nil {
 		rm.Protected = prevProtected
