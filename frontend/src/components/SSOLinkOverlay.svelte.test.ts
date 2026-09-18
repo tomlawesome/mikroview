@@ -17,6 +17,9 @@ import SSOLinkOverlay from './SSOLinkOverlay.svelte'
 beforeEach(() => {
   vi.resetAllMocks()
   authState.showSSOLink = true
+  // An ordinary user by default: the deployment keeps its local admin
+  // whatever this person does, so the base case is the plain warning.
+  authState.role = 'user'
 })
 
 describe('SSOLinkOverlay', () => {
@@ -63,6 +66,57 @@ describe('SSOLinkOverlay', () => {
     expect(await screen.findByText(/already signs in through your identity provider/i)).toBeTruthy()
     // Still open, so the person can read what happened.
     expect(authState.showSSOLink).toBe(true)
+  })
+
+  // #1252: mikroview holds exactly one admin, so the admin linking
+  // theirs is the link that costs the deployment its only way in that
+  // does not need the identity provider. That needs saying, and it
+  // needs its own confirm -- the first warning has already been read
+  // past by the time this one matters.
+  describe('the last local admin (#1252)', () => {
+    it('says a user link costs the deployment nothing extra', () => {
+      render(SSOLinkOverlay)
+      expect(screen.queryByText(/only account that can sign in without SSO/i)).toBeNull()
+      expect(screen.queryByRole('checkbox')).toBeNull()
+    })
+
+    it('warns the admin that nobody would be left who can sign in without SSO', () => {
+      authState.role = 'admin'
+      render(SSOLinkOverlay)
+
+      expect(screen.getByText(/only account that can sign in without SSO/i)).toBeTruthy()
+      expect(screen.getByText(/nobody can sign in to MikroView at all/i)).toBeTruthy()
+      expect(screen.getByText(/-transfer-admin/)).toBeTruthy()
+    })
+
+    it('holds the confirm shut until the admin acknowledges it', async () => {
+      authState.role = 'admin'
+      render(SSOLinkOverlay)
+
+      const confirm = screen.getByRole('button', { name: /delete my password and connect sso/i })
+      expect((confirm as HTMLButtonElement).disabled).toBe(true)
+
+      await fireEvent.click(screen.getByRole('checkbox'))
+      expect((confirm as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    it('sends the acknowledgement, so the server can tell a confirm from a click', async () => {
+      vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+      authState.role = 'admin'
+      render(SSOLinkOverlay)
+
+      await fireEvent.click(screen.getByRole('checkbox'))
+      await fireEvent.click(screen.getByRole('button', { name: /delete my password and connect sso/i }))
+      expect(startSSOLink).toHaveBeenCalledWith(true)
+    })
+
+    it('does not claim an acknowledgement a user never gave', async () => {
+      vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+      render(SSOLinkOverlay)
+
+      await fireEvent.click(screen.getByRole('button', { name: /delete my password and connect sso/i }))
+      expect(startSSOLink).toHaveBeenCalledWith(false)
+    })
   })
 
   it('renders nothing when not open', () => {

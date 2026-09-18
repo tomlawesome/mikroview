@@ -370,6 +370,37 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   session is re-checked against that sealed value at the callback, so a
   sign-out-and-in mid-flow can't attach an identity to the wrong
   account.
+- **SSO is additive; keep a local admin.** A deployment that turns SSO
+  on keeps an admin account with a password of its own, and a dead
+  identity provider must never lock the operator out. MikroView holds
+  exactly one admin, so that one account is the whole break-glass path:
+  MikroView never authenticates to the provider on its own behalf, so
+  if the provider cannot answer, SSO cannot let anybody in.
+
+  Three places hold the rule. The first-run screen does not offer SSO
+  while no account exists, because the first account to exist becomes
+  the admin and an SSO-provisioned admin has no password.
+  `handleOIDCLinkStart` refuses an **admin's** link unless the request
+  carries an explicit acknowledgement, which `SSOLinkOverlay.svelte`
+  only sends after a second, separate confirmation naming the
+  consequence — the check is server-side as well as in the browser, so
+  `curl` inherits it. And a start with SSO configured and no admin
+  holding a password logs that SSO is the only way in. None of the
+  three is a refusal to run SSO: a deployment whose admin has already
+  linked would be locked out entirely by that, which is the outcome
+  this rule exists to prevent.
+
+  **Interim:** until a linked account can keep its password behind a
+  second factor, the break-glass admin must stay **unlinked** —
+  `LinkOIDCIdentity` is destructive today, so linking it is what
+  removes the last local way in. When that lands, this paragraph goes.
+
+  Recovery when it has already happened is CLI-only and recovery-key
+  gated: `mikroview -transfer-admin <username>` moves the admin role to
+  an account that does have a password.
+  `mikroview -recover-admin-account` deliberately refuses an SSO-only
+  admin — there is no password there to reset — which is why transfer
+  is the one that helps.
 - **Admin is a single, transferable role, and transfer is CLI-only**
   (`mikroview -transfer-admin <username>`, recovery-key gated). No
   authenticated session can grant or move admin. The reasoning is that

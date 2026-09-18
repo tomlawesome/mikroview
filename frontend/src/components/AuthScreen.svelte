@@ -45,6 +45,11 @@
     // field comes with it, since a password typed once and never used
     // again until the next sign-in is the worst case for a typo.
     passwordOnly = false,
+    // #1252: SSO is additive. On the setup door -- zero accounts, so
+    // the first SSO sign-in would create the admin and that admin would
+    // have no password -- the SSO link is replaced by this line saying
+    // why, rather than quietly disappearing. Empty everywhere else.
+    ssoWithheldReason = '',
   }: {
     title?: string
     subtitle?: string
@@ -61,6 +66,7 @@
     onEnter?: () => void
     reverseBeat?: boolean
     passwordOnly?: boolean
+    ssoWithheldReason?: string
   } = $props()
 
   // A password-only door always confirms; every other one does as its
@@ -192,7 +198,9 @@
 
           <button type="submit" class="submit-btn" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
 
-          {#if ssoAvailable}
+          {#if ssoAvailable && ssoWithheldReason}
+            <p class="sso-withheld">{ssoWithheldReason}</p>
+          {:else if ssoAvailable}
             <div class="divider"><span>or</span></div>
             <a class="sso-link" href="/api/auth/oidc/login">Sign in with SSO</a>
           {/if}
@@ -438,6 +446,14 @@
     flex: 1;
     height: 1px;
     background: var(--border);
+  }
+
+  .sso-withheld {
+    margin: 0;
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--fg-muted);
   }
 
   .sso-link {
