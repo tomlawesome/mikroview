@@ -73,7 +73,13 @@ api_get() {
   local path="$1" dest="$2"
   if [ -n "${CI_JOB_TOKEN:-}" ]; then
     : "${CI_API_V4_URL:?fetch-upgrade-fixtures: CI_JOB_TOKEN is set but CI_API_V4_URL is not}"
-    curl -fsSL -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>/dev/null
+    # --connect-timeout/--max-time bound a hung connection or a stalled
+    # transfer; --retry covers a registry blip (connection refused, 5xx,
+    # timeout) rather than failing the whole job on the first hiccup.
+    # Without these a dead registry hangs this call for the shell's
+    # default (none), which stalls the job until its own CI timeout.
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused --retry-delay 2 \
+      -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>/dev/null
   else
     glab api "$path" > "$dest" 2>/dev/null
   fi

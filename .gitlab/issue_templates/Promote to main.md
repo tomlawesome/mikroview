@@ -25,6 +25,7 @@
 - [ ] the previous release's review record in `docs/reviews/` lists its deferred security findings with fix commits -- no `pending-disclosure` marker left (`make release-surfaces` checks this)
 - [ ] every operator step named on this promote issue (host scripts, config, secrets) is done and verified
 - [ ] `dev -> preview` merged green, `preview -> main` merged green, tag `v<version>` pushed, GitHub release run green, image pullable
+- [ ] the tag pipeline's `record:upgrade-fixture` job (stage `sync`) actually succeeded -- it's `allow_failure: true` on purpose (a slow build or a GHCR blip must not redden an already-cut tag), so it can fail without anyone noticing; check it and if it did fail, run `scripts/record-upgrade-fixture.sh v<version>` by hand, or the next release's upgrade gate has nothing to test against
 - [ ] back-merge `main -> dev` merged (`main -> preview` is refused by `policy:promotion-hop`; the next `dev -> preview` carries it instead)
 - [ ] this issue and the `v<version>` milestone closed
 
