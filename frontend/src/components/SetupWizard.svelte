@@ -39,7 +39,9 @@
     KEY_DIR,
     KEY_FILE_CONTAINER_PATH,
     KEY_FILE_PATH,
+    loadOrMintHistoryKey,
     newHistoryKey,
+    saveHistoryKeyForSession,
   } from '../lib/history'
   import {
     announceStep,
@@ -338,7 +340,22 @@
   // material, and none of the blocks below quote the value either --
   // the key goes into the file on standard input, which is what keeps
   // it out of the operator's shell history as well.
-  let historyKey = $state(newHistoryKey())
+  //
+  // loadOrMintHistoryKey, not a bare newHistoryKey(): this step still
+  // shows (`blocked`) on a reload that happens before config.yaml picks
+  // the key up and the app restarts, and a bare mint would hand back a
+  // brand new value with the same "write this to keys/history.key"
+  // instructions -- silently offering to overwrite the file the operator
+  // already saved from the first mint. sessionStorage remembers this
+  // tab's key across that reload; see lib/history.ts's own doc comment.
+  let historyKey = $state(loadOrMintHistoryKey())
+
+  // Whatever the field ends up holding -- the mint above, an explicit
+  // Reroll, or the operator's own pasted key -- is what the next reload
+  // in this tab should show too, not whichever of those happened first.
+  $effect(() => {
+    saveHistoryKeyForSession(historyKey)
+  })
 
   // backupBlocked is #1217's reason the backup step printed nothing:
   // the server's own keys for whichever preconditions are unmet. Never
