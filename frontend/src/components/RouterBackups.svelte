@@ -361,9 +361,22 @@
     }
   }
 
+  // downloadError is per-router, not one shared slot: a failed download
+  // for one router's generation should never read as if a different
+  // router's block is the one that failed.
+  let downloadError = $state<{ device: string; message: string } | null>(null)
+
   async function download(device: string, generation: string, kind: 'backup' | 'rsc') {
+    downloadError = null
     const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, kind), `${device}.${kind}`)
-    if (outcome === 'forbidden') await refreshLock()
+    if (outcome === 'forbidden') {
+      await refreshLock()
+    } else if (outcome === 'failed') {
+      // The button used to do nothing and say nothing on anything but a
+      // 403 -- a dropped connection or a 5xx looked identical to a
+      // click that never happened.
+      downloadError = { device, message: 'The download failed. Try again.' }
+    }
   }
 
   // --- reading one export, and comparing two (#895) -----------------------
@@ -525,6 +538,9 @@
           <b>{router.device}</b>
           <span class:brwarn={receipt.amber}>{receipt.text}</span>
         </div>
+        {#if downloadError && downloadError.device === router.device}
+          <p class="oghint err" role="alert">{downloadError.message}</p>
+        {/if}
         <svg
           class="brstrip"
           viewBox="0 0 520 58"
