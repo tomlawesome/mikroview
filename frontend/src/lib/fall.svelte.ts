@@ -62,6 +62,15 @@ export interface FallBoundary {
   // header shows "lan".
   srcAddressList: string
   label: string
+  // #1196: the log-prefix slugs that name this boundary outright. A slug
+  // is the middle field of mikroview's own log-prefix convention
+  // ("A|lan-wan|", internal/routeros/prefix.go), and a live event carries
+  // it as its ruleLabel -- so where exactly one pushed rule wears a slug,
+  // an event wearing the same one came from that rule and belongs here,
+  // no interface reasoning needed. A slug several rules share (the bulk
+  // tagging's action-only "A|accept|") names no single boundary and is
+  // left out rather than guessed at.
+  slugs: string[]
   coverage: BoundaryCoverage
   // The band's epithet, from the pushed rules' own comments -- the
   // logging rule's comment wins, else the first non-empty one. Real
@@ -74,14 +83,115 @@ export interface FallBoundary {
  * FirewallEvent are grouped by, so Fall.svelte can bucket real traffic
  * into the same boundaries boundariesFromRules computed from the rule
  * tables. `''` reads as "any"/unset on either side, matching how
- * RouterOS itself leaves an interface unscoped on many rules.
+ * RouterOS itself leaves an interface unscoped on many rules -- the key
+ * is the boundary's identity, and boundaryMatcher below is where that
+ * "any" is actually honoured when an event is placed (#1196).
  */
 export function boundaryKeyOf(chain: string, inInterface: string | undefined, outInterface: string | undefined): string {
   return `${chain}|${inInterface ?? ''}|${outInterface ?? ''}`
 }
 
+/**
+ * logPrefixSlug reads the rule slug out of a pushed rule's log-prefix.
+ * Mirrors internal/routeros/prefix.go's stripPrefix, which is what turns
+ * the same convention on a live log line into the event's `ruleLabel`:
+ * "<ACTION>|<rule-slug>|", e.g. "A|lan-wan|" -> "lan-wan". Anything not
+ * in the convention (a third-party prefix, or none at all) reads as '',
+ * no slug, rather than half a string nothing will ever equal.
+ */
+export function logPrefixSlug(prefix: string | undefined): string {
+  if (!prefix || prefix.length < 2 || prefix[1] !== '|') return ''
+  // The same action codes actionFromCode accepts; an unknown code is
+  // not the convention, and the parser leaves such a line's ruleLabel
+  // empty, so a slug read out of one could never match anything.
+  if (!'ADRLMN'.includes(prefix[0])) return ''
+  const end = prefix.indexOf('|', 2)
+  if (end < 0) return ''
+  return prefix.slice(2, end)
+}
+
+/** The part of a live FirewallEvent the fall matches a boundary on. */
+export interface MatchableEvent {
+  chain: string
+  inInterface?: string
+  outInterface?: string
+  ruleLabel?: string
+}
+
+export interface FallMatcher {
+  /** The boundary key this event belongs to, or '' when none does. */
+  keyFor(e: MatchableEvent): string
+  /** Whether any pushed boundary shares this chain. */
+  chainIsPushed(chain: string): boolean
+}
+
+// How many interfaces a boundary actually names -- 0, 1 or 2. The
+// tie-break for "most specific wins" below.
+function namedInterfaces(b: FallBoundary): number {
+  return (b.inInterface ? 1 : 0) + (b.outInterface ? 1 : 0)
+}
+
+/**
+ * boundaryMatcher answers which boundary a live event belongs to (#1196).
+ *
+ * Before this, the fall compared `chain|in|out` for exact equality on
+ * both sides. A real router's rules mostly do not name their interfaces
+ * at all -- they scope by address list, connection state, port, or
+ * nothing -- so the rule side keys as `forward||` while the event keys
+ * as `forward|bridge|ether1`, the two never meet, and nearly every
+ * event lands in the unmatched lane while its own lane reads zero.
+ *
+ * So a blank interface on the rule side reads as "any", which is what
+ * RouterOS means by it and what boundaryKeyOf's own comment has always
+ * promised:
+ *
+ *   - a boundary catches an event in its chain when every interface it
+ *     does name is the one the event carries;
+ *   - where several boundaries fit, the one naming the most interfaces
+ *     wins, so a rule written for this exact pair keeps its traffic
+ *     instead of losing it to the catch-all above it;
+ *   - a tie between two equally specific fits falls to key order, so an
+ *     event lands in the same lane on every poll rather than moving;
+ *   - a unique log-prefix slug outranks all of it: that is the rule
+ *     naming itself, not an inference from interfaces.
+ *
+ * What is left in the unmatched lane is traffic in a chain no pushed
+ * rule mentions, or in a chain whose rules all name other interfaces.
+ */
+export function boundaryMatcher(boundaries: FallBoundary[]): FallMatcher {
+  const chains = new Set<string>()
+  const bySlug = new Map<string, string>()
+  for (const b of boundaries) {
+    chains.add(b.chain)
+    for (const slug of b.slugs) bySlug.set(slug, b.key)
+  }
+  // Sorted once, so keyFor below can take the first fit it walks into
+  // and every event sees the same order.
+  const ordered = [...boundaries].sort((a, b) => namedInterfaces(b) - namedInterfaces(a) || a.key.localeCompare(b.key))
+  return {
+    chainIsPushed: (chain: string) => chains.has(chain),
+    keyFor(e: MatchableEvent): string {
+      const named = e.ruleLabel ? bySlug.get(e.ruleLabel) : undefined
+      if (named) return named
+      const inIf = e.inInterface ?? ''
+      const outIf = e.outInterface ?? ''
+      for (const b of ordered) {
+        if (b.chain !== e.chain) continue
+        if (b.inInterface && b.inInterface !== inIf) continue
+        if (b.outInterface && b.outInterface !== outIf) continue
+        return b.key
+      }
+      return ''
+    },
+  }
+}
+
 function boundaryLabel(chain: string, inIf: string, outIf: string, srcAddressList: string): string {
-  const inSide = srcAddressList || inIf
+  // #1196: an address list is a list of hosts, not a host -- a list
+  // called "servers" printed bare in the interface's place reads as one
+  // machine. Saying "(list)" is the whole difference between a lane the
+  // operator can place and one they misread.
+  const inSide = srcAddressList ? `${srcAddressList} (list)` : inIf
   if (inSide && outIf) return `${inSide} → ${outIf}`
   if (inSide) return `${inSide} · ${chain}`
   if (outIf) return `${chain} · ${outIf}`
@@ -115,6 +225,7 @@ interface BoundaryRule {
   comment?: string
   log?: boolean
   srcAddressList?: string
+  logPrefix?: string
 }
 
 /**
@@ -133,10 +244,18 @@ export function boundariesFromRules(rules: BoundaryRule[], anyRulesPushed: boole
       outInterface: string
       sawLog: boolean
       srcAddressList: string
+      slugs: string[]
       epithet: string
       epithetFromLog: boolean
     }
   >()
+  // A slug only identifies a rule if exactly one rule wears it, so the
+  // whole table has to be counted before any boundary can claim one.
+  const slugCounts = new Map<string, number>()
+  for (const r of rules) {
+    const slug = logPrefixSlug(r.logPrefix)
+    if (slug) slugCounts.set(slug, (slugCounts.get(slug) ?? 0) + 1)
+  }
   for (const r of rules) {
     const inIf = r.inInterface ?? ''
     const outIf = r.outInterface ?? ''
@@ -149,6 +268,7 @@ export function boundariesFromRules(rules: BoundaryRule[], anyRulesPushed: boole
         outInterface: outIf,
         sawLog: false,
         srcAddressList: '',
+        slugs: [],
         epithet: '',
         epithetFromLog: false,
       }
@@ -164,6 +284,8 @@ export function boundariesFromRules(rules: BoundaryRule[], anyRulesPushed: boole
     // real disagreement is rarer than a rule further down the table
     // simply not bothering to repeat it.
     if (!entry.srcAddressList && r.srcAddressList) entry.srcAddressList = r.srcAddressList
+    const slug = logPrefixSlug(r.logPrefix)
+    if (slug && slugCounts.get(slug) === 1) entry.slugs.push(slug)
   }
   const list: FallBoundary[] = []
   for (const [key, e] of byKey) {
@@ -174,6 +296,7 @@ export function boundariesFromRules(rules: BoundaryRule[], anyRulesPushed: boole
       inInterface: e.inInterface,
       outInterface: e.outInterface,
       srcAddressList: e.srcAddressList,
+      slugs: e.slugs,
       label: boundaryLabel(e.chain, e.inInterface, e.outInterface, e.srcAddressList),
       coverage,
       epithet: e.epithet,
