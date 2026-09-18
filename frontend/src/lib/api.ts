@@ -1260,23 +1260,20 @@ export async function fetchAuditLog(): Promise<AuditResult> {
   return res.json()
 }
 
-// startSSOLink begins converting the signed-in account to SSO-only.
-// POST, not a navigation, so the CSRF header applies -- linking
-// destroys the account's local password, and a GET-initiated flow could
-// be triggered cross-site (see internal/api/oidc.go's
-// handleOIDCLinkStart). Returns the provider URL for the caller to
-// navigate to, or an error message.
+// startSSOLink connects the signed-in account to an SSO identity: for
+// every role but admin that converts the account to SSO-only, and for
+// the admin it adds SSO alongside the password it keeps (#1252).
+// POST, not a navigation, so the CSRF header applies -- a
+// GET-initiated flow could be triggered cross-site (see
+// internal/api/oidc.go's handleOIDCLinkStart). Returns the provider URL
+// for the caller to navigate to, or an error message.
 //
-// acknowledgeLastLocalAdmin carries the overlay's extra confirm (#1252):
-// the server refuses an admin's link outright without it, because that
-// is the one link that can leave a deployment with no way in that does
-// not depend on the identity provider. Sent as a body field rather than
-// inferred server-side from the role, so "the person was told and said
-// yes" is what the server acts on.
-export async function startSSOLink(
-  acknowledgeLastLocalAdmin = false,
-): Promise<{ url: string } | string> {
-  const res = await postJSON('/api/auth/oidc/link', { acknowledgeLastLocalAdmin })
+// No arguments: the account is the session's, never the body's. Both
+// callers are here -- SSOLinkOverlay.svelte for an account already in
+// the app, and AuthSetup.svelte immediately after first-run creates the
+// admin.
+export async function startSSOLink(): Promise<{ url: string } | string> {
+  const res = await postJSON('/api/auth/oidc/link')
   if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`
   return res.json()
 }

@@ -33,6 +33,12 @@
     // whichever is asked for.
     gate = false,
     onEnter,
+    // The gate's button label, and #1252's other use of the gate: the
+    // first-run confirmation shown when the admin account has been
+    // created and there is no SSO to forward to. Same chrome, a title
+    // and a line of explanation above the button instead of nothing --
+    // the ratified door itself passes neither, so it is unchanged.
+    enterLabel = 'Enter',
     // Set by AuthLogin when this mount follows a sign-out (see
     // authState.consumeJustSignedOut()) -- plays the door's beat in
     // reverse first (the brink collapses, goes dark), then the ordinary
@@ -45,11 +51,6 @@
     // field comes with it, since a password typed once and never used
     // again until the next sign-in is the worst case for a typo.
     passwordOnly = false,
-    // #1252: SSO is additive. On the setup door -- zero accounts, so
-    // the first SSO sign-in would create the admin and that admin would
-    // have no password -- the SSO link is replaced by this line saying
-    // why, rather than quietly disappearing. Empty everywhere else.
-    ssoWithheldReason = '',
   }: {
     title?: string
     subtitle?: string
@@ -64,9 +65,9 @@
     ssoAvailable?: boolean
     gate?: boolean
     onEnter?: () => void
+    enterLabel?: string
     reverseBeat?: boolean
     passwordOnly?: boolean
-    ssoWithheldReason?: string
   } = $props()
 
   // A password-only door always confirms; every other one does as its
@@ -142,7 +143,13 @@
 
     {#if gate}
       <div class="col">
-        <button type="button" class="submit-btn" onclick={() => onEnter?.()}>Enter</button>
+        {#if title}
+          <h1>{title}</h1>
+        {/if}
+        {#if subtitle}
+          <p class="subtitle">{subtitle}</p>
+        {/if}
+        <button type="button" class="submit-btn" onclick={() => onEnter?.()}>{enterLabel}</button>
       </div>
     {:else}
       <div class="col">
@@ -198,9 +205,7 @@
 
           <button type="submit" class="submit-btn" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
 
-          {#if ssoAvailable && ssoWithheldReason}
-            <p class="sso-withheld">{ssoWithheldReason}</p>
-          {:else if ssoAvailable}
+          {#if ssoAvailable}
             <div class="divider"><span>or</span></div>
             <a class="sso-link" href="/api/auth/oidc/login">Sign in with SSO</a>
           {/if}
@@ -446,14 +451,6 @@
     flex: 1;
     height: 1px;
     background: var(--border);
-  }
-
-  .sso-withheld {
-    margin: 0;
-    text-align: center;
-    font-size: 12px;
-    line-height: 1.55;
-    color: var(--fg-muted);
   }
 
   .sso-link {

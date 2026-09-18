@@ -4,9 +4,7 @@ package api
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -25,14 +23,6 @@ const oidcFlowCookieName = "mikroview_oidc_flow"
 // discovery page, maybe an MFA prompt) without leaving a usable flow
 // lying around for long if abandoned.
 const oidcFlowCookieMaxAge = 10 * time.Minute
-
-// lastLocalAdminRefusal is what an admin gets back when they ask to
-// link without acknowledging what it costs the deployment. It names the
-// consequence and the way to avoid it, because this text is what the
-// person reads when the overlay's own warning has been bypassed.
-const lastLocalAdminRefusal = "linking this account removes its password, and it is the only admin that can sign in without your identity provider. " +
-	"If the provider ever goes down, nobody can sign in to MikroView until somebody runs `mikroview -transfer-admin` at the command line. " +
-	"Confirm that you mean to do it."
 
 // handleOIDCLogin starts a login: generates fresh PKCE/state/nonce
 // values (internal/oidc.FlowState), seals them into a short-lived
@@ -65,8 +55,10 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 // navigate to, rather than issuing a redirect itself.
 //
 // POST, not GET, and that is the security-relevant part. Linking is
-// destructive -- it removes the account's local password permanently
-// (see auth.Store.LinkOIDCIdentity). A GET that starts the flow could
+// destructive for every role but admin -- it removes the account's
+// local password permanently (see auth.Store.LinkOIDCIdentity), and
+// even for the admin it attaches a permanent second way in. A GET that
+// starts the flow could
 // be triggered cross-site: an attacker embeds it, the victim's browser
 // follows it, their identity provider silently re-authenticates them,
 // and the callback completes a link the victim never asked for,
@@ -75,8 +67,16 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 //
 // The target account is taken from the session and sealed into the flow
 // state, never from the request body -- the browser does not get to say
-// which account a link applies to. The body carries one thing only, and
-// it is an acknowledgement, not a selection: see lastLocalAdminRefusal.
+// which account a link applies to. The request carries no parameters at
+// all, so there is nothing for a caller to get wrong.
+//
+// This is also the first-run route (#1252). On a fresh deployment with
+// OIDC configured, AuthSetup.svelte creates the local admin and then
+// POSTs here with the session that creation issued; the identity that
+// comes back from the provider is linked to that admin. Session
+// continuity is the whole proof -- the person who made the account is
+// the person the browser carried to the provider and back -- and
+// nothing compares an email address to reach it.
 func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC == nil {
 		http.NotFound(w, r)
@@ -94,27 +94,14 @@ func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this account already signs in through your identity provider", http.StatusConflict)
 		return
 	}
-	// "SSO is additive; keep a local admin" (#1252). Linking removes
-	// this account's local password, so an admin linking theirs is the
-	// one request in the API that can leave a deployment with no way in
-	// that does not depend on the identity provider. It is still
-	// allowed -- the operator may genuinely want an SSO-only
-	// deployment -- but only as a deliberate act, acknowledged in the
-	// request rather than assumed from a button press. The check is
-	// here and not only in SSOLinkOverlay.svelte so the rule holds for
-	// curl and for a future client too.
-	if s.Auth.HasLocalAdmin() && caller.Role == auth.RoleAdmin {
-		var req struct {
-			AcknowledgeLastLocalAdmin bool `json:"acknowledgeLastLocalAdmin"`
-		}
-		// A malformed or absent body is simply not an acknowledgement.
-		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req)
-		if !req.AcknowledgeLastLocalAdmin {
-			http.Error(w, lastLocalAdminRefusal, http.StatusConflict)
-			return
-		}
+	// Already connected, and keeping a password because it is the admin
+	// (#1252). Linking again could only mean pointing the account at a
+	// second identity, which auth.Store.LinkOIDCIdentity refuses -- said
+	// here too so the answer comes before the provider round trip.
+	if caller.OIDCSubject != "" {
+		http.Error(w, "this account is already connected to your identity provider", http.StatusConflict)
+		return
 	}
-
 	fs, err := oidc.NewFlowState(time.Now())
 	if err != nil {
 		http.Error(w, "failed to start SSO linking", http.StatusInternalServerError)
@@ -157,14 +144,16 @@ func (s *Server) completeOIDCLink(w http.ResponseWriter, r *http.Request, fs oid
 		redirectWithSSOError(w, r, "link_failed")
 		return
 	}
+	// Recorded on the completed link rather than on the request that
+	// started it: a link that never came back from the provider changed
+	// nothing and should leave no trace. What it cost the account is
+	// recorded too, because that differs by role now (#1252) -- the
+	// admin keeps its password, everybody else loses it.
 	detail := "issuer=" + identity.Issuer
-	// #1252: the deployment just lost its break-glass account. Recorded
-	// on the event itself rather than as a second entry, so the audit log
-	// says what happened rather than what was intended -- an
-	// acknowledged link that never came back from the provider changes
-	// nothing and should leave no trace.
-	if !s.Auth.HasLocalAdmin() {
-		detail += "; no admin can sign in without SSO now"
+	if caller.Role == auth.RoleAdmin {
+		detail += "; local password kept (admin)"
+	} else {
+		detail += "; local password removed"
 	}
 	s.Audit.Record(caller.Username, "account.link_sso", caller.Username, detail)
 

@@ -202,6 +202,15 @@ var (
 	// ErrNoAdmin is returned by TransferAdmin when no account holds the
 	// role -- nothing to transfer.
 	ErrNoAdmin = errors.New("auth: this deployment has no admin account")
+	// ErrOIDCAlreadyLinked is returned by LinkOIDCIdentity when the
+	// account is already connected to a different (issuer, subject).
+	// Reachable only since #1252: before it, a linked account had no
+	// local password, and the link route refuses those, so nothing could
+	// ask for a second link. Re-pointing would leave the first identity
+	// signing in as this account too, which is not a thing any caller
+	// asked for -- unlinking is a separate operation nothing implements
+	// yet.
+	ErrOIDCAlreadyLinked = errors.New("auth: account is already connected to an SSO identity")
 	// ErrOIDCIdentityTaken is returned by LinkOIDCIdentity when the
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
@@ -680,6 +689,12 @@ func (s *Store) Admin() *User {
 // says the rule rather than the current cardinality, so a future second
 // admin would only change this method's body.
 //
+// Since #1252's ruling, linking is not what makes this false -- the
+// admin keeps its password (see LinkOIDCIdentity). What is left is an
+// admin that never had one: a deployment bootstrapped through SSO,
+// where FindOrCreateOIDCUser made the first identity to sign in the
+// admin. main.go says so at every start while it holds.
+//
 // It reuses User.LocalPassword() rather than re-deriving "has a
 // password" from the stored hash: an unmatchable hash is deliberately
 // indistinguishable from a real one (see FindOrCreateOIDCUser), so
@@ -706,8 +721,9 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 	// is the single funnel every locally-created account passes through,
 	// so nothing can be added later that skips it. (OIDC provisioning
 	// does not come through here -- see sanitiseUsernameHint for why it
-	// falls back instead of refusing.)
-	if err := ValidateUsername(username); err != nil {
+	// falls back instead of refusing, and why the email rule below is
+	// local-creation-only.)
+	if err := ValidateLocalUsername(username); err != nil {
 		return nil, err
 	}
 	if len(password) < minPasswordLength {
@@ -897,21 +913,37 @@ func unmatchablePasswordHash() (string, error) {
 }
 
 // LinkOIDCIdentity attaches (issuer, subject) to an existing account,
-// converting it to SSO-only in the same operation.
+// converting it to SSO-only in the same operation -- unless the account
+// is the admin, which keeps its password.
 //
-// **Linking is destructive and one-way.** The account's local password
-// is replaced with a fresh unmatchable hash and HasLocalPassword is set
-// to false, exactly as if the account had been OIDC-provisioned from
-// the start. There is deliberately no state where a local password and
-// a linked identity both work: keeping the old password alive would
-// preserve the weaker local-password attack surface on an account
-// that has supposedly moved past it, which defeats the point of
-// linking.
+// **For every role but admin, linking is destructive and one-way.** The
+// account's local password is replaced with a fresh unmatchable hash
+// and HasLocalPassword is set to false, exactly as if the account had
+// been OIDC-provisioned from the start. There is deliberately no state
+// where a local password and a linked identity both work: keeping the
+// old password alive would preserve the weaker local-password attack
+// surface on an account that has supposedly moved past it, which
+// defeats the point of linking.
 //
-// That conversion lives here, inside the store, rather than in the API
+// **The admin keeps its local password, permanently** (owner,
+// 2026-09-18, #1252: "the admin must always be able to sign in, even
+// with the identity provider down"). mikroview holds exactly one admin
+// and never authenticates to the provider on its own behalf, so a
+// provider that cannot answer means nobody gets in at all -- the one
+// account that can end that outage is worth the attack surface the
+// paragraph above refuses everybody else. For the admin, SSO is an
+// additional way in rather than a replacement.
+//
+// Both halves live here, inside the store, rather than in the API
 // handler that calls it. A convention at the call site is one forgetful
-// future caller away from a dual-mode account existing; an invariant
-// here cannot be bypassed by adding a second caller.
+// future caller away from a dual-mode ordinary account existing, or a
+// disarmed admin; an invariant here cannot be bypassed by adding a
+// second caller.
+//
+// A role change afterwards does not re-run this: an admin demoted to
+// user keeps the password it had, and -transfer-admin's own rules
+// (main.go) decide what the new admin holds. Linking is the event this
+// method describes, not a standing property of the role.
 //
 // Idempotent for the same user. Fails with ErrOIDCIdentityTaken if that
 // identity is already linked to a *different* account -- which is what
@@ -923,7 +955,10 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	}
 	// Generated before the lock: HashPassword is ~100ms by design, and
 	// holding the write lock across it would serialize every reader --
-	// the same reasoning createLocked documents.
+	// the same reasoning createLocked documents. Which means it is
+	// generated for an admin's link too and then not used; the role is
+	// not knowable until the lock is held, and one wasted hash on a rare
+	// operation is cheaper than holding the lock across one.
 	unmatchable, err := unmatchablePasswordHash()
 	if err != nil {
 		return err
@@ -943,15 +978,29 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	if existingID, ok := s.oidcIndex[key]; ok && existingID != userID {
 		return ErrOIDCIdentityTaken
 	}
+	// Already connected to something else. Idempotent for the same
+	// identity (above and below), refused for a different one: the old
+	// (issuer, subject) would stay in the index and go on signing in as
+	// this account, so "re-link" would quietly mean "two ways in".
+	if u.OIDCSubject != "" && (u.OIDCIssuer != issuer || u.OIDCSubject != subject) {
+		return ErrOIDCAlreadyLinked
+	}
 
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
-	u.PasswordHash = unmatchable
-	u.HasLocalPassword = false
+	if u.Role != RoleAdmin {
+		u.PasswordHash = unmatchable
+		u.HasLocalPassword = false
+	}
 	// Invalidates every session issued before this point, including in
 	// another process -- the account's credentials just changed
 	// fundamentally, so anything holding a session from before that
-	// should have to come back through the IdP.
+	// should have to come back through the IdP. True for the admin too,
+	// whose password survives: a second way into the account was just
+	// attached, and a session issued before that should be re-made
+	// through one of them. The caller that started the link is handed a
+	// fresh session (see completeOIDCLink), so it is other sessions that
+	// this ends.
 	u.PasswordChangedAt = now
 	s.oidcIndex[key] = userID
 	s.persistLocked()

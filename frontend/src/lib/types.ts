@@ -443,6 +443,11 @@ export interface AuthSession {
   // Gates whether "Connect SSO" is offered -- there is nothing left to
   // convert otherwise.
   hasLocalPassword?: boolean
+  // True once this account has an SSO identity attached. Separate from
+  // hasLocalPassword since #1252: the admin keeps its password through
+  // a link, so "has a password" no longer answers "is there anything
+  // left to connect". Absent on an older server, read as false.
+  ssoConnected?: boolean
   // True while an administrator's reset (#1251) is still outstanding:
   // this session signed in with the one-time code and may reach nothing
   // but the set-a-new-password screen until it has. Absent on an older

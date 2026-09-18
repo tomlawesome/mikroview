@@ -370,32 +370,42 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   session is re-checked against that sealed value at the callback, so a
   sign-out-and-in mid-flow can't attach an identity to the wrong
   account.
-- **SSO is additive; keep a local admin.** A deployment that turns SSO
-  on keeps an admin account with a password of its own, and a dead
-  identity provider must never lock the operator out. MikroView holds
-  exactly one admin, so that one account is the whole break-glass path:
-  MikroView never authenticates to the provider on its own behalf, so
-  if the provider cannot answer, SSO cannot let anybody in.
+- **SSO is additive; the admin keeps both ways in.** A dead identity
+  provider must never lock the operator out. MikroView holds exactly one
+  admin and never authenticates to the provider on its own behalf, so if
+  the provider cannot answer, SSO cannot let anybody in — that one
+  account is the whole break-glass path (owner ruling, 2026-09-18, #1252).
 
-  Three places hold the rule. The first-run screen does not offer SSO
-  while no account exists, because the first account to exist becomes
-  the admin and an SSO-provisioned admin has no password.
-  `handleOIDCLinkStart` refuses an **admin's** link unless the request
-  carries an explicit acknowledgement, which `SSOLinkOverlay.svelte`
-  only sends after a second, separate confirmation naming the
-  consequence — the check is server-side as well as in the browser, so
-  `curl` inherits it. And a start with SSO configured and no admin
-  holding a password logs that SSO is the only way in. None of the
-  three is a refusal to run SSO: a deployment whose admin has already
-  linked would be locked out entirely by that, which is the outcome
-  this rule exists to prevent.
+  So the admin keeps its local password when it is connected to SSO, and
+  keeps it permanently. `auth.Store.LinkOIDCIdentity` holds that as an
+  invariant rather than the handlers arranging it, the same way the
+  destructive conversion below is an invariant: a rule kept at the call
+  sites is one forgetful caller away from being lost. **Every other role
+  still loses its local password on linking**, for the reason in the
+  bullet above — the admin's exception buys a way back into the
+  deployment, which an ordinary account's would not.
 
-  **Interim:** until a linked account can keep its password behind a
-  second factor, the break-glass admin must stay **unlinked** —
-  `LinkOIDCIdentity` is destructive today, so linking it is what
-  removes the last local way in. When that lands, this paragraph goes.
+  First run follows from it: MikroView always creates a local admin,
+  with a username and a password, and never offers SSO as an
+  alternative there. With OIDC configured, that creation is followed by
+  a sign-in at the provider and the returning identity is linked to the
+  admin just created — the proof that it is the right person is session
+  continuity, the browser that made the account being the browser sent
+  to the provider and back. No email is compared, and none is stored.
 
-  Recovery when it has already happened is CLI-only and recovery-key
+  **A local account's username may not be an email address**
+  (`auth.ValidateLocalUsername`, enforced at creation only). Identity
+  providers send an email as `preferred_username`, so a namespace that
+  excludes them cannot collide with one — which is why nothing has to
+  compare addresses to tell a returning identity from an existing local
+  person, and why MikroView still holds no email for anyone. Validation
+  runs at creation and never at sign-in, so an account created before
+  the rule is not locked out by it.
+
+  One state is still worth a warning, and MikroView logs it at every
+  start: an admin that never had a password, which is what a deployment
+  bootstrapped entirely through SSO gets (the first identity to sign in
+  is made the admin). Recovery from it is CLI-only and recovery-key
   gated: `mikroview -transfer-admin <username>` moves the admin role to
   an account that does have a password.
   `mikroview -recover-admin-account` deliberately refuses an SSO-only

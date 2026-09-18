@@ -9,33 +9,29 @@
   // "skip auth" choice, which is likewise a permanent decision rather
   // than a default someone falls into.
   //
-  // #1252 adds a second warning on top of the first, for the one
-  // account whose link costs the deployment rather than the person:
-  // mikroview holds exactly one admin (auth.Store.CreateUser), so an
-  // admin linking theirs leaves nobody who can sign in without the
-  // identity provider. That one needs its own acknowledgement -- an
-  // extra, deliberate act, not a second sentence in the same block
-  // somebody has already decided to click past. The server refuses the
-  // link without it (handleOIDCLinkStart), so this is the explanation,
-  // not the enforcement.
+  // #1252, owner's ruling: none of that applies to the admin, whose
+  // password survives linking (auth.Store.LinkOIDCIdentity). mikroview
+  // holds exactly one admin and never authenticates to the provider on
+  // its own behalf, so that account is the only thing standing between
+  // a provider outage and nobody getting in at all -- SSO is added to
+  // it rather than swapped for it. So the admin reads a different
+  // dialog: what is gained, not what is destroyed. Warning somebody
+  // about a deletion that will not happen is how real warnings stop
+  // being read.
   import { authState } from '../lib/auth.svelte'
   import { startSSOLink } from '../lib/api'
 
   let error = $state<string | null>(null)
   let submitting = $state(false)
-  let acknowledged = $state(false)
 
-  // The caller is the deployment's break-glass account exactly when
-  // they are the admin: the route this overlay drives already refuses
-  // an account with no local password, so an admin reaching here is by
-  // definition the admin who still has one.
-  const lastLocalAdmin = $derived(authState.isAdmin)
+  // The admin is the deployment's way in when the provider is down, and
+  // the only account that keeps its password through a link.
+  const keepsPassword = $derived(authState.isAdmin)
 
   function close() {
     authState.showSSOLink = false
     error = null
     submitting = false
-    acknowledged = false
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -49,7 +45,7 @@
   async function confirm() {
     error = null
     submitting = true
-    const result = await startSSOLink(acknowledged)
+    const result = await startSSOLink()
     if (typeof result === 'string') {
       error = result
       submitting = false
@@ -75,36 +71,27 @@
       <div class="body">
         <p>
           You'll be sent to your identity provider to sign in. When you come back,
-          this account will use SSO from then on.
+          this account and that identity are connected for good.
         </p>
 
-        <div class="warning">
-          <strong>Your MikroView password will be deleted.</strong>
-          <p>
-            This can't be undone from MikroView. After connecting, signing in goes
-            through your identity provider only — and if you ever lose access to it,
-            MikroView can't recover this account for you.
-          </p>
-        </div>
-
-        {#if lastLocalAdmin}
+        {#if keepsPassword}
+          <div class="kept">
+            <strong>Your MikroView password stays.</strong>
+            <p>
+              You're the MikroView admin, so SSO becomes an extra way in rather than
+              a replacement: the password is what still lets you in on the day your
+              identity provider can't be reached. Everyone else's password is
+              deleted when they connect.
+            </p>
+          </div>
+        {:else}
           <div class="warning">
-            <strong>This is the only account that can sign in without SSO.</strong>
+            <strong>Your MikroView password will be deleted.</strong>
             <p>
-              You're the MikroView admin, and connecting SSO deletes the password
-              that lets you in when your identity provider can't be reached. After
-              this, a provider outage means nobody can sign in to MikroView at all
-              — getting back in needs <code>mikroview -transfer-admin</code> at the
-              command line, on the machine MikroView runs on.
+              This can't be undone from MikroView. After connecting, signing in goes
+              through your identity provider only — and if you ever lose access to it,
+              MikroView can't recover this account for you.
             </p>
-            <p>
-              Keep a local admin instead: give the admin role to another account
-              that has a password, and connect SSO on this one afterwards.
-            </p>
-            <label class="ack">
-              <input type="checkbox" bind:checked={acknowledged} />
-              <span>I understand SSO will be the only way in</span>
-            </label>
           </div>
         {/if}
 
@@ -120,13 +107,17 @@
 
       <div class="actions">
         <button type="button" class="cancel" onclick={close} disabled={submitting}>Cancel</button>
-        <button
-          type="button"
-          class="danger"
-          onclick={confirm}
-          disabled={submitting || (lastLocalAdmin && !acknowledged)}
-        >
-          {submitting ? 'Redirecting…' : 'Delete my password and connect SSO'}
+        <!-- The label names the consequence rather than saying "OK", so
+             it cannot be clicked through unread -- and the consequence
+             is not the same for the admin, so neither is the label. -->
+        <button type="button" class:danger={!keepsPassword} class:go={keepsPassword} onclick={confirm} disabled={submitting}>
+          {#if submitting}
+            Redirecting…
+          {:else if keepsPassword}
+            Connect SSO and keep my password
+          {:else}
+            Delete my password and connect SSO
+          {/if}
         </button>
       </div>
     </div>
@@ -216,23 +207,22 @@
     color: var(--reject);
   }
 
-  .warning code {
-    font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 12px;
-  }
-
-  .ack {
+  .kept {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: var(--bg-elevated);
     display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    font-weight: 600;
-    color: var(--fg);
-    margin-top: 2px;
+    flex-direction: column;
+    gap: 6px;
   }
 
-  .ack input {
-    margin: 2px 0 0;
-    accent-color: var(--reject);
+  .kept strong {
+    color: var(--fg);
+  }
+
+  .kept p {
+    margin: 0;
   }
 
   .muted {
@@ -278,7 +268,18 @@
     font-weight: 600;
   }
 
+  .go {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--bg);
+    border-radius: 5px;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
   .danger:disabled,
+  .go:disabled,
   .cancel:disabled {
     opacity: 0.6;
   }
