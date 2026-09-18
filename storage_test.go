@@ -183,3 +183,32 @@ func TestBackendForKeepsTheHashedStoresWithoutAKey(t *testing.T) {
 		t.Errorf("flags: backendFor returned %T with no key, want nil -- flags is not a hashed store", backend)
 	}
 }
+
+// TestBackendForPersistsDroplistWithoutAKey is the v0.6.0 pre-release
+// audit's finding: on a default install (no history.keyFile configured,
+// the common case), the droplist store fell through the same "no key, no
+// storage" rule as any other store and stayed memory-only -- so every
+// entry an operator added was gone on the next restart, and the very
+// next scheduled fetch of the .rsc feed (a full sync -- see
+// droplist.Script's doc comment) pushed an empty list that wiped
+// whatever the router still had. Owner ruling: persist droplist by
+// default, the same plaintext-without-a-key exception #853 rule 6
+// already carved out for auth/tokens/recovery_keys, since an
+// operator-authored blocklist is not a secret the way a password is.
+func TestBackendForPersistsDroplistWithoutAKey(t *testing.T) {
+	dir := t.TempDir()
+	s := &storage{}
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "droplist.json")
+	backend, err := s.backendFor(ctx, "droplist", path)
+	if err != nil {
+		t.Fatalf("backendFor: %v", err)
+	}
+	if backend == nil {
+		t.Fatal("backendFor returned nil with no key -- droplist should keep persisting on a default install")
+	}
+	if _, ok := backend.(*persist.FileBackend); !ok {
+		t.Errorf("backendFor returned %T, want a plain *persist.FileBackend", backend)
+	}
+}
