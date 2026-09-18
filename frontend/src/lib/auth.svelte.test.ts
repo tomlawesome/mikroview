@@ -27,7 +27,9 @@ import { authState } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
-import { emptyFilters, type Device, type Flag, type Stats, type WatchlistEntry } from './types'
+import { wizardState } from './wizard.svelte'
+import { logEveryRuleWorkState } from './logEveryRuleWork.svelte'
+import { emptyFilters, type Device, type Flag, type RouterBackupsResponse, type Stats, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -361,6 +363,77 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     expect(flagsState.loaded).toBe(false)
     expect(flagsState.baselinesWarming).toBeUndefined()
     expect(flagsState.pinnedIds).toEqual([])
+  })
+
+  // The Security stage of the v0.6.0 pre-release audit: wizardState was
+  // never added to #1083's batch, though it is a module-level singleton
+  // exactly like the three above. It carries more than a view position
+  // -- `token` is a router ingest token, minted for the previous
+  // operator and handed straight to whoever signs in next on this tab.
+  it('resets wizardState, which carries a router ingest token', async () => {
+    wizardState.open = true
+    wizardState.pane = 4
+    wizardState.token = 'ingest-token-the-next-operator-must-not-be-handed'
+    wizardState.tokenDevice = 'core'
+    wizardState.devices = [fixtureDevice()]
+    wizardState.address = '10.0.0.9'
+    wizardState.backups = {
+      enabled: true,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      lock: { state: 'open' },
+    } as unknown as RouterBackupsResponse
+
+    await authState.logout()
+
+    expect(wizardState.token).toBe('')
+    expect(wizardState.tokenDevice).toBe('')
+    expect(wizardState.backups).toBeNull()
+    expect(wizardState.devices).toEqual([])
+    expect(wizardState.address).toBe('')
+    expect(wizardState.open).toBe(false)
+    expect(wizardState.pane).toBe(1)
+  })
+
+  // The ingest token is the sharp one. This release moved it from
+  // component-local state, which died with the component at logout, to
+  // the wizardState singleton so a step revisit kept it -- so the next
+  // admin to sign in on this tab was shown, and could copy, a live
+  // token minted for someone else, with the mint gate skipped because
+  // a token was already "held".
+  it('clears the wizard ingest token, so the next admin is not handed it', async () => {
+    wizardState.token = 'ingest-token-minted-for-the-previous-admin'
+    wizardState.tokenDevice = 'core'
+
+    await authState.logout()
+
+    expect(wizardState.token).toBe('')
+    expect(wizardState.tokenDevice).toBe('')
+  })
+
+  // A pasted `/export hide-sensitive` is the operator's whole firewall
+  // configuration. Module-lifetime by design, so it survives a deck
+  // scroll -- and, until now, a logout.
+  it('clears a pasted router export from Log every rule', async () => {
+    logEveryRuleWorkState.exportText = '/ip firewall filter add chain=forward comment="the previous operator rules"'
+    logEveryRuleWorkState.exportDevice = 'core'
+
+    await authState.logout()
+
+    expect(logEveryRuleWorkState.exportText).toBe('')
+  })
+
+  // The history key decrypts this instance's stored events, flags,
+  // definitions, watchlist and entities. The wizard clears it once its
+  // step is past asking, but that only runs while the wizard is open.
+  it('clears the minted history key, which the wizard alone would not', async () => {
+    sessionStorage.setItem('mikroview-wizard-history-key', 'a-key-that-decrypts-the-stored-history')
+
+    await authState.logout()
+
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBeNull()
   })
 
   it('resets watchlistState to its initial values', async () => {

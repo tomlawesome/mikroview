@@ -421,6 +421,41 @@ class WizardState {
     await this.refresh()
     return null
   }
+
+  // reset puts every field back to what its initialiser holds, for
+  // #1083's rule: signing out must not leave one account's state for
+  // whoever signs in next on this tab. wizardState was missed from that
+  // batch (v0.6.0 pre-release audit, Security stage) and it carries
+  // more than a view position -- `token` is a router ingest token, and
+  // `backups` is an admin-only read that decided, among other things,
+  // whether the minted history key was still needed.
+  //
+  // commandsRequestSeq is bumped rather than zeroed: a reply still in
+  // flight from the previous session must be discarded when it lands,
+  // and zeroing would let it pass the sequence check instead.
+  reset() {
+    this.open = false
+    this.pane = 1
+    this.status = null
+    this.devices = []
+    this.error = null
+    this.showStepList = false
+    this.lostRouterDevice = null
+    this.pickedVersion = ''
+    this.token = ''
+    this.tokenDevice = ''
+    this.commands = null
+    this.commandsError = null
+    this.commandsRequestSeq++
+    this.backups = null
+    this.autoLaunched = false
+    this.address = ''
+    this.addressInitialized = false
+    this.addressSaveError = null
+    this.backupTransport = 'sftp'
+    this.backupTransportInitialized = false
+    this.backupTransportError = null
+  }
 }
 
 export const wizardState = new WizardState()

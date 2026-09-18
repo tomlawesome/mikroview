@@ -11,6 +11,9 @@ import {
 import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
 import { watchlistState } from "./watchlist.svelte";
+import { wizardState } from "./wizard.svelte";
+import { logEveryRuleWorkState } from "./logEveryRuleWork.svelte";
+import { forgetHistoryKeyForSession } from "./history";
 import type { AuthSession } from "./types";
 
 // #1083: signing out (or being bounced by a 401) must not leave this
@@ -32,6 +35,16 @@ function clearSessionState() {
   flagsState.loaded = false;
   flagsState.baselinesWarming = undefined;
   flagsState.clearPins();
+  // wizardState, logEveryRuleWorkState and the wizard's minted history
+  // key were all missed when #1083 first went round (v0.6.0 pre-release
+  // audit, Security stage). Each is module-lifetime and each carries
+  // something the next person to sign in on this tab should not be
+  // handed: an ingest bearer token still live for a router, the
+  // previous operator's pasted firewall export, and the key that
+  // decrypts this instance's stored history.
+  wizardState.reset();
+  logEveryRuleWorkState.reset();
+  forgetHistoryKeyForSession();
 }
 
 // 'loading' only lasts for the initial check() call on app boot; after
