@@ -196,9 +196,12 @@ func TestResetCodeRefusals(t *testing.T) {
 	}
 }
 
-// TestResetCodeStopsWorking is the single-use, expiry and
-// second-reset-kills-the-first trio -- the three ways a code that was
-// once valid must stop being so.
+// TestResetCodeStopsWorking is the expiry, second-reset-kills-the-first
+// and replaced-by-a-real-password trio -- the three ways a code that was
+// once valid must stop being so. Logging in with it is deliberately not
+// one of these any more (v0.6.0 pre-release audit, owner ruling): see
+// TestResetCodeSurvivesALostSessionBeforeThePasswordIsSet for why
+// spending it at login was the bug, not a fourth case here.
 func TestResetCodeStopsWorking(t *testing.T) {
 	issued := time.Now()
 
@@ -210,15 +213,6 @@ func TestResetCodeStopsWorking(t *testing.T) {
 		// creates.
 		spend func(t *testing.T, s *Store, id, code string) (secret string, at time.Time)
 	}{
-		{
-			name: "single use -- the code is spent by the login that redeems it",
-			spend: func(t *testing.T, s *Store, id, code string) (string, time.Time) {
-				if _, err := s.Authenticate("bilbo", code, issued); err != nil {
-					t.Fatalf("expected the first use to succeed: %v", err)
-				}
-				return code, issued
-			},
-		},
 		{
 			name: "expired -- 24 hours after it was issued",
 			spend: func(t *testing.T, s *Store, id, code string) (string, time.Time) {
@@ -279,6 +273,43 @@ func TestSecondResetCodeStillWorksAfterTheFirstIsKilled(t *testing.T) {
 	}
 	if _, err := s.Authenticate("bilbo", second, now); err != nil {
 		t.Errorf("expected the newest code to work: %v", err)
+	}
+}
+
+// TestResetCodeSurvivesALostSessionBeforeThePasswordIsSet is the v0.6.0
+// pre-release audit's finding: Authenticate used to spend the code the
+// moment it let someone in, before they had actually set a new
+// password. IssueResetCode already killed the old password the instant
+// the code was minted, so losing that first session -- a crashed tab, a
+// restart, anything short of completing the change -- left the account
+// permanently locked out: no working password, and the one code that
+// could get back in already spent. Owner ruling: spend it only when
+// SetPassword actually runs.
+func TestResetCodeSurvivesALostSessionBeforeThePasswordIsSet(t *testing.T) {
+	s, id := newResetTestStore(t)
+	now := time.Now()
+
+	_, code, err := s.IssueResetCode(id, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Authenticate("bilbo", code, now); err != nil {
+		t.Fatalf("expected the first login with the code to succeed: %v", err)
+	}
+
+	// That session is gone -- lost before the forced change completed.
+	// The code must still work, not lock the account out.
+	if _, err := s.Authenticate("bilbo", code, now); err != nil {
+		t.Errorf("expected the code to still work after a lost session, got %v -- the account is now permanently locked out", err)
+	}
+
+	// Only actually setting the new password spends it.
+	if err := s.SetPassword("bilbo", resetTestNewPassword, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Authenticate("bilbo", code, now); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("expected the code to stop working once a new password was actually set, got %v", err)
 	}
 }
 

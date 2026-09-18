@@ -41,7 +41,10 @@ const (
 )
 
 // ResetCodeTTL is how long an issued code stays usable -- the owner's
-// ruling on #1245 question 21 ("A"): 24 hours, single use.
+// ruling on #1245 question 21 ("A"): 24 hours, single use. "Single use"
+// means it is spent once, by SetPassword actually taking effect -- not
+// by each login attempt in between; see Store.Authenticate's doc
+// comment (v0.6.0 pre-release audit).
 const ResetCodeTTL = 24 * time.Hour
 
 // ErrNoLocalPassword is returned by IssueResetCode for an account that
@@ -110,8 +113,9 @@ func NormaliseResetCode(typed string) string {
 
 // resetCodeLive reports whether u is currently holding an unexpired,
 // unspent reset code. Both halves matter: the hash is cleared the
-// moment a code is spent (single use), and the expiry is what ends an
-// unspent one 24 hours later.
+// moment SetPassword actually sets a new one (single use -- not each
+// login attempt against the code, see Store.Authenticate), and the
+// expiry is what ends an unspent one 24 hours later.
 func (u *User) resetCodeLive(now time.Time) bool {
 	return u.ResetCodeHash != "" && now.Before(u.ResetCodeExpiresAt)
 }

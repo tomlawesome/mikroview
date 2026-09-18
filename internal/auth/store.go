@@ -126,7 +126,10 @@ type User struct {
 	// second click has to issue a new one rather than re-show the old.
 	//
 	// Empty whenever no reset is outstanding, and cleared again the
-	// moment the code is spent (single use) or a new password is set.
+	// moment a new password is actually set (SetPassword) -- not by a
+	// login attempt against the code, which leaves it live so a lost
+	// session before that point doesn't lock the account out for good
+	// (v0.6.0 pre-release audit; see Store.Authenticate).
 	ResetCodeHash string `json:"resetCodeHash,omitempty"`
 	// ResetCodeExpiresAt ends an unspent code, 24 hours after it was
 	// issued (ResetCodeTTL). Checked against, never the only check --
@@ -1022,10 +1025,18 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 // issuing a code replaces the stored password hash with an unmatchable
 // one, so the old password is already dead.
 //
-// A code is spent on the login that uses it (single use, per the
-// owner's ruling on #1245 question 21). MustChangePassword is *not*
-// cleared here -- only setting a new password does that -- so the
-// session this login goes on to create is still the restricted one.
+// A code is *not* spent here (v0.6.0 pre-release audit, amending #1245
+// question 21's original "single use at login" ruling): only SetPassword
+// spends it, once a new password has actually been set. Spending it at
+// login meant losing the session before completing the forced change --
+// a crashed tab, a restart, anything short of that -- left the account
+// permanently locked out, with the old password already dead and the
+// one code that could get back in already gone. The code stays live
+// (re-usable, up to its 24-hour expiry) for as many login attempts as
+// it takes to reach the change-password screen and actually finish.
+// MustChangePassword is not cleared here either -- only SetPassword does
+// that -- so the session this login goes on to create is still the
+// restricted one.
 func (s *Store) Authenticate(username, password string, now time.Time) (*User, error) {
 	s.reloadIfStale()
 
@@ -1063,16 +1074,13 @@ func (s *Store) Authenticate(username, password string, now time.Time) (*User, e
 	if !ok {
 		return nil, ErrInvalidCredentials
 	}
-	if viaResetCode {
+	if viaResetCode && !u.resetCodeLive(now) {
 		// Re-checked under the write lock rather than trusted from the
 		// read above: a second reset in the window between them issues a
-		// new code and must kill this one, and a spend that landed first
-		// must not be honoured twice.
-		if !u.resetCodeLive(now) {
-			return nil, ErrInvalidCredentials
-		}
-		u.ResetCodeHash = ""
-		u.ResetCodeExpiresAt = time.Time{}
+		// new code and must kill this one. The code itself is not
+		// cleared on success here -- see this method's doc comment for
+		// why spending it at login was the bug, not the fix.
+		return nil, ErrInvalidCredentials
 	}
 	u.LastLogin = now
 	s.persistLocked()
