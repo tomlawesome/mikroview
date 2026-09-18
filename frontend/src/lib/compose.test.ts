@@ -45,6 +45,47 @@ describe('composeCommand', () => {
     const cmd = composeCommand({ ...base, hostName: 'Weird "Host"!', targetName: 'the internet' })
     expect(cmd).toMatch(/log-prefix="weird-host-the-internet-445"/)
   })
+
+  it('escapes a hostname carrying a RouterOS command substitution into the comment', () => {
+    const cmd = composeCommand({ ...base, hostName: 'x$[/system reset-configuration]"\\', placeBefore: 'iot-to-lan-drop' })
+    expect(cmd).not.toBeNull()
+    // The dangerous run must be escaped in the printed comment: every
+    // `$[` in the line is preceded by the escaping backslash, so none
+    // of them are left for RouterOS to expand when the line is pasted.
+    expect(cmd).not.toMatch(/(?<!\\)\$\[/)
+    expect(cmd).toContain('x\\$[/system reset-configuration]\\"\\\\')
+  })
+
+  it('escapes a quote in placeBefore\'s own comment match', () => {
+    const cmd = composeCommand({ ...base, placeBefore: 'drop "iot"' })
+    expect(cmd).not.toBeNull()
+    expect(cmd).toContain('place-before=[find comment="drop \\"iot\\""]')
+  })
+
+  it('refuses to compose when hostIp is not an address or CIDR', () => {
+    const cmd = composeCommand({ ...base, hostIp: '1.2.3.4 dst-address=0.0.0.0/0' })
+    expect(cmd).toBeNull()
+  })
+
+  it('refuses to compose when target is not an address or CIDR', () => {
+    const cmd = composeCommand({ ...base, target: '10.0.40.10; /system reset-configuration' })
+    expect(cmd).toBeNull()
+  })
+
+  it('still composes for a valid IPv4 address', () => {
+    const cmd = composeCommand({ ...base, hostIp: '10.0.20.31', target: '10.0.40.10' })
+    expect(cmd).toContain('src-address=10.0.20.31 dst-address=10.0.40.10')
+  })
+
+  it('still composes for a valid IPv4 CIDR target', () => {
+    const cmd = composeCommand({ ...base, target: '10.0.40.0/24' })
+    expect(cmd).toContain('dst-address=10.0.40.0/24')
+  })
+
+  it('still composes for a valid IPv6 address', () => {
+    const cmd = composeCommand({ ...base, hostIp: 'fe80::1', target: '2001:db8::1' })
+    expect(cmd).toContain('src-address=fe80::1 dst-address=2001:db8::1')
+  })
 })
 
 describe('refusingCommentFor', () => {
