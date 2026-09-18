@@ -384,7 +384,13 @@ rewritten.
   router pushed its tables, or ran its backup, twice as often as
   configured. Both the script add and the scheduler add now update the
   existing entry in place instead of adding a second one. The wizard
-  version is now 2, since the rendered block changed.
+  version is now 2, since the rendered block changed. The hand-paste
+  alternatives `docs/routeros-setup.md` offers beside those blocks --
+  step 4e's `mv-push` and step 7c-ii's `mv-backup-https` -- now carry
+  the same guard; they were left bare when the generated blocks were
+  fixed, so an operator who set one up by hand and re-pasted it got a
+  second script of that name with no way to tell which one the
+  scheduler ran.
 
 - **Fall traffic now matches the rules that actually catch it** (#1196).
   A pushed rule that did not name both interfaces exactly as the log

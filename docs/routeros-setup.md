@@ -626,7 +626,7 @@ failing (say, a momentary network blip) doesn't stop the others in the
 same run.
 
 ```
-/system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
+:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>" } else={ /system script set [find name=mv-push] policy=read,test source="<the same escaped blocks>" }
 :if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" }
 /system script run mv-push
 ```
@@ -1049,7 +1049,7 @@ To paste it by hand instead:
 ```
 
 ```
-/system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>"
+:if ([:len [/system script find name=mv-backup-https]] = 0) do={ /system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>" } else={ /system script set [find name=mv-backup-https] policy=read,write,test,sensitive source="<the same escaped script>" }
 :if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" }
 /system script run mv-backup-https
 ```
