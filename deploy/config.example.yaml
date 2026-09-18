@@ -461,15 +461,15 @@ store:
 # setup:
 #   storePath: /var/lib/mikroview/setup.json
 
-# Which "N new settings are available" upgrade notice (#1218) has
-# already been dismissed -- so it stops appearing once you've dealt with
-# it, but comes back for the next version that actually adds something
-# new. The notice itself (what's new, and the exact YAML to paste) is
-# never stored here; it's worked out fresh from this file and the
-# running binary every time Settings is opened. storePath already
-# defaults to /var/lib/mikroview/config-drift.json; only uncomment this
-# block to move that path. See docs/configuration.md's "Upgrade notice"
-# section.
+# Nothing reads this any more, and you can leave it alone.
+#
+# The "N new settings are available" notice (#1218) used to record which
+# version you had dismissed, so it would stop appearing. It now just has
+# a close button: closing it puts it away for this visit, nothing is
+# saved, and Settings > Upgrade still shows the list whenever you want
+# to come back to it. That left this file with nothing to keep, so the
+# setting below only still exists to be removed in a later version. See
+# docs/configuration.md's "Upgrade notice" section.
 # configDrift:
 #   storePath: /var/lib/mikroview/config-drift.json
 
