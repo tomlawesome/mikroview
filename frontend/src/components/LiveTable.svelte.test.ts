@@ -114,7 +114,8 @@ beforeEach(() => {
   // foot band's mount-time rule-table fetch from firing in jsdom, and
   // both the band and that fetch are gone.
   // columnState is a module-level singleton, shared with
-  // columns.svelte.test.ts and FilterBar.svelte.test.ts -- reset to the
+  // columns.svelte.test.ts, ColumnToggles.svelte.test.ts,
+  // FilterBar.svelte.test.ts and Whisper.svelte.test.ts -- reset to the
   // shipped default (#729: all fifteen visible) so a toggle from one test
   // can't leak into the next, the same hygiene groupModeState/flagsState
   // above already get.

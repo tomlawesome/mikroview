@@ -103,37 +103,24 @@ export function hiddenInDrawer(group: EventGroup): number {
   return Math.max(0, group.count - maxDrawerEvents)
 }
 
-// flaggedSources builds the set of source addresses that currently carry
-// an active flag, for the row marker.
+// flagsBySource maps each source address to the open flags it carries,
+// for EventRow's mark: which flag to open, and how many to say "N open
+// flags" about.
 //
 // Keyed on the flag's target address because that is the only honest
 // link available: a flag records what it was raised *about*, not which
-// events evidenced it (see #341 -- that gap is the largest unbuilt piece
-// behind the log-extract idea). So the marker means "this source has an
-// active flag against it", not "this event caused that flag", and the
-// UI must say the former.
-export function flaggedSources(flags: readonly { target: string; cleared: boolean }[]): Set<string> {
-  const out = new Set<string>()
-  for (const f of flags) {
-    if (f.cleared) continue
-    // Targets can carry a suffix ("1.2.3.4 -> port 22"); the address is
-    // the part before it. Mirrors extractSourceIp in flags.svelte.ts.
-    const addr = f.target.replace(/ -> port \d+$/, '')
-    if (addr) out.add(addr)
-  }
-  return out
-}
-
-// flagsBySource (#1269) is flaggedSources' own one-pass walk, kept
-// alongside it rather than replacing it: the marker only ever needed
-// membership, but EventRow's ⚑ mark needs the actual open flag(s) a
-// source carries -- which flag to open, and how many to say "N open
-// flags" about. Before this, EventRow built that itself by filtering
-// the full flagsState.list once per flagged row it drew, so naming a
-// screenful of rows from the same handful of sources cost rows x flags
-// instead of the one pass this does. LiveTable builds this once and
-// hands each row its own slice, the same shape flaggedSources already
-// gets right for the boolean case.
+// events evidenced it (see #341 -- that gap is the largest unbuilt
+// piece behind the log-extract idea). So the mark means "this source
+// has an active flag against it", not "this event caused that flag",
+// and the UI must say the former.
+//
+// LiveTable builds this once per flags change and hands each row its
+// own slice. It replaced flaggedSources, a set-of-addresses walk kept
+// alongside it for one release: EventRow used to filter the whole
+// flagsState.list once per flagged row it drew, so a screenful of rows
+// from the same few sources cost rows x flags rather than the one pass
+// this does (#1269). Nothing needed the bare membership set once the
+// slice existed, so it is gone.
 export function flagsBySource(flags: readonly Flag[]): Map<string, Flag[]> {
   const out = new Map<string, Flag[]>()
   for (const f of flags) {

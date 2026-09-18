@@ -418,7 +418,8 @@ describe("the stream's hand (rounds 36-38)", () => {
 // (#1218 audit finding 13) -- FilterBar.svelte.test.ts covers that
 // component mounted in FilterBar's own drawer context. columnState
 // is a module-level singleton (shared with columns.svelte.test.ts,
-// FilterBar.svelte.test.ts and LiveTable.svelte.test.ts), so every test
+// ColumnToggles.svelte.test.ts, FilterBar.svelte.test.ts and
+// LiveTable.svelte.test.ts), so every test
 // below restores it rather than leaking a toggle into whichever test
 // runs next.
 describe('the columns ▸ picker (#729/#1197)', () => {
