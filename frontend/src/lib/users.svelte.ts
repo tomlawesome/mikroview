@@ -52,6 +52,14 @@ class UsersState {
     this.list = this.list.filter((u) => u.id !== id)
     return null
   }
+
+  // #1083, v0.6.0 pre-release audit Security stage: usersState was
+  // missed from the original batch. `list` is the admin account list,
+  // rendered by EngineRoom with no role guard of its own -- it must not
+  // still be sitting there for whoever signs in next on this tab.
+  reset() {
+    this.list = []
+  }
 }
 
 export const usersState = new UsersState()
