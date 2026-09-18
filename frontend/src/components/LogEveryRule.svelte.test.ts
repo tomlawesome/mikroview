@@ -781,6 +781,19 @@ describe('LogEveryRule device pick', () => {
     expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  // A dropped connection rejects rather than answering with an error
+  // string. Uncaught, that skipped the line freeing the button and left
+  // it reading "Analysing…" for a request that had already ended.
+  it('frees the Analyse button and says so when the connection drops', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockRejectedValue(new Error('Failed to fetch'))
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+
+    await waitFor(() => expect(container.querySelector('.load-error')?.textContent).toContain('Failed to fetch'))
+    expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first

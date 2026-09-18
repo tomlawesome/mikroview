@@ -61,7 +61,7 @@
     initialSelection,
     waitingMessage,
   } from '../lib/logEveryRule'
-  import type { TuneLoggingRule } from '../lib/types'
+  import type { TuneLoggingAnalyseResponse, TuneLoggingRenderResponse, TuneLoggingRule } from '../lib/types'
 
   // The pushed tables the dark-boundary set is computed from -- the same
   // two refreshes Topography.svelte runs, so the "dark" this page sends
@@ -251,7 +251,17 @@
     const token = ++work.analyseToken
     analysingToken = token
     analyseError = null
-    const res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
+    // A dropped connection rejects rather than answering with an error
+    // string, and an uncaught rejection skips everything below --
+    // including the line that frees the button, leaving it reading
+    // "Analysing…" for a request that ended. Same shape as
+    // AuthSetup.svelte's startSSOLink call, and for the same reason.
+    let res: TuneLoggingAnalyseResponse | string
+    try {
+      res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
+    } catch (err) {
+      res = err instanceof Error ? err.message : String(err)
+    }
     if (token !== work.analyseToken) return
     analysingToken = 0
     if (typeof res === 'string') {
@@ -280,7 +290,12 @@
     const token = ++work.renderToken
     renderingToken = token
     renderError = null
-    const res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
+    let res: TuneLoggingRenderResponse | string
+    try {
+      res = await fetchTuneLoggingRender({ device: work.device, export: work.exportText, selected: [...work.selected] })
+    } catch (err) {
+      res = err instanceof Error ? err.message : String(err)
+    }
     if (token !== work.renderToken) return
     renderingToken = 0
     if (typeof res === 'string') {
