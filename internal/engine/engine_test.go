@@ -225,7 +225,7 @@ func TestOutrunCountsWhatTheRingWrappedPast(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		st.Insert(evt("198.51.100.1")) // IDs 21..30 survive
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if got := d.calls.Load(); got != 10 {
 		t.Fatalf("definition saw %d events, want the 10 the ring still held", got)
@@ -259,7 +259,7 @@ func TestForgetStartsLevelAfterADeliberateReset(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		st.Insert(evt("198.51.100.1")) // IDs 11, 12
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if behind, _, outrun := e.Lag(); outrun != 0 || behind != 0 {
 		t.Fatalf("Lag() = (behind %d, outrun %d) after Forget, want (0, 0)", behind, outrun)
@@ -286,7 +286,7 @@ func TestOutrunCountsAStoreReset(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		st.Insert(evt("198.51.100.1")) // IDs 11, 12
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if _, _, outrun := e.Lag(); outrun != 7 {
 		t.Fatalf("outrun = %d after a Reset over 7 unevaluated events, want 7", outrun)
@@ -311,7 +311,7 @@ func TestOutrunCountsAShrinkingResize(t *testing.T) {
 	if kept, evicted := st.Resize(10); kept != 10 || evicted != 50 {
 		t.Fatalf("Resize(10) kept %d evicted %d, want 10 and 50", kept, evicted)
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if _, _, outrun := e.Lag(); outrun != 47 {
 		t.Fatalf("outrun = %d after shrinking past 47 unevaluated events, want 47", outrun)
@@ -325,7 +325,7 @@ func TestOutrunCountsAShrinkingResize(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		st.Insert(evt("198.51.100.1"))
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 	if _, _, outrun := e.Lag(); outrun != 47 {
 		t.Fatalf("outrun = %d after growing the ring, want it unchanged at 47", outrun)
 	}
@@ -357,7 +357,7 @@ func TestLagReportsHowFarBehindAndHowLate(t *testing.T) {
 		t.Fatalf("behindSeconds = %v, want roughly the 4s age of the oldest unevaluated event", seconds)
 	}
 
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 	behind, seconds, _ = e.Lag()
 	if behind != 0 || seconds != 0 {
 		t.Fatalf("Lag() = (behind %d, %v s) once caught up, want (0, 0)", behind, seconds)
