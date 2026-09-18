@@ -84,6 +84,44 @@ func TestDuplicateBurstUnderSightingThresholdDoesNotReportDrift(t *testing.T) {
 	}
 }
 
+// TestDuplicateSightingsFromThreeCopiesReportsThreeNotTwo is the v0.6.0
+// pre-release audit's finding: a router whose mikroview logging block
+// was pasted three times dispatches every event three times over, and
+// the reported apparent copy count must say so. The multiplicity
+// histogram used to be stuck reporting "2" regardless: the second copy
+// of each event scored multiplicity 2, and only the third copy scored
+// multiplicity 3, so an N-times-pasted event's weight spread evenly
+// across buckets 2..N -- and since modalMultiplicityLocked's tie-break
+// favors the smaller figure, the true, larger copy count could never
+// win.
+func TestDuplicateSightingsFromThreeCopiesReportsThreeNotTwo(t *testing.T) {
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() {
+		setLossClock(nil)
+		clearDuplicateState()
+		SetConfiguredSources(nil)
+	})
+
+	host := "198.51.100.11"
+	SetConfiguredSources([]string{host})
+	for i := 0; i < dupSightingsToReportDrift; i++ {
+		line := []byte(fmt.Sprintf("event %d", i))
+		noteDuplicateLine(host, line) // the original
+		noteDuplicateLine(host, line) // the second copy
+		noteDuplicateLine(host, line) // the third copy
+		now = now.Add(time.Millisecond)
+	}
+
+	loss := Stats().Loss.Duplicate
+	if !loss.Active {
+		t.Fatalf("expected sustained triplication to be reported active, got %+v", loss)
+	}
+	if loss.CopyCount != 3 {
+		t.Errorf("loss.duplicate.copyCount = %d, want 3 (every line arrived three times)", loss.CopyCount)
+	}
+}
+
 // TestDuplicateContentFromTwoSourcesDoesNotReportDrift guards the
 // other false-positive this rule must avoid: two different routers
 // that happen to log the same thing (e.g. both seeing the same
@@ -146,11 +184,10 @@ func TestDuplicateRingIsFixedSizeAndWraps(t *testing.T) {
 }
 
 // TestDuplicateModalMultiplicityFavorsSmallerOnTie exercises
-// modalMultiplicityLocked directly: a source pasted three times over
-// produces a mix of 2-copy and 3-copy sightings (see noteDuplicateLine's
-// doc comment on why the first duplicate of any run under-reports its
-// own group size), and a tie between them must resolve to the smaller,
-// always-safe figure.
+// modalMultiplicityLocked directly: whatever produced a genuine tie
+// between two multiplicities in the histogram (two, equally common,
+// distinct copy counts within the same episode), it must resolve to the
+// smaller, always-safe figure.
 func TestDuplicateModalMultiplicityFavorsSmallerOnTie(t *testing.T) {
 	var st sourceDupState
 	st.multiplicity[0] = 5 // multiplicity 2
