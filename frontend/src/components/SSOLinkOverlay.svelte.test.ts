@@ -58,6 +58,23 @@ describe('SSOLinkOverlay', () => {
     expect(startSSOLink).toHaveBeenCalledOnce()
   })
 
+  // The other way the call can end: not a refusal string but a thrown
+  // fetch -- the connection dropped. AuthSetup.svelte already guarded
+  // its own call to startSSOLink for this; this caller did not, so the
+  // throw escaped confirm() with submitting still true and left the
+  // button on "Redirecting…" for good.
+  it('surfaces a dropped connection instead of sticking on "Redirecting…"', async () => {
+    vi.mocked(startSSOLink).mockRejectedValue(new Error('Failed to fetch'))
+    render(SSOLinkOverlay)
+
+    await fireEvent.click(screen.getByRole('button', { name: /delete my password and connect sso/i }))
+
+    expect(await screen.findByText(/failed to fetch/i)).toBeTruthy()
+    // And offered again, rather than left disabled mid-flight.
+    expect(screen.getByRole('button', { name: /delete my password and connect sso/i })).toBeTruthy()
+    expect(authState.showSSOLink).toBe(true)
+  })
+
   it('surfaces a refusal instead of navigating', async () => {
     vi.mocked(startSSOLink).mockResolvedValue('this account already signs in through your identity provider')
     render(SSOLinkOverlay)
