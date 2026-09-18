@@ -30,6 +30,13 @@ class LogEveryRuleWorkState {
   // render arrives, since that is a new unsaved result.
   resultSaved = $state(false)
 
+  // Which router the held export was taken for. Kept alongside the
+  // text because `device` is what the operator has selected now, and
+  // those two are allowed to disagree for as long as it takes to
+  // notice -- see adoptDevice. Empty when nothing is held, or when the
+  // export arrived before any router had been picked.
+  exportDevice = $state('')
+
   // A new or edited export invalidates whatever was derived from the
   // old one -- an analyse result, a render, and the guard around it all
   // describe text that is no longer what is in the box.
@@ -41,16 +48,48 @@ class LogEveryRuleWorkState {
     this.resultSaved = false
   }
 
-  /** Clears the export itself too, not just what was derived from it.
-   * LogEveryRule.svelte calls this when a nav request names a
-   * different router, since this module's lifetime would otherwise
-   * carry one router's export into another's view. Tests call it for
-   * the same reason across renders. */
-  reset() {
-    this.device = ''
+  /** The one intake. Every door into the drop zone ends here, so the
+   * router the export belongs to is recorded in the same breath as the
+   * text -- there is no path that stores one without the other. */
+  take(text: string, name: string) {
+    this.exportText = text
+    this.exportName = name
+    this.exportDevice = this.device
+    this.resetDownstream()
+  }
+
+  /** Drops the export and everything derived from it, keeping whatever
+   * router is selected. */
+  clearExport() {
     this.exportText = ''
     this.exportName = ''
+    this.exportDevice = ''
     this.resetDownstream()
+  }
+
+  /** Clears the selected router as well. LogEveryRule.svelte calls this
+   * when a nav request names a different router, since this module's
+   * lifetime would otherwise carry one router's export into another's
+   * view. Tests call it for the same reason across renders. */
+  reset() {
+    this.device = ''
+    this.clearExport()
+  }
+
+  /** Keeps the held export and the selected router in step, whatever
+   * moved the router -- the device dropdown binds straight to `device`,
+   * so a hand-picked switch arrives here and nowhere else. It has to be
+   * caught: Render sends the selected router's name beside whatever
+   * text is held, the server renders from the text alone, and the file
+   * is named for the selection -- so an export left over from another
+   * router yields an .rsc named for this one and built from that one's
+   * rules, with nothing on screen to say so. An export pasted before
+   * any router was picked adopts the first one chosen rather than being
+   * thrown away. */
+  adoptDevice() {
+    if (!this.device) return
+    if (this.exportText && this.exportDevice && this.exportDevice !== this.device) this.clearExport()
+    this.exportDevice = this.device
   }
 }
 

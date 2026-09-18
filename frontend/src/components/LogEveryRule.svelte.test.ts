@@ -519,6 +519,71 @@ describe('LogEveryRule device pick', () => {
     const select = container.querySelector('#ler-device') as HTMLSelectElement
     expect(select.value).toBe('edge-2')
   })
+
+  // The nav-request guard above covers arriving from the topography.
+  // The picker is the other way the router changes, and the commoner
+  // one: two routers in the fleet, the operator does one and turns to
+  // the next. The picker binds straight to the module-lifetime work
+  // state, so nothing the nav path does is on this route. Left alone,
+  // the drop zone keeps the first router's export under the second
+  // router's name, Render sends the second router's name with the
+  // first router's text -- the server renders from the text alone --
+  // and the file downloads as `edge-2-logging.rsc` while every `set`
+  // line in it was computed against edge-1's rules. Pasting that into
+  // edge-2 applies one router's decisions to another's firewall.
+  it('clears the held export when the operator picks a different router by hand', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    expect(logEveryRuleWorkState.device).toBe('edge-1')
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.exportText).toBe('')
+    expect(logEveryRuleWorkState.exportName).toBe('')
+    expect(zoneOf(container).classList.contains('filled')).toBe(false)
+  })
+
+  // The other half, so the guard cannot be satisfied by throwing every
+  // paste away: picking the router the export is already for is the
+  // operator confirming, not changing their mind.
+  it('keeps the held export when the operator picks the router it came from', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-1' } })
+
+    await waitFor(() => expect(logEveryRuleNavState.pending).toBeNull())
+    expect(logEveryRuleWorkState.exportText).toContain('chain=forward')
+    expect(zoneOf(container).classList.contains('filled')).toBe(true)
+  })
+
+  // An export can arrive before any router is picked -- the picker
+  // starts on its own disabled placeholder, and paste is listened for
+  // on the window. That text belongs to no router yet, so the first
+  // pick adopts it rather than throwing it away.
+  it('keeps an export pasted before any router was picked', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    expect(logEveryRuleWorkState.device).toBe('')
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.exportText).toContain('chain=forward')
+    expect(zoneOf(container).classList.contains('filled')).toBe(true)
+  })
 })
 
 // Deck.svelte unmounts a card's scene once it scrolls more than one
