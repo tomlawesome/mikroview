@@ -33,11 +33,24 @@
     // whichever is asked for.
     gate = false,
     onEnter,
+    // The gate's button label, and #1252's other use of the gate: the
+    // first-run confirmation shown when the admin account has been
+    // created and there is no SSO to forward to. Same chrome, a title
+    // and a line of explanation above the button instead of nothing --
+    // the ratified door itself passes neither, so it is unchanged.
+    enterLabel = 'Enter',
     // Set by AuthLogin when this mount follows a sign-out (see
     // authState.consumeJustSignedOut()) -- plays the door's beat in
     // reverse first (the brink collapses, goes dark), then the ordinary
     // entrance below: brief, then the login, no storyboard strip.
     reverseBeat = false,
+    // #1251's forced change: the same door, with the account field gone.
+    // The person is already signed in -- with a one-time code an
+    // administrator read out to them -- so there is nobody to name; all
+    // that is left is choosing a password of their own. The confirm
+    // field comes with it, since a password typed once and never used
+    // again until the next sign-in is the worst case for a typo.
+    passwordOnly = false,
   }: {
     title?: string
     subtitle?: string
@@ -52,8 +65,14 @@
     ssoAvailable?: boolean
     gate?: boolean
     onEnter?: () => void
+    enterLabel?: string
     reverseBeat?: boolean
+    passwordOnly?: boolean
   } = $props()
+
+  // A password-only door always confirms; every other one does as its
+  // caller asks.
+  const needsConfirm = $derived(confirmPassword || passwordOnly)
 
   let username = $state('')
   let password = $state('')
@@ -75,20 +94,20 @@
     // app's, and pointed at a field the error line below already covers.
     // The `required` attributes stay: they are what tells assistive tech
     // the fields are not optional, and they no longer trigger the bubble.
-    if (!username) {
+    if (!passwordOnly && !username) {
       error = 'Enter your account name.'
       return
     }
     if (!password) {
-      error = 'Enter your password.'
+      error = passwordOnly ? 'Choose a new password.' : 'Enter your password.'
       return
     }
-    if (confirmPassword && !passwordConfirm) {
+    if (needsConfirm && !passwordConfirm) {
       error = 'Type the password a second time to confirm it.'
       return
     }
 
-    if (confirmPassword && password !== passwordConfirm) {
+    if (needsConfirm && password !== passwordConfirm) {
       error = 'Passwords do not match.'
       return
     }
@@ -124,7 +143,13 @@
 
     {#if gate}
       <div class="col">
-        <button type="button" class="submit-btn" onclick={() => onEnter?.()}>Enter</button>
+        {#if title}
+          <h1>{title}</h1>
+        {/if}
+        {#if subtitle}
+          <p class="subtitle">{subtitle}</p>
+        {/if}
+        <button type="button" class="submit-btn" onclick={() => onEnter?.()}>{enterLabel}</button>
       </div>
     {:else}
       <div class="col">
@@ -149,17 +174,25 @@
                2026-08-30). The <label> stays for assistive tech,
                visually hidden -- the placeholder is presentation, not
                the accessible name. -->
-          <label>
-            <span class="sr-only">account</span>
-            <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
-          </label>
+          {#if !passwordOnly}
+            <label>
+              <span class="sr-only">account</span>
+              <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
+            </label>
+          {/if}
 
           <label>
-            <span class="sr-only">password</span>
-            <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} placeholder="password" bind:value={password} required />
+            <span class="sr-only">{passwordOnly ? 'new password' : 'password'}</span>
+            <input
+              type="password"
+              autocomplete={needsConfirm ? 'new-password' : 'current-password'}
+              placeholder={passwordOnly ? 'new password' : 'password'}
+              bind:value={password}
+              required
+            />
           </label>
 
-          {#if confirmPassword}
+          {#if needsConfirm}
             <label>
               <span class="sr-only">confirm password</span>
               <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />

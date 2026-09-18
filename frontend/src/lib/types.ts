@@ -443,6 +443,17 @@ export interface AuthSession {
   // Gates whether "Connect SSO" is offered -- there is nothing left to
   // convert otherwise.
   hasLocalPassword?: boolean
+  // True once this account has an SSO identity attached. Separate from
+  // hasLocalPassword since #1252: the admin keeps its password through
+  // a link, so "has a password" no longer answers "is there anything
+  // left to connect". Absent on an older server, read as false.
+  ssoConnected?: boolean
+  // True while an administrator's reset (#1251) is still outstanding:
+  // this session signed in with the one-time code and may reach nothing
+  // but the set-a-new-password screen until it has. Absent on an older
+  // server, which is read as false -- the safe direction, since a server
+  // that does not know about the flag has no route to enforce it either.
+  mustChangePassword?: boolean
   ssoAvailable: boolean
   // This session's own start (#677's sessions row: "signed in 4 d") --
   // when this login happened, not when the account was created. Absent
@@ -461,6 +472,18 @@ export interface UserSummary {
   lastLogin?: string
   hasLocalPassword: boolean
   sso: boolean
+}
+
+// Mirrors internal/api/auth.go's resetPasswordResponse -- the response
+// to an admin reset, and the only place the code exists in clear. It is
+// not stored and cannot be fetched again: a second reset issues a new
+// code and kills this one.
+export interface PasswordResetCode {
+  username: string
+  // Grouped xxxx-xxxx-xxxx-xxxx for reading aloud. The server accepts it
+  // back in any case, with or without the dashes.
+  code: string
+  expiresAt: string
 }
 
 // Mirrors internal/api/tokens.go's tokenResponse. value is present only

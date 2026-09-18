@@ -117,6 +117,31 @@ type User struct {
 	// account, on both sides of it. For the audit trail and the UI only:
 	// authorization always reads Role, never this.
 	RoleChangedAt time.Time `json:"roleChangedAt,omitzero"`
+	// ResetCodeHash is the Argon2id hash of the one-time code an admin
+	// issued for this account (#1251) -- the same hash function and
+	// parameters a password gets, because for as long as it is live this
+	// *is* the account's password. The code itself is never stored,
+	// logged or audited anywhere: the single response to the admin's
+	// reset request is the only place it exists in clear, which is why a
+	// second click has to issue a new one rather than re-show the old.
+	//
+	// Empty whenever no reset is outstanding, and cleared again the
+	// moment the code is spent (single use) or a new password is set.
+	ResetCodeHash string `json:"resetCodeHash,omitempty"`
+	// ResetCodeExpiresAt ends an unspent code, 24 hours after it was
+	// issued (ResetCodeTTL). Checked against, never the only check --
+	// see User.resetCodeLive.
+	ResetCodeExpiresAt time.Time `json:"resetCodeExpiresAt,omitzero"`
+	// MustChangePassword is set by an admin reset and cleared by
+	// SetPassword. While it is true the account's session may reach
+	// nothing but the change-password route (see internal/api's
+	// requireAuth): the person signed in with a code somebody else
+	// chose, so they are not yet holding a credential only they know.
+	//
+	// Deliberately recorded on the account rather than on the session:
+	// the flag has to survive the login that redeems the code, outlive
+	// a restart (sessions do not), and be cleared in exactly one place.
+	MustChangePassword bool `json:"mustChangePassword,omitempty"`
 }
 
 // LocalPassword reports whether this account has a real, user-chosen
@@ -177,6 +202,15 @@ var (
 	// ErrNoAdmin is returned by TransferAdmin when no account holds the
 	// role -- nothing to transfer.
 	ErrNoAdmin = errors.New("auth: this deployment has no admin account")
+	// ErrOIDCAlreadyLinked is returned by LinkOIDCIdentity when the
+	// account is already connected to a different (issuer, subject).
+	// Reachable only since #1252: before it, a linked account had no
+	// local password, and the link route refuses those, so nothing could
+	// ask for a second link. Re-pointing would leave the first identity
+	// signing in as this account too, which is not a thing any caller
+	// asked for -- unlinking is a separate operation nothing implements
+	// yet.
+	ErrOIDCAlreadyLinked = errors.New("auth: account is already connected to an SSO identity")
 	// ErrOIDCIdentityTaken is returned by LinkOIDCIdentity when the
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
@@ -644,6 +678,32 @@ func (s *Store) Admin() *User {
 	return nil
 }
 
+// HasLocalAdmin reports whether the deployment still has a way in that
+// does not depend on an identity provider: an admin account that can
+// sign in with a local password.
+//
+// "SSO is additive; keep a local admin" (#1252, from #1245 decision 2)
+// is this predicate. mikroview holds exactly one admin at a time (see
+// CreateUser), so "at least one admin has a local password" and "the
+// admin has a local password" are the same question -- but the name
+// says the rule rather than the current cardinality, so a future second
+// admin would only change this method's body.
+//
+// Since #1252's ruling, linking is not what makes this false -- the
+// admin keeps its password (see LinkOIDCIdentity). What is left is an
+// admin that never had one: a deployment bootstrapped through SSO,
+// where FindOrCreateOIDCUser made the first identity to sign in the
+// admin. main.go says so at every start while it holds.
+//
+// It reuses User.LocalPassword() rather than re-deriving "has a
+// password" from the stored hash: an unmatchable hash is deliberately
+// indistinguishable from a real one (see FindOrCreateOIDCUser), so
+// HasLocalPassword is the only honest source.
+func (s *Store) HasLocalAdmin() bool {
+	admin := s.Admin()
+	return admin != nil && admin.LocalPassword()
+}
+
 // createLocked inserts a new account. guard, when non-nil, is evaluated
 // with the write lock already held and aborts the insert if it returns
 // an error -- that's the hook callers use to make a precondition
@@ -661,8 +721,9 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 	// is the single funnel every locally-created account passes through,
 	// so nothing can be added later that skips it. (OIDC provisioning
 	// does not come through here -- see sanitiseUsernameHint for why it
-	// falls back instead of refusing.)
-	if err := ValidateUsername(username); err != nil {
+	// falls back instead of refusing, and why the email rule below is
+	// local-creation-only.)
+	if err := ValidateLocalUsername(username); err != nil {
 		return nil, err
 	}
 	if len(password) < minPasswordLength {
@@ -852,21 +913,37 @@ func unmatchablePasswordHash() (string, error) {
 }
 
 // LinkOIDCIdentity attaches (issuer, subject) to an existing account,
-// converting it to SSO-only in the same operation.
+// converting it to SSO-only in the same operation -- unless the account
+// is the admin, which keeps its password.
 //
-// **Linking is destructive and one-way.** The account's local password
-// is replaced with a fresh unmatchable hash and HasLocalPassword is set
-// to false, exactly as if the account had been OIDC-provisioned from
-// the start. There is deliberately no state where a local password and
-// a linked identity both work: keeping the old password alive would
-// preserve the weaker local-password attack surface on an account
-// that has supposedly moved past it, which defeats the point of
-// linking.
+// **For every role but admin, linking is destructive and one-way.** The
+// account's local password is replaced with a fresh unmatchable hash
+// and HasLocalPassword is set to false, exactly as if the account had
+// been OIDC-provisioned from the start. There is deliberately no state
+// where a local password and a linked identity both work: keeping the
+// old password alive would preserve the weaker local-password attack
+// surface on an account that has supposedly moved past it, which
+// defeats the point of linking.
 //
-// That conversion lives here, inside the store, rather than in the API
+// **The admin keeps its local password, permanently** (owner,
+// 2026-09-18, #1252: "the admin must always be able to sign in, even
+// with the identity provider down"). mikroview holds exactly one admin
+// and never authenticates to the provider on its own behalf, so a
+// provider that cannot answer means nobody gets in at all -- the one
+// account that can end that outage is worth the attack surface the
+// paragraph above refuses everybody else. For the admin, SSO is an
+// additional way in rather than a replacement.
+//
+// Both halves live here, inside the store, rather than in the API
 // handler that calls it. A convention at the call site is one forgetful
-// future caller away from a dual-mode account existing; an invariant
-// here cannot be bypassed by adding a second caller.
+// future caller away from a dual-mode ordinary account existing, or a
+// disarmed admin; an invariant here cannot be bypassed by adding a
+// second caller.
+//
+// A role change afterwards does not re-run this: an admin demoted to
+// user keeps the password it had, and -transfer-admin's own rules
+// (main.go) decide what the new admin holds. Linking is the event this
+// method describes, not a standing property of the role.
 //
 // Idempotent for the same user. Fails with ErrOIDCIdentityTaken if that
 // identity is already linked to a *different* account -- which is what
@@ -878,7 +955,10 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	}
 	// Generated before the lock: HashPassword is ~100ms by design, and
 	// holding the write lock across it would serialize every reader --
-	// the same reasoning createLocked documents.
+	// the same reasoning createLocked documents. Which means it is
+	// generated for an admin's link too and then not used; the role is
+	// not knowable until the lock is held, and one wasted hash on a rare
+	// operation is cheaper than holding the lock across one.
 	unmatchable, err := unmatchablePasswordHash()
 	if err != nil {
 		return err
@@ -898,15 +978,29 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	if existingID, ok := s.oidcIndex[key]; ok && existingID != userID {
 		return ErrOIDCIdentityTaken
 	}
+	// Already connected to something else. Idempotent for the same
+	// identity (above and below), refused for a different one: the old
+	// (issuer, subject) would stay in the index and go on signing in as
+	// this account, so "re-link" would quietly mean "two ways in".
+	if u.OIDCSubject != "" && (u.OIDCIssuer != issuer || u.OIDCSubject != subject) {
+		return ErrOIDCAlreadyLinked
+	}
 
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
-	u.PasswordHash = unmatchable
-	u.HasLocalPassword = false
+	if u.Role != RoleAdmin {
+		u.PasswordHash = unmatchable
+		u.HasLocalPassword = false
+	}
 	// Invalidates every session issued before this point, including in
 	// another process -- the account's credentials just changed
 	// fundamentally, so anything holding a session from before that
-	// should have to come back through the IdP.
+	// should have to come back through the IdP. True for the admin too,
+	// whose password survives: a second way into the account was just
+	// attached, and a session issued before that should be re-made
+	// through one of them. The caller that started the link is handed a
+	// fresh session (see completeOIDCLink), so it is other sessions that
+	// this ends.
 	u.PasswordChangedAt = now
 	s.oidcIndex[key] = userID
 	s.persistLocked()
@@ -919,18 +1013,41 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 // failed login takes the same time either way. The CPU-heavy Argon2id
 // comparison deliberately happens with the lock released -- only the
 // map/field reads and writes around it are synchronized.
+// While an admin-issued reset code is live (#1251) the code is what
+// this verifies, in place of the password -- that is what lets somebody
+// locked out type it into the password box and get in. Only one
+// Argon2id comparison ever runs, whichever credential is in play, so a
+// pending reset is not something an attacker can spot from how long a
+// failed attempt took. Nothing is lost by not also trying the password:
+// issuing a code replaces the stored password hash with an unmatchable
+// one, so the old password is already dead.
+//
+// A code is spent on the login that uses it (single use, per the
+// owner's ruling on #1245 question 21). MustChangePassword is *not*
+// cleared here -- only setting a new password does that -- so the
+// session this login goes on to create is still the restricted one.
 func (s *Store) Authenticate(username, password string, now time.Time) (*User, error) {
 	s.reloadIfStale()
 
 	s.mu.RLock()
 	id, known := s.byName[strings.ToLower(username)]
 	hash := dummyHash
+	viaResetCode := false
 	if known {
-		hash = s.byID[id].PasswordHash
+		u := s.byID[id]
+		if u.resetCodeLive(now) {
+			hash, viaResetCode = u.ResetCodeHash, true
+		} else {
+			hash = u.PasswordHash
+		}
 	}
 	s.mu.RUnlock()
 
-	valid := VerifyPassword(password, hash)
+	secret := password
+	if viaResetCode {
+		secret = NormaliseResetCode(password)
+	}
+	valid := VerifyPassword(secret, hash)
 	if !known || !valid {
 		return nil, ErrInvalidCredentials
 	}
@@ -945,6 +1062,17 @@ func (s *Store) Authenticate(username, password string, now time.Time) (*User, e
 	u, ok := s.byID[id]
 	if !ok {
 		return nil, ErrInvalidCredentials
+	}
+	if viaResetCode {
+		// Re-checked under the write lock rather than trusted from the
+		// read above: a second reset in the window between them issues a
+		// new code and must kill this one, and a spend that landed first
+		// must not be honoured twice.
+		if !u.resetCodeLive(now) {
+			return nil, ErrInvalidCredentials
+		}
+		u.ResetCodeHash = ""
+		u.ResetCodeExpiresAt = time.Time{}
 	}
 	u.LastLogin = now
 	s.persistLocked()
@@ -1010,6 +1138,15 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	// OIDCIssuer, so a linked account (OIDC *and* a local password)
 	// isn't misread as SSO-only by the recovery tooling.
 	u.HasLocalPassword = true
+	// Setting a password ends any outstanding admin reset (#1251): the
+	// account now has a credential only its owner knows, so the code
+	// stops working and the forced-change gate lifts. Done here, inside
+	// the store, so every path that sets a password clears it -- the CLI
+	// recovery tool as much as the change-password route -- rather than
+	// each caller having to remember.
+	u.ResetCodeHash = ""
+	u.ResetCodeExpiresAt = time.Time{}
+	u.MustChangePassword = false
 	s.persistLocked()
 	return nil
 }
@@ -1025,6 +1162,11 @@ func (s *Store) List() []User {
 	for _, u := range s.byID {
 		cp := *u
 		cp.PasswordHash = ""
+		// The reset-code hash is a credential verifier too (#1251), and
+		// this list is the one that leaves the package on its way to an
+		// admin-facing API. Blanked for the same reason the password
+		// hash is, so neither can be serialized by accident.
+		cp.ResetCodeHash = ""
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })

@@ -32,6 +32,7 @@ import type {
   HostDossier,
   HourTopBucket,
   MACRegistryEntry,
+  PasswordResetCode,
   PersistenceInfo,
   ReplayResult,
   ReputationResult,
@@ -791,6 +792,31 @@ export async function deleteUser(id: string): Promise<string | null> {
   return (await res.text()) || `deleteUser: ${res.status}`
 }
 
+// resetUserPassword is the admin's way back in for somebody who has lost
+// their password (#1251). It returns the one-time code on success and
+// error text otherwise, the same shape createToken uses -- and for the
+// same reason: the successful answer is a credential that exists in this
+// response and nowhere else. Nothing here may store it, log it or put it
+// in a URL; show it once and let it go.
+export async function resetUserPassword(id: string): Promise<PasswordResetCode | string> {
+  const res = await postJSON(`/api/auth/users/${encodeURIComponent(id)}/reset-password`)
+  if (res.ok) return res.json()
+  return (await res.text()) || `resetUserPassword: ${res.status}`
+}
+
+// setNewPasswordAfterReset is the far end of that flow, for a session
+// established with a reset code. Deliberately separate from
+// changePassword above rather than a variant of it with an empty
+// current password: there is no current password in this state (the
+// stored hash is unmatchable, and the code is already spent), so a call
+// that looks like it is supplying one would be misleading at every
+// reading.
+export async function setNewPasswordAfterReset(newPassword: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/password', { newPassword })
+  if (res.ok) return null
+  return (await res.text()) || `setNewPasswordAfterReset: ${res.status}`
+}
+
 // The one definitions surface (issue #407), replacing /api/detectors and
 // /api/watchlist/entries wholesale -- both are gone server-side, with no
 // alias and no friendlier-error stub, so nothing below may fall back to
@@ -1234,12 +1260,18 @@ export async function fetchAuditLog(): Promise<AuditResult> {
   return res.json()
 }
 
-// startSSOLink begins converting the signed-in account to SSO-only.
-// POST, not a navigation, so the CSRF header applies -- linking
-// destroys the account's local password, and a GET-initiated flow could
-// be triggered cross-site (see internal/api/oidc.go's
-// handleOIDCLinkStart). Returns the provider URL for the caller to
-// navigate to, or an error message.
+// startSSOLink connects the signed-in account to an SSO identity: for
+// every role but admin that converts the account to SSO-only, and for
+// the admin it adds SSO alongside the password it keeps (#1252).
+// POST, not a navigation, so the CSRF header applies -- a
+// GET-initiated flow could be triggered cross-site (see
+// internal/api/oidc.go's handleOIDCLinkStart). Returns the provider URL
+// for the caller to navigate to, or an error message.
+//
+// No arguments: the account is the session's, never the body's. Both
+// callers are here -- SSOLinkOverlay.svelte for an account already in
+// the app, and AuthSetup.svelte immediately after first-run creates the
+// admin.
 export async function startSSOLink(): Promise<{ url: string } | string> {
   const res = await postJSON('/api/auth/oidc/link')
   if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`

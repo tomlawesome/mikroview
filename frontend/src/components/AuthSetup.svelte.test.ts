@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 // Same approach as AuthLogin.svelte.test.ts: only the network boundary is
@@ -12,21 +12,38 @@ vi.mock('../lib/api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
+  startSSOLink: vi.fn(),
 }))
 
-import { fetchAuthSession, register } from '../lib/api'
+import { fetchAuthSession, register, startSSOLink } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { journeyState } from '../lib/journey.svelte'
 import AuthSetup from './AuthSetup.svelte'
 
+// The SSO route ends in a real top-level navigation, which jsdom cannot
+// perform -- stubbed so the tests can read where the browser was sent.
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.stubGlobal('location', { href: '' })
   authState.state = 'setup-required'
   authState.username = ''
   authState.role = ''
   authState.ssoAvailable = false
   journeyState.phase = 'idle'
 })
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+// The three fields and the button, in the order somebody fills them in.
+async function createTheAdmin() {
+  await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+  await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'tom' } })
+  await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
+  await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
+  await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+}
 
 describe('AuthSetup', () => {
   // #645's own scope: a virgin instance shows the door's chrome with an
@@ -69,6 +86,75 @@ describe('AuthSetup', () => {
     // single fireEvent tick flushes all of them.
     await waitFor(() => expect(register).toHaveBeenCalledWith('tom', 'hunter2222'))
     await waitFor(() => expect(journeyState.phase).toBe('attach'))
+  })
+
+  // #1252, owner's ruling: first run always creates a local admin, so
+  // SSO is never an alternative on this door -- not offered, and
+  // nothing withheld to explain either. What the person is told is
+  // where they go next.
+  it('never offers SSO as a way into the first run', async () => {
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+
+    expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /create account/i })).toBeTruthy()
+    expect(screen.getByText(/then you sign in with SSO to connect it/i)).toBeTruthy()
+  })
+
+  // Route one out of creation: OIDC is configured, so the browser that
+  // made the account carries straight on to the provider, and the
+  // identity that comes back is linked to it. Session continuity is the
+  // proof it is the same person -- nothing compares an email.
+  it('hands over to the identity provider when OIDC is configured', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    await waitFor(() => expect(startSSOLink).toHaveBeenCalledOnce())
+    await waitFor(() => expect(location.href).toBe('https://idp.example/authorize'))
+  })
+
+  // Route two: no OIDC details, so there is nowhere to forward to. The
+  // flow ends on the confirmation rather than a redirect, and says
+  // where the provider's details go.
+  it('ends on the confirmation, not a redirect, when OIDC is not configured', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    authState.ssoAvailable = false
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
+    expect(screen.getByText(/config file/i)).toBeTruthy()
+    expect(startSSOLink).not.toHaveBeenCalled()
+    expect(location.href).toBe('')
+    // Still the setup view until the person says they are ready: the
+    // session is only re-read when they continue.
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
+  })
+
+  // The account exists by the time the hand-off can fail, so the
+  // failure belongs on the confirmation -- not on a creation form that
+  // would invite creating it again.
+  it('still confirms the account when the hand-off to SSO fails', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    vi.mocked(startSSOLink).mockResolvedValue('this account already signs in through your identity provider')
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
+    expect(screen.getByText(/already signs in through your identity provider/i)).toBeTruthy()
+    expect(location.href).toBe('')
   })
 
   it('never starts the journey when registration fails', async () => {

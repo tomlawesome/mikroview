@@ -65,12 +65,13 @@
   import RouterBackups from './RouterBackups.svelte'
   import Droplist from './Droplist.svelte'
   import { usersState } from '../lib/users.svelte'
+  import ResetCodeOverlay from './ResetCodeOverlay.svelte'
   import { tokensState } from '../lib/tokens.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
-  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse, DroplistResponse } from '../lib/types'
+  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse, DroplistResponse, PasswordResetCode } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -611,6 +612,16 @@
   let personError = $state<string | null>(null)
   let addingPerson = $state(false)
   let armedRemove = $state<string | null>(null)
+  // #1251's reset. Armed the same way remove and revoke are -- one
+  // click arms, the next confirms, a click anywhere else disarms -- and
+  // for the same reason: it kills the person's password outright, so it
+  // must not be reachable by a stray click on a row.
+  let armedReset = $state<string | null>(null)
+  let resetting = $state<string | null>(null)
+  // The issued code, held only for as long as the dialog showing it is
+  // open. Cleared on close: this is the one place it exists in clear,
+  // and it has no second use.
+  let issuedReset = $state<PasswordResetCode | null>(null)
 
   // Your own row leads the list, then everyone else's, matching the
   // drawing's "your account, then everyone else's" -- the server has no
@@ -662,6 +673,29 @@
     if (err) personError = err
   }
 
+  function onResetClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedReset === id) {
+      armedReset = null
+      resetPersonPassword(id)
+      return
+    }
+    disarmAll()
+    armedReset = id
+  }
+
+  async function resetPersonPassword(id: string) {
+    personError = null
+    resetting = id
+    const result = await usersState.resetPassword(id)
+    resetting = null
+    if (typeof result === 'string') {
+      personError = result
+      return
+    }
+    issuedReset = result
+  }
+
   // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all
   // bubble is the other example): a click anywhere that isn't the armed
   // button itself disarms it, so an armed revoke/remove can't be
@@ -669,6 +703,7 @@
   function disarmAll() {
     armedRevoke = null
     armedRemove = null
+    armedReset = null
   }
 </script>
 
@@ -1448,6 +1483,27 @@
                   console-only
                 </span>
               {:else}
+                <!-- Absent, not disabled, for an SSO account: its
+                     provider owns the password and the server refuses
+                     (409), so offering the verb would only promise
+                     something that cannot happen. #548's grammar. -->
+                {#if user.hasLocalPassword}
+                  <button
+                    type="button"
+                    class="olink quiet"
+                    class:armed={armedReset === user.id}
+                    disabled={resetting === user.id}
+                    onclick={(e) => onResetClick(e, user.id)}
+                  >
+                    {#if resetting === user.id}
+                      resetting…
+                    {:else if armedReset === user.id}
+                      confirm — their password stops working now
+                    {:else}
+                      reset password
+                    {/if}
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="olink quiet remove"
@@ -1497,6 +1553,10 @@
     </div>
   </div>
 </div>
+
+{#if issuedReset}
+  <ResetCodeOverlay reset={issuedReset} onclose={() => (issuedReset = null)} />
+{/if}
 
 <style>
   .page {

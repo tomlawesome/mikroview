@@ -200,6 +200,37 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   on the very system they're locked out of. A password reset immediately
   invalidates every existing session for that account, including on an
   already-running server.
+- **An admin resets somebody else's password with a one-time code, and
+  MikroView never emails anyone.** Accounts carry no email address by
+  design (SSO identity is `(issuer, subject)`; any `email` claim is a
+  display hint), so there is no reset-by-mail path to attack and no
+  SMTP dependency in the authentication surface. `POST
+  /api/auth/users/{id}/reset-password` (admin-only) mints a 16-character
+  code over an alphabet with no `0`/`O`/`1`/`I`, stores only its Argon2id
+  hash, and returns the code in that one response — it is not persisted
+  in clear, not written to the audit log or any server log, and cannot be
+  shown again. A second reset issues a new code and kills the first.
+
+  The reset acts immediately rather than when the person gets round to
+  the code: the account's password hash is replaced with an unmatchable
+  one, `PasswordChangedAt` is bumped (which ends every session for that
+  account, including in another process and across a restart), and the
+  live sessions are dropped there and then. The code is valid for 24
+  hours and for one login. That login produces a session which may reach
+  `POST /api/auth/password` and nothing else — enforced in the
+  authentication middleware, not per handler, and pinned by the
+  route-authorization matrix — so a credential somebody else chose never
+  opens the application.
+
+  What an admin **cannot** do with it: reset their own account (409 —
+  since MikroView holds a single admin, that keeps the admin account out
+  of this route entirely, and the console's recovery-key-gated
+  `-recover-admin-account` remains the only way back into it), reset an
+  SSO-only account (409 — its provider owns the credential), or set
+  another person's password directly. There is no route anywhere that
+  writes a chosen password onto somebody else's account: the only thing
+  an admin can hand over is a code that forces its holder to choose their
+  own.
 - **Recovery-key digests and the pepper are kept apart, and follow
   different storage.** A recovery key is never stored -- what is stored
   is an HMAC-SHA-256 digest of it, computed under a 256-bit server-side
@@ -339,6 +370,47 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   session is re-checked against that sealed value at the callback, so a
   sign-out-and-in mid-flow can't attach an identity to the wrong
   account.
+- **SSO is additive; the admin keeps both ways in.** A dead identity
+  provider must never lock the operator out. MikroView holds exactly one
+  admin and never authenticates to the provider on its own behalf, so if
+  the provider cannot answer, SSO cannot let anybody in — that one
+  account is the whole break-glass path (owner ruling, 2026-09-18, #1252).
+
+  So the admin keeps its local password when it is connected to SSO, and
+  keeps it permanently. `auth.Store.LinkOIDCIdentity` holds that as an
+  invariant rather than the handlers arranging it, the same way the
+  destructive conversion below is an invariant: a rule kept at the call
+  sites is one forgetful caller away from being lost. **Every other role
+  still loses its local password on linking**, for the reason in the
+  bullet above — the admin's exception buys a way back into the
+  deployment, which an ordinary account's would not.
+
+  First run follows from it: MikroView always creates a local admin,
+  with a username and a password, and never offers SSO as an
+  alternative there. With OIDC configured, that creation is followed by
+  a sign-in at the provider and the returning identity is linked to the
+  admin just created — the proof that it is the right person is session
+  continuity, the browser that made the account being the browser sent
+  to the provider and back. No email is compared, and none is stored.
+
+  **A local account's username may not be an email address**
+  (`auth.ValidateLocalUsername`, enforced at creation only). Identity
+  providers send an email as `preferred_username`, so a namespace that
+  excludes them cannot collide with one — which is why nothing has to
+  compare addresses to tell a returning identity from an existing local
+  person, and why MikroView still holds no email for anyone. Validation
+  runs at creation and never at sign-in, so an account created before
+  the rule is not locked out by it.
+
+  One state is still worth a warning, and MikroView logs it at every
+  start: an admin that never had a password, which is what a deployment
+  bootstrapped entirely through SSO gets (the first identity to sign in
+  is made the admin). Recovery from it is CLI-only and recovery-key
+  gated: `mikroview -transfer-admin <username>` moves the admin role to
+  an account that does have a password.
+  `mikroview -recover-admin-account` deliberately refuses an SSO-only
+  admin — there is no password there to reset — which is why transfer
+  is the one that helps.
 - **Admin is a single, transferable role, and transfer is CLI-only**
   (`mikroview -transfer-admin <username>`, recovery-key gated). No
   authenticated session can grant or move admin. The reasoning is that
