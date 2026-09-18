@@ -182,6 +182,23 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 	return s, nil
 }
 
+// Persisted reports whether this store has a real backend behind it --
+// true once OpenWithBackend was given a non-nil persist.Backend, false
+// for the memory-only mode Open("") (or #853's "no key, no storage"
+// before the v0.6.0 audit's droplist exception -- see storage.go's
+// plaintextWithoutKeyStores) still allows. The one caller that needs
+// this is the API's pull-feed handler: every fetch of the .rsc feed is
+// a full sync of the router's live list (see Script's own doc comment),
+// so serving zero entries from a store with no durability guarantee
+// would not mean "the operator cleared the list" -- it would mean this
+// process just restarted and forgot, and the router's real entries
+// would be wiped on its next scheduled fetch.
+func (s *Store) Persisted() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backend != nil
+}
+
 // SetAuditor wires the audit log every Add/Remove writes to. A nil
 // auditor (the zero value, and what tests and the CLI get by leaving
 // this unset) records nothing -- Add/Remove still work, they simply

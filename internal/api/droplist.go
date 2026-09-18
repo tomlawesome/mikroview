@@ -457,8 +457,22 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entries := s.Droplist.List()
+	if len(entries) == 0 && !s.Droplist.Persisted() {
+		// v0.6.0 pre-release audit, owner ruling: a memory-only store
+		// starts empty on every restart, and Script's full-sync shape
+		// means serving that empty state here would wipe the router's
+		// real, still-wanted list on its next scheduled fetch. Refuse
+		// instead -- a failed fetch leaves the router serving whatever
+		// it imported last (see this handler's own doc comment above).
+		// A genuinely empty, *persisted* list still serves normally:
+		// that is an operator's own deliberate state, not data loss.
+		http.Error(w, "droplist has no persisted entries to serve", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	w.Write(droplist.Script(s.Droplist.List(), now))
+	w.Write(droplist.Script(entries, now))
 }

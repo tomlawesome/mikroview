@@ -187,3 +187,32 @@ definitions remain memory-only with no key, no exceptions.
 `openAuthStoreForCLI`/`openRecoveryStoreForCLI` (main.go) keep their nil
 check -- an empty configured path still yields `nil` -- but no longer word
 the refusal as needing a key, since that can no longer be the reason.
+
+## Addendum, 2026-09-18: droplist joins the no-key exception (v0.6.0 pre-release audit)
+
+**Status:** Decided (owner ruling, during the v0.6.0 audit).
+
+`internal/droplist`'s entry store fell through rule 2 like any other store:
+memory-only with no `history.keyFile` configured, the common case on a
+default install. That meant every operator-authored blocklist entry was
+gone on the next restart -- and because the `.rsc` feed a router fetches is
+a full sync (`internal/droplist.Script`'s own doc comment: clear the live
+list, then rebuild it from whatever the store currently holds), the next
+scheduled fetch after a restart pushed an *empty* list, wiping the
+router's real entries.
+
+Owner ruling: persist droplist by default, the same way, without needing
+`history.keyFile` configured. The reasoning is different from rule 6's --
+droplist holds plaintext CIDRs and operator-typed reasons, not a hash of
+anything -- but the conclusion is the same: this is not a secret the way a
+password is, so encrypting it protects nothing a plaintext copy would
+expose, and losing it silently is worse than that exposure.
+
+`storage.go`'s exemption set was renamed `plaintextWithoutKeyStores` (from
+`hashedStores`) and now also lists `droplist`; see its own doc comment for
+both reasons side by side. As a second, independent safeguard,
+`droplist.Store.Persisted()` reports whether a real backend is behind the
+store at all, and `handleDroplistPull` refuses to serve the feed
+(503) when the store is both empty and unpersisted -- so an operator who
+explicitly sets `droplist.storePath` to `""` (still a supported choice)
+cannot have that combine with a restart to silently wipe a router's list.

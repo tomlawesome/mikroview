@@ -383,6 +383,35 @@ func TestDroplistPullKeyServesTheFeed(t *testing.T) {
 	}
 }
 
+// TestDroplistPullRefusesEmptyFeedWhenNotPersisted is the belt-and-
+// suspenders half of the v0.6.0 pre-release audit's persistence ruling:
+// even when droplist.storePath is explicitly unset (droplistTestServer
+// uses droplist.Open("") -- memory-only, the same shape a real
+// deployment gets if an operator opts out on purpose), the pull feed
+// must not serve an empty script. Every fetch is a full sync (see
+// droplist.Script's doc comment): a router that imports zero entries
+// has its real, still-wanted list cleared, and a memory-only store
+// empties itself on every restart. A router that fails the fetch
+// instead keeps serving whatever it imported last, which is what an
+// operator actually wants here.
+func TestDroplistPullRefusesEmptyFeedWhenNotPersisted(t *testing.T) {
+	_, ts, admin := droplistTestServer(t)
+
+	mintResp := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
+	defer mintResp.Body.Close()
+	var minted droplistKeyCreateResponse
+	if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
+		t.Fatal(err)
+	}
+
+	pullResp := bearerGet(t, ts.URL+"/api/droplist.rsc", minted.Key)
+	defer pullResp.Body.Close()
+	if pullResp.StatusCode != http.StatusServiceUnavailable {
+		body, _ := io.ReadAll(pullResp.Body)
+		t.Fatalf("pull status = %d, want 503: %s", pullResp.StatusCode, body)
+	}
+}
+
 // TestDroplistPullKeyBlastRadiusIsTheFeedAndNothingElse pins #1224's
 // central safety property: a droplist-pull key reaches exactly one
 // route, and an ingest token cannot reach the feed either -- the same
@@ -480,6 +509,10 @@ func TestDroplistPullKeyRevokeLeavesIngestWorking(t *testing.T) {
 // exactly one droplist-pull token in the store.
 func TestDroplistPullKeyMintTwiceRotates(t *testing.T) {
 	s, ts, admin := droplistTestServer(t)
+	// An entry, so the pull below exercises rotation and not the
+	// separate "no persisted entries" refusal (see
+	// TestDroplistPullRefusesEmptyFeedWhenNotPersisted).
+	postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "scanning"}).Body.Close()
 
 	first := postJSON(t, admin, ts.URL+"/api/droplist/key", nil)
 	var firstKey droplistKeyCreateResponse
