@@ -405,6 +405,64 @@ describe('keeping a backup', () => {
     expect(screen.getByText('say why you are keeping it')).toBeTruthy()
     expect(keepRouterBackup).not.toHaveBeenCalled()
   })
+
+  // #1218 audit finding 6: the parent (EngineRoom) polls GET
+  // /api/router-backups on its own timer and hands down whatever it
+  // gets as a fresh `resp` object. A poll that was already in flight
+  // when the keep above landed resolves moments later with the
+  // *pre-keep* row -- this reproduces that arriving as a prop update
+  // right after the optimistic one, and expects the kept block to
+  // survive it rather than being stomped back to "not kept".
+  it('keeps the optimistic row when a stale poll lands right after it', async () => {
+    vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
+    const { rerender } = render(RouterBackups, {
+      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
+    await fireEvent.input(screen.getByLabelText('why keep this one'), {
+      target: { value: 'before the 7.16 upgrade' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
+    expect(await screen.findByText(/before the 7.16 upgrade/)).toBeTruthy()
+
+    // The stale poll: still the pre-keep router, as a brand new object
+    // (a real poll never hands back the exact same reference).
+    await rerender({ resp: resp({ routers: [{ ...router }] }), onopenlost: vi.fn() })
+
+    expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
+  })
+
+  it('lets a poll that has genuinely caught up take over from the optimistic row', async () => {
+    vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
+    const { rerender } = render(RouterBackups, {
+      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
+    await fireEvent.input(screen.getByLabelText('why keep this one'), {
+      target: { value: 'before the 7.16 upgrade' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
+    expect(await screen.findByText(/before the 7.16 upgrade/)).toBeTruthy()
+
+    // A poll matching what the keep call itself returned -- the parent
+    // has caught up, so a later change (another admin editing the same
+    // comment) has to be able to reach the screen rather than being
+    // pinned to this tab's own copy forever.
+    await rerender({
+      resp: resp({ routers: [{ ...routerWithKept, protected: [{ ...keptGeneration }] }] }),
+      onopenlost: vi.fn(),
+    })
+    await rerender({
+      resp: resp({
+        routers: [{ ...routerWithKept, protected: [{ ...keptGeneration, comment: 'edited by someone else' }] }],
+      }),
+      onopenlost: vi.fn(),
+    })
+
+    expect(await screen.findByText(/edited by someone else/)).toBeTruthy()
+  })
 })
 
 describe('the earlier generations', () => {
