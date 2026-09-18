@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildQuery,
   clearAllFlags,
+  deleteDroplistEntry,
   fetchAuditLog,
   fetchEventsWindow,
   fetchSetupCommands,
@@ -378,5 +379,28 @@ describe('the message a failed request carries (#1162)', () => {
   it('does not paste a proxy’s HTML error page into the message', async () => {
     stubFetch(502, '<!doctype html><html><body>502 Bad Gateway</body></html>')
     await expect(fetchAuditLog()).rejects.toThrow('the server could not do that (502)')
+  })
+})
+
+// The server registers DELETE /api/droplist/{cidr...} (internal/api) --
+// the CIDR belongs in the path, not a JSON body. Droplist.svelte.test.ts
+// mocks this whole module, so it only proves the call happened, never
+// that it hit the right URL; this is what actually exercises the request.
+describe('deleteDroplistEntry (#1225)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('sends the CIDR in the path, not a JSON body', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deleteDroplistEntry('203.0.113.0/24')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/droplist/203.0.113.0%2F24')
+    expect(init?.method).toBe('DELETE')
+    expect(init?.body).toBeUndefined()
   })
 })

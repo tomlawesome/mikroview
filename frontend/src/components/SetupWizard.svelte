@@ -34,12 +34,15 @@
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import { newestGeneration } from '../lib/backups'
+  import { downloadFromUrl } from '../lib/export'
   import {
     HOW_TO_MOUNT_URL,
     KEY_DIR,
     KEY_FILE_CONTAINER_PATH,
     KEY_FILE_PATH,
+    loadOrMintHistoryKey,
     newHistoryKey,
+    saveHistoryKeyForSession,
   } from '../lib/history'
   import {
     announceStep,
@@ -274,10 +277,45 @@
     (wizardState.status?.instance.addressCandidates ?? []).filter((a) => a !== wizardState.address),
   )
 
+  // debouncedAddress (#1218 audit finding 11): wizardState.address is
+  // bound to the header field per keystroke, on purpose -- see its own
+  // doc comment, other command blocks read it live. commandsKey below
+  // used to include it directly, so every keystroke re-ran the effect
+  // and fired a fresh POST /api/setup/commands. Only the address needs
+  // this: every other commandsKey input (a token just minted, a version
+  // picked, a transport switch) is a discrete event this component and
+  // its tests both expect to answer promptly, not one that fires on
+  // every keystroke -- so the delay belongs here, on the one input that
+  // does, rather than in refreshCommands itself.
+  //
+  // Passed to refreshCommands explicitly below (opts.address), rather
+  // than left for it to read wizardState.address itself: refreshCommands
+  // reads that field synchronously, before its own first await, which
+  // means the effect *calling* it picks up wizardState.address as a
+  // dependency too, transitively, the same as if commandsKey had
+  // included it directly -- Svelte's dependency tracking follows any
+  // reactive read that happens during an effect's synchronous execution,
+  // including ones inside a function it calls. Passing debouncedAddress
+  // by value keeps the effect's only address dependency the debounced
+  // one.
+  const ADDRESS_DEBOUNCE_MS = 300
+  let debouncedAddress = $state(wizardState.address)
+  let addressDebounce: ReturnType<typeof setTimeout> | null = null
+  $effect(() => {
+    const address = wizardState.address
+    if (addressDebounce) clearTimeout(addressDebounce)
+    addressDebounce = setTimeout(() => {
+      debouncedAddress = address
+    }, ADDRESS_DEBOUNCE_MS)
+    return () => {
+      if (addressDebounce) clearTimeout(addressDebounce)
+    }
+  })
+
   const commandsKey = $derived(
     wizardState.status
       ? JSON.stringify([
-          wizardState.address,
+          debouncedAddress,
           wizardState.status.instance.syslogPort,
           wizardState.status.pushKinds,
           token,
@@ -293,7 +331,7 @@
 
   $effect(() => {
     if (!commandsKey) return
-    wizardState.refreshCommands({ token, device: tokenDevice })
+    wizardState.refreshCommands({ token, device: tokenDevice, address: debouncedAddress })
   })
 
   // The router-standing warning (#436): one line per router outside the
@@ -338,7 +376,22 @@
   // material, and none of the blocks below quote the value either --
   // the key goes into the file on standard input, which is what keeps
   // it out of the operator's shell history as well.
-  let historyKey = $state(newHistoryKey())
+  //
+  // loadOrMintHistoryKey, not a bare newHistoryKey(): this step still
+  // shows (`blocked`) on a reload that happens before config.yaml picks
+  // the key up and the app restarts, and a bare mint would hand back a
+  // brand new value with the same "write this to keys/history.key"
+  // instructions -- silently offering to overwrite the file the operator
+  // already saved from the first mint. sessionStorage remembers this
+  // tab's key across that reload; see lib/history.ts's own doc comment.
+  let historyKey = $state(loadOrMintHistoryKey())
+
+  // Whatever the field ends up holding -- the mint above, an explicit
+  // Reroll, or the operator's own pasted key -- is what the next reload
+  // in this tab should show too, not whichever of those happened first.
+  $effect(() => {
+    saveHistoryKeyForSession(historyKey)
+  })
 
   // backupBlocked is #1217's reason the backup step printed nothing:
   // the server's own keys for whichever preconditions are unmet. Never
@@ -416,6 +469,32 @@
   const lostObservationText = $derived(
     wizardState.lostRouterDevice ? backupReceiptForDevice(wizardState.backups, wizardState.lostRouterDevice) : '',
   )
+
+  // lostRouterGated (#1218 audit finding 16): the "download the newest
+  // .backup" link used to be a plain <a href>, so it ignored #1115's
+  // vault passphrase gate entirely -- RouterBackups.svelte's own
+  // downloads (the same endpoint) go through downloadFromUrl and hide
+  // behind this exact check; a bare link here just navigated the whole
+  // tab to whatever the server answered a locked vault with, including
+  // a 403 page, rather than reading it as "gated" at all.
+  const lostRouterGated = $derived(
+    wizardState.backups ? wizardState.backups.lock.passphraseSet && !wizardState.backups.lock.unlockedForYou : false,
+  )
+  let lostDownloadError = $state<string | null>(null)
+
+  async function downloadLostBackup(device: string, generation: string) {
+    lostDownloadError = null
+    const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, 'backup'), `${device}.backup`)
+    if (outcome === 'forbidden') {
+      // The idle timeout lapsing between the link being drawn and the
+      // click -- re-read the lock (and the rest of the backups read
+      // along with it, same as RouterBackups.svelte's refreshLock)
+      // rather than trusting a client-side clock to have guessed right.
+      await wizardState.refreshBackups()
+    } else if (outcome === 'failed') {
+      lostDownloadError = 'The download failed. Try again.'
+    }
+  }
 
   async function copy(text: string, label: string) {
     try {
@@ -1235,14 +1314,24 @@
                     {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
                     {lostObservationText || 'nothing kept for this router yet'}
                     {#if lostGeneration}
-                      ·
-                      <a
-                        class="olink"
-                        href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
-                      >
-                        download the newest .backup
-                      </a>
-                      to restore the replacement, then run the script above
+                      {#if lostRouterGated}
+                        ·
+                        {wizardState.backups?.lock.locked
+                          ? 'locked — the vault passphrase opens downloads'
+                          : 'unlocked by another of your sign-ins — unlock it in Settings to download here'}
+                        <button type="button" class="link" onclick={openBackupsInSettings}>open Settings</button>
+                      {:else}
+                        ·
+                        <button
+                          type="button"
+                          class="olink"
+                          onclick={() => downloadLostBackup(wizardState.lostRouterDevice ?? '', lostGeneration.id)}
+                        >
+                          download the newest .backup
+                        </button>
+                        to restore the replacement, then run the script above
+                        {#if lostDownloadError}<span class="load-error">{lostDownloadError}</span>{/if}
+                      {/if}
                     {/if}
                   {:else}
                     {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
@@ -2023,8 +2112,10 @@
      inline with the sentence beside it, not a second boxed button next
      to "Run setup… reopens this". Step 6's "see it in Settings", "mint
      a new one" and "how to mount one"/"download the newest .backup"
-     (#394, round 45) read the same way, the last two as real <a>
-     elements rather than buttons since they navigate. */
+     (#394, round 45) read the same way -- the download is a <button>
+     now, not a real <a>, so downloadFromUrl can read a locked vault as
+     a status rather than the browser navigating to whatever a 403
+     answers with (#1218 audit finding 16). */
   button.link,
   a.olink,
   button.olink {

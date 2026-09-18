@@ -107,6 +107,7 @@ vi.mock('../lib/api', () => ({
     ownRangesKnown: false,
     setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
   })),
+  fetchConfigUpgrade: vi.fn(async () => ({ version: 'v1.2.3', settings: [] })),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -126,12 +127,19 @@ import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
-import { fetchHistorySettings as fetchHistorySettingsReal, fetchRouterBackups as fetchRouterBackupsReal } from '../lib/api'
+import {
+  fetchHistorySettings as fetchHistorySettingsReal,
+  fetchRouterBackups as fetchRouterBackupsReal,
+  fetchDroplist as fetchDroplistReal,
+  fetchConfigUpgrade as fetchConfigUpgradeReal,
+} from '../lib/api'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
 const fetchRouterBackups = vi.mocked(fetchRouterBackupsReal)
+const fetchDroplist = vi.mocked(fetchDroplistReal)
+const fetchConfigUpgrade = vi.mocked(fetchConfigUpgradeReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -1041,5 +1049,191 @@ describe('The settings shelf (#633)', () => {
       expect(ingestRow('Checking:')).toBeNull()
       expect(ingestRow('Outrun:')).toBeNull()
     })
+  })
+})
+
+// #1218 audit finding 15: EngineRoom's three newest groups -- new
+// settings (#1218), router backups (#394 round 44) and drop list
+// (#1225/#461), landed in that order across three separate recent
+// commits -- shipped with no EngineRoom-level test at all (router
+// backups had one narrow #1153 regression test, the other two none).
+// Each delegates to a child component with its own full internal test
+// file (ConfigUpgrade.svelte.test.ts, RouterBackups.svelte.test.ts,
+// Droplist.svelte.test.ts), so what belongs here is the integration
+// layer those don't cover: the group is mounted under its own heading,
+// in the right position, admin-gated, wired to the right props, and
+// answers the same dfail "the server did not answer" shape the older
+// groups already do.
+describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
+  it('mounts "new settings" right after ingest, before keys, admin-only', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const group = document.getElementById('engineroom-new-settings')
+    expect(group).toBeTruthy()
+    expect(group?.querySelector('h3')?.textContent).toBe('new settings')
+    // ConfigUpgrade really is the thing mounted here, not an empty
+    // shell: its own "nothing missing" reading, off the mocked default.
+    expect(within(group as HTMLElement).getByText(/Nothing new/)).toBeTruthy()
+
+    // Document order: ingest's own group, then this one, then keys --
+    // "straight after ingest" per the component's own comment.
+    const headings = Array.from(document.querySelectorAll('.stsection h3')).map((h) => h.textContent)
+    const ingestIndex = headings.indexOf('ingest')
+    const newSettingsIndex = headings.indexOf('new settings')
+    const keysIndex = headings.indexOf('keys')
+    expect(ingestIndex).toBeLessThan(newSettingsIndex)
+    expect(newSettingsIndex).toBeLessThan(keysIndex)
+  })
+
+  it('"new settings" actually renders what the server sends, not just its own empty state', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchConfigUpgrade.mockResolvedValueOnce({
+      version: 'v1.3.0',
+      settings: [{ key: 'geoip', block: '# geoip:\n#   dbPath: /etc/mikroview/GeoLite2-Country.mmdb' }],
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const group = document.getElementById('engineroom-new-settings') as HTMLElement
+    expect(within(group).getByText(/dbPath: \/etc\/mikroview\/GeoLite2-Country\.mmdb/)).toBeTruthy()
+  })
+
+  it('a viewer sees no "new settings" group at all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('engineroom-new-settings')).toBeNull()
+    expect(screen.queryByText('new settings')).toBeNull()
+  })
+
+  it('mounts "router backups" right after disk, with the router the server reports', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchRouterBackups.mockResolvedValueOnce({
+      enabled: true,
+      port: ':2222',
+      routers: [{ device: 'rb5009', generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 }],
+      totalGenerations: 1,
+      totalRouters: 1,
+      totalBytes: 1024,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg')
+    const backups = document.getElementById('bakg')
+    expect(backups).toBeTruthy()
+    expect(backups?.querySelector('h3')?.textContent).toBe('router backups')
+    expect(disk?.nextElementSibling?.id).toBe('bakg')
+    // RouterBackups really is the thing mounted here, wired to the
+    // fetched resp -- not an empty shell.
+    expect(within(backups as HTMLElement).getByText('rb5009')).toBeTruthy()
+  })
+
+  it('"router backups" answers unknown, with a working ask again, when the server does not', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchRouterBackups.mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const backups = document.getElementById('bakg')
+    expect(backups?.classList.contains('dfail')).toBe(true)
+    expect(within(backups as HTMLElement).getByText(/unknown — the server did not answer/)).toBeTruthy()
+
+    fetchRouterBackups.mockResolvedValueOnce({
+      enabled: false,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    })
+    await fireEvent.click(within(backups as HTMLElement).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+
+    expect(document.getElementById('bakg')?.classList.contains('dfail')).toBe(false)
+  })
+
+  it('a viewer sees no "router backups" group at all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('bakg')).toBeNull()
+    expect(screen.queryByText('router backups')).toBeNull()
+  })
+
+  it('mounts "drop list" right after router backups, with the entry the server reports', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [{ cidr: '203.0.113.0/24', addedBy: 'tom', addedAt: '2026-09-14T00:00:00Z', reason: 'ssh brute force' }],
+      key: { present: false },
+      ownRangesKnown: true,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const backups = document.getElementById('bakg')
+    const droplist = document.getElementById('engineroom-droplist')
+    expect(droplist).toBeTruthy()
+    expect(droplist?.querySelector('h3')?.textContent).toBe('drop list')
+    expect(backups?.nextElementSibling?.id).toBe('engineroom-droplist')
+    // Droplist really is the thing mounted here, wired to the fetched
+    // resp -- not an empty shell.
+    expect(within(droplist as HTMLElement).getByText('203.0.113.0/24')).toBeTruthy()
+  })
+
+  it('"drop list" answers unknown, with a working ask again, when the server does not', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchDroplist.mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const droplist = document.getElementById('engineroom-droplist')
+    expect(droplist?.classList.contains('dfail')).toBe(true)
+    expect(within(droplist as HTMLElement).getByText(/unknown — the server did not answer/)).toBeTruthy()
+
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [],
+      key: { present: false },
+      ownRangesKnown: false,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    await fireEvent.click(within(droplist as HTMLElement).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+
+    expect(document.getElementById('engineroom-droplist')?.classList.contains('dfail')).toBe(false)
+  })
+
+  it('a viewer sees no "drop list" group at all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('engineroom-droplist')).toBeNull()
+    expect(screen.queryByText('drop list')).toBeNull()
   })
 })

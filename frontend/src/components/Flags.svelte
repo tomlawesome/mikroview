@@ -530,14 +530,18 @@
     // once the response landed, rather than staying put for the flash.
     flagsState.pin(f.id)
     if (expandedId === f.id) expandedId = null
-    // What was written in the drawer goes with the click (#1232), and
-    // the draft is dropped whichever way the request goes: on success
-    // the flag carries it, on failure the revert puts the flag back the
-    // way it was and a draft left behind would claim otherwise.
+    // What was written in the drawer goes with the click (#1232). The
+    // draft is dropped only once the call actually succeeds: on success
+    // the flag carries the note, so a draft left behind would claim
+    // there was still unsent work when there is not -- but deleting it
+    // before the await, win or lose, threw away what the operator typed
+    // on a failed call too, with judgeAndClear's own revert leaving
+    // noteText(f) nothing to fall back to but the flag's pre-verdict
+    // note. Held in `note` either way, so a retry sends the same text.
     const note = noteText(f)
-    delete noteDrafts[f.id]
     try {
       await flagsState.judgeAndClear(f.id, verdict, note)
+      delete noteDrafts[f.id]
     } catch (err) {
       flagsState.unpin(f.id)
       reportFailure('Could not record the verdict', err)
@@ -547,9 +551,9 @@
   async function callInvestigate(f: Flag) {
     error = null
     const note = noteText(f)
-    delete noteDrafts[f.id]
     try {
       await flagsState.judgeInvestigate(f.id, authState.username ?? '', note)
+      delete noteDrafts[f.id]
     } catch (err) {
       reportFailure('Could not record the verdict', err)
     }

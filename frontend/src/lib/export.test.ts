@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FirewallEvent } from './types'
-import { COLUMNS, eventsToCsv } from './export'
+import { COLUMNS, downloadFromUrl, eventsToCsv } from './export'
 
 function event(overrides: Partial<FirewallEvent> = {}): FirewallEvent {
   return {
@@ -145,5 +145,63 @@ describe('every exported column is neutralised', () => {
     // Guards against COLUMNS being emptied or renamed out from under
     // the it.each above, which would make it vacuously pass.
     expect(COLUMNS.length).toBeGreaterThan(20)
+  })
+})
+
+// downloadFromUrl (#1115): every caller (RouterBackups.svelte's
+// download(), LogEveryRule's precedent for the blob-a-link idiom)
+// treats the return value as the outcome, never as something to catch
+// -- so a rejection here reads as an uncaught exception rather than the
+// failure the operator's download button already knows how to show.
+describe('downloadFromUrl', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('returns ok and hands the browser a blob once the body has fully arrived', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, blob: async () => new Blob(['x']) })),
+    )
+    vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() })
+
+    await expect(downloadFromUrl('/api/router-backups/rb1/g0/backup', 'rb1.backup')).resolves.toBe('ok')
+  })
+
+  it('returns forbidden on a 403, without reading the body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403 })))
+
+    await expect(downloadFromUrl('/x', 'x')).resolves.toBe('forbidden')
+  })
+
+  it('returns failed when the fetch itself throws', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network unreachable')
+      }),
+    )
+
+    await expect(downloadFromUrl('/x', 'x')).resolves.toBe('failed')
+  })
+
+  // The defect this covers: headers can arrive ok (the fetch above
+  // resolves, res.ok is true) and the connection can still drop while
+  // the body streams in -- res.blob() throws in that case, and used to
+  // reject downloadFromUrl's own promise instead of resolving 'failed'
+  // like every other failure path here does.
+  it('returns failed, not a rejection, when the connection drops mid-download', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        blob: async () => {
+          throw new Error('network error while reading body')
+        },
+      })),
+    )
+
+    await expect(downloadFromUrl('/x', 'x')).resolves.toBe('failed')
   })
 })

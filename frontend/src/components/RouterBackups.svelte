@@ -80,17 +80,42 @@
     onopenlost: (device: string) => void
   } = $props()
 
-  // routers is kept locally for the same reason lock is: a keep control
-  // answers with the router's whole block, and the screen shows that
-  // straight away rather than waiting up to a minute for the parent's
-  // own poll to come round again.
-  let routers = $state<RouterBackupRouter[]>(resp.routers)
+  // A keep/release/comment control answers with the router's whole
+  // block, and the screen shows that straight away rather than waiting
+  // up to a minute for the parent's own poll to come round again --
+  // but that used to be a straight `routers = resp.routers` mirror plus
+  // an effect that reran on every prop change, which fought the
+  // optimistic write: a poll already in flight when the mutation landed
+  // resolves with pre-mutation data moments later and, since the effect
+  // resyncs unconditionally, stomps the fresh row straight back to what
+  // it looked like before the click.
+  //
+  // overrides holds only what this tab wrote and the parent hasn't
+  // confirmed back yet, keyed by device, laid over resp.routers for
+  // rendering. An override is dropped once resp's own row for that
+  // device structurally matches it -- both are server-issued
+  // RouterBackupRouter values, so equality there means the parent's
+  // poll has genuinely caught up, not merely that it looks similar --
+  // which is what lets a later change from a different admin through
+  // instead of pinning the row to this tab's copy forever.
+  let overrides = $state<Record<string, RouterBackupRouter>>({})
+  const routers = $derived(resp.routers.map((r) => overrides[r.device] ?? r))
+
   $effect(() => {
-    routers = resp.routers
+    const fresh = resp.routers
+    let next: Record<string, RouterBackupRouter> | undefined
+    for (const device in overrides) {
+      const row = fresh.find((r) => r.device === device)
+      if (row && JSON.stringify(row) === JSON.stringify(overrides[device])) {
+        next ??= { ...overrides }
+        delete next[device]
+      }
+    }
+    if (next) overrides = next
   })
 
   function applyRow(row: RouterBackupRouter) {
-    routers = routers.map((r) => (r.device === row.device ? row : r))
+    overrides = { ...overrides, [row.device]: row }
   }
 
   // canKeep is the viewer floor: a viewer reads the kept list and the
@@ -145,13 +170,17 @@
 
   // --- the vault passphrase (#1115, #956) ---------------------------------
   //
-  // lock is kept in local state, seeded from resp.lock and re-synced by
-  // the effect below whenever a fresh resp lands from the parent's own
-  // poll -- but a control's own call updates it immediately from the
-  // VaultLock that call returned, without waiting for the next poll.
-  let lock: VaultLock = $state(resp.lock)
+  // Same override-over-derived shape as routers/overrides above, and
+  // for the same reason: a control's own call updates lockOverride
+  // immediately from the VaultLock that call returned, without waiting
+  // for the parent's next poll -- and that write has to survive a poll
+  // already in flight resolving with the pre-mutation lock a moment
+  // later, not lose to it.
+  let lockOverride = $state<VaultLock | null>(null)
+  const lock = $derived(lockOverride ?? resp.lock)
+
   $effect(() => {
-    lock = resp.lock
+    if (lockOverride && JSON.stringify(resp.lock) === JSON.stringify(lockOverride)) lockOverride = null
   })
 
   type PassState = 'off' | 'locked' | 'unlocked' | 'unlocked elsewhere'
@@ -224,7 +253,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = result
     closeForm()
   }
 
@@ -254,7 +283,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = result
     closeForm()
   }
 
@@ -268,7 +297,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = result
     closeForm()
   }
 
@@ -282,7 +311,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = result
     closeForm()
   }
 
@@ -344,7 +373,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = result
   }
 
   // refreshLock re-reads the lock object alone, off the back of the
@@ -355,15 +384,28 @@
   async function refreshLock() {
     try {
       const r = await fetchRouterBackups()
-      lock = r.lock
+      lockOverride = r.lock
     } catch {
       // the parent's own periodic refresh will catch up
     }
   }
 
+  // downloadError is per-router, not one shared slot: a failed download
+  // for one router's generation should never read as if a different
+  // router's block is the one that failed.
+  let downloadError = $state<{ device: string; message: string } | null>(null)
+
   async function download(device: string, generation: string, kind: 'backup' | 'rsc') {
+    downloadError = null
     const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, kind), `${device}.${kind}`)
-    if (outcome === 'forbidden') await refreshLock()
+    if (outcome === 'forbidden') {
+      await refreshLock()
+    } else if (outcome === 'failed') {
+      // The button used to do nothing and say nothing on anything but a
+      // 403 -- a dropped connection or a 5xx looked identical to a
+      // click that never happened.
+      downloadError = { device, message: 'The download failed. Try again.' }
+    }
   }
 
   // --- reading one export, and comparing two (#895) -----------------------
@@ -525,6 +567,9 @@
           <b>{router.device}</b>
           <span class:brwarn={receipt.amber}>{receipt.text}</span>
         </div>
+        {#if downloadError && downloadError.device === router.device}
+          <p class="oghint err" role="alert">{downloadError.message}</p>
+        {/if}
         <svg
           class="brstrip"
           viewBox="0 0 520 58"

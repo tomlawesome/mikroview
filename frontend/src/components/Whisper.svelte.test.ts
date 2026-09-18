@@ -412,9 +412,11 @@ describe("the stream's hand (rounds 36-38)", () => {
 // fold-out strip; the owner's ruling on #1197 moved the desktop trigger
 // and its popover onto this hand instead, right after csv ↓ -- this hand
 // is already control over what the table holds and shows, and choosing
-// columns is one more of those. FilterBar.svelte keeps its own copy of
-// the underlying snippet for the mobile drawer's always-open list, which
-// is unchanged and still covered by FilterBar.svelte.test.ts. columnState
+// columns is one more of those. FilterBar.svelte keeps its own drawer
+// for the mobile always-open list, but the checkbox list itself is
+// ColumnToggles.svelte, shared between the two rather than duplicated
+// (#1218 audit finding 13) -- FilterBar.svelte.test.ts covers that
+// component mounted in FilterBar's own drawer context. columnState
 // is a module-level singleton (shared with columns.svelte.test.ts,
 // FilterBar.svelte.test.ts and LiveTable.svelte.test.ts), so every test
 // below restores it rather than leaking a toggle into whichever test
