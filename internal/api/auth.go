@@ -18,6 +18,12 @@ var authLog = logging.New("auth-api")
 
 const sessionCookieName = "mikroview_session"
 
+// changePasswordPath is the one route a session flagged
+// MustChangePassword may reach (#1251) -- named once here rather than
+// written as a literal in requireAuth, so the gate and the route table
+// cannot drift apart silently.
+const changePasswordPath = "/api/auth/password"
+
 // cookieMaxAge is how long the browser itself remembers the cookie --
 // deliberately longer than Auth.SessionTTL (the server-side idle
 // timeout, which slides forward on use): the cookie value doesn't
@@ -305,6 +311,22 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeUnauthorized(w, "unauthorized")
 			return
 		}
+		// An account an admin has just reset (#1251) signed in with a
+		// code somebody else chose and read out over the phone. Until it
+		// is traded for a password only its owner knows, the session can
+		// reach exactly one route: the one that does the trading. Every
+		// other route -- read or write, viewer-tier or admin -- is 403.
+		//
+		// Enforced here rather than in each handler for the same reason
+		// requireAuth exists at all: a gate that has to be remembered per
+		// endpoint is one forgotten endpoint away from not being a gate.
+		// GET /api/auth/session and the two logout-shaped routes stay
+		// reachable without a special case, because exemptPaths above has
+		// already returned by the time this runs.
+		if user.MustChangePassword && r.URL.Path != changePasswordPath {
+			http.Error(w, "an administrator reset this account -- set a new password before going any further", http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
 	})
 }
@@ -380,6 +402,23 @@ type sessionResponse struct {
 	// by linking. The frontend uses it to decide whether "Connect SSO"
 	// is offered at all: there is nothing left to convert otherwise.
 	HasLocalPassword bool `json:"hasLocalPassword"`
+	// SSOConnected is true once this account has an SSO identity
+	// attached. Separate from HasLocalPassword since #1252: the admin
+	// keeps its password through a link, so "has a password" no longer
+	// answers "is there anything left to connect". The frontend uses
+	// both to decide whether to offer "Connect SSO".
+	SSOConnected bool `json:"ssoConnected"`
+	// MustChangePassword is true while this session may reach nothing
+	// but POST /api/auth/password -- an admin reset the account and it
+	// signed in with the one-time code (#1251). The frontend draws the
+	// "Set a new password" screen and nothing else while it holds.
+	//
+	// Read from the account, not from anything recorded on the session:
+	// the flag is cleared by setting a password, which can happen in
+	// another process (the CLI recovery tool), and a copy on the session
+	// would keep a person locked out of an account that is no longer
+	// flagged.
+	MustChangePassword bool `json:"mustChangePassword"`
 	// SSOAvailable tells the frontend whether to render the "Sign in
 	// with SSO" link at all -- true whenever s.OIDC is configured,
 	// regardless of the other fields above.
@@ -406,6 +445,8 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
 		resp.HasLocalPassword = user.LocalPassword()
+		resp.SSOConnected = user.OIDCSubject != ""
+		resp.MustChangePassword = user.MustChangePassword
 		// sessionUser already validated the cookie once (that is how
 		// user was resolved); re-reading it here just for IssuedAt
 		// rather than widening sessionUser's own signature, which
@@ -436,7 +477,12 @@ var authErrorMessages = map[error]string{
 	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
 	auth.ErrUsernameInvalid:    "that username contains characters that aren't allowed -- no control characters, and no leading or trailing spaces",
 	auth.ErrUsernameLength:     auth.ErrUsernameLength.Error(), // already phrased for an end user
-	auth.ErrInvalidRole:        `role must be "user" or "viewer"`,
+	// #1252: names created here are kept clear of email addresses, which
+	// is what identity providers send as preferred_username. The message
+	// says the rule and what to do instead, since "invalid" alone would
+	// read as a bug to someone typing the name they use everywhere.
+	auth.ErrUsernameIsEmail: "a MikroView username can't be an email address -- pick a plain name (SSO accounts are the ones named by their email)",
+	auth.ErrInvalidRole:     `role must be "user" or "viewer"`,
 }
 
 // writeAuthError translates err into a safe, user-facing message via
@@ -504,7 +550,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable
-		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength, auth.ErrUsernameIsEmail:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, r, err, status)
@@ -604,26 +650,42 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Rate-limited on the same limiter as login, keyed by user. The
-	// current password is a credential and this is a guess at it, so an
-	// endpoint that verifies one without counting the attempt is a
-	// brute-force oracle that happens to need a session -- and a session
-	// is exactly what an attacker who has stolen a cookie already has.
-	userKey := "user:" + strings.ToLower(user.Username)
-	if !s.LoginLimiter.Reserve(userKey, now) {
-		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
-		return
-	}
-	if _, err := s.Auth.Authenticate(user.Username, req.CurrentPassword, now); err != nil {
-		// Reservation stays claimed: that is what counts the failure.
-		writeUnauthorized(w, "current password is incorrect")
-		return
-	}
-	s.LoginLimiter.Release(userKey, now)
+	// After an admin reset (#1251) there is no current password to
+	// supply: the account's stored hash is the unmatchable one
+	// IssueResetCode left behind, and the credential this session was
+	// established with was a one-time code that is already spent. So the
+	// whole verify-the-old-one block below is skipped -- asking for
+	// something that provably cannot be supplied would make the forced
+	// change impossible to complete.
+	//
+	// Nothing is weakened by skipping it. Reaching this point at all
+	// required signing in with a live code, which requireAuth's gate
+	// above then confines to this single route; there is no credential
+	// being guessed here for the limiter to count, and no username in
+	// the body pointing anywhere but the caller's own account.
+	if !user.MustChangePassword {
+		// Rate-limited on the same limiter as login, keyed by user. The
+		// current password is a credential and this is a guess at it, so
+		// an endpoint that verifies one without counting the attempt is a
+		// brute-force oracle that happens to need a session -- and a
+		// session is exactly what an attacker who has stolen a cookie
+		// already has.
+		userKey := "user:" + strings.ToLower(user.Username)
+		if !s.LoginLimiter.Reserve(userKey, now) {
+			http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+			return
+		}
+		if _, err := s.Auth.Authenticate(user.Username, req.CurrentPassword, now); err != nil {
+			// Reservation stays claimed: that is what counts the failure.
+			writeUnauthorized(w, "current password is incorrect")
+			return
+		}
+		s.LoginLimiter.Release(userKey, now)
 
-	if req.NewPassword == req.CurrentPassword {
-		http.Error(w, "the new password is the same as the current one", http.StatusBadRequest)
-		return
+		if req.NewPassword == req.CurrentPassword {
+			http.Error(w, "the new password is the same as the current one", http.StatusBadRequest)
+			return
+		}
 	}
 	if err := s.Auth.SetPassword(user.Username, req.NewPassword, now); err != nil {
 		if errors.Is(err, auth.ErrPasswordTooShort) {
@@ -649,7 +711,16 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	// unlock by changing its own password (#1124).
 	s.lockVaultForUser(user.ID)
 
-	s.Audit.Record(user.Username, "account.password_changed", user.Username, "sessions ended: all")
+	detail := "sessions ended: all"
+	if user.MustChangePassword {
+		// Records that the forced change completed, so the audit trail
+		// pairs the admin's reset entry with the moment the account came
+		// back under its owner's own credential. The code is not in this
+		// line, or in any other: it exists in clear exactly once, in the
+		// response to the reset itself.
+		detail += ", after an administrator's reset"
+	}
+	s.Audit.Record(user.Username, "account.password_changed", user.Username, detail)
 
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
@@ -806,7 +877,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		switch err {
 		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
-		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrInvalidRole, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrInvalidRole, auth.ErrUsernameInvalid, auth.ErrUsernameLength, auth.ErrUsernameIsEmail:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, r, err, status)
@@ -912,5 +983,91 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username":      user.Username,
 		"tokensRevoked": revokedTokens,
+	})
+}
+
+// resetPasswordResponse is the only place an issued reset code exists in
+// clear (#1251). Nothing persists it, nothing logs it, and no later
+// request can retrieve it: an admin who loses it issues another, which
+// kills this one.
+type resetPasswordResponse struct {
+	Username string `json:"username"`
+	// Code is grouped xxxx-xxxx-xxxx-xxxx for reading aloud. The server
+	// accepts it back in any case, with or without the dashes.
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// handleAuthResetUserPassword is the admin's way back in for somebody
+// who has lost their password (#1251, from #1245 decision 3). mikroview
+// sends no mail, so there is no reset link: the admin resets the
+// account, reads the returned code out to its owner in person or over a
+// call they trust, and the owner types it into the password box once and
+// chooses a new password on the spot.
+//
+// Two accounts are refused, both with 409:
+//
+//   - the caller's own. An admin locked out of their own account cannot
+//     bootstrap themselves back in with a code they mint for themselves
+//     -- that is POST /api/auth/password if they still know the current
+//     one, and the recovery-key-gated `mikroview -recover-admin-account`
+//     from the console if they do not. Since mikroview holds exactly one
+//     admin, this is also what keeps the admin account out of this route
+//     entirely.
+//   - an SSO-only account. Its identity provider owns the credential;
+//     see auth.ErrNoLocalPassword.
+//
+// The account's live sessions go with the reset, twice over: the store
+// bumps PasswordChangedAt (which ends them across processes and
+// restarts) and this drops the ones in memory immediately, the same
+// pattern handleAuthDeleteUser and handleAuthChangePassword use. The
+// router-backup vault's key goes too if that account is what was holding
+// it open (#1120).
+func (s *Server) handleAuthResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "user id is required", http.StatusBadRequest)
+		return
+	}
+	if caller := userFromContext(r); caller != nil && caller.ID == id {
+		http.Error(w, "an administrator cannot reset their own password here -- change it from the account menu, "+
+			"or use `mikroview -recover-admin-account` at the console", http.StatusConflict)
+		return
+	}
+
+	now := time.Now()
+	user, code, err := s.Auth.IssueResetCode(id, now)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, auth.ErrUserNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, auth.ErrNoLocalPassword):
+			status = http.StatusConflict
+		case errors.Is(err, auth.ErrNotPersisted):
+			status = http.StatusServiceUnavailable
+		}
+		writeAuthError(w, r, err, status)
+		return
+	}
+
+	s.Sessions.RevokeAllForUser(user.ID)
+	s.lockVaultForUser(user.ID)
+
+	// Who reset whom, and never the code -- not here, not in any log
+	// line. The detail records the deadline instead, which is what an
+	// operator reading this entry later actually needs.
+	s.Audit.Record(auditActor(r), "user.password_reset", user.Username,
+		fmt.Sprintf("one-time code issued, expires %s; sessions ended: all",
+			user.ResetCodeExpiresAt.Format(time.RFC3339)))
+
+	writeJSON(w, http.StatusOK, resetPasswordResponse{
+		Username:  user.Username,
+		Code:      code,
+		ExpiresAt: user.ResetCodeExpiresAt,
 	})
 }

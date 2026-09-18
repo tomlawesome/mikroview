@@ -779,6 +779,7 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
+		{http.MethodPost, "/api/auth/users/{id}/reset-password", s.handleAuthResetUserPassword},
 
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/

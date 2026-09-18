@@ -3062,7 +3062,12 @@ host, port, or rule, so scoping either wouldn't mean anything.
 The first time MikroView loads with no accounts and no prior decision,
 it shows a one-time choice screen instead of the live view: **create
 the admin account**. That is the only option -- running without
-authentication was removed, and creating an account is the floor. See
+authentication was removed, and creating an account is the floor. It is
+a username and a password; the username can't be an email address, and
+SSO is never offered in its place. What happens straight afterwards
+depends on whether your OIDC details are already in the config file --
+see [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin). See
 [SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
 section is the configuration reference.
 
@@ -3308,7 +3313,10 @@ absent entirely for anyone else, not shown read-only.
 ![Settings' people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
 
 Press **+ Let someone in**, type a username and password, press **Let
-them in**, and the account appears in the list. Everyone added here gets an ordinary account: admin-only
+them in**, and the account appears in the list. The username can't be an
+email address — see [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin) for why MikroView keeps its
+own names clear of the ones identity providers send. Everyone added here gets an ordinary account: admin-only
 pages are simply absent from their navigation, with one exception --
 they can open Settings and read it, but every control there is
 missing rather than greyed out, so they still can't change settings,
@@ -3331,13 +3339,20 @@ to it: open the account menu at the bottom of the rail (click your
 username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
-**This deletes your MikroView password, and can't be undone from
-MikroView.** After connecting:
+**Unless you are the admin, this deletes your MikroView password, and
+can't be undone from MikroView.** After connecting:
 
 - You sign in through your identity provider only.
 - If you lose access to that provider, MikroView can't recover the
-  account for you — that includes the admin account, so read
-  "Recovering the admin account" above before connecting the admin.
+  account for you.
+
+**The admin is the exception: it keeps its password.** MikroView holds
+exactly one admin, and a provider outage with no password anywhere locks
+everybody out rather than one person — so for that account SSO is an
+extra way in rather than a replacement, and the dialog says so instead
+of warning about a deletion that does not happen. See [SSO is additive:
+keep a local admin](#sso-is-additive-keep-a-local-admin).
+
 - You stay signed in on the browser you did it from. Anywhere else
   you're signed in gets signed out.
 
@@ -3441,6 +3456,53 @@ is the only copy — get them into a password manager before you type
 You can't regenerate them while a set exists — that would let anyone
 with access to the machine mint themselves a fresh key and walk straight
 through the gate. They rotate automatically after each use instead.
+
+### Resetting someone's password
+
+Somebody has forgotten their password, or you think someone else has
+learned it. You reset it from the web interface, and MikroView gives you
+a one-time code to hand over. **MikroView never sends email** — it holds
+no address for anyone, so there is no reset link and nothing to send one
+to. You are the delivery mechanism.
+
+Settings → **people** → **reset password** on their row. Clicking it
+once arms it, clicking again does it, and a dialog then shows a code
+like `K7RM-4TQD-9WXF-3HJP`. Copy it, or read it out: the alphabet has no
+`0`, `O`, `1` or `I` in it, so there is nothing ambiguous to dictate.
+
+Give it to them **in person or over a call you trust**. It is a password
+for the next 24 hours, so a chat message that sits in someone's history
+is the wrong channel.
+
+What the reset does the moment you confirm it:
+
+- their old password stops working — you do not wait for them to act;
+- they are signed out everywhere, on every device;
+- the code works once, or for 24 hours, whichever comes first;
+- **the code is shown once.** MikroView stores only a hash of it and
+  cannot show it again. Lost it? Reset again — that mints a new code and
+  kills the old one.
+
+They then type their own account name and the code where the password
+normally goes. MikroView lets them in, shows them **Set a new password**
+and nothing else until they have chosen one — no part of the app is
+reachable in between. Once they do, the code is finished with and they
+carry on as normal.
+
+Two accounts you cannot do this to:
+
+- **your own.** Change it from the account menu if you still know it, or
+  use `mikroview -recover-admin-account` from the console if you do not
+  (see below). Since MikroView has one admin, that keeps the admin
+  account out of this path entirely — no one can mint themselves a
+  credential for it.
+- **an account that signs in through SSO only.** Its password belongs to
+  your identity provider; reset it there.
+
+The reset is recorded in the [audit log](#audit-log-admin-action-accountability-optional)
+— who reset whom, and when the code expires. The code itself is never
+written down anywhere: not the audit log, not MikroView's own logs, not
+the accounts file.
 
 ### Recovering the admin account
 
@@ -3627,6 +3689,66 @@ oidc:
   terminating a real domain (`https://mikroview.example.com`).
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
+
+### SSO is additive: keep a local admin
+
+**Your admin account keeps its MikroView password, whether or not you
+connect it to SSO.** That password is the way back in on the day your
+identity provider is down, misconfigured after an upgrade, or has lost
+the admin's directory entry. MikroView never signs in to your provider
+on its own behalf, so if the provider cannot answer, SSO cannot let
+anybody in.
+
+What this means in practice:
+
+- **First run always creates a local admin**, with a username and a
+  password. MikroView never offers SSO instead of that, even when SSO
+  is configured — the local account is step one either way.
+- **Then one of two things happens.** If your OIDC details are already
+  in the config file, MikroView sends you to your provider to sign in,
+  and connects the identity you sign in with to the admin account you
+  just created. It is the same browser throughout, which is how
+  MikroView knows it is the same person — it compares no email address,
+  and stores none. If the details are not there, MikroView says the
+  account has been created and that the OIDC settings go in the config
+  file; add them, restart, and connect the account from the account
+  menu whenever you like.
+- **Connecting the admin to SSO keeps its password.** Afterwards you
+  can sign in either way: through your provider normally, with the
+  password when the provider is unreachable.
+- **Everybody else loses their password when they connect.** A user or
+  viewer who connects their account signs in through your provider from
+  then on, and MikroView cannot recover that account for them. That is
+  unchanged, and it costs the deployment nothing — the admin still has
+  a password.
+- **A MikroView username can't be an email address.** Identity
+  providers send an email as the username, so keeping local names clear
+  of them means the two can never be the same name and MikroView never
+  has to compare addresses — which is how it goes on holding no email
+  for anyone. Only new accounts are checked: one created before this
+  rule keeps its name and still signs in.
+- If your admin signs in through SSO only — which happens when a
+  deployment was bootstrapped entirely through your provider, the first
+  person to sign in becoming the admin — MikroView says so in its log
+  at every start. Nothing breaks while the provider is up; the warning
+  is about the day it isn't.
+
+If you end up locked out — the provider is unreachable and the admin
+has no password — the way back in is the command line, on the machine
+MikroView runs on:
+
+```bash
+mikroview -transfer-admin <username>
+```
+
+It moves the admin role onto an account that does have a password, and
+asks for a [recovery key](#recovery-keys) first. Its sibling
+`mikroview -recover-admin-account` resets the admin's own password, and
+deliberately refuses an admin who signs in through SSO only — there is
+no password there to reset, which is why `-transfer-admin` is the one
+that helps. See [Handing admin to someone
+else](#handing-admin-to-someone-else) and [Recovering the admin
+account](#recovering-the-admin-account).
 
 ### Supported providers
 
@@ -4396,18 +4518,19 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
-| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser |
+| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
+| `POST /api/auth/users/{id}/reset-password` | admin-only: issue a one-time code for somebody who has lost their password -- returns the code once, kills that account's old password and every session it holds, and forces a new password at their next sign-in. Refused (409) on your own account and on an SSO-only one. See [Resetting someone's password](#resetting-someones-password) |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
 | `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else). Narrowed back from user tier by #657: the viewer-readable settings page it was widened for (#490) is gone, and issuing keys is treated as a setup task rather than day-to-day product use |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
-| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
+| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, which deletes that account's password -- except for the admin, which keeps it, so SSO becomes a second way into that one account rather than a replacement. Takes no parameters: the account is the session's. See [Connecting your account to SSO](#connecting-your-account-to-sso) and [SSO is additive](#sso-is-additive-keep-a-local-admin) |
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what MikroView has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |

@@ -1645,6 +1645,17 @@ func main() {
 			} else {
 				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
 			}
+			// "SSO is additive; keep a local admin" (#1252). Said out
+			// loud at every start while it is untrue, because the day it
+			// matters is the day the provider is down and nobody is
+			// reading the docs. Not a refusal: turning SSO off here
+			// would leave a deployment whose admin already signs in
+			// through the provider with no way in at all, which is the
+			// lock-out this rule exists to prevent.
+			if authStore.Count() > 0 && !authStore.HasLocalAdmin() {
+				oidcLog.Warn("no MikroView admin has a local password, so SSO is the only way in -- if the provider goes down, " +
+					"signing in needs `mikroview -transfer-admin <username>` at the command line. See SECURITY.md, \"SSO is additive\"")
+			}
 		}
 	}
 
