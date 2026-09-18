@@ -921,22 +921,58 @@ func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
 // Reading the doc rather than the generator is the point: the generator
 // was already right both times.
 func TestSetupDocAddsAreAllGuarded(t *testing.T) {
-	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "routeros-setup.md"))
+	// Every doc, not just the one the finding named. Scoping the first
+	// version of this test to routeros-setup.md is what let the drop
+	// list's own block in configuration.md stay bare: the same mistake
+	// the test exists to catch, made by the test.
+	docs, err := filepath.Glob(filepath.Join("..", "..", "docs", "*.md"))
 	if err != nil {
-		t.Fatalf("reading docs/routeros-setup.md: %v", err)
+		t.Fatalf("listing docs: %v", err)
 	}
-	for i, line := range strings.Split(string(doc), "\n") {
-		trimmed := strings.TrimSpace(line)
-		for _, add := range []string{"/system script add", "/system scheduler add"} {
-			if !strings.Contains(trimmed, add) {
-				continue
+	for _, name := range []string{"README.md", "SECURITY.md"} {
+		docs = append(docs, filepath.Join("..", "..", name))
+	}
+	if len(docs) < 2 {
+		t.Fatalf("found %d docs to check, expected the whole docs/ directory", len(docs))
+	}
+
+	// The adds MikroView itself generates and hands the operator to
+	// paste. Each has to survive being pasted again, since RouterOS
+	// does not deduplicate any of them.
+	//
+	// `/ip firewall filter add` is deliberately not here. MikroView
+	// never generates one -- Log every rule emits `set` lines against
+	// rules that already exist -- and routeros-setup.md's blank-firewall
+	// section prints some as an illustrative example of the operator's
+	// own ruleset, saying in as many words that they are "not something
+	// to paste in blind". Guarding those would be wrong: a firewall rule
+	// has no name, and two accept rules with different match conditions
+	// are two rules, not a duplicate.
+	adds := []string{
+		"/system script add",
+		"/system scheduler add",
+		"/ip firewall raw add",
+		"/system logging add",
+	}
+
+	for _, path := range docs {
+		doc, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(doc), "\n") {
+			trimmed := strings.TrimSpace(line)
+			for _, add := range adds {
+				if !strings.Contains(trimmed, add) {
+					continue
+				}
+				// The guarded idiom puts the add inside a find check,
+				// so the line leads with the check, not with the add.
+				if strings.HasPrefix(trimmed, ":if ([:len [") && strings.Contains(trimmed, "] = 0) do={") {
+					continue
+				}
+				t.Errorf("%s:%d has a bare %q; wrap it in the find guard SchedulerAdd/scriptAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", filepath.Base(path), i+1, add, trimmed)
 			}
-			// The guarded idiom puts the add inside a find check, so
-			// the line starts with the check, not with the add.
-			if strings.HasPrefix(trimmed, ":if ([:len [/system") && strings.Contains(trimmed, "] = 0) do={") {
-				continue
-			}
-			t.Errorf("docs/routeros-setup.md:%d has a bare %q; wrap it in the find guard scriptAdd/schedulerAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", i+1, add, trimmed)
 		}
 	}
 }

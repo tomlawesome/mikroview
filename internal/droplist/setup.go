@@ -69,11 +69,26 @@ func NewSetup(address, key string) Setup {
 		`/tool fetch url="https://%s/api/droplist.rsc" http-header-field="Authorization: Bearer %s" check-certificate=yes dst-path=%s.rsc; /import file-name=%s.rsc`,
 		quotedAddress, key, ListName, ListName)
 
+	// Both adds are guarded, the same idiom and the same reason as the
+	// wizard's own scheduler entries (#1266): RouterOS does not
+	// deduplicate, and these four commands are handed to the operator
+	// again every time a key is minted -- docs/configuration.md says in
+	// as many words that minting again replaces the key, so rotating one
+	// means pasting this block a second time. Unguarded, that left the
+	// router with two mikroview-drop schedulers, the older still
+	// fetching with the key that was just replaced, and a second
+	// identical raw rule. Nothing on the router says which is which.
+	//
+	// The rule is found by its comment rather than by name, since a raw
+	// rule has no name; dropListRuleComment is the same marker
+	// DisableRule already matches on. place-before is placement, not a
+	// property, so it belongs to the add branch alone -- a rule that is
+	// already there keeps the position it already has.
 	return Setup{
-		Scheduler: fmt.Sprintf(`/system scheduler add name=%s interval=5m on-event="%s"`,
-			ListName, routeros.QuoteScriptString(inner)),
-		Rule: fmt.Sprintf(`/ip firewall raw add chain=prerouting src-address-list=%s action=drop comment="%s" place-before=0`,
-			ListName, dropListRuleComment),
+		Scheduler: routeros.SchedulerAdd(ListName, fmt.Sprintf(`interval=5m on-event="%s"`,
+			routeros.QuoteScriptString(inner))),
+		Rule: fmt.Sprintf(`:if ([:len [/ip firewall raw find comment="%s"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=%s action=drop comment="%s" place-before=0 } else={ /ip firewall raw set [find comment="%s"] chain=prerouting src-address-list=%s action=drop }`,
+			dropListRuleComment, ListName, dropListRuleComment, dropListRuleComment, ListName),
 		DisableRule: fmt.Sprintf(`/ip firewall raw disable [find comment="%s"]`, dropListRuleComment),
 		EmptyList: fmt.Sprintf(`/system scheduler disable [find name=%s]; /ip firewall address-list remove [find list=%s]`,
 			ListName, ListName),
