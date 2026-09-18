@@ -30,6 +30,28 @@ class LogEveryRuleWorkState {
   // render arrives, since that is a new unsaved result.
   resultSaved = $state(false)
 
+  // One token per kind of request in flight, retired by any later
+  // request of its kind and by anything that invalidates what a request
+  // was asked about. They live here, not in the component, because the
+  // thing they protect lives here: Deck.svelte destroys and rebuilds
+  // this card on every scroll past it, and a request in flight outlives
+  // the instance that made it. Component-held tokens died with that
+  // instance, so the dead request's answer sailed through its own
+  // never-retired token and wrote router A's rules into the state a
+  // freshly mounted card was showing as router B's.
+  //
+  // Not $state: nothing renders from them, and a token changing must
+  // not invalidate anything.
+  analyseToken = 0
+  renderToken = 0
+
+  /** Retires every request in flight, so no answer already on its way
+   * can write once what it was asked about no longer holds. */
+  retireRequests() {
+    this.analyseToken++
+    this.renderToken++
+  }
+
   // Which router the held export was taken for. Kept alongside the
   // text because `device` is what the operator has selected now, and
   // those two are allowed to disagree for as long as it takes to
@@ -64,6 +86,9 @@ class LogEveryRuleWorkState {
     this.exportText = ''
     this.exportName = ''
     this.exportDevice = ''
+    // An answer still on its way was asked about the text being
+    // dropped here, so it describes nothing that is left.
+    this.retireRequests()
     this.resetDownstream()
   }
 

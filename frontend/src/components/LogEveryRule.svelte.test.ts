@@ -695,6 +695,41 @@ describe('LogEveryRule device pick', () => {
     expect(logEveryRuleWorkState.result).toEqual(fresh)
   })
 
+  // The deck destroys and rebuilds this card whenever it scrolls more
+  // than one card away (lib/deckMount.ts), which is ordinary
+  // navigation. A request in flight outlives that, so the guard against
+  // a stale answer has to outlive it too -- it lives on the work state
+  // for the same reason the work does. Held in the component, it died
+  // with the instance that made the request, and the answer then wrote
+  // one router's rules into a freshly mounted card showing another's.
+  it('drops a request left in flight across an unmount, remount and nav to another router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const first = render(LogEveryRule)
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-1'))
+    await typeExport(first.container)
+    await clickAnalyse()
+
+    // Scrolled away. The request is still on its way.
+    first.unmount()
+
+    // While it is gone, the coverage lens hands over a different router.
+    logEveryRuleNavState.request('edge-2', 'guest|bridge')
+    render(LogEveryRule)
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+
+    // edge-1's answer arrives now, in an instance that no longer exists.
+    settle(analyseResponse())
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first
