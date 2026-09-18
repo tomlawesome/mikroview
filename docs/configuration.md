@@ -2043,7 +2043,7 @@ that endpoint's event-specific filters.
 ## Setup wizard ledger (optional)
 
 The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
-five steps. Most of what it shows is not stored anywhere: MikroView
+six steps. Most of what it shows is not stored anywhere: MikroView
 never connects to your router, so each step's check is simply an
 observation of what arrived here -- a certificate fetch, a syslog
 connection, events carrying a decoded log-prefix, a pushed table -- and
