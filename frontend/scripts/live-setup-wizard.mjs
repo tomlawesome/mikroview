@@ -468,8 +468,12 @@ check(
 // the first push happen now. No second box, and nothing asking the
 // operator to paste one clipboard inside another.
 check(
-  script.startsWith('/system script add name=mv-push policy=read,test source="'),
+  script.includes('/system script add name=mv-push policy=read,test source="'),
   `the block saves the script itself (${script.slice(0, 60)})`,
+)
+check(
+  script.startsWith(':if ([:len [/system script find name=mv-push]] = 0) do={'),
+  `and guards the add, so pasting it twice updates the script instead of failing (${script.slice(0, 60)})`,
 )
 check(!script.includes('<paste the script above>'), 'no placeholder is left for the operator to fill in')
 check(
