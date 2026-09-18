@@ -32,6 +32,7 @@ import type {
   HostDossier,
   HourTopBucket,
   MACRegistryEntry,
+  PasswordResetCode,
   PersistenceInfo,
   ReplayResult,
   ReputationResult,
@@ -789,6 +790,31 @@ export async function deleteUser(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteUser: ${res.status}`
+}
+
+// resetUserPassword is the admin's way back in for somebody who has lost
+// their password (#1251). It returns the one-time code on success and
+// error text otherwise, the same shape createToken uses -- and for the
+// same reason: the successful answer is a credential that exists in this
+// response and nowhere else. Nothing here may store it, log it or put it
+// in a URL; show it once and let it go.
+export async function resetUserPassword(id: string): Promise<PasswordResetCode | string> {
+  const res = await postJSON(`/api/auth/users/${encodeURIComponent(id)}/reset-password`)
+  if (res.ok) return res.json()
+  return (await res.text()) || `resetUserPassword: ${res.status}`
+}
+
+// setNewPasswordAfterReset is the far end of that flow, for a session
+// established with a reset code. Deliberately separate from
+// changePassword above rather than a variant of it with an empty
+// current password: there is no current password in this state (the
+// stored hash is unmatchable, and the code is already spent), so a call
+// that looks like it is supplying one would be misleading at every
+// reading.
+export async function setNewPasswordAfterReset(newPassword: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/password', { newPassword })
+  if (res.ok) return null
+  return (await res.text()) || `setNewPasswordAfterReset: ${res.status}`
 }
 
 // The one definitions surface (issue #407), replacing /api/detectors and

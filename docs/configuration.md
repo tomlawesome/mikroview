@@ -3442,6 +3442,53 @@ You can't regenerate them while a set exists — that would let anyone
 with access to the machine mint themselves a fresh key and walk straight
 through the gate. They rotate automatically after each use instead.
 
+### Resetting someone's password
+
+Somebody has forgotten their password, or you think someone else has
+learned it. You reset it from the web interface, and MikroView gives you
+a one-time code to hand over. **MikroView never sends email** — it holds
+no address for anyone, so there is no reset link and nothing to send one
+to. You are the delivery mechanism.
+
+Settings → **people** → **reset password** on their row. Clicking it
+once arms it, clicking again does it, and a dialog then shows a code
+like `K7RM-4TQD-9WXF-3HJP`. Copy it, or read it out: the alphabet has no
+`0`, `O`, `1` or `I` in it, so there is nothing ambiguous to dictate.
+
+Give it to them **in person or over a call you trust**. It is a password
+for the next 24 hours, so a chat message that sits in someone's history
+is the wrong channel.
+
+What the reset does the moment you confirm it:
+
+- their old password stops working — you do not wait for them to act;
+- they are signed out everywhere, on every device;
+- the code works once, or for 24 hours, whichever comes first;
+- **the code is shown once.** MikroView stores only a hash of it and
+  cannot show it again. Lost it? Reset again — that mints a new code and
+  kills the old one.
+
+They then type their own account name and the code where the password
+normally goes. MikroView lets them in, shows them **Set a new password**
+and nothing else until they have chosen one — no part of the app is
+reachable in between. Once they do, the code is finished with and they
+carry on as normal.
+
+Two accounts you cannot do this to:
+
+- **your own.** Change it from the account menu if you still know it, or
+  use `mikroview -recover-admin-account` from the console if you do not
+  (see below). Since MikroView has one admin, that keeps the admin
+  account out of this path entirely — no one can mint themselves a
+  credential for it.
+- **an account that signs in through SSO only.** Its password belongs to
+  your identity provider; reset it there.
+
+The reset is recorded in the [audit log](#audit-log-admin-action-accountability)
+— who reset whom, and when the code expires. The code itself is never
+written down anywhere: not the audit log, not MikroView's own logs, not
+the accounts file.
+
 ### Recovering the admin account
 
 If you can't sign in as the admin, you get back in from the command
@@ -4396,12 +4443,13 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
-| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser |
+| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
+| `POST /api/auth/users/{id}/reset-password` | admin-only: issue a one-time code for somebody who has lost their password -- returns the code once, kills that account's old password and every session it holds, and forces a new password at their next sign-in. Refused (409) on your own account and on an SSO-only one. See [Resetting someone's password](#resetting-someones-password) |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
 | `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else). Narrowed back from user tier by #657: the viewer-readable settings page it was widened for (#490) is gone, and issuing keys is treated as a setup task rather than day-to-day product use |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |

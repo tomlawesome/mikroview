@@ -5,6 +5,7 @@ import {
   login,
   logout,
   register,
+  setNewPasswordAfterReset,
   signOutEverywhere,
 } from "./api";
 import { appState } from "./state.svelte";
@@ -38,10 +39,17 @@ function clearSessionState() {
 // different top-level view for each (see appState.view for the same
 // independent-view pattern used by Metrics) rather than layering
 // anything as a modal.
+// 'must-change-password' is a real session that may reach nothing but
+// the change-password route (#1251): an administrator reset this account
+// and it signed in with the one-time code. It is its own view state
+// rather than a flag on 'authenticated' because the app is not open in
+// it -- every other request would 403 -- so App.svelte must draw the
+// door's set-a-new-password form and nothing else.
 export type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"
+  | "must-change-password"
   | "authenticated";
 
 class AuthState {
@@ -79,6 +87,11 @@ class AuthState {
   // deliberately a fixed message chosen from the opaque error code,
   // never the raw code or any provider-supplied text.
   ssoError = $state<string | null>(null);
+  // Mirrors sessionResponse.mustChangePassword. Kept beside `state`
+  // rather than replacing it so the rest of the app can keep asking the
+  // one question it asks today ("are we signed in?") without learning
+  // about the reset flow.
+  mustChangePassword = $state(false);
   // #677's sessions row ("this device ... signed in 4 d") -- this
   // session's own IssuedAt, RFC3339, from sessionResponse.signedInSince.
   // Empty while unauthenticated or against an older server.
@@ -168,7 +181,10 @@ class AuthState {
     if (session.setupRequired) {
       this.state = "setup-required";
     } else if (session.authenticated) {
-      this.state = "authenticated";
+      this.mustChangePassword = session.mustChangePassword ?? false;
+      this.state = this.mustChangePassword
+        ? "must-change-password"
+        : "authenticated";
       this.username = session.username ?? "";
       this.role = (session.role as "admin" | "user" | "viewer") ?? "";
       // Absent on an older server: treated as "has one", which only
@@ -181,6 +197,7 @@ class AuthState {
       this.username = "";
       this.role = "";
       this.hasLocalPassword = true;
+      this.mustChangePassword = false;
       this.signedInSince = "";
     }
   }
@@ -203,6 +220,18 @@ class AuthState {
     return null;
   }
 
+  // setNewPassword completes a forced change: the session established
+  // with a one-time code trades it for a password only its owner knows,
+  // and the app opens. No current password is asked for because there is
+  // none -- the reset replaced it with an unmatchable hash, and the code
+  // was spent by the login that got here.
+  async setNewPassword(newPassword: string): Promise<string | null> {
+    const err = await setNewPasswordAfterReset(newPassword);
+    if (err) return err;
+    await this.check();
+    return null;
+  }
+
   // The local session is cleared either way, deliberately: a user who
   // pressed Sign out must not be left looking signed in because the
   // request failed. The error is returned so the caller can say the
@@ -213,6 +242,7 @@ class AuthState {
     this.state = "unauthenticated";
     this.username = "";
     this.role = "";
+    this.mustChangePassword = false;
     this.justSignedOut = true;
     clearSessionState();
     return err;
@@ -233,10 +263,11 @@ class AuthState {
   // or reset-invalidated session) -- bounces straight to the login view
   // without a full page reload.
   handleUnauthorized() {
-    if (this.state === "authenticated") {
+    if (this.state === "authenticated" || this.state === "must-change-password") {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
+      this.mustChangePassword = false;
       clearSessionState();
     }
   }

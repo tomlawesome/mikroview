@@ -318,7 +318,11 @@
        one fetch round-trip on the same origin, not worth the flash. -->
 {:else if authState.state === 'setup-required'}
   <AuthSetup />
-{:else if authState.state === 'unauthenticated'}
+{:else if authState.state === 'unauthenticated' || authState.state === 'must-change-password'}
+  <!-- 'must-change-password' draws the same door with one field swapped
+       (#1251). It is on this branch rather than inside the app because
+       the session behind it can reach the change-password route and
+       nothing else -- every scene below would be a wall of 403s. -->
   <AuthLogin />
 {:else}
   <!-- First in tab order: rendered ahead of BottomBar and every scene's
