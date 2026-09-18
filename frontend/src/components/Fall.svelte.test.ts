@@ -578,6 +578,86 @@ describe('port labels along the foot cover every band (#700 fault 8)', () => {
   })
 })
 
+// #1254: a real capture of the bridge-lan -> vlan-srv band put :123 NTP
+// (a small, recent carrier) on top of :53 DNS's own peak (a much
+// bigger one, port-scaled to nearly the same x by assignX's port-range
+// mapping once :5001 also shares the band), and separately clipped
+// :5001 Synology-HTTPS at the rig's right edge. Both fixtures below
+// recreate that exact three-port band; the port numbers, not just the
+// traffic shape, are what made assignX squeeze DNS and NTP together.
+function spectrumBandEvents(now: number) {
+  const at = (dstPort: number, n: number) =>
+    Array.from({ length: n }, () =>
+      makeEvent({
+        chain: 'forward',
+        inInterface: 'bridge-lan',
+        outInterface: 'vlan-srv',
+        dstPort,
+        time: new Date(now - 1000).toISOString(),
+      }),
+    )
+  // DNS busy but not the band's busiest; NTP barely active; Synology
+  // the busiest (sets nowMax) -- see the comment above needlesFor for
+  // why bucket[0]'s share of nowMax drives a carrier's peak height.
+  return [...at(53, 24), ...at(123, 2), ...at(5001, 40)]
+}
+
+const spectrumBandBoundary = boundary({
+  key: 'forward|bridge-lan|vlan-srv',
+  chain: 'forward',
+  inInterface: 'bridge-lan',
+  outInterface: 'vlan-srv',
+  label: 'bridge-lan → vlan-srv',
+})
+
+function peakLabelY(container: HTMLElement, text: string): number {
+  const el = [...container.querySelectorAll('text.plab:not(.carrier-label)')].find((e) => e.textContent === text)
+  expect(el, `expected a peak label reading "${text}"`).toBeTruthy()
+  return Number(el!.getAttribute('y'))
+}
+
+describe('a short peak’s label never crosses a taller neighbour’s curve (#1254 fault 1)', () => {
+  it('lifts :123 NTP clear of :53 DNS’s own peak instead of drawing over it', async () => {
+    const { container } = await renderFall({
+      boundaries: [spectrumBandBoundary],
+      events: spectrumBandEvents(Date.now()),
+    })
+    const dnsY = peakLabelY(container, ':53 DNS')
+    const ntpY = peakLabelY(container, ':123 NTP')
+    // A label's own baseline sits 8 rig units above its own peak's tip
+    // (see the comment above needlesFor) whenever nothing displaced
+    // it -- DNS is this band's tallest carrier after NTP and is placed
+    // first, so it is never displaced, making dnsY + 8 a solid stand-in
+    // for DNS's own curve top. NTP's label must never sit numerically
+    // below that (SVG y grows downward), or it is drawn across DNS's
+    // curve rather than above it.
+    expect(ntpY).toBeLessThanOrEqual(dnsY + 8)
+  })
+})
+
+describe('a long port label stays inside its own band, not clipped at the rig edge (#1254 fault 2)', () => {
+  it('anchors :5001 Synology-HTTPS so it ends inside the band instead of running past it', async () => {
+    const { container } = await renderFall({
+      boundaries: [spectrumBandBoundary],
+      events: spectrumBandEvents(Date.now()),
+    })
+    const band = headHitBoxes(container)[0]
+    const label = [...container.querySelectorAll('text.plab.carrier-label')].find(
+      (el) => el.getAttribute('data-port') === '5001',
+    )
+    expect(label, 'expected a :5001 port label').toBeTruthy()
+    const x = Number(label!.getAttribute('x'))
+    const anchor = label!.getAttribute('text-anchor')
+    const text = label!.textContent ?? ''
+    // CHAR_W_10 in Fall.svelte: this rig's own measured per-character
+    // width for its 10px label type (#1114).
+    const CHAR_W_10 = 6.5
+    const w = text.length * CHAR_W_10
+    const rightEdge = anchor === 'end' ? x : anchor === 'start' ? x + w : x + w / 2
+    expect(rightEdge).toBeLessThanOrEqual(band.x + band.width)
+  })
+})
+
 // The band sizing policy (#722): an ideal width, elastic within limits,
 // and pages beyond them. The ResizeObserver stub above means `.rig`
 // always reports a 0 clientWidth under jsdom, so every case here runs

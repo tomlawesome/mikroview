@@ -815,54 +815,132 @@
     )
   }
 
-  // Peak labels, culled so neighbours never collide: strongest first,
-  // then any label whose text would overlap one already kept is dropped.
+  // ── Label placement: port of round-66/67's own placeLabel(placed, x,
+  // y, w, lo, hi) (docs/design/concepts) ────────────────────────────
+  // Two known-good moves from those theme concepts, ported rather than
+  // copied: clamp a label into its own band's [lo, hi] bounds by
+  // switching text-anchor instead of letting it run past the edge
+  // (#1254 fault 2 -- :5001 Synology-HTTPS clipped at the rig's own
+  // right edge), and lift a label clear of anything already occupying
+  // that space rather than only checking other labels' baselines
+  // within a fixed vertical band. The old peakLabels cull compared
+  // candidates' y within 20 units of each other -- fine for two peaks
+  // of similar height, but a short peak's label sits close to its own
+  // (low) tip, and a much taller neighbour's curve reaches all the way
+  // down to the same baseline, so the two can be 60+ units apart in y
+  // and still visually cross (#1254 fault 1 -- :123 NTP drawn over the
+  // :53 DNS peaks). Checking against the neighbour's actual rendered
+  // curve footprint, not just its label, catches that.
+  const LABEL_MARGIN = 6 // clamp margin off a band's own edge
+  const LABEL_LIFT = 13 // one line, matching the concept's own step
+  const LABEL_LIFT_MAX = 6 // bounded, matching the concept's own guard
+  const LABEL_ASCENT = 9 // a 10px label's rendered height above its baseline (#1114)
+  const LABEL_DESCENT = 3
+
+  type LabelAnchor = 'start' | 'middle' | 'end'
+
+  interface OccupiedBox {
+    x1: number
+    x2: number
+    y1: number // top (smaller svg y)
+    y2: number // bottom (larger svg y)
+  }
+
+  function boxesOverlap(a: OccupiedBox, b: OccupiedBox): boolean {
+    return a.x1 < b.x2 + 4 && a.x2 > b.x1 - 4 && a.y1 < b.y2 && a.y2 > b.y1
+  }
+
+  function clampLabelX(x: number, w: number, lo: number, hi: number): { tx: number; anchor: LabelAnchor } {
+    let anchor: LabelAnchor = 'middle'
+    let tx = x
+    if (tx + w / 2 > hi) {
+      anchor = 'end'
+      tx = hi
+    }
+    if (tx - w / 2 < lo) {
+      anchor = 'start'
+      tx = lo
+    }
+    return { tx, anchor }
+  }
+
+  // Clamps horizontally (clampLabelX above), then lifts the label by
+  // LABEL_LIFT steps, up to LABEL_LIFT_MAX times or until minY, while
+  // its box overlaps anything already in `occupied` -- another placed
+  // label, or a neighbouring carrier's own curve. Pushes its own final
+  // box into `occupied` before returning, so later candidates see it.
+  function placeLabel(
+    occupied: OccupiedBox[],
+    x: number,
+    y: number,
+    w: number,
+    lo: number,
+    hi: number,
+    minY: number,
+  ): { tx: number; ty: number; anchor: LabelAnchor } {
+    const { tx, anchor } = clampLabelX(x, w, lo, hi)
+    const x1 = anchor === 'middle' ? tx - w / 2 : anchor === 'end' ? tx - w : tx
+    const x2 = x1 + w
+    const boxAt = (cy: number): OccupiedBox => ({ x1, x2, y1: cy - LABEL_ASCENT, y2: cy + LABEL_DESCENT })
+    let ty = y
+    let guard = 0
+    while (guard++ < LABEL_LIFT_MAX && ty - LABEL_LIFT >= minY && occupied.some((o) => boxesOverlap(boxAt(ty), o)))
+      ty -= LABEL_LIFT
+    occupied.push(boxAt(ty))
+    return { tx, ty, anchor }
+  }
+
+  // Peak labels: one per active carrier, tallest placed first so a
+  // shorter neighbour's label is the one that lifts clear.
   const peakLabels = $derived.by(() => {
-    const cands: { x: number; y: number; text: string; lane: Lane; h: number }[] = []
+    const cands: { x: number; y: number; text: string; lane: Lane; h: number; slot: BandSlot }[] = []
+    const occupiedByBand = new Map<string, OccupiedBox[]>()
     for (const slot of rig.slots) {
       if (slot.band.coverage === 'dark') continue
-      for (const n of needlesFor(slot))
-        cands.push({ x: n.x, y: n.tipY - 8, text: portLabel(n.port), lane: n.lane, h: SPEC_BASE - n.tipY })
+      const needles = needlesFor(slot)
+      // Seed each band's occupied space with every one of its own
+      // curves' rendered footprints up front (wavePath's halfW=8),
+      // so a short peak's label can never land on a taller
+      // neighbour's curve regardless of placement order.
+      occupiedByBand.set(
+        slot.band.key,
+        needles.map((n) => ({ x1: n.x - 8, x2: n.x + 8, y1: n.tipY, y2: SPEC_BASE })),
+      )
+      for (const n of needles)
+        cands.push({ x: n.x, y: n.tipY - 8, text: portLabel(n.port), lane: n.lane, h: SPEC_BASE - n.tipY, slot })
     }
     cands.sort((a, b) => b.h - a.h)
-    const kept: typeof cands = []
+    const placed: { x: number; y: number; anchor: LabelAnchor; text: string; lane: Lane }[] = []
     for (const c of cands) {
       const w = c.text.length * CHAR_W_10
-      // Round 30 places one label above each curve, never stacked on
-      // another (#700) -- the build's own 11-unit vertical tolerance was
-      // tight enough that two peaks differing in height by just over
-      // that still rendered close enough for a 10px label (which draws
-      // roughly a full line's height either side of its baseline) to
-      // visibly overlap. Widened to a margin that actually clears a
-      // label's own rendered height, alongside a slightly wider
-      // horizontal gap. #1114: 15 was still short of a full label
-      // height (~20 for this 10px type, baseline to baseline), and the
-      // per-character width feeding the horizontal half was a flat 6.2
-      // guess that under-measured the rig's actual (monospace) type --
-      // both now use the measured CHAR_W_10 above.
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * CHAR_W_10 + w) / 2 + 8 && Math.abs(k.y - c.y) < 20))
-        continue
-      kept.push(c)
+      const occupied = occupiedByBand.get(c.slot.band.key)!
+      const lo = c.slot.bx + LABEL_MARGIN
+      const hi = c.slot.bx + bandW - LABEL_MARGIN
+      const { tx, ty, anchor } = placeLabel(occupied, c.x, c.y, w, lo, hi, SPEC_TOP + 12)
+      placed.push({ x: tx, y: ty, anchor, text: c.text, lane: c.lane })
     }
-    return kept
+    return placed
   })
 
-  // Port labels under the floor, culled the same way (heaviest carrier
-  // keeps its label; a crowded band folds the rest) -- but only ever
-  // against another candidate on the *same* band (#700). Comparing
-  // across bands let a heavy carrier on one boundary silently suppress
-  // a lighter one several bands away whenever the two candidates'
-  // absolute x (adjacent bands sit only pitch-bandW apart, i.e. one
-  // gutter) happened to
-  // fall inside the text-width gap, which is how the build ended up
-  // labelling only a couple of ports total instead of every band along
-  // the foot.
+  // Port labels under the floor, culled the same way as before
+  // (heaviest carrier keeps its label; a crowded band folds the rest)
+  // -- but only ever against another candidate on the *same* band
+  // (#700). Comparing across bands let a heavy carrier on one boundary
+  // silently suppress a lighter one several bands away whenever the
+  // two candidates' absolute x (adjacent bands sit only pitch-bandW
+  // apart, i.e. one gutter) happened to fall inside the text-width
+  // gap, which is how the build ended up labelling only a couple of
+  // ports total instead of every band along the foot. Kept labels are
+  // then clamped into their own band's bounds (#1254 fault 2): a
+  // carrier scaled toward the high end of its band (assignX maps port
+  // number onto [10, 90]) otherwise centres a long label past the
+  // rig's own right edge and gets clipped by the viewBox.
   const portLabels = $derived.by(() => {
-    const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; w: number }[] = []
+    const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; bx: number; w: number }[] = []
     for (const slot of rig.slots) {
       for (const c of slot.band.carriers) {
         const text = portLabel(c.port)
-        cands.push({ x: cx(slot, c), text, lane: c.lane, port: c.port, bandKey: slot.band.key, w: c.total })
+        cands.push({ x: cx(slot, c), text, lane: c.lane, port: c.port, bandKey: slot.band.key, bx: slot.bx, w: c.total })
       }
     }
     cands.sort((a, b) => b.w - a.w)
@@ -880,7 +958,11 @@
         continue
       kept.push(c)
     }
-    return kept
+    return kept.map((c) => {
+      const w = c.text.length * CHAR_W_10
+      const { tx, anchor } = clampLabelX(c.x, w, c.bx + LABEL_MARGIN, c.bx + bandW - LABEL_MARGIN)
+      return { x: tx, anchor, text: c.text, lane: c.lane, port: c.port, bandKey: c.bandKey }
+    })
   })
 
   // Flag horizons: each flagged moment draws the mockup's dotted line
@@ -1438,12 +1520,13 @@
           </g>
         {/each}
 
-        <!-- ══ peak + port labels, collision-culled across the rig ══ -->
+        <!-- ══ peak + port labels, clamped to band bounds and lifted
+             clear of collisions (#1254) ══ -->
         {#each peakLabels as p, pi (pi)}
-          <text class="plab {p.lane}" x={p.x} y={p.y} text-anchor="middle">{p.text}</text>
+          <text class="plab {p.lane}" x={p.x} y={p.y} text-anchor={p.anchor}>{p.text}</text>
         {/each}
         {#each portLabels as p (p.bandKey + p.port)}
-          <text class="plab carrier-label {p.lane}" data-port={p.port} x={p.x} y={PORTLAB_Y} text-anchor="middle"
+          <text class="plab carrier-label {p.lane}" data-port={p.port} x={p.x} y={PORTLAB_Y} text-anchor={p.anchor}
             >{p.text}</text>
         {/each}
 
