@@ -42,6 +42,7 @@
   //
   // The `TuneLogging*` names it imports keep theirs: they mirror the two
   // /api/tune-logging endpoints, and #1134 leaves those paths alone.
+  import { untrack } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { policyState } from '../lib/policy.svelte'
   import { coverageState } from '../lib/coverage.svelte'
@@ -99,6 +100,16 @@
     if (!work.device && appState.devices.length === 1) work.device = appState.devices[0].id
   })
 
+  // The router changed -- by the dropdown above all, which binds
+  // straight to work.device and so passes none of the guards the nav
+  // request does. work.adoptDevice decides what that means for the
+  // export still being held; untrack keeps this watching the router
+  // only, since adoptDevice writes the very state it reads.
+  $effect(() => {
+    work.device
+    untrack(() => work.adoptDevice())
+  })
+
   let dragging = $state(false)
   let fileInput = $state<HTMLInputElement | null>(null)
   const ruleCount = $derived(work.exportText ? countFilterRules(work.exportText) : 0)
@@ -115,11 +126,11 @@
 
   // The one intake. Every door into the drop zone -- a dropped file, a
   // chosen file, a paste -- ends here, so a second export always lands
-  // in exactly the state the first one did.
+  // in exactly the state the first one did. The text and the router it
+  // came from are stored together by work.take; only the two error
+  // lines, which belong to this component, are cleared here.
   function take(text: string, name: string) {
-    work.exportText = text
-    work.exportName = name
-    work.resetDownstream()
+    work.take(text, name)
     analyseError = null
     renderError = null
   }
