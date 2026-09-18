@@ -62,11 +62,14 @@ describe('fitRing (#1215)', () => {
 // a margin), which is the safer default for something that is not
 // visibly a box.
 describe('TOUR_HIGHLIGHTS box classification (#1215 item 3)', () => {
-  it('marks only the topography waist -- an SVG rect with its own fill and stroke -- as a box', () => {
+  it('marks the topography waist and the log-every-rule drop zone -- each paints its own fill and stroke -- as boxes, and nothing else', () => {
     const boxed = Object.entries(TOUR_HIGHLIGHTS).flatMap(([cardKey, list]) =>
       list.filter((h) => h.box === true).map((h) => `${cardKey}: ${h.label}`),
     )
-    expect(boxed).toEqual(['topography: the router as the waist — subnets below, the internet above'])
+    expect(boxed).toEqual([
+      'topography: the router as the waist — subnets below, the internet above',
+      'log-every-rule: one drop zone — drop, click or paste the router export',
+    ])
   })
 })
 
