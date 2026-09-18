@@ -392,6 +392,42 @@ func scriptAddSource(t *testing.T, block string) (string, bool) {
 	return rest[:j], true
 }
 
+// extractEscapedValue finds marker in s and reads a RouterOS-escaped
+// value forward from there, stopping at the first unescaped `"` --
+// honouring the same backslash-escapes-the-next-character rule
+// unescapeRouterOS applies, rather than a plain strings.Index("\"")
+// that a value carrying \" would fool. It returns the raw (still
+// escaped) slice; the caller runs it through unescapeRouterOS to get
+// the value RouterOS itself would read.
+//
+// This is what lets a test check the *inner* string a saved script
+// actually parses when it runs -- not just that the outer
+// scriptSource wrapper contains some escaped bytes, which is true of
+// the vulnerable code too (#1095, defence-in-depth Security stage):
+// scriptSource escapes the whole body once regardless of whether an
+// inner quote was ever escaped on its own account.
+func extractEscapedValue(t *testing.T, s, marker string) string {
+	t.Helper()
+	i := strings.Index(s, marker)
+	if i == -1 {
+		t.Fatalf("marker %q not found in %q", marker, s)
+	}
+	start := i + len(marker)
+	for j := start; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+			if j >= len(s) {
+				t.Fatalf("value after %q ends on a lone backslash: %q", marker, s)
+			}
+		case '"':
+			return s[start:j]
+		}
+	}
+	t.Fatalf("value after %q never closes with an unescaped quote: %q", marker, s)
+	return ""
+}
+
 // TestScriptSourceRoundTrips is the escaping's real contract: whatever
 // body goes in, RouterOS's own un-escaping takes back out. The fixture
 // carries every character the rule is about -- a quote, a backslash, a
@@ -808,18 +844,115 @@ func TestPushBlockEscapesQuotedAddress(t *testing.T) {
 	}
 }
 
-// TestBackupScriptEscapesQuotedToken covers #1095's password=\"...\"
-// spot: BackupScript's hand-written quote wrapper around token must
-// route through the same escaping quote gives every other quoted value,
-// so a token carrying '"' or '\' cannot break out of it.
+// TestBackupScriptEscapesQuotedToken proves the real security property,
+// not merely that the outer source="..." wrapper carries some escaped
+// bytes -- a shallow "contains" check on that alone cannot tell this
+// function's own quote() apart from the outer wrap doing all the work
+// by accident, which is exactly the bug this test used to miss (v0.6.0
+// audit, Security stage): it un-wraps the outer layer first, the same
+// way RouterOS does when it saves the script, then reads the inner
+// password="..." value the same way RouterOS does a second time when
+// the saved script actually *runs*, and checks that value is the raw
+// token again, byte for byte -- proving the inner quoting survives
+// being nested inside the outer one rather than merely coexisting with
+// it.
 func TestBackupScriptEscapesQuotedToken(t *testing.T) {
-	benign := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123", "a")
-	tricky := BackupScript("10.0.40.5", "47022", "rb5009", `tok"; /system reset\`, "a")
-	if !strings.Contains(tricky, `password=\"tok\"; /system reset\\\"`) {
-		t.Errorf("BackupScript did not escape the token:\n%s", tricky)
+	token := "tok\"$evil\\; /system reset"
+	got := BackupScript("10.0.40.5", "47022", "rb5009", token, "a")
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
 	}
-	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
-		t.Errorf("BackupScript unescaped quote count = %d, want %d (same structure as a benign token):\n%s", got, want, tricky)
+	body := unescapeRouterOS(t, source)
+	// BackupScript writes password="..." twice, once per SFTP upload
+	// line -- both must round-trip, not just whichever one a naive
+	// first-match search happens to find.
+	rest := body
+	for i := 0; i < 2; i++ {
+		value := extractEscapedValue(t, rest, `password="`)
+		if got := unescapeRouterOS(t, value); got != token {
+			t.Errorf("BackupScript's password=\"...\" #%d did not round-trip through the saved script: got %q, want %q\nbody:\n%s", i+1, got, token, body)
+		}
+		rest = rest[strings.Index(rest, `password="`)+len(`password="`)+len(value)+1:]
+	}
+}
+
+// TestBackupScriptNormalTokenIsUnchangedByTheFix pins BackupScript's
+// output for a token drawn from the charset validSetupToken actually
+// allows through in production (letters, digits, '-', '_' -- what
+// internal/auth's hex tokens look like) -- captured from the code
+// before quote() was added to token. Defence-in-depth quoting a value
+// that carries none of the characters quote() touches is a no-op, and
+// this is the test that would catch it being anything else.
+func TestBackupScriptNormalTokenIsUnchangedByTheFix(t *testing.T) {
+	got := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123_ABC", "a")
+	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" }"
+	if got != want {
+		t.Errorf("BackupScript with a normal token changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// TestPushBlockEscapesQuotedAndDollarToken is BackupScript's twin for
+// the ingest push block's Bearer header: the token has to survive being
+// read out of the saved mv-push script's inner Authorization header the
+// way RouterOS reads it when the schedule fires, not merely appear
+// escaped somewhere in the outer source="...".
+func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
+	token := "tok\"$evil\\; /system reset"
+	body := PushScript("192.0.2.10:8080", token, []string{"arp"}, "a")
+	got := ScheduleCommands(body, "a")
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
+	}
+	inner := unescapeRouterOS(t, source)
+	value := extractEscapedValue(t, inner, "Bearer ")
+	if got := unescapeRouterOS(t, value); got != token {
+		t.Errorf("PushBlock's Bearer header did not round-trip through the saved script: got %q, want %q\nbody:\n%s", got, token, inner)
+	}
+}
+
+// TestPushBlockNormalTokenIsUnchangedByTheFix is
+// TestBackupScriptNormalTokenIsUnchangedByTheFix's twin for PushBlock:
+// captured from the code before quote() was added to token, to pin that
+// a normal token's rendered output is byte-for-byte identical.
+func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
+	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=2; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	if got != want {
+		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// TestLoggingPushBlockEscapesQuotedAndDollarToken is
+// TestPushBlockEscapesQuotedAndDollarToken's twin for the #1241 setup
+// report block, which carries its own Bearer header and its own %s
+// fmt.Sprintf call rather than sharing PushBlock's.
+func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
+	token := "tok\"$evil\\; /system reset"
+	// loggingPushBlock always rides along in PushScript (see PushScript),
+	// so asking for no tables at all still carries it.
+	body := PushScript("192.0.2.10:8080", token, nil, "a")
+	got := ScheduleCommands(body, "a")
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
+	}
+	inner := unescapeRouterOS(t, source)
+	value := extractEscapedValue(t, inner, "Bearer ")
+	if got := unescapeRouterOS(t, value); got != token {
+		t.Errorf("loggingPushBlock's Bearer header did not round-trip through the saved script: got %q, want %q\nbody:\n%s", got, token, inner)
+	}
+}
+
+// TestLoggingPushBlockNormalTokenIsUnchangedByTheFix is
+// TestPushBlockNormalTokenIsUnchangedByTheFix's twin for
+// loggingPushBlock: captured before quote() was added to token.
+func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
+	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
+	want := ":local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"name\") = \"mikroview\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if (($v->\"action\") = \"mikroview\") do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=2; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	if got != want {
+		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
 }
 
