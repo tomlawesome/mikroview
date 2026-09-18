@@ -37,6 +37,14 @@ vi.mock('../lib/api', () => ({
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
+// downloadFromUrl's own fetch-and-save path is unreliable in jsdom (see
+// RouterBackups.svelte.test.ts's identical guard) -- faked at the module
+// boundary so what is tested here is this component's own wiring: which
+// URL, and what the vault gate does to it (#1218 audit finding 16).
+vi.mock('../lib/export', () => ({
+  downloadFromUrl: vi.fn(),
+}))
+
 import {
   createToken,
   fetchDevices,
@@ -51,6 +59,7 @@ import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
+import { downloadFromUrl } from '../lib/export'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
 // Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
@@ -1599,36 +1608,93 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(createToken).not.toHaveBeenCalled()
   })
 
+  // Shared by the lost-router tests below: one router, one generation,
+  // and whatever lock the vault passphrase gate (#1115) should read.
+  function lostRouterBackups(lock?: Partial<import('../lib/types').VaultLock>) {
+    return backupsFixture({
+      enabled: true,
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [
+            { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
+          ],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900, ...lock },
+    })
+  }
+
   it('reaches the lost-router shape only through wizardState.openLostRouter, never on its own', async () => {
-    vi.mocked(fetchRouterBackups).mockResolvedValue(
-      backupsFixture({
-        enabled: true,
-        routers: [
-          {
-            device: 'rb5009',
-            generations: [
-              { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
-            ],
-            intervalKnown: false,
-            missed: 0,
-          },
-        ],
-      }),
-    )
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('ok')
     wizardState.openLostRouter('rb5009')
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.textContent).toContain('rb5009 is gone'))
-    expect(screen.getByRole('link', { name: /download the newest \.backup/ })).toHaveProperty(
-      'href',
-      expect.stringContaining('/api/router-backups/rb5009/g0/backup'),
-    )
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+    expect(downloadFromUrl).toHaveBeenCalledWith('/api/router-backups/rb5009/g0/backup', 'rb5009.backup')
     expect(screen.getByRole('button', { name: 'done — the replacement is pushing' })).toBeTruthy()
     // No skip on this footer -- there is nothing to skip past.
     expect(screen.queryByRole('button', { name: 'Skip this step' })).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'done — the replacement is pushing' }))
     expect(wizardState.lostRouterDevice).toBeNull()
+  })
+
+  // #1218 audit finding 16: the download used to be a plain <a href>,
+  // so it ignored #1115's vault passphrase gate entirely -- a locked
+  // vault meant the browser navigated the whole tab to whatever the
+  // server's 403 answered with, rather than reading it as gated the way
+  // RouterBackups.svelte's own downloads (the same endpoint) already do.
+  it('gates the download behind a locked vault, with no link to click', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups({ passphraseSet: true, locked: true }))
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    expect(screen.getByText(/locked — the vault passphrase opens downloads/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download the newest \.backup/ })).toBeNull()
+    expect(downloadFromUrl).not.toHaveBeenCalled()
+  })
+
+  it('names the other case too -- unlocked elsewhere, not here', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(
+      lostRouterBackups({ passphraseSet: true, locked: false, unlockedForYou: false }),
+    )
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    expect(screen.getByText(/unlocked by another of your sign-ins/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download the newest \.backup/ })).toBeNull()
+  })
+
+  it('reports a failed download instead of doing nothing', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('failed')
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+
+    expect(await screen.findByText('The download failed. Try again.')).toBeTruthy()
+  })
+
+  it('re-reads the vault lock instead of the client’s own clock when a download 403s', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValueOnce(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('forbidden')
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    vi.mocked(fetchRouterBackups).mockResolvedValueOnce(lostRouterBackups({ passphraseSet: true, locked: true }))
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+
+    expect(await screen.findByText(/locked — the vault passphrase opens downloads/)).toBeTruthy()
   })
 })
 

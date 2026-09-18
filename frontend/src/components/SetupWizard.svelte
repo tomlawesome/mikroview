@@ -34,6 +34,7 @@
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import { newestGeneration } from '../lib/backups'
+  import { downloadFromUrl } from '../lib/export'
   import {
     HOW_TO_MOUNT_URL,
     KEY_DIR,
@@ -468,6 +469,32 @@
   const lostObservationText = $derived(
     wizardState.lostRouterDevice ? backupReceiptForDevice(wizardState.backups, wizardState.lostRouterDevice) : '',
   )
+
+  // lostRouterGated (#1218 audit finding 16): the "download the newest
+  // .backup" link used to be a plain <a href>, so it ignored #1115's
+  // vault passphrase gate entirely -- RouterBackups.svelte's own
+  // downloads (the same endpoint) go through downloadFromUrl and hide
+  // behind this exact check; a bare link here just navigated the whole
+  // tab to whatever the server answered a locked vault with, including
+  // a 403 page, rather than reading it as "gated" at all.
+  const lostRouterGated = $derived(
+    wizardState.backups ? wizardState.backups.lock.passphraseSet && !wizardState.backups.lock.unlockedForYou : false,
+  )
+  let lostDownloadError = $state<string | null>(null)
+
+  async function downloadLostBackup(device: string, generation: string) {
+    lostDownloadError = null
+    const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, 'backup'), `${device}.backup`)
+    if (outcome === 'forbidden') {
+      // The idle timeout lapsing between the link being drawn and the
+      // click -- re-read the lock (and the rest of the backups read
+      // along with it, same as RouterBackups.svelte's refreshLock)
+      // rather than trusting a client-side clock to have guessed right.
+      await wizardState.refreshBackups()
+    } else if (outcome === 'failed') {
+      lostDownloadError = 'The download failed. Try again.'
+    }
+  }
 
   async function copy(text: string, label: string) {
     try {
@@ -1287,14 +1314,24 @@
                     {#if step.flavour !== 'arrived' && !lostGeneration}<span class="dot" aria-hidden="true"></span>{/if}
                     {lostObservationText || 'nothing kept for this router yet'}
                     {#if lostGeneration}
-                      ·
-                      <a
-                        class="olink"
-                        href={routerBackupDownloadUrl(wizardState.lostRouterDevice ?? '', lostGeneration.id, 'backup')}
-                      >
-                        download the newest .backup
-                      </a>
-                      to restore the replacement, then run the script above
+                      {#if lostRouterGated}
+                        ·
+                        {wizardState.backups?.lock.locked
+                          ? 'locked — the vault passphrase opens downloads'
+                          : 'unlocked by another of your sign-ins — unlock it in Settings to download here'}
+                        <button type="button" class="link" onclick={openBackupsInSettings}>open Settings</button>
+                      {:else}
+                        ·
+                        <button
+                          type="button"
+                          class="olink"
+                          onclick={() => downloadLostBackup(wizardState.lostRouterDevice ?? '', lostGeneration.id)}
+                        >
+                          download the newest .backup
+                        </button>
+                        to restore the replacement, then run the script above
+                        {#if lostDownloadError}<span class="load-error">{lostDownloadError}</span>{/if}
+                      {/if}
                     {/if}
                   {:else}
                     {#if step.flavour === 'waiting'}<span class="dot" aria-hidden="true"></span>{/if}
@@ -2075,8 +2112,10 @@
      inline with the sentence beside it, not a second boxed button next
      to "Run setup… reopens this". Step 6's "see it in Settings", "mint
      a new one" and "how to mount one"/"download the newest .backup"
-     (#394, round 45) read the same way, the last two as real <a>
-     elements rather than buttons since they navigate. */
+     (#394, round 45) read the same way -- the download is a <button>
+     now, not a real <a>, so downloadFromUrl can read a locked vault as
+     a status rather than the browser navigating to whatever a 403
+     answers with (#1218 audit finding 16). */
   button.link,
   a.olink,
   button.olink {
