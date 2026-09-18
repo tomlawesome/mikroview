@@ -427,9 +427,15 @@ describe('keeping a backup', () => {
     expect(await screen.findByText(/before the 7.16 upgrade/)).toBeTruthy()
 
     // The stale poll: still the pre-keep router, as a brand new object
-    // (a real poll never hands back the exact same reference), and
-    // issued before the keep landed -- fetchedAt 0 says so.
-    await rerender({ resp: resp({ routers: [{ ...router }] }), fetchedAt: 0, onopenlost: vi.fn() })
+    // (a real poll never hands back the exact same reference), from a
+    // request issued five seconds before the keep landed -- which is
+    // the whole point, so it is dated rather than left at the 0 the
+    // other renders here use as "no poll yet".
+    await rerender({
+      resp: resp({ routers: [{ ...router }] }),
+      fetchedAt: Date.now() - 5000,
+      onopenlost: vi.fn(),
+    })
 
     expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
   })
