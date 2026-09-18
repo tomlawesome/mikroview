@@ -117,6 +117,7 @@ function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     inInterface: 'iot',
     outInterface: 'bridge1',
     srcAddressList: 'iot',
+    slugs: [],
     label: 'iot → bridge1',
     coverage: 'observed',
     epithet: '',
@@ -396,13 +397,51 @@ describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #
     // An event on a boundary no pushed rule names makes the "other
     // traffic" band; the three words on its caption meant nothing
     // without a screen reader.
-    const events = [makeEvent({ chain: 'forward', inInterface: 'wan', outInterface: 'lan' })]
+    // The chain here is one nothing was pushed for at all -- #1196 gives
+    // the other case (a pushed chain, other interfaces) its own sentence,
+    // tested below.
+    const events = [makeEvent({ chain: 'srcnat', inInterface: 'wan', outInterface: 'lan' })]
     const { container } = await renderFall({ boundaries: [boundary()], events })
     const caption = [...container.querySelectorAll('.band-caption')].find((n) => n.textContent?.includes('NOT IN A PUSHED TABLE'))
     expect(caption?.querySelector('title')?.textContent).toBe('events whose boundary is not in a pushed rule table yet')
     // The same words, not a second wording of them.
     const head = caption?.closest('.band-head')
     expect(head?.getAttribute('aria-label')).toContain('events whose boundary is not in a pushed rule table yet')
+  })
+})
+
+// #1196: a pushed rule that names no interface used to key as
+// `forward||` while its own traffic keyed as `forward|bridge|ether1`, so
+// every lane read zero and everything sat in "other traffic".
+describe('the fall matches traffic to the rules that actually catch it (#1196)', () => {
+  const wildcard = boundary({
+    key: 'forward||',
+    inInterface: '',
+    outInterface: '',
+    srcAddressList: '',
+    label: 'forward',
+  })
+
+  it('draws interfaced traffic on the band whose rule names no interface', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'bridge', outInterface: 'ether1', dstPort: 443 })]
+    const { container } = await renderFall({ boundaries: [wildcard], events })
+    expect(container.textContent).not.toContain('NOT IN A PUSHED TABLE')
+    const head = [...container.querySelectorAll('.band-head')].find((n) => n.getAttribute('aria-label')?.startsWith('forward'))
+    expect(head?.getAttribute('aria-label')).toContain('1 events this window')
+  })
+
+  it('tells the unmatched lane why when the chain is pushed but the interfaces are not', async () => {
+    // boundary() names both interfaces; this event is in the same chain
+    // through different ones, so "not in a pushed table" would be true
+    // but would point the operator at the wrong thing.
+    const events = [makeEvent({ chain: 'forward', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const caption = [...container.querySelectorAll('.band-caption')].find((n) => n.textContent?.includes('NOT IN A PUSHED TABLE'))
+    expect(caption?.querySelector('title')?.textContent).toBe(
+      'their chain is in a pushed table, but no rule there names these interfaces',
+    )
+    const head = caption?.closest('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain('their chain is in a pushed table, but no rule there names these interfaces')
   })
 })
 
