@@ -31,8 +31,9 @@ reads (the DSN, the history key, a TLS private key) should stay `600`; a
 certificate or a GeoIP database is not a secret and `644` is fine.
 
 A whole *directory* you bind-mount — the data directory — is the same
-idea with `-R`: `sudo chown -R 1000:1000 ./data`, described in README.md's
-"Persistent data" section.
+idea with `-R`: `sudo chown -R 1000:1000 ./data`, described in
+[docs/install.md](install.md#persistent-data)'s "Persistent data"
+section.
 
 1000 is not a number MikroView invented for itself: it is the uid in the
 image's `USER` line, which `docker inspect` will show you. If you start
@@ -1337,11 +1338,14 @@ instead of asynchronously.
 Separate from the fetched feeds above: the drop list is a small store of
 ranges an admin has explicitly decided to block, typed in directly or
 raised from a flag's drawer, never written automatically. #461's ratified
-design has three stages -- the store and its validation (#1223: public
-IPv4 only, no broader than /24, and never a range the pushed router state
-shows as the router's own), the admin API and the RouterOS feed (#1224,
-this stage), and the Settings group and router setup card (#1225, still
-to come).
+design shipped in three stages, all now in this release: the store and
+its validation (#1223: public IPv4 only, no broader than /24, and never a
+range the pushed router state shows as the router's own), the admin API
+and the RouterOS feed (#1224), and the Settings group and router setup
+card (#1225). Manage it from Settings ▸ Engine room's drop list group:
+add and remove entries with who/when/why, one drift line per router,
+mint or revoke the pull key, and copy the setup commands below already
+filled in.
 
 ```yaml
 droplist:
@@ -1356,14 +1360,22 @@ droplist:
 A router pulls the current drop list itself, on its own schedule, with
 its own pull-only key -- MikroView never connects to a router (see
 `AGENTS.md`'s "MikroView observes; it never scans or connects"). Minting
-a key (`POST /api/droplist/key`) prints the two lines to paste into the
-router's terminal (#1225's setup card renders these; shown here for what
-they actually are):
+a key (`POST /api/droplist/key`, or Settings ▸ Engine room's drop list
+group) prints four RouterOS commands, already filled in with the real
+address and key, to paste into the router's terminal once:
 
 ```
-/tool fetch url="https://<mikroview>/api/droplist.rsc" http-header-field="Authorization: Bearer <key>" dst-path=mikroview-drop.rsc
-/import file-name=mikroview-drop.rsc
+/system scheduler add name=mikroview-drop interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc"
+/ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0
 ```
+
+The scheduler is what keeps the router current -- it re-runs the fetch
+and import every 5 minutes, so an entry you add or remove reaches the
+router on its own, with nothing to re-paste. The firewall rule is what
+actually drops the traffic; without it the address list fills but
+nothing is blocked. Two more commands are rendered alongside these, for
+undoing either one without retyping: one disables the rule, the other
+empties the address list.
 
 The fetched script never rewrites the live `mikroview-drop` address list
 directly. It builds the new generation entirely in a staging list
@@ -2019,8 +2031,8 @@ device-attributed exception:
   Minting or revoking the pull key a router fetches the feed with (#1224)
   is `droplist.key_minted` (detail says "replaced the previous key" when
   minting rotated an existing one rather than creating the first) and
-  `droplist.key_revoked`. There is still no UI writing any of this yet --
-  that is #1225.
+  `droplist.key_revoked`. Settings ▸ Engine room's drop list group (#1225)
+  is what actually writes these.
 
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
@@ -4459,7 +4471,7 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/rules` | every rule label MikroView has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what MikroView actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)). Also `liveSince` (RFC 3339 UTC, when this process started observing) and, only after a warm restart, `restoredTo` (when the snapshot it loaded was taken) -- absent rather than null on a cold start, see [Warm restart](#warm-restart-what-survives-a-restart) |
 | `GET /api/stats/tops` | per-minute top-port/top-talker breakdown of the last hour, same tier as `GET /api/stats` -- feeds the Metrics page |
-| `POST /api/syslog/loss/clear` | user tier: zeroes the four monotonic ingest-loss counters `GET /api/stats`' `syslog.loss` field is built from, so a transient loss the operator has already seen stops permanently marking the instance (issue #1015). Audit-logged once per call, carrying the totals cleared. Same tier as `POST /api/flags/clear-all` |
+| `POST /api/syslog/loss/clear` | user tier: zeroes the five monotonic ingest-loss counters `GET /api/stats`' `syslog.loss` field is built from -- `dropped`, `rejectedConfigured`, `rejected`, `oversized`, and `duplicateSightings` (added by #1234) -- so a transient loss the operator has already seen stops permanently marking the instance (issue #1015). Audit-logged once per call, carrying the totals cleared. Same tier as `POST /api/flags/clear-all` |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/routeros/{device}/rules` | the pushed firewall filter table for one router, in RouterOS's own display order (#186) -- read from MikroView's own stored state, never a live call to the router |
