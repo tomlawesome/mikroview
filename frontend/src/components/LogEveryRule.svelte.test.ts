@@ -730,6 +730,32 @@ describe('LogEveryRule device pick', () => {
     expect(logEveryRuleWorkState.result).toBeNull()
   })
 
+  // Same fault, reached without touching the router at all: replace the
+  // pasted export while an analyse is still running and the old text's
+  // answer lands under the new text. The drop zone shows one export and
+  // the rule list below it describes another.
+  it('drops an analyse still running when a new export is pasted', async () => {
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+
+    // A second export replaces the first, same router.
+    await typeExport(container, EXPORT_TEXT.replace('lan to wan', 'something else'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+
+    // The first export's analysis arrives now.
+    settle(analyseResponse())
+    await waitFor(() => expect(logEveryRuleWorkState.exportText).toContain('something else'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+    expect(container.querySelectorAll('.rule-row').length).toBe(0)
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first
