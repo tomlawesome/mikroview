@@ -104,14 +104,14 @@ const router = {
 
 describe('no key mounted', () => {
   it('says the drop box is closed, with no per-router block', () => {
-    render(RouterBackups, { props: { resp: resp({ enabled: false }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ enabled: false }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText(/none mounted — a backup that arrives has nowhere safe to go/)).toBeTruthy()
   })
 })
 
 describe('nothing pushed yet', () => {
   it('points at the wizard step that prints the script', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText(/no router has pushed one yet/)).toBeTruthy()
     expect(screen.getByText(/the wizard's step 6 prints the script/)).toBeTruthy()
   })
@@ -122,7 +122,7 @@ describe('a router at rest', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ routers: [router], totalGenerations: 1, totalRouters: 1, totalBytes: 450000 }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     expect(screen.getByText('rb5009')).toBeTruthy()
@@ -136,7 +136,7 @@ describe('a router at rest', () => {
   it('downloads through the fetch-and-save path, not a plain link', async () => {
     vi.mocked(downloadFromUrl).mockResolvedValue('ok')
     render(RouterBackups, {
-      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
     expect(downloadFromUrl).toHaveBeenCalledWith('/api/router-backups/rb5009/g0/backup', 'rb5009.backup')
@@ -146,7 +146,7 @@ describe('a router at rest', () => {
     vi.mocked(downloadFromUrl).mockResolvedValue('forbidden')
     vi.mocked(fetchRouterBackups).mockResolvedValue(resp({ lock: lock({ passphraseSet: true, locked: true }) }))
     render(RouterBackups, {
-      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
@@ -159,7 +159,7 @@ describe('a router at rest', () => {
   it('says so when a download fails outright, rather than doing nothing', async () => {
     vi.mocked(downloadFromUrl).mockResolvedValue('failed')
     render(RouterBackups, {
-      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
     expect((await screen.findByRole('alert')).textContent).toBe('The download failed. Try again.')
@@ -168,7 +168,7 @@ describe('a router at rest', () => {
   it('clears a previous download error once a later download succeeds', async () => {
     vi.mocked(downloadFromUrl).mockResolvedValueOnce('failed')
     render(RouterBackups, {
-      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
     expect(await screen.findByRole('alert')).toBeTruthy()
@@ -192,7 +192,7 @@ describe('a router that has missed its usual push', () => {
       lastArrival: '2026-08-30T03:00:00Z',
       missed: 3,
     }
-    render(RouterBackups, { props: { resp: resp({ routers: [missedRouter] }), onopenlost } })
+    render(RouterBackups, { props: { resp: resp({ routers: [missedRouter] }), fetchedAt: 0, onopenlost } })
     expect(screen.getByText(/3 missed/)).toBeTruthy()
     const link = screen.getByRole('button', { name: 'is it gone?' })
     link.click()
@@ -203,7 +203,7 @@ describe('a router that has missed its usual push', () => {
 describe('the facts column', () => {
   it('states the arrive-by port and the fixed allowance', () => {
     const restingRouter = { device: 'rb5009', generations: [], intervalKnown: false, missed: 0 }
-    render(RouterBackups, { props: { resp: resp({ routers: [restingRouter] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [restingRouter] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText(/SFTP on port 47022/)).toBeTruthy()
     expect(screen.getByText(/10 pairs a router · 16 MiB a file/)).toBeTruthy()
   })
@@ -211,7 +211,7 @@ describe('the facts column', () => {
 
 describe('the vault passphrase (#1115)', () => {
   it('off: offers to set one, with the loss warning above the confirm field and a client-side length refusal', async () => {
-    render(RouterBackups, { props: { resp: resp(), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp(), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText('off')).toBeTruthy()
 
     await fireEvent.click(screen.getByRole('button', { name: 'set…' }))
@@ -239,7 +239,7 @@ describe('the vault passphrase (#1115)', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ routers: [router], lock: lock({ passphraseSet: true, locked: true }) }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     expect(screen.getByText('locked')).toBeTruthy()
@@ -257,7 +257,7 @@ describe('the vault passphrase (#1115)', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ routers: [router], lock: lock({ passphraseSet: true, locked: false, unlockedForYou: false }) }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     expect(screen.getByText('unlocked elsewhere')).toBeTruthy()
@@ -270,7 +270,7 @@ describe('the vault passphrase (#1115)', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ routers: [router], lock: lock({ passphraseSet: true, unlockedForYou: true }) }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     expect(screen.getByText('unlocked')).toBeTruthy()
@@ -286,7 +286,7 @@ describe('the vault passphrase (#1115)', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ lock: lock({ passphraseSet: true, unlockedForYou: true }) }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'remove…' }))
@@ -309,7 +309,7 @@ describe('the vault passphrase (#1115)', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ lock: lock({ passphraseSet: true, unlockedForYou: true }) }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'change…' }))
@@ -326,7 +326,7 @@ describe('the vault passphrase (#1115)', () => {
   it('unlock takes a single field and shows no warning of its own', async () => {
     vi.mocked(unlockRouterBackupVault).mockResolvedValue(lock({ passphraseSet: true, unlockedForYou: true }))
     render(RouterBackups, {
-      props: { resp: resp({ lock: lock({ passphraseSet: true, locked: true }) }), onopenlost: vi.fn() },
+      props: { resp: resp({ lock: lock({ passphraseSet: true, locked: true }) }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'unlock…' }))
     expect(screen.queryByText(/lost/i)).toBeNull()
@@ -381,7 +381,7 @@ const routerWithThree = {
 describe('keeping a backup', () => {
   it('offers keep… on the newest line and sends the typed reason', async () => {
     vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
-    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
     await fireEvent.input(screen.getByLabelText('why keep this one'), {
@@ -398,7 +398,7 @@ describe('keeping a backup', () => {
 
   it('will not keep one without a reason', async () => {
     vi.mocked(keepRouterBackup).mockClear()
-    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
     await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
@@ -416,7 +416,7 @@ describe('keeping a backup', () => {
   it('keeps the optimistic row when a stale poll lands right after it', async () => {
     vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
     const { rerender } = render(RouterBackups, {
-      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
 
     await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
@@ -427,8 +427,9 @@ describe('keeping a backup', () => {
     expect(await screen.findByText(/before the 7.16 upgrade/)).toBeTruthy()
 
     // The stale poll: still the pre-keep router, as a brand new object
-    // (a real poll never hands back the exact same reference).
-    await rerender({ resp: resp({ routers: [{ ...router }] }), onopenlost: vi.fn() })
+    // (a real poll never hands back the exact same reference), and
+    // issued before the keep landed -- fetchedAt 0 says so.
+    await rerender({ resp: resp({ routers: [{ ...router }] }), fetchedAt: 0, onopenlost: vi.fn() })
 
     expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
   })
@@ -436,7 +437,7 @@ describe('keeping a backup', () => {
   it('lets a poll that has genuinely caught up take over from the optimistic row', async () => {
     vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
     const { rerender } = render(RouterBackups, {
-      props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
 
     await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
@@ -446,28 +447,64 @@ describe('keeping a backup', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
     expect(await screen.findByText(/before the 7.16 upgrade/)).toBeTruthy()
 
-    // A poll matching what the keep call itself returned -- the parent
-    // has caught up, so a later change (another admin editing the same
+    // A poll issued after the keep landed -- the parent has genuinely
+    // caught up, so a later change (another admin editing the same
     // comment) has to be able to reach the screen rather than being
-    // pinned to this tab's own copy forever.
+    // pinned to this tab's own copy forever. It does not have to match
+    // what the keep returned: a row carries a missed count and an
+    // interval estimate that move on their own, so waiting for a match
+    // could mean waiting for ever.
     await rerender({
       resp: resp({ routers: [{ ...routerWithKept, protected: [{ ...keptGeneration }] }] }),
-      onopenlost: vi.fn(),
+      fetchedAt: Date.now() + 1000, onopenlost: vi.fn(),
     })
     await rerender({
       resp: resp({
         routers: [{ ...routerWithKept, protected: [{ ...keptGeneration, comment: 'edited by someone else' }] }],
       }),
-      onopenlost: vi.fn(),
+      fetchedAt: Date.now() + 2000, onopenlost: vi.fn(),
     })
 
     expect(await screen.findByText(/edited by someone else/)).toBeTruthy()
+  })
+
+  // The fault the freshness check replaced an equality check to fix. A
+  // row carries a missed-backup count, an interval estimate and the
+  // generations themselves, all of which move without anyone touching
+  // this screen. So a polled row need never equal the one a keep
+  // returned -- and while the override was dropped only on a match, it
+  // was never dropped at all: that router's block stayed frozen on this
+  // tab's copy, hiding whatever arrived since, until a page reload.
+  it('lets a poll take over even when its row never matches the optimistic one', async () => {
+    vi.mocked(keepRouterBackup).mockResolvedValue(routerWithKept)
+    const { rerender } = render(RouterBackups, {
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'keep…' }))
+    await fireEvent.input(screen.getByLabelText('why keep this one'), {
+      target: { value: 'before the 7.16 upgrade' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'keep' }))
+    expect(await screen.findByText(/before the 7.16 upgrade/)).toBeTruthy()
+
+    // The nightly backup lands, so the next poll's row differs from the
+    // keep's answer in a way it will never recover from.
+    await rerender({
+      resp: resp({
+        routers: [{ ...routerWithKept, protected: [{ ...keptGeneration, comment: 'kept by the night shift' }], missed: 3 }],
+      }),
+      fetchedAt: Date.now() + 1000,
+      onopenlost: vi.fn(),
+    })
+
+    expect(await screen.findByText(/kept by the night shift/)).toBeTruthy()
   })
 })
 
 describe('the earlier generations', () => {
   it('are behind earlier…, and each can be kept', async () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [routerWithThree] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithThree] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     // Only the newest line is drawn until the expander is used.
     expect(screen.queryByRole('button', { name: '.backup' })).toBeNull()
@@ -480,14 +517,14 @@ describe('the earlier generations', () => {
   })
 
   it('is not offered when a router has only the one generation', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.queryByRole('button', { name: 'earlier…' })).toBeNull()
   })
 })
 
 describe('the kept group', () => {
   it('states the reason beside the pair, with edit… and release…', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText('kept', { selector: 'p' })).toBeTruthy()
     expect(screen.getByText(/✱/)).toBeTruthy()
     expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
@@ -500,7 +537,7 @@ describe('the kept group', () => {
   it('edit… opens the same field with the reason already in it', async () => {
     const rewritten = { ...routerWithKept, protected: [{ ...keptGeneration, comment: 'before the office move' }] }
     vi.mocked(setRouterBackupComment).mockResolvedValue(rewritten)
-    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'edit…' }))
     const field = screen.getByLabelText('why keep this one') as HTMLInputElement
@@ -518,7 +555,7 @@ describe('the kept group', () => {
       protected: [],
       generations: [keptGeneration],
     })
-    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'release…' }))
     expect(screen.getByText(/release this one\? it goes back into the ten and the oldest may go/)).toBeTruthy()
@@ -529,7 +566,7 @@ describe('the kept group', () => {
 
   it('cancel leaves the kept backup alone', async () => {
     vi.mocked(releaseRouterBackup).mockClear()
-    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), fetchedAt: 0, onopenlost: vi.fn() } })
     await fireEvent.click(screen.getByRole('button', { name: 'release…' }))
     await fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
     expect(releaseRouterBackup).not.toHaveBeenCalled()
@@ -540,7 +577,7 @@ describe('the kept group', () => {
 describe('a disk that is getting low', () => {
   it('says so above the routers, and names the one thing that frees space', () => {
     render(RouterBackups, {
-      props: { resp: resp({ routers: [routerWithKept], lowSpace: true }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [routerWithKept], lowSpace: true }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     expect(
       screen.getByText(
@@ -550,14 +587,14 @@ describe('a disk that is getting low', () => {
   })
 
   it('is absent when the disk is fine', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [routerWithKept] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.queryByText(/disk is getting low/)).toBeNull()
   })
 })
 
 describe('the hint line', () => {
   it('says a kept backup stays out of the ten', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText(/a kept backup stays out of the ten until you release it/)).toBeTruthy()
   })
 })
@@ -566,7 +603,7 @@ describe('a viewer', () => {
   it('reads the kept backups and is offered none of the three controls', () => {
     authState.role = 'viewer'
     render(RouterBackups, {
-      props: { resp: resp({ routers: [routerWithKept] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [routerWithKept] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
     expect(screen.getByText('kept', { selector: 'p' })).toBeTruthy()
     expect(screen.getByText(/before the 7.16 upgrade/)).toBeTruthy()
@@ -593,13 +630,13 @@ describe('reading one export, and comparing two', () => {
   }
 
   it('offers read on the newest, and compare with previous once there are two', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByRole('button', { name: 'read' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'compare with previous' })).toBeTruthy()
   })
 
   it('offers no comparison on the only generation there is', () => {
-    render(RouterBackups, { props: { resp: resp({ routers: [router] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByRole('button', { name: 'read' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'compare with previous' })).toBeNull()
   })
@@ -612,7 +649,7 @@ describe('reading one export, and comparing two', () => {
       lines: 3,
       redacted: true,
     })
-    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'read' }))
     await waitFor(() => expect(fetchRouterBackupText).toHaveBeenCalledWith('rb5009', 'g1'))
@@ -632,7 +669,7 @@ describe('reading one export, and comparing two', () => {
       same: false,
     })
     const { container } = render(RouterBackups, {
-      props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() },
+      props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() },
     })
 
     await fireEvent.click(screen.getByRole('button', { name: 'compare with previous' }))
@@ -652,7 +689,7 @@ describe('reading one export, and comparing two', () => {
       lines: [],
       same: true,
     })
-    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'compare with previous' }))
     expect(await screen.findByText(/nothing changed between these two/)).toBeTruthy()
@@ -661,7 +698,7 @@ describe('reading one export, and comparing two', () => {
   it('re-reads the lock when the vault refuses a read, rather than showing a stale unlock', async () => {
     vi.mocked(fetchRouterBackupText).mockResolvedValue('the vault is locked -- unlock it with the vault passphrase first')
     vi.mocked(fetchRouterBackups).mockResolvedValue(resp({ lock: lock({ passphraseSet: true, locked: true }) }))
-    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), onopenlost: vi.fn() } })
+    render(RouterBackups, { props: { resp: resp({ routers: [twoGenerations] }), fetchedAt: 0, onopenlost: vi.fn() } })
 
     await fireEvent.click(screen.getByRole('button', { name: 'read' }))
     expect(await screen.findByRole('alert')).toBeTruthy()
@@ -673,7 +710,7 @@ describe('reading one export, and comparing two', () => {
     render(RouterBackups, {
       props: {
         resp: resp({ routers: [twoGenerations], lock: lock({ passphraseSet: true, locked: true }) }),
-        onopenlost: vi.fn(),
+        fetchedAt: 0, onopenlost: vi.fn(),
       },
     })
     expect(screen.queryByRole('button', { name: 'read' })).toBeNull()
