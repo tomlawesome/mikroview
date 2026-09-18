@@ -16,6 +16,36 @@ A "released version" is any `v*` tag: `v0.1.0` onwards. An install that
 predates the first release is treated as the oldest state MikroView
 knows how to read, and upgrades the same way.
 
+## Upgrading to 0.6.0: chown your bind mount first
+
+0.6.0 changes the container's user from uid/gid `65532` to `1000`
+(#1210) — 1000 is the first account on most Linux hosts, so a file you
+mount in is now readable as it stands, where `65532` needed a `chown`
+first. This is the one step the single-step promise above does not
+cover by itself: a data directory or a secret file (the Postgres DSN,
+`history.keyFile`, a TLS key) written by the old image is owned by
+`65532`, and the new container cannot write to it until you hand it
+over.
+
+Stop MikroView, then hand it over:
+
+```sh
+# bind mount
+sudo chown -R 1000:1000 /path/on/host/data
+```
+
+```sh
+# named volume
+docker run --rm -v mikroview-data:/data alpine:3.22 chown -R 1000:1000 /data
+```
+
+Mounted secret files want the same treatment — `sudo chown 1000:1000
+postgres-dsn` and so on — unless you already own them as uid 1000. Skip
+this and MikroView's own startup check refuses to start rather than
+silently losing data (see [docs/install.md](install.md#persistent-data)'s
+"Persistent data" section for what that refusal looks like); chown the
+directory it names and restart.
+
 ## What happens at start
 
 1. MikroView reads the schema version its data was last written by.
