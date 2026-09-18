@@ -173,6 +173,11 @@ beforeEach(async () => {
   // default the same way a fresh install reads.
   wizardState.backupTransport = 'sftp'
   wizardState.backupTransportError = null
+  // The history key (#1218 audit finding 4) now survives a reload via
+  // sessionStorage -- cleared here so one test's mint or pasted key
+  // never leaks into the next, the same "start without one" rule the
+  // wizardState fields above already follow.
+  sessionStorage.clear()
 })
 
 describe('SetupWizard', () => {
@@ -1214,6 +1219,31 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     await fireEvent.input(field, { target: { value: 'a-key-of-my-own-that-i-already-had' } })
     await tick()
     expect(keyField(container).value).toBe('a-key-of-my-own-that-i-already-had')
+  })
+
+  // Reproduces #1218 audit finding 4: SetupWizard's own script runs
+  // fresh on a page reload, same as unmounting and remounting does here
+  // -- and step 6 stays `blocked` (this fixture's backupsFixture never
+  // flips enabled) exactly the way it would if the operator had saved
+  // the key but not yet updated config.yaml and restarted.
+  it('shows the same key after a remount, not a fresh one that would tell the operator to overwrite it', async () => {
+    const first = await noKeyPane()
+    const firstKey = keyField(first.container).value
+    first.unmount()
+
+    const second = await noKeyPane()
+    expect(keyField(second.container).value).toBe(firstKey)
+  })
+
+  it('remembers a Reroll across a remount too -- the operator\'s latest choice, not the first mint', async () => {
+    const first = await noKeyPane()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await tick()
+    const rerolled = keyField(first.container).value
+    first.unmount()
+
+    const second = await noKeyPane()
+    expect(keyField(second.container).value).toBe(rerolled)
   })
 
   it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
