@@ -1720,7 +1720,7 @@ export async function createDroplistEntry(req: {
 }
 
 export async function deleteDroplistEntry(cidr: string): Promise<string | null> {
-  const res = await deleteJSON('/api/droplist', { cidr })
+  const res = await deleteJSON(`/api/droplist/${encodeURIComponent(cidr)}`)
   if (res.ok) return null
   return (await res.text()).trim() || `deleteDroplistEntry: ${res.status}`
 }
