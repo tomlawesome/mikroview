@@ -61,6 +61,7 @@ vi.mock('../lib/api', () => ({
   ]),
   createUser: vi.fn(),
   deleteUser: vi.fn(),
+  resetUserPassword: vi.fn(),
   fetchTokens: vi.fn(async () => [
     { id: 't1', name: 'rb5009-ingest', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-01T00:00:00Z', lastUsedAt: '2026-08-24T14:02:00Z' },
   ]),
@@ -506,6 +507,56 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'confirm — signs them out, revokes their keys' }))
     await settle()
     expect(deleteUser).toHaveBeenCalledWith('u2')
+  })
+
+  // #1251. The verb kills somebody's password outright, so it arms
+  // before it acts like remove and revoke beside it, and what it mints
+  // is shown exactly once.
+  it('reset password arms before it acts, then shows the code once', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { resetUserPassword } = await import('../lib/api')
+    vi.mocked(resetUserPassword).mockResolvedValue({
+      username: 'kai',
+      code: 'ABCD-EFGH-JKLM-NPQR',
+      expiresAt: '2026-09-19T00:00:00Z',
+    })
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'reset password' }))
+    await settle()
+    expect(resetUserPassword).not.toHaveBeenCalled()
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'confirm — their password stops working now' }),
+    )
+    await settle()
+
+    expect(resetUserPassword).toHaveBeenCalledWith('u2')
+    expect(screen.getByTestId('reset-code').textContent).toBe('ABCD-EFGH-JKLM-NPQR')
+
+    // Closing it is the end of the code: nothing holds it afterwards.
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await settle()
+    expect(screen.queryByTestId('reset-code')).toBeNull()
+  })
+
+  // An SSO account's password belongs to its provider and the server
+  // refuses (409), so the verb is absent rather than offered and denied.
+  it('offers no reset for an SSO account', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: false, sso: true },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByRole('button', { name: 'reset password' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
   })
 
   it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {

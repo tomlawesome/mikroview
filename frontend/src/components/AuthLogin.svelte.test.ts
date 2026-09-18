@@ -14,9 +14,10 @@ vi.mock('../lib/api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
+  setNewPasswordAfterReset: vi.fn(),
 }))
 
-import { fetchAuthSession, login } from '../lib/api'
+import { fetchAuthSession, login, setNewPasswordAfterReset } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import AuthLogin from './AuthLogin.svelte'
 
@@ -28,6 +29,7 @@ beforeEach(() => {
   authState.ssoAvailable = false
   authState.ssoError = null
   authState.justSignedOut = false
+  authState.mustChangePassword = false
 })
 
 async function fillAndSubmit(username: string, password: string) {
@@ -130,5 +132,69 @@ describe('AuthLogin', () => {
     const { container } = render(AuthLogin)
 
     expect(container.querySelector('.reverse')).toBeNull()
+  })
+})
+
+
+// #1251: after signing in with a one-time code, the door does not open.
+// It asks for a password of your own and shows nothing else -- the
+// server 403s everything but that one route, so anything else on screen
+// would be a promise the session cannot keep.
+describe('AuthLogin after a one-time code sign-in', () => {
+  beforeEach(() => {
+    authState.state = 'must-change-password'
+    authState.mustChangePassword = true
+  })
+
+  it('asks only for a new password, with no account field and no SSO way round it', () => {
+    authState.ssoAvailable = true
+
+    render(AuthLogin)
+
+    expect(screen.getByText('Set a new password')).toBeTruthy()
+    expect(screen.queryByLabelText('account')).toBeNull()
+    expect(screen.getByLabelText('new password')).toBeTruthy()
+    expect(screen.getByLabelText('confirm password')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+  })
+
+  it('refuses two passwords that do not match without calling the server', async () => {
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('new password'), {
+      target: { value: 'new-password-placeholder' },
+    })
+    await fireEvent.input(screen.getByLabelText('confirm password'), {
+      target: { value: 'a-different-placeholder' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /set password/i }))
+
+    expect(await screen.findByText('Passwords do not match.')).toBeTruthy()
+    expect(setNewPasswordAfterReset).not.toHaveBeenCalled()
+  })
+
+  it('sets the password and opens the app', async () => {
+    vi.mocked(setNewPasswordAfterReset).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'bilbo',
+      role: 'user',
+      mustChangePassword: false,
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('new password'), {
+      target: { value: 'new-password-placeholder' },
+    })
+    await fireEvent.input(screen.getByLabelText('confirm password'), {
+      target: { value: 'new-password-placeholder' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /set password/i }))
+
+    expect(setNewPasswordAfterReset).toHaveBeenCalledWith('new-password-placeholder')
+    expect(authState.state).toBe('authenticated')
   })
 })

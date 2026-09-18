@@ -18,6 +18,30 @@ rewritten.
 
 ### Added
 
+- **An admin can reset someone's password with a one-time code** (#1251).
+  Somebody forgets their password, or you think someone else has learned
+  it: Settings -> people -> "reset password" on their row. MikroView
+  shows you a code like `K7RM-4TQD-9WXF-3HJP` once -- no `0`, `O`, `1` or
+  `I` in it, so it is safe to read aloud -- and you hand it over in
+  person or on a call you trust. **MikroView still sends no email**: it
+  holds no address for anyone, so there is no reset link and nothing to
+  send one to.
+
+  The moment you confirm, their old password stops working and they are
+  signed out everywhere. The code works once, or for 24 hours, whichever
+  comes first, and it goes in the password box where their password used
+  to. MikroView then shows them "Set a new password" and nothing else
+  until they have chosen one.
+
+  The code is shown once and cannot be shown again -- only its hash is
+  kept, and it appears in no log and no audit entry. Lost it? Reset
+  again; that mints a new code and kills the old one. You cannot reset
+  your own account (use the account menu, or
+  `mikroview -recover-admin-account` from the console) or an SSO-only
+  account (its password belongs to your identity provider). See
+  [docs/configuration.md](docs/configuration.md), "Resetting someone's
+  password".
+
 - **Every release is now checked against a real database it wrote, not
   just real files** (#1247). Alongside the recorded data directory each
   release already gets, there is now a `pg_dump` per schema version --

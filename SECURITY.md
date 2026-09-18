@@ -200,6 +200,37 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   on the very system they're locked out of. A password reset immediately
   invalidates every existing session for that account, including on an
   already-running server.
+- **An admin resets somebody else's password with a one-time code, and
+  MikroView never emails anyone.** Accounts carry no email address by
+  design (SSO identity is `(issuer, subject)`; any `email` claim is a
+  display hint), so there is no reset-by-mail path to attack and no
+  SMTP dependency in the authentication surface. `POST
+  /api/auth/users/{id}/reset-password` (admin-only) mints a 16-character
+  code over an alphabet with no `0`/`O`/`1`/`I`, stores only its Argon2id
+  hash, and returns the code in that one response — it is not persisted
+  in clear, not written to the audit log or any server log, and cannot be
+  shown again. A second reset issues a new code and kills the first.
+
+  The reset acts immediately rather than when the person gets round to
+  the code: the account's password hash is replaced with an unmatchable
+  one, `PasswordChangedAt` is bumped (which ends every session for that
+  account, including in another process and across a restart), and the
+  live sessions are dropped there and then. The code is valid for 24
+  hours and for one login. That login produces a session which may reach
+  `POST /api/auth/password` and nothing else — enforced in the
+  authentication middleware, not per handler, and pinned by the
+  route-authorization matrix — so a credential somebody else chose never
+  opens the application.
+
+  What an admin **cannot** do with it: reset their own account (409 —
+  since MikroView holds a single admin, that keeps the admin account out
+  of this route entirely, and the console's recovery-key-gated
+  `-recover-admin-account` remains the only way back into it), reset an
+  SSO-only account (409 — its provider owns the credential), or set
+  another person's password directly. There is no route anywhere that
+  writes a chosen password onto somebody else's account: the only thing
+  an admin can hand over is a code that forces its holder to choose their
+  own.
 - **Recovery-key digests and the pepper are kept apart, and follow
   different storage.** A recovery key is never stored -- what is stored
   is an HMAC-SHA-256 digest of it, computed under a 256-bit server-side

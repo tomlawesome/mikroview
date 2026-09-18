@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from './types'
 
-// auth.svelte.ts talks to the backend exclusively through these five
+// auth.svelte.ts talks to the backend exclusively through these
 // lib/api.ts functions -- mock the whole module so tests exercise only
 // AuthState's own state-transition logic, never a real fetch().
 vi.mock('./api', () => ({
@@ -11,10 +11,18 @@ vi.mock('./api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
+  setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
 }))
 
-import { fetchAuthSession, login, logout, register, signOutEverywhere } from './api'
+import {
+  fetchAuthSession,
+  login,
+  logout,
+  register,
+  setNewPasswordAfterReset,
+  signOutEverywhere,
+} from './api'
 import { authState } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
@@ -43,6 +51,7 @@ beforeEach(() => {
   authState.ssoError = null
   authState.justSignedOut = false
   authState.signedInSince = ''
+  authState.mustChangePassword = false
   window.history.replaceState(null, '', '/')
 })
 
@@ -443,5 +452,81 @@ describe('AuthState.isAdmin / canEdit', () => {
     authState.role = ''
     expect(authState.isAdmin).toBe(false)
     expect(authState.canEdit).toBe(false)
+  })
+})
+
+
+// #1251: an account an admin has reset signs in with a one-time code.
+// The session is real but the app is not open -- the server 403s
+// everything but the change-password route -- so AuthState has to land
+// in its own view state rather than 'authenticated', or App.svelte would
+// draw an app of failed requests.
+describe('AuthState and a forced password change (#1251)', () => {
+  const cases: {
+    name: string
+    mustChangePassword: boolean | undefined
+    want: string
+  }[] = [
+    { name: 'a reset is outstanding', mustChangePassword: true, want: 'must-change-password' },
+    { name: 'no reset is outstanding', mustChangePassword: false, want: 'authenticated' },
+    {
+      name: 'an older server that does not report the flag at all',
+      mustChangePassword: undefined,
+      want: 'authenticated',
+    },
+  ]
+
+  for (const c of cases) {
+    it(`lands in ${c.want} when ${c.name}`, async () => {
+      vi.mocked(fetchAuthSession).mockResolvedValue(
+        session({
+          authenticated: true,
+          username: 'bilbo',
+          role: 'user',
+          mustChangePassword: c.mustChangePassword,
+        }),
+      )
+
+      await authState.check()
+
+      expect(authState.state).toBe(c.want)
+      expect(authState.mustChangePassword).toBe(c.mustChangePassword ?? false)
+    })
+  }
+
+  it('opens the app once the new password is set', async () => {
+    vi.mocked(setNewPasswordAfterReset).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'bilbo', role: 'user', mustChangePassword: false }),
+    )
+
+    const err = await authState.setNewPassword('new-password-placeholder')
+
+    expect(err).toBeNull()
+    expect(setNewPasswordAfterReset).toHaveBeenCalledWith('new-password-placeholder')
+    expect(authState.state).toBe('authenticated')
+    expect(authState.mustChangePassword).toBe(false)
+  })
+
+  it('surfaces a refusal and stays on the set-a-password screen', async () => {
+    authState.state = 'must-change-password'
+    authState.mustChangePassword = true
+    vi.mocked(setNewPasswordAfterReset).mockResolvedValue('password must be at least 8 characters')
+
+    const err = await authState.setNewPassword('short')
+
+    expect(err).toBe('password must be at least 8 characters')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(authState.state).toBe('must-change-password')
+  })
+
+  it('drops the flag when a mid-flight request comes back 401', () => {
+    authState.state = 'must-change-password'
+    authState.mustChangePassword = true
+
+    authState.handleUnauthorized()
+
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.mustChangePassword).toBe(false)
   })
 })
