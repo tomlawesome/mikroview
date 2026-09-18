@@ -392,7 +392,7 @@ describe('deleteDroplistEntry (#1225)', () => {
   })
 
   it('sends the CIDR in the path, not a JSON body', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => '' }))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
     vi.stubGlobal('fetch', fetchMock)
 
     await deleteDroplistEntry('203.0.113.0/24')
