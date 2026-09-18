@@ -7,8 +7,11 @@ vi.mock('./api', () => ({
   fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
+  saveSetupAddress: vi.fn(),
+  saveSetupBackupTransport: vi.fn(),
 }))
 
+import { saveSetupAddress, saveSetupBackupTransport } from './api'
 import { wizardState } from './wizard.svelte'
 import type { SetupStatus } from './types'
 
@@ -106,5 +109,36 @@ describe('openLostRouter (#394)', () => {
     wizardState.openLostRouter('hap-ax2')
     wizardState.launch()
     expect(wizardState.lostRouterDevice).toBeNull()
+  })
+})
+
+// #1218 audit finding 11: saveSetupAddress/saveSetupBackupTransport only
+// ever resolve to an error string for a refusal the server actually
+// answered -- a dropped connection rejects instead (postJSON/putJSON's
+// own fetch), and neither setter caught that. Left uncaught, the
+// rejection propagated to a fire-and-forget onclick/onblur caller in
+// SetupWizard.svelte with nothing there to catch it either, so
+// addressSaveError/backupTransportError were never set: no message
+// beside the field, which then just looked saved.
+describe('a dropped connection surfaces the same way a refusal does', () => {
+  it('saveAddress', async () => {
+    wizardState.address = '192.0.2.1'
+    wizardState.addressSaveError = null
+    vi.mocked(saveSetupAddress).mockRejectedValue(new Error('network unreachable'))
+
+    await wizardState.saveAddress()
+
+    expect(wizardState.addressSaveError).toBe('network unreachable')
+  })
+
+  it('setBackupTransport, without silently applying the switch it never confirmed', async () => {
+    wizardState.backupTransport = 'sftp'
+    wizardState.backupTransportError = null
+    vi.mocked(saveSetupBackupTransport).mockRejectedValue(new Error('network unreachable'))
+
+    await wizardState.setBackupTransport('https')
+
+    expect(wizardState.backupTransportError).toBe('network unreachable')
+    expect(wizardState.backupTransport).toBe('sftp')
   })
 })

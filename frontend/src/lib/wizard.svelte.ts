@@ -156,7 +156,19 @@ class WizardState {
   // the server renders whichever transport it has stored.
   async setBackupTransport(transport: BackupTransport): Promise<void> {
     if (transport === this.backupTransport) return
-    const error = await saveSetupBackupTransport(transport)
+    // saveSetupBackupTransport only ever resolves to an error string for
+    // a refusal the server actually answered (postJSON/putJSON's own
+    // fetch throws instead on a dropped connection) -- caught here so a
+    // network failure surfaces the same way a refusal does, rather than
+    // as an unhandled rejection that leaves backupTransportError exactly
+    // as it was (most likely null), with nothing beside the pair saying
+    // the switch never took.
+    let error: string | null
+    try {
+      error = await saveSetupBackupTransport(transport)
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    }
     this.backupTransportError = error
     if (error) return
     this.backupTransport = transport
@@ -171,8 +183,23 @@ class WizardState {
   // yet", and every command block already renders its own no-command
   // state from that on the server side (commandStep.blocked's
   // "no-address" key, the same mechanism #1217 gave the backup block).
+  //
+  // saveSetupAddress only ever resolves to an error string for a
+  // refusal the server actually answered (postJSON's own fetch throws
+  // instead on a dropped connection) -- caught here so a network
+  // failure surfaces the same way a refusal does, rather than as an
+  // unhandled rejection that leaves addressSaveError exactly as it was
+  // (most likely null), with the field looking saved when nothing was.
   async saveAddress(): Promise<void> {
-    this.addressSaveError = this.address ? await saveSetupAddress(this.address) : null
+    if (!this.address) {
+      this.addressSaveError = null
+      return
+    }
+    try {
+      this.addressSaveError = await saveSetupAddress(this.address)
+    } catch (err) {
+      this.addressSaveError = err instanceof Error ? err.message : String(err)
+    }
   }
 
   // ledger is the six steps as they currently stand. Empty until the
@@ -257,11 +284,30 @@ class WizardState {
   // moved it onto this object: the component reads it in the same
   // derived key that decides when to re-request at all, and a call that
   // took its own copy from here could disagree with that key.
-  async refreshCommands(opts: { token?: string; device?: string } = {}): Promise<void> {
+  //
+  // Deliberately not debounced here (#1218 audit finding 11): the only
+  // caller this actually spams is commandsKey's own effect in
+  // SetupWizard.svelte, driven by wizardState.address on every
+  // keystroke -- every other trigger (a token just minted, a version
+  // picked, a transport switch) is a discrete event that this component
+  // and its tests both expect to answer promptly. SetupWizard.svelte
+  // debounces the address component of that key instead of delaying
+  // every call here regardless of what triggered it.
+  //
+  // opts.address lets that caller pass its own debounced value rather
+  // than this reading wizardState.address itself: this function reads
+  // its address argument before its own first await, so a caller that
+  // left it to read `this.address` here would pick up wizardState.address
+  // as a dependency too, transitively -- Svelte's reactive tracking
+  // follows any reactive read during an effect's synchronous execution,
+  // including ones inside a function the effect calls, which is exactly
+  // the "per keystroke" behaviour the debounce above exists to stop.
+  // Every other caller omits it and gets the live value, same as before.
+  async refreshCommands(opts: { token?: string; device?: string; address?: string } = {}): Promise<void> {
     if (!this.status) return
     const seq = ++this.commandsRequestSeq
     const result = await fetchSetupCommands({
-      address: this.address,
+      address: opts.address ?? this.address,
       syslogPort: this.status.instance.syslogPort,
       kinds: this.status.pushKinds,
       token: opts.token || undefined,

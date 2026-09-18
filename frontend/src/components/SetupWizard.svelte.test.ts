@@ -681,6 +681,37 @@ describe('SetupWizard -- the address field (#1213)', () => {
     })
   })
 
+  // #1218 audit finding 11: the field is bound per keystroke, and
+  // commandsKey (this file's own effect below) includes
+  // wizardState.address -- before refreshCommands debounced its actual
+  // request, every one of these fired its own POST
+  // /api/setup/commands. fetchSetupCommands is called once already by
+  // the initial mount (asserted above in the previous test's own first
+  // line); this one keeps typing going and checks the traffic that
+  // follows collapses to one more call, not one per character.
+  it('collapses a run of keystrokes into a single request, not one per character', async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+    // Mount settles on its own (unrelated to the address field -- the
+    // status/token effects above can each fire their own initial
+    // request), so the baseline is however many calls that took, not an
+    // assumed 1 -- what this test actually checks is the *delta* a run
+    // of keystrokes adds.
+    const baseline = vi.mocked(fetchSetupCommands).mock.calls.length
+
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    for (const value of ['1', '19', '192', '192.', '192.1', '192.16', '192.168']) {
+      await fireEvent.input(input, { target: { value } })
+    }
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.address).toBe('192.168')
+    })
+    // One more call for the whole run, not one per character.
+    expect(vi.mocked(fetchSetupCommands).mock.calls.length - baseline).toBe(1)
+  })
+
   it('persists on blur, not on every keystroke', async () => {
     render(SetupWizard)
     const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
