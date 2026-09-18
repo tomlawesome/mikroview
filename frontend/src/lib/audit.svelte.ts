@@ -31,6 +31,17 @@ class AuditState {
       this.loaded = true
     }
   }
+
+  // #1083, v0.6.0 pre-release audit Security stage: auditState was
+  // missed from the original batch. `loaded` never reset on its own, so
+  // AuditLog.svelte kept rendering the previous account's action log
+  // for whoever signed in next on this tab.
+  reset() {
+    this.list = []
+    this.hasMore = false
+    this.loaded = false
+    this.error = null
+  }
 }
 
 export const auditState = new AuditState()

@@ -13,6 +13,7 @@ vi.mock('./api', () => ({
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
+  fetchPersistence: vi.fn(),
 }))
 
 import {
@@ -22,6 +23,7 @@ import {
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
+  fetchPersistence,
 } from './api'
 import { authState } from './auth.svelte'
 import { appState } from './state.svelte'
@@ -29,7 +31,12 @@ import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
 import { wizardState } from './wizard.svelte'
 import { logEveryRuleWorkState } from './logEveryRuleWork.svelte'
-import { emptyFilters, type Device, type Flag, type RouterBackupsResponse, type Stats, type WatchlistEntry } from './types'
+import { tokensState } from './tokens.svelte'
+import { usersState } from './users.svelte'
+import { auditState } from './audit.svelte'
+import { persistenceState } from './persistence.svelte'
+import { configProblemsState } from './configProblems.svelte'
+import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -309,6 +316,38 @@ function fixtureWatchlistEntry(): WatchlistEntry {
   return { id: 'w1', name: 'watch w1', enabled: true, createdAt: '2026-01-01T00:00:00Z' }
 }
 
+function fixtureApiToken(): ApiToken {
+  return {
+    id: 't1',
+    name: 'router-a',
+    kind: 'ingest',
+    device: 'core',
+    createdAt: '2026-01-01T00:00:00Z',
+    value: 'ingest-token-live-value-the-next-admin-must-not-see',
+  }
+}
+
+function fixtureUser(): UserSummary {
+  return {
+    id: 'u1',
+    username: 'carol',
+    role: 'user',
+    createdAt: '2026-01-01T00:00:00Z',
+    hasLocalPassword: true,
+    sso: false,
+  }
+}
+
+function fixtureAuditEntry(): AuditEntry {
+  return {
+    id: 1,
+    timestamp: '2026-01-01T00:00:00Z',
+    actor: 'tom',
+    action: 'user.create',
+    target: 'carol',
+  }
+}
+
 describe('AuthState.logout clears the previous session state (#1083)', () => {
   beforeEach(() => {
     vi.mocked(logout).mockResolvedValue(null)
@@ -443,6 +482,99 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     expect(watchlistState.coverage).toEqual({})
     expect(watchlistState.loaded).toBe(false)
   })
+
+  // Security stage, same batch as wizardState/logEveryRuleWorkState
+  // above: tokensState.justCreated is a raw, live API/ingest bearer
+  // token -- EngineRoom's copy-once banner keeps rendering it after
+  // logout, handing it to whoever signs in next on this tab.
+  it('resets tokensState, so a raw bearer token is not handed to the next session', async () => {
+    tokensState.list = [fixtureApiToken()]
+    tokensState.justCreated = fixtureApiToken()
+
+    await authState.logout()
+
+    expect(tokensState.list).toEqual([])
+    expect(tokensState.justCreated).toBeNull()
+  })
+
+  // usersState.list is the admin account list, rendered by EngineRoom
+  // with no role guard of its own -- a non-admin signing in next on
+  // this tab must not still see it.
+  it('resets usersState, the admin-only account list', async () => {
+    usersState.list = [fixtureUser()]
+
+    await authState.logout()
+
+    expect(usersState.list).toEqual([])
+  })
+
+  // auditState.loaded never reset on its own, so AuditLog.svelte kept
+  // rendering the previous account's action log for whoever signed in
+  // next.
+  it('resets auditState, the admin-only action log', async () => {
+    auditState.list = [fixtureAuditEntry()]
+    auditState.hasMore = true
+    auditState.loaded = true
+    auditState.error = 'stale error from the previous session'
+
+    await authState.logout()
+
+    expect(auditState.list).toEqual([])
+    expect(auditState.hasMore).toBe(false)
+    expect(auditState.loaded).toBe(false)
+    expect(auditState.error).toBeNull()
+  })
+
+  // persistenceState.loaded is private and never reset on its own, so
+  // ensureLoaded() never fetched again once an admin had opened
+  // DiskControl -- a non-admin signing in next on the same tab kept
+  // seeing this admin-only info for the rest of the tab's life. loaded
+  // is private, so this proves the guard cleared by calling
+  // ensureLoaded() again and checking it actually fetches rather than
+  // short-circuiting.
+  it('resets persistenceState and re-fetches on the next ensureLoaded()', async () => {
+    vi.mocked(fetchPersistence).mockResolvedValue({ backend: 'file', dir: '/data' })
+    await persistenceState.ensureLoaded()
+    expect(persistenceState.info).toEqual({ backend: 'file', dir: '/data' })
+    expect(fetchPersistence).toHaveBeenCalledTimes(1)
+
+    await authState.logout()
+
+    expect(persistenceState.info).toBeNull()
+
+    vi.mocked(fetchPersistence).mockResolvedValue({ backend: 'memory' })
+    await persistenceState.ensureLoaded()
+    expect(fetchPersistence).toHaveBeenCalledTimes(2)
+    expect(persistenceState.info).toEqual({ backend: 'memory' })
+  })
+
+  // configProblemsState.loaded is private and never reset on its own,
+  // so ConfigProblemBanner -- which has no role check of its own --
+  // kept showing the previous admin's config diagnostics. Same
+  // "prove the guard cleared" shape as persistenceState above, but
+  // through the raw fetch() this store calls directly rather than
+  // through lib/api.ts.
+  it('resets configProblemsState and re-fetches on the next ensureLoaded()', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ problems: [{ code: 'clamped', key: 'x', message: 'y' }] }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await configProblemsState.ensureLoaded()
+    configProblemsState.dismissed = true
+    expect(configProblemsState.problems).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await authState.logout()
+
+    expect(configProblemsState.problems).toEqual([])
+    expect(configProblemsState.dismissed).toBe(false)
+
+    await configProblemsState.ensureLoaded()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('AuthState.handleUnauthorized clears the previous session state (#1083)', () => {
@@ -454,6 +586,8 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     flagsState.loaded = true
     watchlistState.entries = [fixtureWatchlistEntry()]
     watchlistState.loaded = true
+    tokensState.list = [fixtureApiToken()]
+    tokensState.justCreated = fixtureApiToken()
 
     authState.handleUnauthorized()
 
@@ -463,6 +597,8 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     expect(flagsState.loaded).toBe(false)
     expect(watchlistState.entries).toEqual([])
     expect(watchlistState.loaded).toBe(false)
+    expect(tokensState.list).toEqual([])
+    expect(tokensState.justCreated).toBeNull()
   })
 
   it('leaves every store untouched when the session was not authenticated', () => {
@@ -470,12 +606,14 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     appState.devices = [fixtureDevice()]
     flagsState.list = [fixtureFlag()]
     watchlistState.entries = [fixtureWatchlistEntry()]
+    tokensState.list = [fixtureApiToken()]
 
     authState.handleUnauthorized()
 
     expect(appState.devices).toEqual([fixtureDevice()])
     expect(flagsState.list).toEqual([fixtureFlag()])
     expect(watchlistState.entries).toEqual([fixtureWatchlistEntry()])
+    expect(tokensState.list).toEqual([fixtureApiToken()])
   })
 })
 
