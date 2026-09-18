@@ -33,7 +33,7 @@
   import { trapFocus } from '../lib/focusTrap'
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
-  import { newestGeneration } from '../lib/backups'
+  import { newestGeneration, vaultGated } from '../lib/backups'
   import { downloadFromUrl } from '../lib/export'
   import {
     HOW_TO_MOUNT_URL,
@@ -477,9 +477,7 @@
   // behind this exact check; a bare link here just navigated the whole
   // tab to whatever the server answered a locked vault with, including
   // a 403 page, rather than reading it as "gated" at all.
-  const lostRouterGated = $derived(
-    wizardState.backups ? wizardState.backups.lock.passphraseSet && !wizardState.backups.lock.unlockedForYou : false,
-  )
+  const lostRouterGated = $derived(vaultGated(wizardState.backups?.lock))
   let lostDownloadError = $state<string | null>(null)
 
   async function downloadLostBackup(device: string, generation: string) {
