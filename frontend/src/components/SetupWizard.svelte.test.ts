@@ -1286,6 +1286,31 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(keyField(second.container).value).toBe(rerolled)
   })
 
+  // Reproduces the v0.6.0 fix-batch audit's Security stage finding.
+  // sessionStorage fixed the re-mint bug above, but nothing ever
+  // cleared it: the plaintext history key stayed readable for the life
+  // of the tab, long after the server had read the key file and the
+  // step stopped asking for one. A logout and a second login in the
+  // same tab rehydrated it into the new session -- a different
+  // operator's, potentially.
+  it('forgets the minted key once the step no longer asks for one', async () => {
+    const first = await noKeyPane()
+    expect(keyField(first.container).value).toBeTruthy()
+    first.unmount()
+
+    // The operator mounts the key file and restarts, so the server now
+    // reports history on and step 6 stops being blocked. Nothing needs
+    // the minted value again.
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    wizardState.pane = 6
+    const settled = render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
+    await tick()
+
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBeNull()
+    settled.unmount()
+  })
+
   it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
     const { container } = await noKeyPane()
 

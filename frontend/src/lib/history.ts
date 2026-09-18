@@ -525,3 +525,18 @@ export function saveHistoryKeyForSession(key: string): void {
     // Best-effort, see above.
   }
 }
+
+/** Drops this tab's stored key once nothing needs it again -- the step
+ * has left `blocked`, so the server has already read the mounted file
+ * and a later reload cannot want the old value back (v0.6.0
+ * pre-release audit, Security stage). Nothing cleared it before, so the
+ * key stayed readable for the life of the tab: a logout and a second
+ * login rehydrated it into the new session, possibly a different
+ * operator's. Best-effort, for saveHistoryKeyForSession's reasons. */
+export function forgetHistoryKeyForSession(): void {
+  try {
+    sessionStorage.removeItem(SESSION_KEY_STORAGE_KEY)
+  } catch {
+    // Best-effort, see above.
+  }
+}

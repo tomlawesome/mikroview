@@ -40,6 +40,7 @@
     KEY_DIR,
     KEY_FILE_CONTAINER_PATH,
     KEY_FILE_PATH,
+    forgetHistoryKeyForSession,
     loadOrMintHistoryKey,
     newHistoryKey,
     saveHistoryKeyForSession,
@@ -389,8 +390,20 @@
   // Whatever the field ends up holding -- the mint above, an explicit
   // Reroll, or the operator's own pasted key -- is what the next reload
   // in this tab should show too, not whichever of those happened first.
+  //
+  // And only while the step is still asking (v0.6.0 pre-release audit,
+  // Security stage). Once it leaves `blocked` the server has read the
+  // mounted key file, so no later reload can want the old value back
+  // and keeping it only leaves a plaintext key in the tab -- one that
+  // survived a logout and rehydrated into the next login, potentially
+  // someone else's. A ledger that has not arrived yet decides nothing:
+  // forgetting on `undefined` would hand a mid-setup operator a fresh
+  // key on their next reload, which is the bug sessionStorage fixed.
+  const historyKeyStepState = $derived(ledger[5]?.status.state)
   $effect(() => {
-    saveHistoryKeyForSession(historyKey)
+    if (historyKeyStepState === undefined) return
+    if (historyKeyStepState === 'blocked') saveHistoryKeyForSession(historyKey)
+    else forgetHistoryKeyForSession()
   })
 
   // backupBlocked is #1217's reason the backup step printed nothing:
