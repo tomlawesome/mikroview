@@ -40,10 +40,12 @@ class LogEveryRuleWorkState {
   // never-retired token and wrote router A's rules into the state a
   // freshly mounted card was showing as router B's.
   //
-  // Not $state: nothing renders from them, and a token changing must
-  // not invalidate anything.
-  analyseToken = 0
-  renderToken = 0
+  // $state because the card's "Analysing…"/"Rendering…" state is
+  // derived from them rather than tracked alongside them -- a flag kept
+  // in step by hand got left true when a retired request returned early
+  // and skipped the line that cleared it, wedging the button for good.
+  analyseToken = $state(0)
+  renderToken = $state(0)
 
   /** Retires every request in flight, so no answer already on its way
    * can write once what it was asked about no longer holds. */

@@ -756,6 +756,31 @@ describe('LogEveryRule device pick', () => {
     expect(container.querySelectorAll('.rule-row').length).toBe(0)
   })
 
+  // The button has to settle too. A retired request returns early, so
+  // anything cleared after that check never runs -- which left Analyse
+  // stuck reading "Analysing…" and disabled for a request that had been
+  // abandoned, with no way back except scrolling the card away and
+  // returning. Whether it is busy is derived from the token now, so
+  // retiring one settles the label in the same move.
+  it('frees the Analyse button when a new export retires the request in flight', async () => {
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Analysing…' })).toBeTruthy())
+
+    await typeExport(container, EXPORT_TEXT.replace('lan to wan', 'something else'))
+    settle(analyseResponse())
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Analyse' })).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   // An export can arrive before any router is picked -- the picker
   // starts on its own disabled placeholder, and paste is listened for
   // on the window. That text belongs to no router yet, so the first
