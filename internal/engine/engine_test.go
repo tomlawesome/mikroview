@@ -274,6 +274,39 @@ func TestForgetStartsLevelAfterADeliberateReset(t *testing.T) {
 	}
 }
 
+// TestForgetRendezvousesWithARunningEngine exercises the branch
+// runOnEvaluationGoroutine takes when Run is actively driving evaluation
+// (e.running == true): Forget must hand its work to Run's tasks channel
+// and wait for it there, rather than running inline -- the branch
+// TestForgetStartsLevelAfterADeliberateReset never reaches, since it
+// never starts Run at all. Forget's own doc comment says this rendezvous
+// is what stops a Reset from racing a batch in flight and writing an
+// older cursor back over the reset one, so the case worth proving is
+// Run genuinely busy in catchUp when Forget is called, not merely alive.
+func TestForgetRendezvousesWithARunningEngine(t *testing.T) {
+	e, st := newEngineOnStore(t, 4096)
+	d := &fakeDef{id: "slow", kind: "declarative", delay: 2 * time.Millisecond}
+	e.Register(d)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	defer func() {
+		cancel()
+		<-e.Done()
+	}()
+	waitForRunning(t, e)
+
+	storeAndNudge(e, st, 200)
+	waitFor(t, "evaluation to be underway", func() bool { return d.calls.Load() > 0 })
+
+	st.Reset()
+	e.Forget()
+
+	if behind, _, outrun := e.Lag(); behind != 0 || outrun != 0 {
+		t.Fatalf("Lag() = (behind %d, outrun %d) after Forget on a running engine, want (0, 0)", behind, outrun)
+	}
+}
+
 // TestOutrunCountsAStoreReset -- Reset empties the ring without rewinding
 // its IDs (see store.Store.Reset), so events the engine had not reached
 // are gone exactly as an eviction would leave them, and must be counted
