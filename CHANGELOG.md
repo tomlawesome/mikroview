@@ -18,6 +18,33 @@ rewritten.
 
 ### Security
 
+- **Adding a router now takes your password, and opens the port to one
+  address** (#1291). Minting a router's enrolment token asks you to
+  re-enter your password at that moment — being signed in as the admin
+  is no longer enough on its own, so a stolen session cookie, a
+  cross-site request riding your browser, or script injected into a page
+  you are viewing cannot add a log source behind your back. **Reroll
+  asks every time**, because it mints a token too.
+
+  You also give the router's own address before minting, and MikroView
+  listens for it on that address alone until its token arrives or lapses
+  — where before, a single pending token anywhere left the syslog port
+  reachable by any unknown address on your network. If you get the
+  address wrong, whatever was turned away is listed under the step's
+  refused senders and one press points the window at it; the token you
+  already pasted into the router stays as it is.
+
+  The setup ledger gains a last step, **Register the router**, recording
+  that this is a router you meant to add. Registering grants the router
+  nothing on its own — its logs are accepted because its token arrived
+  from its address, and that is unchanged. A router you enrolled before
+  this release counts as registered already; see "Upgrading to 0.6.0" in
+  docs/upgrades.md.
+
+  If your admin account signs in only through your identity provider it
+  has no password to re-check, so minting is refused for now with a
+  message saying so — declare those routers in `config.yaml` instead.
+
 - **The one-line installer applies the same hardening as Compose**
   (#1286). `install.sh`'s container now runs `--read-only`, with all
   Linux capabilities dropped, `no-new-privileges`, a process cap, and

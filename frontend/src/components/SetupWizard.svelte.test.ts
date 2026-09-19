@@ -74,7 +74,7 @@ import SetupWizard from './SetupWizard.svelte'
 // rather than numbered, because the order is the record's to set and
 // has moved once already -- naming moved from last to first when it
 // started creating the router.
-const PANE = { ca: 1, name: 2, syslog: 3, rules: 4, push: 5, backup: 6 } as const
+const PANE = { ca: 1, name: 2, syslog: 3, rules: 4, push: 5, backup: 6, register: 7 } as const
 
 // The number each step's marks and witnesses are recorded under, which
 // is not its pane: the server witnesses by fixed number (step 2 is the
@@ -252,11 +252,11 @@ describe('SetupWizard', () => {
     expect(screen.getByLabelText(/Run setup…/)).toBeTruthy()
   })
 
-  it('always shows six steps, whatever state they are in', () => {
+  it('always shows seven steps, whatever state they are in', () => {
     const { container } = render(SetupWizard)
     const rows = container.querySelectorAll('.steps .step-row')
-    // Six steps plus the read-back row.
-    expect(rows.length).toBe(7)
+    // Seven steps plus the read-back row (#1291 added Register).
+    expect(rows.length).toBe(8)
   })
 
   // Next runs the check where one exists. Waiting does not proceed: it
@@ -514,13 +514,15 @@ describe('SetupWizard', () => {
 
   it('offers Finish on the last step, and reads the ledger back after it', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
-    wizardState.pane = PANE.backup
+    // Finish is on the ledger's last step, which since #1291 is
+    // Register rather than Back up the router.
+    wizardState.pane = PANE.register
     const { container } = render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
     await fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
 
     expect(container.querySelector('.headline')).toBeTruthy()
-    expect(container.querySelectorAll('.readback li').length).toBe(6)
+    expect(container.querySelectorAll('.readback li').length).toBe(7)
     // #1166: the readback and the rail say the same thing the same way
     // about a step that has seen nothing.
     expect(container.textContent).not.toContain('nothing arrived')
@@ -570,12 +572,28 @@ describe('SetupWizard', () => {
     expect(screen.getByText('Give the router a name.')).toBeTruthy()
   })
 
-  // #1166: the footer hint named "Next" beside a button labelled Finish.
-  it('names the button it is describing in the last step\'s footer hint', async () => {
-    wizardState.pane = PANE.backup
+  // #1166: the footer hint named "Next" beside a button labelled
+  // Finish. The hint and the button must never disagree about which
+  // one they mean.
+  //
+  // Since #1291 the ledger's last step is Register, which runs no
+  // check, so the hint is not drawn there at all -- there is nothing
+  // waiting to be checked to describe. What #1166 guards is the
+  // disagreement, so that is what is asserted: on the last step the
+  // button reads Finish and no hint contradicts it, and on a checked
+  // step that is not last the hint reads Next.
+  it('never lets the footer hint name a different button from the footer button', async () => {
     const { container } = render(SetupWizard)
-    await waitFor(() => expect(container.querySelector('.hint')).toBeTruthy())
-    expect(container.querySelector('.hint')?.textContent).toBe('Finish checks what has arrived')
+
+    wizardState.pane = PANE.backup
+    await tick()
+    expect(container.querySelector('.hint')?.textContent).toBe('Next checks what has arrived')
+    expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy()
+
+    wizardState.pane = PANE.register
+    await tick()
+    expect(screen.getByRole('button', { name: 'Finish' })).toBeTruthy()
+    expect(container.querySelector('.hint')?.textContent ?? '').not.toContain('Next')
   })
 
   // #646: the wizard ends by taking the operator back to the fall,
@@ -583,7 +601,7 @@ describe('SetupWizard', () => {
   // wizard, the journey's own hand-off included.
   it('the finish leads back to the fall', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
-    wizardState.pane = PANE.backup
+    wizardState.pane = PANE.register
     appState.view = 'engineroom'
     render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
@@ -713,7 +731,7 @@ describe('SetupWizard', () => {
   it('announces the step it moved to, not just that it moved', () => {
     const { container } = render(SetupWizard)
     const live = container.querySelector('[role="status"]')?.textContent ?? ''
-    expect(live).toContain('Step 1 of 6')
+    expect(live).toContain('Step 1 of 7')
     expect(live).toContain('Trust the certificate')
   })
 })
@@ -1936,7 +1954,7 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
     wizardState.open = true
   }
 
-  it('is the same five steps, opened at Name your router, with no certificate step in front', () => {
+  it('is the same six steps, opened at Name your router, with no certificate step in front', () => {
     openRouterLedger(1)
     const { container } = render(SetupWizard)
 
@@ -1947,9 +1965,10 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
       'Tag firewall rules',
       'Push router state',
       'Back up the router',
+      'Register the router',
       'Where setup stands',
     ])
-    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 1 of 5')
+    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 1 of 6')
   })
 
   // The same modal, not a second one: the ledger, the anatomy and the
@@ -1964,14 +1983,40 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
     expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy()
   })
 
-  it('opens at Send logs for a router being re-enrolled, and mints it a fresh token', async () => {
+  // #1291: opening Send logs no longer mints anything. Minting needs
+  // the router's own address -- the enrolment window binds to it, so
+  // the port opens for that address alone -- and the admin's password
+  // re-typed at that moment. Neither is something the wizard can supply
+  // for them, so the step asks and waits.
+  it('opens at Send logs for a router being re-enrolled, and asks before it mints', async () => {
     wizardState.devices = [edge1()]
     vi.mocked(fetchDevices).mockResolvedValue([edge1()])
     openRouterLedger(2, 'edge-1')
     const { container } = render(SetupWizard)
 
-    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('edge-1'))
-    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 2 of 5')
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+    expect(mintEnrolment).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Mint the token' })).toBeTruthy()
+    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 2 of 6')
+  })
+
+  // The two fields the operator fills, and the call they produce.
+  it('mints with the address and password the operator gave', async () => {
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+
+    const address = container.querySelector('#setup-wizard-enrol-address') as HTMLInputElement
+    const password = container.querySelector('#setup-wizard-enrol-password') as HTMLInputElement
+    await fireEvent.input(address, { target: { value: '192.0.2.50' } })
+    await fireEvent.input(password, { target: { value: 'password123' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Mint the token' }))
+
+    await waitFor(() =>
+      expect(mintEnrolment).toHaveBeenCalledWith('edge-1', 'password123', '192.0.2.50'),
+    )
   })
 
   // The last line the block prints carries a token, so the step says
@@ -1987,8 +2032,11 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
     expect(line).toMatch(/^Token good until \d\d:\d\d \(15 minutes\) · Reroll$/)
     expect(container.querySelector('pre.stale')).toBeNull()
 
+    // Reroll goes through the same endpoint, so it asks again rather
+    // than re-minting on the click. That is the feature working.
     await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
-    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('edge-1'))
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+    expect(mintEnrolment).not.toHaveBeenCalled()
   })
 
   // An expired token cannot be pasted, so the block that carries it
@@ -2077,7 +2125,7 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
   // The finish leads out to the fleet when the ledger was opened from
   // it, and to the fall when it was opened from setup.
   it('leads out to the fleet from a walk the fleet opened', async () => {
-    openRouterLedger(6)
+    openRouterLedger(7)
     render(SetupWizard)
 
     await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fleet' }))
@@ -2087,7 +2135,7 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
   it('still leads out to the fall from Run setup…', async () => {
     wizardState.steps = SETUP_STEPS
     wizardState.finishTo = 'fall'
-    wizardState.pane = 7
+    wizardState.pane = 8
     wizardState.open = true
     render(SetupWizard)
 

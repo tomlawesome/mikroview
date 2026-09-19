@@ -132,6 +132,14 @@ export interface Device {
   // minted and waiting to be used, and when it lapses. Absent on a
   // router nobody is currently enrolling.
   enrolment?: DeviceEnrolment
+  // registeredAt (#1291) is when the operator confirmed this router on
+  // the device itself -- the ledger's final Register step. Absent until
+  // they do, and independent of acceptedIp: registering records intent
+  // and grants nothing, so a router can be registered without being
+  // enrolled, or enrolled without being registered. The pair is how the
+  // fleet tells a finished setup from one someone walked away from part
+  // way through.
+  registeredAt?: string
 }
 
 // DeviceEnrolment is the enrolment token's standing as GET /api/devices

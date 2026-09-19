@@ -747,6 +747,24 @@
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
+              <!-- #1291: enrolling and the ledger's Register step are
+                   independent, so the pair says how far the operator
+                   actually got. This card is where it has to be said --
+                   every router the wizard adds is drawn here, and the
+                   config.yaml-declared cards above can never carry a
+                   registeredAt at all (the server refuses to register
+                   one, since config.yaml rebuilds it every boot).
+                   Worded as "the Register step" rather than
+                   "registered": on this card that word already means
+                   declared in config.yaml, which is the chip in the
+                   header, and the two senses must not be read as one. -->
+              {#if d.acceptedIp && !d.registeredAt}
+                <div class="frow">its logs are accepted, but the Register step was never finished</div>
+              {:else if d.registeredAt && !d.acceptedIp}
+                <div class="frow dim">
+                  the Register step is done; still waiting for its enrolment token to arrive
+                </div>
+              {/if}
               {#if isAdmin}
                 <!-- Re-enrol… belongs on this card most of all: since
                      #1281 a router earns its place by presenting a

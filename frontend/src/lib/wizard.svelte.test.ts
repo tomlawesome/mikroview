@@ -157,6 +157,11 @@ describe('the minted token reaches the block the operator pastes (#1281)', () =>
     wizardState.status = status()
     wizardState.ledgerDevice = 'edge-1'
     wizardState.enrolment = null
+    // #1291: minting now needs the router's own address, which the
+    // enrolment window binds to, and the admin's password re-typed at
+    // that moment.
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'password123'
     vi.mocked(mintEnrolment).mockResolvedValue({
       token: 'examplenotarealtoken',
       expiresAt: '2026-09-19T12:15:00Z',
@@ -165,9 +170,54 @@ describe('the minted token reaches the block the operator pastes (#1281)', () =>
 
     await wizardState.mintEnrolmentToken()
 
+    expect(mintEnrolment).toHaveBeenCalledWith('edge-1', 'password123', '192.0.2.50')
     expect(fetchSetupCommands).toHaveBeenCalledWith(
       expect.objectContaining({ device: 'edge-1', enrolToken: 'examplenotarealtoken' }),
     )
+  })
+
+  // The password is held only long enough to make the call. Left
+  // standing it would weaken "re-prove at the moment of minting" to
+  // "once per modal", which is the thing #1291 exists to stop.
+  it('clears the password whether the mint succeeded or failed', async () => {
+    wizardState.status = status()
+    wizardState.ledgerDevice = 'edge-1'
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+
+    wizardState.enrolPassword = 'password123'
+    vi.mocked(mintEnrolment).mockResolvedValue({
+      token: 'examplenotarealtoken',
+      expiresAt: '2026-09-19T12:15:00Z',
+    })
+    await wizardState.mintEnrolmentToken()
+    expect(wizardState.enrolPassword).toBe('')
+
+    wizardState.enrolPassword = 'wrong-password'
+    vi.mocked(mintEnrolment).mockResolvedValue('password is incorrect')
+    await wizardState.mintEnrolmentToken()
+    expect(wizardState.enrolPassword).toBe('')
+    expect(wizardState.enrolmentError).toBe('password is incorrect')
+  })
+
+  // Neither field is something the wizard can supply on the operator's
+  // behalf, so it says which one is missing rather than calling the
+  // endpoint and reporting whatever it answers.
+  it('will not mint without an address or without a password', async () => {
+    wizardState.status = status()
+    wizardState.ledgerDevice = 'edge-1'
+    vi.mocked(mintEnrolment).mockClear()
+
+    wizardState.enrolExpectedAddress = ''
+    wizardState.enrolPassword = 'password123'
+    await wizardState.mintEnrolmentToken()
+    expect(mintEnrolment).not.toHaveBeenCalled()
+    expect(wizardState.enrolmentError).toContain('address')
+
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = ''
+    await wizardState.mintEnrolmentToken()
+    expect(mintEnrolment).not.toHaveBeenCalled()
+    expect(wizardState.enrolmentError).toContain('password')
   })
 
   // A later re-render -- the operator corrects the address, or picks a

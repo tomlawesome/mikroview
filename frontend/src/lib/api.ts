@@ -347,10 +347,42 @@ export async function createDevice(name: string): Promise<Device | string> {
 // into its last logging line (#1281). Re-minting is what Reroll does --
 // the same call, which is why there is no second endpoint for it. The
 // value comes back once; the server keeps only its hash.
-export async function mintEnrolment(device: string): Promise<EnrolmentToken | string> {
-  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`)
+export async function mintEnrolment(
+  device: string,
+  password: string,
+  expectedAddress: string,
+): Promise<EnrolmentToken | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`, {
+    password,
+    expectedAddress,
+  })
   if (res.ok) return res.json()
   return (await res.text()) || `mintEnrolment: ${res.status}`
+}
+
+// registerDevice records the operator's confirmation of a router --
+// the ledger's final Register step (#1291). It grants the router
+// nothing: the server never sets acceptedIp from this call, so an
+// address is still only accepted when a valid token arrives over
+// syslog from it. Answers the updated device.
+export async function registerDevice(device: string, name: string): Promise<Device | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/registration`, { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `registerDevice: ${res.status}`
+}
+
+// rebindEnrolment points a pending enrolment window at a different
+// address without touching the token (#1291, ruling 23a) -- the
+// one-click recovery when the operator named the wrong address and
+// their router was turned away at accept. The token keeps its value
+// and expiry, so nothing is pasted into the router a second time. The
+// server only accepts an address already in the refused-senders list.
+export async function rebindEnrolment(device: string, address: string): Promise<string | null> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment/address`, {
+    address,
+  })
+  if (res.ok) return null
+  return (await res.text()) || `rebindEnrolment: ${res.status}`
 }
 
 // burnEnrolment retires a minted token without using it. No surface

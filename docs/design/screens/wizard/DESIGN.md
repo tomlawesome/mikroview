@@ -158,15 +158,28 @@ this order:
 | # | Step | Check character |
 |---|---|---|
 | 1 | Name your router | acts (creates the router record on Next; the name is the only field) — quiet, nothing to wait for |
-| 2 | Send logs | acts (mints the enrolment token on entry, its own audit line) then waiting → arrived (the enrol line came in: "Enrolled at 192.168.88.1 · 14:02") |
+| 2 | Send logs | asks (the router's own address, and the operator's password) then acts (mints the enrolment token when they say so, its own audit line) then waiting → arrived (the enrol line came in: "Enrolled at 192.168.88.1 · 14:02") |
 | 3 | Tag firewall rules | counting, as today |
 | 4 | Push router state | as today; a push counts only from the enrolled address |
 | 5 | Back up the router | as today |
+| 6 | Register the router | acts (records the operator's confirmation) — quiet, nothing to wait for |
 
-First-run setup is **Trust the certificate**, then these five, so it
-reads as six steps: the ledger is embedded, not copied. Naming moves
+First-run setup is **Trust the certificate**, then these six, so it
+reads as seven steps: the ledger is embedded, not copied. Naming moves
 from last to first because the enrolment token belongs to a named
 router; the old "nothing to name" row is retired.
+
+Step 2 no longer mints on entry (#1291). Minting needs two things only
+the operator has -- the router's own address, which the enrolment window
+binds to so the syslog port opens for that address alone, and their
+password, re-typed at that moment because minting is what opens the
+port. Reroll goes through the same act and so asks again every time.
+
+Step 6 records intent and grants the router nothing: it never sets the
+accepted address. Its logs are accepted because its token arrived from
+its address, which does not change here. The two are independent, and
+the pair is how the fleet tells a finished setup from one someone walked
+away from part way.
 
 **Send logs, in detail.** The command block is the remote-logging
 block as today with one more line at the end,
