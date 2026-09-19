@@ -209,6 +209,71 @@ func isConfiguredSource(host string) bool {
 	return m != nil && (*m)[host]
 }
 
+// EnrolmentGate is issue #1281's per-line admission check: whether a
+// syslog source address is allowed onto the ingest pipeline at all, and
+// whether an as-yet-unrecognised line enrols a pending device at that
+// address. Declared here (rather than the implementation's own
+// package) so this package -- syslog -- need not import the device
+// registry or the API to call it, the same reason OnConnection above is
+// a package-level hook rather than a constructor parameter:
+// device.Registry satisfies this interface structurally, with no import
+// in either direction beyond main.go wiring the two together.
+type EnrolmentGate interface {
+	// Allowed reports whether host is already some device's sourceIp or
+	// acceptedIp -- the fast path, checked before touching line at all.
+	Allowed(host string) bool
+	// TryEnrol inspects one line for the enrolment marker; if it names a
+	// device's current, unexpired, unused pending token, that device is
+	// enrolled at host (the token burned) and TryEnrol reports true.
+	// Any other line reports false and changes nothing.
+	TryEnrol(host string, line []byte) bool
+	// Refuse records that a line from host was neither already allowed
+	// nor a valid enrolment line, for the refused-senders list.
+	Refuse(host string, line []byte)
+}
+
+// enrolmentGate holds the installed EnrolmentGate, nil by default --
+// same "unconfigured means inert" convention as OnConnection/
+// configuredSources above, so the many tests that never call
+// SetEnrolmentGate see every line allowed through unconditionally, the
+// behaviour this package always had before #1281.
+var enrolmentGate atomic.Pointer[EnrolmentGate]
+
+// SetEnrolmentGate installs the gate. Call once at startup; nil clears
+// it back to "everything allowed", which is also what a test's
+// t.Cleanup should restore.
+func SetEnrolmentGate(g EnrolmentGate) {
+	enrolmentGate.Store(&g)
+}
+
+// gateAllows applies the installed EnrolmentGate (if any) to one
+// resolved line from host, in the order issue #1281 specifies: already
+// allowed, else a valid enrolment line, else refused. A nil gate allows
+// everything, unconditionally -- see enrolmentGate's own doc comment.
+//
+// The enrolment line itself is never forwarded as an event either way:
+// it is a synthetic marker (`/log info "mikroview-enrol <token>"`), not
+// real router traffic, so a successful TryEnrol reports false here too
+// -- "lines from this address pass from then on" means the lines after
+// it, which is exactly what host being Allowed from this call onward
+// (device.Registry.TryEnrol sets AcceptedIP before returning) already
+// gives every later line on this connection.
+func gateAllows(host string, line []byte) bool {
+	p := enrolmentGate.Load()
+	if p == nil || *p == nil {
+		return true
+	}
+	g := *p
+	if g.Allowed(host) {
+		return true
+	}
+	if g.TryEnrol(host, line) {
+		return false
+	}
+	g.Refuse(host, line)
+	return false
+}
+
 // reservedSlots is how many of maxTCPConnections only declared devices
 // may occupy. Zero when nothing is declared -- see SetConfiguredSources.
 func reservedSlots() int {
@@ -1295,6 +1360,14 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	emit := func(data []byte) {
 		data = bytes.TrimRight(data, "\r")
 		if len(data) == 0 {
+			return
+		}
+		// Issue #1281: a source address that is not already some
+		// device's sourceIp/acceptedIp gets no further than this check
+		// unless the line itself carries a valid enrolment token -- see
+		// EnrolmentGate. The connection is left open either way (the
+		// existing per-source caps bound it); only the line is dropped.
+		if !gateAllows(host, data) {
 			return
 		}
 		noteDuplicateLine(host, data)
