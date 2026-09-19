@@ -16,14 +16,28 @@ rewritten.
 
 ## [Unreleased]
 
+### Security
+
+- **The one-line installer applies the same hardening as Compose**
+  (#1286). `install.sh`'s container now runs `--read-only`, with all
+  Linux capabilities dropped, `no-new-privileges`, a process cap, and
+  the app folder (`/etc/mikroview` — your config, TLS pair and history
+  key) mounted read-only, which is what `deploy/docker-compose.yml` has
+  always done. A release check keeps the two from drifting apart again.
+  Because the app folder is read-only, put files into it from outside
+  the container rather than with `docker cp` — see docs/install.md. No
+  memory or CPU cap is set by the installer on purpose: the right number
+  depends on your host, and a wrong one is a silent outage.
+
 ### Added
 
 - **Routers now enrol before their logs count** (#1281). A syslog
   address is trusted only once it is the address you declared in
   config.yaml, or once it has redeemed a one-time enrolment token you
-  mint for it (Settings > Devices: "Enrol" or "Reroll", 15-minute life,
-  single use). Until then its lines are refused and listed under
-  "Refused senders" rather than silently attributed to whichever router
+  mint for it (the setup wizard's "Send logs" step, or **Re-enrol…** on
+  a router's card; 15-minute life, single use). Until then its lines are
+  refused and shown as refused senders beside your routers on the
+  Entities screen, rather than silently attributed to whichever router
   happened to claim an address in its own pushed configuration -- a
   router's own word about its address was never something to trust
   identity to. Declare a syslog-only router with no address at all from
@@ -38,6 +52,18 @@ rewritten.
   enrolled address. See "Upgrading to 0.6.0" in docs/upgrades.md for
   what this means for a router that only ever sent logs and was never
   given a `sourceIp`.
+
+- **Adding a router is a walk through the setup ledger** (#1284). "+ add
+  a router", beside your routers on the Entities screen, opens the same
+  ledger the first-run setup uses, starting at **Name your router**:
+  naming it is what creates it, and the next step mints its enrolment
+  token and prints the block to paste, enrol line included. Each router's
+  card carries **Re-enrol…** for one you have replaced or given a new
+  address — a fresh token, the same walk, the router's history kept. The
+  ledger's steps are walked in the order you do them now (the
+  certificate, then naming, then logs), while the step numbers recorded
+  against past decisions keep their old meaning, so nothing already in
+  your setup record changes what it says.
 
 - **Your admin account keeps its password when you connect it to SSO**
   (#1252). MikroView has exactly one admin, and it never signs in to
