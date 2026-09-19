@@ -5,6 +5,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -136,6 +137,29 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Issue #1281: an ingest token names a device, never an address --
+	// "any RouterOS user holding the built-in read policy can print an
+	// ingest token out of a script" (see noteIngest's own doc comment),
+	// so the token alone is not enough to say a push actually came from
+	// the router it claims to be. It must also arrive from that device's
+	// own enrolled address (config.yaml's sourceIp, or a redeemed
+	// enrolment token's acceptedIp) -- the same evidence bar syslog
+	// attribution holds pushes to, closing a gap a stolen token used to
+	// leave open: pushing fabricated router state from anywhere at all.
+	if s.Devices != nil && !s.Devices.IsEnrolledAt(tok.Device, s.ClientIP(r)) {
+		// Same noteIngest throttle as the decode-error and cap-refusal
+		// branches below: a repeatedly refused push is exactly the flood
+		// noteIngest exists to keep off the audit trail (see its own doc
+		// comment), and this refusal is just as caller-controlled and
+		// just as cheap to produce as a decode error.
+		if s.noteIngest(tok.Device, "", false, now) {
+			s.Audit.Record("device:"+tok.Device, "ingest.routeros.refused", tok.Device,
+				fmt.Sprintf("push refused: %s is not %s's enrolled address", s.ClientIP(r), tok.Device))
+		}
+		http.Error(w, "this address is not enrolled for that device", http.StatusForbidden)
+		return
+	}
+
 	// Same 64KiB bound every other JSON body on this API is held to (see
 	// maxJSONBodyBytes) -- it also happens to be the number RouterOS's
 	// own /tool fetch enforces client-side, so this can never be the
@@ -178,6 +202,21 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	// routers while Entities showed one.
 	if s.Devices != nil {
 		s.Devices.Ensure(tok.Device, now)
+	}
+
+	// Issue #1281's "Upgrading to 0.6.0" one-shot nudge (docs/upgrades.md):
+	// the first time a pushed /ip/address table arrives after this
+	// restart is the earliest point mikroview has any evidence to check
+	// -- routerState itself persists nothing (see main.go's wiring
+	// comment), so this cannot run any earlier. Naturally idempotent
+	// (EnrolFromPushedAddresses only ever touches a device with no
+	// acceptedIp yet), so calling it on every such push costs nothing
+	// once every device that is going to be settled this way already
+	// has been.
+	if payload.Kind == ingest.KindIPAddress && s.Devices != nil && s.RouterState != nil {
+		if upgraded := s.Devices.EnrolFromPushedAddresses(s.RouterState, now); len(upgraded) > 0 {
+			apiLog.Info(fmt.Sprintf("upgrade: enrolled %d device(s) at the address their own pushed table was the sole claimant of: %s -- see docs/upgrades.md", len(upgraded), strings.Join(upgraded, ", ")))
+		}
 	}
 
 	// Tell every open screen the pushed tables moved, so an answer

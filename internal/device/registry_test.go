@@ -58,43 +58,45 @@ func TestResolveConfiguredDevice(t *testing.T) {
 	}
 }
 
-// #1170 step (a): config.yaml is the strongest attribution there is --
-// the operator said which address is which router -- so it wins even
-// when another router has pushed that same address as one of its own.
+// #1281's attribution order, step (a): config.yaml is the strongest
+// attribution there is -- the operator said which address is which
+// router -- so it wins even over a device this registry itself
+// enrolled by token at the very same address.
 func TestResolveAttributesByConfiguredSourceIPFirst(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"},
 	})
-	r.SetAddressTables(pushedAddresses{"hap-ax3": {"192.168.1.1/24"}})
-	r.Ensure("hap-ax3", time.Now())
+	if _, err := r.Create("other", "Other", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "other", "192.168.1.1")
 
 	if id := r.Resolve("192.168.1.1", time.Now()); id != "core" {
-		t.Errorf("Resolve() = %q, want the declared device %q -- config.yaml outranks a pushed address table", id, "core")
+		t.Errorf("Resolve() = %q, want the declared device %q -- config.yaml outranks a token enrolment", id, "core")
 	}
 	if got := r.Unattributed(); len(got) != 0 {
 		t.Errorf("Unattributed() = %+v, want none", got)
 	}
 }
 
-// #1170 step (b): the router told us its own addresses, so a source
-// address exactly one router has pushed belongs to that router -- no
-// config.yaml entry needed, which is the multi-homed and
-// never-declared case both answered by the routers' own evidence.
-func TestResolveAttributesByThePushedAddressTable(t *testing.T) {
+// #1281's attribution order, step (b): a device this registry enrolled
+// by a redeemed token is attributed by its AcceptedIP, no config.yaml
+// entry needed -- the replacement for the pushed-address-table claim
+// #1281's audit removed (TestResolveIgnoresThePushedAddressTable below
+// covers that removal directly).
+func TestResolveAttributesByAcceptedIP(t *testing.T) {
 	r := NewRegistry(nil)
 	now := time.Now()
-	r.SetAddressTables(pushedAddresses{
-		"hap-ax3": {"10.10.0.1/24", "192.168.88.1/24"},
-		"lab-crs": {"10.20.0.1/24"},
-	})
-	r.Ensure("hap-ax3", now)
-	r.Ensure("lab-crs", now)
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
 
 	if id := r.Resolve("10.10.0.1", now); id != "hap-ax3" {
-		t.Errorf("Resolve() = %q, want %q -- the one router that pushed that address", id, "hap-ax3")
+		t.Errorf("Resolve() = %q, want %q -- the device enrolled at that address", id, "hap-ax3")
 	}
 	if got := r.Unattributed(); len(got) != 0 {
-		t.Errorf("Unattributed() = %+v, want none: the address was claimed", got)
+		t.Errorf("Unattributed() = %+v, want none: the address was enrolled", got)
 	}
 
 	var seen Info
@@ -108,42 +110,31 @@ func TestResolveAttributesByThePushedAddressTable(t *testing.T) {
 	}
 }
 
-// #1170's conflict case: two routers have pushed the same address, so
-// their own tables disagree and nothing can say which of them sent the
-// line. The address stays unattributed, and the source remembers both
-// names so the operator is told why rather than only that.
-func TestResolveLeavesAnAddressTwoRoutersClaimUnattributed(t *testing.T) {
+// TestResolveIgnoresThePushedAddressTable is issue #1281's audit,
+// pinned directly: before this issue, an address exactly one device's
+// pushed /ip/address table named was attributed to that device with no
+// token at all (AddressTables, computeClaimLocked). That evidence is no
+// longer trusted for attribution -- a router asserting its own address
+// in a payload an ingest token merely let it push is not proof of
+// identity -- so the same setup that used to attribute now leaves the
+// address unattributed.
+func TestResolveIgnoresThePushedAddressTable(t *testing.T) {
 	r := NewRegistry(nil)
 	now := time.Now()
-	r.SetAddressTables(pushedAddresses{
-		"border-rb5009": {"172.23.0.1/16"},
-		"lab-crs":       {"172.23.0.1/16"},
-	})
-	r.Ensure("border-rb5009", now)
-	r.Ensure("lab-crs", now)
+	r.Ensure("hap-ax3", now)
 
-	if id := r.Resolve("172.23.0.1", now); id != "172.23.0.1" {
-		t.Errorf("Resolve() = %q, want the address itself: two routers claim it, so it is attributed to neither", id)
-	}
-	for _, info := range r.List() {
-		if info.ID == "172.23.0.1" {
-			t.Errorf("a device was minted for a contested address: %+v", info)
-		}
-		if info.EventCount != 0 {
-			t.Errorf("device %q was credited with an event it cannot be shown to have sent: %+v", info.ID, info)
-		}
-	}
+	// A pushed table naming this exact address, deliberately never
+	// handed to EnrolFromPushedAddresses (the one place this evidence
+	// still matters -- the once-at-startup upgrade nudge). Resolve
+	// itself must not consult it at all.
+	_ = pushedAddresses{"hap-ax3": {"10.10.0.1/24"}}
 
+	if id := r.Resolve("10.10.0.1", now); id != "10.10.0.1" {
+		t.Errorf("Resolve() = %q, want the address itself: a pushed table alone is no longer attribution evidence", id)
+	}
 	sources := r.Unattributed()
-	if len(sources) != 1 {
-		t.Fatalf("Unattributed() = %+v, want the one contested address", sources)
-	}
-	if sources[0].Address != "172.23.0.1" || sources[0].Lines != 1 {
-		t.Errorf("unattributed source = %+v, want the address with one line", sources[0])
-	}
-	want := []string{"border-rb5009", "lab-crs"}
-	if len(sources[0].Claimants) != 2 || sources[0].Claimants[0] != want[0] || sources[0].Claimants[1] != want[1] {
-		t.Errorf("Claimants = %v, want both routers %v", sources[0].Claimants, want)
+	if len(sources) != 1 || sources[0].Address != "10.10.0.1" {
+		t.Fatalf("Unattributed() = %+v, want the one unattributed address", sources)
 	}
 }
 
@@ -171,29 +162,29 @@ func TestResolveLeavesAnUnclaimedSourceUnattributed(t *testing.T) {
 	}
 }
 
-// A source that arrives before its router has pushed is unattributed;
-// once the router pushes the address, the next line is attributed and
-// the address stops being listed as unclaimed. The evidence moved, so
-// the answer moves with it.
-func TestAPushAttributesASourceThatArrivedBeforeIt(t *testing.T) {
+// A source that arrives before its device is enrolled is unattributed;
+// once a token is redeemed at that address, the next line is attributed
+// and the address stops being listed as unclaimed. The evidence moved,
+// so the answer moves with it.
+func TestATokenAttributesASourceThatArrivedBeforeIt(t *testing.T) {
 	r := NewRegistry(nil)
 	now := time.Now()
-	tables := pushedAddresses{}
-	r.SetAddressTables(tables)
 
 	r.Resolve("10.10.0.1", now)
 	if got := r.Unattributed(); len(got) != 1 {
-		t.Fatalf("Unattributed() = %+v, want the source before any push", got)
+		t.Fatalf("Unattributed() = %+v, want the source before any enrolment", got)
 	}
 
-	tables["hap-ax3"] = []string{"10.10.0.1/24"}
-	r.Ensure("hap-ax3", now.Add(time.Minute))
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
 
 	if id := r.Resolve("10.10.0.1", now.Add(2*time.Minute)); id != "hap-ax3" {
-		t.Errorf("Resolve() = %q, want %q once the router pushed the address", id, "hap-ax3")
+		t.Errorf("Resolve() = %q, want %q once the device was enrolled at the address", id, "hap-ax3")
 	}
 	if got := r.Unattributed(); len(got) != 0 {
-		t.Errorf("Unattributed() = %+v, want none: the address is claimed now", got)
+		t.Errorf("Unattributed() = %+v, want none: the address is enrolled now", got)
 	}
 }
 
@@ -303,22 +294,18 @@ func TestListReturnsIndependentSnapshot(t *testing.T) {
 	}
 }
 
-// Unattributed() is a copy for the same reason List() is, claimants
-// included: the API serialises it outside the registry's lock.
+// Unattributed() is a copy for the same reason List() is: the API
+// serialises it outside the registry's lock.
 func TestUnattributedReturnsIndependentSnapshot(t *testing.T) {
 	r := NewRegistry(nil)
 	now := time.Now()
-	r.SetAddressTables(pushedAddresses{"a": {"10.0.0.5/24"}, "b": {"10.0.0.5/24"}})
-	r.Ensure("a", now)
-	r.Ensure("b", now)
 	r.Resolve("10.0.0.5", now)
 
 	sources := r.Unattributed()
 	sources[0].Lines = 999
-	sources[0].Claimants[0] = "tampered"
 
 	fresh := r.Unattributed()
-	if fresh[0].Lines == 999 || fresh[0].Claimants[0] == "tampered" {
+	if fresh[0].Lines == 999 {
 		t.Errorf("mutating an Unattributed() result affected subsequent output: %+v", fresh)
 	}
 }
@@ -413,12 +400,11 @@ func TestMultihomedCandidatesReadTheSameAttribution(t *testing.T) {
 		{ID: "core-router", Name: "Core Router", SourceIP: "192.168.1.1"},
 	})
 	now := time.Now()
-	r.SetAddressTables(pushedAddresses{"core-router": {"10.10.0.1/24"}})
-	r.Ensure("core-router", now)
+	enrolAt(t, r, "core-router", "10.10.0.1")
 	r.Resolve("10.10.0.1", now)
 
 	if got := r.MultihomedCandidates(); got != nil {
-		t.Errorf("MultihomedCandidates() = %+v, want nil: the router's own table claimed that address", got)
+		t.Errorf("MultihomedCandidates() = %+v, want nil: the address was already enrolled", got)
 	}
 }
 
@@ -447,6 +433,23 @@ func TestMultihomedCandidatesListsEveryUnattributedSource(t *testing.T) {
 type fixedNames map[string]string
 
 func (f fixedNames) Device(id string) string { return f[id] }
+
+// enrolAt mints a real enrolment token for device and redeems it at
+// host via TryEnrol, exactly the way the listener gate would on a real
+// "mikroview-enrol <token>" line -- the one path tests should use to
+// put a device's AcceptedIP in place, rather than poking the field
+// directly, so these tests exercise the real mint/hash/redeem sequence.
+func enrolAt(t *testing.T, r *Registry, device, host string) {
+	t.Helper()
+	token, _, err := r.MintEnrolment(device, time.Now())
+	if err != nil {
+		t.Fatalf("MintEnrolment(%q): %v", device, err)
+	}
+	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
+	if !r.TryEnrol(host, line) {
+		t.Fatalf("TryEnrol(%q, ...) = false, want the freshly minted token to redeem", host)
+	}
+}
 
 // TestListServesTheStoredName is issue #600's requirement at the layer
 // it is stored: a rename one person saved is what every reader of List

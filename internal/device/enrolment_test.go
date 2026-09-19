@@ -1,0 +1,422 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package device
+
+import (
+	"fmt"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/tomlawesome/mikroview/internal/config"
+)
+
+// TestCreateDeclaresANamelessDevice is POST /api/devices' backing rule:
+// a device with no address at all, ready to be enrolled.
+func TestCreateDeclaresANamelessDevice(t *testing.T) {
+	r := NewRegistry(nil)
+	info, err := r.Create("hap-ax3", "Hap AX3", time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if info.ID != "hap-ax3" || info.Name != "Hap AX3" || info.SourceIP != "" || info.AcceptedIP != "" {
+		t.Errorf("Create() = %+v, want a bare device with no address", info)
+	}
+	if _, err := r.Create("hap-ax3", "Duplicate", time.Now()); err != ErrDeviceExists {
+		t.Errorf("Create() on an existing id = %v, want ErrDeviceExists", err)
+	}
+}
+
+// TestDeleteClearsTheDeviceAndItsAddress is the "deleting a device
+// clears its address" rule: once deleted, its former AcceptedIP is free
+// for another device to be enrolled at.
+func TestDeleteClearsTheDeviceAndItsAddress(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	if err := r.Delete("hap-ax3"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(r.List()) != 0 {
+		t.Errorf("List() after Delete = %+v, want empty", r.List())
+	}
+	if r.Allowed("10.10.0.1") {
+		t.Errorf("Allowed(%q) = true after the device that claimed it was deleted, want false", "10.10.0.1")
+	}
+
+	if _, err := r.Create("other", "other", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "other", "10.10.0.1")
+	if id := r.Resolve("10.10.0.1", now); id != "other" {
+		t.Errorf("Resolve() = %q, want the address free to re-enrol to a different device", id)
+	}
+}
+
+// TestDeleteRefusesAConfiguredDevice: a config.yaml declaration is
+// recreated on every boot regardless, so deleting it via the API would
+// only reappear confusingly on restart.
+func TestDeleteRefusesAConfiguredDevice(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", SourceIP: "192.168.1.1"}})
+	if err := r.Delete("core"); err != ErrDeviceConfigured {
+		t.Errorf("Delete() on a configured device = %v, want ErrDeviceConfigured", err)
+	}
+}
+
+func TestDeleteUnknownDeviceNotFound(t *testing.T) {
+	r := NewRegistry(nil)
+	if err := r.Delete("nope"); err != ErrDeviceNotFound {
+		t.Errorf("Delete() on an unknown device = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+// TestMintEnrolmentReplacesAnyPendingToken is the "Reroll" affordance:
+// minting again invalidates the previous token outright rather than
+// letting either one redeem.
+func TestMintEnrolmentReplacesAnyPendingToken(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+
+	first, _, err := r.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := r.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("two mints produced the same token")
+	}
+
+	if r.TryEnrol("10.10.0.1", []byte("mikroview-enrol "+first)) {
+		t.Errorf("the first, superseded token redeemed -- want it invalidated by the second mint")
+	}
+	if !r.TryEnrol("10.10.0.1", []byte("mikroview-enrol "+second)) {
+		t.Errorf("the current token failed to redeem")
+	}
+}
+
+// TestTokenIsSingleUse: redeeming a token burns it, so replaying the
+// same line a second time (a duplicate delivery, or an attacker who
+// captured it) does nothing.
+func TestTokenIsSingleUse(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte("mikroview-enrol " + token)
+	if !r.TryEnrol("10.10.0.1", line) {
+		t.Fatalf("first redemption failed")
+	}
+	if r.TryEnrol("10.10.0.2", line) {
+		t.Errorf("a burned token redeemed a second time, at a different address")
+	}
+	if r.Allowed("10.10.0.2") {
+		t.Errorf("the second address became allowed from a replayed, already-burned token")
+	}
+}
+
+// TestTokenExpires: a token minted more than 15 minutes ago no longer
+// redeems.
+func TestTokenExpires(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, expiresAt, err := r.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expiresAt.Equal(now.Add(15 * time.Minute)) {
+		t.Errorf("expiresAt = %v, want exactly 15 minutes from mint time", expiresAt)
+	}
+
+	// TryEnrol reads the wall clock directly, so simulate lateness by
+	// minting far enough in the past that "now" (real time.Now, a
+	// moment from now) is already past expiry -- the mint call accepts
+	// any reference instant, including one in the past, precisely so
+	// this is testable without a fake clock.
+	longAgo := now.Add(-16 * time.Minute)
+	staleToken, _, err := r.MintEnrolment("hap-ax3", longAgo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.TryEnrol("10.10.0.1", []byte("mikroview-enrol "+staleToken)) {
+		t.Errorf("an expired token redeemed")
+	}
+	_ = token
+}
+
+// TestBurnEnrolmentRevokesAPendingToken is DELETE
+// /api/devices/{id}/enrolment's backing rule.
+func TestBurnEnrolmentRevokesAPendingToken(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.BurnEnrolment("hap-ax3"); err != nil {
+		t.Fatalf("BurnEnrolment: %v", err)
+	}
+	if r.TryEnrol("10.10.0.1", []byte("mikroview-enrol "+token)) {
+		t.Errorf("a burned pending token still redeemed")
+	}
+	if err := r.BurnEnrolment("hap-ax3"); err != ErrNoPendingEnrolment {
+		t.Errorf("BurnEnrolment on an already-burned device = %v, want ErrNoPendingEnrolment", err)
+	}
+	if err := r.BurnEnrolment("nope"); err != ErrDeviceNotFound {
+		t.Errorf("BurnEnrolment on an unknown device = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+// TestVerifyPendingTokenChecksHashAndExpiry is POST /api/setup/commands'
+// gate before it ever embeds a caller-echoed raw token into a rendered
+// RouterOS command.
+func TestVerifyPendingTokenChecksHashAndExpiry(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.VerifyPendingToken("hap-ax3", token, now) {
+		t.Errorf("VerifyPendingToken() = false for the current token, want true")
+	}
+	if r.VerifyPendingToken("hap-ax3", "wrong-token-entirely-00", now) {
+		t.Errorf("VerifyPendingToken() = true for an unrelated value")
+	}
+	if r.VerifyPendingToken("hap-ax3", token, now.Add(16*time.Minute)) {
+		t.Errorf("VerifyPendingToken() = true past the token's 15-minute life")
+	}
+	// Verifying must not itself consume the token -- rendering a command
+	// has to be safe to repeat.
+	if !r.TryEnrol("10.10.0.1", []byte("mikroview-enrol "+token)) {
+		t.Errorf("token failed to redeem after being merely verified")
+	}
+}
+
+// TestAllowedIsTrueForConfiguredAndAcceptedAddresses: the listener
+// gate's fast path.
+func TestAllowedIsTrueForConfiguredAndAcceptedAddresses(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", SourceIP: "192.168.1.1"}})
+	if !r.Allowed("192.168.1.1") {
+		t.Errorf("Allowed() = false for a config.yaml sourceIp, want true -- no token needed")
+	}
+	if r.Allowed("10.10.0.1") {
+		t.Errorf("Allowed() = true for an address nothing has enrolled yet")
+	}
+
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+	if !r.Allowed("10.10.0.1") {
+		t.Errorf("Allowed() = false once the device was enrolled at that address")
+	}
+}
+
+// TestRefuseCountsRejectedLinesAndAllowsTheConnectionOn is GET
+// /api/devices/refused's backing rule.
+func TestRefuseCountsRejectedLinesAndAllowsTheConnectionOn(t *testing.T) {
+	r := NewRegistry(nil)
+	r.Refuse("10.10.0.1", []byte("not an enrol line"))
+	r.Refuse("10.10.0.1", []byte("still not one"))
+
+	got := r.Refused()
+	if len(got) != 1 || got[0].Address != "10.10.0.1" || got[0].Lines != 2 {
+		t.Fatalf("Refused() = %+v, want one address with two lines", got)
+	}
+	if got[0].FirstSeen.IsZero() || got[0].LastSeen.IsZero() {
+		t.Errorf("Refused() = %+v, want first/last seen set", got)
+	}
+}
+
+// TestRefusedIsBoundedAndEvictsOldestLastSeenFirst pins the 256-address
+// cap: past it, the address that has been quietest the longest is the
+// one dropped, so an active flood cannot itself evict the accounting
+// for other still-active refused senders.
+func TestRefusedIsBoundedAndEvictsOldestLastSeenFirst(t *testing.T) {
+	r := NewRegistry(nil)
+	if maxRefusedAddresses != 256 {
+		t.Fatalf("maxRefusedAddresses = %d, want 256", maxRefusedAddresses)
+	}
+	for i := 0; i < maxRefusedAddresses+10; i++ {
+		host := ipFromIndex(i)
+		r.Refuse(host, []byte("x"))
+	}
+	got := r.Refused()
+	if len(got) > maxRefusedAddresses {
+		t.Fatalf("Refused() returned %d entries, want at most %d", len(got), maxRefusedAddresses)
+	}
+	// The very first addresses refused are the oldest by last-seen and
+	// must be the ones evicted.
+	for _, ref := range got {
+		if ref.Address == ipFromIndex(0) {
+			t.Errorf("the oldest refused address survived the eviction: %+v", got)
+		}
+	}
+}
+
+func ipFromIndex(i int) string {
+	return fmt.Sprintf("10.%d.%d.%d", i/65536, (i/256)%256, i%256)
+}
+
+// TestOwnPrefixesReadsOnlySourceAndAcceptedIP is issue #1281's
+// replacement for the drop-list's former OwnRanges source
+// (routerstate's pushed /ip/address tables): only real evidence -- a
+// config.yaml declaration or a redeemed enrolment token -- ever counts,
+// never a device's pushed table.
+func TestOwnPrefixesReadsOnlySourceAndAcceptedIP(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", SourceIP: "192.168.1.1"}})
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	got := r.OwnPrefixes()
+	want := map[string]bool{"192.168.1.1/32": true, "10.10.0.1/32": true}
+	if len(got) != len(want) {
+		t.Fatalf("OwnPrefixes() = %v, want exactly %v", got, want)
+	}
+	for _, p := range got {
+		if !want[p.String()] {
+			t.Errorf("OwnPrefixes() contains unexpected prefix %v", p)
+		}
+	}
+}
+
+// TestEnrolFromPushedAddressesEnrolsTheSoleClaimant is the "Upgrading
+// to 0.6.0" one-shot nudge: a device with no AcceptedIP yet, whose
+// pushed table is the only one naming a given address, is enrolled at
+// it once and the enrolment persists across the call boundary (never
+// re-run against a device that already has one).
+func TestEnrolFromPushedAddressesEnrolsTheSoleClaimant(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	r.Ensure("hap-ax3", now)
+	tables := pushedAddresses{"hap-ax3": {"10.10.0.1/24"}}
+
+	enrolled := r.EnrolFromPushedAddresses(tables, now)
+	if len(enrolled) != 1 || enrolled[0] != "hap-ax3" {
+		t.Fatalf("EnrolFromPushedAddresses() = %v, want [hap-ax3]", enrolled)
+	}
+	if id := r.Resolve("10.10.0.1", now); id != "hap-ax3" {
+		t.Errorf("Resolve() = %q after the upgrade nudge, want %q", id, "hap-ax3")
+	}
+
+	// Idempotent: a device already enrolled (by this call or a real
+	// token) is left alone on a later call, even with the same evidence
+	// still in front of it.
+	if again := r.EnrolFromPushedAddresses(tables, now); len(again) != 0 {
+		t.Errorf("EnrolFromPushedAddresses() on an already-enrolled device = %v, want none", again)
+	}
+}
+
+// TestEnrolFromPushedAddressesSkipsContestedAddresses: two devices
+// pushing the same address is exactly the case the old live-attribution
+// claim step could not settle either -- the one-shot nudge must not
+// guess, so neither device is enrolled from it.
+func TestEnrolFromPushedAddressesSkipsContestedAddresses(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	r.Ensure("a", now)
+	r.Ensure("b", now)
+	tables := pushedAddresses{
+		"a": {"172.23.0.1/16"},
+		"b": {"172.23.0.1/16"},
+	}
+
+	if enrolled := r.EnrolFromPushedAddresses(tables, now); len(enrolled) != 0 {
+		t.Errorf("EnrolFromPushedAddresses() = %v, want none: the address is contested", enrolled)
+	}
+}
+
+// TestAcceptedIPAndEnrolledAtSurviveRestart is issue #1281's core
+// persistence promise: a device this registry created, once enrolled,
+// keeps its AcceptedIP/EnrolledAt (and continues to exist at all) after
+// the process restarts -- the same JSON-file + atomic-write convention
+// internal/device/mac_registry.go already uses.
+func TestAcceptedIPAndEnrolledAtSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devices.json")
+
+	r1, err := OpenRegistry(path, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	now := time.Now().Truncate(time.Second)
+	if _, err := r1.Create("hap-ax3", "Hap AX3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r1, "hap-ax3", "10.10.0.1")
+
+	r2, err := OpenRegistry(path, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistry (reload): %v", err)
+	}
+	list := r2.List()
+	if len(list) != 1 {
+		t.Fatalf("List() after reload = %+v, want the one created device", list)
+	}
+	d := list[0]
+	if d.ID != "hap-ax3" || d.Name != "Hap AX3" || d.AcceptedIP != "10.10.0.1" || d.EnrolledAt.IsZero() {
+		t.Errorf("reloaded device = %+v, want identity and enrolment to have survived", d)
+	}
+	if !r2.Allowed("10.10.0.1") {
+		t.Errorf("Allowed(%q) = false after reload, want true: the enrolment must be live, not just visible", "10.10.0.1")
+	}
+}
+
+// TestConfiguredDevicesAreNotPersisted: a config.yaml declaration is
+// rebuilt fresh from that file on every boot, so persisting it too
+// would be a second, potentially stale source of truth for the same
+// device.
+func TestConfiguredDevicesAreNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devices.json")
+
+	r1, err := OpenRegistry(path, []config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.Resolve("192.168.1.1", time.Now())
+	// Force a write by also creating a real registry-owned device --
+	// otherwise persistLocked has nothing to write and the file may not
+	// exist at all yet, which is a valid but less informative case.
+	if _, err := r1.Create("extra", "extra", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	r2, err := OpenRegistry(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range r2.List() {
+		if d.ID == "core" {
+			t.Errorf("a config.yaml-declared device was persisted and reloaded without config.yaml declaring it: %+v", d)
+		}
+	}
+}

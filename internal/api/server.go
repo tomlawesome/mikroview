@@ -525,6 +525,16 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
 		{http.MethodGet, "/api/devices/macs", s.handleDeviceMACs},
+		// Issue #1281: declaring, enrolling and deleting a syslog-only
+		// device, and the addresses the listener gate has refused a line
+		// from. Admin-only writes beside the viewer-tier read above --
+		// see devices.go's own doc comments for why each is gated where
+		// it is.
+		{http.MethodPost, "/api/devices", s.handleDeviceCreate},
+		{http.MethodDelete, "/api/devices/{id}", s.handleDeviceDelete},
+		{http.MethodPost, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentCreate},
+		{http.MethodDelete, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentDelete},
+		{http.MethodGet, "/api/devices/refused", s.handleDevicesRefused},
 		{http.MethodGet, "/api/rules", s.handleRules},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push

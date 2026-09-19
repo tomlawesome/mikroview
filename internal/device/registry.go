@@ -14,6 +14,10 @@
 package device
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sort"
@@ -23,7 +27,13 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// deviceLog is this package's logger -- distinct from mac_registry.go's
+// persistLog ("device-mac"), which names the separate MAC-history store.
+var deviceLog = logging.New("device")
 
 // Info describes a RouterOS device mikroview has received log data from.
 //
@@ -40,6 +50,19 @@ type Info struct {
 	FirstSeen  time.Time `json:"firstSeen"`
 	LastSeen   time.Time `json:"lastSeen"`
 	EventCount uint64    `json:"eventCount"`
+	// AcceptedIP is issue #1281's enrolled address: empty until a valid
+	// enrolment token is redeemed at some source address (Registry.
+	// TryEnrol), or until the upgrade-time one-shot check
+	// (EnrolFromPushedAddresses) finds this device the sole claimant of
+	// one of its own pushed addresses. Distinct from SourceIP, which is
+	// either the operator's config.yaml declaration or the first address
+	// attribution ever happened to see -- AcceptedIP is the one address
+	// this instance has actual evidence (a token, not merely a claim) is
+	// this router. Persisted (see persistLocked) so an enrolment
+	// survives a restart.
+	AcceptedIP string `json:"acceptedIp"`
+	// EnrolledAt is when AcceptedIP was set, zero until then.
+	EnrolledAt time.Time `json:"enrolledAt"`
 }
 
 // Source is a syslog source address no device has claimed: neither a
@@ -55,12 +78,14 @@ type Source struct {
 	Lines     uint64    `json:"lines"`
 	FirstSeen time.Time `json:"firstSeen"`
 	LastSeen  time.Time `json:"lastSeen"`
-	// Claimants names every device whose pushed address table carries
-	// this address, and is set only when two or more do -- the one case
-	// where the registry can say *why* it could not attribute, rather
-	// than only that it could not. Device ids: a caller showing them to
-	// an operator resolves display names the same way it does for any
-	// other device id.
+	// Claimants named every device whose pushed address table carried
+	// this address, when two or more did. Issue #1281's audit removed
+	// the pushed-address-table claim from attribution entirely (a router
+	// cannot be trusted to name its own address over syslog -- see
+	// Registry.Resolve's doc comment), so this is never populated any
+	// more; it stays on the wire shape rather than being deleted so a
+	// client reading it sees a stable "no conflict" answer instead of a
+	// field disappearing.
 	Claimants []string `json:"claimants,omitempty"`
 }
 
@@ -78,6 +103,16 @@ type NameLookup interface {
 // /ip/address table. An interface for the same two reasons NameLookup
 // is one -- device does not import routerstate, and a test can supply
 // a table without a store.
+//
+// No longer consulted by Resolve (issue #1281's audit: a router's own
+// claim about its address, made over syslog, is not evidence strong
+// enough to attribute identity -- see Resolve's doc comment). The one
+// remaining caller is EnrolFromPushedAddresses, the once-at-startup
+// upgrade step that offers a still-unenrolled device the same "sole
+// claimant" evidence as a one-time, logged, operator-visible nudge
+// rather than a standing security decision. The pushed tables
+// themselves are untouched and keep serving the display-only table
+// endpoints (GET /api/routeros/{device}/addresses).
 type AddressTables interface {
 	// Devices returns every device that has pushed anything.
 	Devices() []string
@@ -90,41 +125,67 @@ type AddressTables interface {
 // sources it has not been able to attribute to one, and per-device
 // liveness/volume for the /api/devices endpoint.
 //
-// Devices enter one of two ways, both of them an act by the operator: a
-// config.yaml declaration (NewRegistry), or an ingest token they minted
-// naming the device that pushed (Ensure). Syslog traffic adds none: an
-// address that resolves to no device is kept as a Source, so events are
-// never lost just because a router has not been declared -- the
-// operator sees the unattributed address in the UI and can declare it
-// there.
+// Devices enter one of three ways: a config.yaml declaration
+// (OpenRegistry), an ingest token minted for a device that then pushed
+// (Ensure), or an admin declaring a syslog-only router by name (Create,
+// issue #1281) ahead of enrolling it. Syslog traffic on its own adds
+// none: an address that resolves to no device is kept as a Source, so
+// events are never lost just because a router has not been declared --
+// the operator sees the unattributed address in the UI and can declare
+// it there.
 type Registry struct {
 	mu sync.RWMutex
 	// byIP maps a config.yaml-declared devices[].sourceIp to its
 	// device: attribution step (a), the operator's own word on which
 	// address is which router, and the only lookup strong enough to be
-	// cached permanently. Attribution derived from pushed tables
-	// (step (b)) deliberately does not land here -- see attribution.
+	// cached permanently.
 	byIP map[string]*Info
-	// byID holds every device by id, declared and push-named alike.
-	// This is the list List returns and everything counts.
+	// byAcceptedIP maps a device's enrolled address (Info.AcceptedIP) to
+	// its device: attribution step (b), issue #1281's replacement for
+	// the pushed-address-table claim this package used to trust. An
+	// address lands here only through TryEnrol (a token minted by an
+	// admin, redeemed by a line actually carrying it) or
+	// EnrolFromPushedAddresses' one-shot upgrade nudge -- never merely
+	// because a router's own pushed table says so.
+	byAcceptedIP map[string]*Info
+	// byID holds every device by id, declared, push-named and
+	// admin-created alike. This is the list List returns and everything
+	// counts.
 	byID map[string]*Info
 	// sources holds the unattributed syslog source addresses, keyed by
 	// the normalised address. The only map here that grows from
-	// unauthenticated traffic, so the only one pruneLocked bounds.
+	// unauthenticated traffic, so the only one pruneLocked bounds. Since
+	// #1281's listener gate, a source only ever reaches Resolve (and so
+	// this map) if it was already sourceIp/acceptedIp -- an address that
+	// is neither is refused at the listener and never becomes a Source
+	// at all; see Refused for where those addresses are counted instead.
 	sources map[string]*Source
-	// attribution caches what the pushed address tables said about one
-	// source address -- the miss as much as the hit, because Resolve
-	// runs on every ingested line and a walk of every device's address
-	// table per line is exactly the per-event cost #370 took out of
-	// this function. Derived, never authoritative: every push clears it
-	// (Ensure), so an attribution is never resting on evidence the
-	// routers have since revised.
-	attribution map[string]claim
-	// addresses is the pushed-address-table source for step (b), nil
-	// until wired (SetAddressTables) and on a registry whose owner has
-	// no router state at all -- attribution then stops at step (a),
-	// which is a narrower answer, never a wrong one.
-	addresses AddressTables
+
+	// refused holds every syslog source address the listener gate has
+	// refused a line from -- issue #1281's GET /api/devices/refused.
+	// Bounded and evicted the same oldest-last-seen-first way as
+	// sources; see pruneRefusedLocked.
+	refused map[string]*Refused
+	// pendingByDevice holds each device's current enrolment token, by
+	// device id -- at most one per device, replaced (never
+	// accumulated) by MintEnrolment. Only the token's hash is kept; see
+	// pendingToken.
+	pendingByDevice map[string]pendingToken
+	// pendingByHash is pendingByDevice's reverse index, so the listener
+	// gate's TryEnrol -- called for every line from a not-yet-allowed
+	// address -- costs one map lookup rather than a walk of every
+	// device's pending token.
+	pendingByHash map[string]string
+
+	// backend/version are this registry's own optional persistence
+	// (issue #1281): only AcceptedIP/EnrolledAt and the identity of any
+	// device not declared in config.yaml need to survive a restart --
+	// see persistLocked. Same JSON-file + atomic-write convention as
+	// every other small store in this codebase (internal/droplist,
+	// internal/suggest); nil backend (the default) means memory-only,
+	// same as those.
+	backend persist.Backend
+	version int64
 
 	// names, when set, resolves the display name for a device id --
 	// config.yaml's declared name, else an operator's stored label
@@ -137,14 +198,6 @@ type Registry struct {
 	// Read under the same lock as byIP, but never on the ingest path:
 	// Resolve returns the id, and only List asks for a name.
 	names NameLookup
-}
-
-// claim is what the pushed address tables say about one source
-// address: the single device that claims it, the two-or-more that all
-// do, or neither.
-type claim struct {
-	id        string
-	claimants []string
 }
 
 // maxUnattributedSources bounds how many unclaimed syslog source
@@ -188,12 +241,53 @@ func ConfigNames(configured []config.Device) map[string]string {
 	return out
 }
 
+// NewRegistry builds a memory-only registry: every persistence-backed
+// caller (main.go) wants OpenRegistry instead, but the many tests that
+// have no need to exercise persistence keep this shorter spelling.
 func NewRegistry(configured []config.Device) *Registry {
+	r, err := OpenRegistryWithBackend(nil, configured)
+	if err != nil {
+		// Unreachable: OpenRegistryWithBackend only ever fails reading
+		// from a real backend, and nil is the documented "no backend"
+		// case (see persist.Open).
+		panic("device: NewRegistry: " + err.Error())
+	}
+	return r
+}
+
+// OpenRegistry is NewRegistry plus issue #1281's own persistence: path
+// loads (if it exists -- a missing file is the expected first-run case)
+// and every device this registry itself created is written back to it
+// from then on, atomically, the same convention internal/droplist and
+// internal/suggest already use. An empty path keeps everything
+// memory-only, same optional-persistence contract as every other small
+// store in this codebase.
+func OpenRegistry(path string, configured []config.Device) (*Registry, error) {
+	if path == "" {
+		return OpenRegistryWithBackend(nil, configured)
+	}
+	return OpenRegistryWithBackend(persist.NewFileBackend(path), configured)
+}
+
+// OpenRegistryWithBackend is OpenRegistry against any persist.Backend.
+//
+// Only a device this registry itself created (never one config.yaml
+// declares, which is rebuilt from that file on every boot regardless)
+// is written to the document -- see persistLocked -- and its
+// AcceptedIP/EnrolledAt are read back onto it here so an enrolment
+// survives a restart. A persisted record whose id collides with a
+// config.yaml declaration merges onto that declared Info instead of
+// creating a second entry, config.yaml's Name winning either way.
+func OpenRegistryWithBackend(b persist.Backend, configured []config.Device) (*Registry, error) {
 	r := &Registry{
-		byIP:        make(map[string]*Info),
-		byID:        make(map[string]*Info),
-		sources:     make(map[string]*Source),
-		attribution: make(map[string]claim),
+		byIP:            make(map[string]*Info),
+		byAcceptedIP:    make(map[string]*Info),
+		byID:            make(map[string]*Info),
+		sources:         make(map[string]*Source),
+		refused:         make(map[string]*Refused),
+		pendingByDevice: make(map[string]pendingToken),
+		pendingByHash:   make(map[string]string),
+		backend:         b,
 	}
 	for _, d := range configured {
 		key := normalizeIP(d.SourceIP)
@@ -206,18 +300,100 @@ func NewRegistry(configured []config.Device) *Registry {
 		r.byIP[key] = info
 		r.byID[info.ID] = info
 	}
-	return r
+
+	version, existed, err := persist.Open(context.Background(), b, "the device registry", func(data []byte) error {
+		var file registryFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			return err
+		}
+		for _, pd := range file.Devices {
+			if pd == nil || pd.ID == "" {
+				continue
+			}
+			info, ok := r.byID[pd.ID]
+			if !ok {
+				info = &Info{ID: pd.ID, Name: pd.Name}
+				r.byID[pd.ID] = info
+			}
+			if pd.AcceptedIP != "" {
+				info.AcceptedIP = pd.AcceptedIP
+				info.EnrolledAt = pd.EnrolledAt
+				r.byAcceptedIP[normalizeIP(pd.AcceptedIP)] = info
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if existed {
+		r.version = version
+	}
+	return r, nil
 }
 
-// SetAddressTables wires attribution step (b) in: the routers' own
-// pushed /ip/address tables. Separate from NewRegistry for the same
-// reason SetNames is -- the store it reads is built later in main --
-// and a Registry without one attributes by config.yaml alone.
-func (r *Registry) SetAddressTables(a AddressTables) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.addresses = a
-	clear(r.attribution)
+// registryFile is the on-disk shape OpenRegistryWithBackend/
+// persistLocked read and write.
+type registryFile struct {
+	Devices []*persistedDevice `json:"devices"`
+}
+
+// persistedDevice is one registry-created device's durable half: its
+// identity (so it exists at all on the next boot -- nothing else would
+// recreate it) plus its enrolment. FirstSeen/LastSeen/EventCount are
+// deliberately absent: those are syslog liveness, never persisted for
+// any device before this feature either, and starting them fresh on
+// restart is the existing, unremarked-on behaviour.
+type persistedDevice struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	AcceptedIP string    `json:"acceptedIp,omitempty"`
+	EnrolledAt time.Time `json:"enrolledAt,omitzero"`
+}
+
+// persistLocked writes every non-config.yaml device to disk, if
+// persistence is configured. Write failures are swallowed rather than
+// surfaced to the caller -- the in-memory state (which every read goes
+// through) stays correct either way, same contract as every other
+// store's persistLocked in this codebase (e.g. internal/droplist).
+// Must be called with r.mu held.
+func (r *Registry) persistLocked() {
+	if r.backend == nil {
+		return
+	}
+	devices := make([]*persistedDevice, 0, len(r.byID))
+	for _, info := range r.byID {
+		if info.Configured {
+			// Rebuilt from config.yaml on every boot regardless; nothing
+			// here would ever be read back for it except a redundant
+			// AcceptedIP, since a config-declared device is already
+			// enrolled at its SourceIP with no token needed (see
+			// Registry.Resolve).
+			continue
+		}
+		devices = append(devices, &persistedDevice{
+			ID:         info.ID,
+			Name:       info.Name,
+			AcceptedIP: info.AcceptedIP,
+			EnrolledAt: info.EnrolledAt,
+		})
+	}
+	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })
+
+	data, err := json.MarshalIndent(registryFile{Devices: devices}, "", "  ")
+	if err != nil {
+		deviceLog.Error(fmt.Sprintf("encoding the device registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
+		return
+	}
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), r.backend, data, r.version)
+	if err != nil {
+		deviceLog.Error(fmt.Sprintf("writing the device registry to %s failed: %v -- this change exists only in memory and will be lost on restart", r.backend.Describe(), err))
+		return
+	}
+	if conflicted {
+		deviceLog.Warn(fmt.Sprintf("the device registry was modified by another process while this change was pending (%s); this change was applied on top", r.backend.Describe()))
+	}
+	r.version = version
 }
 
 // Ensure records that deviceID has pushed, creating its registry entry
@@ -237,23 +413,27 @@ func (r *Registry) Ensure(deviceID string, now time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureLocked(deviceID, now)
-	// A push is new evidence about which addresses belong to which
-	// router, so every derived attribution is dropped and recomputed on
-	// the next line from that source.
-	clear(r.attribution)
+	if _, created := r.ensureLocked(deviceID, now); created {
+		r.persistLocked()
+	}
 }
 
-func (r *Registry) ensureLocked(deviceID string, now time.Time) *Info {
+// ensureLocked returns deviceID's Info, creating it (with created =
+// true) the first time it is seen. Since #1281's audit, this is the
+// only remaining consumer of clear-on-every-push cache invalidation --
+// there is no cache left to clear (see Resolve's doc comment) -- so a
+// caller only ever needs to persist on the created branch.
+func (r *Registry) ensureLocked(deviceID string, now time.Time) (info *Info, created bool) {
 	info, ok := r.byID[deviceID]
 	if !ok {
 		info = &Info{ID: deviceID, Name: deviceID, FirstSeen: now}
 		r.byID[deviceID] = info
+		created = true
 	}
 	if info.FirstSeen.IsZero() {
 		info.FirstSeen = now
 	}
-	return info
+	return info, created
 }
 
 // Resolve maps a syslog source IP to the id its events are stored
@@ -263,17 +443,31 @@ func (r *Registry) ensureLocked(deviceID string, now time.Time) *Info {
 // the RWMutex exists for concurrent /api/devices reads, not for
 // ingest-side concurrency.
 //
-// #1170's attribution order, strongest evidence first:
+// Issue #1281's audit narrowed attribution to two steps, both actual
+// operator evidence rather than a router's own claim about itself:
 //
 //   - (a) config.yaml's devices[].sourceIp -- the operator said so.
-//   - (b) the routers' own pushed /ip/address tables: an address that
-//     appears in exactly one device's table belongs to that device.
-//     The router told us its addresses, so we use them; two routers
-//     pushing the same address tells us only that we cannot tell.
+//   - (b) Info.AcceptedIP -- a device the operator issued an enrolment
+//     token for, redeemed by a "mikroview-enrol <token>" line actually
+//     arriving from this address (Registry.TryEnrol), or by the
+//     once-at-startup upgrade nudge (EnrolFromPushedAddresses).
 //   - otherwise the source is unattributed. It is remembered as a
 //     Source, not minted as a device named after its own IP, and the
 //     address itself is returned so the lines are stored and shown
 //     exactly as before -- under an id that claims nothing.
+//
+// What this no longer does is the removed step (b) from before #1281:
+// trusting a router's own pushed /ip/address table to say which address
+// is its own. That table is still stored and served for display (GET
+// /api/routeros/{device}/addresses), but a router is not a trustworthy
+// witness to its own identity purely by asserting an address in a
+// payload an ingest token merely let it push -- see docs/decisions and
+// this issue's audit for the full reasoning. In production this branch
+// is close to unreachable besides: the listener gate (internal/syslog,
+// EnrolmentGate) refuses a line from any address that is not already
+// sourceIp or AcceptedIP before Resolve is ever called with it, so an
+// address only lands here as an unattributed Source through a caller
+// that bypasses the gate (a test, or a future second ingestion path).
 func (r *Registry) Resolve(sourceIP string, now time.Time) (deviceID string) {
 	key := normalizeIP(sourceIP)
 
@@ -286,14 +480,14 @@ func (r *Registry) Resolve(sourceIP string, now time.Time) (deviceID string) {
 		return info.ID
 	}
 
-	// (b) claimed by exactly one router's pushed address table.
-	c := r.claimLocked(key)
-	if c.id != "" {
-		info := r.ensureLocked(c.id, now)
+	// (b) enrolled by token.
+	if info, ok := r.byAcceptedIP[key]; ok {
 		r.seenLocked(info, key, now)
 		// Attributed now, so it is no longer an address nobody has
-		// claimed: drop any record of it as one. The lines it sent
-		// while unattributed stay where they were stored.
+		// claimed -- drop any record of it as one, same as step (a)
+		// always implicitly does (a config.yaml address is never in
+		// r.sources to begin with). The lines it sent while unattributed
+		// stay where they were stored.
 		delete(r.sources, key)
 		return info.ID
 	}
@@ -306,7 +500,6 @@ func (r *Registry) Resolve(sourceIP string, now time.Time) (deviceID string) {
 	}
 	src.LastSeen = now
 	src.Lines++
-	src.Claimants = c.claimants
 	r.pruneLocked()
 	return key
 }
@@ -325,50 +518,6 @@ func (r *Registry) seenLocked(info *Info, key string, now time.Time) {
 	}
 	info.LastSeen = now
 	info.EventCount++
-}
-
-// claimLocked answers which devices have pushed key as one of their own
-// addresses, from the cache when it can. A hit and a miss are cached
-// alike: an unattributed source keeps sending, and rescanning every
-// address table for every one of its lines is the cost this avoids.
-func (r *Registry) claimLocked(key string) claim {
-	if c, ok := r.attribution[key]; ok {
-		return c
-	}
-	c := r.computeClaimLocked(key)
-	// Bounded by the same reasoning as sources: every miss cached here
-	// has a Source beside it, and a prune clears the whole cache rather
-	// than tracking which entries went with the sources it shed.
-	r.attribution[key] = c
-	return c
-}
-
-func (r *Registry) computeClaimLocked(key string) claim {
-	if r.addresses == nil || key == "" {
-		return claim{}
-	}
-	var owners []string
-	for _, dev := range r.addresses.Devices() {
-		entries, _, ok := r.addresses.IPAddresses(dev)
-		if !ok {
-			continue
-		}
-		for _, e := range entries {
-			if addressOf(e.Address) == key {
-				owners = append(owners, dev)
-				break
-			}
-		}
-	}
-	switch len(owners) {
-	case 0:
-		return claim{}
-	case 1:
-		return claim{id: owners[0]}
-	default:
-		sort.Strings(owners)
-		return claim{claimants: owners}
-	}
 }
 
 // addressOf reduces one /ip/address row to the address itself:
@@ -408,11 +557,17 @@ func (r *Registry) pruneLocked() {
 	evict.DownTo(r.sources, evict.Target(maxUnattributedSources), func(s *Source) time.Time {
 		return s.LastSeen
 	})
-	// The attribution cache is derived and cheap to refill, and its
-	// misses are keyed by exactly the addresses just shed; dropping the
-	// lot is simpler than tracking which went with which, and costs one
-	// rescan per live source.
-	clear(r.attribution)
+}
+
+// pruneRefusedLocked is pruneLocked for the refused-address list --
+// same oldest-last-seen-first eviction, capped at maxRefusedAddresses.
+func (r *Registry) pruneRefusedLocked() {
+	if len(r.refused) <= maxRefusedAddresses {
+		return
+	}
+	evict.DownTo(r.refused, evict.Target(maxRefusedAddresses), func(s *Refused) time.Time {
+		return s.LastSeen
+	})
 }
 
 // SetNames wires the display-name resolver in. Separate from
@@ -573,4 +728,102 @@ func normalizeIP(s string) string {
 		return ip.String()
 	}
 	return s
+}
+
+// ErrDeviceExists is returned by Create for an id already in the
+// registry, config.yaml-declared or otherwise.
+var ErrDeviceExists = errors.New("device: a device with that id already exists")
+
+// ErrDeviceNotFound is returned by Delete/MintEnrolment/BurnEnrolment
+// for an id this registry does not hold.
+var ErrDeviceNotFound = errors.New("device: no such device")
+
+// ErrDeviceConfigured is returned by Delete for a device declared in
+// config.yaml -- it is recreated from that file on every boot
+// regardless of anything an API call does to it, so deleting it here
+// would only reappear confusingly on the next restart. Remove it from
+// config.yaml instead.
+var ErrDeviceConfigured = errors.New("device: this device is declared in config.yaml; remove it there instead")
+
+// Create declares a device by name alone, with no address (issue
+// #1281): the admin path for a router that only ever sends logs and so
+// has no ingest token to auto-discover it through Ensure, and no
+// address to declare in config.yaml either -- what POST /api/devices
+// backs. id is what every other device identity in this codebase is
+// keyed by; the caller (the API handler) derives and validates it from
+// the operator-supplied name before this is ever called.
+func (r *Registry) Create(id, name string, now time.Time) (Info, error) {
+	if id == "" {
+		return Info{}, ErrDeviceNotFound
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.byID[id]; exists {
+		return Info{}, ErrDeviceExists
+	}
+	info := &Info{ID: id, Name: name}
+	r.byID[id] = info
+	r.persistLocked()
+	return *info, nil
+}
+
+// Delete removes a device this registry itself created (Create or
+// Ensure) -- a config.yaml declaration refuses with ErrDeviceConfigured
+// instead, since it would simply reappear on the next boot. Clears the
+// device's enrolled address (if any) and any pending enrolment token
+// along with it, matching #1281's contract that deleting a device
+// clears its address.
+func (r *Registry) Delete(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	info, ok := r.byID[id]
+	if !ok {
+		return ErrDeviceNotFound
+	}
+	if info.Configured {
+		return ErrDeviceConfigured
+	}
+	if info.AcceptedIP != "" {
+		delete(r.byAcceptedIP, normalizeIP(info.AcceptedIP))
+	}
+	r.burnPendingLocked(id)
+	delete(r.byID, id)
+	r.persistLocked()
+	return nil
+}
+
+// OwnPrefixes returns every device's enrolled and config-declared
+// address as a /32 (or /128) prefix -- issue #1281's replacement source
+// for internal/droplist.OwnRanges' "that is your router's own address"
+// refusal, which used to read the routers' own pushed /ip/address
+// tables (routerstate.Store.OwnPrefixes) the same way attribution used
+// to. A pushed table is exactly the kind of self-reported claim this
+// issue's audit stopped trusting for anything security-relevant; a
+// device's SourceIP/AcceptedIP is real operator or token evidence, so
+// this is the narrower, no-longer-router-supplied answer to the same
+// question. Only IPv4 is returned: droplist.Validate only ever accepts
+// IPv4 entries, so an IPv6 address here could never overlap anything it
+// would check against anyway.
+func (r *Registry) OwnPrefixes() []netip.Prefix {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []netip.Prefix
+	seen := make(map[string]bool)
+	add := func(addr string) {
+		if addr == "" || seen[addr] {
+			return
+		}
+		a, err := netip.ParseAddr(addr)
+		if err != nil || !a.Is4() {
+			return
+		}
+		seen[addr] = true
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	for _, info := range r.byID {
+		add(info.SourceIP)
+		add(info.AcceptedIP)
+	}
+	return out
 }
