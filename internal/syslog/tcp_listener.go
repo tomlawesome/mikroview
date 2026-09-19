@@ -232,14 +232,15 @@ type EnrolmentGate interface {
 	// Refuse records that a line from host was neither already allowed
 	// nor a valid enrolment line, for the refused-senders list.
 	Refuse(host string, line []byte)
-	// AcceptsUnknown reports whether at least one enrolment token is
-	// currently pending, anywhere -- while true, the accept loop lets an
-	// address through that is neither Allowed nor yet known, since the
-	// enrol line that proves a pending token has to be able to arrive
-	// from the address it is enrolling. Checked once per accepted
+	// AcceptsConnectionFrom reports whether host is the address some
+	// unexpired pending enrolment token was minted for -- while true,
+	// the accept loop lets that one address through even though it is
+	// not yet Allowed, since the enrol line proving the token has to be
+	// able to arrive from the address it is enrolling. Every other
+	// unknown address stays refused. Checked once per accepted
 	// connection, before the TLS handshake and before the per-line gate
 	// ever sees a byte.
-	AcceptsUnknown() bool
+	AcceptsConnectionFrom(host string) bool
 	// RefuseConnection records that host's TCP connection was refused at
 	// accept time -- before TLS, before any line -- because host is
 	// neither Allowed nor is any token pending. Counted the same way as
@@ -849,18 +850,21 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		// tls_listener.go's own comment): it happens lazily on this
 		// conn's first Read/Write, inside handleTCPConn, which this
 		// loop never reaches for a refused connection. An address that
-		// is not already Allowed only gets this far while some device,
-		// anywhere, has a pending enrolment token -- AcceptsUnknown --
-		// because the enrol line that redeems such a token has to be
-		// able to arrive from the very address it is enrolling. Once
-		// every pending token is burned or has expired, the port closes
-		// back up to unknown addresses.
+		// is not already Allowed only gets this far while it is the one
+		// address a pending enrolment token was minted for --
+		// AcceptsConnectionFrom -- because the enrol line that redeems
+		// that token has to be able to arrive from the very address it
+		// is enrolling. Since #1291 that is one address rather than
+		// every unknown address at once: a pending token elsewhere on
+		// the fleet no longer opens the port to anybody. Once every
+		// pending token is burned or has expired, the port closes back
+		// up to unknown addresses entirely.
 		if p := enrolmentGate.Load(); p != nil && *p != nil {
 			g := *p
-			if !g.Allowed(host) && !g.AcceptsUnknown() {
+			if !g.Allowed(host) && !g.AcceptsConnectionFrom(host) {
 				g.RefuseConnection(host)
 				if total, ok := enrolmentRejectGate.Allow(); ok {
-					tcpLog.Warn(fmt.Sprintf("connection from an address that is neither a declared/enrolled router nor covered by a pending enrolment token -- rejecting %s (%d such rejections since start or last clear)", host, total))
+					tcpLog.Warn(fmt.Sprintf("connection from an address that is neither a declared/enrolled router nor the address a pending enrolment token was minted for -- rejecting %s (%d such rejections since start or last clear)", host, total))
 				}
 				conn.Close()
 				continue

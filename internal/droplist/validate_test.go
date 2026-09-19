@@ -107,7 +107,7 @@ func TestValidateRejectsRoutersOwnRange(t *testing.T) {
 	if _, err := r.Create("router-1", "router-1", now); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	token, _, err := r.MintEnrolment("router-1", now)
+	token, _, err := r.MintEnrolment("router-1", "203.0.114.1", now)
 	if err != nil {
 		t.Fatalf("MintEnrolment: %v", err)
 	}

@@ -532,6 +532,7 @@ func (s *Server) apiRoutes() []route {
 		// it is.
 		{http.MethodPost, "/api/devices", s.handleDeviceCreate},
 		{http.MethodDelete, "/api/devices/{id}", s.handleDeviceDelete},
+		{http.MethodPost, "/api/devices/{id}/registration", s.handleDeviceRegister},
 		{http.MethodPost, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentCreate},
 		{http.MethodDelete, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentDelete},
 		{http.MethodGet, "/api/devices/refused", s.handleDevicesRefused},

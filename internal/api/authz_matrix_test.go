@@ -432,10 +432,16 @@ var authzMatrix = []routeExpectation{
 		"removes a device this registry itself created, clearing its enrolled address and any pending token with " +
 			"it -- same tier as creating one. A config.yaml declaration refuses with 400 rather than reaching this " +
 			"tier check meaningfully, since it would simply reappear on the next restart"},
+	{http.MethodPost, "/api/devices/{id}/registration", accessAdmin,
+		"records the operator's confirmation of a router on the device itself -- the ledger's final Register step " +
+			"(#1291). Admin tier like its neighbours, but deliberately no password re-proof on top: registering " +
+			"grants nothing (it never sets AcceptedIP), so spoofing it renames a device and stamps a date. The " +
+			"re-proof belongs on the endpoint that opens the door, which is minting"},
 	{http.MethodPost, "/api/devices/{id}/enrolment", accessAdmin,
 		"mints (or rerolls) a device's enrolment token (#1281) -- a bearer credential that attributes syslog traffic " +
 			"to a device, the same tier every other token-issuing endpoint in this API holds to (POST /api/tokens, " +
-			"POST /api/droplist/key)"},
+			"POST /api/droplist/key). Since #1291 the admin tier is the floor, not the whole check: this endpoint " +
+			"also re-verifies the caller's password at the moment of minting, so a stolen session is not enough"},
 	{http.MethodDelete, "/api/devices/{id}/enrolment", accessAdmin,
 		"revokes a device's pending enrolment token before it is redeemed -- same tier as minting one"},
 	{http.MethodGet, "/api/devices/refused", accessAdmin,

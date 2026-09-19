@@ -28,6 +28,16 @@ func deviceTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 	return s, ts, admin
 }
 
+// mintBody is the body POST /api/devices/{id}/enrolment has taken since
+// issue #1291: the admin's own password, re-proving identity at the
+// moment of minting, and the one address the token may be redeemed
+// from. testAdminPassword is what setUpAdmin registers the admin with.
+const testAdminPassword = "password123"
+
+func mintBody(addr string) deviceEnrolmentRequest {
+	return deviceEnrolmentRequest{Password: testAdminPassword, ExpectedAddress: addr}
+}
+
 func TestDeviceCreateDeclaresANamelessDevice(t *testing.T) {
 	_, ts, admin := deviceTestServer(t)
 
@@ -109,7 +119,7 @@ func TestDeviceEnrolmentMintReplacesAndRerolls(t *testing.T) {
 	_, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
 
-	first := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", nil)
+	first := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1"))
 	var firstResp deviceEnrolmentResponse
 	if err := json.NewDecoder(first.Body).Decode(&firstResp); err != nil {
 		t.Fatal(err)
@@ -119,7 +129,7 @@ func TestDeviceEnrolmentMintReplacesAndRerolls(t *testing.T) {
 		t.Fatalf("mint response = %+v, want a token and expiry", firstResp)
 	}
 
-	second := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", nil)
+	second := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1"))
 	var secondResp deviceEnrolmentResponse
 	if err := json.NewDecoder(second.Body).Decode(&secondResp); err != nil {
 		t.Fatal(err)
@@ -132,7 +142,7 @@ func TestDeviceEnrolmentMintReplacesAndRerolls(t *testing.T) {
 
 func TestDeviceEnrolmentMintUnknownDeviceNotFound(t *testing.T) {
 	_, ts, admin := deviceTestServer(t)
-	resp := postJSON(t, admin, ts.URL+"/api/devices/nope/enrolment", nil)
+	resp := postJSON(t, admin, ts.URL+"/api/devices/nope/enrolment", mintBody("10.10.0.1"))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
@@ -142,7 +152,7 @@ func TestDeviceEnrolmentMintUnknownDeviceNotFound(t *testing.T) {
 func TestDeviceEnrolmentDeleteBurnsThePendingToken(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
-	mint := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", nil)
+	mint := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1"))
 	var minted deviceEnrolmentResponse
 	json.NewDecoder(mint.Body).Decode(&minted)
 	mint.Body.Close()
@@ -191,7 +201,7 @@ func TestDevicesRefusedListsAndBoundsAddresses(t *testing.T) {
 func TestHandleDevicesReportsAcceptedIPAndEnrolment(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
-	mint := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", nil)
+	mint := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1"))
 	var minted deviceEnrolmentResponse
 	json.NewDecoder(mint.Body).Decode(&minted)
 	mint.Body.Close()
@@ -239,5 +249,141 @@ func TestHandleDevicesReportsAcceptedIPAndEnrolment(t *testing.T) {
 	}
 	if d2.Enrolment.Pending {
 		t.Errorf("enrolment = %+v, want pending: false once redeemed (single use)", d2.Enrolment)
+	}
+}
+
+// TestDeviceEnrolmentMintRefusesWithoutAPassword is issue #1291's core
+// claim at the HTTP boundary: holding an admin session is not enough to
+// mint. A stolen session cookie, a cross-site request riding the
+// admin's browser, or script injected into a page they are viewing all
+// arrive exactly like this -- authenticated, admin, and with no
+// password.
+func TestDeviceEnrolmentMintRefusesWithoutAPassword(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment",
+		deviceEnrolmentRequest{ExpectedAddress: "10.10.0.1"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 for a mint with no password", resp.StatusCode)
+	}
+	// Nothing was minted, so the connection gate never opened.
+	if s.Devices.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("a refused mint still left a token pending -- want nothing minted at all")
+	}
+}
+
+// TestDeviceEnrolmentMintRefusesAWrongPassword: the re-proof is a real
+// check, not a required-field formality.
+func TestDeviceEnrolmentMintRefusesAWrongPassword(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment",
+		deviceEnrolmentRequest{Password: "not-the-password", ExpectedAddress: "10.10.0.1"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 for a mint with the wrong password", resp.StatusCode)
+	}
+	if s.Devices.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("a mint with the wrong password still left a token pending")
+	}
+
+	// The right password still works straight afterwards: the refusal
+	// above counts against the login limiter, and one wrong attempt must
+	// not lock the admin out of their own setup.
+	ok := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1"))
+	defer ok.Body.Close()
+	if ok.StatusCode != http.StatusCreated {
+		t.Errorf("status = %d after one wrong attempt, want 201", ok.StatusCode)
+	}
+}
+
+// TestDeviceEnrolmentMintRerollAsksEveryTime: reroll goes through this
+// same endpoint, so it re-proves too. That is the feature working, not
+// a snag to smooth over.
+func TestDeviceEnrolmentMintRerollAsksEveryTime(t *testing.T) {
+	_, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1")).Body.Close()
+
+	reroll := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment",
+		deviceEnrolmentRequest{ExpectedAddress: "10.10.0.1"})
+	defer reroll.Body.Close()
+	if reroll.StatusCode != http.StatusUnauthorized {
+		t.Errorf("reroll status = %d with no password, want 401 -- rerolling must ask every time", reroll.StatusCode)
+	}
+}
+
+// TestDeviceEnrolmentMintRequiresAnExpectedAddress: the enrolment
+// window binds to one address (#1291), so there is no way to ask for a
+// token that opens the port to everyone.
+func TestDeviceEnrolmentMintRequiresAnExpectedAddress(t *testing.T) {
+	_, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	for _, tc := range []struct{ name, addr string }{
+		{"none", ""},
+		{"a hostname", "router.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment",
+				deviceEnrolmentRequest{Password: testAdminPassword, ExpectedAddress: tc.addr})
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestDeviceRegisterRecordsIntentAndGrantsNoAddress is the ledger's
+// final step end to end: it stamps the device and confers nothing.
+func TestDeviceRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/registration",
+		deviceRegisterRequest{Name: "hap-ax3"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body = %s", resp.StatusCode, body)
+	}
+	var info device.Info
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		t.Fatal(err)
+	}
+	if info.RegisteredAt.IsZero() {
+		t.Error("registeredAt is zero after registering, want it stamped")
+	}
+	if info.AcceptedIP != "" {
+		t.Fatalf("acceptedIp = %q after registering, want registering to grant no address", info.AcceptedIP)
+	}
+	// And it opened no enrolment window either -- registering is not a
+	// back door to the thing minting is now guarded for.
+	if s.Devices.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("registering opened the connection gate, want it to grant nothing at all")
+	}
+}
+
+// TestDeviceRegisterRequiresAdmin: same tier as every other
+// device-identity write in this file.
+func TestDeviceRegisterRequiresAdmin(t *testing.T) {
+	_, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users",
+		createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewer := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewer, ts.URL+"/api/auth/login",
+		credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	resp := postJSON(t, viewer, ts.URL+"/api/devices/hap-ax3/registration",
+		deviceRegisterRequest{Name: "hap-ax3"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a non-admin", resp.StatusCode)
 	}
 }

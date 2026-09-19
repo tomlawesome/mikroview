@@ -3,6 +3,8 @@
 package device
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -72,7 +74,7 @@ func TestResolveAttributesByConfiguredSourceIPFirst(t *testing.T) {
 	if _, err := r.Create("other", "Other", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := r.MintEnrolment("other", now)
+	token, _, err := r.MintEnrolment("other", "192.168.1.1", now)
 	if err != nil {
 		t.Fatalf("MintEnrolment: %v", err)
 	}
@@ -450,7 +452,7 @@ func (f fixedNames) Device(id string) string { return f[id] }
 // directly, so these tests exercise the real mint/hash/redeem sequence.
 func enrolAt(t *testing.T, r *Registry, device, host string) {
 	t.Helper()
-	token, _, err := r.MintEnrolment(device, time.Now())
+	token, _, err := r.MintEnrolment(device, host, time.Now())
 	if err != nil {
 		t.Fatalf("MintEnrolment(%q): %v", device, err)
 	}
@@ -526,5 +528,123 @@ func TestListOrdersConfiguredFirstThenByID(t *testing.T) {
 				t.Fatalf("List() ids = %v, want %v", ids, want)
 			}
 		}
+	}
+}
+
+// TestRegisterRecordsIntentAndGrantsNoAddress is the heart of issue
+// #1291: the ledger's final step records that the operator confirmed
+// this router, and confers nothing on it. If registering could set
+// AcceptedIP, an admin session alone would be enough to have an address
+// treated as a log source -- which is exactly the hole #1291 closes.
+func TestRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := r.Register("hap-ax3", "Upstairs hAP", now)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if info.RegisteredAt.IsZero() {
+		t.Error("registeredAt is zero after registering, want it stamped")
+	}
+	if info.Name != "Upstairs hAP" {
+		t.Errorf("name = %q, want the confirmed name", info.Name)
+	}
+	if info.AcceptedIP != "" {
+		t.Fatalf("acceptedIp = %q after registering, want registering to grant no address at all", info.AcceptedIP)
+	}
+	// And nothing anywhere else in the registry started attributing an
+	// address to it either.
+	if id := r.Resolve("10.10.0.1", now); id == "hap-ax3" {
+		t.Error("Resolve() attributed an address to a merely registered device, want registering to grant nothing")
+	}
+	if r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom() = true after registering, want registering to open no window")
+	}
+}
+
+// TestRegisterKeepsTheExistingNameWhenGivenNone: the operator is
+// confirming the router, not necessarily renaming it.
+func TestRegisterKeepsTheExistingNameWhenGivenNone(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	info, err := r.Register("hap-ax3", "", now)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if info.Name != "hap-ax3" {
+		t.Errorf("name = %q, want the name it already had", info.Name)
+	}
+	if info.RegisteredAt.IsZero() {
+		t.Error("registeredAt is zero, want registering to stamp it even with no rename")
+	}
+}
+
+// TestRegisterRefusesAConfigDeclaredDevice: config.yaml rebuilds it on
+// every boot, so a registration written here would vanish at the next
+// restart -- the same reason Delete refuses one.
+func TestRegisterRefusesAConfigDeclaredDevice(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "10.0.0.1"}})
+	if _, err := r.Register("core", "Renamed", time.Now()); err != ErrDeviceConfigured {
+		t.Errorf("Register(config-declared) error = %v, want ErrDeviceConfigured", err)
+	}
+}
+
+// TestRegisterUnknownDevice is the 404 the API answers with.
+func TestRegisterUnknownDevice(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Register("nope", "", time.Now()); err != ErrDeviceNotFound {
+		t.Errorf("Register(unknown) error = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+// TestARouterEnrolledBeforeRegistrationExistedReadsAsRegistered is
+// issue #1291's upgrade path. A registry written before this shipped
+// has no registeredAt at all, so every router already enrolled under
+// #1281 would otherwise come back as an enrolment someone abandoned
+// part way, and the ledger would reopen on routers whose operator did
+// everything the ledger asked of them at the time. An enrolment that
+// predates registration counts as its own registration, dated when it
+// was enrolled.
+func TestARouterEnrolledBeforeRegistrationExistedReadsAsRegistered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	enrolled := time.Now().Add(-72 * time.Hour).UTC().Truncate(time.Second)
+	// Exactly what #1281 persisted: no registeredAt key at all.
+	old := `{"devices":[
+		{"id":"hap-ax3","name":"hAP","acceptedIp":"10.10.0.1","enrolledAt":"` + enrolled.Format(time.RFC3339) + `"},
+		{"id":"never-enrolled","name":"Spare"}
+	]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := OpenRegistry(path, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	byID := map[string]Info{}
+	for _, info := range r.List() {
+		byID[info.ID] = info
+	}
+
+	got := byID["hap-ax3"]
+	if !got.RegisteredAt.Equal(enrolled) {
+		t.Errorf("registeredAt = %v, want it back-dated to enrolledAt %v", got.RegisteredAt, enrolled)
+	}
+	if got.AcceptedIP != "10.10.0.1" {
+		t.Errorf("acceptedIp = %q, want the enrolled address kept -- the upgrade must grant nothing new", got.AcceptedIP)
+	}
+
+	// A device that never enrolled is not swept along with it: there is
+	// no evidence its operator confirmed anything, so it still has the
+	// Register step to walk.
+	if spare := byID["never-enrolled"]; !spare.RegisteredAt.IsZero() {
+		t.Errorf("registeredAt = %v on a device that never enrolled, want zero", spare.RegisteredAt)
 	}
 }

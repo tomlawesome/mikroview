@@ -63,6 +63,19 @@ type Info struct {
 	AcceptedIP string `json:"acceptedIp"`
 	// EnrolledAt is when AcceptedIP was set, zero until then.
 	EnrolledAt time.Time `json:"enrolledAt"`
+	// RegisteredAt is when the operator confirmed this router on the
+	// device itself -- the ledger's final Register step (#1291) -- zero
+	// until they do. It records intent and grants nothing: registering
+	// never sets or changes AcceptedIP, so spoofing the click buys an
+	// attacker no acceptance. Acceptance stays where #1281 put it, in a
+	// token arriving over real syslog traffic from the address being
+	// accepted.
+	//
+	// Enrolled and registered are therefore independent, and the pair
+	// reads as the operator's progress: enrolled but never registered is
+	// an enrolment someone walked away from part way, and the ledger
+	// reopens at what is left.
+	RegisteredAt time.Time `json:"registeredAt"`
 }
 
 // Source is a syslog source address no device has claimed: neither a
@@ -320,6 +333,21 @@ func OpenRegistryWithBackend(b persist.Backend, configured []config.Device) (*Re
 				info.EnrolledAt = pd.EnrolledAt
 				r.byAcceptedIP[normalizeIP(pd.AcceptedIP)] = info
 			}
+			info.RegisteredAt = pd.RegisteredAt
+			// A registry written before #1291 has no registeredAt at
+			// all, so every router already enrolled under #1281 would
+			// read as an enrolment someone abandoned part way -- and the
+			// ledger would reopen on routers whose operator finished
+			// every step the ledger asked of them at the time. Treat an
+			// enrolment that predates this as its own registration,
+			// dated when it was enrolled: the operator's intent is not
+			// in doubt for a router that went on to present a valid
+			// token. Nothing is granted by this -- AcceptedIP is
+			// untouched here, read back above from what was already
+			// persisted. See docs/upgrades.md.
+			if info.RegisteredAt.IsZero() && info.AcceptedIP != "" {
+				info.RegisteredAt = info.EnrolledAt
+			}
 		}
 		return nil
 	})
@@ -345,10 +373,11 @@ type registryFile struct {
 // any device before this feature either, and starting them fresh on
 // restart is the existing, unremarked-on behaviour.
 type persistedDevice struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	AcceptedIP string    `json:"acceptedIp,omitempty"`
-	EnrolledAt time.Time `json:"enrolledAt,omitzero"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	AcceptedIP   string    `json:"acceptedIp,omitempty"`
+	EnrolledAt   time.Time `json:"enrolledAt,omitzero"`
+	RegisteredAt time.Time `json:"registeredAt,omitzero"`
 }
 
 // persistLocked writes every non-config.yaml device to disk, if
@@ -372,10 +401,11 @@ func (r *Registry) persistLocked() {
 			continue
 		}
 		devices = append(devices, &persistedDevice{
-			ID:         info.ID,
-			Name:       info.Name,
-			AcceptedIP: info.AcceptedIP,
-			EnrolledAt: info.EnrolledAt,
+			ID:           info.ID,
+			Name:         info.Name,
+			AcceptedIP:   info.AcceptedIP,
+			EnrolledAt:   info.EnrolledAt,
+			RegisteredAt: info.RegisteredAt,
 		})
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })
@@ -763,6 +793,42 @@ func (r *Registry) Create(id, name string, now time.Time) (Info, error) {
 	}
 	info := &Info{ID: id, Name: name}
 	r.byID[id] = info
+	r.persistLocked()
+	return *info, nil
+}
+
+// Register records the operator's confirmation of a router on the
+// device itself -- the ledger's final step (issue #1291) -- stamping
+// RegisteredAt and taking the name they confirmed it under.
+//
+// It grants nothing. AcceptedIP is deliberately not touched here, and
+// no path through this function can set it: that is the whole point of
+// splitting registration from acceptance. An attacker who can make an
+// admin's browser issue this request gets a renamed device with a date
+// on it, and no ability to have any address treated as a log source.
+// Acceptance still requires a valid, unexpired, single-use enrolment
+// token arriving over real syslog traffic from the address being
+// accepted (TryEnrol).
+//
+// Registering again is idempotent in effect but re-stamps the date --
+// the operator confirmed it again, and the later confirmation is the
+// true one. A config.yaml-declared device refuses with
+// ErrDeviceConfigured for Delete's reason: it is rebuilt from that file
+// on every boot, so nothing written here would survive a restart.
+func (r *Registry) Register(id, name string, now time.Time) (Info, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	info, ok := r.byID[id]
+	if !ok {
+		return Info{}, ErrDeviceNotFound
+	}
+	if info.Configured {
+		return Info{}, ErrDeviceConfigured
+	}
+	if name != "" {
+		info.Name = name
+	}
+	info.RegisteredAt = now
 	r.persistLocked()
 	return *info, nil
 }

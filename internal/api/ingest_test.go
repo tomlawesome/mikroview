@@ -76,7 +76,7 @@ func enrolIngestTestDeviceAt(t *testing.T, s *Server, device, addr string) {
 		// enrolling it again at the same address is harmless.
 		_ = err
 	}
-	token, _, err := s.Devices.MintEnrolment(device, now)
+	token, _, err := s.Devices.MintEnrolment(device, addr, now)
 	if err != nil {
 		t.Fatalf("MintEnrolment(%q): %v", device, err)
 	}
