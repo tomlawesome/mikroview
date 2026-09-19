@@ -138,9 +138,12 @@
                 </div>
               {/if}
               {#if multihomedEcho(d)}
-                <!-- The source-address split's echo (#442): the wizard's
-                     step 2 owns the diagnosis and the command; this card
-                     only says the pair is visible and where the fix is. -->
+                <!-- The source-address split's echo (#442): Send logs
+                     owns the diagnosis and the command (named, not
+                     numbered -- it read "step 2" until #1284 moved Send
+                     logs to third; see fleet.ts's multihomedEcho
+                     comment); this card only says the pair is visible
+                     and where the fix is. -->
                 <div class="frow dim">{multihomedEcho(d)}</div>
               {/if}
               {#if setupEcho(d)}
