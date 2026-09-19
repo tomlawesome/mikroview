@@ -8,6 +8,7 @@
 // numbers rather than through a mounted component.
 
 import { describe, expect, it } from 'vitest'
+import { deckCards } from './deckCards'
 import { fitRing, HAIRLINE_MIN_PX, RING_MARGIN_PX, TOUR_HIGHLIGHTS } from './tourHighlights'
 
 describe('fitRing (#1215)', () => {
@@ -70,6 +71,26 @@ describe('TOUR_HIGHLIGHTS box classification (#1215 item 3)', () => {
       'topography: the router as the waist — subnets below, the internet above',
       'log-every-rule: one drop zone — drop, click or paste the router export',
     ])
+  })
+})
+
+// #1271 item 2: both tests above iterate TOUR_HIGHLIGHTS, so they only
+// ever check entries that exist -- a card added to the deck without a
+// matching TOUR_HIGHLIGHTS entry ('log-every-rule', when it first
+// landed) walks the tour as a blank stop (JourneyTour.svelte's `?? []`
+// fallback draws no ring and no sentence), and nothing here failed. The
+// deck is the source of truth for what the tour must cover, so this
+// reads deckCards() -- not TOUR_HIGHLIGHTS -- and asserts every card it
+// lists has a highlight entry with real content.
+describe('TOUR_HIGHLIGHTS covers every deck card (#1271)', () => {
+  it('has a non-empty entry for every admin deck card', () => {
+    const cards = deckCards(true)
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
+      const highlights = TOUR_HIGHLIGHTS[card.key]
+      expect(highlights, card.key).toBeDefined()
+      expect(highlights?.length, card.key).toBeGreaterThan(0)
+    }
   })
 })
 
