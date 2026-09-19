@@ -15,6 +15,7 @@ and cannot be imported with a plain `import` statement. Importing it is
 safe: everything below `if __name__ == "__main__":` only runs when the
 file is executed directly, never on import.
 """
+import argparse
 import importlib.util
 import os
 import pathlib
@@ -264,6 +265,104 @@ class SeededAccountsFileTests(unittest.TestCase):
         ref = seed_demo._write_seeded_accounts(self.ref_dir)
         mode = stat.S_IMODE(os.stat(ref).st_mode)
         self.assertEqual(mode, 0o600)
+
+
+class DefaultSyslogPortTests(unittest.TestCase):
+    """#1272: live-env.sh up exports MV_SYSLOG_TLS_PORT, never the old
+    plaintext MV_SYSLOG_PORT -- the default must read the variable that
+    is actually set, or the feeder silently points at nothing."""
+
+    def setUp(self):
+        self._old_tls = os.environ.pop("MV_SYSLOG_TLS_PORT", None)
+
+    def tearDown(self):
+        if self._old_tls is None:
+            os.environ.pop("MV_SYSLOG_TLS_PORT", None)
+        else:
+            os.environ["MV_SYSLOG_TLS_PORT"] = self._old_tls
+
+    def test_reads_mv_syslog_tls_port(self):
+        os.environ["MV_SYSLOG_TLS_PORT"] = "23456"
+        self.assertEqual(seed_demo._default_syslog_port(), 23456)
+
+    def test_falls_back_when_unset(self):
+        self.assertIsInstance(seed_demo._default_syslog_port(), int)
+
+
+class FeedRefusedConnectionTests(unittest.TestCase):
+    """#1272: a demo feeder pointed at a port nobody is listening on used
+    to print "connection refused" to stderr forever and never stop --
+    exactly what happens if a release capture is run without the syslog
+    TLS port live-env.sh actually exported. It must fail loudly instead
+    of quietly sending into the void."""
+
+    def setUp(self):
+        # cmd_feed's real inter-tick pacing draws from the shared,
+        # unseeded `random` module (random.uniform(3, 6)) -- even with
+        # time.sleep stubbed out below, each tick still consumes a draw.
+        # Save/restore state so driving several ticks here doesn't also
+        # perturb whatever an unrelated, unseeded test elsewhere in this
+        # file draws afterward -- general hygiene; investigated as a
+        # cause of docs/flakes.md's CamBeaconTests entry and ruled out
+        # (that flake reproduces with this test class not even loaded).
+        self._random_state = random.getstate()
+
+    def tearDown(self):
+        random.setstate(self._random_state)
+
+    def test_all_refused_true_when_every_attempt_was_refused(self):
+        self.assertTrue(seed_demo._tick_all_refused([True, True]))
+
+    def test_all_refused_false_when_any_attempt_succeeded(self):
+        self.assertFalse(seed_demo._tick_all_refused([True, False]))
+
+    def test_all_refused_false_when_nothing_was_attempted(self):
+        # No router had traffic to send this tick -- not evidence of a
+        # dead port.
+        self.assertFalse(seed_demo._tick_all_refused([]))
+
+    def test_cmd_feed_aborts_after_consecutive_fully_refused_ticks(self):
+        orig_lines_for_router = seed_demo.lines_for_router
+        orig_send_tls = seed_demo.send_tls
+        orig_sleep = seed_demo.time.sleep
+        seed_demo.lines_for_router = lambda router, elapsed, tick: ["line"]
+
+        def _always_refused(*_a, **_k):
+            raise ConnectionRefusedError("refused")
+
+        seed_demo.send_tls = _always_refused
+        seed_demo.time.sleep = lambda *_a, **_k: None
+        try:
+            args = argparse.Namespace(syslog_host="127.0.0.1", syslog_port=1, once=False)
+            with self.assertRaises(seed_demo.FeedConnectionRefused):
+                seed_demo.cmd_feed(args)
+        finally:
+            seed_demo.lines_for_router = orig_lines_for_router
+            seed_demo.send_tls = orig_send_tls
+            seed_demo.time.sleep = orig_sleep
+
+    def test_cmd_feed_keeps_going_when_at_least_one_router_gets_through(self):
+        orig_lines_for_router = seed_demo.lines_for_router
+        orig_send_tls = seed_demo.send_tls
+        orig_sleep = seed_demo.time.sleep
+        seed_demo.lines_for_router = lambda router, elapsed, tick: ["line"]
+        calls = {"n": 0}
+
+        def _refused_except_first_router(host, port, src_ip, lines):
+            calls["n"] += 1
+            if src_ip != next(iter(seed_demo.ROUTERS.values()))["src"]:
+                raise ConnectionRefusedError("refused")
+
+        seed_demo.send_tls = _refused_except_first_router
+        seed_demo.time.sleep = lambda *_a, **_k: None
+        try:
+            args = argparse.Namespace(syslog_host="127.0.0.1", syslog_port=1, once=True)
+            seed_demo.cmd_feed(args)  # must not raise: --once stops after one tick anyway
+            self.assertGreater(calls["n"], 0)
+        finally:
+            seed_demo.lines_for_router = orig_lines_for_router
+            seed_demo.send_tls = orig_send_tls
+            seed_demo.time.sleep = orig_sleep
 
 
 if __name__ == "__main__":
