@@ -127,7 +127,10 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 		req  setupMarkRequest
 	}{
 		{"step zero", setupMarkRequest{Step: 0, Outcome: "skipped"}},
-		{"step past the last", setupMarkRequest{Step: 7, Outcome: "skipped"}},
+		// Eight, not seven: #1291's register step records as seven
+		// (setupsteps.ts's RECORD_NUMBERS), and this row pinned the old
+		// ceiling rather than "past the last".
+		{"step past the last", setupMarkRequest{Step: 8, Outcome: "skipped"}},
 		{"unknown outcome", setupMarkRequest{Step: 1, Outcome: "finished"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
