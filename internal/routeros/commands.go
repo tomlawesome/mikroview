@@ -159,7 +159,15 @@ func CaTrustCommands(address, dialect string) string {
 // Deliberately not the release version. Two releases whose pasted
 // blocks are identical share a wizard version, and a router is not
 // behind merely because mikroview was upgraded around it.
-const WizardVersion = 2
+//
+// Bumped to 3 by issue #1281: SyslogCommands can now render a trailing
+// enrolment line. The line itself is conditional (only present with a
+// pending token) and carries no persistent router-side state -- unlike
+// every earlier bump, nothing here is a drift target LoggingSetup
+// compares against -- but the doc comment above is unconditional about
+// what triggers a bump, and re-pasting step 2 is exactly what an
+// operator should be nudged to do once this ships.
+const WizardVersion = 3
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
@@ -221,7 +229,19 @@ func WizardLogging(address, syslogPort, dialect string) LoggingSetup {
 // upgrade must still reach a router whose action already exists,
 // which is why the action branches to `set` on the existing one rather
 // than leaving it as it was the day it was first created.
-func SyslogCommands(address, syslogPort, dialect string) string {
+//
+// enrolToken, when non-empty, appends issue #1281's enrolment line:
+// `/log info "mikroview-enrol <token>"`, a one-shot marker the listener
+// gate matches to attribute this router's syslog source address to the
+// device the operator minted the token for. Unlike the two guarded
+// blocks above it, this line is bare -- there is nothing to guard: it
+// changes no router-side configuration, so pasting it twice (or the
+// router itself repeating it on every restart, since it is not wrapped
+// in a script) costs nothing beyond a redundant, already-burned
+// enrolment attempt the gate simply ignores. Empty when the caller has
+// no pending token to embed, in which case this block is unchanged from
+// before #1281.
+func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 	want := WizardLogging(address, syslogPort, dialect)
 	// host and port are placed bare, not inside a quoted string -- the
 	// handler validates address/syslogPort's charset before either
@@ -232,10 +252,19 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 	// separate lines rather than one garbled one (#614). Keep this
 	// identical to docs/routeros-setup.md's block.
 	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
-	return strings.Join([]string{
+	lines := []string{
 		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
 		fmt.Sprintf(`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=%s action=mikroview }`, strings.Join(want.Topics, ",")),
-	}, "\n")
+	}
+	if enrolToken != "" {
+		// quote() has nothing to escape in the token's own alphabet
+		// (lowercase letters/digits only), but every value this package
+		// places inside a quoted string goes through it regardless -- see
+		// quote's own doc comment for why that is the one rule that must
+		// never have an exception.
+		lines = append(lines, fmt.Sprintf(`/log info "mikroview-enrol %s"`, quote(enrolToken)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // RuleTaggingCommands bulk-tags existing rules by action, which is the
