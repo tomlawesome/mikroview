@@ -27,6 +27,9 @@ vi.hoisted(() => {
 // the operator can and cannot do to a half-finished setup.
 vi.mock('../lib/api', () => ({
   fetchSetupStatus: vi.fn(),
+  createDevice: vi.fn(),
+  mintEnrolment: vi.fn(),
+  fetchRefusedSenders: vi.fn(),
   fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
@@ -46,8 +49,11 @@ vi.mock('../lib/export', () => ({
 }))
 
 import {
+  createDevice,
   createToken,
   fetchDevices,
+  fetchRefusedSenders,
+  mintEnrolment,
   fetchRouterBackups,
   fetchSetupCommands,
   fetchSetupStatus,
@@ -59,9 +65,16 @@ import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
+import { ROUTER_STEPS, SETUP_STEPS } from '../lib/setupsteps'
 import { downloadFromUrl } from '../lib/export'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
+
+// Which pane each step sits on in the first-run ledger (#1284). Named
+// rather than numbered, because the order is the record's to set and
+// has moved once already -- naming moved from last to first when it
+// started creating the router.
+const PANE = { ca: 1, name: 2, syslog: 3, rules: 4, push: 5, backup: 6 } as const
 // Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
 // its own CSS-token assertions (#1216): jsdom does not resolve a scoped
 // custom property through getComputedStyle, so the ink itself is checked
@@ -149,6 +162,8 @@ beforeEach(async () => {
   vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture())
   vi.mocked(saveSetupAddress).mockResolvedValue(null)
   vi.mocked(saveSetupBackupTransport).mockResolvedValue(null)
+  vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+  vi.mocked(mintEnrolment).mockResolvedValue({ token: 'enr-token', expiresAt: '2026-09-19T14:17:00Z' })
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -168,6 +183,16 @@ beforeEach(async () => {
   // page load does.
   wizardState.token = ''
   wizardState.tokenDevice = ''
+  // The router ledger's own module-lifetime fields (#1284/#1281), same
+  // reasoning as the two above: each test starts as a fresh page load
+  // would, with no router in hand and no token minted.
+  wizardState.steps = SETUP_STEPS
+  wizardState.ledgerDevice = ''
+  wizardState.enrolment = null
+  wizardState.enrolmentMintedAt = ''
+  wizardState.enrolmentError = null
+  wizardState.refused = []
+  wizardState.finishTo = 'fall'
   // address (#1213) is a module-lifetime field too, same reasoning as
   // token/tokenDevice above. Defaulted to a host status()'s own
   // tls.hosts fixture covers -- the same "already answered, matches the
@@ -313,7 +338,7 @@ describe('SetupWizard', () => {
   // colour rather than the reject red -- the shortfall is not a fault
   // on mikroview's side, and it is not good news either.
   it('puts a partial step’s shortfall in its own warning box, under the arrived line', () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.status = status({
       devices: [
         {
@@ -340,7 +365,7 @@ describe('SetupWizard', () => {
   })
 
   it('shows one observation box, and no shortfall, once everything has arrived', () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.status = status({
       devices: [
         {
@@ -363,7 +388,7 @@ describe('SetupWizard', () => {
   // wrongly -- states both facts, and prints the remedy with the
   // operator's values. It never claims the two addresses are one box.
   it('surfaces the source-address split on step 2 with the printed remedy', async () => {
-    wizardState.pane = 2
+    wizardState.pane = PANE.syslog
     wizardState.status = status({
       sources: [{ source: '10.0.20.1', syslogFirstSeenAt: '2026-08-23T09:00:00Z' }],
     })
@@ -418,13 +443,13 @@ describe('SetupWizard', () => {
 
     // The step list carries the split as its receipt.
     const rows = container.querySelectorAll('.steps .step-row')
-    expect(rows[1].querySelector('.step-receipt')?.textContent).toBe(
+    expect(rows[PANE.syslog - 1].querySelector('.step-receipt')?.textContent).toBe(
       'syslog from 10.0.20.1 · declared 192.168.88.1 silent',
     )
   })
 
   it('shows no split body when the declared router is the one sending', () => {
-    wizardState.pane = 2
+    wizardState.pane = PANE.syslog
     wizardState.status = status({
       sources: [{ source: '192.168.88.1', syslogFirstSeenAt: '2026-08-23T09:00:00Z' }],
     })
@@ -448,13 +473,13 @@ describe('SetupWizard', () => {
   // Step 3 counts, and can only count upward. There is no waiting check
   // to force past, so Next is free and the hint is absent.
   it('leaves Next free on the counting step', async () => {
-    wizardState.pane = 3
+    wizardState.pane = PANE.rules
     const { container } = render(SetupWizard)
     expect(container.querySelector('.hint')).toBeFalsy()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(container.querySelector('.heavy')).toBeFalsy()
-    expect(wizardState.pane).toBe(4)
+    expect(wizardState.pane).toBe(PANE.push)
   })
 
   // Step 6 (#394) has a waiting check too, same as step 4's -- give it
@@ -483,7 +508,7 @@ describe('SetupWizard', () => {
 
   it('offers Finish on the last step, and reads the ledger back after it', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     const { container } = render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
     await fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
@@ -498,34 +523,50 @@ describe('SetupWizard', () => {
   // #1184: step 5 was the only step with no Copy button, and its sample
   // named the router after the very address the step exists to replace,
   // so pasting it changed nothing.
-  it('offers Copy on step 5, on a stanza that does not name the router after its own address', async () => {
-    wizardState.pane = 5
-    // An undeclared router's name is its own address -- that is what
-    // this step exists to replace.
-    wizardState.devices = [
-      {
-        id: '172.23.0.1',
-        name: '172.23.0.1',
-        sourceIp: '172.23.0.1',
-        configured: false,
-        firstSeen: '2026-08-23T09:00:00Z',
-        lastSeen: '2026-09-02T09:00:00Z',
-        eventCount: 10,
-        status: 'live',
-      } as never,
-    ]
+  // Naming moved from last to first and now creates the router
+  // (#1284): the name is the only field, there is nothing to paste on a
+  // router here, and Next is the act.
+  it('asks for a name, and creates the router on Next', async () => {
+    wizardState.pane = PANE.name
+    vi.mocked(createDevice).mockResolvedValue({
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '',
+      configured: true,
+      firstSeen: '2026-09-19T14:00:00Z',
+      lastSeen: '2026-09-19T14:00:00Z',
+      eventCount: 0,
+      status: 'never_seen',
+    })
     const { container } = render(SetupWizard)
 
-    const stanza = container.querySelector('pre')?.textContent ?? ''
-    expect(stanza).toContain('sourceIp: "172.23.0.1"')
-    expect(stanza).not.toContain('name: "172.23.0.1"')
-    expect(stanza).toContain('name: "my-router"')
-    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+    // No command block: this is the one step body that never has one.
+    expect(container.querySelector('.body pre')).toBeNull()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'edge-1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(createDevice).toHaveBeenCalledWith('edge-1'))
+    await waitFor(() => expect(wizardState.ledgerDevice).toBe('edge-1'))
+    await waitFor(() => expect(wizardState.pane).toBe(PANE.syslog))
+  })
+
+  // An empty field is the one thing that stops Next here: the step's
+  // whole job is the name, so there is nothing to go on without it.
+  it('does not create a router with no name, and says so', async () => {
+    wizardState.pane = PANE.name
+    render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    expect(createDevice).not.toHaveBeenCalled()
+    expect(wizardState.pane).toBe(PANE.name)
+    expect(screen.getByText('Give the router a name.')).toBeTruthy()
   })
 
   // #1166: the footer hint named "Next" beside a button labelled Finish.
   it('names the button it is describing in the last step\'s footer hint', async () => {
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     const { container } = render(SetupWizard)
     await waitFor(() => expect(container.querySelector('.hint')).toBeTruthy())
     expect(container.querySelector('.hint')?.textContent).toBe('Finish checks what has arrived')
@@ -536,7 +577,7 @@ describe('SetupWizard', () => {
   // wizard, the journey's own hand-off included.
   it('the finish leads back to the fall', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     appState.view = 'engineroom'
     render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
@@ -551,10 +592,10 @@ describe('SetupWizard', () => {
   // a decision that has been recorded goes on saying so.
   it('carries a recorded decision in the step list', () => {
     wizardState.status = status({
-      marks: [{ step: 2, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+      marks: [{ step: PANE.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
     })
     const { container } = render(SetupWizard)
-    const row = container.querySelectorAll('.steps .step-row')[1]
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
     expect(row.className).toContain('skipped')
     expect(row.textContent).toContain('skipped by tom')
     // Its consequence, stated plainly -- never a reproach.
@@ -572,10 +613,10 @@ describe('SetupWizard', () => {
   // checked against the component source below.
   it('marks a skipped step and its receipt with the skipped class, not the muted one', () => {
     wizardState.status = status({
-      marks: [{ step: 2, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+      marks: [{ step: PANE.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
     })
     const { container } = render(SetupWizard)
-    const row = container.querySelectorAll('.steps .step-row')[1]
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
     expect(row.className).toContain('skipped')
     const receipt = row.querySelector('.step-receipt')
     expect(receipt).toBeTruthy()
@@ -749,7 +790,7 @@ describe('SetupWizard -- the address field (#1213)', () => {
   // mechanism with the "no-address" key): every block that embeds the
   // address comes back blank server-side with nothing answered yet, and
   // the wizard shows why rather than an empty box.
-  it('renders "no commands yet" on steps 1, 2 and 4 when nothing has been answered', async () => {
+  it('renders "no commands yet" on the certificate, Send logs and push steps when nothing has been answered', async () => {
     wizardState.address = ''
     vi.mocked(fetchSetupCommands).mockResolvedValue(
       commandsFixture({
@@ -771,17 +812,17 @@ describe('SetupWizard -- the address field (#1213)', () => {
     expect(container.textContent).toContain('no commands yet')
     expect(container.querySelector('pre')?.textContent).not.toBe('CA_TRUST_COMMANDS')
 
-    // Step 2 -- the step list rows, in order, the same way the ledger
-    // tests elsewhere in this file navigate.
+    // Send logs -- the step list rows, in order, the same way the
+    // ledger tests elsewhere in this file navigate.
     const rows = container.querySelectorAll('.steps .step-row')
-    await fireEvent.click(rows[1])
+    await fireEvent.click(rows[PANE.syslog - 1])
     await waitFor(() => expect(container.textContent).toContain('no commands yet'))
     expect(container.textContent).not.toContain('SYSLOG_COMMANDS')
 
-    // Step 4, once a token exists.
+    // Push router state, once a token exists.
     wizardState.token = 'mvt-token'
     wizardState.tokenDevice = 'edge-1'
-    await fireEvent.click(rows[3])
+    await fireEvent.click(rows[PANE.push - 1])
     await waitFor(() => expect(container.textContent).toContain('no commands yet'))
     expect(container.querySelector('pre.script')).toBeNull()
   })
@@ -882,7 +923,7 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
   // control. It says now: one dialect covers the table, and the pick is
   // what gets the release checked against it.
   it('says what picking a version is for, since it is not the command text', async () => {
-    wizardState.pane = 1
+    wizardState.pane = PANE.ca
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('.routeros-version')).toBeTruthy())
@@ -908,7 +949,7 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
         },
       }),
     )
-    wizardState.pane = 3
+    wizardState.pane = PANE.rules
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('TAG'))
@@ -920,7 +961,7 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
   // tell two of them apart, and the step now says so instead of leaving
   // the operator to find out from the log.
   it('says the bulk command labels by action alone', async () => {
-    wizardState.pane = 3
+    wizardState.pane = PANE.rules
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('RULE_TAGGING_COMMANDS'))
@@ -968,7 +1009,7 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
   })
 
   it('shows the minted token in its own copy box', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -983,7 +1024,7 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
   })
 
   it('hands over one block, not a script plus a line to paste it into', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1006,7 +1047,7 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
   // apart. The key belongs to the wizard session now, not to whichever
   // component instance happened to be showing the step.
   it('shows the session key again on a second visit rather than minting another', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
 
     const first = render(SetupWizard)
@@ -1024,7 +1065,7 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
     wizardState.token = 'mvt-from-step-4'
     wizardState.tokenDevice = 'edge-1'
     wizardState.lostRouterDevice = 'edge-1'
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [edge1()]
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
     render(SetupWizard)
@@ -1035,7 +1076,7 @@ describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () =
   })
 
   it('gives the script box always-drawn scrollbars', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1101,7 +1142,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
   })
 
   it('opens the reader from the handle, with the exact text unsliced', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1119,7 +1160,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
   })
 
   it('closes on its own ✕ and returns to exactly the same step', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1132,7 +1173,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     expect(container.querySelector('.reader')).toBeFalsy()
     expect(container.querySelector('.modal.reading')).toBeFalsy()
     expect(container.querySelector('.body')).toBeTruthy()
-    expect(wizardState.pane).toBe(4)
+    expect(wizardState.pane).toBe(PANE.push)
     expect(wizardState.open).toBe(true)
   })
 
@@ -1140,7 +1181,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
   // the wizard while one is open; this is that behaviour exercised
   // through the handle that opens it.
   it('closes on Esc without closing the wizard', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1153,11 +1194,11 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
 
     expect(container.querySelector('.reader')).toBeFalsy()
     expect(wizardState.open).toBe(true)
-    expect(wizardState.pane).toBe(4)
+    expect(wizardState.pane).toBe(PANE.push)
   })
 
   it('clears on a step change, so a reader never shows over the wrong step', async () => {
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1165,7 +1206,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
-    wizardState.pane = 1
+    wizardState.pane = PANE.ca
     await tick()
 
     expect(container.querySelector('.reader')).toBeFalsy()
@@ -1176,7 +1217,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
   // the handle does not appear there at all.
   it('has no handle on a phone, where the modal is already near-full-screen', async () => {
     viewportState.isMobile = true
-    wizardState.pane = 4
+    wizardState.pane = PANE.push
     wizardState.devices = [edge1()]
     const { container } = render(SetupWizard)
 
@@ -1204,7 +1245,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
 
   it('reads the no-key state as the disabled-step voice, with no script and no mint form', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
@@ -1220,7 +1261,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
 
   async function noKeyPane() {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     const rendered = render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(false))
     await tick()
@@ -1302,7 +1343,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     // reports history on and step 6 stops being blocked. Nothing needs
     // the minted value again.
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     const settled = render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
     await tick()
@@ -1410,7 +1451,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     // with the mocked fetchDevices' default (empty) list, racing the
     // assertions below.
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const { container } = render(SetupWizard)
 
@@ -1443,7 +1484,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
       }),
     )
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const { container } = render(SetupWizard)
 
@@ -1471,7 +1512,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
       }),
     )
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const { container } = render(SetupWizard)
 
@@ -1510,7 +1551,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
       })
     })
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const rendered = render(SetupWizard)
     await waitFor(() => expect(rendered.container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
@@ -1568,7 +1609,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
       }),
     )
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const { container } = render(SetupWizard)
 
@@ -1594,7 +1635,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     })
     const twoDevices = [rb5009(), { ...rb5009(), id: 'hap-ax2', name: 'hap-ax2' }]
     vi.mocked(fetchDevices).mockResolvedValue(twoDevices)
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = twoDevices
     const { container } = render(SetupWizard)
 
@@ -1621,7 +1662,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
       value: 'mvt-token',
       createdAt: '2026-09-02T09:00:00Z',
     })
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = []
     const { container } = render(SetupWizard)
 
@@ -1644,7 +1685,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
     const twoDevices = [rb5009(), { ...rb5009(), id: 'hap-ax2', name: 'hap-ax2' }]
     vi.mocked(fetchDevices).mockResolvedValue(twoDevices)
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = twoDevices
     const { container } = render(SetupWizard)
 
@@ -1788,7 +1829,7 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
       }),
     )
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const rendered = render(SetupWizard)
     await waitFor(() => expect(createToken).toHaveBeenCalled())
@@ -1847,7 +1888,7 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
       }),
     )
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const { container } = render(SetupWizard)
 
@@ -1855,5 +1896,188 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
     expect(container.querySelector('.no-script')).toBeNull()
     expect(screen.getByRole('button', { name: 'Copy script' })).toBeTruthy()
     expect(container.querySelector('.lead')?.textContent ?? '').toContain('already in the script')
+  })
+})
+
+// #1284, with #1281: adding a router is the same modal, the same
+// ledger and the same step anatomy -- only the step set differs. What
+// these pin is that it really is the same component, and that the
+// enrolment step tells the truth about the token in the block it
+// prints.
+describe('SetupWizard -- the router ledger (#1284)', () => {
+  function edge1(over: Partial<Device> = {}): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '',
+      configured: true,
+      firstSeen: '2026-09-19T14:00:00Z',
+      lastSeen: '2026-09-19T14:00:00Z',
+      eventCount: 0,
+      status: 'never_seen',
+      ...over,
+    } as Device
+  }
+
+  function openRouterLedger(pane: number, device = '') {
+    wizardState.steps = ROUTER_STEPS
+    wizardState.finishTo = 'fleet'
+    wizardState.ledgerDevice = device
+    wizardState.tokenDevice = device
+    wizardState.pane = pane
+    wizardState.open = true
+  }
+
+  it('is the same five steps, opened at Name your router, with no certificate step in front', () => {
+    openRouterLedger(1)
+    const { container } = render(SetupWizard)
+
+    const titles = [...container.querySelectorAll('.steps .step-title')].map((t) => t.textContent)
+    expect(titles).toEqual([
+      'Name your router',
+      'Send logs',
+      'Tag firewall rules',
+      'Push router state',
+      'Back up the router',
+      'Where setup stands',
+    ])
+    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 1 of 5')
+  })
+
+  // The same modal, not a second one: the ledger, the anatomy and the
+  // footer are the wizard's own.
+  it('is the wizard\'s own modal, ledger and footer -- not a dialog of its own', () => {
+    openRouterLedger(1)
+    const { container } = render(SetupWizard)
+
+    expect(container.querySelector('.modal.setup-wizard')).toBeTruthy()
+    expect(container.querySelector('nav.steps')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Skip this step' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy()
+  })
+
+  it('opens at Send logs for a router being re-enrolled, and mints it a fresh token', async () => {
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('edge-1'))
+    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 2 of 5')
+  })
+
+  // The last line the block prints carries a token, so the step says
+  // how long it is good for and offers the one control that renews it.
+  it('states how long the token is good for, beside a Reroll that re-mints', async () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() }
+    wizardState.enrolmentMintedAt = new Date().toISOString()
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const line = container.querySelector('.token-life')?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+    expect(line).toMatch(/^Token good until \d\d:\d\d \(15 minutes\) · Reroll$/)
+    expect(container.querySelector('pre.stale')).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await waitFor(() => expect(mintEnrolment).toHaveBeenCalledWith('edge-1'))
+  })
+
+  // An expired token cannot be pasted, so the block that carries it
+  // dims and the line says so rather than counting down past zero.
+  it('dims the block and says the token has lapsed once it has', () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: '2020-01-01T00:00:00Z' }
+    wizardState.enrolmentMintedAt = '2020-01-01T00:00:00Z'
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    expect(container.querySelector('.token-life')?.textContent).toContain('Token expired')
+    expect(screen.getByRole('button', { name: 'Reroll to mint another' })).toBeTruthy()
+    expect(container.querySelector('pre.stale')).toBeTruthy()
+  })
+
+  // The refused box is #1132's shape reused, never a fifth flavour --
+  // and it never claims the address is this router.
+  it('warns about lines refused since this walk minted its token, without diagnosing whose they are', async () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    wizardState.enrolmentMintedAt = '2026-09-19T14:02:00Z'
+    wizardState.refused = [
+      { ip: '192.168.88.1', firstSeen: '2026-09-19T14:03:00Z', lastSeen: '2026-09-19T14:04:00Z', lines: 12 },
+      // First seen before the mint: the fleet strip's business, not
+      // evidence about the block just pasted.
+      { ip: '10.0.0.9', firstSeen: '2026-09-18T09:00:00Z', lastSeen: '2026-09-18T09:00:00Z', lines: 3 },
+    ]
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const box = container.querySelector('.observation.shortfall.refused')
+    expect(box?.textContent).toContain(
+      'Lines from 192.168.88.1 arrived without the enrol line and were refused',
+    )
+    expect(box?.textContent).not.toContain('10.0.0.9')
+    // Warning colour, never the reject red: nothing is wrong on
+    // mikroview's side.
+    expect(box?.classList.contains('shortfall')).toBe(true)
+    expect(box?.classList.contains('attention')).toBe(false)
+  })
+
+  it('reads arrived once the enrol line lands, naming the address it came from', () => {
+    wizardState.devices = [edge1({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T14:04:00Z' })]
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const observation = container.querySelector('.observation')
+    expect(observation?.textContent).toContain('Enrolled at 192.168.88.1')
+    expect(observation?.classList.contains('arrived')).toBe(true)
+    expect(container.querySelector('.observation.shortfall.refused')).toBeNull()
+  })
+
+  // A decision made here is recorded under the step's canonical number,
+  // because that is what the server stores.
+  it('records a forced-past decision under the step number the server keeps', async () => {
+    vi.mocked(markSetupStep).mockResolvedValue({
+      step: 3,
+      outcome: 'forced',
+      actor: 'tom',
+      at: '2026-09-19T14:05:00Z',
+    })
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(container.querySelector('.heavy .quote')?.textContent).toContain('setup · step 3 forced past')
+    expect(container.querySelector('.heavy .quote')?.textContent).toContain(
+      'router not enrolled; its logs are refused until it is',
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: /Go on anyway/ }))
+    await waitFor(() =>
+      expect(markSetupStep).toHaveBeenCalledWith(3, 'forced', 'router not enrolled; its logs are refused until it is'),
+    )
+  })
+
+  // The finish leads out to the fleet when the ledger was opened from
+  // it, and to the fall when it was opened from setup.
+  it('leads out to the fleet from a walk the fleet opened', async () => {
+    openRouterLedger(6)
+    render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fleet' }))
+    expect(appState.view).toBe('fleet')
+  })
+
+  it('still leads out to the fall from Run setup…', async () => {
+    wizardState.steps = SETUP_STEPS
+    wizardState.finishTo = 'fall'
+    wizardState.pane = 7
+    wizardState.open = true
+    render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fall' }))
+    expect(appState.view).toBe('fall')
   })
 })
