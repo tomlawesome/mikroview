@@ -898,7 +898,13 @@ export function buildLedger(
     const canonical = canonicalStep(key)
     const check = checks[key]
     const mark = markFor(status.marks, canonical)
-    const witness = witnessFor(status.witnesses, canonical)
+    // A witness is fleet-wide: some router once satisfied this step. On
+    // a router ledger the Send logs step is this router's enrolment
+    // (#1281), which another router's connection says nothing about, so
+    // that one step reads live evidence only -- otherwise a second
+    // router would show Send logs done before it had enrolled, and the
+    // wrong-sender box (rendered only while the step waits) never could.
+    const witness = device && key === 'syslog' ? undefined : witnessFor(status.witnesses, canonical)
     const hasEvidence = arrived(check.state)
     // A witness only ever speaks when there is nothing better to go on:
     // live evidence outranks it (the record's "forced is not failed"
@@ -1146,5 +1152,8 @@ export const REFUSED_STRIP_LEAD =
 // business, not evidence about the block the operator just pasted.
 export function refusedSince(refused: RefusedSender[], since: string): RefusedSender[] {
   if (!since) return []
-  return refused.filter((r) => r.firstSeen >= since)
+  // Instants, not strings: the server stamps in its own zone, the
+  // browser mints in UTC, and the two only sort alike by luck.
+  const from = Date.parse(since)
+  return refused.filter((r) => Date.parse(r.firstSeen) >= from)
 }
