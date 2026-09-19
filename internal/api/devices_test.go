@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
 )
@@ -432,5 +434,49 @@ func TestDeviceEnrolmentRebindRefusesAnAddressNeverTurnedAway(t *testing.T) {
 	}
 	if s.Devices.AcceptsConnectionFrom("203.0.113.7") {
 		t.Error("a refused rebind still opened the window")
+	}
+}
+
+// TestDeviceEnrolmentMintDoesNotStarveTheAdminsLogin: the mint's
+// password re-check (#1291) counts guesses on the same limiter as
+// login, but it must not count them in the same bucket. There is only
+// ever one admin (ErrSingleAdmin), so spending login's allowance on a
+// run of typos at the Reroll dialog leaves nobody able to let them back
+// in: if their session goes in that window -- a closed tab, cleared
+// cookies, a second machine -- every sign-in is refused without the
+// password ever being checked. The vault-unlock gate already keys its
+// own bucket separately (vaultUnlockLimiterKey); this does the same.
+func TestDeviceEnrolmentMintDoesNotStarveTheAdminsLogin(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	s.LoginLimiter = auth.NewLoginLimiter(3, time.Minute)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	// The admin fat-fingers their password until the mint stops even
+	// checking it.
+	var minted int
+	for range 4 {
+		resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment",
+			deviceEnrolmentRequest{Password: "not-the-password", ExpectedAddress: "10.10.0.1"})
+		resp.Body.Close()
+		minted++
+		if resp.StatusCode == http.StatusTooManyRequests {
+			break
+		}
+	}
+	if minted < 2 {
+		t.Fatalf("the mint stopped checking after %d attempts -- the test proves nothing", minted)
+	}
+
+	// Their session is gone -- another machine, a cleared cookie jar --
+	// and they sign in again with the right password.
+	fresh := &http.Client{Jar: mustCookieJar(t)}
+	login := postJSON(t, fresh, ts.URL+"/api/auth/login",
+		credentialsRequest{Username: "admin", Password: testAdminPassword})
+	defer login.Body.Close()
+	if login.StatusCode == http.StatusTooManyRequests {
+		t.Fatal("wrong passwords at the enrolment dialog locked the only admin out of signing in")
+	}
+	if login.StatusCode != http.StatusOK {
+		t.Errorf("login status = %d, want 200", login.StatusCode)
 	}
 }
