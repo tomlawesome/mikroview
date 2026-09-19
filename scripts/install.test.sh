@@ -104,8 +104,14 @@ run() {
 ARGS=(); ENV_VARS=(); WITH_DOCKER=true
 run default
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "default run exits 0 (rc=$rc, out: $out)"
-check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
+check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
   "default run line: latest, mikroview name, both named volumes, 6514/443"
+
+# --- hardening flags (#1286): each must appear on the run line -------------
+for flag in "--read-only" "--cap-drop ALL" "--security-opt no-new-privileges" "--pids-limit 128"; do
+  check "$(case "$calls" in *"$flag"*) echo true;; *) echo false;; esac)" \
+    "hardening flag on the run line: $flag"
+done
 
 # --- version from the first argument --------------------------------------
 ARGS=(v0.6.0); ENV_VARS=(); WITH_DOCKER=true

@@ -17,6 +17,7 @@ of fetching a script:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
+    --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
     -p 6514:6514/tcp -p 443:8080 \
     -v mikroview-data:/var/lib/mikroview \
     -v mikroview-etc:/etc/mikroview \
