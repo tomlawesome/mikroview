@@ -83,6 +83,8 @@ import { watchlistState } from '../lib/watchlist.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { authState } from '../lib/auth.svelte'
 import { UNATTRIBUTED_FIX, unattributedLabel } from '../lib/fleet'
+import { ROUTER_STEPS } from '../lib/setupsteps'
+import { wizardState } from '../lib/wizard.svelte'
 import Entities from './Entities.svelte'
 
 async function settle() {
@@ -272,7 +274,7 @@ describe('Entities router cards (#675)', () => {
     expect(container.querySelector('.berth-trigger')?.textContent?.trim()).toBe('+ add a router')
   })
 
-  it('keeps the add-router explanation and commands off the page until the berth is activated (#718)', async () => {
+  it('keeps the add-router explanation and commands off the page (#718, #1284)', async () => {
     const { container } = render(Entities)
     await settle()
 
@@ -280,20 +282,21 @@ describe('Entities router cards (#675)', () => {
     expect(container.querySelector('.paste')).toBeNull()
   })
 
-  it('reveals the port, the paste-able RouterOS lines and the never-connects assurance when the berth is clicked (#718)', async () => {
-    const { container, getByRole } = render(Entities)
+  // #1284: the berth used to unfold into a second copy of the syslog
+  // block. It opens the router ledger instead -- the same modal, the
+  // same steps -- so two surfaces can no longer print the same commands
+  // in different words.
+  it('opens the router ledger at Name your router when the berth is clicked', async () => {
+    const { getByRole } = render(Entities)
     await settle()
 
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(container.textContent).toContain(':16893')
-    expect(container.textContent).toContain('Routers push to MikroView — it never connects to them.')
-    expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
-
-    const pre = container.querySelector('.paste')
-    expect(pre?.textContent).toContain('remote-port=16893')
-    expect(pre?.textContent).toContain('remote-protocol=tls')
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(1)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    expect(wizardState.ledgerDevice).toBe('')
   })
 
   it('is a real <button> element, focusable and Enter/Space-activatable for free under HTML\'s own semantics (#718)', async () => {
@@ -312,33 +315,18 @@ describe('Entities router cards (#675)', () => {
     expect(trigger.getAttribute('tabindex')).toBeNull() // native focusability, not a synthetic tabindex
   })
 
-  it('closes the unfolded berth on Escape and returns focus to the trigger, without moving the table (#718)', async () => {
+  // The berth no longer unfolds in place, so there is no panel of its
+  // own to close and nothing on this page moves when it is pressed --
+  // the table stays exactly where it was and the modal takes over.
+  it('never unfolds a panel of its own, and leaves the table where it was', async () => {
     const { container, getByRole } = render(Entities)
     await settle()
 
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
-    await settle()
-    expect(container.querySelector('.berth-panel')).toBeTruthy()
-
-    await fireEvent.keyDown(window, { key: 'Escape' })
     await settle()
 
     expect(container.querySelector('.berth-panel')).toBeNull()
     expect(container.querySelector('.etable')).toBeTruthy()
-    expect(document.activeElement).toBe(container.querySelector('.berth-trigger'))
-  })
-
-  it('closes the unfolded berth from its own close control', async () => {
-    const { container, getByRole } = render(Entities)
-    await settle()
-
-    await fireEvent.click(getByRole('button', { name: 'Add a router' }))
-    await settle()
-
-    await fireEvent.click(getByRole('button', { name: 'Close' }))
-    await settle()
-
-    expect(container.querySelector('.berth-panel')).toBeNull()
   })
 
   it('replaces the dashed "another router?" card and the old pill with the empty berth (#718)', async () => {
@@ -713,16 +701,16 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     expect(cards.at(-1)?.className).toContain('berth')
   })
 
-  it('still opens into the add-router instructions with an unregistered router already pushing (#828)', async () => {
+  it('still opens the ledger with an unregistered router already pushing (#828)', async () => {
     appState.devices = unregistered
-    const { container, getByRole } = render(Entities)
+    const { getByRole } = render(Entities)
     await settle()
 
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(container.textContent).toContain('Routers push to MikroView — it never connects to them.')
-    expect(container.querySelector('.berth-panel')).toBeTruthy()
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
   })
 
   it('leaves the berth in place when every router is registered', async () => {

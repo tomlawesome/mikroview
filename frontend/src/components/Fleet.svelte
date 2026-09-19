@@ -24,10 +24,12 @@
   // - No page heading and no strap (#697, "I meant all... No page
   //   heading, no strap"); the row keeps only the .og h3 label, the
   //   same one Entities prints over the same cards.
-  // - No berth, no add-router affordance of any kind: adding a router
-  //   is a change, and #657's grammar is absent, never disabled. This
-  //   card exists so a viewer can read why the log looks wrong -- a
-  //   quiet router is presented as a fact to read, not a fault to fix.
+  // - Adding a router is a change, and #657's grammar is absent rather
+  //   than disabled -- so Add a router and Re-enrol… are drawn for an
+  //   admin and are simply not there for anyone else (#1284). For a
+  //   viewer this is still what it always was: a card that says why the
+  //   log looks wrong, where a quiet router is a fact to read and not a
+  //   fault to fix.
   // - Status is a mark plus a written label (#616: never colour alone),
   //   and a router with an active silence flag carries a real link into
   //   the docket's flags tab -- the one place a viewer can take that
@@ -36,14 +38,56 @@
   // Fleet never carried a readOnly chip (#548/#490's grammar): the view
   // has no edit affordance for anyone, admin included, so there is no
   // distinction to declare.
+  import { fetchRefusedSenders } from '../lib/api'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
-  import { formatLastHeard } from '../lib/format'
+  import { formatLastHeard, formatHM } from '../lib/format'
   import { deviceState, multihomedEcho, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { REFUSED_STRIP_LEAD } from '../lib/setupsteps'
+  import { wizardState } from '../lib/wizard.svelte'
+  import type { RefusedSender } from '../lib/types'
   import GhostRows from './GhostRows.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
+
+  // The same read the empty state below already makes -- one admin
+  // test on this card, not two that could disagree.
+  const isAdmin = $derived(authState.role === 'admin')
+
+  // The refused senders (#1281): addresses whose lines were dropped for
+  // not being any router's enrolled address. Read on the same cadence
+  // the rest of this card already refreshes on, and read as "nothing
+  // refused" when the request fails -- the strip explains a silence, it
+  // is not one itself, and a viewer's 403 must not put an error on a
+  // card that otherwise reads fine.
+  const REFUSED_POLL_MS = 10000
+  let refused = $state<RefusedSender[]>([])
+
+  $effect(() => {
+    const read = () => {
+      fetchRefusedSenders()
+        .then((r) => (refused = r))
+        .catch(() => (refused = []))
+    }
+    read()
+    const timer = setInterval(read, REFUSED_POLL_MS)
+    return () => clearInterval(timer)
+  })
+
+  // Adding a router is the setup wizard's own router steps, opened at
+  // Name your router (#1284) -- not a second dialog that would have to
+  // say the same things in different words.
+  function addRouter() {
+    wizardState.openAddRouter()
+  }
+
+  // Re-enrol… opens the same ledger at Send logs for one router, with a
+  // fresh token: a replaced or re-addressed router needs the enrol line
+  // again and nothing else.
+  function reEnrol(deviceId: string) {
+    wizardState.openReEnrol(deviceId)
+  }
 
   // True when this device has an active (unacknowledged) device_silence
   // flag -- distinct from status === 'stale': the flag only exists for a
@@ -85,7 +129,12 @@
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
     <div class="og">
-      <h3>routers — every one that pushes here</h3>
+      <div class="oghead">
+        <h3>routers — every one that pushes here</h3>
+        {#if isAdmin}
+          <button type="button" class="og-action" onclick={addRouter}>Add a router</button>
+        {/if}
+      </div>
       {#if rows.length === 0}
         {#if emptyState.kind === 'ghost'}
           <GhostRows label="Loading devices…" rows={4} />
@@ -135,11 +184,41 @@
                   ⚑ silence flagged — read it in the docket
                 </button>
               {/if}
+              {#if isAdmin}
+                <button
+                  type="button"
+                  class="row-action"
+                  onclick={() => reEnrol(d.id)}
+                  aria-label="Re-enrol {d.name} — mint a fresh enrolment token for it"
+                >
+                  Re-enrol…
+                </button>
+              {/if}
             </div>
           {/each}
         </div>
       {/if}
     </div>
+
+    {#if refused.length > 0}
+      <!-- The refused-senders strip (#1281): present only when it has
+           something to say, and carrying no accept control, by ruling --
+           an address is accepted only by a router presenting a token.
+           Its only pointers are Add a router above it and Re-enrol on
+           the rows. -->
+      <div class="og refused">
+        <h3>refused senders</h3>
+        <p class="refused-lead">{REFUSED_STRIP_LEAD}</p>
+        <ul>
+          {#each refused as r (r.ip)}
+            <li>
+              <span class="mono">{r.ip}</span> · {r.lines} line{r.lines === 1 ? '' : 's'} · last seen
+              {formatHM(r.lastSeen)}
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
   </div></div>
 </div>
 
@@ -177,6 +256,68 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-dim);
+  }
+
+  /* The header row: the label the deck's other cards print, with the
+     screen's one action beside it. */
+  .oghead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  .oghead h3 {
+    margin: 0;
+  }
+
+  .og-action,
+  .row-action {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .og-action:hover,
+  .row-action:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .og-action:focus-visible,
+  .row-action:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .row-action {
+    margin-top: 8px;
+  }
+
+  /* The refused-senders strip: quiet, under the list, a fact to read.
+     Nothing here is pressable -- there is no accept control, by ruling. */
+  .refused ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 12.5px;
+    color: var(--fg-dim);
+  }
+
+  .refused li {
+    padding: 3px 0;
+  }
+
+  .refused-lead {
+    margin: 0 0 6px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
   }
 
   .empty {
