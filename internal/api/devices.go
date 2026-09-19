@@ -228,13 +228,14 @@ func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "this account signs in through your identity provider, and minting an enrolment token needs a password re-check that does not exist for it yet; declare this router in config.yaml instead", http.StatusConflict)
 		return
 	}
-	// Rate-limited on the same limiter as login, keyed by user: the
-	// password is a credential and this is a guess at it, so verifying
-	// one without counting the attempt is a brute-force oracle that
-	// happens to need a session -- and a session is exactly what an
-	// attacker who has stolen a cookie already has. Copied from
-	// handleAuthChangePassword, which guards the same thing.
-	userKey := "user:" + strings.ToLower(user.Username)
+	// Rate-limited on the same limiter as login, in the shared
+	// password-re-check bucket: the password is a credential and this
+	// is a guess at it, so verifying one without counting the attempt
+	// is a brute-force oracle that happens to need a session -- and a
+	// session is exactly what an attacker who has stolen a cookie
+	// already has. handleAuthChangePassword guards the same thing
+	// through the same key rather than a copy of it.
+	userKey := passwordRecheckLimiterKey(user.Username)
 	if !s.LoginLimiter.Reserve(userKey, now) {
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
