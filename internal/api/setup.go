@@ -491,6 +491,20 @@ type SetupInstance struct {
 	// a different listener entirely. Empty when backup.enabled is
 	// false: step 6 has no address to render a script for.
 	BackupPort string
+	// BackupKeyUnreadable is #1264 finding 5: true when history.keyFile
+	// names a file that could not be read (missing, truncated, wrong --
+	// anything other than simply being unset), set once at startup by
+	// main.go from backups.go's openRouterBackupVault. Vault.Enabled()
+	// alone cannot tell this apart from "no key configured at all" --
+	// both leave the vault's key nil -- so every surface that used to
+	// read Enabled() to decide what to tell the operator about the
+	// retention key (routerBackupsResponse.keyUnreadable, this step's
+	// own blocked key) reads this too, and must never fold the two back
+	// into one message. A configured-but-unreadable key must never be
+	// presented as "no key yet, mint one": minting overwrites the file,
+	// and every backup already encrypted under the old key becomes
+	// unreadable.
+	BackupKeyUnreadable bool
 	// Candidates are this instance's own guesses at the address a router
 	// could reach it on (#1213): every real address it is bound to, on
 	// the configured HTTPS port. Set once at startup by

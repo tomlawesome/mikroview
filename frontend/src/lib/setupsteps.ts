@@ -311,10 +311,27 @@ export const NO_ADDRESS_LINE =
 // the operator edits config.yaml and restarts -- then the ones the
 // wizard itself can still fix, in the order it asks them (the header
 // field before either step-4/6 pick).
-export const BACKUP_BLOCKED_ORDER = ['backups-off', 'no-retention-key', NO_ADDRESS_KEY, 'no-device', 'no-token'] as const
+export const BACKUP_BLOCKED_ORDER = [
+  'backups-off',
+  'retention-key-unreadable',
+  'no-retention-key',
+  NO_ADDRESS_KEY,
+  'no-device',
+  'no-token',
+] as const
 
 const BACKUP_BLOCKED_COPY: Record<string, string> = {
   'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+  // #1264 finding 5: a configured retention key that could not be read
+  // is not the same fact as no-retention-key below, and must never read
+  // like it -- "set history.keyFile" tells the operator to mint a fresh
+  // one, and a fresh key cannot decrypt what the old, now-unreadable one
+  // already wrote. This line says what actually happened and warns off
+  // the one action that would make it permanent.
+  'retention-key-unreadable':
+    'the retention key at history.keyFile is set but could not be read (missing, unreadable, or too short) — ' +
+    'check the server logs and fix that file in place. Do not replace it with a new one: every backup already ' +
+    'stored under the old key would become unrecoverable.',
   'no-retention-key':
     'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
     'config.yaml and restart mikroview.',

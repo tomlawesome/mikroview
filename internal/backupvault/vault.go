@@ -99,6 +99,14 @@ var (
 	// ErrNotFound is returned by Open/Download for a router or
 	// generation this vault does not hold.
 	ErrNotFound = errors.New("backupvault: no such router or generation")
+	// ErrRecoveredNameUnknown is returned by Open/Download for a
+	// generation that is really there -- rebuildFromDisk recovered it
+	// -- but was sealed under a device name the rebuild could not
+	// match to this directory (#1294). It stays refused, not attempted
+	// and failed, until either the original device pushes again or a
+	// deleted device's ingest token is recreated under the same name:
+	// sealing binds the name string, not the token.
+	ErrRecoveredNameUnknown = errors.New("backupvault: this router's name could not be recovered -- its backups are held protected but unreadable until the original name pushes again")
 )
 
 // HeaderLabel is what Store found in a `.backup`'s first bytes.
@@ -225,7 +233,34 @@ type routerMeta struct {
 	// It is never the one cycled out while the mode lasts, and it is
 	// cleared when the mode ends. Persisted so a restart keeps it.
 	Anchor string `json:"anchor,omitempty"`
+	// Dir is the one stated place this router's map key is not its
+	// device name (#1294): set when rebuildFromDisk cannot resolve a
+	// recovered directory to any candidate device name, and when
+	// removeUnreferencedFiles adopts an orphan found in a directory
+	// nothing names -- both key the entry by a not-a-device-name
+	// placeholder instead, because the real name is genuinely unknown,
+	// not merely unresolved this time. Cleared (and the entry re-keyed
+	// to the real name) the moment a push supplies it. While set, Dir
+	// names the physical directory this entry's files actually live in
+	// -- dirNameFor(the placeholder key) would otherwise hash the
+	// placeholder itself, landing on a directory that only
+	// coincidentally exists, if at all. Empty means the ordinary case:
+	// the map key is the device name, and dirNameFor(key) is the
+	// directory. dirFor is the only place that reads this field, so
+	// every caller that needs this router's directory -- reconcile,
+	// Store, Protect, download, the lock path -- agrees on the answer.
+	Dir string `json:"dir,omitempty"`
 }
+
+// recoveredDeviceUnknown prefixes the map key rebuildFromDisk and
+// removeUnreferencedFiles use for a router whose real name could not be
+// resolved, with dirNameFor's own hash output kept as the suffix so the
+// placeholder is still unique per directory. Deliberately not just the
+// bare hash: Routers() returns map keys directly, and the API surface
+// built on that should not have to guess whether one is a 32-hex device
+// name or a directory hash standing in for a name nobody has supplied
+// yet (#1294).
+const recoveredDeviceUnknown = "recovered, name unknown: "
 
 // vaultMeta is the whole persisted document, sealed under the retention
 // key as a single blob (metaFileName) beside the per-generation files it
@@ -294,7 +329,16 @@ type Vault struct {
 // empty), but Store and Open both return ErrDisabled. This mirrors
 // #853's "no key, no storage" rule: the drop box exists as a concept
 // (so Settings can say so) but holds nothing and accepts nothing.
-func Open(dir string, key *retention.Key) (*Vault, error) {
+//
+// candidates is every device name worth trying a lost index's rebuild
+// against (#1294) -- the caller's union of live ingest-token Device
+// fields and device-registry ids (backups.go's recoveryCandidates).
+// Recovery is a one-shot match over a small set at start-up, not an
+// ongoing lookup, which is why this is a plain slice rather than a
+// resolver callback: it keeps this package from importing internal/auth
+// or internal/device to get one, and the caller already has the answer
+// in hand from stores an index loss never touches.
+func Open(dir string, key *retention.Key, candidates []string) (*Vault, error) {
 	v := &Vault{dir: dir, key: key, log: logging.New("backupvault"), meta: vaultMeta{Routers: map[string]*routerMeta{}}}
 	if key == nil {
 		return v, nil
@@ -317,7 +361,7 @@ func Open(dir string, key *retention.Key) (*Vault, error) {
 			// and the *next* ordinary restart's reconcile sweeps every
 			// file the small index does not name, protected and anchor
 			// included.
-			if err := v.rebuildFromDisk(); err != nil {
+			if err := v.rebuildFromDisk(candidates); err != nil {
 				return nil, err
 			}
 			return v, nil
@@ -363,23 +407,34 @@ func errUnreadableIndex(reason error) error {
 // cycling a kept backup destroys it forever, wrongly keeping a cycling
 // one costs disk space and one click to release.
 //
-// A recovered router is keyed by its directory hash (dirNameFor's
-// output) rather than its name: the hash is one-way, so the name is not
-// recoverable from the files alone. It shows up under that hash in
-// Routers()/Settings until the router's own next push arrives --
-// storeLocked re-keys the entry to the real name at that point, in
-// place, rather than starting a second and empty one beside it.
-func (v *Vault) rebuildFromDisk() error {
+// candidates -- the caller's live ingest-token Device fields and
+// device-registry ids, neither of which an index loss touches -- lets
+// most directories recover under their real name immediately: this
+// package keys and seals by that same name, so a directory whose hash
+// matches dirNameFor(name) for some candidate is exactly as usable from
+// this moment as any router that never lost its index. A directory no
+// candidate explains -- a revoked token, or recovery running before the
+// caller had any candidates to offer -- recovers under a
+// recoveredDeviceUnknown placeholder instead: still protected, but its
+// files were sealed under a name this rebuild cannot supply, so they
+// stay refused (ErrRecoveredNameUnknown) until the real name reaches
+// the vault again, in a push storeLocked re-keys the entry to.
+func (v *Vault) rebuildFromDisk(candidates []string) error {
+	nameForHash := make(map[string]string, len(candidates))
+	for _, name := range candidates {
+		nameForHash[dirNameFor(name)] = name
+	}
 	entries, err := os.ReadDir(v.dir)
 	if err != nil {
 		return fmt.Errorf("backupvault: reading %s to rebuild the vault index: %w", v.dir, err)
 	}
-	var routers int
+	var matched, unmatched int
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		dir := filepath.Join(v.dir, entry.Name())
+		dirHash := entry.Name()
+		dir := filepath.Join(v.dir, dirHash)
 		files, err := os.ReadDir(dir)
 		if err != nil {
 			v.log.Warn(fmt.Sprintf("could not read %s to rebuild the vault index: %v", dir, err))
@@ -403,9 +458,16 @@ func (v *Vault) rebuildFromDisk() error {
 		for _, id := range ids {
 			gen, ok := recoveredGeneration(dir, id)
 			if !ok {
+				// A well-shaped `<id>.<kind>.enc` whose id this package
+				// never minted: not one of ours to recover, but worth
+				// saying so rather than leaving it silent forever --
+				// removeUnreferencedFiles will not touch it either,
+				// since a healthy index is not yet in play to sweep
+				// against.
+				v.log.Warn(fmt.Sprintf("%s: %s has an id this package never minted -- left alone, neither recovered nor removed", dir, id))
 				continue
 			}
-			gen.Comment = "recovered after index loss, 2026-09-19"
+			gen.Comment = fmt.Sprintf("recovered after index loss, %s", recoveredAt.Format("2006-01-02"))
 			gen.ProtectedAt = recoveredAt
 			gen.ProtectedBy = auditActorSystem
 			gens = append(gens, gen)
@@ -414,15 +476,32 @@ func (v *Vault) rebuildFromDisk() error {
 			continue
 		}
 		sort.Slice(gens, func(i, j int) bool { return gens[i].ID < gens[j].ID })
-		v.meta.Routers[entry.Name()] = &routerMeta{Protected: gens}
-		routers++
+		if name, ok := nameForHash[dirHash]; ok {
+			v.meta.Routers[name] = &routerMeta{Protected: gens}
+			matched++
+			continue
+		}
+		v.meta.Routers[recoveredDeviceUnknown+dirHash] = &routerMeta{Protected: gens, Dir: dirHash}
+		unmatched++
 	}
-	if routers == 0 {
+	if matched == 0 && unmatched == 0 {
 		return nil
 	}
-	v.log.Warn(fmt.Sprintf("the vault index (%s) was missing at start-up: rebuilt it from backup files on disk for %d router(s), "+
+	msg := fmt.Sprintf("the vault index (%s) was missing at start-up: rebuilt it from backup files on disk for %d router(s), "+
 		"recovering every generation found as protected -- comments, protection notes and the low-space anchor from before the loss are gone, but no backup file is",
-		metaFileName, routers))
+		metaFileName, matched+unmatched)
+	switch {
+	case unmatched == 0:
+		msg += "; every one matched a known device name and is readable now"
+	case matched == 0:
+		msg += fmt.Sprintf("; none matched any of the %d device name(s) tried, so all %d are held under a placeholder, unreadable until the original name pushes again "+
+			"(recreating a deleted device's ingest token under its original name works too -- sealing binds the name, not the token)",
+			len(candidates), unmatched)
+	default:
+		msg += fmt.Sprintf("; %d matched a known device name and are readable now, %d did not and are held under a placeholder, unreadable until the original name pushes again",
+			matched, unmatched)
+	}
+	v.log.Warn(msg)
 	return v.persistMetaLocked()
 }
 
@@ -455,7 +534,7 @@ func (v *Vault) reconcile() {
 func (v *Vault) repairIndexAgainstDisk() bool {
 	var changed bool
 	for device, rm := range v.meta.Routers {
-		dir := v.routerDir(device)
+		dir := v.dirFor(device, rm)
 		var lostGeneration, lostProtected bool
 		// Both lists, on the same terms: a kept generation whose file
 		// has gone is still an entry the vault would list, offer and
@@ -598,10 +677,12 @@ func openGeneration(rm *routerMeta) *generationMeta {
 func (v *Vault) removeUnreferencedFiles() {
 	referenced := make(map[string]map[string]bool, len(v.meta.Routers))
 	// deviceForDir lets an adopted file rejoin the router that already
-	// owns its directory. A directory with no such entry belongs to a
-	// router the vault holds nothing named for -- recovered exactly as
-	// rebuildFromDisk recovers a whole lost index, keyed by the
-	// directory's own hash until a push names it (#1294).
+	// owns its directory -- rm.Dir when the entry is keyed by a
+	// recoveredDeviceUnknown placeholder rather than its device name,
+	// dirNameFor(device) otherwise, the same rule dirFor applies
+	// (#1294). A directory with no entry at all belongs to a router the
+	// vault holds nothing named for, and is recovered fresh below under
+	// its own new placeholder.
 	deviceForDir := make(map[string]string, len(v.meta.Routers))
 	for device, rm := range v.meta.Routers {
 		names := make(map[string]bool, 2*(len(rm.Generations)+len(rm.Protected)))
@@ -612,7 +693,10 @@ func (v *Vault) removeUnreferencedFiles() {
 			names[v.fileName(g.ID, KindBackup)] = true
 			names[v.fileName(g.ID, KindRsc)] = true
 		}
-		dirName := dirNameFor(device)
+		dirName := rm.Dir
+		if dirName == "" {
+			dirName = dirNameFor(device)
+		}
 		referenced[dirName] = names
 		deviceForDir[dirName] = device
 	}
@@ -669,15 +753,19 @@ func (v *Vault) removeUnreferencedFiles() {
 			handled[id] = true
 			gen, ok := recoveredGeneration(dir, id)
 			if !ok {
+				// A well-shaped `<id>.<kind>.enc` whose id this package
+				// never minted: not adoptable, but worth saying rather
+				// than leaving it silently unnoticed forever (#1294).
+				v.log.Warn(fmt.Sprintf("%s has an id this package never minted -- left alone, neither adopted nor removed", path))
 				continue
 			}
 			device, known := deviceForDir[dirName]
 			if !known {
-				device = dirName
+				device = recoveredDeviceUnknown + dirName
 			}
 			rm := v.meta.Routers[device]
 			if rm == nil {
-				rm = &routerMeta{}
+				rm = &routerMeta{Dir: dirName}
 				v.meta.Routers[device] = rm
 			}
 			rm.Generations = insertGeneration(rm.Generations, gen)
@@ -697,6 +785,25 @@ func (v *Vault) removeUnreferencedFiles() {
 // drop box a login reaches is open at all.
 func (v *Vault) Enabled() bool { return v != nil && v.key != nil }
 
+// RecoveredNameUnknown reports whether device -- a key Routers() or
+// ProtectedGenerations() returned, not necessarily a real device name
+// -- is a router recovered from disk whose name a lost index's rebuild
+// could not resolve (#1294). Its generations are genuinely held and
+// protected, but Open/download refuses every one of them with
+// ErrRecoveredNameUnknown until the original name pushes again; the API
+// surface built on this package should read the key as "recovered, name
+// unknown" and not offer a download that can only fail, rather than
+// asking this method first and hoping nobody forgets to.
+func (v *Vault) RecoveredNameUnknown(device string) bool {
+	if v == nil {
+		return false
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	rm := v.meta.Routers[device]
+	return rm != nil && rm.Dir != ""
+}
+
 // dirNameFor is the on-disk directory a device's files live under: a
 // fixed-length hash of the device name, never the name itself. Device
 // names pass internal/auth's validDeviceID (printable, <=64 chars,
@@ -709,8 +816,31 @@ func dirNameFor(device string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func (v *Vault) routerDir(device string) string {
+// dirFor is the directory device's files live in, given the routerMeta
+// already fetched for it (rm may be nil, for a device the vault holds
+// nothing for yet). Ordinarily that is dirNameFor(device); an entry
+// recovered under a recoveredDeviceUnknown placeholder key records its
+// real, physical directory in rm.Dir instead, since dirNameFor(the
+// placeholder) would hash the placeholder itself into a directory that
+// only coincidentally exists, if at all (#1294). Pure and lock-free, so
+// a caller that already read rm under v.mu can keep using the result
+// after releasing the lock -- see storedSlots/resealSlot and Vault.
+// Open's download path -- without a second, racing read of the map
+// routerDir would otherwise need.
+func (v *Vault) dirFor(device string, rm *routerMeta) string {
+	if rm != nil && rm.Dir != "" {
+		return filepath.Join(v.dir, rm.Dir)
+	}
 	return filepath.Join(v.dir, dirNameFor(device))
+}
+
+// routerDir is dirFor with its own fresh read of device's routerMeta,
+// for the callers that already hold v.mu (or run single-threaded, as
+// reconcile does at start-up) and so can read the map safely. A caller
+// that will use the directory after releasing the lock must call
+// dirFor directly with the rm it already fetched, not this.
+func (v *Vault) routerDir(device string) string {
+	return v.dirFor(device, v.meta.Routers[device])
 }
 
 func (v *Vault) fileName(generationID, kind string) string {
@@ -907,19 +1037,21 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	dirty := change != nil
 
 	rm := v.meta.Routers[device]
-	// reassociatedFrom is the recovered-but-unnamed key this push
-	// re-keys to device's real name, once the write below succeeds --
-	// see rebuildFromDisk (#1294): a rebuilt index cannot know a
-	// recovered router's name, only the directory hash it was found
-	// under, so it keys the entry with that until the router's own next
-	// push carries the name back. Re-keying it here rather than
-	// starting a second, empty routerMeta under device's real name
-	// keeps that entry's protected pool reachable under the name every
-	// other caller (Protect, Generations, the API) already uses.
+	// reassociatedFrom is the recoveredDeviceUnknown placeholder key
+	// this push re-keys to device's real name, once the write below
+	// succeeds -- see rebuildFromDisk and removeUnreferencedFiles
+	// (#1294): either can recover a router whose name candidates at the
+	// time did not explain, keyed by a placeholder over the directory
+	// hash it was found under, until the router's own next push carries
+	// the name back. Re-keying it here rather than starting a second,
+	// empty routerMeta under device's real name keeps that entry's
+	// protected pool reachable under the name every other caller
+	// (Protect, Generations, the API) already uses.
 	var reassociatedFrom string
 	if rm == nil {
-		if recovered, ok := v.meta.Routers[dirNameFor(device)]; ok {
-			rm, reassociatedFrom = recovered, dirNameFor(device)
+		placeholder := recoveredDeviceUnknown + dirNameFor(device)
+		if recovered, ok := v.meta.Routers[placeholder]; ok {
+			rm, reassociatedFrom = recovered, placeholder
 		}
 	}
 	if rm == nil {
@@ -967,7 +1099,7 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	if err != nil {
 		return fail(fmt.Errorf("backupvault: sealing %s: %w", kind, err))
 	}
-	dir := v.routerDir(device)
+	dir := v.dirFor(device, rm)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fail(fmt.Errorf("backupvault: creating %s: %w", dir, err))
 	}
@@ -1030,6 +1162,11 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	v.meta.Routers[device] = rm
 	if reassociatedFrom != "" {
 		delete(v.meta.Routers, reassociatedFrom)
+		// The entry is keyed by device's real name from here on, so
+		// dirNameFor(device) is its directory again -- which is the
+		// same physical directory rm.Dir already named, since that
+		// hash was dirNameFor(device) all along.
+		rm.Dir = ""
 	}
 
 	// A router that first appears while the mode is on has no anchor
@@ -1068,11 +1205,13 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 		rm.Anchor = prevAnchor
 		switch {
 		case reassociatedFrom != "":
-			// rm existed before this push, just under the directory
-			// hash rebuildFromDisk had to key it by -- put it back
-			// exactly where it was rather than losing its protected
-			// pool under a key nothing else looks it up by.
+			// rm existed before this push, just under the
+			// recoveredDeviceUnknown placeholder key it was recovered
+			// under -- put it back exactly where it was, Dir included,
+			// rather than losing its protected pool under a key
+			// nothing else looks it up by.
 			delete(v.meta.Routers, device)
+			rm.Dir = strings.TrimPrefix(reassociatedFrom, recoveredDeviceUnknown)
 			v.meta.Routers[reassociatedFrom] = rm
 		case !hadRouter && len(rm.Generations) == 0:
 			delete(v.meta.Routers, device)
@@ -1083,7 +1222,7 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 		return change, err
 	}
 	if reassociatedFrom != "" {
-		v.log.Warn(fmt.Sprintf("%s pushed again: re-associated its recovered backups, kept under the directory hash since the last index rebuild, with its name", device))
+		v.log.Warn(fmt.Sprintf("%s pushed again: re-associated its recovered backups, held protected under a placeholder since a lost index could not resolve the name, with its real name -- they are readable now", device))
 	}
 	return change, nil
 }
@@ -1357,19 +1496,37 @@ func (v *Vault) Open(device, generationID, kind string) ([]byte, error) {
 	}
 	v.mu.Lock()
 	rm := v.meta.Routers[device]
-	var found bool
+	var found, nameUnknown bool
+	var dir string
 	if rm != nil {
 		// Both lists: a protected generation is downloaded through the
 		// same route as any other (#1126), and being kept has never
 		// meant being unreadable.
 		found = generationsHave(rm.Generations, generationID) || generationsHave(rm.Protected, generationID)
+		nameUnknown = rm.Dir != ""
+		// Computed here, under the lock, and used after it is released:
+		// dirFor is pure and takes no further lock of its own, but
+		// v.meta.Routers itself is not safe to read again once
+		// unlocked (#1294).
+		dir = v.dirFor(device, rm)
 	}
 	v.mu.Unlock()
 	if !found {
 		return nil, ErrNotFound
 	}
+	if nameUnknown {
+		// The file is really there -- found says so -- but it was
+		// sealed under a device name this router's rebuilt entry does
+		// not have (rebuildFromDisk, #1294). Refusing here is the
+		// honest answer reconcile's own doc comment insists on
+		// elsewhere: attempting the read would either 404 on the wrong
+		// directory (the bug this refusal replaces) or fail
+		// decryption in a way indistinguishable from corruption, when
+		// the real story is simply "not readable yet".
+		return nil, ErrRecoveredNameUnknown
+	}
 
-	path := filepath.Join(v.routerDir(device), v.fileName(generationID, kind))
+	path := filepath.Join(dir, v.fileName(generationID, kind))
 	sealed, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

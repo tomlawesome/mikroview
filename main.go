@@ -897,10 +897,12 @@ func main() {
 
 	// Router-backup vault (#394): the SFTP drop box (started further
 	// below, once the listen address is finalised) writes into this,
-	// and the admin API reads it back. Needs tokenStore above (a login's
-	// password is checked against it) so it is opened here, not
-	// earlier.
-	routerBackupVault := openRouterBackupVault(logging.New("backupvault"), cfg)
+	// and the admin API reads it back. Needs tokenStore above (a
+	// login's password is checked against it) so it is opened here, not
+	// earlier -- and it also needs both tokenStore and devices to try a
+	// lost index's rebuild against every name it might recognise
+	// (#1294's recoveryCandidates), so it stays below devices too.
+	routerBackupVault, routerBackupKeyUnreadable := openRouterBackupVault(logging.New("backupvault"), cfg, tokenStore, devices)
 
 	// Audit (issue #112): the persisted admin-action accountability log.
 	// Persistence itself is optional -- a missing/unconfigured path just
@@ -1801,11 +1803,12 @@ func main() {
 		Vault:                   routerBackupVault,
 		BackupSlices:            routerBackupSlices,
 		SetupInstance: api.SetupInstance{
-			TLSEnabled: cfg.TLS.Enabled,
-			Hosts:      cfg.TLS.Hosts,
-			SyslogPort: cfg.Listen.SyslogTLS,
-			BackupPort: routerBackupPort(cfg),
-			Candidates: setupAddressCandidates(cfg.Listen.HTTP),
+			TLSEnabled:          cfg.TLS.Enabled,
+			Hosts:               cfg.TLS.Hosts,
+			SyslogPort:          cfg.Listen.SyslogTLS,
+			BackupPort:          routerBackupPort(cfg),
+			BackupKeyUnreadable: routerBackupKeyUnreadable,
+			Candidates:          setupAddressCandidates(cfg.Listen.HTTP),
 		},
 		OIDC:                  oidcClient,
 		OIDCState:             oidcState,

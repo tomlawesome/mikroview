@@ -541,7 +541,16 @@
     <div class="orow">
       <span>key</span>
       <span class="ov">
-        none mounted — a backup that arrives has nowhere safe to go, so the drop box is closed
+        {#if resp.keyUnreadable}
+          <!-- #1264 finding 5: a configured-but-broken key must never
+               read like "none mounted, mint one" -- that action
+               overwrites history.keyFile, and every backup already
+               encrypted under the old one becomes unreadable for good. -->
+          configured but could not be read — check the server logs and fix history.keyFile in place; do not
+          mint a new one, or every backup already stored under the old key becomes unrecoverable
+        {:else}
+          none mounted — a backup that arrives has nowhere safe to go, so the drop box is closed
+        {/if}
       </span>
     </div>
   </div>

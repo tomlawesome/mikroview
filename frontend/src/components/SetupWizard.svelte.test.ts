@@ -153,6 +153,7 @@ function commandsFixture(over: Partial<SetupCommandsResponse> = {}): SetupComman
 function backupsFixture(over: Partial<import('../lib/types').RouterBackupsResponse> = {}) {
   return {
     enabled: false,
+    keyUnreadable: false,
     routers: [],
     totalGenerations: 0,
     totalRouters: 0,
@@ -1895,6 +1896,22 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
 
     const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
     expect(lines).toEqual(['backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.'])
+  })
+
+  // #1264 finding 5: retention-key-unreadable must read as its own
+  // distinct fault, never folded into no-retention-key's "set one" line
+  // -- the whole point is that minting a fresh key over a broken one
+  // strands every backup already encrypted under the old one.
+  it('says the retention key could not be read, and warns against minting a new one, not "no retention key is mounted"', async () => {
+    const { container } = await step6WithBlocked(['retention-key-unreadable'])
+
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual([
+      'the retention key at history.keyFile is set but could not be read (missing, unreadable, or too short) — ' +
+        'check the server logs and fix that file in place. Do not replace it with a new one: every backup ' +
+        'already stored under the old key would become unrecoverable.',
+    ])
+    expect(container.textContent).not.toContain('no retention key is mounted')
   })
 
   it('leaves an unblocked step unchanged -- the script, its Copy button and the token promise all still show', async () => {

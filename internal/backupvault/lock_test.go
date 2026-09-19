@@ -25,7 +25,7 @@ const testPassphrase = "correct horse battery staple"
 // process can and cannot read off the disk.
 func openVaultAt(t *testing.T, dir string, key *retention.Key) *Vault {
 	t.Helper()
-	v, err := Open(dir, key)
+	v, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

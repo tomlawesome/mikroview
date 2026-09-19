@@ -21,7 +21,7 @@ import (
 // are both about.
 func vaultWithTwoExports(t *testing.T) *backupvault.Vault {
 	t.Helper()
-	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t))
+	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
