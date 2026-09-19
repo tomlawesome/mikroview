@@ -16,6 +16,8 @@ import type {
   DefinitionParamSchema,
   DetectorScope,
   Device,
+  EnrolmentToken,
+  RefusedSender,
   UnattributedSource,
   DroplistEntry,
   DroplistResponse,
@@ -330,6 +332,49 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// createDevice is the router ledger's first step (#1284): naming a
+// router is what creates it, so the name field and the create are one
+// act. Admin-only server-side, same gate as every other write here.
+export async function createDevice(name: string): Promise<Device | string> {
+  const res = await postJSON('/api/devices', { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createDevice: ${res.status}`
+}
+
+// mintEnrolment mints the short-lived token the Send logs step writes
+// into its last logging line (#1281). Re-minting is what Reroll does --
+// the same call, which is why there is no second endpoint for it. The
+// value comes back once; the server keeps only its hash.
+export async function mintEnrolment(device: string): Promise<EnrolmentToken | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`)
+  if (res.ok) return res.json()
+  return (await res.text()) || `mintEnrolment: ${res.status}`
+}
+
+// burnEnrolment retires a minted token without using it. No surface
+// reaches for it yet -- the ledger's own Reroll re-mints rather than
+// burning, and closing the modal deliberately leaves a live token
+// standing, because a router still on its way to enrolling is progress
+// the record says closing must not lose. Kept as the typed client for
+// the endpoint the contract defines.
+export async function burnEnrolment(device: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`)
+  if (res.ok) return null
+  return (await res.text()) || `burnEnrolment: ${res.status}`
+}
+
+// fetchRefusedSenders reads the addresses whose lines were dropped for
+// not being any router's enrolled address (#1281). Read by the wizard's
+// Send logs step while it waits, and by the fleet's own strip.
+export async function fetchRefusedSenders(): Promise<RefusedSender[]> {
+  const res = await fetch('/api/devices/refused')
+  if (!res.ok) throw new ApiError(`fetchRefusedSenders: ${res.status}`, res.status)
+  const body = await res.json()
+  // The contract is a bare array; the envelope form is read too so this
+  // does not break if the endpoint grows one, the way /api/devices has.
+  return Array.isArray(body) ? body : (body.refused ?? [])
 }
 
 // fetchUnattributedSources serves the other half of the one device
