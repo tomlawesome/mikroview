@@ -44,7 +44,7 @@
 // anywhere" (the closed-port assertion's own premise) can be trusted
 // rather than merely hoped for.
 
-import { session, feedRawFrom, check, done, goTo, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, feedRawFrom, check, done, goTo, eventsTotal, waitForEventsTotal, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -54,6 +54,10 @@ const STALE_TOKEN_IP = '127.0.0.23'
 const ENROL_IP = '127.0.0.21'
 const CLOSED_PORT_IP = '127.0.0.24'
 const REENROL_IP = '127.0.0.25'
+// #1291: an address the router is deliberately NOT at, used to mint a
+// window at the wrong place so the rebind recovery can be driven for
+// real (ruling 23a).
+const MISTYPED_IP = '127.0.0.26'
 
 const { page, consoleErrors } = await session()
 
@@ -137,16 +141,37 @@ if (!created) {
 }
 const deviceId = created.id
 
-// --- b. Send logs: the token comes off the page, not the API ---------
+// mintFor drives the Send logs step's mint form as an operator would
+// (#1291): the router's own address, which the enrolment window binds
+// to, and the admin's password, because minting is what opens the port.
+async function mintFor(address, previousLine = '') {
+  await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
+  await page.fill('#setup-wizard-enrol-address', address)
+  await page.fill('#setup-wizard-enrol-password', adminPassword)
+  await page.click('.setup-wizard .mint-ask button:text-is("Mint the token")')
+  return waitForCondition(async () => {
+    const t = tokenFromBlock((await block.textContent()) ?? '')
+    return t.token && t.line !== previousLine ? t : null
+  }, 20000)
+}
+
+// --- b. Send logs: it asks before it mints, and the token comes off
+//        the page, not the API ---------------------------------------
 
 await block.waitFor({ timeout: 10000 })
-// The mint that fires on entering the step is async, so the block can
-// render once before its last line carries the token.
-let read = await waitForCondition(async () => {
-  const t = tokenFromBlock((await block.textContent()) ?? '')
-  return t.token ? t : null
-})
-check(!!read?.token, `the block's last line carries a fresh token ("${read?.line}")`)
+
+// #1291: entering the step mints nothing. The two fields are the point
+// -- the window binds to the address, and the password is asked for
+// because minting is what opens the port.
+await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
+check(true, 'entering Send logs shows the mint form rather than a token')
+check(
+  tokenFromBlock((await block.textContent()) ?? '').token === '',
+  'and the block carries no token until the operator asks for one',
+)
+
+let read = await mintFor(ENROL_IP)
+check(!!read?.token, `the block's last line carries a fresh token once minted ("${read?.line}")`)
 
 const tokenLife = wizard.locator('.token-life')
 await tokenLife.waitFor({ timeout: 5000 })
@@ -159,11 +184,20 @@ check((await tokenLife.locator('button:text-is("Reroll")').count()) === 1, 'a Re
 
 // --- c. Wrong sender: refused, and offered no accept anywhere --------
 
+// Before #1291 a pending token anywhere left the port open to every
+// unknown address, so this connection was accepted and the line dropped.
+// The window now binds to the one address the token was minted for, so
+// a stranger is turned away at accept -- before TLS, before a byte.
+let wrongRefusedAtConnect = false
 try {
   feedRawFrom(WRONG_IP, plainLine('live-enrolment-wrong'))
-} catch (e) {
-  check(false, `a line from an unenrolled address while a token is pending should be accepted (and dropped), not refused at connect: ${e}`)
+} catch {
+  wrongRefusedAtConnect = true
 }
+check(
+  wrongRefusedAtConnect,
+  `while a token is pending for ${ENROL_IP}, a connection from ${WRONG_IP} is refused at accept (#1291)`,
+)
 
 const warningBox = wizard.locator('.observation.shortfall.refused')
 const warningText = await waitForCondition(async () => {
@@ -184,17 +218,24 @@ check(!!refusedAfterWrong, `GET /api/devices/refused carries ${WRONG_IP}`)
 
 const staleLine = read.line
 await page.click('.setup-wizard .token-life button:text-is("Reroll")')
-read = await waitForCondition(async () => {
-  const t = tokenFromBlock((await block.textContent()) ?? '')
-  return t.token && t.line !== staleLine ? t : null
-})
+// Reroll mints too, so it asks again -- that is the feature working.
+await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
+check(true, 'Reroll reopens the ask rather than minting on the click (#1291)')
+read = await mintFor(ENROL_IP, staleLine)
 check(!!read?.token, `Reroll changes the token on the page (was "${staleLine}", now "${read?.line}")`)
 
+// The stale token's own address is a stranger to the new window, so it
+// is turned away at accept rather than reaching TryEnrol at all.
+let staleRefusedAtConnect = false
 try {
   feedRawFrom(STALE_TOKEN_IP, staleLine)
-} catch (e) {
-  check(false, `the stale token from a fresh address should be accepted (and refused), not refused at connect: ${e}`)
+} catch {
+  staleRefusedAtConnect = true
 }
+check(
+  staleRefusedAtConnect,
+  `a rerolled-away token replayed from ${STALE_TOKEN_IP} never reaches the listener -- refused at accept`,
+)
 
 const refusedAfterStale = await waitForCondition(async () => {
   const list = await refusedList()
@@ -305,17 +346,52 @@ check(
 
 await page.click(`.fcard button.row-action[aria-label^="Re-enrol ${ROUTER_NAME}"]`)
 await wizard.waitFor({ timeout: 10000 })
-const remintedLine = await waitForCondition(async () => {
-  const t = tokenFromBlock((await block.textContent()) ?? '')
-  return t.token && t.line !== read.line ? t : null
-}, 20000)
+
+// #1291, ruling 23a: the operator names the router's address before
+// minting, so getting it wrong is the case worth driving for real.
+// Mint the window at an address the router is not at, then let the
+// router try from where it really is.
+const remintedLine = await mintFor(MISTYPED_IP, read.line)
 check(!!remintedLine?.token, `Re-enrol… reopens the ledger with a fresh token ("${remintedLine?.line}")`)
 
-if (remintedLine?.token) {
+let reenrolRefusedAtConnect = false
+try {
+  feedRawFrom(REENROL_IP, enrolLine(remintedLine?.token ?? ''))
+} catch {
+  reenrolRefusedAtConnect = true
+}
+check(
+  reenrolRefusedAtConnect,
+  `with the window bound to ${MISTYPED_IP}, the router at ${REENROL_IP} is turned away at accept`,
+)
+
+// It was turned away before a byte was read, so nothing here knows the
+// connection carried a token -- only that an address was refused. The
+// operator is standing at the router and knows which one is theirs, so
+// the step offers each refused address as one click.
+const rebindOffer = wizard.locator('.observation.shortfall.refused ~ p.note button.addr-candidate', {
+  hasText: REENROL_IP,
+})
+const rebindReady = await waitForCondition(async () => ((await rebindOffer.count()) > 0 ? true : null), 25000)
+check(!!rebindReady, `the step offers ${REENROL_IP} to point the enrolment window at`)
+
+if (rebindReady) {
+  const lineBeforeRebind = tokenFromBlock((await block.textContent()) ?? '').line
+  await rebindOffer.first().click()
+  // The token is untouched -- nothing is pasted into the router again.
+  const lineAfterRebind = await waitForCondition(async () => {
+    const t = tokenFromBlock((await block.textContent()) ?? '')
+    return t.token ? t.line : null
+  }, 10000)
+  check(
+    lineAfterRebind === lineBeforeRebind,
+    `rebinding keeps the same token (was "${lineBeforeRebind}", now "${lineAfterRebind}")`,
+  )
+
   try {
-    feedRawFrom(REENROL_IP, enrolLine(remintedLine.token))
+    feedRawFrom(REENROL_IP, enrolLine(remintedLine?.token ?? ''))
   } catch (e) {
-    check(false, `the enrol line from ${REENROL_IP} should be accepted at connect: ${e}`)
+    check(false, `after rebinding, the enrol line from ${REENROL_IP} should be accepted at connect: ${e}`)
   }
 }
 

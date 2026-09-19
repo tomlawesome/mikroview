@@ -60,6 +60,7 @@ import {
   dismissSetupWizard,
   goTo,
   unfoldStreamFilter,
+  adminPassword,
 } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
@@ -156,7 +157,12 @@ if (createRes.status === 201) {
     `it starts with no accepted address (got ${JSON.stringify(createRes.body?.acceptedIp)})`,
   )
 
-  const mint = await api(page.request, 'POST', `/api/devices/${encodeURIComponent(UNDECLARED_ID)}/enrolment`)
+  // #1291: minting re-proves the admin's identity and binds the
+  // enrolment window to the address the token may be redeemed from.
+  const mint = await api(page.request, 'POST', `/api/devices/${encodeURIComponent(UNDECLARED_ID)}/enrolment`, {
+    password: adminPassword,
+    expectedAddress: UNDECLARED_IP,
+  })
   check(mint.status === 201 && !!mint.body?.token, `an enrolment token is minted for ${UNDECLARED_ID} (${mint.status})`)
 
   if (mint.body?.token) {
