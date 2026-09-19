@@ -50,7 +50,7 @@ func render(step, dialect, address, syslogPort string) (string, error) {
 		if address == "" || syslogPort == "" {
 			return "", fmt.Errorf("-address and -syslog-port are required for -step=syslog")
 		}
-		return routeros.SyslogCommands(address, syslogPort, dialect), nil
+		return routeros.SyslogCommands(address, syslogPort, dialect, ""), nil
 	case "ruletagging":
 		return routeros.RuleTaggingCommands(dialect), nil
 	case "all":
@@ -59,7 +59,7 @@ func render(step, dialect, address, syslogPort string) (string, error) {
 		}
 		return strings.Join([]string{
 			routeros.CaTrustCommands(address, dialect),
-			routeros.SyslogCommands(address, syslogPort, dialect),
+			routeros.SyslogCommands(address, syslogPort, dialect, ""),
 			routeros.RuleTaggingCommands(dialect),
 		}, "\n\n"), nil
 	default:

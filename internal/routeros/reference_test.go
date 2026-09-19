@@ -94,9 +94,14 @@ func TestEmittedCommandsUseKnownMenus(t *testing.T) {
 		dialect = "a"
 	)
 	blocks := map[string]string{
-		"CaTrustCommands":     CaTrustCommands(address, dialect),
-		"SyslogCommands":      SyslogCommands(address, syslog, dialect),
-		"RuleTaggingCommands": RuleTaggingCommands(dialect),
+		"CaTrustCommands": CaTrustCommands(address, dialect),
+		"SyslogCommands":  SyslogCommands(address, syslog, dialect, ""),
+		// SyslogCommandsWithEnrolToken exercises the /log menu #1281's
+		// enrolment line adds, separately from the plain block above so
+		// a missing "log" reference entry is reported against this name
+		// rather than silently blamed on the wrong block.
+		"SyslogCommandsWithEnrolToken": SyslogCommands(address, syslog, dialect, "abcdefghijklmnopqrst"),
+		"RuleTaggingCommands":          RuleTaggingCommands(dialect),
 		// ScheduleCommands carries the push script itself since #1131,
 		// so the menus inside the saved source are checked here too --
 		// they are the same console paths the router runs when the

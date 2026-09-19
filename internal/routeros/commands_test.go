@@ -62,7 +62,7 @@ func TestCaTrustCommands(t *testing.T) {
 }
 
 func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
-	if got := SyslogCommands("192.0.2.10:8080", ":16514", "a"); !strings.Contains(got, "remote-port=16514") {
+	if got := SyslogCommands("192.0.2.10:8080", ":16514", "a", ""); !strings.Contains(got, "remote-port=16514") {
 		t.Errorf("syslogCommands did not honour the configured port: %s", got)
 	}
 }
@@ -71,14 +71,14 @@ func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
 // remote-log-format=syslog, which docs/routeros-setup.md has carried
 // since #614 -- without it a burst of lines can be read as one.
 func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
-	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote-log-format=syslog") {
 		t.Errorf("syslogCommands omitted remote-log-format=syslog: %s", cmd)
 	}
 }
 
 func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
-	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote=192.0.2.10") {
 		t.Errorf("syslogCommands missing remote=host: %s", cmd)
 	}
@@ -97,7 +97,7 @@ func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 // rather than leaving an upgraded install's action as it was the day it
 // was first created.
 func TestSyslogCommandsAreIdempotent(t *testing.T) {
-	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 
 	if !strings.Contains(cmd, `[:len [/system logging action find name=mikroview]] = 0`) {
 		t.Errorf("syslogCommands' action line is not guarded by a find: %s", cmd)
@@ -113,6 +113,39 @@ func TestSyslogCommandsAreIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "/system logging add topics=firewall,info action=mikroview") {
 		t.Errorf("syslogCommands lost the rule add: %s", cmd)
+	}
+}
+
+// TestSyslogCommandsOmitsTheEnrolLineWithNoToken is #1281's default:
+// nothing about the block changes when the caller has no pending token
+// to embed.
+func TestSyslogCommandsOmitsTheEnrolLineWithNoToken(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
+	if strings.Contains(cmd, "mikroview-enrol") {
+		t.Errorf("syslogCommands emitted an enrolment line with no token: %s", cmd)
+	}
+}
+
+// TestSyslogCommandsAppendsTheEnrolLineWithAToken is #1281's actual
+// contract: "the enrol line... ends with /log info "mikroview-enrol
+// <token>" when the chosen device has a pending token."
+func TestSyslogCommandsAppendsTheEnrolLineWithAToken(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "abcdefghijklmnopqrst")
+	want := `/log info "mikroview-enrol abcdefghijklmnopqrst"`
+	if !strings.HasSuffix(cmd, want) {
+		t.Errorf("syslogCommands = %q, want it to end with %q", cmd, want)
+	}
+}
+
+// TestSyslogCommandsQuotesTheEnrolToken pins that the token still goes
+// through quote() even though its own alphabet never needs escaping
+// (#1095's rule: every value placed inside a quoted string goes through
+// it, with no exceptions carved out for "this one happens not to need
+// it").
+func TestSyslogCommandsQuotesTheEnrolToken(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", `a"b\c`)
+	if !strings.Contains(cmd, `mikroview-enrol a\"b\\c`) {
+		t.Errorf("syslogCommands did not escape the token: %s", cmd)
 	}
 }
 
@@ -918,7 +951,7 @@ func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // a normal token's rendered output is byte-for-byte identical.
 func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
-	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=2; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -950,7 +983,7 @@ func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // loggingPushBlock: captured before quote() was added to token.
 func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
-	want := ":local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"name\") = \"mikroview\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if (($v->\"action\") = \"mikroview\") do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=2; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"name\") = \"mikroview\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if (($v->\"action\") = \"mikroview\") do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1025,7 +1058,7 @@ func TestPushScriptStampsEveryBlockWithTheWizardVersion(t *testing.T) {
 // invisible.
 func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
 	want := WizardLogging("192.0.2.10:8443", "6514", "a")
-	cmd := SyslogCommands("192.0.2.10:8443", "6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8443", "6514", "a", "")
 	if want.Remote != "192.0.2.10" || want.RemotePort != "6514" {
 		t.Fatalf("WizardLogging = %+v, want the host and port split out", want)
 	}
