@@ -747,6 +747,21 @@
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
+              {#if isAdmin}
+                <!-- Re-enrol… belongs on this card most of all: since
+                     #1281 a router earns its place by presenting a
+                     token, and a router the ledger declared is not in
+                     config.yaml, so every router the wizard itself adds
+                     is drawn here rather than above. -->
+                <button
+                  type="button"
+                  class="row-action"
+                  onclick={() => reEnrol(d.id)}
+                  aria-label="Re-enrol {d.name || d.sourceIp} — mint a fresh enrolment token for it"
+                >
+                  Re-enrol…
+                </button>
+              {/if}
             </div>
           {/each}
           {#each unattributed as s (s.address)}
