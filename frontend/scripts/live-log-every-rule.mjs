@@ -53,10 +53,12 @@ await goTo(page, 'Run setup…')
 const modal = page.locator('.setup-wizard')
 await modal.waitFor({ state: 'visible' })
 
-// The finish row ("Where setup stands") is nth-child(7): #394 added
-// "Back up the router" as the ledger's sixth step, so the finish row --
-// rendered after the six-item ledger loop -- shifted from position 6.
-await page.locator('.setup-wizard .steps li:nth-child(7) .step-row').click()
+// The finish row ("Where setup stands") is named, not counted. It was
+// nth-child(6), then nth-child(7) when #394 added "Back up the router",
+// then nth-child(8) when #1291 added "Register". Each insertion broke
+// this line silently -- the click landed on whichever step had taken
+// that position. .finish-row is what the row has always been called.
+await page.locator('.setup-wizard .steps .step-row.finish-row').click()
 const pageLink = page.locator('.setup-wizard button.link:text-is("Log every rule…")')
 await pageLink.waitFor({ state: 'visible' })
 await pageLink.click()

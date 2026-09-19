@@ -605,14 +605,17 @@ if (missingKinds.length > 0) {
 }
 
 // --- The finish reads the ledger back ---------------------------------
-// The finish row is the li *after* the ledger's six steps -- #394 made
-// that nth-child(7), not nth-child(6) -- and the readback lists all six
-// of them (SetupWizard.svelte's `{#each ledger as s}` under onFinish).
-await page.locator('.setup-wizard .steps li:nth-child(7) .step-row').click()
+// The finish row sits after the ledger's steps and is selected by name
+// rather than by position: counting it broke on #394's sixth step and
+// again on #1291's seventh. The readback lists every ledger step
+// (SetupWizard.svelte's `{#each ledger as s}` under onFinish), so it
+// counts the ledger itself rather than a number written down here.
+await page.locator('.setup-wizard .steps .step-row.finish-row').click()
+const ledgerSteps = await page.locator('.setup-wizard .steps li').count()
 const headline = ((await page.textContent('.setup-wizard .headline')) ?? '').trim()
 check(headline.length > 0, `the finish reads the ledger back in a sentence (${headline})`)
 check(
-  (await page.locator('.setup-wizard .readback li').count()) === 6,
+  (await page.locator('.setup-wizard .readback li').count()) === ledgerSteps - 1,
   'one row per step — receipt or honest gap',
 )
 
