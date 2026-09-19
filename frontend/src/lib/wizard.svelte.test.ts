@@ -10,9 +10,18 @@ vi.mock('./api', () => ({
   markSetupStep: vi.fn(),
   saveSetupAddress: vi.fn(),
   saveSetupBackupTransport: vi.fn(),
+  rebindEnrolment: vi.fn(),
+  fetchRefusedSenders: vi.fn(),
 }))
 
-import { fetchSetupCommands, mintEnrolment, saveSetupAddress, saveSetupBackupTransport } from './api'
+import {
+  fetchRefusedSenders,
+  fetchSetupCommands,
+  mintEnrolment,
+  rebindEnrolment,
+  saveSetupAddress,
+  saveSetupBackupTransport,
+} from './api'
 import { ROUTER_STEPS, SETUP_STEPS } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import type { SetupStatus } from './types'
@@ -264,5 +273,78 @@ describe('Run setup… does not inherit a router walk (#1284)', () => {
     wizardState.openReEnrol('edge-1')
     expect(wizardState.ledgerDevice).toBe('edge-1')
     expect(wizardState.steps).toEqual(ROUTER_STEPS)
+  })
+})
+
+// The mint form binds straight to the singleton, so whatever is typed
+// into it belongs to the walk it was typed in and to nothing after.
+// Found by the v0.6.0 audit's Safety stage (#1257).
+describe('a typed password and address do not outlive their walk (#1291)', () => {
+  it('closing the wizard clears the mint form', () => {
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+
+    wizardState.close()
+
+    expect(wizardState.enrolPassword).toBe('')
+    expect(wizardState.enrolExpectedAddress).toBe('')
+  })
+
+  // The one that mints a real token against the wrong address: the
+  // operator abandons router A's walk and opens router B's, and the
+  // form still holds A's address with nothing marking it stale. The
+  // server cannot catch this -- it only checks the address parses.
+  it('opening a second router does not inherit the first one\'s address', () => {
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+    wizardState.close()
+
+    wizardState.openReEnrol('edge-2')
+
+    expect(wizardState.enrolExpectedAddress).toBe('')
+    expect(wizardState.enrolPassword).toBe('')
+  })
+
+  it('Add a router does not inherit them either', () => {
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+
+    wizardState.openAddRouter()
+
+    expect(wizardState.enrolExpectedAddress).toBe('')
+    expect(wizardState.enrolPassword).toBe('')
+  })
+})
+
+// Two refused addresses are offered side by side, so clicking the wrong
+// one and then the right one is an ordinary correction. Without a guard
+// the window ends up at whichever answer came back last, both calls
+// report success, and the bound address is never shown again -- so the
+// router keeps being refused with nothing on screen explaining why.
+// Found by the v0.6.0 audit's Safety stage (#1257).
+describe('rebinding the enrolment window is one at a time (#1291)', () => {
+  it('ignores a second click while the first is still in flight', async () => {
+    vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+    let settleFirst: (v: string | null) => void = () => {}
+    vi.mocked(rebindEnrolment)
+      .mockReturnValueOnce(
+        new Promise<string | null>((resolve) => {
+          settleFirst = resolve
+        }),
+      )
+      .mockResolvedValue(null)
+
+    wizardState.openReEnrol('edge-1')
+    const first = wizardState.rebindEnrolmentWindow('192.0.2.50')
+    await wizardState.rebindEnrolmentWindow('192.0.2.99')
+
+    expect(rebindEnrolment).toHaveBeenCalledTimes(1)
+    settleFirst(null)
+    await first
+    expect(wizardState.enrolExpectedAddress).toBe('192.0.2.50')
+    expect(wizardState.enrolRebinding).toBe(false)
   })
 })
