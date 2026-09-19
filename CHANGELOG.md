@@ -18,6 +18,24 @@ rewritten.
 
 ### Added
 
+- **Routers now enrol before their logs count** (#1281). A syslog
+  address is trusted only once it is the address you declared in
+  config.yaml, or once it has redeemed a one-time enrolment token you
+  mint for it (Settings > Devices: "Enrol" or "Reroll", 15-minute life,
+  single use). Until then its lines are refused and listed under
+  "Refused senders" rather than silently attributed to whichever router
+  happened to claim an address in its own pushed configuration -- a
+  router's own word about its address was never something to trust
+  identity to. Declare a syslog-only router with no address at all from
+  the same screen, mint it a token, and paste the one extra line the
+  "Send logs" step now shows into its logging action.
+
+  Router-to-mikroview pushes (the ingest token flow) now hold to the
+  same rule: a push is refused unless it also arrives from that device's
+  enrolled address. See "Upgrading to 0.6.0" in docs/upgrades.md for
+  what this means for a router that only ever sent logs and was never
+  given a `sourceIp`.
+
 - **Your admin account keeps its password when you connect it to SSO**
   (#1252). MikroView has exactly one admin, and it never signs in to
   your identity provider on its own behalf -- so if the provider is
