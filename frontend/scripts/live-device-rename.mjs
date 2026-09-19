@@ -382,5 +382,11 @@ check(
   `and the device shows its own id again (name="${restored?.name}")`,
 )
 
+// Leave the fleet as this scenario found it -- a router left behind
+// sorts ahead of the harness's own and the next scenario's pushes get
+// refused (#1281's push gate).
+const cleanedUp = await api(page.request, 'DELETE', `/api/devices/${encodeURIComponent(UNDECLARED_ID)}`)
+check(cleanedUp.status === 204, `${UNDECLARED_ID} is deleted so later scenarios see the fleet as it was (${cleanedUp.status})`)
+
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()
