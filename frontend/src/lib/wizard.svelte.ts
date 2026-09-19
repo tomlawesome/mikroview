@@ -565,6 +565,13 @@ class WizardState {
         'Give the router’s own address first — the enrolment window opens for that address and nothing else.'
       return
     }
+    // The mint button disables itself while this runs, but the address
+    // field's Enter key calls straight in here and never saw that
+    // button. Two quick presses minted twice, and the second
+    // invalidates the first -- which the operator may already have
+    // pasted into the router. The guard belongs here, where both
+    // entry points meet, the same way rebinding's does.
+    if (this.enrolMinting) return
     if (!this.enrolPassword) {
       this.enrolmentError = 'Enter your password to mint a token.'
       return
