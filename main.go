@@ -653,12 +653,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	devices := device.NewRegistry(cfg.Devices)
 	// Tell the syslog listener which sources are the operator's declared
 	// routers, so a flood of undeclared ones cannot take every
 	// connection slot and lock them out -- see syslog.reservedFraction.
 	// Set here, before any listener starts, which is the contract
-	// SetConfiguredSources documents.
+	// SetConfiguredSources documents. (The device registry itself --
+	// device.OpenRegistry -- opens later, alongside every other
+	// persisted store, since issue #1281 gave it a backend of its own;
+	// nothing here needs it yet.)
 	configuredSources := make([]string, 0, len(cfg.Devices))
 	for _, d := range cfg.Devices {
 		if d.SourceIP != "" {
@@ -717,6 +719,20 @@ func main() {
 	}
 	fs, err := flags.OpenWithBackend(flagsBackend)
 	mustOpenStore(flagsLog, err)
+
+	// devices is the one device registry every count reads (#1170), now
+	// with its own optional persistence (issue #1281): an enrolled
+	// device's acceptedIp/enrolledAt, and the identity of any device
+	// this registry itself created (Create/Ensure) rather than
+	// config.yaml, survive a restart -- see device.Registry's own doc
+	// comment for what is and is not written back.
+	deviceRegistryLog := logging.New("device")
+	deviceRegistryBackend, err := persistence.backendFor(bootCtx, "device_registry", cfg.DeviceRegistry.StorePath)
+	if err != nil {
+		deviceRegistryLog.Warn(err.Error())
+	}
+	devices, err := device.OpenRegistryWithBackend(deviceRegistryBackend, cfg.Devices)
+	mustOpenStore(deviceRegistryLog, err)
 
 	// macRegistry backs the new-device/new-MAC detector (issue #103
 	// phase 1) -- see internal/device.MACRegistry's doc comment for why
@@ -1166,17 +1182,31 @@ func main() {
 	// API server for the ingest endpoint to write and the table endpoints
 	// to read.
 	routerState := routerstate.New()
-	// Now that routerState exists, droplistStore.Add can refuse a
-	// range the router has pushed as one of its own (issue #1223's
-	// ErrRouterOwn) -- see internal/droplist.OwnRanges and
-	// routerstate.Store.OwnPrefixes.
-	droplistStore.SetOwnRanges(routerState)
-	// #1170 attribution step (b): a syslog source the operator never
-	// declared is attributed to the one router that has pushed that
-	// address as its own. Wired here rather than at NewRegistry for the
-	// same reason SetNames is wired later -- the store it reads is built
-	// here, long after the registry the ingest path needs.
-	devices.SetAddressTables(routerState)
+	// droplistStore.Add can refuse a range that is one of mikroview's
+	// own enrolled/declared addresses (issue #1223's ErrRouterOwn) --
+	// see internal/droplist.OwnRanges and device.Registry.OwnPrefixes.
+	// Issue #1281's audit moved this off routerState's pushed
+	// /ip/address tables (a router's own claim about itself) onto the
+	// registry's actual evidence -- config.yaml's sourceIp and a
+	// redeemed enrolment token's acceptedIp -- the same narrowing
+	// Resolve's own attribution went through.
+	droplistStore.SetOwnRanges(devices)
+	// Issue #1281's listener gate: a syslog source is allowed onto the
+	// ingest pipeline only once it is sourceIp or acceptedIp; anything
+	// else is checked for the enrolment marker and refused otherwise.
+	// device.Registry satisfies syslog.EnrolmentGate structurally --
+	// see that interface's own doc comment for why syslog declares it
+	// rather than importing this package.
+	syslog.SetEnrolmentGate(devices)
+	// The "Upgrading to 0.6.0" one-shot nudge (docs/upgrades.md) is NOT
+	// run here: routerState is brand new at process start and persists
+	// nothing (see its own doc comment), so there is no pushed evidence
+	// to check yet -- a call here would always be a no-op. It runs
+	// instead from handleIngestRouterOS, the first time a device's own
+	// /ip/address table actually arrives after this restart (naturally
+	// idempotent: EnrolFromPushedAddresses only ever touches a device
+	// with no acceptedIp yet), which is the earliest point such evidence
+	// can exist.
 
 	// Everything the engine evaluates, registered from the one
 	// definitions document and kept in step with it (issues #405/#406/
