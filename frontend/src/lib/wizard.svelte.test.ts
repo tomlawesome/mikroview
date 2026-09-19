@@ -75,7 +75,9 @@ describe('relaunch is the same door', () => {
     })
     wizardState.launch()
     expect(wizardState.open).toBe(true)
-    // Step 1 has its evidence, so the first thing still waiting is 2.
+    // Step 1 has its evidence, so the first thing still unanswered is
+    // step 2 -- naming, which asks for something even though it waits
+    // for nothing (#1284).
     expect(wizardState.pane).toBe(2)
   })
 

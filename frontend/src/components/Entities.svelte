@@ -78,7 +78,7 @@
   // the rule is on the router and fires on the router, so a rules view
   // that omits it is not the rule table. It stays unnameable: the row
   // is plain dim text with no rename affordance, for every tier.
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -93,7 +93,6 @@
     fetchRouterAddresses,
     fetchRules,
     fetchSetupStatus,
-    fetchSetupCommands,
     fetchUnattributedSources,
     type RouterFilterRule,
   } from '../lib/api'
@@ -109,7 +108,6 @@
     unattributedLabel,
     UNATTRIBUTED_FIX,
   } from '../lib/fleet'
-  import { portOf } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus, UnattributedSource } from '../lib/types'
 
@@ -181,44 +179,18 @@
   const canRename = $derived(authState.canEdit)
 
   let status = $state<SetupStatus | null>(null)
-  // berthSyslogCommands is the empty berth's two paste lines -- POST
-  // /api/setup/commands' steps.syslog.commands (#436 moved the RouterOS
-  // syntax server-side), fetched once status carries the syslog port it
-  // needs.
-  let berthSyslogCommands = $state('')
 
   // The empty berth (#718): one more card at the end of the router row,
   // the same size and shape as a real one but empty -- an outline with
   // nothing in it. Activating it (click, Enter or Space -- a native
-  // <button>, so both keys work for free) swaps that outline for a panel
-  // holding the same port, paste lines and "never connects to them"
-  // assurance the old pill's dialog carried; Escape or the panel's own
-  // close button folds it back. The panel is positioned over the berth's
-  // own footprint rather than growing it, so opening never changes the
-  // row's height and the table below never moves (see .berth-panel).
-  let berthOpen = $state(false)
-  let berthTrigger = $state<HTMLButtonElement | null>(null)
-
+  // <button>, so both keys work for free) used to unfold it in place
+  // into the syslog paste lines; since #1284 it opens the router ledger
+  // instead -- the setup wizard's own router steps, which name the
+  // router, enrol it and print the same block with an enrol line at the
+  // end. Two surfaces printing the same commands in different words is
+  // exactly what the ledger being one component removes.
   function openBerth() {
-    berthOpen = true
-  }
-
-  // Returns focus to the trigger so a keyboard user who opened the berth
-  // and dismissed it lands back where they started, not at the top of
-  // the page -- awaits a tick because the trigger button doesn't exist
-  // in the DOM again until the {#if} below re-renders it.
-  async function closeBerth() {
-    berthOpen = false
-    await tick()
-    berthTrigger?.focus()
-  }
-
-  function onBerthKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && berthOpen) closeBerth()
-  }
-
-  function focusOnOpen(node: HTMLButtonElement) {
-    node.focus()
+    wizardState.openAddRouter()
   }
 
   // Per-router enrichment beyond what GET /api/devices already carries
@@ -556,23 +528,10 @@
       // Lane names fall back to the raw boundary id until this resolves.
     })
     fetchSetupStatus()
-      .then((s) => {
-        status = s
-        // wizardState.address (#1213) is the operator's own answer to
-        // "what address can your router reach mikroview on?", not this
-        // tab's own URL -- the same value the wizard itself renders
-        // every RouterOS command against.
-        return fetchSetupCommands({
-          address: wizardState.address,
-          syslogPort: s.instance.syslogPort,
-        })
-      })
-      .then((r) => {
-        if (typeof r !== 'string') berthSyslogCommands = r.steps.syslog.commands
-      })
+      .then((s) => (status = s))
       .catch(() => {
-        // The "add a third router" card's paste-lines disclosure simply
-        // has nothing to show until this resolves.
+        // Nothing on this page depends on it beyond the unattributed
+        // card's own wording; it simply reads less until this resolves.
       })
     fetchRules()
       .then((r) => (rulesUsage = r))
@@ -668,7 +627,6 @@
   }
 </script>
 
-<svelte:window onkeydown={onBerthKeydown} />
 
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
@@ -757,37 +715,18 @@
               <div class="frow dim">{UNATTRIBUTED_FIX}</div>
             </div>
           {/each}
-          <div class="fcard berth" class:open={berthOpen}>
-          {#if berthOpen}
-            <div class="berth-panel" role="group" aria-label="Add a router">
-              <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
-              <p>
-                Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'MikroView’s syslog port'} and
-                it appears here.
-              </p>
-              <p>Routers push to MikroView — it never connects to them.</p>
-              {#if berthSyslogCommands}
-                <pre class="paste">{berthSyslogCommands}</pre>
-              {:else}
-                <p class="dim">Loading the commands to paste…</p>
-              {/if}
-            </div>
-          {:else}
+          <div class="fcard berth">
             <!-- #1168: the resting state says what it is. #718 asked for
                  no words at all, on the reading that an empty shape in a
                  row of full cards is affordance enough -- with no routers
                  registered there is no row of full cards, and what the
-                 operator met on first run was one blank dashed box.
-                 aria-label stays: it is the same name the panel this
-                 opens already carries. -->
+                 operator met on first run was one blank dashed box. -->
             <button
               type="button"
               class="berth-trigger"
-              bind:this={berthTrigger}
               onclick={openBerth}
               aria-label="Add a router"
             ><span class="berth-label">+ add a router</span></button>
-          {/if}
           </div>
         </div>
     </div>
@@ -1170,75 +1109,6 @@
     outline-offset: 2px;
   }
 
-  /* Unfolded, the berth becomes a panel positioned over its own closed
-     footprint (inset: 0 against the .fcard.berth it fills) rather than
-     growing that footprint -- the grid row's height never changes, so
-     the table below never moves. Same background/border/radius as a
-     real .fcard: this is that treatment, filled in and given room to
-     hold the paste commands, not a second card style. */
-  .berth-panel {
-    /* top/left/right only -- no "bottom" -- so the box grows downward
-       to fit its content instead of being stretched to exactly the
-       closed card's height (which is what a full "inset: 0" would do). */
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 100%;
-    padding: 16px 20px;
-    /* --bg-elevated, not the --glass a resting .fcard wears: glass is
-       66% opaque, which is fine for a card sitting on the page but not
-       for a panel that opens downward over the table below it -- the
-       rows would read straight through the paste commands. Same hue,
-       fully opaque. */
-    background: var(--bg-elevated);
-    border: 1px solid var(--accent);
-    border-radius: 12px;
-    font-size: 12.5px;
-    color: var(--fg-muted);
-    animation: berth-unfold 0.12s ease-out;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .berth-panel {
-      animation: none;
-    }
-  }
-
-  @keyframes berth-unfold {
-    from {
-      opacity: 0;
-      transform: scaleY(0.94);
-    }
-    to {
-      opacity: 1;
-      transform: scaleY(1);
-    }
-  }
-
-  .berth-panel p {
-    margin: 0;
-  }
-
-  .berth-close {
-    align-self: flex-end;
-    background: none;
-    border: none;
-    color: var(--fg-muted);
-    cursor: pointer;
-    font-size: 1rem;
-    padding: 0.25rem;
-    margin: -0.25rem -0.25rem 0 0;
-  }
-
-  .berth-close:hover {
-    color: var(--fg);
-  }
-
   .fhead {
     display: flex;
     justify-content: space-between;
@@ -1276,19 +1146,6 @@
 
   .fcard .frow {
     padding: 3px 0;
-  }
-
-  .paste {
-    margin: 8px 0 0;
-    padding: 8px 10px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--fg-muted);
-    white-space: pre-wrap;
-    word-break: break-all;
   }
 
   /* --- the named-things table ------------------------------------------ */

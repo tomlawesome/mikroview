@@ -13,9 +13,13 @@ import {
   firstOpenStep,
   forcedPastRecord,
   hostname,
+  nameReceipt,
   nameStep,
   notObserved,
   portOf,
+  refusedSince,
+  refusedWarning,
+  ROUTER_STEPS,
   pushStep,
   rulesStep,
   silenceExplanation,
@@ -26,6 +30,8 @@ import {
   srcAddressCommand,
   syslogReceipt,
   syslogStep,
+  tokenExpired,
+  tokenLine,
 } from './setupsteps'
 import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './types'
 
@@ -287,8 +293,8 @@ describe('a partial step states its shortfall apart from its arrival', () => {
       ],
     })
     const ledger = buildLedger(partial, [], 'h')
-    expect(announceStep(ledger[3])).toBe(
-      'Step 4 of 6 — Push router state — Arrived: filter-rule. Still missing: address-list, dhcp-lease, arp.',
+    expect(announceStep(ledger[4])).toBe(
+      'Step 5 of 6 — Push router state — Arrived: filter-rule. Still missing: address-list, dhcp-lease, arp.',
     )
   })
 })
@@ -346,9 +352,10 @@ describe('the source-address split', () => {
   it('carries the split into the step list receipt', () => {
     expect(syslogReceipt(connected, [declared, arriving])).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
     const ledger = buildLedger(connected, [declared, arriving], 'h')
-    expect(ledger[1].status.state).toBe('partial')
-    expect(ledger[1].outcome).toBe('done')
-    expect(ledger[1].receipt).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
+    expect(ledger[2].key).toBe('syslog')
+    expect(ledger[2].status.state).toBe('partial')
+    expect(ledger[2].outcome).toBe('done')
+    expect(ledger[2].receipt).toBe('syslog from 10.0.20.1 · declared 192.168.88.1 silent')
   })
 
   // The existing receipt already states a match; no new words.
@@ -388,14 +395,41 @@ describe('the source-address split', () => {
 })
 
 describe('the claim ledger', () => {
-  // The count of six is stable whatever the state: the record is
-  // explicit that step 5's row always exists, marked "nothing to name"
-  // until a push surfaces an unnamed device, and step 6 (#394) is the
-  // same kind of always-there row. A ledger that grew and shrank would
-  // be a different promise every time it was opened.
-  it('always has exactly six steps', () => {
+  // The count is stable whatever the state: a ledger that grew and
+  // shrank would be a different promise every time it was opened. What
+  // does change it is which ledger was opened (#1284) -- first-run
+  // setup is the certificate step plus the five router ones, and the
+  // router ledger is those five on their own.
+  it('always has exactly six steps on first-run setup', () => {
     expect(buildLedger(status(), [], 'h').length).toBe(6)
     expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(6)
+  })
+
+  // The router ledger is embedded, not copied: the same five steps in
+  // the same order, minus the certificate step in front of them.
+  it('is the same five router steps, without the certificate step, on the router ledger', () => {
+    const setup = buildLedger(status(), [], 'h')
+    const router = buildLedger(status(), [], 'h', null, 'sftp', { steps: ROUTER_STEPS })
+    expect(router.map((s) => s.key)).toEqual(['name', 'syslog', 'rules', 'push', 'backup'])
+    expect(router.map((s) => s.key)).toEqual(setup.slice(1).map((s) => s.key))
+    // Numbered from one in the list being walked, but recorded under
+    // the number the server stores, which is the v0.5 order frozen:
+    // "Name your router" moved forward for #1284, its marks did not.
+    expect(router.map((s) => s.n)).toEqual([1, 2, 3, 4, 5])
+    expect(router.map((s) => s.canonical)).toEqual([5, 2, 3, 4, 6])
+  })
+
+  // A mark is persisted under the server's own fixed number, so it
+  // means a step and not a row: step 2 is Send logs in every ledger,
+  // whichever position Send logs is walked in.
+  it('reads a mark back on the same step whichever ledger is open', () => {
+    const marked = status({ marks: [mark(2, 'forced')] })
+    const setup = buildLedger(marked, [], 'h')
+    const router = buildLedger(marked, [], 'h', null, 'sftp', { steps: ROUTER_STEPS })
+    expect(setup[2].key).toBe('syslog')
+    expect(setup[2].outcome).toBe('forced')
+    expect(router[1].key).toBe('syslog')
+    expect(router[1].outcome).toBe('forced')
   })
 
   it('reads a step with no evidence and no decision as open, with an honest gap', () => {
@@ -432,7 +466,7 @@ describe('the claim ledger', () => {
   // the interface keeps pointing at.
   it('lets evidence outrank a forced-past mark', () => {
     const forcedOnly = buildLedger(status({ marks: [mark(2, 'forced')] }), [], '192.0.2.10')
-    expect(forcedOnly[1].outcome).toBe('forced')
+    expect(forcedOnly[2].outcome).toBe('forced')
 
     const thenArrived = buildLedger(
       status({
@@ -442,17 +476,26 @@ describe('the claim ledger', () => {
       [],
       '192.0.2.10',
     )
-    expect(thenArrived[1].outcome).toBe('done')
-    expect(thenArrived[1].receipt).toContain('syslog connected')
+    expect(thenArrived[2].outcome).toBe('done')
+    expect(thenArrived[2].receipt).toContain('syslog connected')
   })
 
-  // Step 3 counts and can only count upward, and step 5 has nothing to
-  // wait for -- Next is always free on both, so neither can raise the
-  // heavy warning. Step 6 does have a waiting check, the same shape as
-  // step 4's.
+  // Tagging rules counts and can only count upward, and naming has
+  // nothing to wait for -- Next is always free on both, so neither can
+  // raise the heavy warning. The rule follows the step, not its row:
+  // the same two are free on the router ledger, one number lower.
   it('marks only the steps with a waiting check as checkable', () => {
     const ledger = buildLedger(status(), [], '192.0.2.10')
-    expect(ledger.map((s) => s.hasCheck)).toEqual([true, true, false, true, false, true])
+    expect(ledger.map((s) => `${s.key}:${s.hasCheck}`)).toEqual([
+      'ca:true',
+      'name:false',
+      'syslog:true',
+      'rules:false',
+      'push:true',
+      'backup:true',
+    ])
+    const router = buildLedger(status(), [], '192.0.2.10', null, 'sftp', { steps: ROUTER_STEPS })
+    expect(router.map((s) => s.hasCheck)).toEqual([false, true, false, true, true])
   })
 
   it('reads a partially tagged rule set as counting, not as half-failed', () => {
@@ -461,9 +504,10 @@ describe('the claim ledger', () => {
       [],
       '192.0.2.10',
     )
-    expect(ledger[2].flavour).toBe('counting')
-    expect(ledger[2].outcome).toBe('done')
-    expect(ledger[2].receipt).toContain('4 of 10')
+    expect(ledger[3].key).toBe('rules')
+    expect(ledger[3].flavour).toBe('counting')
+    expect(ledger[3].outcome).toBe('done')
+    expect(ledger[3].receipt).toContain('4 of 10')
   })
 
   // The mikroview-side check logic this design inherits (#371/#374) is
@@ -475,12 +519,21 @@ describe('the claim ledger', () => {
     expect(ledger[0].flavour).toBe('attention')
   })
 
-  it('says there is nothing to name until a push surfaces an unnamed device', () => {
-    expect(nameStep([]).detail).toContain('Nothing to name')
-    expect(nameStep([device({ configured: true })]).detail).toContain('Nothing to name')
-    const undeclared = nameStep([device({ configured: false, sourceIp: '192.0.2.44' })])
-    expect(undeclared.state).toBe('quiet')
-    expect(undeclared.detail).toContain('192.0.2.44')
+  // Naming moved from last to first and now creates the router (#1284),
+  // so the old "nothing to name" row is retired: with no router in hand
+  // the step is quiet and has nothing to wait for, and once this walk
+  // has named one the row is its own evidence.
+  it('is quiet until this walk has named a router, then reads done', () => {
+    const quiet = nameStep([])
+    expect(quiet.state).toBe('quiet')
+    expect(quiet.detail).toContain('Nothing to wait for')
+    // Another router already existing is not this walk's router.
+    expect(nameStep([device({ id: 'other' })]).state).toBe('quiet')
+
+    const named = nameStep([device({ id: 'edge-1', name: 'edge-1' })], 'edge-1')
+    expect(named.state).toBe('done')
+    expect(named.detail).toContain('edge-1')
+    expect(nameReceipt([device({ id: 'edge-1', name: 'edge-1' })], 'edge-1')).toBe('named edge-1')
   })
 })
 
@@ -607,13 +660,16 @@ describe('reopening the ledger', () => {
     const ledger = buildLedger(
       status({
         sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }],
-        marks: [mark(2, 'skipped')],
+        // The server's own numbers: 5 is Name your router and 2 is Send
+        // logs, whichever position each is walked in.
+        marks: [mark(5, 'skipped'), mark(2, 'skipped')],
       }),
       [],
       '192.0.2.10',
     )
-    // 1 has evidence, 2 was decided -- 3 is the first still waiting.
-    expect(firstOpenStep(ledger)).toBe(3)
+    // Walked in order: 1 has evidence, 2 and 3 were decided -- 4, Tag
+    // firewall rules, is the first still waiting.
+    expect(firstOpenStep(ledger)).toBe(4)
   })
 
   it('falls back to the first step when nothing is left open', () => {
@@ -632,10 +688,36 @@ describe('the forced-past record', () => {
   // produced after the fact.
   it('quotes step, what was not observed, who and when', () => {
     const ledger = buildLedger(status(), [], '192.0.2.10')
-    const line = forcedPastRecord(ledger[1], 'tom', new Date('2026-08-23T09:00:00Z'))
+    const line = forcedPastRecord(ledger[2], 'tom', new Date('2026-08-23T09:00:00Z'))
     expect(line).toContain('setup · step 2 forced past')
     expect(line).toContain('no router has opened a syslog connection')
     expect(line).toContain('tom')
+  })
+
+  // The number quoted is the one the server stores, not the row the
+  // operator is looking at: on the router ledger Name your router is
+  // step 1 of 5 and is recorded as step 5, because that is where it
+  // sits in the ledger the marks are kept in.
+  it('quotes the canonical step number, not the row, on the router ledger', () => {
+    const router = buildLedger(status(), [], '192.0.2.10', null, 'sftp', { steps: ROUTER_STEPS })
+    expect(router[0].n).toBe(1)
+    expect(forcedPastRecord(router[0], 'tom', new Date('2026-08-23T09:00:00Z'))).toContain(
+      'setup · step 5 forced past',
+    )
+  })
+
+  // With a token minted and unspent, what has not happened is the
+  // enrolment, and its consequence is what the record is worth writing
+  // down: an un-enrolled router's logs are not merely absent, they
+  // arrive and are dropped.
+  it('words an un-enrolled router’s forced-past line as refusal, not silence', () => {
+    const enrolling = buildLedger(status(), [], '192.0.2.10', null, 'sftp', {
+      steps: ROUTER_STEPS,
+      device: 'edge-1',
+      enrolling: true,
+    })
+    expect(enrolling[1].key).toBe('syslog')
+    expect(notObserved(enrolling[1])).toBe('router not enrolled; its logs are refused until it is')
   })
 
   it('says the check could not run when the problem is on mikroview’s side', () => {
@@ -652,7 +734,7 @@ describe('the finish', () => {
           { source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z', syslogFirstSeenAt: '2026-08-23T09:00:00Z' },
         ],
         devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 10 }],
-        marks: [mark(4, 'skipped')],
+        marks: [mark(5, 'skipped')],
       }),
       [],
       '192.0.2.10',
@@ -681,6 +763,8 @@ describe('explaining a silence elsewhere', () => {
   })
 
   it('names the step, the decision, who made it and what was not observed', () => {
+    // Step 2 is Send logs in the server's own ledger, whichever
+    // position Send logs is walked in.
     const line = silenceExplanation([mark(2, 'forced', { note: 'no router has opened a syslog connection' })])
     expect(line).toContain('step 2')
     expect(line).toContain('Send logs')
@@ -694,5 +778,117 @@ describe('explaining a silence elsewhere', () => {
   it('prefers a forced-past line over a skip', () => {
     const line = silenceExplanation([mark(1, 'skipped'), mark(4, 'forced')])
     expect(line).toContain('step 4')
+  })
+})
+
+// --- Enrolment (#1281, with #1284) --------------------------------------
+
+describe('the enrolment step', () => {
+  const enrolled = (over: Partial<Device> = {}) =>
+    device({ id: 'edge-1', name: 'edge-1', configured: true, ...over })
+
+  it('waits for the enrol line at the end of the block', () => {
+    const s = syslogStep(status(), [enrolled()], 'edge-1')
+    expect(s.state).toBe('waiting')
+    expect(s.detail).toContain('enrol line')
+  })
+
+  it('arrives when the line has been accepted, saying where from and when', () => {
+    const s = syslogStep(
+      status(),
+      [enrolled({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T14:02:00Z' })],
+      'edge-1',
+    )
+    expect(s.state).toBe('done')
+    expect(s.detail).toContain('Enrolled at 192.168.88.1')
+    expect(syslogReceipt(status(), [enrolled({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T14:02:00Z' })], 'edge-1'))
+      .toContain('enrolled at 192.168.88.1')
+  })
+
+  // Re-enrol names the address it already has and says what is still
+  // outstanding; the new line replaces it when it arrives.
+  it('names the address it already has while a re-enrol waits for the new line', () => {
+    const before = syslogStep(
+      status(),
+      [enrolled({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T14:02:00Z' })],
+      'edge-1',
+      '2026-09-19T15:00:00Z',
+    )
+    expect(before.state).toBe('waiting')
+    expect(before.detail).toBe('Enrolled at 192.168.88.1 · waiting for the new line')
+
+    const after = syslogStep(
+      status(),
+      [enrolled({ acceptedIp: '10.0.0.9', enrolledAt: '2026-09-19T15:01:00Z' })],
+      'edge-1',
+      '2026-09-19T15:00:00Z',
+    )
+    expect(after.state).toBe('done')
+    expect(after.detail).toContain('Enrolled at 10.0.0.9')
+  })
+
+  // The lead says the model once, and only where an enrol line is
+  // actually in the block below it.
+  it('says what the enrol line does only when there is one', () => {
+    const plain = buildLedger(status(), [], 'h')
+    const enrolling = buildLedger(status(), [], 'h', null, 'sftp', { steps: ROUTER_STEPS, enrolling: true })
+    expect(plain[2].lead).not.toContain('enrolment token')
+    expect(enrolling[1].lead).toContain('the only address MikroView accepts this router’s logs from')
+  })
+
+  it('states how long the token is good for, and says plainly when it has lapsed', () => {
+    const now = new Date('2026-09-19T14:02:00Z')
+    expect(tokenLine('2026-09-19T14:17:00Z', now)).toContain('(15 minutes)')
+    expect(tokenExpired('2026-09-19T14:17:00Z', now)).toBe(false)
+    expect(tokenExpired('2026-09-19T14:01:00Z', now)).toBe(true)
+  })
+
+  // The warning box never claims the address is this router -- only the
+  // operator knows that.
+  it('words refused lines without diagnosing whose they are', () => {
+    const line = refusedWarning([
+      { ip: '192.168.88.1', firstSeen: '2026-09-19T14:03:00Z', lastSeen: '2026-09-19T14:04:00Z', lines: 12 },
+    ])
+    expect(line).toBe(
+      'Lines from 192.168.88.1 arrived without the enrol line and were refused — if that is this ' +
+        'router, paste the whole block, last line included.',
+    )
+    expect(refusedWarning([])).toBe('')
+  })
+
+  // An address refused last week is the fleet strip's business, not
+  // evidence about the block just pasted.
+  it('keeps only what was first seen after this walk minted its token', () => {
+    const old = { ip: '10.0.0.1', firstSeen: '2026-09-18T09:00:00Z', lastSeen: '2026-09-18T09:00:00Z', lines: 3 }
+    const fresh = { ip: '10.0.0.2', firstSeen: '2026-09-19T14:03:00Z', lastSeen: '2026-09-19T14:04:00Z', lines: 4 }
+    expect(refusedSince([old, fresh], '2026-09-19T14:02:00Z')).toEqual([fresh])
+    expect(refusedSince([old, fresh], '')).toEqual([])
+  })
+})
+
+// The stored numbers are the server's, and STEP_TITLES is indexed by
+// them -- a walking order that moves must not retitle a mark that was
+// written before it moved.
+describe('the recorded step numbers', () => {
+  it('names each stored step number with the step the server meant', () => {
+    const named = (n: number) => silenceExplanation([mark(n, 'forced')]) ?? ''
+    expect(named(1)).toContain('Trust the certificate')
+    expect(named(2)).toContain('Send logs')
+    expect(named(3)).toContain('Tag firewall rules')
+    expect(named(4)).toContain('Push router state')
+    expect(named(5)).toContain('Name your router')
+    expect(named(6)).toContain('Back up the router')
+  })
+
+  it('records every step under the number the server keeps, not its row', () => {
+    const setup = buildLedger(status(), [], '192.0.2.10')
+    expect(setup.map((s) => `${s.key}:${s.n}:${s.canonical}`)).toEqual([
+      'ca:1:1',
+      'name:2:5',
+      'syslog:3:2',
+      'rules:4:3',
+      'push:5:4',
+      'backup:6:6',
+    ])
   })
 })
