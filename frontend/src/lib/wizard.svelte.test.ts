@@ -13,6 +13,7 @@ vi.mock('./api', () => ({
 }))
 
 import { fetchSetupCommands, mintEnrolment, saveSetupAddress, saveSetupBackupTransport } from './api'
+import { ROUTER_STEPS, SETUP_STEPS } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import type { SetupStatus } from './types'
 
@@ -180,5 +181,38 @@ describe('the minted token reaches the block the operator pastes (#1281)', () =>
     expect(fetchSetupCommands).toHaveBeenCalledWith(
       expect.objectContaining({ enrolToken: 'examplenotarealtoken' }),
     )
+  })
+})
+
+// close() deliberately keeps a walk's state so reopening the same door
+// resumes it. Run setup… is a different door: it asks about the
+// instance, not about whichever router a Re-enrol… walk was in the
+// middle of. Left behind, ledgerDevice made the first-run ledger read
+// as that router's -- Name your router already done, and Send logs
+// offering its live token to reroll.
+describe('Run setup… does not inherit a router walk (#1284)', () => {
+  it('clears the router and its token', () => {
+    wizardState.status = status()
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolment = { token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' }
+    wizardState.enrolmentMintedAt = '2026-09-19T12:00:00Z'
+    wizardState.token = 'an-ingest-token'
+    wizardState.close()
+
+    wizardState.launch()
+
+    expect(wizardState.ledgerDevice).toBe('')
+    expect(wizardState.tokenDevice).toBe('')
+    expect(wizardState.token).toBe('')
+    expect(wizardState.enrolment).toBeNull()
+    expect(wizardState.enrolmentMintedAt).toBe('')
+    expect(wizardState.steps).toEqual(SETUP_STEPS)
+  })
+
+  // Reopening the router door itself must still resume where it was.
+  it('but Re-enrol… still reopens at Send logs for its own router', () => {
+    wizardState.openReEnrol('edge-1')
+    expect(wizardState.ledgerDevice).toBe('edge-1')
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
   })
 })
