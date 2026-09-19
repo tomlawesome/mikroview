@@ -20,14 +20,28 @@ docker run -d --name mikroview --restart unless-stopped \
     --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
     -p 6514:6514/tcp -p 443:8080 \
     -v mikroview-data:/var/lib/mikroview \
-    -v mikroview-etc:/etc/mikroview \
+    -v mikroview-etc:/etc/mikroview:ro \
     ghcr.io/tomlawesome/mikroview:latest
 ```
 
 The `mikroview-etc` volume is the app folder #1243 introduced: an empty
 folder is fine, and dropping a config file, GeoIP database or
-certificate pair into it (`docker cp`, or swap the named volume for a
-bind mount) is picked up at the next restart with no other change. That
+certificate pair into it is picked up at the next restart with no other
+change. It is mounted read-only, as the Compose examples below have
+always mounted it -- MikroView only ever reads it, and nothing that
+breaks into the container gets to rewrite your config or your keys. So
+put files in from outside the app's own container, with either a helper
+container:
+
+```sh
+docker run --rm -v mikroview-etc:/etc/mikroview -v "$PWD:/from:ro" \
+    alpine cp /from/config.yaml /etc/mikroview/config.yaml
+```
+
+or by swapping the named volume for a bind mount of a folder on the
+host, which is what the Compose examples do. `docker cp` into the
+running container does not work here, by design: Docker refuses it with
+"mounted volume is marked read-only". That
 relies on nothing naming a config path explicitly, which is true of the
 `docker run` above but **not** of the Compose example below -- see the
 note under it. See "Persistent data" below.

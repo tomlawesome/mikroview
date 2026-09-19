@@ -104,7 +104,7 @@ run() {
 ARGS=(); ENV_VARS=(); WITH_DOCKER=true
 run default
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "default run exits 0 (rc=$rc, out: $out)"
-check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
+check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
   "default run line: latest, mikroview name, both named volumes, 6514/443"
 
 # --- hardening flags (#1286): each must appear on the run line -------------
@@ -152,7 +152,7 @@ check "$(case "$calls" in *"rm mikroview"$'\n'*"run -d"*) echo true;; *) echo fa
 # --- container name drives both volume names --------------------------------
 ARGS=(); ENV_VARS=(MIKROVIEW_CONTAINER=mikroview-ci); WITH_DOCKER=true
 run container-name
-check "$(case "$calls" in *"--name mikroview-ci"*"-v mikroview-ci-data:/var/lib/mikroview -v mikroview-ci-etc:/etc/mikroview"*) echo true;; *) echo false;; esac)" \
+check "$(case "$calls" in *"--name mikroview-ci"*"-v mikroview-ci-data:/var/lib/mikroview -v mikroview-ci-etc:/etc/mikroview:ro"*) echo true;; *) echo false;; esac)" \
   "MIKROVIEW_CONTAINER renames the container and both named volumes"
 
 # --- no existing container: nothing is stopped or removed ------------------

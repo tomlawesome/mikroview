@@ -212,17 +212,23 @@ if [ -f install.sh ] && [ -f deploy/docker-compose.yml ]; then
 --cap-drop ALL|- ALL
 --security-opt no-new-privileges|- no-new-privileges:true
 --pids-limit 128|pids_limit: 128
+:/etc/mikroview:ro|/etc/mikroview:ro
 EOF
+  # The install.sh side is matched against its `docker run` argument
+  # list alone, not the whole file: a flag named only in a comment is
+  # not a flag the installer applies, and matching the file would let
+  # one pass this check while the container ran without it.
+  sed -n '/^set -- run /,/^  "\$image"/p' install.sh >"$tmpd/install-run-line"
   while IFS='|' read -r install_flag compose_line; do
     [ -n "$install_flag" ] || continue
     in_install=0
     in_compose=0
-    grep -qF -- "$install_flag" install.sh && in_install=1
+    grep -qF -- "$install_flag" "$tmpd/install-run-line" && in_install=1
     grep -qF -- "$compose_line" deploy/docker-compose.yml && in_compose=1
     if [ "$in_install" = "1" ] && [ "$in_compose" = "1" ]; then
       ok "hardening parity: '$install_flag' is in install.sh and '$compose_line' is in deploy/docker-compose.yml"
     else
-      fail "hardening drift -- '$install_flag' ($([ "$in_install" = "1" ] && echo present || echo missing) in install.sh) vs '$compose_line' ($([ "$in_compose" = "1" ] && echo present || echo missing) in deploy/docker-compose.yml) -- keep install.sh's docker run and deploy/docker-compose.yml's hardening block in sync"
+      fail "hardening drift -- '$install_flag' ($([ "$in_install" = "1" ] && echo present || echo missing) in install.sh's docker run) vs '$compose_line' ($([ "$in_compose" = "1" ] && echo present || echo missing) in deploy/docker-compose.yml) -- keep install.sh's docker run and deploy/docker-compose.yml's hardening block in sync"
     fi
   done <"$tmpd/hardening-pairs"
 else

@@ -56,14 +56,18 @@ fi
 #
 # Hardening (#1286): the same flags deploy/docker-compose.yml's hardening
 # block applies, kept in sync by scripts/check-release-surfaces.sh so the
-# two can't drift apart again. No memory or CPU cap here on purpose --
+# two can't drift apart again. The app folder is mounted read-only, as
+# Compose has always mounted it and as internal/config/appfolder.go
+# describes it ("a folder an operator mounts read-only... nothing else
+# writes to it"): config, the GeoIP database, the history key and the
+# certificate are put there by the operator, never by mikroview. No memory or CPU cap here on purpose --
 # both depend on the host this runs on, a wrong one is a silent outage on
 # a small box, and Compose (where an operator already sets the rest of
 # their deployment) is the right place to choose one.
 set -- run -d --name "$name" --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
   -p "${syslog_port}:6514" -p "${https_port}:8080" \
-  -v "${data_vol}:/var/lib/mikroview" -v "${etc_vol}:/etc/mikroview" \
+  -v "${data_vol}:/var/lib/mikroview" -v "${etc_vol}:/etc/mikroview:ro" \
   "$image"
 echo "docker $*"
 
