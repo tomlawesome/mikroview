@@ -14,6 +14,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/hub"
 )
 
@@ -107,6 +108,48 @@ func TestIngestRouteAcceptsAValidPushFromAnIngestToken(t *testing.T) {
 	}
 	if ack.Kind != "arp" || ack.Page != 1 || ack.Pages != 1 || ack.Records != 1 {
 		t.Errorf("ack = %+v, unexpected", ack)
+	}
+}
+
+// TestIngestRouteRefusesAPushFromAnUnenrolledAddress is issue #1281's
+// core ingest-side rule: an ingest token names a device, never an
+// address, so a push must also arrive from that device's own enrolled
+// address (sourceIp or acceptedIp) -- a valid token alone is not
+// enough. Built directly rather than via ingestTestServer, which always
+// enrols its device at the address this file's client actually connects
+// from; this device is declared but deliberately never enrolled
+// anywhere, so IsEnrolledAt is false for every address, including the
+// one the request genuinely arrives from.
+func TestIngestRouteRefusesAPushFromAnUnenrolledAddress(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Devices = device.NewRegistry(nil)
+	if _, err := s.Devices.Create("router-1", "router-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	admin, _ := s.Auth.ByUsername("admin")
+	raw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", admin, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	resp := postIngest(t, ts, raw, validARPPayload)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 -- a valid token from an unenrolled address must be refused", resp.StatusCode)
+	}
+
+	result := s.Audit.Query(audit.Query{})
+	if len(result.Entries) == 0 {
+		t.Fatal("no audit entry was recorded for the refused push")
+	}
+	last := result.Entries[len(result.Entries)-1]
+	if last.Action != "ingest.routeros.refused" || !strings.Contains(last.Detail, "not") {
+		t.Errorf("audit entry = %+v, want ingest.routeros.refused naming the address as not enrolled", last)
 	}
 }
 
