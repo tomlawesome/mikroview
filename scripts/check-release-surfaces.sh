@@ -196,6 +196,39 @@ if [ "$pending_fails" -eq 0 ]; then
   ok "no older docs/reviews record still has a pending-disclosure marker"
 fi
 
+# ---------------------------------------------------------------------
+# 8. install/compose hardening parity: install.sh's one `docker run` and
+#    deploy/docker-compose.yml's hardening block must carry the same set
+#    of flags (owner ruling 2026-09-19, #1286) -- this is the one place
+#    that set is written down, so removing a flag from either file without
+#    the other is what this check exists to catch. Each pair below is
+#    "<install.sh docker-run flag>|<deploy/docker-compose.yml line>";
+#    memory/CPU limits are deliberately not in this set -- see install.sh's
+#    comment above its `docker run` for why.
+# ---------------------------------------------------------------------
+if [ -f install.sh ] && [ -f deploy/docker-compose.yml ]; then
+  cat >"$tmpd/hardening-pairs" <<'EOF'
+--read-only|read_only: true
+--cap-drop ALL|- ALL
+--security-opt no-new-privileges|- no-new-privileges:true
+--pids-limit 128|pids_limit: 128
+EOF
+  while IFS='|' read -r install_flag compose_line; do
+    [ -n "$install_flag" ] || continue
+    in_install=0
+    in_compose=0
+    grep -qF -- "$install_flag" install.sh && in_install=1
+    grep -qF -- "$compose_line" deploy/docker-compose.yml && in_compose=1
+    if [ "$in_install" = "1" ] && [ "$in_compose" = "1" ]; then
+      ok "hardening parity: '$install_flag' is in install.sh and '$compose_line' is in deploy/docker-compose.yml"
+    else
+      fail "hardening drift -- '$install_flag' ($([ "$in_install" = "1" ] && echo present || echo missing) in install.sh) vs '$compose_line' ($([ "$in_compose" = "1" ] && echo present || echo missing) in deploy/docker-compose.yml) -- keep install.sh's docker run and deploy/docker-compose.yml's hardening block in sync"
+    fi
+  done <"$tmpd/hardening-pairs"
+else
+  echo "skip: install/compose hardening parity (install.sh or deploy/docker-compose.yml not present)"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
   echo "check-release-surfaces: $fails check(s) failed"
