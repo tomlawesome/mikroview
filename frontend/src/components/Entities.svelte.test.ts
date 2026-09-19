@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity, Flag, FlagType, RuleUsage, UnattributedSource } from '../lib/types'
+import type { Entity, Flag, FlagType, RefusedSender, RuleUsage, UnattributedSource } from '../lib/types'
 import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
@@ -36,6 +36,10 @@ const fetchRouterRules = vi.fn(async (): Promise<{ available: boolean; rules: Ro
 // #1170: GET /api/devices' second list, fetched on its own so
 // fetchDevices' signature (and every mock of it) stays as it was.
 const fetchUnattributedSources = vi.fn(async (): Promise<UnattributedSource[]> => [])
+// #1281's refused senders, moved here from Fleet.svelte: an admin's
+// deck answers the fleet view with this card and never draws that one
+// (deckCards.ts, #785), and the endpoint behind it is admin-only.
+const fetchRefusedSenders = vi.fn(async (): Promise<RefusedSender[]> => [])
 
 vi.mock('../lib/api', () => ({
   fetchEntities: () => fetchEntities(),
@@ -46,6 +50,7 @@ vi.mock('../lib/api', () => ({
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRules: () => fetchRules(),
   fetchUnattributedSources: () => fetchUnattributedSources(),
+  fetchRefusedSenders: () => fetchRefusedSenders(),
   fetchSetupStatus: vi.fn(
     async () =>
       ({
@@ -1113,5 +1118,89 @@ describe('Entities unattributed sources (#1170)', () => {
     ] as unknown as (typeof appState)['devices']
     await settle()
     expect(fetchUnattributedSources).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The refused senders (#1281) and Re-enrol… (#1284), both moved here
+// from Fleet.svelte: an admin's deck answers the fleet view with the
+// Entities card and never draws Fleet at all (deckCards.ts, #785),
+// while GET /api/devices/refused is admin-only -- so on Fleet neither
+// could be reached by anybody.
+describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
+  function refused(over: Partial<RefusedSender> = {}): RefusedSender {
+    return {
+      ip: '192.168.88.1',
+      firstSeen: '2026-09-19T14:03:00Z',
+      lastSeen: '2026-09-19T14:09:00Z',
+      lines: 12,
+      ...over,
+    }
+  }
+
+  it('draws no refused card when nothing has been refused', async () => {
+    fetchRefusedSenders.mockResolvedValue([])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.refused')).toBeNull()
+  })
+
+  it('names each address, its lines and when it was seen -- and offers no way to accept it', async () => {
+    fetchRefusedSenders.mockResolvedValue([refused()])
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.refused')
+    expect(card).not.toBeNull()
+    const text = card?.textContent ?? ''
+    expect(card?.querySelector('.fhead b')?.textContent).toBe('refused · 192.168.88.1')
+    expect(text).toContain('syslog from an address no router is enrolled at')
+    expect(text).toContain('12 lines')
+    expect(text).toContain('Refused senders — logs from an address that is not enrolled are dropped.')
+    // No accept control, by ruling: an address is accepted only by a
+    // router presenting a one-time token.
+    expect(card?.querySelector('button')).toBeNull()
+    expect(text.toLowerCase()).not.toContain('accept it')
+  })
+
+  it('says "1 line", never "1 lines"', async () => {
+    fetchRefusedSenders.mockResolvedValue([refused({ lines: 1 })])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.refused')?.textContent).toContain('1 line ·')
+  })
+
+  it('opens the router ledger at Send logs for one router, from its own card', async () => {
+    appState.devices = [
+      { id: 'edge-1', name: 'edge-1', configured: true, status: 'live', sourceIp: '10.0.0.1', eventCount: 3 },
+    ] as unknown as (typeof appState)['devices']
+    const { getByLabelText } = render(Entities)
+    await settle()
+
+    getByLabelText(/Re-enrol edge-1/).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    // Send logs is the second step of the router ledger.
+    expect(wizardState.pane).toBe(2)
+    expect(wizardState.ledgerDevice).toBe('edge-1')
+  })
+
+  // A user tier reaches this screen but not the endpoint (admin-only),
+  // so it must not ask -- and #657's grammar is absent, not disabled.
+  it('asks for nothing and draws neither affordance below admin', async () => {
+    authState.role = 'user'
+    fetchRefusedSenders.mockClear()
+    appState.devices = [
+      { id: 'edge-1', name: 'edge-1', configured: true, status: 'live', sourceIp: '10.0.0.1', eventCount: 3 },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(fetchRefusedSenders).not.toHaveBeenCalled()
+    expect(container.querySelector('.fcard.refused')).toBeNull()
+    expect(container.querySelector('.row-action')).toBeNull()
   })
 })

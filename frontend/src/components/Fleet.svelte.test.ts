@@ -8,15 +8,13 @@ import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { ROUTER_STEPS } from '../lib/setupsteps'
 import { wizardState } from '../lib/wizard.svelte'
-import type { RefusedSender } from '../lib/types'
 import Fleet from './Fleet.svelte'
 
-// Fleet reads appState.devices directly; the one request of its own is
-// the refused-senders list (#1281), faked at the module boundary.
-const fetchRefusedSenders = vi.fn(async (): Promise<RefusedSender[]> => [])
-vi.mock('../lib/api', () => ({
-  fetchRefusedSenders: () => fetchRefusedSenders(),
-}))
+// Fleet reads appState.devices directly and asks the server for nothing
+// of its own: Re-enrol… and the refused senders moved to Entities, the
+// surface an admin's deck actually draws (#785). The mock stays so an
+// accidental new call fails loudly rather than hitting fetch.
+vi.mock('../lib/api', () => ({}))
 
 function device(overrides: Record<string, unknown>) {
   return {
@@ -211,15 +209,16 @@ describe('Fleet deck identity (#657/#706)', () => {
 })
 
 // #1284: adding a router is the wizard's own router steps, opened from
-// the fleet -- and #657's grammar still holds, so both actions are drawn
-// for an admin and are simply not there for anyone else.
-describe('Fleet -- Add a router and Re-enrol… (#1284)', () => {
+// the fleet -- and #657's grammar still holds, so the action is drawn
+// for an admin and is simply not there for anyone else. Re-enrol… and
+// the refused senders are Entities' now (#785: an admin's deck answers
+// the fleet view with that card and never draws this one).
+describe('Fleet -- Add a router (#1284)', () => {
   beforeEach(() => {
     appState.devices = []
     appState.initialLoadDone = true
     authState.role = 'admin'
     flagsState.list = []
-    fetchRefusedSenders.mockResolvedValue([])
     wizardState.reset()
   })
 
@@ -239,22 +238,7 @@ describe('Fleet -- Add a router and Re-enrol… (#1284)', () => {
     expect(wizardState.finishTo).toBe('fleet')
   })
 
-  it('opens the same ledger at Send logs for one router, from its own row', () => {
-    setDevices([device({ id: 'edge-1', name: 'edge-1' })])
-    const { getByLabelText } = render(Fleet)
-    flushSync()
-
-    getByLabelText(/Re-enrol edge-1/).click()
-    flushSync()
-
-    expect(wizardState.open).toBe(true)
-    expect(wizardState.steps).toEqual(ROUTER_STEPS)
-    // Send logs is the second step of the router ledger.
-    expect(wizardState.pane).toBe(2)
-    expect(wizardState.ledgerDevice).toBe('edge-1')
-  })
-
-  it('draws neither action for a viewer', () => {
+  it('draws no action for a viewer', () => {
     authState.role = 'viewer'
     setDevices([device({})])
     const { container } = render(Fleet)
@@ -262,49 +246,5 @@ describe('Fleet -- Add a router and Re-enrol… (#1284)', () => {
 
     expect(container.querySelector('.og-action')).toBeNull()
     expect(container.querySelector('.row-action')).toBeNull()
-  })
-})
-
-// The refused-senders strip (#1281): under the list, present only when
-// it has something to say, and carrying no accept control by ruling.
-describe('Fleet -- refused senders (#1281)', () => {
-  beforeEach(() => {
-    appState.devices = []
-    appState.initialLoadDone = true
-    authState.role = 'admin'
-    flagsState.list = []
-    wizardState.reset()
-  })
-
-  it('is absent entirely when nothing has been refused', async () => {
-    fetchRefusedSenders.mockResolvedValue([])
-    setDevices([device({})])
-    const { container } = render(Fleet)
-    await vi.waitFor(() => expect(fetchRefusedSenders).toHaveBeenCalled())
-    flushSync()
-
-    expect(container.querySelector('.og.refused')).toBeNull()
-    expect(container.textContent).not.toContain('Refused senders')
-  })
-
-  it('names each address, its lines and when it was last seen -- and offers no way to accept it', async () => {
-    fetchRefusedSenders.mockResolvedValue([
-      { ip: '192.168.88.1', firstSeen: '2026-09-19T14:03:00Z', lastSeen: '2026-09-19T14:09:00Z', lines: 12 },
-    ])
-    setDevices([device({})])
-    const { container } = render(Fleet)
-    await vi.waitFor(() => expect(container.querySelector('.og.refused')).not.toBeNull())
-    flushSync()
-
-    const strip = container.querySelector('.og.refused')
-    expect(strip?.textContent).toContain(
-      'Refused senders — logs from an address that is not enrolled are dropped.',
-    )
-    expect(strip?.textContent).toContain('192.168.88.1')
-    expect(strip?.textContent).toContain('12 lines')
-    // No accept control, by ruling: an address is accepted only by a
-    // router presenting a token.
-    expect(strip?.querySelector('button')).toBeNull()
-    expect(strip?.textContent?.toLowerCase()).not.toContain('accept')
   })
 })

@@ -188,19 +188,24 @@ block, last line included." It clears when the enrol line arrives.
 
 **Where it opens.**
 
-- **Fleet**: an **Add a router** action in the screen's header row
-  opens the ledger at step 1. Each router's row gains **Re-enrol…**,
-  which opens the ledger at step 2 for that router with a fresh
-  token; the observation line reads "Enrolled at 192.168.88.1 ·
-  waiting for the new line"; arrival replaces the address. The
-  Entities screen's "+ add a router" berth opens the same ledger.
-- **Refused senders**: a quiet strip under the fleet list, present
-  only when non-empty: "Refused senders — logs from an address that
-  is not enrolled are dropped." then one row per address: address ·
-  lines · last seen. The strip's only pointer is the Add a router
-  action above it and Re-enrol on the rows; there is no accept
+- **Entities' routers row** is where an admin meets both: it is the
+  surface an admin's deck draws for the fleet view (#647/#785 — the
+  standalone Fleet card is the viewer tier's), so the admin actions
+  live there rather than on Fleet, which an admin never sees. The
+  "+ add a router" berth opens the ledger at step 1; each router card
+  gains **Re-enrol…**, opening the ledger at step 2 for that router
+  with a fresh token; the observation line reads "Enrolled at
+  192.168.88.1 · waiting for the new line"; arrival replaces the
+  address. Fleet keeps **Add a router** for its own admin case.
+- **Refused senders**: a card per address beside the routers, in the
+  unattributed card's quiet vocabulary and present only when non-empty:
+  head "refused · 192.168.88.1 ◌ REFUSED", then what it means, then
+  lines · first seen · last seen, then "Refused senders — logs from an
+  address that is not enrolled are dropped." The only pointers are
+  Re-enrol… on a router card and the berth; there is no accept
   control, by ruling (an address is accepted only by a router
-  presenting a token).
+  presenting a token). GET /api/devices/refused is admin-only, so
+  nothing below admin asks for it.
 - **Run setup…** is unchanged: the first-run ledger with the
   certificate step in front.
 
