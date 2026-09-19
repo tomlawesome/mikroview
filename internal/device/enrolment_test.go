@@ -487,3 +487,26 @@ func TestConfiguredDevicesAreNotPersisted(t *testing.T) {
 		}
 	}
 }
+
+// TestEnrolmentClearsTheAddressFromTheRefusedList: a router logs its
+// own logging-action change before the enrol line reaches us, so the
+// first line or two from every router are refused and only then does
+// the token redeem. Left in place, that entry puts the router the
+// operator just enrolled in the wizard's "wrong sender" warning box and
+// the fleet strip, beside the "enrolled at" line saying the opposite.
+func TestEnrolmentClearsTheAddressFromTheRefusedList(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Create("hap-ax3", "hap-ax3", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r.RefuseConnection("10.10.0.1")
+	r.Refuse("10.10.0.1", []byte("system,info log action changed by admin"))
+	r.Refuse("10.10.0.9", []byte("some other box"))
+
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	got := r.Refused()
+	if len(got) != 1 || got[0].Address != "10.10.0.9" {
+		t.Fatalf("Refused() after enrolling 10.10.0.1 = %+v, want only the stranger left", got)
+	}
+}
