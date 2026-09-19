@@ -119,6 +119,47 @@ export interface Device {
   // setup ledger -- "never reported" is itself an answer, never a
   // missing field.
   setup?: RouterSetupReport
+  // acceptedIp (#1281) is the one address this router's logs are
+  // accepted from: the address the enrol line arrived from. Absent
+  // until a router has enrolled, which is exactly what the wizard's
+  // Send logs step waits for -- lines from any other address are
+  // refused (see RefusedSender below).
+  acceptedIp?: string
+  // enrolledAt is when that line arrived, for the step's arrived
+  // observation ("Enrolled at 192.168.88.1 · 14:02").
+  enrolledAt?: string
+  // enrolment is the token standing for this router: whether one is
+  // minted and waiting to be used, and when it lapses. Absent on a
+  // router nobody is currently enrolling.
+  enrolment?: DeviceEnrolment
+}
+
+// DeviceEnrolment is the enrolment token's standing as GET /api/devices
+// reports it (#1281). Never the token itself: that is shown once, by
+// the response that minted it, and the server keeps only its hash.
+export interface DeviceEnrolment {
+  pending: boolean
+  expiresAt?: string
+}
+
+// EnrolmentToken is what POST /api/devices/{id}/enrolment answers with
+// (#1281) -- the value the wizard writes into its last logging line,
+// and the moment it lapses. Shown once; re-minting is Reroll.
+export interface EnrolmentToken {
+  token: string
+  expiresAt: string
+}
+
+// RefusedSender mirrors an entry of GET /api/devices/refused (#1281):
+// an address whose syslog lines were dropped because it is not any
+// router's enrolled address. A fact to read, never a thing to accept --
+// there is no accept control anywhere, by ruling: an address is
+// accepted only by a router presenting a token.
+export interface RefusedSender {
+  ip: string
+  firstSeen: string
+  lastSeen: string
+  lines: number
 }
 
 // Mirrors internal/setup.RouterSetup (#1241). scriptVersion is what the

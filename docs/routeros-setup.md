@@ -1,20 +1,31 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open **your account menu ▸ Run setup…**. It generates every
-> command below with your own address, port and a token it mints for you
-> — nothing to fill in — and tells you as each step lands, because each
-> one ends with your router arriving at MikroView.
+> an admin and open **your account menu ▸ Run setup…**. It names and
+> enrols the router for you, generates every command below with your own
+> address, port and a token it mints for you — nothing to fill in — and
+> tells you as each step lands, because each one ends with your router
+> arriving at MikroView.
+>
+> Its six steps, in order: **Trust the certificate**, **Name your
+> router**, **Send logs**, **Tag firewall rules**, **Push router
+> state**, **Back up the router**. They do not line up one-to-one with
+> this page's numbered sections below, so where a step is named here it
+> is named in full rather than by number.
 >
 > This page remains the reference: what the wizard emits, and why. Use it
 > if you prefer working from documentation, if you are scripting a fleet,
 > or when you want the reasoning behind a step.
 
+<!-- shot: the wizard's ledger opened at step 1 -->
+
 MikroView never talks to RouterOS's API and never holds a RouterOS
 credential. Instead, RouterOS pushes to MikroView: firewall log lines
 over syslog (steps 1–3, required), optionally a copy of its own config
-for host names and rule lookups (step 4), and optionally a nightly config
-backup MikroView keeps encrypted (step 7, issue #394). The optional
+for host names and rule lookups (step 4), and optionally a nightly
+config backup MikroView keeps encrypted (step 7, issue #394). The
+wizard's version of step 2 adds one line this page's does not — see
+"The wizard's enrol line" there. The optional
 pushes carry an ingest token MikroView mints for that device — a
 MikroView credential on the router, never a router credential in
 MikroView. Either way, the router always initiates; MikroView never
@@ -139,6 +150,29 @@ RouterOS tags firewall rule matches with both the `firewall` category and
 
 This is also safe to paste again — it only adds the rule when it is not
 already there (#1208).
+
+### The wizard's enrol line
+
+MikroView's own setup wizard prints one more line at the end of this
+block, with a live token already filled in:
+
+```
+/log info "mikroview-enrol <token>"
+```
+
+<!-- shot: the wizard's Send logs step, showing the token line "Token good until HH:MM (15 minutes) · Reroll" -->
+
+The token is good for 15 minutes; the wizard shows a countdown next to
+it with a **Reroll** control if it expires before you paste. The
+address that line arrives from becomes the only address MikroView
+accepts this router's logs from — lines arriving from any other address
+are refused and dropped. Both the wizard and the Fleet screen list
+refused senders (address, lines, last seen), so a router that looks
+silent because it is enrolled under the wrong address is easy to spot
+rather than a mystery.
+
+There is no control anywhere to just accept an address by hand: a
+router's logs are accepted only once it has presented a valid token.
 
 ## 3. Tag your firewall rules
 
@@ -362,7 +396,7 @@ not the address you declared as `sourceIp`. If pushes return `200` in
 the audit log but the "i" popups still say no data has been pushed,
 check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
-address is the most likely cause. The setup wizard's step 2 names it
+address is the most likely cause. The setup wizard's Send logs step names it
 when it sees it (a declared router that has sent nothing while an
 undeclared address streams) and prints the fix. Keeping the declared
 address is the recommended one, because the token and the tables it
@@ -654,9 +688,10 @@ same run.
 The escaping is not optional: inside `source="…"` RouterOS reads `$v`
 as a variable to substitute, so an unescaped script is saved with its
 variables already replaced by nothing. If you would rather not do it
-by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**, step 4)
-prints these three lines as one block with your host, your token and
-the escaping already in it — copy, paste, done. WinBox's script dialog
+by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**,
+its Push router state step) prints these three lines as one block with
+your host, your token and the escaping already in it — copy, paste,
+done. WinBox's script dialog
 is the other way out: its **Source** field takes the script body as
 written in 4c, unescaped, because there is no enclosing string there.
 
@@ -855,8 +890,8 @@ they are safe to run on a router that was never bitten:
 /ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
 ```
 
-Those same two lines now end the wizard's step 3, so re-running step 3
-repairs the router as well as tagging it. One line per term rather than
+Those same two lines now end the wizard's Tag firewall rules step, so
+re-running it repairs the router as well as tagging it. One line per term rather than
 one with `or`: two `~` tests in a single `find` is the form checked
 against a real router.
 - **Fasttrack changes what the filter chain sees.** With a
@@ -904,8 +939,9 @@ second listening port (`backup.listen`, default `:47022`), only once
 you have decided to use it. Skip this section entirely if you are
 taking the HTTPS-only path in 7c-ii: it needs no second port, and so
 nothing to turn on here. Nothing here needs the wizard, but the
-wizard's step 6 is what actually prints the script below with your own
-values filled in, which is the easier path for most people.
+wizard's Back up the router step is what actually prints the script
+below with your own values filled in, which is the easier path for
+most people.
 
 ### 7b. The token
 
@@ -1119,3 +1155,28 @@ oldest may then be dropped as normal.
 Restoring is your own act on the replacement router
 (`/system backup load`) — MikroView never connects to a router to apply
 one; it only ever reads the header to confirm what arrived.
+
+## Adding another router
+
+In the app, Fleet's **Add a router** action (in the screen's header row)
+opens the same ledger at **Name your router**, and the Entities screen's
+"+ add a router" berth opens the same place.
+
+<!-- shot: Fleet's header row, showing the Add a router action -->
+
+Each router's row on Fleet also carries **Re-enrol…**, which opens the
+ledger at **Send logs** with a fresh token for that router — for a
+router you have replaced or given a new address, where the old token's
+address no longer applies. A quiet strip under the Fleet list, present
+whenever there is something to show, lists refused senders — an address
+that has sent lines without a valid enrol line — so you can tell an
+unrecognised address apart from a router that simply is not sending yet.
+
+<!-- shot: the refused-senders strip under the Fleet list -->
+
+**Run setup…** is unchanged: it still opens the first-run ledger with
+**Trust the certificate** in front.
+
+Working from this document instead of the wizard: repeat steps 1–3
+above for the new router, and give it whatever name you use when you
+declare it under `devices:` in `config.yaml` (see step 4b).
