@@ -387,3 +387,50 @@ func TestDeviceRegisterRequiresAdmin(t *testing.T) {
 		t.Errorf("status = %d, want 403 for a non-admin", resp.StatusCode)
 	}
 }
+
+// TestDeviceEnrolmentRebindMovesTheWindowWithoutANewToken is ruling
+// 23a end to end: one click, no password, same token.
+func TestDeviceEnrolmentRebindMovesTheWindowWithoutANewToken(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	mint := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1"))
+	var minted deviceEnrolmentResponse
+	json.NewDecoder(mint.Body).Decode(&minted)
+	mint.Body.Close()
+
+	// The router is really at .5, so the listener turned it away.
+	s.Devices.RefuseConnection("10.10.0.5")
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment/address",
+		deviceEnrolmentRebindRequest{Address: "10.10.0.5"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 204, body = %s", resp.StatusCode, body)
+	}
+	if !s.Devices.AcceptsConnectionFrom("10.10.0.5") {
+		t.Error("the window did not move to the rebound address")
+	}
+	// The token the operator already pasted into the router still works.
+	if !s.Devices.TryEnrol("10.10.0.5", []byte("mikroview-enrol "+minted.Token)) {
+		t.Error("the original token no longer redeems after rebinding, want nothing re-pasted")
+	}
+}
+
+// TestDeviceEnrolmentRebindRefusesAnAddressNeverTurnedAway: the rebind
+// can only point at somewhere that already reached the listener.
+func TestDeviceEnrolmentRebindRefusesAnAddressNeverTurnedAway(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment", mintBody("10.10.0.1")).Body.Close()
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices/hap-ax3/enrolment/address",
+		deviceEnrolmentRebindRequest{Address: "203.0.113.7"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an address the listener never turned away", resp.StatusCode)
+	}
+	if s.Devices.AcceptsConnectionFrom("203.0.113.7") {
+		t.Error("a refused rebind still opened the window")
+	}
+}

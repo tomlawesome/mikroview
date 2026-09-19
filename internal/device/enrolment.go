@@ -156,6 +156,63 @@ func (r *Registry) MintEnrolment(device, expected string, now time.Time) (token 
 	return token, expiresAt, nil
 }
 
+// ErrNotRefused is returned by RebindEnrolment for an address the
+// listener has never turned away. The rebind may only point the
+// enrolment window at an address that has actually reached this
+// instance, which is what keeps it safe to offer as one click: it can
+// open the window to somewhere that could already connect, and nowhere
+// else.
+var ErrNotRefused = errors.New("device: that address has not been refused by the listener, so there is nothing to rebind to")
+
+// RebindEnrolment points a device's pending enrolment window at a
+// different address, keeping the token itself exactly as it is (issue
+// #1291, ruling 23a).
+//
+// This is the wrong-address recovery. The operator names the router's
+// address before minting, so the listener opens for that one address
+// and nothing else; if they name the wrong one, their router's
+// connection is turned away at accept and lands in the refused-senders
+// list. They are standing at the router and know which address is
+// theirs, so the wizard shows what was turned away and they rebind to
+// it in one click.
+//
+// The token is untouched -- same value, same expiry, still unspent --
+// so nothing has to be pasted into the router a second time. And
+// rebinding grants nothing on its own: the window opens, but the token
+// still has to arrive from that address before anything is accepted.
+//
+// addr must already be in the refused-senders list. That is what makes
+// one click the right cost rather than another password prompt: the
+// window can only be pointed at an address that already reached the
+// listener under its own steam, so a caller who could do this gains no
+// reach they did not already have.
+func (r *Registry) RebindEnrolment(device, addr string) error {
+	key := normalizeIP(strings.TrimSpace(addr))
+	if key == "" {
+		return ErrExpectedAddressRequired
+	}
+	if _, err := netip.ParseAddr(key); err != nil {
+		return ErrExpectedAddressInvalid
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.byID[device]; !ok {
+		return ErrDeviceNotFound
+	}
+	p, ok := r.pendingByDevice[device]
+	if !ok {
+		return ErrNoPendingEnrolment
+	}
+	if _, refused := r.refused[key]; !refused {
+		return ErrNotRefused
+	}
+	p.expected = key
+	r.pendingByDevice[device] = p
+	deviceLog.Info("enrolment window for " + device + " rebound to " + key)
+	return nil
+}
+
 // BurnEnrolment revokes device's pending enrolment token, if it has
 // one. Reports ErrDeviceNotFound for an unknown device and
 // ErrNoPendingEnrolment for a known one with nothing pending -- the two
