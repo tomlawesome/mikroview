@@ -5,13 +5,14 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('./api', () => ({
   fetchSetupStatus: vi.fn(),
   fetchSetupCommands: vi.fn(),
+  mintEnrolment: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
   saveSetupAddress: vi.fn(),
   saveSetupBackupTransport: vi.fn(),
 }))
 
-import { saveSetupAddress, saveSetupBackupTransport } from './api'
+import { fetchSetupCommands, mintEnrolment, saveSetupAddress, saveSetupBackupTransport } from './api'
 import { wizardState } from './wizard.svelte'
 import type { SetupStatus } from './types'
 
@@ -142,5 +143,42 @@ describe('a dropped connection surfaces the same way a refusal does', () => {
 
     expect(wizardState.backupTransportError).toBe('network unreachable')
     expect(wizardState.backupTransport).toBe('sftp')
+  })
+})
+
+// The server writes the enrol line, and only from a token the caller
+// echoes back -- it stores nothing but a hash, so it cannot look the
+// value up. A minted token that never reaches POST /api/setup/commands
+// is therefore a block that configures logging and enrols nothing: the
+// operator pastes it, the router logs, and every line is refused.
+describe('the minted token reaches the block the operator pastes (#1281)', () => {
+  it('re-renders the commands with the token as soon as it is minted', async () => {
+    wizardState.status = status()
+    wizardState.ledgerDevice = 'edge-1'
+    wizardState.enrolment = null
+    vi.mocked(mintEnrolment).mockResolvedValue({
+      token: 'examplenotarealtoken',
+      expiresAt: '2026-09-19T12:15:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue('unused')
+
+    await wizardState.mintEnrolmentToken()
+
+    expect(fetchSetupCommands).toHaveBeenCalledWith(
+      expect.objectContaining({ device: 'edge-1', enrolToken: 'examplenotarealtoken' }),
+    )
+  })
+
+  // A later re-render -- the operator corrects the address, or picks a
+  // RouterOS version -- must not drop the line back out again.
+  it('keeps sending it on a re-render the mint did not cause', async () => {
+    vi.mocked(fetchSetupCommands).mockClear()
+    wizardState.address = '192.0.2.10'
+
+    await wizardState.refreshCommands({ device: 'edge-1' })
+
+    expect(fetchSetupCommands).toHaveBeenCalledWith(
+      expect.objectContaining({ enrolToken: 'examplenotarealtoken' }),
+    )
   })
 })
