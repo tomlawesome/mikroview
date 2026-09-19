@@ -51,8 +51,10 @@ fi
 
 # Two named volumes: the data store, and the app folder #1243 taught the
 # binary to read config, GeoIP and a certificate pair from -- see
-# docs/install.md for putting a file there (docker cp or a bind-mount
-# swap) once you want one.
+# docs/install.md for putting a file there once you want one. Not with
+# docker cp: the same folder is mounted :ro below, and Docker refuses a
+# copy into it with "mounted volume is marked read-only". A helper
+# container writing to the volume, or a bind-mount swap, is the way.
 #
 # Hardening (#1286): the same flags deploy/docker-compose.yml's hardening
 # block applies, kept in sync by scripts/check-release-surfaces.sh so the

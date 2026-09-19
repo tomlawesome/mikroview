@@ -23,8 +23,13 @@ var ErrNoPendingEnrolment = errors.New("device: no pending enrolment token for t
 // one that is not an IP address (issue #1291). The address is what the
 // enrolment window binds to, so there is no meaningful token without
 // one.
+//
+// RebindEnrolment returns them too, through the same
+// validateExpectedAddress, and rebinding mints nothing -- so the text
+// names the window rather than minting, or the rebind endpoint echoes
+// an explanation of an act it did not perform.
 var (
-	ErrExpectedAddressRequired = errors.New("device: an expected sender address is required to mint an enrolment token")
+	ErrExpectedAddressRequired = errors.New("device: an expected sender address is required -- it is what the enrolment window opens for")
 	ErrExpectedAddressInvalid  = errors.New("device: the expected sender address is not a valid IP address")
 )
 
