@@ -720,6 +720,33 @@ describe('the forced-past record', () => {
     expect(notObserved(enrolling[1])).toBe('router not enrolled; its logs are refused until it is')
   })
 
+  // A witness is a fleet-wide memory: some router once opened a syslog
+  // connection. On a router ledger the Send logs step is about this
+  // router's enrolment, which the first router's connection last month
+  // says nothing about -- read from the witness, a second router would
+  // show Send logs done before it had enrolled, and the wrong-sender
+  // box (rendered only while the step waits) could never appear for it.
+  it('does not let a fleet-wide syslog witness stand in for this router’s enrolment', () => {
+    const witnessed = status({
+      witnesses: [{ step: 2, receipt: 'syslog connected from 192.0.2.1', at: '2026-08-23T09:00:00Z' }],
+    })
+    const fleet = buildLedger(witnessed, [], 'h')
+    expect(fleet[2].key).toBe('syslog')
+    expect(fleet[2].outcome).toBe('done')
+    expect(fleet[2].witnessed).toBe(true)
+
+    const bare = device({ id: 'edge-2', name: 'edge-2', sourceIp: '', acceptedIp: '', eventCount: 0 })
+    const router = buildLedger(witnessed, [bare], 'h', null, 'sftp', {
+      steps: ROUTER_STEPS,
+      device: 'edge-2',
+      enrolling: true,
+    })
+    expect(router[1].key).toBe('syslog')
+    expect(router[1].outcome).toBe('open')
+    expect(router[1].flavour).toBe('waiting')
+    expect(router[1].witnessed).toBe(false)
+  })
+
   it('says the check could not run when the problem is on mikroview’s side', () => {
     const ledger = buildLedger(status(), [], '192.0.2.99:8080')
     expect(notObserved(ledger[0])).toContain('could not run')
@@ -863,6 +890,15 @@ describe('the enrolment step', () => {
     const fresh = { ip: '10.0.0.2', firstSeen: '2026-09-19T14:03:00Z', lastSeen: '2026-09-19T14:04:00Z', lines: 4 }
     expect(refusedSince([old, fresh], '2026-09-19T14:02:00Z')).toEqual([fresh])
     expect(refusedSince([old, fresh], '')).toEqual([])
+  })
+
+  // The server stamps firstSeen in its own zone (an offset, not Z) and
+  // the browser mints in UTC; compared as strings, a New York server's
+  // "13:03-04:00" reads as before a "14:02Z" mint it actually followed.
+  it('compares instants, not strings, when the server writes an offset', () => {
+    const offset = { ip: '10.0.0.3', firstSeen: '2026-09-19T13:03:00-04:00', lastSeen: '2026-09-19T13:04:00-04:00', lines: 1 }
+    expect(refusedSince([offset], '2026-09-19T14:02:00Z')).toEqual([offset])
+    expect(refusedSince([offset], '2026-09-19T17:04:00Z')).toEqual([])
   })
 })
 
