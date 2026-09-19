@@ -110,6 +110,11 @@ type setupDevice struct {
 	// its address rather than a name.
 	Configured bool   `json:"configured"`
 	SourceIP   string `json:"sourceIp"`
+	// AcceptedIP is issue #1281's enrolled address, empty until a valid
+	// enrolment token is redeemed at some address (or, for a Configured
+	// device, never needed at all -- SourceIP already counts as
+	// enrolled). syslogSatisfied below is what reads this.
+	AcceptedIP string `json:"acceptedIp"`
 	Events     uint64 `json:"events"`
 	// DecodedActions is how many of those events carried an action
 	// decoded from a log-prefix. Zero, with events above zero, is the
@@ -150,6 +155,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 				Device:     info.ID,
 				Configured: info.Configured,
 				SourceIP:   info.SourceIP,
+				AcceptedIP: info.AcceptedIP,
 				Events:     uint64(info.EventCount),
 			}
 			if obs, ok := prefixByDevice[info.ID]; ok {
@@ -187,7 +193,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if receipt, ok := caSatisfied(sources); ok {
 			s.Setup.NoteWitnessed(1, receipt, now)
 		}
-		if receipt, ok := syslogSatisfied(sources); ok {
+		if receipt, ok := syslogSatisfied(devices); ok {
 			s.Setup.NoteWitnessed(2, receipt, now)
 		}
 		if receipt, ok := rulesSatisfied(devices); ok {
@@ -241,10 +247,21 @@ func caSatisfied(sources []setup.SourceObservation) (string, bool) {
 	return "", false
 }
 
-func syslogSatisfied(sources []setup.SourceObservation) (string, bool) {
-	for _, src := range sources {
-		if src.SyslogFirstSeenAt != nil {
-			return fmt.Sprintf("syslog connected from %s", src.Source), true
+// syslogSatisfied is issue #1281's tightening: any address completing a
+// TLS handshake used to be enough, including one that never went on to
+// send anything mikroview could attribute to the router being set up.
+// Real evidence now means either a device's enrolment token was
+// actually redeemed (AcceptedIP set) or a config.yaml-declared device
+// (already enrolled at its sourceIp, no token needed) has genuinely
+// logged something -- either way syslog reached the specific device the
+// operator is setting up, not merely some address.
+func syslogSatisfied(devices []setupDevice) (string, bool) {
+	for _, d := range devices {
+		if d.AcceptedIP != "" {
+			return fmt.Sprintf("enrolled at %s", d.AcceptedIP), true
+		}
+		if d.Configured && d.Events > 0 {
+			return fmt.Sprintf("logging from its declared address %s", d.SourceIP), true
 		}
 	}
 	return "", false

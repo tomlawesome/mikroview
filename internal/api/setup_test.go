@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
+	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
@@ -208,6 +209,59 @@ func TestSetupStatusWitnessesLiveEvidence(t *testing.T) {
 	}
 	if got.Witnesses[0].Step != 1 || !strings.Contains(got.Witnesses[0].Receipt, "192.0.2.9") {
 		t.Errorf("witness = %+v, want step 1 naming the source that fetched the CA", got.Witnesses[0])
+	}
+}
+
+// TestSetupStatusSyslogWitnessNeedsRealEvidenceNotJustAConnection is
+// issue #1281's tightening of step 2's witness: before this issue, any
+// address completing a TLS handshake satisfied it (NoteSyslogConnection
+// alone), including one that never went on to send anything mikroview
+// could attribute to the device being set up. A bare connection, with
+// nothing enrolled and no configured device logging anything, must no
+// longer witness the step; a device that has actually redeemed an
+// enrolment token (AcceptedIP set) must.
+func TestSetupStatusSyslogWitnessNeedsRealEvidenceNotJustAConnection(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	// A connection from an address nothing has enrolled -- the old
+	// signal this issue removed.
+	s.Setup.NoteSyslogConnection("198.51.100.9", time.Now())
+	s.Devices = device.NewRegistry(nil)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	got := getSetupStatus(t, adminClient, ts.URL)
+	for _, w := range got.Witnesses {
+		if w.Step == 2 {
+			t.Fatalf("step 2 witnessed on a bare, unattributed TLS connection alone: %+v", w)
+		}
+	}
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Devices.TryEnrol("198.51.100.9", []byte("mikroview-enrol "+token)) {
+		t.Fatal("TryEnrol failed to redeem the freshly minted token")
+	}
+
+	got2 := getSetupStatus(t, adminClient, ts.URL)
+	var sawStep2 bool
+	for _, w := range got2.Witnesses {
+		if w.Step == 2 {
+			sawStep2 = true
+			if !strings.Contains(w.Receipt, "198.51.100.9") {
+				t.Errorf("step 2 receipt = %q, want it to name the enrolled address", w.Receipt)
+			}
+		}
+	}
+	if !sawStep2 {
+		t.Fatalf("step 2 was not witnessed once the device was enrolled: %+v", got2.Witnesses)
 	}
 }
 
