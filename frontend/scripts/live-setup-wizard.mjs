@@ -92,15 +92,27 @@ check(await modal.isVisible(), 'clicking outside does not dismiss the modal')
 check((await veil.count()) === 1, 'the veil is present but inert')
 
 // --- The step list is the ledger --------------------------------------
-// Six steps plus the read-back, since #394 (round 44/45) added "Back up
-// the router" as the ledger's sixth entry, straight after "Name your
-// router" -- see setupsteps.ts's buildLedger and its STEP_TITLES.
+// The whole ledger in order, then the read-back. Named rather than
+// counted: a count says a step went missing without saying which, and
+// this list has grown twice -- #394 added "Back up the router", #1291
+// added "Register the router" -- see setupsteps.ts's buildLedger and
+// its TITLES.
+const LEDGER_TITLES = [
+  'Trust the certificate',
+  'Name your router',
+  'Send logs',
+  'Tag firewall rules',
+  'Push router state',
+  'Back up the router',
+  'Register the router',
+  'Where setup stands',
+]
 const stepTitles = await page.$$eval('.setup-wizard .steps .step-title', (els) =>
   els.map((e) => e.textContent?.trim() ?? ''),
 )
 check(
-  stepTitles.length === 7,
-  `six steps and the read-back, always the same count (${JSON.stringify(stepTitles)})`,
+  JSON.stringify(stepTitles) === JSON.stringify(LEDGER_TITLES),
+  `the ledger reads in order, and ends at the read-back (${JSON.stringify(stepTitles)})`,
 )
 
 // --- Commands carry real values, never placeholders --------------------
