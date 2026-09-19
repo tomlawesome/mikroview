@@ -551,11 +551,12 @@ export async function goTo(page, label, { unfold = true } = {}) {
  * enough traffic to out-rank somebody else's leftovers. Pipelines 819 and
  * 820 were both that failure.
  *
- * A 404 is not a failure. The route exists only where the process was
- * started with MV_TEST_HOOKS=1, which live-env.sh does and a shipped
- * image does not, so the container flavour of this harness runs the same
- * scenarios against an instance that simply cannot be reset. That is a
- * weaker guarantee, not a broken run.
+ * The route exists only where the process was started with
+ * MV_TEST_HOOKS=1 -- live-env.sh and live-container.sh both do. A 404 is
+ * not a weaker guarantee to carry on under: it means the target is not a
+ * test instance, and these scenarios sign in with fixed harness
+ * credentials and some of them create accounts, mint tokens and push
+ * data, so this refuses rather than risk doing that to a real mikroview.
  *
  * Returns whether a reset happened, so the caller knows to reload.
  */
@@ -564,7 +565,12 @@ async function resetInstance(page) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   })
-  if (res.status() === 404) return false
+  if (res.status() === 404) {
+    throw new Error(
+      'POST /api/test/reset answered 404 -- this is not a test instance (it was not started with MV_TEST_HOOKS=1). ' +
+        'The live scenarios create accounts and tokens and push data; refusing to run them against it.',
+    )
+  }
   if (res.status() !== 200) {
     throw new Error(`POST /api/test/reset answered ${res.status()} -- the instance was not reset, so this run would be judging residue`)
   }
