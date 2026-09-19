@@ -857,6 +857,22 @@ describe('the enrolment step', () => {
     expect(after.detail).toContain('Enrolled at 10.0.0.9')
   })
 
+  // #1291: enrolledAt is the server's own time.Time, stamped in its
+  // local zone; reEnrolSince is minted in the browser as UTC. A string
+  // compare sorts "T17:31...+01:00" above "T16:45...Z" even though the
+  // first is the earlier instant (16:31Z), so an old enrolment must not
+  // read as the new one just because its offset digits are bigger.
+  it('reads an old enrolment as still waiting even when its offset digits sort higher', () => {
+    const s = syslogStep(
+      status(),
+      [enrolled({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T17:31:00+01:00' })],
+      'edge-1',
+      '2026-09-19T16:45:00Z',
+    )
+    expect(s.state).toBe('waiting')
+    expect(s.detail).toBe('Enrolled at 192.168.88.1 · waiting for the new line')
+  })
+
   // The lead says the model once, and only where an enrol line is
   // actually in the block below it.
   it('says what the enrol line does only when there is one', () => {

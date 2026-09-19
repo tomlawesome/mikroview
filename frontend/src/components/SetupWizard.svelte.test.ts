@@ -29,6 +29,7 @@ vi.mock('../lib/api', () => ({
   fetchSetupStatus: vi.fn(),
   createDevice: vi.fn(),
   mintEnrolment: vi.fn(),
+  rebindEnrolment: vi.fn(),
   fetchRefusedSenders: vi.fn(),
   fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
@@ -54,6 +55,7 @@ import {
   fetchDevices,
   fetchRefusedSenders,
   mintEnrolment,
+  rebindEnrolment,
   fetchRouterBackups,
   fetchSetupCommands,
   fetchSetupStatus,
@@ -170,6 +172,7 @@ beforeEach(async () => {
   vi.mocked(saveSetupBackupTransport).mockResolvedValue(null)
   vi.mocked(fetchRefusedSenders).mockResolvedValue([])
   vi.mocked(mintEnrolment).mockResolvedValue({ token: 'enr-token', expiresAt: '2026-09-19T14:17:00Z' })
+  vi.mocked(rebindEnrolment).mockResolvedValue(null)
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -2077,6 +2080,42 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
     // mikroview's side.
     expect(box?.classList.contains('shortfall')).toBe(true)
     expect(box?.classList.contains('attention')).toBe(false)
+  })
+
+  // #1291, ruling 23a: a Re-enrol walk whose router was refused at
+  // accept offers each refused address as a one-click rebind, right
+  // under the refused-senders box -- and the click only points the
+  // window, it never mints a second token.
+  //
+  // enrolledAt carries a +01:00 offset (the server's own zone) whose
+  // UTC instant (16:31) is still earlier than enrolmentMintedAt's
+  // Z-stamped 16:45 -- an old enrolment, on any honest clock. A
+  // string compare reads it as the new one instead (offset digits
+  // sort higher than "Z"), which reads the step as done and hides
+  // this whole box.
+  it('offers a one-click rebind onto a refused address during a re-enrol wait', async () => {
+    wizardState.devices = [edge1({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T17:31:00+01:00' })]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    wizardState.enrolmentMintedAt = '2026-09-19T16:45:00Z'
+    const refused = [{ ip: '192.168.88.2', firstSeen: '2026-09-19T16:46:00Z', lastSeen: '2026-09-19T16:47:00Z', lines: 5 }]
+    wizardState.refused = refused
+    // The component polls GET /api/devices/refused on mount too, so the
+    // mock has to agree with the state set above -- otherwise its
+    // resolution (an empty list, by default) clobbers it once the
+    // promise settles and the box this test is about disappears again.
+    vi.mocked(fetchRefusedSenders).mockResolvedValue(refused)
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const box = container.querySelector('.observation.shortfall.refused')
+    const note = box?.nextElementSibling as HTMLElement
+    expect(note?.classList.contains('note')).toBe(true)
+    const candidate = note?.querySelector('button.addr-candidate')
+    expect(candidate?.textContent).toBe('192.168.88.2')
+
+    await fireEvent.click(candidate as Element)
+    await waitFor(() => expect(rebindEnrolment).toHaveBeenCalledWith('edge-1', '192.168.88.2'))
+    expect(mintEnrolment).not.toHaveBeenCalled()
   })
 
   it('reads arrived once the enrol line lands, naming the address it came from', () => {
