@@ -144,6 +144,69 @@ instant.
   says the model once and correctly: mikroview encrypts backups, the
   event history and the state store under the key file you mount.
 
+## The router ledger (#1284, with #1281)
+
+Ratified as text, 2026-09-19 (owner: "as long as it's the same style
+as the first run wizard"). Adding a router is the same modal, the same
+ledger, the same anatomy — only the step set differs. Nothing below
+adds a flavour, a colour or a control the wizard does not already
+have.
+
+**Steps.** The router ledger is the wizard's router-side steps, in
+this order:
+
+| # | Step | Check character |
+|---|---|---|
+| 1 | Name your router | acts (creates the router record on Next; the name is the only field) — quiet, nothing to wait for |
+| 2 | Send logs | acts (mints the enrolment token on entry, its own audit line) then waiting → arrived (the enrol line came in: "Enrolled at 192.168.88.1 · 14:02") |
+| 3 | Tag firewall rules | counting, as today |
+| 4 | Push router state | as today; a push counts only from the enrolled address |
+| 5 | Back up the router | as today |
+
+First-run setup is **Trust the certificate**, then these five, so it
+reads as six steps: the ledger is embedded, not copied. Naming moves
+from last to first because the enrolment token belongs to a named
+router; the old "nothing to name" row is retired.
+
+**Send logs, in detail.** The command block is the remote-logging
+block as today with one more line at the end,
+`/log info "mikroview-enrol <token>"`. Under the block, one plain
+line: "Token good until 14:17 (15 minutes) · **Reroll**" — the reroll
+is step 6's control reused, with the same quiet confirmation. When the
+token has expired the block dims and the line reads "Token expired ·
+Reroll to mint another"; Next on an expired or unarrived token is the
+ordinary heavy warning (forced past = "router not enrolled; its logs
+are refused until it is"). The lead sentence says the model once: the
+address the last line arrives from becomes the only address mikroview
+accepts this router's logs from.
+
+While waiting, if lines arrive from an address that is not enrolled,
+the partial-step warning box (#1132 shape, `--warn`) appears under the
+observation line: "Lines from 192.168.88.1 arrived without the enrol
+line and were refused — if that is this router, paste the whole
+block, last line included." It clears when the enrol line arrives.
+
+**Where it opens.**
+
+- **Fleet**: an **Add a router** action in the screen's header row
+  opens the ledger at step 1. Each router's row gains **Re-enrol…**,
+  which opens the ledger at step 2 for that router with a fresh
+  token; the observation line reads "Enrolled at 192.168.88.1 ·
+  waiting for the new line"; arrival replaces the address. The
+  Entities screen's "+ add a router" berth opens the same ledger.
+- **Refused senders**: a quiet strip under the fleet list, present
+  only when non-empty: "Refused senders — logs from an address that
+  is not enrolled are dropped." then one row per address: address ·
+  lines · last seen. The strip's only pointer is the Add a router
+  action above it and Re-enrol on the rows; there is no accept
+  control, by ruling (an address is accepted only by a router
+  presenting a token).
+- **Run setup…** is unchanged: the first-run ledger with the
+  certificate step in front.
+
+**Finish** reads the ledger back exactly as today, and leads out to
+the fleet when opened from it, to the fall when opened from setup.
+
 ## Superseded (considered and closed)
 
 - **The 640px modal** (round 1 as first posted): the owner's size
