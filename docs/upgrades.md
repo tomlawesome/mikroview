@@ -52,7 +52,7 @@ directory it names and restart.
 address its syslog comes from (#1281). From this version on, a syslog
 source is accepted only once it is the address you declared under
 `devices:` in config.yaml (`sourceIp`), or once it has redeemed a
-one-time enrolment token you mint for it from Settings > Devices. Until
+one-time enrolment token you mint for it from the Entities screen. Until
 then, its lines are refused and shown under "Refused senders" rather
 than counted at all.
 
@@ -71,24 +71,45 @@ left unenrolled rather than guessed at.
 
 For anything the automatic step does not settle, enrol it by hand:
 
-1. Open Settings > Devices (or declare the router there first if it has
-   never pushed anything at all — routers that only send logs, never a
-   push, have no entry to enrol until you add one by name).
-2. Press **Enrol** (or **Reroll**, if a token already exists) to mint a
-   token, valid for 15 minutes, single use.
-3. Paste the one extra line the "Send logs" step now shows — it is
-   appended to the syslog action commands you already have on the
-   router — and let the router run it once.
-4. The router's next log line carrying that token is what enrols it;
+1. Open the Entities screen and find the router beside your others (or
+   press **+ add a router** first if it has never pushed anything at all
+   — routers that only send logs, never a push, have no entry to enrol
+   until you add one by name).
+2. Press **Re-enrol…** to open the setup ledger at **Send logs**.
+3. Give the router's own address, and your password. MikroView opens
+   the syslog port for that one address while the token is pending, and
+   asks who you are because minting the token is what opens it — holding
+   an admin session is not enough on its own.
+4. Paste the one extra line the step shows — it is appended to the
+   syslog action commands you already have on the router — and let the
+   router run it once.
+5. The router's next log line carrying that token is what enrols it;
    everything after that is accepted normally.
+6. Finish the ledger's last step, **Register the router**, to record that
+   this is a router you meant to add.
+
+If you gave the wrong address, the router is turned away and its real
+address is listed under the step's refused senders. Press it to point
+the enrolment window at it — the token you already pasted stays as it
+is, so there is nothing to paste into the router again.
 
 Until you do this, that router's traffic is refused, not silently
-dropped: it is listed under "Refused senders" in Settings > Devices so
-you can see exactly which addresses are waiting on you. The syslog port
-itself now refuses the connection outright from an address it does not
-recognise, except during the 15 minutes an enrolment token is pending
-for some device — that window is what lets the router's own enrol line
-reach the port in the first place.
+dropped: it is listed under "Refused senders" beside your routers on the
+Entities screen so you can see exactly which addresses are waiting on
+you. The syslog port itself now refuses the connection outright from an
+address it does not recognise, except for the one address an enrolment
+token is currently pending for — that window is what lets the router's
+own enrol line reach the port in the first place.
+
+### Routers you enrolled before this release
+
+Registering (step 6 above) is new in this release. A router that was
+already enrolled when you upgraded is treated as registered, dated when
+it enrolled: its operator did everything the ledger asked of them at the
+time, and reopening the ledger on it would be asking for work that did
+not exist yet. A router that never enrolled is not swept along with it —
+there is no evidence anyone confirmed it, so it still has the Register
+step to walk.
 
 ## What happens at start
 

@@ -294,7 +294,7 @@ describe('a partial step states its shortfall apart from its arrival', () => {
     })
     const ledger = buildLedger(partial, [], 'h')
     expect(announceStep(ledger[4])).toBe(
-      'Step 5 of 6 — Push router state — Arrived: filter-rule. Still missing: address-list, dhcp-lease, arp.',
+      'Step 5 of 7 — Push router state — Arrived: filter-rule. Still missing: address-list, dhcp-lease, arp.',
     )
   })
 })
@@ -400,23 +400,25 @@ describe('the claim ledger', () => {
   // does change it is which ledger was opened (#1284) -- first-run
   // setup is the certificate step plus the five router ones, and the
   // router ledger is those five on their own.
-  it('always has exactly six steps on first-run setup', () => {
-    expect(buildLedger(status(), [], 'h').length).toBe(6)
-    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(6)
+  it('always has exactly seven steps on first-run setup', () => {
+    expect(buildLedger(status(), [], 'h').length).toBe(7)
+    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(7)
   })
 
   // The router ledger is embedded, not copied: the same five steps in
   // the same order, minus the certificate step in front of them.
-  it('is the same five router steps, without the certificate step, on the router ledger', () => {
+  it('is the same six router steps, without the certificate step, on the router ledger', () => {
     const setup = buildLedger(status(), [], 'h')
     const router = buildLedger(status(), [], 'h', null, 'sftp', { steps: ROUTER_STEPS })
-    expect(router.map((s) => s.key)).toEqual(['name', 'syslog', 'rules', 'push', 'backup'])
+    expect(router.map((s) => s.key)).toEqual(['name', 'syslog', 'rules', 'push', 'backup', 'register'])
     expect(router.map((s) => s.key)).toEqual(setup.slice(1).map((s) => s.key))
     // Numbered from one in the list being walked, but recorded under
     // the number the server stores, which is the v0.5 order frozen:
     // "Name your router" moved forward for #1284, its marks did not.
-    expect(router.map((s) => s.n)).toEqual([1, 2, 3, 4, 5])
-    expect(router.map((s) => s.canonical)).toEqual([5, 2, 3, 4, 6])
+    // Register is 7 in both: it is new with #1291 and has no earlier
+    // number to preserve.
+    expect(router.map((s) => s.n)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(router.map((s) => s.canonical)).toEqual([5, 2, 3, 4, 6, 7])
   })
 
   // A mark is persisted under the server's own fixed number, so it
@@ -493,9 +495,10 @@ describe('the claim ledger', () => {
       'rules:false',
       'push:true',
       'backup:true',
+      'register:false',
     ])
     const router = buildLedger(status(), [], '192.0.2.10', null, 'sftp', { steps: ROUTER_STEPS })
-    expect(router.map((s) => s.hasCheck)).toEqual([false, true, false, true, true])
+    expect(router.map((s) => s.hasCheck)).toEqual([false, true, false, true, true, false])
   })
 
   it('reads a partially tagged rule set as counting, not as half-failed', () => {
@@ -925,6 +928,7 @@ describe('the recorded step numbers', () => {
       'rules:4:3',
       'push:5:4',
       'backup:6:6',
+      'register:7:7',
     ])
   })
 })

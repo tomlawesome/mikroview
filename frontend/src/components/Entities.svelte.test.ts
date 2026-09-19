@@ -245,6 +245,79 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
+  // #1291: registering (the ledger's final Register step) and enrolling
+  // (a router's logs being accepted) are independent, so a card has to
+  // say plainly when only one of the two ever happened.
+  // configured: false throughout -- every router the wizard adds is
+  // drawn on the unregistered cards, and a config.yaml-declared one can
+  // never carry a registeredAt at all (the server refuses to register
+  // one, since config.yaml rebuilds it on every boot). A test written
+  // against the declared cards would be asserting about a state that
+  // cannot happen.
+  it('reads an enrolled-but-never-registered router as an unfinished setup, not the finished state', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.unreg')
+    expect(card?.textContent).toContain(
+      'its logs are accepted, but the Register step was never finished',
+    )
+  })
+
+  it('reads a registered-but-not-yet-enrolled router as a normal wait, not an error', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'never_seen',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 0,
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).toContain(
+      'the Register step is done; still waiting for its enrolment token to arrive',
+    )
+  })
+
+  it('shows neither unfinished-setup nor waiting-for-token copy once both registered and enrolled', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).not.toContain('the Register step was never finished')
+    expect(container.textContent).not.toContain('still waiting for its enrolment token to arrive')
+  })
+
   it('draws the empty berth as one more card at the end of the router row, saying what it does (#718, #1168)', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },

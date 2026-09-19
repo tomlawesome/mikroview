@@ -3,13 +3,16 @@
 > **There is a guided version of this page inside MikroView.** Sign in as
 > an admin and open **your account menu ▸ Run setup…**. It names and
 > enrols the router for you, generates every command below with your own
-> address, port and a token it mints for you — nothing to fill in — and
-> tells you as each step lands, because each one ends with your router
-> arriving at MikroView.
+> address and port, and tells you as each step lands, because each one
+> ends with your router arriving at MikroView. It asks you for two
+> things: the router's own address, which is the only address the syslog
+> port opens to while its token is pending, and your password, because
+> minting that token is what opens the port.
 >
-> Its six steps, in order: **Trust the certificate**, **Name your
+> Its seven steps, in order: **Trust the certificate**, **Name your
 > router**, **Send logs**, **Tag firewall rules**, **Push router
-> state**, **Back up the router**. They do not line up one-to-one with
+> state**, **Back up the router**, **Register the router**. They do not
+> line up one-to-one with
 > this page's numbered sections below, so where a step is named here it
 > is named in full rather than by number.
 >
@@ -162,14 +165,24 @@ block, with a live token already filled in:
 
 <!-- shot: the wizard's Send logs step, showing the token line "Token good until HH:MM (15 minutes) · Reroll" -->
 
+Before it mints that token the wizard asks for the router's own address
+and for your password. The address is the only one MikroView opens the
+syslog port to while the token is pending — a pending token does not
+leave the port reachable by everything else on your network — and the
+password is asked for because minting is what opens it, so being signed
+in as the admin is not enough on its own. **Reroll** mints a fresh
+token, so it asks again.
+
 The token is good for 15 minutes; the wizard shows a countdown next to
 it with a **Reroll** control if it expires before you paste. The
 address that line arrives from becomes the only address MikroView
 accepts this router's logs from — lines arriving from any other address
-are refused and dropped. Both the wizard and the Fleet screen list
+are refused and dropped. Both the wizard and the Entities screen list
 refused senders (address, lines, last seen), so a router that looks
 silent because it is enrolled under the wrong address is easy to spot
-rather than a mystery.
+rather than a mystery. If the address you gave was wrong, the router is
+turned away and appears there: press it to point the enrolment window at
+it, and the token you already pasted stays as it is.
 
 There is no control anywhere to just accept an address by hand: a
 router's logs are accepted only once it has presented a valid token.

@@ -23,6 +23,8 @@ import {
   fetchSetupStatus,
   markSetupStep,
   mintEnrolment,
+  rebindEnrolment,
+  registerDevice,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
@@ -74,6 +76,33 @@ class WizardState {
   enrolment = $state<EnrolmentToken | null>(null)
   enrolmentMintedAt = $state('')
   enrolmentError = $state<string | null>(null)
+
+  // enrolExpectedAddress is the router's own address, asked for before
+  // a token is minted (#1291, ruling 23a). The enrolment window opens
+  // for this address and nothing else, so the operator -- who is
+  // standing at the router -- names it rather than the port being left
+  // open to everyone for the token's life.
+  enrolExpectedAddress = $state('')
+
+  // enrolPassword is the admin's password, re-proved at the moment of
+  // minting (#1291). Held only long enough to make the call and cleared
+  // immediately after, whether it succeeded or not: a session alone must
+  // not be able to mint, and a password left sitting in component state
+  // for the rest of the walk would weaken that to "once per modal".
+  enrolPassword = $state('')
+
+  // enrolMinting guards the mint button while a call is in flight, so a
+  // double click cannot mint twice and strand the first token.
+  enrolMinting = $state(false)
+
+  // registerError surfaces a refused Register step, and registering
+  // guards its button the same way enrolMinting does.
+  registerError = $state<string | null>(null)
+  registering = $state(false)
+
+  // rebindError surfaces a refused rebind of the enrolment window
+  // (#1291, ruling 23a).
+  rebindError = $state<string | null>(null)
 
   // refused is GET /api/devices/refused: addresses whose lines were
   // dropped for not being any router's enrolled address. Read on the
@@ -417,6 +446,16 @@ class WizardState {
     this.enrolment = null
     this.enrolmentMintedAt = ''
     this.enrolmentError = null
+    // Same reasoning for #1291's own fields: a Re-enrol… walk's expected
+    // address left standing here would have Run setup… mint this
+    // router's token bound to a different router's address, and any
+    // typed password must never outlive the walk it was typed in.
+    this.enrolExpectedAddress = ''
+    this.enrolPassword = ''
+    this.enrolMinting = false
+    this.registerError = null
+    this.registering = false
+    this.rebindError = null
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null
@@ -478,12 +517,32 @@ class WizardState {
       this.enrolmentError = 'Name the router first — a token is minted for a named router.'
       return
     }
+    if (!this.enrolExpectedAddress.trim()) {
+      this.enrolmentError =
+        'Give the router’s own address first — the enrolment window opens for that address and nothing else.'
+      return
+    }
+    if (!this.enrolPassword) {
+      this.enrolmentError = 'Enter your password to mint a token.'
+      return
+    }
     this.enrolmentError = null
+    this.enrolMinting = true
     let result: EnrolmentToken | string
     try {
-      result = await mintEnrolment(this.ledgerDevice)
+      result = await mintEnrolment(
+        this.ledgerDevice,
+        this.enrolPassword,
+        this.enrolExpectedAddress.trim(),
+      )
     } catch (err) {
       result = err instanceof Error ? err.message : String(err)
+    } finally {
+      // Cleared whatever happened. A wrong password must be retyped,
+      // and a right one must not linger for the rest of the walk --
+      // holding a session is deliberately not enough to mint.
+      this.enrolPassword = ''
+      this.enrolMinting = false
     }
     if (typeof result === 'string') {
       this.enrolmentError = result
@@ -495,6 +554,58 @@ class WizardState {
     // minted -- the server writes that line, and this is the only call
     // that tells it which token to write.
     await this.refreshCommands({ device: this.ledgerDevice })
+  }
+
+  // rebindEnrolmentWindow points the pending enrolment window at an
+  // address the listener turned away (#1291, ruling 23a) -- the
+  // operator named the wrong one, their router was refused at accept,
+  // and this is the one click that fixes it. The token is untouched, so
+  // nothing is pasted into the router again and no password is asked
+  // for: rebinding grants no acceptance on its own.
+  async rebindEnrolmentWindow(address: string): Promise<void> {
+    if (!this.ledgerDevice) return
+    this.rebindError = null
+    let result: string | null
+    try {
+      result = await rebindEnrolment(this.ledgerDevice, address)
+    } catch (err) {
+      result = err instanceof Error ? err.message : String(err)
+    }
+    if (result) {
+      this.rebindError = result
+      return
+    }
+    this.enrolExpectedAddress = address
+    await this.refreshRefused()
+  }
+
+  // registerRouter records the operator's confirmation -- the ledger's
+  // final step (#1291). It grants the router nothing: the server never
+  // sets an accepted address from this call, so the router's logs are
+  // still accepted only because its token arrived from its address.
+  async registerRouter(name = ''): Promise<void> {
+    if (!this.ledgerDevice) {
+      this.registerError = 'Name the router first.'
+      return
+    }
+    this.registerError = null
+    this.registering = true
+    let result: Device | string
+    try {
+      result = await registerDevice(this.ledgerDevice, name)
+    } catch (err) {
+      result = err instanceof Error ? err.message : String(err)
+    } finally {
+      this.registering = false
+    }
+    if (typeof result === 'string') {
+      this.registerError = result
+      return
+    }
+    // Refresh rather than patch the row in place: the ledger reads the
+    // device list, and one row edited by hand here would be overwritten
+    // by the next 5s poll anyway.
+    await this.refresh()
   }
 
   // refreshRefused reads the dropped-line addresses (#1281), polled

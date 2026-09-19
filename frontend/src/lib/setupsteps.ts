@@ -505,12 +505,20 @@ export type Outcome = 'done' | 'skipped' | 'forced' | 'open'
 // flavour it reads in, whether Next runs a check, what skipping it
 // costs -- is written against the key instead, so the same step behaves
 // the same wherever it is drawn.
-export type StepKey = 'ca' | 'name' | 'syslog' | 'rules' | 'push' | 'backup'
+export type StepKey = 'ca' | 'name' | 'syslog' | 'rules' | 'push' | 'backup' | 'register'
 
 // SETUP_STEPS is the first-run ledger in the order it is walked. The
 // router ledger below is a slice of this list, not a copy of it -- "the
 // ledger is embedded, not copied", the record's own words.
-export const SETUP_STEPS: readonly StepKey[] = ['ca', 'name', 'syslog', 'rules', 'push', 'backup']
+export const SETUP_STEPS: readonly StepKey[] = [
+  'ca',
+  'name',
+  'syslog',
+  'rules',
+  'push',
+  'backup',
+  'register',
+]
 
 // RECORD_NUMBERS is the number each step's marks and witnesses are
 // recorded under in internal/setup's ledger. It is the v0.5 walking
@@ -526,12 +534,15 @@ const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
   push: 4,
   name: 5,
   backup: 6,
+  // 7 is new with #1291 and has no history to preserve; it is last
+  // because nothing was ever recorded under it before.
+  register: 7,
 }
 
 // ROUTER_STEPS is the router ledger (#1284): the same five router-side
 // steps without the certificate step in front, which is an instance
 // question and is asked once.
-export const ROUTER_STEPS: readonly StepKey[] = ['name', 'syslog', 'rules', 'push', 'backup']
+export const ROUTER_STEPS: readonly StepKey[] = ['name', 'syslog', 'rules', 'push', 'backup', 'register']
 
 // canonicalStep is the number a step's decisions are recorded under,
 // whichever ledger it is being walked in. A mark is persisted server
@@ -592,6 +603,7 @@ export const TITLES: Record<StepKey, string> = {
   rules: 'Tag firewall rules',
   push: 'Push router state',
   backup: 'Back up the router',
+  register: 'Register the router',
 }
 
 // STEP_TITLES is the six in RECORD_NUMBERS' order, not the walking
@@ -708,6 +720,39 @@ export function nameReceipt(devices: Device[], device = ''): string {
   return named ? `named ${named.name || named.id}` : ''
 }
 
+// registerStep is the ledger's final step (#1291): whether the
+// operator has confirmed this router on the device itself. There is
+// nothing to wait for -- no router-side command, no arriving evidence
+// -- because registering is the operator's own statement of intent,
+// not something observed. It is 'done' once the server holds a
+// registeredAt for the router, and 'quiet' until then.
+//
+// Deliberately says nothing about acceptedIp. Registering grants the
+// router nothing (the server never sets an accepted address from it),
+// so a step that read as done because a router had enrolled would be
+// claiming the operator confirmed something they never did.
+export function registerStep(devices: Device[], device = ''): StepStatus {
+  const row = device ? devices.find((d) => d.id === device) : undefined
+  if (row?.registeredAt) {
+    return {
+      state: 'done',
+      detail: `${row.name || row.id} is registered — nothing to wait for.`,
+    }
+  }
+  return {
+    state: 'quiet',
+    detail: 'Nothing to wait for — Next records that you confirmed this router.',
+  }
+}
+
+// registerReceipt is the step list's sub-line once the router is
+// registered: the fact, no timestamp, for nameReceipt's reason -- the
+// operator did it in front of us rather than us observing it arrive.
+export function registerReceipt(devices: Device[], device = ''): string {
+  const row = device ? devices.find((d) => d.id === device) : undefined
+  return row?.registeredAt ? `registered ${row.name || row.id}` : ''
+}
+
 // BACKUP_LEAD_INTRO is step 6's lead sentence with no script promised --
 // what the step is for, said whether or not a script can be printed
 // right now. BACKUP_LEAD_SCRIPT_NOTE is only true once one can: #1217's
@@ -779,6 +824,10 @@ const LEADS: Record<StepKey, string> = {
   rules: 'The letter in the log-prefix is how MikroView knows what a rule did. This tags every existing filter rule by its action, in one pass.',
   push: 'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. It authenticates with the token below.',
   backup: backupLead(true),
+  register:
+    'Confirm this router is one you meant to add. MikroView records that you did — the name, and that it is ' +
+    'here to stay. Registering grants the router nothing on its own: its logs are accepted because its ' +
+    'enrolment token arrived from its address, and that does not change here.',
 }
 
 // CHECKED says where Next runs a check. Tagging rules can only count
@@ -791,6 +840,9 @@ const CHECKED: Record<StepKey, boolean> = {
   rules: false,
   push: true,
   backup: true,
+  // Nothing to wait for: the operator is confirming something they
+  // already know, the same as naming.
+  register: false,
 }
 
 // stepMarks indexes marks by step, so building the ledger stays one pass.
@@ -887,6 +939,7 @@ export function buildLedger(
     rules: rulesStep(status),
     push: pushStep(status),
     backup: backupStep(backups, backupTransport),
+    register: registerStep(devices, device),
   }
   const receipts: Record<StepKey, string> = {
     ca: caReceipt(status),
@@ -895,6 +948,7 @@ export function buildLedger(
     rules: rulesReceipt(status),
     push: pushReceipt(status),
     backup: backupReceipt(backups),
+    register: registerReceipt(devices, device),
   }
 
   return keys.map((key, i) => {
@@ -1001,6 +1055,8 @@ export function notObserved(step: LedgerStep): string {
       return 'no pushed table has arrived'
     case 'backup':
       return 'no pushed backup has arrived'
+    case 'register':
+      return 'this router was not registered'
     default:
       return 'nothing has arrived'
   }
@@ -1074,6 +1130,8 @@ export const SKIP_CONSEQUENCES: Record<StepKey, string> = {
   rules: 'events arrive without an action, so rows read "unknown"',
   push: 'the stream stays address-only — no names, no rule lookups, nothing to suggest from',
   backup: 'no backups are kept until the script runs',
+  register:
+    'the router stays an enrolment nobody finished, and the ledger reopens here next time',
 }
 
 // announceStep is what a screen reader is told when the step changes:

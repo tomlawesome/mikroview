@@ -170,27 +170,54 @@
   const splits = $derived(sourceSplits(wizardState.devices))
   const arriving = $derived(arrivingAddresses(splits))
 
-  // The Send logs step acts before it waits (#1281): entering it mints
-  // the enrolment token the block's last line carries. mintedFor is the
-  // router it was minted for, so a failed mint is reported once rather
-  // than retried in a tight loop, and a second walk for the same router
-  // (Re-enrol… again) still gets its own fresh token -- openAddRouter
-  // clears the token, and closing clears this.
-  let mintedFor = ''
+  // The Send logs step used to mint its token on entry (#1281). It
+  // cannot any more: since #1291 minting needs the router's own address
+  // -- the enrolment window opens for that one address and nothing else
+  // -- and the admin's password re-typed at that moment. Neither is
+  // something the wizard can supply on the operator's behalf, so the
+  // step asks first and mints when they say so.
+  //
+  // rerollAsked reopens the same form for a Reroll, which goes through
+  // the same endpoint and so asks again every time.
+  let rerollAsked = $state(false)
+  const mintFormOpen = $derived(!wizardState.enrolment || rerollAsked)
   $effect(() => {
     if (!wizardState.open) {
-      mintedFor = ''
       // The name field goes with the walk it was typed in: this
       // component outlives the modal, and a name left in the box would
-      // be offered to whoever opens the next ledger.
+      // be offered to whoever opens the next ledger. The same is true
+      // of anything typed into the mint form.
       routerName = ''
+      rerollAsked = false
       return
     }
-    if (paneKey !== 'syslog') return
+  })
+
+  // mintNow runs the mint the operator asked for and closes the form
+  // again on success. The password is cleared by the state object
+  // itself, whatever the outcome.
+  async function mintNow() {
+    await wizardState.mintEnrolmentToken()
+    if (wizardState.enrolment && !wizardState.enrolmentError) rerollAsked = false
+  }
+
+  // The Register step's name field (#1291), seeded from the router the
+  // ledger is about so confirming is one click for the common case
+  // where the name has not changed since the name step. Local to the
+  // component for routerName's reason below.
+  let registerName = $state('')
+  let registerSeededFor = ''
+  $effect(() => {
     const device = wizardState.ledgerDevice
-    if (!device || wizardState.enrolment || mintedFor === device) return
-    mintedFor = device
-    wizardState.mintEnrolmentToken()
+    if (!device) {
+      registerName = ''
+      registerSeededFor = ''
+      return
+    }
+    if (registerSeededFor === device) return
+    const row = wizardState.devices.find((d) => d.id === device)
+    registerName = row?.name || device
+    registerSeededFor = device
   })
 
   // The name step's one field (#1284). Local to the component: what
@@ -1105,6 +1132,52 @@
                       <p class="note">{NO_ADDRESS_LINE}</p>
                     </div>
                   {:else}
+                    <!-- #1291: the token is minted only when the operator
+                         asks, because minting needs two things only they
+                         have -- the router's own address, which the
+                         enrolment window then opens for and nothing else,
+                         and their password, re-typed at that moment so a
+                         session on its own cannot open the port. -->
+                    {#if mintFormOpen}
+                      <div class="mint-ask">
+                        <label for="setup-wizard-enrol-address">What is this router's own address?</label>
+                        <input
+                          id="setup-wizard-enrol-address"
+                          type="text"
+                          spellcheck="false"
+                          autocomplete="off"
+                          autocapitalize="off"
+                          bind:value={wizardState.enrolExpectedAddress}
+                        />
+                        <p class="note">
+                          MikroView will listen for this router on that address only, until its token
+                          arrives or lapses. If you get it wrong, whatever is turned away is shown
+                          below and you can point the window at it in one click.
+                        </p>
+                        <label for="setup-wizard-enrol-password">Your password</label>
+                        <input
+                          id="setup-wizard-enrol-password"
+                          type="password"
+                          autocomplete="current-password"
+                          bind:value={wizardState.enrolPassword}
+                          onkeydown={(e) => {
+                            if (e.key === 'Enter') mintNow()
+                          }}
+                        />
+                        <p class="note">
+                          Minting a token is what opens the port, so it asks who you are rather than
+                          trusting the session you are already in.
+                        </p>
+                        <button type="button" class="copy" disabled={wizardState.enrolMinting} onclick={mintNow}>
+                          {wizardState.enrolMinting ? 'Minting…' : 'Mint the token'}
+                        </button>
+                        {#if rerollAsked}
+                          <button type="button" class="link" onclick={() => (rerollAsked = false)}>
+                            Keep the token I have
+                          </button>
+                        {/if}
+                      </div>
+                    {/if}
                     <!-- The block dims once the token in its last line has
                          lapsed (#1281): what it prints can no longer be
                          pasted, and a live-looking block that would be
@@ -1126,12 +1199,12 @@
                       <p class="note token-life" class:expired={enrolExpired}>
                         {#if enrolExpired}
                           {TOKEN_EXPIRED_LINE}
-                          <button type="button" class="link" onclick={() => wizardState.mintEnrolmentToken()}>
+                          <button type="button" class="link" onclick={() => (rerollAsked = true)}>
                             {TOKEN_REROLL_EXPIRED_LABEL}
                           </button>
                         {:else}
                           {enrolLine} ·
-                          <button type="button" class="link" onclick={() => wizardState.mintEnrolmentToken()}>
+                          <button type="button" class="link" onclick={() => (rerollAsked = true)}>
                             {TOKEN_REROLL_LABEL}
                           </button>
                         {/if}
@@ -1478,6 +1551,41 @@
                     {copied === 'backupsched' ? 'Copied' : 'Copy'}
                   </button>
                 {/if}
+              {:else if step.key === 'register'}
+                <!-- #1291: the ledger's last step. There is no
+                     router-side command here and nothing to wait for --
+                     this is the operator saying the router is one they
+                     meant to add. It grants the router nothing, and the
+                     body says so plainly rather than letting a confirm
+                     button read as though it were what lets the logs
+                     in. -->
+                <div class="mint-ask">
+                  <label for="setup-wizard-register-name">What should this router be called?</label>
+                  <input
+                    id="setup-wizard-register-name"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    bind:value={registerName}
+                  />
+                  <p class="note">
+                    Registering records that you confirmed this router, and nothing else. Its logs
+                    are accepted because its enrolment token arrived from its address — that is what
+                    lets them in, and it does not change here.
+                  </p>
+                  <button
+                    type="button"
+                    class="copy"
+                    disabled={wizardState.registering}
+                    onclick={() => wizardState.registerRouter(registerName.trim())}
+                  >
+                    {wizardState.registering ? 'Registering…' : 'Register this router'}
+                  </button>
+                  {#if wizardState.registerError}
+                    <p class="load-error">{wizardState.registerError}</p>
+                  {/if}
+                </div>
               {/if}
 
               <!-- The observation line. Four flavours and no more:
@@ -1555,6 +1663,32 @@
                      address is this router -- only the operator knows
                      that. -->
                 <p class="observation shortfall refused">{refusedLine}</p>
+                <!-- #1291, ruling 23a: the window opens for the one
+                     address the operator named, so a router at a
+                     different address is turned away at accept and
+                     lands here. They are standing at the router and
+                     know which of these is theirs, so each is offered
+                     as one click. It still claims nothing -- pointing
+                     the window at an address accepts nothing by itself,
+                     the token has to arrive from it -- and the token is
+                     untouched, so nothing is pasted into the router
+                     again. -->
+                {#if wizardState.enrolment}
+                  <p class="note">
+                    If one of these is this router, point the enrolment window at it — the token you
+                    already pasted stays as it is:
+                    {#each wizardState.refusedForThisWalk as sender, i (sender.ip)}{i > 0
+                        ? ', '
+                        : ''}<button
+                        type="button"
+                        class="addr-candidate"
+                        onclick={() => wizardState.rebindEnrolmentWindow(sender.ip)}>{sender.ip}</button
+                      >{/each}.
+                  </p>
+                  {#if wizardState.rebindError}
+                    <p class="load-error">{wizardState.rebindError}</p>
+                  {/if}
+                {/if}
               {/if}
               {#if step.key === 'syslog' && step.status.state === 'partial' && splits.length > 0}
                 <!-- The source-address split (#442), under the
@@ -2082,6 +2216,38 @@
     padding: 7px 10px;
     font-family: var(--font-mono);
     font-size: 12.5px;
+  }
+
+  /* #1291's two asks -- the mint form on Send logs, and the Register
+     step's name -- drawn as the key mint's field above is, for the same
+     reason the name step is: they are the same shape, a label, a box
+     and a button. Wrapping rather than a row, since the mint form has
+     two fields and their notes between them. */
+  .mint-ask {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mint-ask label {
+    font-size: 12.5px;
+    color: var(--fg-muted);
+  }
+
+  .mint-ask input {
+    min-width: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+
+  .mint-ask button {
+    align-self: flex-start;
   }
 
   /* The name step's one field (#1284). Drawn as the key mint's field
