@@ -46,6 +46,46 @@ silently losing data (see [docs/install.md](install.md#persistent-data)'s
 "Persistent data" section for what that refusal looks like); chown the
 directory it names and restart.
 
+## Upgrading to 0.6.0: routers must be enrolled
+
+0.6.0 stops trusting a router's own pushed configuration to say which
+address its syslog comes from (#1281). From this version on, a syslog
+source is accepted only once it is the address you declared under
+`devices:` in config.yaml (`sourceIp`), or once it has redeemed a
+one-time enrolment token you mint for it from Settings > Devices. Until
+then, its lines are refused and shown under "Refused senders" rather
+than counted at all.
+
+**Plainly: if a router was only ever sending logs, and you never gave it
+a `sourceIp` in config.yaml, its logs stop being accepted the moment you
+upgrade, and stay refused until you enrol it.** A router you declared
+with `sourceIp` needs nothing — it keeps working exactly as it did.
+
+MikroView tries to spare you the manual step once, automatically, at the
+first push after this upgrade: if a router's own pushed address table
+names an address that no other router also claims, that router is
+enrolled at it there and then, and it is logged (at Info) so you can see
+it happened. This only ever fires once per router, and only when the
+evidence is unambiguous — two routers pushing the same address are both
+left unenrolled rather than guessed at.
+
+For anything the automatic step does not settle, enrol it by hand:
+
+1. Open Settings > Devices (or declare the router there first if it has
+   never pushed anything at all — routers that only send logs, never a
+   push, have no entry to enrol until you add one by name).
+2. Press **Enrol** (or **Reroll**, if a token already exists) to mint a
+   token, valid for 15 minutes, single use.
+3. Paste the one extra line the "Send logs" step now shows — it is
+   appended to the syslog action commands you already have on the
+   router — and let the router run it once.
+4. The router's next log line carrying that token is what enrols it;
+   everything after that is accepted normally.
+
+Until you do this, that router's traffic is refused, not silently
+dropped: it is listed under "Refused senders" in Settings > Devices so
+you can see exactly which addresses are waiting on you.
+
 ## What happens at start
 
 1. MikroView reads the schema version its data was last written by.
