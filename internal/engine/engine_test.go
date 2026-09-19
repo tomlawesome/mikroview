@@ -402,6 +402,31 @@ func TestLagReportsHowFarBehindAndHowLate(t *testing.T) {
 	}
 }
 
+// TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns -- outrun
+// used to be counted lazily, inside evaluateBatch, so an engine that had
+// never run a batch (the state Lag() can be called in at any time, e.g.
+// from /api/stats before Run's goroutine has read anything) reported
+// everything between its cursor and the store's newest event as "behind"
+// -- recoverable -- even the part the ring had already evicted for good.
+// Lag() must draw the same line evaluateBatch draws: events at or after
+// the oldest survivor are behind, everything older than that, back to the
+// cursor, is outrun.
+func TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns(t *testing.T) {
+	e, st := newEngineOnStore(t, 10)
+
+	for i := 0; i < 30; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 21..30 survive, cursor is still 0
+	}
+
+	behind, _, outrun := e.Lag()
+	if outrun != 20 {
+		t.Fatalf("outrun = %d before any batch ran, want the 20 events evicted past the cursor", outrun)
+	}
+	if behind != 10 {
+		t.Fatalf("behind = %d before any batch ran, want the 10 events the store still holds", behind)
+	}
+}
+
 // TestLagIsNilSafe -- /api/stats holds the engine behind a narrow
 // interface that is commonly nil (see api.Server.Evaluation), and the
 // nil-receiver convention Nudge and Tick follow applies here too.

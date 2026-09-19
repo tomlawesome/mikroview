@@ -507,6 +507,16 @@ func (e *Engine) Forget() {
 // gap. /api/stats reports all three (see internal/api/rest.go) so the UI
 // can say so in those terms.
 //
+// outrun does not wait for evaluateBatch to notice a loss: it also counts,
+// from the store's current oldestHeld, anything already evicted past the
+// cursor that no batch has read yet -- otherwise an engine that has never
+// run one (nothing has called evaluateBatch, so e.outrun is still its
+// starting value) would report those events as behind, i.e. recoverable,
+// when the ring has already thrown them away. Once a batch does read
+// through that gap it calls recordOutrun and advances the cursor past it
+// (see evaluateBatch), so this and e.outrun.Load() never count the same
+// loss twice.
+//
 // behindSeconds reads the next unevaluated event's ReceivedAt rather
 // than timing evaluation itself: "the oldest thing not yet looked at is
 // 4 seconds old" is a statement an operator can act on, where a rate is
@@ -516,7 +526,17 @@ func (e *Engine) Lag() (behind uint64, behindSeconds float64, outrun uint64) {
 		return 0, 0, 0
 	}
 	cursor := e.cursor.Load()
-	next, _, newestHeld := e.read(cursor, 1)
+	next, oldestHeld, newestHeld := e.read(cursor, 1)
+	outrun = e.outrun.Load()
+	if oldestHeld > cursor+1 {
+		// Same line evaluateBatch draws (see its recordOutrun call): the
+		// ring has evicted everything from the cursor up to the oldest
+		// survivor, so that part is gone for good, not merely late --
+		// reported here without waiting for a batch to notice, so an
+		// engine that has never run one doesn't show it as recoverable.
+		outrun += oldestHeld - 1 - cursor
+		cursor = oldestHeld - 1
+	}
 	if newestHeld > cursor {
 		behind = newestHeld - cursor
 	}
@@ -525,7 +545,7 @@ func (e *Engine) Lag() (behind uint64, behindSeconds float64, outrun uint64) {
 			behindSeconds = age
 		}
 	}
-	return behind, behindSeconds, e.outrun.Load()
+	return behind, behindSeconds, outrun
 }
 
 // read is Source.Since with the nil-source case folded in, so every
