@@ -95,6 +95,14 @@ class WizardState {
   // double click cannot mint twice and strand the first token.
   enrolMinting = $state(false)
 
+  // enrolRebinding guards the refused-address buttons the same way.
+  // Without it the window ends up pointed at whichever response landed
+  // last rather than whichever address was clicked last: two candidates
+  // are offered side by side, both rebinds succeed, and nothing on
+  // screen shows which one won -- the bound address is not displayed
+  // again after minting.
+  enrolRebinding = $state(false)
+
   // registerError surfaces a refused Register step, and registering
   // guards its button the same way enrolMinting does.
   registerError = $state<string | null>(null)
@@ -443,23 +451,34 @@ class WizardState {
     this.ledgerDevice = ''
     this.tokenDevice = ''
     this.token = ''
-    this.enrolment = null
-    this.enrolmentMintedAt = ''
-    this.enrolmentError = null
-    // Same reasoning for #1291's own fields: a Re-enrol… walk's expected
-    // address left standing here would have Run setup… mint this
-    // router's token bound to a different router's address, and any
-    // typed password must never outlive the walk it was typed in.
-    this.enrolExpectedAddress = ''
-    this.enrolPassword = ''
-    this.enrolMinting = false
+    this.clearEnrolment()
     this.registerError = null
     this.registering = false
-    this.rebindError = null
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null
     this.open = true
+  }
+
+  // clearEnrolment wipes every field #1291's enrolment step owns. One
+  // helper rather than a copy per entry point: the fields must all go
+  // together, and they were being cleared in one place out of five.
+  // A typed password outliving its walk weakens "a session alone must
+  // not mint" to "once per modal", and an expected address outliving
+  // one is worse -- open Re-enrol on router A, type A's address, press
+  // Escape, open Re-enrol on router B, and the form is pre-filled with
+  // A's address with nothing marking it stale. Minting there returns a
+  // valid token for B whose window is open to A, so B is refused at
+  // accept and the token is spent on nothing. The server cannot catch
+  // it: MintEnrolment only checks the address parses.
+  clearEnrolment() {
+    this.enrolment = null
+    this.enrolmentMintedAt = ''
+    this.enrolmentError = null
+    this.enrolExpectedAddress = ''
+    this.enrolPassword = ''
+    this.enrolMinting = false
+    this.rebindError = null
   }
 
   // openAddRouter is the fleet's Add a router action and the Entities
@@ -471,9 +490,7 @@ class WizardState {
     this.finishTo = 'fleet'
     this.ledgerDevice = ''
     this.tokenDevice = ''
-    this.enrolment = null
-    this.enrolmentMintedAt = ''
-    this.enrolmentError = null
+    this.clearEnrolment()
     this.pane = 1
     this.showStepList = false
     this.lostRouterDevice = null
@@ -563,13 +580,16 @@ class WizardState {
   // nothing is pasted into the router again and no password is asked
   // for: rebinding grants no acceptance on its own.
   async rebindEnrolmentWindow(address: string): Promise<void> {
-    if (!this.ledgerDevice) return
+    if (!this.ledgerDevice || this.enrolRebinding) return
     this.rebindError = null
+    this.enrolRebinding = true
     let result: string | null
     try {
       result = await rebindEnrolment(this.ledgerDevice, address)
     } catch (err) {
       result = err instanceof Error ? err.message : String(err)
+    } finally {
+      this.enrolRebinding = false
     }
     if (result) {
       this.rebindError = result
@@ -642,6 +662,10 @@ class WizardState {
   close() {
     this.open = false
     this.lostRouterDevice = null
+    // Escape and the X land here. Whatever was typed into the mint form
+    // goes with the walk it was typed in, rather than waiting to
+    // pre-fill the next router's.
+    this.clearEnrolment()
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in
@@ -722,9 +746,7 @@ class WizardState {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'
     this.ledgerDevice = ''
-    this.enrolment = null
-    this.enrolmentMintedAt = ''
-    this.enrolmentError = null
+    this.clearEnrolment()
     this.refused = []
     this.pane = 1
     this.status = null

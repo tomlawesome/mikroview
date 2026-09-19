@@ -1682,6 +1682,7 @@
                         : ''}<button
                         type="button"
                         class="addr-candidate"
+                        disabled={wizardState.enrolRebinding}
                         onclick={() => wizardState.rebindEnrolmentWindow(sender.ip)}>{sender.ip}</button
                       >{/each}.
                   </p>
