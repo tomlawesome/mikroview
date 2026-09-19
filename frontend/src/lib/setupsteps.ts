@@ -749,7 +749,12 @@ export function registerStep(devices: Device[], device = ''): StepStatus {
   }
   return {
     state: 'quiet',
-    detail: 'Nothing to wait for — Next records that you confirmed this router.',
+    // Ruling 24 (#1291, owner, 2026-09-19): Next does not act here --
+    // CHECKED.register stays false, and the only thing that registers
+    // is the "Register this router" button above. An earlier wording
+    // claimed Next itself recorded the confirmation, which was false:
+    // it just moves on, the same as every other unchecked step.
+    detail: 'Nothing to wait for — Next moves on without registering; the Register button above is what confirms this router.',
   }
 }
 
@@ -1012,13 +1017,17 @@ export function buildLedger(
 // shows the ledger as it stands.
 export function firstOpenStep(ledger: LedgerStep[]): number {
   // A quiet step has nothing to wait for, so reopening does not land on
-  // one -- with the one exception of naming while no router has been
-  // named (#1284). Naming stopped being informational when it started
-  // creating the router: there is still nothing to wait for, but there
-  // is something being asked, and walking past an unanswered question
-  // leaves the step after it with no router to mint a token for.
+  // one -- with two exceptions, both steps where quiet does not mean
+  // answered. Naming (#1284) stopped being informational when it
+  // started creating the router: there is still nothing to wait for,
+  // but there is something being asked, and walking past an unanswered
+  // question leaves the step after it with no router to mint a token
+  // for. Register (#1291, Ruling 24) is the same shape: Next never
+  // checks it, so it stays quiet until the operator presses the
+  // Register button, and reopening a walk that never got pressed must
+  // land back on it rather than reporting nothing left to do.
   const open = ledger.find(
-    (s) => s.outcome === 'open' && (s.status.state !== 'quiet' || s.key === 'name'),
+    (s) => s.outcome === 'open' && (s.status.state !== 'quiet' || s.key === 'name' || s.key === 'register'),
   )
   return open?.n ?? 1
 }

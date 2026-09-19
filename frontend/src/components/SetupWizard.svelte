@@ -1171,7 +1171,12 @@
                         <button type="button" class="copy" disabled={wizardState.enrolMinting} onclick={mintNow}>
                           {wizardState.enrolMinting ? 'Minting…' : 'Mint the token'}
                         </button>
-                        {#if rerollAsked}
+                        {#if rerollAsked && !enrolExpired}
+                          <!-- 2026-09-18 audit, stage 6 finding 10: this
+                               opened for an expired token too, offering
+                               to "keep" one that is already dead -- the
+                               banner right above says so, and there is
+                               nothing left to keep. -->
                           <button type="button" class="link" onclick={() => (rerollAsked = false)}>
                             Keep the token I have
                           </button>

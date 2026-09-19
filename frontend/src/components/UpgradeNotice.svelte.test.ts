@@ -50,7 +50,7 @@ describe('the upgrade notice', () => {
 
     await waitFor(() => expect(container.querySelector('.banner')).toBeTruthy())
     expect(container.querySelector('.line')?.textContent).toBe(
-      'upgraded from v0.4.0 · paste step 1 of the setup again on each router',
+      'upgraded from v0.4.0 · paste Trust the certificate again on each router',
     )
     expect(getByText('open setup')).toBeTruthy()
     expect(getByText('done')).toBeTruthy()

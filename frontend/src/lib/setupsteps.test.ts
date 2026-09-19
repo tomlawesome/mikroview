@@ -19,6 +19,8 @@ import {
   portOf,
   refusedSince,
   refusedWarning,
+  registerReceipt,
+  registerStep,
   ROUTER_STEPS,
   pushStep,
   rulesStep,
@@ -540,6 +542,34 @@ describe('the claim ledger', () => {
   })
 })
 
+// Register (#1291, Ruling 24): the ledger's last step. Owner's ruling
+// was that Next does not act here -- only the "Register this router"
+// button does -- so the quiet sentence must say that, not claim Next
+// records anything.
+describe('registerStep', () => {
+  it('is quiet until registered, and its sentence does not claim Next records the confirmation', () => {
+    const quiet = registerStep([device({ id: 'edge-1' })], 'edge-1')
+    expect(quiet.state).toBe('quiet')
+    // Next has no acting branch for this step (CHECKED.register stays
+    // false); only the Register button does. The sentence must not
+    // claim otherwise, and must point at the button that does act.
+    expect(quiet.detail).not.toContain('Next records')
+    expect(quiet.detail).toContain('Register')
+  })
+
+  it('reads done once the server holds a registeredAt, and says so', () => {
+    const registered = registerStep(
+      [device({ id: 'edge-1', name: 'edge-1', registeredAt: '2026-09-19T09:00:00Z' })],
+      'edge-1',
+    )
+    expect(registered.state).toBe('done')
+    expect(registered.detail).toContain('edge-1')
+    expect(
+      registerReceipt([device({ id: 'edge-1', name: 'edge-1', registeredAt: '2026-09-19T09:00:00Z' })], 'edge-1'),
+    ).toBe('registered edge-1')
+  })
+})
+
 // --- Step 6: back up the router (#394, round 45) ------------------------
 
 describe('backupStep', () => {
@@ -677,11 +707,29 @@ describe('reopening the ledger', () => {
 
   it('falls back to the first step when nothing is left open', () => {
     const ledger = buildLedger(
-      status({ marks: [1, 2, 3, 4, 5, 6].map((n) => mark(n, 'skipped')) }),
+      // All seven, including Register (7) -- leaving it out left this
+      // test exercising the very bug below by accident rather than on
+      // purpose.
+      status({ marks: [1, 2, 3, 4, 5, 6, 7].map((n) => mark(n, 'skipped')) }),
       [],
       '192.0.2.10',
     )
     expect(firstOpenStep(ledger)).toBe(1)
+  })
+
+  // Register is quiet -- there is nothing to wait for -- but unlike
+  // every other quiet step, quiet does not mean answered: nobody has
+  // pressed the Register button. Treating it as not-open (the #1291
+  // bug) meant reopening a finished walk skipped straight past a
+  // router nobody had confirmed.
+  it('lands on Register when every other step is decided but it has not been pressed', () => {
+    const ledger = buildLedger(
+      status({ marks: [1, 2, 3, 4, 5, 6].map((n) => mark(n, 'skipped')) }),
+      [],
+      '192.0.2.10',
+    )
+    expect(ledger[6].key).toBe('register')
+    expect(firstOpenStep(ledger)).toBe(7)
   })
 })
 
