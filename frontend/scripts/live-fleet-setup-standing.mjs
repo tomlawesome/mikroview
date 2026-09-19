@@ -15,15 +15,22 @@
 // Three standings, #1241's own "done when": never reported (a router
 // that has pushed other router state but not this page), current (the
 // page matches what today's wizard would leave), and behind (an older
-// wizard version). All three need a device that actually exists --
-// #1170 changed what that takes: GET /api/devices lists a device once
-// an ingest token has been minted for it and it has pushed (Ensure),
-// never merely because something logged. So each device below is
-// created by minting its own token and pushing under it, straight
-// away -- there is no syslog in this scenario at all any more, and no
-// discover-then-scope-a-token order to follow.
+// wizard version). All three need a device that actually exists.
+//
+// #1281 changed what a push may do once that device exists: since it
+// added handleIngestRouterOS's own IsEnrolledAt(tok.Device,
+// s.ClientIP(r)) check, a push is 403 unless it arrives from the
+// device's own declared or enrolled address -- and a device an ingest
+// token merely names, with no address of any kind yet, is enrolled
+// nowhere, so its very first push (the one #1170 relied on to Ensure it
+// into existence) refused outright. Each device below is now declared
+// by name first (POST /api/devices, admin path), enrolled at a loopback
+// address of its own via the syslog gate exactly as an operator would,
+// and only then pushed to -- bound, via Node's own http/https client,
+// to the address it was just enrolled at, since a push from anywhere
+// else is exactly what #1281 now refuses.
 
-import { session, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, check, done, enrolDevice, goTo, launchBrowser, pushFrom } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // PortOf(cfg.Listen.SyslogTLS) is what the instance's own wizard would
@@ -35,11 +42,12 @@ const URL_BASE = process.env.MV_URL
 // own doc comment: an unset address is not compared at all).
 const SYSLOG_TLS_PORT = process.env.MV_SYSLOG_TLS_PORT
 
-// The two devices this scenario needs, named directly rather than
-// discovered: #1170 made a device id whatever its ingest token names,
-// with no address of any kind required.
+// The two devices this scenario needs, and the loopback address each is
+// enrolled at -- nothing else in this scenario feeds from either.
 const NEVER_ID = 'mv1241-never-reported'
+const NEVER_ADDR = '127.0.0.30'
 const CURRENT_ID = 'mv1241-current'
+const CURRENT_ADDR = '127.0.0.31'
 
 const { page, consoleErrors } = await session()
 
@@ -58,14 +66,15 @@ async function issueIngestToken(device, name) {
   return res.body?.value
 }
 
-async function push(token, payload) {
-  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  return res.status
-}
+// enrolDevice and pushFrom are the harness's own (live-browser.mjs):
+// since #1281 a device an ingest token merely names is enrolled
+// nowhere, so its very first push -- the one #1170 relied on to
+// Ensure it into existence -- is refused outright. Each device below
+// is declared by name, enrolled at a loopback address of its own over
+// syslog exactly as an operator would, and only then pushed to, bound
+// to that address.
+const push = (localAddress, token, payload) => pushFrom(URL_BASE, localAddress, token, payload)
+const enrol = (id, addr) => enrolDevice(page.request, URL_BASE, id, addr)
 
 function loggingPayload(wizardVersion) {
   return {
@@ -116,21 +125,25 @@ let currentVersion = null
 
 // --- never reported: router state pushed, the logging page never sent ---
 
-const neverToken = await issueIngestToken(NEVER_ID, 'mv1241-never-reported')
+const neverEnrolled = await enrol(NEVER_ID, NEVER_ADDR)
+const neverToken = neverEnrolled ? await issueIngestToken(NEVER_ID, 'mv1241-never-reported') : null
 
 if (neverToken) {
-  const arpStatus = await push(neverToken, {
+  const arpStatus = await push(NEVER_ADDR, neverToken, {
     kind: 'arp',
     page: 1,
     pages: 1,
     records: [{ address: '192.168.1.50', mac: 'aa:bb:cc:dd:ee:ff' }],
   })
-  check(arpStatus === 200, `an ARP table push (router state, not the logging page) is accepted (${arpStatus})`)
+  check(
+    arpStatus === 200,
+    `an ARP table push (router state, not the logging page), bound to its enrolled address, is accepted (${arpStatus})`,
+  )
 
   const { body: afterArp } = await api('GET', '/api/devices')
   check(
     afterArp?.devices?.some((d) => d.id === NEVER_ID),
-    `the push Ensures ${NEVER_ID} into the device registry (#1170) -- no syslog required`,
+    `${NEVER_ID} is still in the device registry after the push`,
   )
 
   const neverSetup = await setupOf(NEVER_ID)
@@ -149,16 +162,17 @@ if (neverToken) {
 
 // --- current, then behind: the same device's standing after each push ---
 
-const token = await issueIngestToken(CURRENT_ID, 'mv1241-setup-standing')
+const currentEnrolled = await enrol(CURRENT_ID, CURRENT_ADDR)
+const token = currentEnrolled ? await issueIngestToken(CURRENT_ID, 'mv1241-setup-standing') : null
 
 if (token) {
-  const currentStatus = await push(token, loggingPayload(currentVersion))
-  check(currentStatus === 200, `a logging page at the current wizard version is accepted (${currentStatus})`)
+  const currentStatus = await push(CURRENT_ADDR, token, loggingPayload(currentVersion))
+  check(currentStatus === 200, `a logging page at the current wizard version, bound to its enrolled address, is accepted (${currentStatus})`)
 
   const { body: afterPush } = await api('GET', '/api/devices')
   check(
     afterPush?.devices?.some((d) => d.id === CURRENT_ID),
-    `the push Ensures ${CURRENT_ID} into the device registry (#1170) -- no syslog required`,
+    `${CURRENT_ID} is still in the device registry after the push`,
   )
 
   const current = await waitForStanding(CURRENT_ID, 'current')
@@ -171,8 +185,8 @@ if (token) {
     `scriptVersion and currentVersion both read ${currentVersion} while current (got ${JSON.stringify(current)})`,
   )
 
-  const behindStatus = await push(token, loggingPayload(currentVersion - 1))
-  check(behindStatus === 200, `a second push at an older wizard version is accepted (${behindStatus})`)
+  const behindStatus = await push(CURRENT_ADDR, token, loggingPayload(currentVersion - 1))
+  check(behindStatus === 200, `a second push at an older wizard version, bound to the same enrolled address, is accepted (${behindStatus})`)
 
   const behind = await waitForStanding(CURRENT_ID, 'behind')
   check(

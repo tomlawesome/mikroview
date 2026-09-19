@@ -51,7 +51,7 @@
 //    count elements and read text rather than asking whether a box is
 //    visible wherever the element may legitimately be zero-height.
 
-import { session, feedRaw, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, feedRaw, check, done, enrolDevice, goTo, launchBrowser, pushFrom } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -66,13 +66,14 @@ async function api(method, path, body) {
   return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
 }
 
-async function push(token, payload) {
-  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  return res.status
+// Since #1281 a push is refused unless it arrives from the pushing
+// device's own enrolled address, so live-r33-router is enrolled at
+// ROUTER_ADDR below and every push is bound to it.
+const ROUTER_ID = 'live-r33-router'
+const ROUTER_ADDR = '127.0.0.44'
+
+function push(token, payload) {
+  return pushFrom(URL_BASE, ROUTER_ADDR, token, payload)
 }
 
 /** visible waits for a locator, returning false instead of throwing. */
@@ -308,10 +309,11 @@ if ((await older.count()) > 0) {
 // so it doubles as the fastest real path to fresh candidates without a
 // test-only knob added just for this.
 
+await enrolDevice(page.request, URL_BASE, ROUTER_ID, ROUTER_ADDR)
 const ingest = await api('POST', '/api/tokens', {
   name: 'live-r33',
   kind: 'ingest',
-  device: 'live-r33-router',
+  device: ROUTER_ID,
 })
 check(ingest.status === 201, `an ingest token is issued (${ingest.status})`)
 
