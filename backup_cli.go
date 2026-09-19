@@ -363,7 +363,9 @@ func writeVaultBundle(dir string, bundle vaultBundle) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return fmt.Errorf("router backup vault: %w", err)
 		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
+		// Atomic like every other publish here: a router backup found
+		// short at the moment it is needed is worse than one missing.
+		if err := persist.WriteFileAtomic(path, data, 0o600); err != nil {
 			return fmt.Errorf("router backup vault: %w", err)
 		}
 	}
