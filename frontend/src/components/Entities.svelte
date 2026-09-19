@@ -92,6 +92,7 @@
     fetchRouterRules,
     fetchRouterAddresses,
     fetchRules,
+    fetchRefusedSenders,
     fetchSetupStatus,
     fetchUnattributedSources,
     type RouterFilterRule,
@@ -108,8 +109,16 @@
     unattributedLabel,
     UNATTRIBUTED_FIX,
   } from '../lib/fleet'
+  import { REFUSED_STRIP_LEAD } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
-  import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus, UnattributedSource } from '../lib/types'
+  import type {
+    EntityType,
+    MACRegistryEntry,
+    RefusedSender,
+    RuleUsage,
+    SetupStatus,
+    UnattributedSource,
+  } from '../lib/types'
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
   const routerRows = $derived(sortedDevices(appState.devices))
@@ -169,6 +178,39 @@
       })
       .catch(() => {})
   })
+
+  // The refused senders (#1281): addresses whose syslog lines were
+  // dropped for belonging to no enrolled router. They live here, beside
+  // the routers, because this is the screen an admin's deck actually
+  // draws for the fleet view (deckCards.ts, #785) and GET
+  // /api/devices/refused is admin-only -- the strip Fleet.svelte
+  // originally carried could be reached by nobody. Read on the fleet's
+  // own signature like the unattributed sources above; a failed read
+  // leaves the list empty, since these cards explain a silence rather
+  // than being one.
+  const isAdmin = $derived(authState.isAdmin)
+  let refused = $state<RefusedSender[]>([])
+  $effect(() => {
+    void deviceSignature
+    if (!isAdmin) {
+      refused = []
+      return
+    }
+    fetchRefusedSenders()
+      .then((list) => {
+        refused = list
+      })
+      .catch(() => {
+        refused = []
+      })
+  })
+
+  // Re-enrol… opens the router ledger at Send logs for one router with
+  // a fresh token: a replaced or re-addressed router needs the enrol
+  // line again and nothing else.
+  function reEnrol(deviceId: string) {
+    wizardState.openReEnrol(deviceId)
+  }
 
   // Renaming is an edit, so the viewer tier does not get the affordance
   // and its names stop looking clickable. Nothing on this page says why:
@@ -668,6 +710,20 @@
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
+              {#if isAdmin}
+                <!-- Re-enrol… (#1284): the ledger at Send logs with a
+                     fresh token, for a router that has been replaced or
+                     has moved address. Absent rather than disabled for
+                     anyone who cannot use it (#657's grammar). -->
+                <button
+                  type="button"
+                  class="row-action"
+                  onclick={() => reEnrol(d.id)}
+                  aria-label="Re-enrol {d.name} — mint a fresh enrolment token for it"
+                >
+                  Re-enrol…
+                </button>
+              {/if}
             </div>
           {/each}
           {#each unregisteredRouters as d (d.id)}
@@ -713,6 +769,29 @@
                 <div class="frow dim">{s.explanation}</div>
               {/if}
               <div class="frow dim">{UNATTRIBUTED_FIX}</div>
+            </div>
+          {/each}
+          {#each refused as r (r.ip)}
+            <!-- The refused senders (#1281), in the unattributed card's
+                 own quiet vocabulary: an address whose lines were
+                 dropped because no router is enrolled at it. There is no
+                 accept control here, by ruling -- an address is accepted
+                 only by a router presenting a one-time token, so the
+                 only ways on are Re-enrol… on a router above and the
+                 berth's + add a router. -->
+            <div
+              class="fcard unattr refused"
+              role="group"
+              aria-label="refused · {r.ip} — syslog from an address no router is enrolled at"
+            >
+              <div class="fhead">
+                <b>refused · {r.ip}</b><span class="fstate quiet">◌ REFUSED</span>
+              </div>
+              <div class="frow">syslog from an address no router is enrolled at</div>
+              <div class="frow dim">
+                {r.lines} line{r.lines === 1 ? '' : 's'} · first seen {formatHM(r.firstSeen)} · last seen {formatHM(r.lastSeen)}
+              </div>
+              <div class="frow dim">{REFUSED_STRIP_LEAD} Re-enrol the router it belongs to, or add it as a new one.</div>
             </div>
           {/each}
           <div class="fcard berth">
@@ -1054,6 +1133,31 @@
   .fcard.unattr {
     border-style: dashed;
     border-color: color-mix(in srgb, var(--fg-dim) 40%, transparent);
+  }
+
+  /* Re-enrol… on a router card (#1284), ported from Fleet.svelte with
+     the fields it had there: a quiet outline button, not a primary. */
+  .row-action {
+    margin-top: 8px;
+    align-self: flex-start;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .row-action:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .row-action:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   /* The empty berth (#718): a further grid cell in .fcards, same

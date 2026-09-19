@@ -62,6 +62,8 @@ vi.mock('../lib/api', () => ({
   fetchDeviceMACs: vi.fn(async () => []),
   // #1170: Entities' own read of GET /api/devices' `unattributed` list.
   fetchUnattributedSources: vi.fn(async () => []),
+  // #1281: the refused senders, drawn beside the routers for an admin.
+  fetchRefusedSenders: vi.fn(async () => []),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRules: vi.fn(async (): Promise<RuleUsage[]> => []),
   fetchCoverageDeclarations: vi.fn(async () => []),
