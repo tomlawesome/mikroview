@@ -42,6 +42,11 @@ services:
       # the mappings above, which is exactly why they aren't 443/80
       # inside the container), so it needs no Linux capabilities at all.
       - ALL
+    # Caps the number of tasks (processes/threads) the container can hold,
+    # a cheap backstop against a fork bomb or runaway goroutine spawn.
+    # Not a memory or CPU limit -- those depend on the host this runs on,
+    # so they're left to the operator rather than guessed here.
+    pids_limit: 128
     # The root filesystem is read-only; every path MikroView actually
     # writes to is a mount. /var/lib/mikroview is the mikroview/data
     # bind mount below, and the distroless image has no shell or package manager

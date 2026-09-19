@@ -105,6 +105,25 @@ EOF
 
 No findings.
 EOF
+  cat >"$dir/install.sh" <<'EOF'
+#!/bin/sh
+set -- run -d --name mikroview --restart unless-stopped \
+  --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
+  -p 6514:6514 -p 443:8080 \
+  -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview \
+  ghcr.io/tomlawesome/mikroview:latest
+EOF
+  mkdir -p "$dir/deploy"
+  cat >"$dir/deploy/docker-compose.yml" <<'EOF'
+services:
+  mikroview:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    read_only: true
+EOF
 
   commit "$dir" "2026-01-01T00:00:00" "initial"
 }
@@ -230,6 +249,36 @@ cp -r "$good" "$c7c"
 printf '\n<!-- pending-disclosure: #3 -->\n' >>"$c7c/docs/reviews/2026-01-01-v0.1.0.md"
 run "$c7c"
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "the current version's own pending-disclosure marker does not fail (rc=$rc)"
+
+# --- check 8: install/compose hardening parity ------------------------------
+
+# removing a flag from install.sh's docker run fails, names the drift
+c8a="$TMP/case8a-install-drift"
+cp -r "$good" "$c8a"
+sed 's/--read-only //' "$c8a/install.sh" >"$c8a/install.sh.new" && mv "$c8a/install.sh.new" "$c8a/install.sh"
+run "$c8a"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "install.sh missing --read-only fails hardening parity (rc=$rc)"
+check "$(case "$out" in *"FAIL: hardening drift"*"--read-only"*) echo true;; *) echo false;; esac)" \
+  "and names the drifted flag"
+
+# removing the matching line from deploy/docker-compose.yml fails too
+c8b="$TMP/case8b-compose-drift"
+cp -r "$good" "$c8b"
+grep -v 'pids_limit: 128' "$c8b/deploy/docker-compose.yml" >"$c8b/deploy/docker-compose.yml.new" && mv "$c8b/deploy/docker-compose.yml.new" "$c8b/deploy/docker-compose.yml"
+run "$c8b"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "deploy/docker-compose.yml missing pids_limit fails hardening parity (rc=$rc)"
+check "$(case "$out" in *"FAIL: hardening drift"*"pids_limit: 128"*) echo true;; *) echo false;; esac)" \
+  "and names the drifted line"
+
+# neither file present (a repo mid-migration, or another project's fixture): skip, not a failure
+c8c="$TMP/case8c-no-install-files"
+cp -r "$good" "$c8c"
+rm -f "$c8c/install.sh"
+rm -rf "$c8c/deploy"
+run "$c8c"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "no install.sh/docker-compose.yml present passes (rc=$rc)"
+check "$(case "$out" in *"skip: install/compose hardening parity"*) echo true;; *) echo false;; esac)" \
+  "and says so"
 
 echo
 if [ "$fails" -ne 0 ]; then
