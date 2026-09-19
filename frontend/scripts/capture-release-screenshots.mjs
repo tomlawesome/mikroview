@@ -36,8 +36,15 @@
 // second copy of the same dark UI.
 //
 // Usage:
-//   eval "$(scripts/live-env.sh up)"   # MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1
+//   eval "$(scripts/live-env.sh up)"   # MV_DEMO_DEVICES=1 MV_DEMO_BUILD=1, and
+//                                      # exports MV_SYSLOG_TLS_PORT -- feed's
+//                                      # --syslog-port default reads that, not
+//                                      # the old plaintext MV_SYSLOG_PORT (#1272)
 //   scripts/seed-demo.py push / entities / accounts, then feed &
+//     # `feed` now exits loudly (non-zero, "connection refused" x N on
+//     # stderr) if every router's connection keeps getting refused --
+//     # check it is still running before capturing, or the shots come
+//     # out of an empty instance and look plausible anyway
 //   cd frontend && node scripts/capture-release-screenshots.mjs   # while feed is still running
 //   scripts/live-env.sh down   (from the repo root)
 

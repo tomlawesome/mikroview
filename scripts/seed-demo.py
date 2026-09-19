@@ -33,7 +33,7 @@ Usage (against an already-running instance):
   export MV_URL=https://192.0.2.30:19893
   export MV_USER=... MV_PASS=...              # never echoed by this script
   export MV_SYSLOG_HOST=127.0.0.1             # host part of the syslog TLS target
-  export MV_SYSLOG_PORT=16956
+  export MV_SYSLOG_TLS_PORT=16957             # what live-env.sh up actually exports
   scripts/seed-demo.py push        # rule/NAT/address tables (needs ingest tokens)
   scripts/seed-demo.py entities    # named hosts/rules/ports
   scripts/seed-demo.py accounts    # a user-tier and a viewer-tier account
@@ -1240,21 +1240,61 @@ def lines_for_round40(router, elapsed, tick):
     return out
 
 
+class FeedConnectionRefused(RuntimeError):
+    """Raised by cmd_feed when every router with traffic to send has had
+    its connection refused for FEED_REFUSED_TICK_LIMIT consecutive ticks.
+    #1272: a feeder pointed at a syslog port nobody is listening on used
+    to print "connection refused" to stderr forever and keep running --
+    indistinguishable, from the outside, from one that was working. A
+    release capture taken against it produced empty screenshots that
+    looked like real ones. This is the loud failure that replaces that
+    silence."""
+
+
+FEED_REFUSED_TICK_LIMIT = 3
+
+
+def _tick_all_refused(router_results):
+    """router_results: one bool per router that had traffic to send this
+    tick, True if that send raised ConnectionRefusedError. True only when
+    there was at least one attempt and every single one was refused --
+    an empty tick (nothing due to send) says nothing about the port."""
+    results = list(router_results)
+    return bool(results) and all(results)
+
+
 def cmd_feed(args):
     print(f"seed-demo feed: {len(HOSTS)} stable-identity hosts across {len(ROUTERS)} routers "
           f"-> {args.syslog_host}:{args.syslog_port}", file=sys.stderr)
     start = time.time()
     tick = 0
+    consecutive_refused_ticks = 0
     while True:
         elapsed = time.time() - start
+        refusals = []
         for router, cfg in ROUTERS.items():
             lines = lines_for_router(router, elapsed, tick)
             if not lines:
                 continue
             try:
                 send_tls(args.syslog_host, args.syslog_port, cfg["src"], lines)
-            except Exception as e:  # a demo feeder never dies
+                refusals.append(False)
+            except ConnectionRefusedError as e:
+                refusals.append(True)
+                print(f"{router}: connection refused ({e})", file=sys.stderr)
+            except Exception as e:  # a demo feeder never dies on anything else
+                refusals.append(False)
                 print(f"{router}: {e}", file=sys.stderr)
+        if _tick_all_refused(refusals):
+            consecutive_refused_ticks += 1
+        else:
+            consecutive_refused_ticks = 0
+        if consecutive_refused_ticks >= FEED_REFUSED_TICK_LIMIT:
+            raise FeedConnectionRefused(
+                f"every router's connection to {args.syslog_host}:{args.syslog_port} was "
+                f"refused for {consecutive_refused_ticks} ticks in a row -- nothing is "
+                "listening there. Check --syslog-port / MV_SYSLOG_TLS_PORT against what "
+                "`scripts/live-env.sh up` actually exported.")
         tick += 1
         if args.once:
             break
@@ -1482,13 +1522,23 @@ def cmd_all(args):
     cmd_watchlist(args)
 
 
+def _default_syslog_port():
+    """--syslog-port's default. #1272: `scripts/live-env.sh up` exports
+    MV_SYSLOG_TLS_PORT -- there is no plaintext MV_SYSLOG_PORT any more,
+    deliberately (see its own comment) -- so that is the variable this
+    reads. The literal fallback only matters when neither this nor
+    --syslog-port is given, i.e. run standalone against a hand-built
+    listener."""
+    return int(os.environ.get("MV_SYSLOG_TLS_PORT", "16957"))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default=os.environ.get("MV_URL", "https://127.0.0.1:19893"))
     p.add_argument("--user", default=os.environ.get("MV_USER"))
     p.add_argument("--password", default=os.environ.get("MV_PASS"))
     p.add_argument("--syslog-host", default=os.environ.get("MV_SYSLOG_HOST", "127.0.0.1"))
-    p.add_argument("--syslog-port", type=int, default=int(os.environ.get("MV_SYSLOG_PORT", "16956")))
+    p.add_argument("--syslog-port", type=int, default=_default_syslog_port())
     p.add_argument("--once", action="store_true", help="feed: send one tick per router and exit")
     sub = p.add_subparsers(dest="cmd", required=True)
     for name, fn in [("push", cmd_push), ("entities", cmd_entities), ("accounts", cmd_accounts),
@@ -1499,7 +1549,11 @@ def main():
     args = p.parse_args()
     if args.cmd != "feed" and (not args.user or not args.password):
         p.error("MV_USER/MV_PASS (or --user/--password) are required for this command")
-    args.func(args)
+    try:
+        args.func(args)
+    except FeedConnectionRefused as e:
+        print(f"seed-demo feed: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

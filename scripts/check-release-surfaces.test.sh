@@ -46,7 +46,8 @@ commit() { # commit <dir> <date> <message>
 new_repo() { # new_repo <dir>
   local dir="$1"
   rm -rf "$dir"
-  mkdir -p "$dir/docs/screenshots" "$dir/docs/reviews" "$dir/site" "$dir/frontend/src" \
+  mkdir -p "$dir/docs/screenshots" "$dir/docs/reviews" "$dir/site" \
+    "$dir/frontend/src/components" "$dir/frontend/src/lib" \
     "$dir/.github/workflows" "$dir/scripts"
   git -C "$dir" init -q
   git -C "$dir" config user.email "test@example.com"
@@ -69,7 +70,7 @@ EOF
 See [docs/x.md](docs/x.md) for details and
 [docs/development.md](docs/development.md) to build it.
 
-![screenshot](docs/screenshots/a.png)
+![screenshot](docs/screenshots/fall-dark.png)
 EOF
   cat >"$dir/SECURITY.md" <<'EOF'
 # Security
@@ -94,12 +95,17 @@ EOF
 
 Details.
 EOF
-  printf 'png-v1\n' >"$dir/docs/screenshots/a.png"
+  printf 'png-v1\n' >"$dir/docs/screenshots/fall-dark.png"
   cat >"$dir/.github/workflows/pages.yml" <<'EOF'
 name: pages
 on: push
 EOF
-  printf 'export const x = 1;\n' >"$dir/frontend/src/app.js"
+  # fall-dark.png's mapped sources (check-release-surfaces.sh's own
+  # screenshot_sources()) -- both must exist and predate the screenshot
+  # in the fixture's history, or the "all-good fixture passes" baseline
+  # itself would fail check 6.
+  printf 'export const Fall = 1;\n' >"$dir/frontend/src/components/Fall.svelte"
+  printf 'export const fall = 1;\n' >"$dir/frontend/src/lib/fall.svelte.ts"
   cat >"$dir/docs/reviews/2026-01-01-v0.1.0.md" <<'EOF'
 # Pre-release review: v0.1.0
 
@@ -194,33 +200,78 @@ check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a stale Go version claim 
 check "$(case "$out" in *"FAIL: docs/development.md says Go 1.20+ but go.mod requires 1.21"*) echo true;; *) echo false;; esac)" \
   "and names both versions"
 
-# --- check 6: screenshots fresh, all three states -------------------------
+# --- check 6: screenshots checked against their own mapped source files ---
+#
+# Pre-existing, unrelated to #1273: the shared new_repo() fixture's
+# synthetic install.sh/deploy/docker-compose.yml already fail check 8's
+# hardening-parity pairing (missing the ":ro" suffix on one volume line)
+# at HEAD, before any of this file's changes -- confirmed by running
+# this same test file, unmodified, checked out on its own. That makes
+# the script's overall rc always 1 for every fixture derived from
+# new_repo(), regardless of section 6. So the "passes" cases below
+# assert the section's own ok:/FAIL: lines directly rather than the
+# whole-script rc, which section 8's bug would otherwise poison. Report
+# check 8's bug separately; fixing it is out of scope here.
 shots="$TMP/screens"
 new_repo "$shots"
 
-# no tag reachable yet -> skip, not a failure
+# the all-good fixture's own screenshot passes against its mapped sources
 run "$shots"
-check "$([ "$rc" -eq 0 ] && echo true || echo false)" "screenshots: no v* tag reachable passes (rc=$rc)"
-check "$(case "$out" in *"skip: screenshots (no v* tag reachable)"*) echo true;; *) echo false;; esac)" \
-  "and says so"
+check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*) echo true;; *) echo false;; esac)" \
+  "a screenshot fresh against its mapped sources passes"
+check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
+  "and no FAIL line names it"
 
-git -C "$shots" tag v0.1.0
-
-# frontend/src changes since the tag, screenshot does not -> FAIL
-printf 'export const x = 2;\n' >"$shots/frontend/src/app.js"
-commit "$shots" "2026-01-02T00:00:00" "change frontend"
+# one of the two mapped sources changes after the screenshot -> FAIL,
+# naming that source specifically (not just "something in frontend/src")
+printf 'export const Fall = 2;\n' >"$shots/frontend/src/components/Fall.svelte"
+commit "$shots" "2026-01-02T00:00:00" "change Fall.svelte"
 run "$shots"
-check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a screenshot older than the last tag fails (rc=$rc)"
-check "$(case "$out" in *"FAIL: docs/screenshots/a.png -- last captured before v0.1.0"*) echo true;; *) echo false;; esac)" \
-  "and names the stale png and the tag it predates"
+check "$(case "$out" in *"FAIL: docs/screenshots/fall-dark.png -- frontend/src/components/Fall.svelte changed at"*) echo true;; *) echo false;; esac)" \
+  "a screenshot whose mapped source moved after capture fails, naming the specific source file"
 
-# recapturing the screenshot clears it -> pass
-printf 'png-v2\n' >"$shots/docs/screenshots/a.png"
+# an unrelated component changing does NOT flag this screenshot (the old
+# blanket frontend/src diff would have) -- based on $good, not $shots,
+# so it does not inherit the staleness just introduced above
+c6b="$TMP/case6b-unrelated"
+cp -r "$good" "$c6b"
+mkdir -p "$c6b/frontend/src/components"
+printf 'export const Other = 1;\n' >"$c6b/frontend/src/components/Other.svelte"
+commit "$c6b" "2026-01-02T12:00:00" "add unrelated component"
+run "$c6b"
+check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
+  "a change to an unmapped component does not flag fall-dark.png"
+
+# recapturing the screenshot after its source moved clears it -> pass
+printf 'png-v2\n' >"$shots/docs/screenshots/fall-dark.png"
 commit "$shots" "2026-01-03T00:00:00" "recapture screenshot"
 run "$shots"
-check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a recaptured screenshot passes (rc=$rc)"
-check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/a.png"*) echo true;; *) echo false;; esac)" \
-  "and confirms it"
+check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*) echo true;; *) echo false;; esac)" \
+  "a recaptured screenshot passes"
+check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
+  "and no FAIL line names it"
+
+# a screenshot with no entry in screenshot_sources() fails loudly, naming
+# itself, rather than silently passing or guessing
+c6c="$TMP/case6c-unmapped"
+cp -r "$shots" "$c6c"
+printf '\n![other](docs/screenshots/unmapped.png)\n' >>"$c6c/README.md"
+printf 'png\n' >"$c6c/docs/screenshots/unmapped.png"
+commit "$c6c" "2026-01-04T00:00:00" "add an unmapped screenshot"
+run "$c6c"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a screenshot with no screenshot_sources() entry fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/screenshots/unmapped.png -- no entry in check-release-surfaces.sh's screenshot_sources()"*) echo true;; *) echo false;; esac)" \
+  "and names it as unmapped rather than guessing"
+
+# a screenshot referenced but never committed fails as untracked
+c6d="$TMP/case6d-untracked"
+cp -r "$shots" "$c6d"
+printf '\n![other](docs/screenshots/stream-dark.png)\n' >>"$c6d/README.md"
+# deliberately not committed -- README references it, nothing ever added it
+run "$c6d"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a screenshot referenced but never committed fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/screenshots/stream-dark.png -- untracked (never committed)"*) echo true;; *) echo false;; esac)" \
+  "and names it as untracked"
 
 # --- check 7: review records -----------------------------------------------
 
