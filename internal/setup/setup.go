@@ -408,12 +408,18 @@ const (
 	MarkWitnessed MarkOutcome = "witnessed"
 )
 
-// maxStep bounds the step numbers a mark may carry. Six steps -- round
-// 45 (#394) added the sixth, "Back up the router", after the original
-// five; see frontend/src/lib/setupsteps.ts's STEP_TITLES, which this
-// must keep matching. A mark outside that range is a client bug or a
-// probe, and either way has nothing to describe.
-const maxStep = 6
+// maxStep bounds the step numbers a mark may carry. Seven steps --
+// round 45 (#394) added the sixth, "Back up the router", after the
+// original five, and #1291 added the seventh, "Register this router";
+// see frontend/src/lib/setupsteps.ts's RECORD_NUMBERS, which this must
+// keep matching. A mark outside that range is a client bug or a probe,
+// and either way has nothing to describe.
+//
+// This number has now lagged the wizard twice (#1267, then #1257's
+// audit): the wizard gains a step, the ledger silently refuses every
+// decision about it, and the walk advances anyway so nobody sees the
+// refusal. If an eighth is ever added, this is the second edit.
+const maxStep = 7
 
 // Mark is one recorded decision about one step.
 type Mark struct {

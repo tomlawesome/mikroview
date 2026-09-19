@@ -168,6 +168,19 @@ func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
 	}
 }
 
+// TestMarkAcceptsTheWizardsSeventhStep is #1267 recurring: #1291 added
+// "Register this router" as RECORD_NUMBERS.register = 7 in
+// frontend/src/lib/setupsteps.ts and maxStep stayed at 6, so skipping
+// that step 400s while the wizard advances anyway -- the operator sees
+// the step pass and the ledger never records the decision. Found by the
+// v0.6.0 audit (#1257).
+func TestMarkAcceptsTheWizardsSeventhStep(t *testing.T) {
+	s := New()
+	if _, ok := s.NoteMark(7, MarkSkipped, "tom", "", time.Now()); !ok {
+		t.Error("NoteMark refused step 7, but setupsteps.ts records the register step under it")
+	}
+}
+
 func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 	s := New()
 	now := time.Now()
