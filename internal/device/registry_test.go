@@ -60,18 +60,27 @@ func TestResolveConfiguredDevice(t *testing.T) {
 
 // #1281's attribution order, step (a): config.yaml is the strongest
 // attribution there is -- the operator said which address is which
-// router -- so it wins even over a device this registry itself
-// enrolled by token at the very same address.
+// router -- so a token enrolment cannot take an address it names. The
+// enrolment is refused outright rather than recorded and then outranked
+// at read time: a second row claiming the address would say "Enrolled
+// at 192.168.1.1" on a card that receives nothing.
 func TestResolveAttributesByConfiguredSourceIPFirst(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"},
 	})
-	if _, err := r.Create("other", "Other", time.Now()); err != nil {
+	now := time.Now()
+	if _, err := r.Create("other", "Other", now); err != nil {
 		t.Fatal(err)
 	}
-	enrolAt(t, r, "other", "192.168.1.1")
+	token, _, err := r.MintEnrolment("other", now)
+	if err != nil {
+		t.Fatalf("MintEnrolment: %v", err)
+	}
+	if r.TryEnrol("192.168.1.1", []byte(`<30>Jan  1 00:00:00 router mikroview-enrol `+token)) {
+		t.Error("TryEnrol() = true at a declared device's own address, want false")
+	}
 
-	if id := r.Resolve("192.168.1.1", time.Now()); id != "core" {
+	if id := r.Resolve("192.168.1.1", now); id != "core" {
 		t.Errorf("Resolve() = %q, want the declared device %q -- config.yaml outranks a token enrolment", id, "core")
 	}
 	if got := r.Unattributed(); len(got) != 0 {
