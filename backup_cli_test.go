@@ -330,3 +330,26 @@ func TestVaultBundleRoundTrip(t *testing.T) {
 		t.Errorf("readVaultBundle()[%q] = %q, want %q", rel, got, want)
 	}
 }
+
+// TestRestoreWritesEveryFileAtomically guards what a unit test cannot
+// otherwise see: a torn file needs the process to die between the open
+// and the last byte, which no test can stage. os.WriteFile truncates
+// the destination first and writes in place, so a crash there leaves a
+// short file where a router backup used to be -- discovered at the one
+// moment it is needed. persist.WriteFileAtomic writes a temp file,
+// fsyncs and renames, so the destination is either the old bytes or
+// the new ones and never half of either. Every other publish in this
+// file already goes that way; writeVaultBundle was the one that did
+// not (found by the v0.6.0 audit's Safety stage, #1257).
+func TestRestoreWritesEveryFileAtomically(t *testing.T) {
+	src, err := os.ReadFile("backup_cli.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(src), "\n") {
+		if strings.Contains(line, "os.WriteFile(") {
+			t.Errorf("backup_cli.go:%d writes in place: %s\n\twant persist.WriteFileAtomic, so a crash mid-write cannot leave a short file",
+				i+1, strings.TrimSpace(line))
+		}
+	}
+}
