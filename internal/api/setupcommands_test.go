@@ -286,7 +286,7 @@ func TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken(t *testing.T) 
 	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := s.Devices.MintEnrolment("hap-ax3", now)
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,11 +317,11 @@ func TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken(t *testing.T)
 	if _, err := s.Devices.Create("other", "other", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := s.Devices.MintEnrolment("hap-ax3", now)
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherToken, _, err := s.Devices.MintEnrolment("other", now)
+	otherToken, _, err := s.Devices.MintEnrolment("other", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -271,7 +271,7 @@ func TestDroplistAddRefusesRoutersOwnRange(t *testing.T) {
 	if _, err := s.Devices.Create("router-1", "router-1", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := s.Devices.MintEnrolment("router-1", now)
+	token, _, err := s.Devices.MintEnrolment("router-1", "203.0.114.9", now)
 	if err != nil {
 		t.Fatalf("MintEnrolment: %v", err)
 	}

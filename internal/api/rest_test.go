@@ -127,7 +127,7 @@ func pushingRouter(t *testing.T, s *Server, id, cidr string) {
 	if err != nil {
 		t.Fatalf("pushingRouter: %q does not parse as a CIDR: %v", cidr, err)
 	}
-	token, _, err := s.Devices.MintEnrolment(id, now)
+	token, _, err := s.Devices.MintEnrolment(id, prefix.Addr().String(), now)
 	if err != nil {
 		t.Fatalf("pushingRouter: MintEnrolment(%q): %v", id, err)
 	}

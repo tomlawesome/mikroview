@@ -3,6 +3,7 @@
 package device
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -84,11 +85,11 @@ func TestMintEnrolmentReplacesAnyPendingToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, _, err := r.MintEnrolment("hap-ax3", now)
+	first, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := r.MintEnrolment("hap-ax3", now)
+	second, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestTokenIsSingleUse(t *testing.T) {
 	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := r.MintEnrolment("hap-ax3", now)
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestTokenExpires(t *testing.T) {
 	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatal(err)
 	}
-	token, expiresAt, err := r.MintEnrolment("hap-ax3", now)
+	token, expiresAt, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestTokenExpires(t *testing.T) {
 	// any reference instant, including one in the past, precisely so
 	// this is testable without a fake clock.
 	longAgo := now.Add(-16 * time.Minute)
-	staleToken, _, err := r.MintEnrolment("hap-ax3", longAgo)
+	staleToken, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", longAgo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestBurnEnrolmentRevokesAPendingToken(t *testing.T) {
 	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := r.MintEnrolment("hap-ax3", now)
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +197,7 @@ func TestVerifyPendingTokenChecksHashAndExpiry(t *testing.T) {
 	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := r.MintEnrolment("hap-ax3", now)
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,53 +271,53 @@ func TestRefuseConnectionCountsIntoTheSameRefusedListAsRefuse(t *testing.T) {
 	}
 }
 
-// TestAcceptsUnknownIsFalseWithNoPendingTokens is the closed-port
+// TestAcceptsConnectionFromIsFalseWithNoPendingTokens is the closed-port
 // default: a registry with no device ever having minted a token has
 // nothing pending, so the syslog port must not stay open to unknown
 // addresses.
-func TestAcceptsUnknownIsFalseWithNoPendingTokens(t *testing.T) {
+func TestAcceptsConnectionFromIsFalseWithNoPendingTokens(t *testing.T) {
 	r := NewRegistry(nil)
-	if r.AcceptsUnknown() {
-		t.Error("AcceptsUnknown() = true, want false with nothing pending")
+	if r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom() = true, want false with nothing pending")
 	}
 }
 
-// TestAcceptsUnknownIsTrueWhileATokenIsPending is issue #1281's
+// TestAcceptsConnectionFromIsTrueForTheAddressATokenWasMintedFor is issue #1281's
 // connection gate opening: while any device has an unexpired pending
 // enrolment token, the port must accept connections from addresses it
 // does not yet recognise, since the enrol line proving the token has to
 // be able to arrive from exactly such an address.
-func TestAcceptsUnknownIsTrueWhileATokenIsPending(t *testing.T) {
+func TestAcceptsConnectionFromIsTrueForTheAddressATokenWasMintedFor(t *testing.T) {
 	r := NewRegistry(nil)
 	now := time.Now()
 	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, _, err := r.MintEnrolment("hap-ax3", now); err != nil {
+	if _, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now); err != nil {
 		t.Fatalf("MintEnrolment: %v", err)
 	}
-	if !r.AcceptsUnknown() {
-		t.Error("AcceptsUnknown() = false, want true while a token is pending")
+	if !r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom() = false, want true for the address the pending token was minted for")
 	}
 }
 
-// TestAcceptsUnknownIsFalseOnceTheOnlyPendingTokenExpires mints a token
+// TestAcceptsConnectionFromIsFalseOnceTheOnlyPendingTokenExpires mints a token
 // far enough in the past (mirroring TestTokenExpires) that it has
 // already expired against the real clock, and checks the port closes
 // back up: a token's 15-minute life, not its mere existence, is what
 // keeps the port open.
-func TestAcceptsUnknownIsFalseOnceTheOnlyPendingTokenExpires(t *testing.T) {
+func TestAcceptsConnectionFromIsFalseOnceTheOnlyPendingTokenExpires(t *testing.T) {
 	r := NewRegistry(nil)
 	now := time.Now()
 	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	longAgo := now.Add(-16 * time.Minute)
-	if _, _, err := r.MintEnrolment("hap-ax3", longAgo); err != nil {
+	if _, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", longAgo); err != nil {
 		t.Fatalf("MintEnrolment: %v", err)
 	}
-	if r.AcceptsUnknown() {
-		t.Error("AcceptsUnknown() = true, want false once the only pending token has expired")
+	if r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom() = true, want false once the only pending token has expired")
 	}
 }
 
@@ -530,7 +531,11 @@ func TestEnrolRefusesAnAddressAnotherDeviceAlreadyHolds(t *testing.T) {
 	}
 	enrolAt(t, r, "held", "10.0.0.1")
 
-	token, _, err := r.MintEnrolment("claimant", now)
+	// Minted for the contested address itself, so the refusal below is
+	// the held-address rule doing the work -- not #1291's address
+	// binding, which would refuse any other address first and leave this
+	// test passing while proving nothing.
+	token, _, err := r.MintEnrolment("claimant", "10.0.0.1", now)
 	if err != nil {
 		t.Fatalf("MintEnrolment: %v", err)
 	}
@@ -550,9 +555,108 @@ func TestEnrolRefusesAnAddressAnotherDeviceAlreadyHolds(t *testing.T) {
 	if id := r.Resolve("10.0.0.1", now); id != "held" {
 		t.Errorf("Resolve() = %q, want the address still attributing to held", id)
 	}
-	// The token is unspent, so the same token redeems from an address
-	// that is actually free.
-	if !r.TryEnrol("10.0.0.2", line) {
-		t.Error("TryEnrol() = false at a free address, want the unspent token still good")
+	// The token is unspent: once the address stops being held, the same
+	// token still redeems there.
+	//
+	// It has to be the same address. Before #1291 this was checked by
+	// redeeming at a different free one, which a token minted since
+	// #1291 refuses -- it is bound to the address it was minted for, and
+	// changing the address now means minting again. That is the binding
+	// working, so the claim under test (the refusal leaves the token
+	// unspent) is proved by freeing the address instead.
+	if err := r.Delete("held"); err != nil {
+		t.Fatalf("Delete(held): %v", err)
+	}
+	if !r.TryEnrol("10.0.0.1", line) {
+		t.Error("TryEnrol() = false once the address was freed, want the unspent token still good")
+	}
+}
+
+// TestMintEnrolmentRequiresAnExpectedAddress: the address the token
+// binds to is not optional (issue #1291). A token minted without one
+// would be #1281's global gate again under a new name -- the port open
+// to every unknown address for the life of the token -- so there is
+// deliberately no way to ask for that.
+func TestMintEnrolmentRequiresAnExpectedAddress(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, addr string
+		want       error
+	}{
+		{"empty", "", ErrExpectedAddressRequired},
+		{"only spaces", "   ", ErrExpectedAddressRequired},
+		{"a hostname, not an address", "router.example.com", ErrExpectedAddressInvalid},
+		{"nonsense", "10.0.0.999", ErrExpectedAddressInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := r.MintEnrolment("hap-ax3", tc.addr, now); !errors.Is(err, tc.want) {
+				t.Errorf("MintEnrolment(%q) error = %v, want %v", tc.addr, err, tc.want)
+			}
+		})
+	}
+	// Nothing was left pending by any of the refusals above, so the
+	// connection gate stayed shut throughout.
+	if r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom() = true after only refused mints, want the port still closed")
+	}
+}
+
+// TestTokenIsRefusedFromAnAddressItWasNotMintedFor is issue #1291's
+// binding at the redemption itself: a token names one address, and a
+// line carrying it from anywhere else enrols nothing. The connection
+// gate refuses that address before a byte is read in the real listener,
+// so reaching TryEnrol from the wrong address means it was allowed for
+// some other reason -- and this is what stops that becoming a way in.
+func TestTokenIsRefusedFromAnAddressItWasNotMintedFor(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte("mikroview-enrol " + token)
+
+	if r.TryEnrol("10.10.0.2", line) {
+		t.Fatal("TryEnrol() = true from an address the token was not minted for, want false")
+	}
+	for _, info := range r.List() {
+		if info.ID == "hap-ax3" && info.AcceptedIP != "" {
+			t.Errorf("acceptedIp = %q after a refused redemption, want it left unenrolled", info.AcceptedIP)
+		}
+	}
+	// The token is unspent -- a wrong-address attempt must not burn it,
+	// or anyone able to reach the port could destroy an enrolment in
+	// flight by replaying the line from somewhere else.
+	if !r.TryEnrol("10.10.0.1", line) {
+		t.Error("TryEnrol() = false at the minted address, want the token unharmed by the refused attempt")
+	}
+}
+
+// TestAcceptsConnectionFromIsFalseForAnyOtherAddress is the narrowing
+// #1291 exists for: before it, one pending token anywhere left the
+// syslog port reachable by every unknown address on the network.
+func TestAcceptsConnectionFromIsFalseForAnyOtherAddress(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now); err != nil {
+		t.Fatal(err)
+	}
+	if !r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom(minted address) = false, want true")
+	}
+	for _, other := range []string{"10.10.0.2", "192.168.1.1", "", "not-an-address"} {
+		if r.AcceptsConnectionFrom(other) {
+			t.Errorf("AcceptsConnectionFrom(%q) = true while a token is pending for another address, want false", other)
+		}
 	}
 }

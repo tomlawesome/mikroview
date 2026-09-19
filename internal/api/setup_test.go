@@ -242,7 +242,7 @@ func TestSetupStatusSyslogWitnessNeedsRealEvidenceNotJustAConnection(t *testing.
 	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := s.Devices.MintEnrolment("hap-ax3", now)
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "198.51.100.9", now)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,19 +14,19 @@ import (
 // are already sourceIp/acceptedIp, enrolled tracks which host TryEnrol
 // most recently accepted (and so becomes allowed from then on, exactly
 // as device.Registry's own TryEnrol/Allowed pair behaves), refused
-// counts every line handed to Refuse, acceptUnknown is the fixed answer
-// AcceptsUnknown gives (a real registry ties this to whether a token is
-// pending; the fake takes it as a field instead so a test can set it
-// independently), and refusedConns counts every host handed to
-// RefuseConnection.
+// counts every line handed to Refuse, expecting is the single host
+// AcceptsConnectionFrom answers true for (a real registry ties this to
+// the address a pending token was minted for; the fake takes it as a
+// field instead so a test can set it independently), and refusedConns
+// counts every host handed to RefuseConnection.
 type fakeGate struct {
-	mu            sync.Mutex
-	allowed       map[string]bool
-	token         string
-	acceptUnknown bool
-	refused       []string
-	refusedConns  []string
-	enrolled      []string
+	mu           sync.Mutex
+	allowed      map[string]bool
+	token        string
+	expecting    string
+	refused      []string
+	refusedConns []string
+	enrolled     []string
 }
 
 func (g *fakeGate) Allowed(host string) bool {
@@ -56,10 +56,10 @@ func (g *fakeGate) Refuse(host string, line []byte) {
 	g.refused = append(g.refused, host)
 }
 
-func (g *fakeGate) AcceptsUnknown() bool {
+func (g *fakeGate) AcceptsConnectionFrom(host string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.acceptUnknown
+	return g.expecting != "" && g.expecting == host
 }
 
 func (g *fakeGate) RefuseConnection(host string) {
@@ -104,11 +104,13 @@ func TestGateAllowsAConfiguredSourceWithNoTokenNeeded(t *testing.T) {
 // connection is not dropped, so a legitimate router that has not yet
 // enrolled is not locked out by its own unrecognised lines.
 func TestGateRefusesAnUnenrolledLineAndKeepsTheConnectionOpen(t *testing.T) {
-	// acceptUnknown: true because this test's connection is from an
-	// address with nothing yet Allowed -- issue #1281's connection gate
+	// expecting 127.0.0.1 because this test's connection is from an
+	// address with nothing yet Allowed -- the connection gate
 	// (TestConnectionFromUnknownAddressWithNoTokenPendingIsRefusedAtAccept,
 	// below) would otherwise refuse it before a single line is read.
-	g := &fakeGate{token: "abcdefghijklmnopqrst", acceptUnknown: true}
+	// Since #1291 the gate opens for the one address a token was minted
+	// for, so the fake has to name it rather than wave everyone through.
+	g := &fakeGate{token: "abcdefghijklmnopqrst", expecting: "127.0.0.1"}
 	SetEnrolmentGate(g)
 	t.Cleanup(func() { SetEnrolmentGate(nil) })
 
@@ -221,7 +223,7 @@ func TestConnectionFromUnknownAddressWithNoTokenPendingIsRefusedAtAccept(t *test
 
 // TestConnectionFromAllowedAddressIsAcceptedWithNoTokenPending is the
 // declared/enrolled half of issue #1281's connection gate: an address
-// already Allowed connects normally even when acceptUnknown is false,
+// already Allowed connects normally even when no token is pending,
 // so an ordinary already-enrolled router is never affected by whether
 // some other device happens to have a token pending.
 func TestConnectionFromAllowedAddressIsAcceptedWithNoTokenPending(t *testing.T) {

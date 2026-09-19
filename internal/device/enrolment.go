@@ -7,14 +7,26 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/netip"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
 // ErrNoPendingEnrolment is returned by BurnEnrolment for a device that
 // exists but has no pending token.
 var ErrNoPendingEnrolment = errors.New("device: no pending enrolment token for that device")
+
+// ErrExpectedAddressRequired and ErrExpectedAddressInvalid are returned
+// by MintEnrolment when the caller gives no expected sender address, or
+// one that is not an IP address (issue #1291). The address is what the
+// enrolment window binds to, so there is no meaningful token without
+// one.
+var (
+	ErrExpectedAddressRequired = errors.New("device: an expected sender address is required to mint an enrolment token")
+	ErrExpectedAddressInvalid  = errors.New("device: the expected sender address is not a valid IP address")
+)
 
 // enrolTokenLen/enrolTokenAlphabet/enrolTokenTTL are issue #1281's
 // enrolment-token shape: 20 lowercase letters/digits, valid for 15
@@ -49,6 +61,14 @@ var enrolLineRE = regexp.MustCompile(`mikroview-enrol ([a-z0-9]{20})`)
 type pendingToken struct {
 	hash      string
 	expiresAt time.Time
+	// expected is the one source address this token may be redeemed
+	// from, normalised (issue #1291). A token is minted for a router the
+	// operator can already name an address for, so the enrolment window
+	// opens for that address alone rather than for everyone: before
+	// #1291 a single pending token anywhere left the syslog port
+	// reachable by any unknown address at all, which is a far wider door
+	// than the one enrolment actually needs.
+	expected string
 }
 
 // Refused is one syslog source address the listener gate has refused a
@@ -109,7 +129,18 @@ func randomEnrolToken() string {
 // an already-pending device simply invalidates the old token and hands
 // back a new one. Returns the raw token (shown exactly once -- only its
 // hash is ever stored) and its expiry.
-func (r *Registry) MintEnrolment(device string, now time.Time) (token string, expiresAt time.Time, err error) {
+func (r *Registry) MintEnrolment(device, expected string, now time.Time) (token string, expiresAt time.Time, err error) {
+	// The expected address is required (issue #1291): it is what the
+	// enrolment window binds to, and a token minted without one would be
+	// the old global gate again under a new name.
+	key := normalizeIP(strings.TrimSpace(expected))
+	if key == "" {
+		return "", time.Time{}, ErrExpectedAddressRequired
+	}
+	if _, parseErr := netip.ParseAddr(key); parseErr != nil {
+		return "", time.Time{}, ErrExpectedAddressInvalid
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.byID[device]; !ok {
@@ -120,7 +151,7 @@ func (r *Registry) MintEnrolment(device string, now time.Time) (token string, ex
 	token = randomEnrolToken()
 	expiresAt = now.Add(enrolTokenTTL)
 	hash := hashEnrolToken(token)
-	r.pendingByDevice[device] = pendingToken{hash: hash, expiresAt: expiresAt}
+	r.pendingByDevice[device] = pendingToken{hash: hash, expiresAt: expiresAt, expected: key}
 	r.pendingByHash[hash] = device
 	return token, expiresAt, nil
 }
@@ -188,23 +219,35 @@ func (r *Registry) VerifyPendingToken(device, raw string, now time.Time) bool {
 	return p.hash == hashEnrolToken(raw)
 }
 
-// AcceptsUnknown reports whether at least one pending enrolment token
-// exists anywhere and has not yet expired -- issue #1281's connection
-// gate: the syslog port must stay open to an address that is not yet
-// anyone's sourceIp/acceptedIp for as long as some device has a pending
-// token, because the enrol line proving that token has to be able to
-// arrive from the very address it is enrolling. Once every pending
-// token is burned (TryEnrol) or expires, this reports false again and
-// the port closes to unknown addresses. Called once per accepted TCP
-// connection, not per line, so a full walk of pendingByDevice is cheap
-// enough here even though Allowed's map lookups are preferred on the
-// hotter per-line path.
-func (r *Registry) AcceptsUnknown() bool {
+// AcceptsConnectionFrom reports whether host is the address some
+// unexpired pending enrolment token was minted for -- the connection
+// gate, narrowed by issue #1291.
+//
+// It replaces #1281's AcceptsUnknown, which asked only whether any
+// token was pending anywhere and so left the syslog port reachable by
+// every unknown address on the network for the whole life of any
+// enrolment. The window enrolment actually needs is one address: the
+// router the operator is enrolling, which they already named when they
+// minted the token. Everyone else is refused at accept, before TLS and
+// before a byte is read, exactly as an unknown address was before a
+// token existed.
+//
+// Once every pending token is burned (TryEnrol) or expires, this
+// reports false for every host and the port is closed to unknown
+// addresses again. Called once per accepted TCP connection, not per
+// line, so a full walk of pendingByDevice is cheap enough here even
+// though Allowed's map lookups are preferred on the hotter per-line
+// path.
+func (r *Registry) AcceptsConnectionFrom(host string) bool {
+	key := normalizeIP(host)
+	if key == "" {
+		return false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	now := time.Now()
 	for _, p := range r.pendingByDevice {
-		if now.Before(p.expiresAt) {
+		if now.Before(p.expiresAt) && p.expected == key {
 			return true
 		}
 	}
@@ -275,6 +318,20 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	p := r.pendingByDevice[device]
 	now := time.Now()
 	if now.After(p.expiresAt) {
+		return false
+	}
+	// The token is redeemable from the one address it was minted for and
+	// nowhere else (issue #1291). The connection gate
+	// (AcceptsConnectionFrom) already refuses every other address before
+	// a byte is read, so reaching here from the wrong one means the
+	// address was allowed for some other reason -- it is another
+	// device's declared or enrolled address. Checking again here keeps
+	// the rule true of the redemption itself rather than only of the
+	// door in front of it, so no future change to the accept path can
+	// quietly widen what a token accepts.
+	if normalizeIP(host) != p.expected {
+		r.refuseLocked(normalizeIP(host))
+		deviceLog.Info("refused enrolling " + device + " at " + normalizeIP(host) + ": the token was minted for " + p.expected)
 		return false
 	}
 	info, ok := r.byID[device]
