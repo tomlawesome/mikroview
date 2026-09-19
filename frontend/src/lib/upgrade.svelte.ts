@@ -112,7 +112,7 @@ class UpgradeState {
     if (r.total > 0 && r.behind > 0) {
       return `upgraded from ${u.previous} · ${r.behind} of ${r.total} routers still on the old setup · paste ${TITLES.ca} again on each`
     }
-    return `upgraded from ${u.previous} · paste step 1 of the setup again on each router`
+    return `upgraded from ${u.previous} · paste ${TITLES.ca} again on each router`
   }
 }
 

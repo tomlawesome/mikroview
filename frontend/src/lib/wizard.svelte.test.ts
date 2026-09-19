@@ -15,8 +15,10 @@ vi.mock('./api', () => ({
 }))
 
 import {
+  fetchDevices,
   fetchRefusedSenders,
   fetchSetupCommands,
+  fetchSetupStatus,
   mintEnrolment,
   rebindEnrolment,
   saveSetupAddress,
@@ -240,6 +242,60 @@ describe('the minted token reaches the block the operator pastes (#1281)', () =>
     expect(fetchSetupCommands).toHaveBeenCalledWith(
       expect.objectContaining({ enrolToken: 'examplenotarealtoken' }),
     )
+  })
+})
+
+// 2026-09-18 audit, stage 4 finding 14: refresh() already polls the
+// device list, which carries whether the server still considers an
+// enrolment pending -- but nothing reconciled the cached token against
+// it. After a restart the pending token is gone server-side (it was
+// never persisted), yet the wizard went on counting its cached
+// `enrolment` down to zero, showing a countdown against a token the
+// server had already forgotten.
+describe('refresh reconciles the cached enrolment against the poll', () => {
+  function deviceRow(over: Partial<import('./types').Device> = {}): import('./types').Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '',
+      configured: true,
+      firstSeen: '2026-09-19T09:00:00Z',
+      lastSeen: '2026-09-19T09:00:00Z',
+      eventCount: 0,
+      status: 'live',
+      ...over,
+    }
+  }
+
+  it('drops the cached token once the polled device no longer shows one pending', async () => {
+    wizardState.status = status()
+    wizardState.ledgerDevice = 'edge-1'
+    wizardState.enrolment = { token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' }
+    wizardState.enrolmentMintedAt = '2026-09-19T12:00:00Z'
+
+    vi.mocked(fetchSetupStatus).mockResolvedValue(status())
+    vi.mocked(fetchDevices).mockResolvedValue([deviceRow()])
+
+    await wizardState.refresh()
+
+    expect(wizardState.enrolment).toBeNull()
+    expect(wizardState.enrolmentMintedAt).toBe('')
+  })
+
+  it('keeps the cached token while the poll still shows it pending', async () => {
+    wizardState.status = status()
+    wizardState.ledgerDevice = 'edge-1'
+    wizardState.enrolment = { token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' }
+    wizardState.enrolmentMintedAt = '2026-09-19T12:00:00Z'
+
+    vi.mocked(fetchSetupStatus).mockResolvedValue(status())
+    vi.mocked(fetchDevices).mockResolvedValue([
+      deviceRow({ enrolment: { pending: true, expiresAt: '2026-09-19T12:15:00Z' } }),
+    ])
+
+    await wizardState.refresh()
+
+    expect(wizardState.enrolment).not.toBeNull()
   })
 })
 

@@ -349,6 +349,7 @@ class WizardState {
       this.status = s
       this.devices = d
       this.error = null
+      this.reconcileEnrolment(d)
       // The field's default order (#1213): the operator's own stored
       // answer first -- it survived whatever restart brought this
       // session here -- then the browser's own host, which is the
@@ -479,6 +480,31 @@ class WizardState {
     this.enrolPassword = ''
     this.enrolMinting = false
     this.rebindError = null
+  }
+
+  // reconcileEnrolment closes the gap the 2026-09-18 audit found
+  // (stage 4, finding 14): `refresh()` already polls the device list,
+  // which carries the server's own live answer to "is a token still
+  // pending for this router" (Device.enrolment.pending), but nothing
+  // ever compared it against the cached `enrolment` this object trusts
+  // for the countdown. Pending tokens are memory-only server-side, so a
+  // restart during the 15-minute window forgets it silently -- the
+  // router presents the exact line it was told to paste and is refused
+  // with no error -- while the wizard's own clock ran on regardless.
+  // Once the poll says nothing is pending any more, the cached token is
+  // either spent or gone; either way there is nothing left to count
+  // down, so it is cleared the same way clearEnrolment does.
+  private reconcileEnrolment(devices: Device[]): void {
+    if (!this.enrolment || !this.ledgerDevice) return
+    // Only acts once the poll actually names this router: an empty or
+    // partial device list (a poll that has not caught up yet, or does
+    // not carry this router for some other reason) says nothing either
+    // way and must not be read as "the token is gone".
+    const row = devices.find((d) => d.id === this.ledgerDevice)
+    if (row && !row.enrolment?.pending) {
+      this.enrolment = null
+      this.enrolmentMintedAt = ''
+    }
   }
 
   // openAddRouter is the fleet's Add a router action and the Entities

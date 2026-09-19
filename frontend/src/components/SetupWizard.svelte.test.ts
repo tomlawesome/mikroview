@@ -2056,6 +2056,25 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
     expect(container.querySelector('pre.stale')).toBeTruthy()
   })
 
+  // 2026-09-18 audit, stage 6 finding 10: "Reroll to mint another" opens
+  // the same mint form a live token's Reroll does, and that form always
+  // offers "Keep the token I have" -- but there is no token left to
+  // keep, only the dead one the banner right above it is announcing.
+  // Offering to keep a token that cannot be pasted is worse than not
+  // offering the choice at all.
+  it('does not offer to keep an already-expired token', async () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: '2020-01-01T00:00:00Z' }
+    wizardState.enrolmentMintedAt = '2020-01-01T00:00:00Z'
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll to mint another' }))
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+
+    expect(screen.queryByRole('button', { name: 'Keep the token I have' })).toBeNull()
+  })
+
   // The refused box is #1132's shape reused, never a fifth flavour --
   // and it never claims the address is this router.
   it('warns about lines refused since this walk minted its token, without diagnosing whose they are', async () => {
