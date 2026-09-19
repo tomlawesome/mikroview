@@ -67,10 +67,13 @@ failed=0
 
 # api_get <api-path> <destination> -- GET one thing from this project's
 # API with whichever credential the environment offers. Returns non-zero
-# for anything that is not a 200, without distinguishing why: every
-# caller here decides for itself whether a miss is fatal.
+# for anything that is not a 200, without distinguishing why in its exit
+# code: every caller here decides for itself whether a miss is fatal.
+# curl/glab's own error text is logged either way, so a real failure
+# (timeout, DNS, 502) reads as what it was instead of looking identical
+# to an expected 404.
 api_get() {
-  local path="$1" dest="$2"
+  local path="$1" dest="$2" err
   if [ -n "${CI_JOB_TOKEN:-}" ]; then
     : "${CI_API_V4_URL:?fetch-upgrade-fixtures: CI_JOB_TOKEN is set but CI_API_V4_URL is not}"
     # --connect-timeout/--max-time bound a hung connection or a stalled
@@ -78,10 +81,18 @@ api_get() {
     # timeout) rather than failing the whole job on the first hiccup.
     # Without these a dead registry hangs this call for the shell's
     # default (none), which stalls the job until its own CI timeout.
-    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused --retry-delay 2 \
-      -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>/dev/null
+    if err="$(curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused --retry-delay 2 \
+      -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>&1)"; then
+      return 0
+    fi
+    log "curl: ${err:-curl gave no error output}"
+    return 1
   else
-    glab api "$path" > "$dest" 2>/dev/null
+    if err="$(glab api "$path" 2>&1 >"$dest")"; then
+      return 0
+    fi
+    log "glab api: ${err:-glab gave no error output}"
+    return 1
   fi
 }
 
