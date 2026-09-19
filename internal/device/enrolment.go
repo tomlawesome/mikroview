@@ -124,6 +124,25 @@ func randomEnrolToken() string {
 	return string(out)
 }
 
+// validateExpectedAddress normalises and validates raw as the one
+// address issue #1291's enrolment window may bind to -- shared by
+// MintEnrolment (binding a fresh token) and RebindEnrolment (pointing an
+// existing one elsewhere). Audit finding 26b: this used to be two
+// copies of the same three lines, one per caller, so a future change to
+// what counts as a valid expected address could make minting and
+// rebinding quietly disagree about it. One helper, both callers, so
+// they cannot drift apart.
+func validateExpectedAddress(raw string) (key string, err error) {
+	key = normalizeIP(strings.TrimSpace(raw))
+	if key == "" {
+		return "", ErrExpectedAddressRequired
+	}
+	if _, parseErr := netip.ParseAddr(key); parseErr != nil {
+		return "", ErrExpectedAddressInvalid
+	}
+	return key, nil
+}
+
 // MintEnrolment mints a fresh enrolment token for device, replacing any
 // pending one -- this is also the "Reroll" affordance: minting again on
 // an already-pending device simply invalidates the old token and hands
@@ -133,12 +152,9 @@ func (r *Registry) MintEnrolment(device, expected string, now time.Time) (token 
 	// The expected address is required (issue #1291): it is what the
 	// enrolment window binds to, and a token minted without one would be
 	// the old global gate again under a new name.
-	key := normalizeIP(strings.TrimSpace(expected))
-	if key == "" {
-		return "", time.Time{}, ErrExpectedAddressRequired
-	}
-	if _, parseErr := netip.ParseAddr(key); parseErr != nil {
-		return "", time.Time{}, ErrExpectedAddressInvalid
+	key, err := validateExpectedAddress(expected)
+	if err != nil {
+		return "", time.Time{}, err
 	}
 
 	r.mu.Lock()
@@ -187,12 +203,9 @@ var ErrNotRefused = errors.New("device: that address has not been refused by the
 // listener under its own steam, so a caller who could do this gains no
 // reach they did not already have.
 func (r *Registry) RebindEnrolment(device, addr string) error {
-	key := normalizeIP(strings.TrimSpace(addr))
-	if key == "" {
-		return ErrExpectedAddressRequired
-	}
-	if _, err := netip.ParseAddr(key); err != nil {
-		return ErrExpectedAddressInvalid
+	key, err := validateExpectedAddress(addr)
+	if err != nil {
+		return err
 	}
 
 	r.mu.Lock()
@@ -345,6 +358,45 @@ func (r *Registry) IsEnrolledAt(device, host string) bool {
 		(info.AcceptedIP != "" && normalizeIP(info.AcceptedIP) == key)
 }
 
+// addressHeldByAnotherDevice reports whether key is already some device
+// other than device's -- declared in config.yaml (byIP) or enrolled
+// earlier (byAcceptedIP) -- and, if so, which one and through which of
+// those two. Shared by TryEnrol and EnrolFromPushedAddresses (audit
+// finding 26c): both enforce the identical "an address belongs to one
+// router" rule, and used to do it via two independently maintained
+// copies of the same two lookups. The copies had already drifted --
+// TryEnrol refused and logged the collision into the refused-senders
+// list the wizard renders; EnrolFromPushedAddresses silently skipped the
+// device, leaving no trace anywhere that a colliding upgrade-time push
+// had even been seen. Must be called with r.mu held.
+func (r *Registry) addressHeldByAnotherDevice(key, device string) (heldBy string, configured, ok bool) {
+	if held, taken := r.byIP[key]; taken && held.ID != device {
+		return held.ID, true, true
+	}
+	if held, taken := r.byAcceptedIP[key]; taken && held.ID != device {
+		return held.ID, false, true
+	}
+	return "", false, false
+}
+
+// collisionReason renders addressHeldByAnotherDevice's answer as the
+// tail of a refusal log line. The two cases read differently to an
+// operator: a config.yaml declaration is fixed by editing that file, but
+// an earlier enrolment is state this instance itself created and can
+// itself let go of. Stage 6 finding 1 of the #1291 audit: the "already
+// enrolled as" case used to stop at naming the other device, which
+// leaves an operator whose router was simply replaced with new hardware
+// no way to learn that re-enrolling the old id at a different address,
+// or deleting its device record outright, is what frees this one for the
+// replacement.
+func collisionReason(heldBy string, configured bool) string {
+	if configured {
+		return "declared as " + heldBy
+	}
+	return "already enrolled as " + heldBy +
+		" -- free this address by re-enrolling " + heldBy + " at a different one, or by deleting " + heldBy + "'s device record"
+}
+
 // TryEnrol inspects one line for the enrolment marker; if it names a
 // device's current, unexpired, unused pending token, that device is
 // enrolled at host (AcceptedIP/EnrolledAt set, the token burned) and
@@ -409,14 +461,9 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	// so the operator can redeem it from the right address without
 	// rerolling. The address is counted as refused, so the wizard's
 	// warning box shows that something arrived and was not accepted.
-	if held, taken := r.byIP[key]; taken && held.ID != device {
+	if heldBy, configured, taken := r.addressHeldByAnotherDevice(key, device); taken {
 		r.refuseLocked(key)
-		deviceLog.Info("refused enrolling " + device + " at " + key + ": declared as " + held.ID)
-		return false
-	}
-	if held, taken := r.byAcceptedIP[key]; taken && held.ID != device {
-		r.refuseLocked(key)
-		deviceLog.Info("refused enrolling " + device + " at " + key + ": already enrolled as " + held.ID)
+		deviceLog.Info("refused enrolling " + device + " at " + key + ": " + collisionReason(heldBy, configured))
 		return false
 	}
 
@@ -559,12 +606,16 @@ func (r *Registry) EnrolFromPushedAddresses(addresses AddressTables, now time.Ti
 		}
 		sort.Strings(addrs)
 		key := normalizeIP(addrs[0])
-		// Same rule as TryEnrol: never take an address another device
-		// already holds.
-		if held, taken := r.byIP[key]; taken && held.ID != dev {
-			continue
-		}
-		if held, taken := r.byAcceptedIP[key]; taken && held.ID != dev {
+		// Same rule as TryEnrol -- literally the same check, via
+		// addressHeldByAnotherDevice (audit finding 26c) -- never take an
+		// address another device already holds. And, since that finding,
+		// the same consequence too: the collision is refused and logged
+		// rather than skipped in silence, so a colliding upgrade-time push
+		// leaves the same trace in the wizard's warning box a colliding
+		// live enrolment does.
+		if heldBy, configured, taken := r.addressHeldByAnotherDevice(key, dev); taken {
+			r.refuseLocked(key)
+			deviceLog.Info("upgrade: refused enrolling " + dev + " at " + key + ": " + collisionReason(heldBy, configured))
 			continue
 		}
 		info.AcceptedIP = key

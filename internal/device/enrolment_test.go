@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -737,5 +738,115 @@ func TestRebindEnrolmentNeedsAPendingToken(t *testing.T) {
 	}
 	if r.AcceptsConnectionFrom("10.10.0.5") {
 		t.Error("rebinding with nothing pending opened the window, want it to grant nothing")
+	}
+}
+
+// TestValidateExpectedAddressSharedByMintAndRebind is audit finding
+// 26b: MintEnrolment and RebindEnrolment used to validate the expected
+// address via two independent copies of the same three lines, so a
+// future rule change could make them disagree about what counts as
+// valid. This exercises the shared validateExpectedAddress helper
+// directly -- if a later change reintroduces a second copy inside one of
+// the two callers instead of editing this one, that caller stops
+// agreeing with this test's cases without this test itself changing.
+func TestValidateExpectedAddressSharedByMintAndRebind(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		addr    string
+		wantErr error
+		wantKey string
+	}{
+		{"empty", "", ErrExpectedAddressRequired, ""},
+		{"only spaces", "   ", ErrExpectedAddressRequired, ""},
+		{"a hostname, not an address", "router.example.com", ErrExpectedAddressInvalid, ""},
+		{"nonsense", "10.0.0.999", ErrExpectedAddressInvalid, ""},
+		{"a valid address", "10.10.0.1", nil, "10.10.0.1"},
+		{"padded with spaces", "  10.10.0.1  ", nil, "10.10.0.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key, err := validateExpectedAddress(tc.addr)
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("validateExpectedAddress(%q) error = %v, want %v", tc.addr, err, tc.wantErr)
+			}
+			if key != tc.wantKey {
+				t.Errorf("validateExpectedAddress(%q) key = %q, want %q", tc.addr, key, tc.wantKey)
+			}
+		})
+	}
+
+	// Both callers must actually go through the helper, not merely agree
+	// with it by coincidence: same bad input, same error, from each.
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.MintEnrolment("hap-ax3", "not-an-ip", now); !errors.Is(err, ErrExpectedAddressInvalid) {
+		t.Errorf("MintEnrolment(bad address) error = %v, want ErrExpectedAddressInvalid", err)
+	}
+	if err := r.RebindEnrolment("hap-ax3", "not-an-ip"); !errors.Is(err, ErrExpectedAddressInvalid) {
+		t.Errorf("RebindEnrolment(bad address) error = %v, want ErrExpectedAddressInvalid", err)
+	}
+}
+
+// TestEnrolFromPushedAddressesRefusesAnAddressAnotherDeviceAlreadyHolds
+// is audit finding 26c: the "an address belongs to one router" check is
+// shared with TryEnrol (addressHeldByAnotherDevice), and the two must
+// behave alike, not just agree on the outcome. Before this fix,
+// EnrolFromPushedAddresses silently skipped a colliding device -- no
+// refusal recorded, nothing for the wizard's warning box to show -- so a
+// push-time collision at upgrade left no trace anywhere. It must land in
+// Refused() exactly as a colliding live enrolment through TryEnrol does.
+func TestEnrolFromPushedAddressesRefusesAnAddressAnotherDeviceAlreadyHolds(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	for _, id := range []string{"held", "claimant"} {
+		if _, err := r.Create(id, id, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enrolAt(t, r, "held", "10.10.0.1")
+
+	tables := pushedAddresses{"claimant": {"10.10.0.1/24"}}
+	if enrolled := r.EnrolFromPushedAddresses(tables, now); len(enrolled) != 0 {
+		t.Fatalf("EnrolFromPushedAddresses() = %v, want none: the address is already held", enrolled)
+	}
+	for _, info := range r.List() {
+		if info.ID == "claimant" && info.AcceptedIP != "" {
+			t.Errorf("claimant AcceptedIP = %q, want it left unenrolled", info.AcceptedIP)
+		}
+	}
+
+	refused := r.Refused()
+	if len(refused) != 1 || refused[0].Address != "10.10.0.1" {
+		t.Errorf("Refused() after a colliding push-time enrolment = %+v, want the address recorded exactly as a colliding TryEnrol would leave it", refused)
+	}
+}
+
+// TestCollisionReasonNamesTheWayOut is stage 6 finding 1 of the #1291
+// audit: TryEnrol's refusal for an address already enrolled to another
+// device used to stop at naming that device ("already enrolled as
+// <id>"), with no hint that the address is recoverable. An operator
+// whose router was swapped for new hardware at the same address has no
+// way to know that re-enrolling the old id elsewhere, or deleting its
+// device record, frees the address for the replacement. The wording
+// change belongs in the message every caller of collisionReason shares
+// (TryEnrol, EnrolFromPushedAddresses), so this checks it once at the
+// source rather than in each caller.
+func TestCollisionReasonNamesTheWayOut(t *testing.T) {
+	got := collisionReason("old-router", false)
+	if !strings.Contains(got, "old-router") {
+		t.Fatalf("collisionReason(enrolled) = %q, want it to name the device that holds the address", got)
+	}
+	if !strings.Contains(got, "re-enrolling") || !strings.Contains(got, "deleting") {
+		t.Errorf("collisionReason(enrolled) = %q, want it to say how to free the address: re-enrol the holder elsewhere, or delete its device record", got)
+	}
+
+	// The config.yaml case is a different fix (edit that file) and
+	// deliberately keeps its own, unchanged wording -- this only asserts
+	// the two cases stay distinguishable, not that the declared case also
+	// grows the same guidance it does not apply to.
+	if got := collisionReason("core", true); !strings.Contains(got, "declared as core") {
+		t.Errorf("collisionReason(configured) = %q, want the declared-in-config wording unchanged", got)
 	}
 }
