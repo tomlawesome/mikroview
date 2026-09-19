@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -97,21 +98,42 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		StartTime:     time.Now(),
 		Version:       "test-version",
 	}
-	// The wiring main does (#1170): the registry attributes a syslog
-	// source to the router that pushed that address as its own, so a
-	// test server answers the same way the app does.
-	s.Devices.SetAddressTables(s.RouterState)
+	// The wiring main does (issue #1281): the drop-list's own-range
+	// refusal reads the registry's real evidence (config.yaml's sourceIp
+	// and a redeemed enrolment token's acceptedIp), not the pushed
+	// tables, so a test server answers the same way the app does.
+	s.Droplist.SetOwnRanges(s.Devices)
 	return s, st
 }
 
-// pushingRouter is what a router looks like to the registry since
-// #1170: an ingest token names it on a push, and its own pushed
-// /ip/address table is what attributes its syslog. cidr is written the
-// way RouterOS writes one ("203.0.113.9/24").
+// pushingRouter is what a router looks like to the registry: an ingest
+// token names it on a push (so its pushed /ip/address table exists for
+// display, e.g. GET /api/routeros/{device}/addresses), and -- issue
+// #1281's audit having removed that table as attribution evidence -- it
+// is also enrolled directly at cidr's host address, the same redeemed-
+// token evidence a real "mikroview-enrol <token>" syslog line would
+// establish. cidr is written the way RouterOS writes one
+// ("203.0.113.9/24"); callers that go on to Resolve() its host address
+// see it attributed to id, exactly as #1170's original pushed-table
+// behaviour used to give them before #1281 narrowed what counts as
+// evidence.
 func pushingRouter(t *testing.T, s *Server, id, cidr string) {
 	t.Helper()
-	s.Devices.Ensure(id, time.Now())
+	now := time.Now()
+	s.Devices.Ensure(id, now)
 	pushIPAddresses(t, s, id, ingest.IPAddressEntry{Address: cidr})
+
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		t.Fatalf("pushingRouter: %q does not parse as a CIDR: %v", cidr, err)
+	}
+	token, _, err := s.Devices.MintEnrolment(id, now)
+	if err != nil {
+		t.Fatalf("pushingRouter: MintEnrolment(%q): %v", id, err)
+	}
+	if !s.Devices.TryEnrol(prefix.Addr().String(), []byte("mikroview-enrol "+token)) {
+		t.Fatalf("pushingRouter: TryEnrol failed to enrol %q at %q", id, prefix.Addr().String())
+	}
 }
 
 func TestHandleHealthz(t *testing.T) {
