@@ -1190,7 +1190,10 @@ describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
 
   // A user tier reaches this screen but not the endpoint (admin-only),
   // so it must not ask -- and #657's grammar is absent, not disabled.
-  it('asks for nothing and draws neither affordance below admin', async () => {
+  // The berth goes with them: POST /api/devices is admin-only too, so a
+  // user who could open it would name a router, press Next and meet a
+  // 403 with nothing to do about it.
+  it('asks for nothing and draws no add-or-enrol affordance below admin', async () => {
     authState.role = 'user'
     fetchRefusedSenders.mockClear()
     appState.devices = [
@@ -1202,5 +1205,6 @@ describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
     expect(fetchRefusedSenders).not.toHaveBeenCalled()
     expect(container.querySelector('.fcard.refused')).toBeNull()
     expect(container.querySelector('.row-action')).toBeNull()
+    expect(container.querySelector('.berth-trigger')).toBeNull()
   })
 })

@@ -809,6 +809,11 @@
               <div class="frow dim">{REFUSED_STRIP_LEAD} Re-enrol the router it belongs to, or add it as a new one.</div>
             </div>
           {/each}
+          {#if isAdmin}
+          <!-- Adding a router is admin-only: POST /api/devices refuses
+               anyone else, and #657's grammar is absent rather than
+               disabled, so a user tier does not meet a berth that would
+               only fail at the end of the walk. -->
           <div class="fcard berth">
             <!-- #1168: the resting state says what it is. #718 asked for
                  no words at all, on the reading that an empty shape in a
@@ -822,6 +827,7 @@
               aria-label="Add a router"
             ><span class="berth-label">+ add a router</span></button>
           </div>
+          {/if}
         </div>
     </div>
 

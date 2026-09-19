@@ -405,6 +405,18 @@ class WizardState {
   launch() {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'
+    // The first-run ledger is about the instance, not about whichever
+    // router a Re-enrol… walk was in the middle of. close() leaves that
+    // walk's state behind -- deliberately, so reopening the same door
+    // resumes it -- so this door clears it, or Run setup… would show
+    // Name your router already done, and Send logs would offer that
+    // other router's live token to reroll (#1284).
+    this.ledgerDevice = ''
+    this.tokenDevice = ''
+    this.token = ''
+    this.enrolment = null
+    this.enrolmentMintedAt = ''
+    this.enrolmentError = null
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null

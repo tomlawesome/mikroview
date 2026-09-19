@@ -71,6 +71,7 @@
     TOKEN_EXPIRED_LINE,
     TOKEN_REROLL_EXPIRED_LABEL,
     TOKEN_REROLL_LABEL,
+    TITLES,
     type LedgerStep,
     type StepKey,
   } from '../lib/setupsteps'
@@ -1193,7 +1194,7 @@
                   </div>
                   {#if wizardState.devices.length === 0}
                     <p class="note">
-                      No routers known yet — finish step 2 first, and this list fills in on its own.
+                      No routers known yet — finish {TITLES.name} first, and this list fills in on its own.
                     </p>
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}
@@ -1390,7 +1391,7 @@
                   </div>
                   {#if wizardState.devices.length === 0}
                     <p class="note">
-                      No routers known yet — finish step 2 first, and this list fills in on its own.
+                      No routers known yet — finish {TITLES.name} first, and this list fills in on its own.
                     </p>
                   {/if}
                   {#if tokenError}<p class="load-error">{tokenError}</p>{/if}

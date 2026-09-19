@@ -24,7 +24,7 @@ credential. Instead, RouterOS pushes to MikroView: firewall log lines
 over syslog (steps 1–3, required), optionally a copy of its own config
 for host names and rule lookups (step 4), and optionally a nightly
 config backup MikroView keeps encrypted (step 7, issue #394). The
-wizard's version of step 2 adds one line this page's does not — see
+wizard's version of **Send logs** adds one line this page's does not — see
 "The wizard's enrol line" there. The optional
 pushes carry an ingest token MikroView mints for that device — a
 MikroView credential on the router, never a router credential in
@@ -1158,21 +1158,24 @@ one; it only ever reads the header to confirm what arrived.
 
 ## Adding another router
 
-In the app, Fleet's **Add a router** action (in the screen's header row)
-opens the same ledger at **Name your router**, and the Entities screen's
-"+ add a router" berth opens the same place.
+In the app, the Entities screen's "+ add a router" berth opens the same
+ledger at **Name your router**. That is the screen an administrator gets
+for the fleet, so everything below is there; the standalone Fleet screen
+a read-only account sees carries the same router cards without the
+actions.
 
-<!-- shot: Fleet's header row, showing the Add a router action -->
+<!-- shot: the Entities routers row, showing the + add a router berth -->
 
-Each router's row on Fleet also carries **Re-enrol…**, which opens the
-ledger at **Send logs** with a fresh token for that router — for a
-router you have replaced or given a new address, where the old token's
-address no longer applies. A quiet strip under the Fleet list, present
-whenever there is something to show, lists refused senders — an address
-that has sent lines without a valid enrol line — so you can tell an
-unrecognised address apart from a router that simply is not sending yet.
+Each router's card also carries **Re-enrol…**, which opens the ledger at
+**Send logs** with a fresh token for that router — for a router you have
+replaced or given a new address, where the old token's address no longer
+applies. Beside the routers, a card per refused sender appears whenever
+there is something to show — an address that has sent lines without a
+valid enrol line — so you can tell an unrecognised address apart from a
+router that simply is not sending yet. There is no control on it that
+accepts an address: a router is accepted only by presenting a token.
 
-<!-- shot: the refused-senders strip under the Fleet list -->
+<!-- shot: a refused-sender card beside the routers on Entities -->
 
 **Run setup…** is unchanged: it still opens the first-run ledger with
 **Trust the certificate** in front.
