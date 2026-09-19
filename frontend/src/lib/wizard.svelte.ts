@@ -380,6 +380,12 @@ class WizardState {
       token: opts.token || undefined,
       device: opts.device || undefined,
       version: this.pickedVersion || undefined,
+      // The minted token travels with every command request, not only
+      // the one that follows a mint: the block is re-rendered whenever
+      // the address or the version changes, and a re-render that
+      // dropped the enrol line would quietly hand the operator a block
+      // that configures logging and enrols nothing.
+      enrolToken: this.enrolment?.token || undefined,
     })
     // A newer call started (and may already have answered) while this
     // one was in flight -- its result is the stale one now, whichever
@@ -473,6 +479,10 @@ class WizardState {
     }
     this.enrolment = result
     this.enrolmentMintedAt = new Date().toISOString()
+    // Re-render the block so its last line carries the token just
+    // minted -- the server writes that line, and this is the only call
+    // that tells it which token to write.
+    await this.refreshCommands({ device: this.ledgerDevice })
   }
 
   // refreshRefused reads the dropped-line addresses (#1281), polled

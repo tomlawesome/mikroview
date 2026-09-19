@@ -1906,6 +1906,12 @@ export interface SetupCommandsRequest {
   kinds?: string[]
   version?: string
   device?: string
+  // enrolToken is the raw enrolment token minted for device (#1281),
+  // echoed back so the server can write it into the block's last line.
+  // Only a hash of it is stored, so the server cannot look it up; it
+  // verifies this value against that hash and renders nothing if it
+  // does not match device's current, unexpired token.
+  enrolToken?: string
 }
 
 // --- Log every rule (#435) --------------------------------------------
