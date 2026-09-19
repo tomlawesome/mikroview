@@ -62,7 +62,7 @@ type Info struct {
 	// survives a restart.
 	AcceptedIP string `json:"acceptedIp"`
 	// EnrolledAt is when AcceptedIP was set, zero until then.
-	EnrolledAt time.Time `json:"enrolledAt"`
+	EnrolledAt time.Time `json:"enrolledAt,omitzero"`
 	// RegisteredAt is when the operator confirmed this router on the
 	// device itself -- the ledger's final Register step (#1291) -- zero
 	// until they do. It records intent and grants nothing: registering
@@ -75,7 +75,7 @@ type Info struct {
 	// reads as the operator's progress: enrolled but never registered is
 	// an enrolment someone walked away from part way, and the ledger
 	// reopens at what is left.
-	RegisteredAt time.Time `json:"registeredAt"`
+	RegisteredAt time.Time `json:"registeredAt,omitzero"`
 }
 
 // Source is a syslog source address no device has claimed: neither a

@@ -3,6 +3,7 @@
 package device
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -646,5 +647,30 @@ func TestARouterEnrolledBeforeRegistrationExistedReadsAsRegistered(t *testing.T)
 	// Register step to walk.
 	if spare := byID["never-enrolled"]; !spare.RegisteredAt.IsZero() {
 		t.Errorf("registeredAt = %v on a device that never enrolled, want zero", spare.RegisteredAt)
+	}
+}
+
+// TestABareDeviceCarriesNoTimestamps: the wizard reads these two as
+// "absent until it happened" -- frontend/src/lib/types.ts declares both
+// optional, and setupsteps.ts's register witness is `row?.registeredAt
+// ? ... : ”`. A zero time.Time marshals to "0001-01-01T00:00:00Z",
+// which is a non-empty string, so without omitzero every device that
+// has never been registered reads as registered, and the Register step
+// is done before the operator has touched it. persistedDevice's own
+// copies of these fields already carry omitzero; the wire type did not.
+// Found by the v0.6.0 audit (#1257).
+func TestABareDeviceCarriesNoTimestamps(t *testing.T) {
+	data, err := json.Marshal(Info{ID: "hap-ax3", Name: "hap-ax3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"registeredAt", "enrolledAt"} {
+		if v, present := wire[key]; present {
+			t.Errorf("a device that has never been enrolled or registered sent %s = %v, want the key absent", key, v)
+		}
 	}
 }
