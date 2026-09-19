@@ -166,7 +166,7 @@ describe('Fleet deck identity (#657/#706)', () => {
     const cards = [...container.querySelectorAll('.fcard')]
     const office = cards.find((c) => c.textContent?.includes('office'))
     expect(office?.textContent).toContain(
-      'Declared as 192.168.88.1, nothing arrived. If 10.0.20.1 below is the same router on another of its addresses, Run setup… step 2 shows the one-line fix.',
+      'Declared as 192.168.88.1, nothing arrived. If 10.0.20.1 below is the same router on another of its addresses, Run setup… ▸ Send logs shows the one-line fix.',
     )
     const arriving = cards.find((c) => c.textContent?.includes('seen on the wire'))
     expect(arriving?.textContent).not.toContain('Declared as')

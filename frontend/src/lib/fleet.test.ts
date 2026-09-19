@@ -23,7 +23,7 @@ function device(setup?: Device['setup']): Device {
 describe('setupEcho', () => {
   it('names the remedy while a router is behind', () => {
     expect(setupEcho(device({ standing: 'behind', scriptVersion: 4, currentVersion: 5 }))).toBe(
-      'setup behind · paste step 1 again',
+      'setup behind · paste Trust the certificate again',
     )
   })
 

@@ -581,7 +581,11 @@ export interface LedgerStep {
 
 // TITLES is every step's name, by key. The step list, the header and
 // the spoken announcement all read from here, so they cannot drift.
-const TITLES: Record<StepKey, string> = {
+// Exported because the fleet's own sentences point at a step by name:
+// a number would be wrong the next time the walking order moves, which
+// #1284 is exactly what happened to (the source-split echo sent an
+// operator to "step 2" long after Send logs stopped being second).
+export const TITLES: Record<StepKey, string> = {
   ca: 'Trust the certificate',
   name: 'Name your router',
   syslog: 'Send logs',

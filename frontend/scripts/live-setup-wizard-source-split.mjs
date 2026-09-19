@@ -5,9 +5,16 @@
 // with whichever interface faces mikroview -- so the declared device
 // sits silent, the real stream auto-discovers as a second device, and a
 // token minted for the declared identity enriches nothing. The wizard's
-// step 2 reads this as partial, states both facts, and prints the
-// remedy with the operator's values; the router cards carry a one-line
-// echo pointing back at it.
+// Send logs step reads this as partial, states both facts, and prints
+// the remedy with the operator's values; the router cards carry a
+// one-line echo pointing back at it.
+//
+// #1284 inserted a Name your router step ahead of it in the first-run
+// ledger (SETUP_STEPS is now ['ca', 'name', 'syslog', ...]), so Send
+// logs is the ledger's third pane now, not its second -- this drives
+// into `li:nth-child(3)` below for that reason. The card's own echo
+// named "step 2" until that same insertion made it point at the wrong
+// step; it names Send logs now, which cannot drift again.
 //
 // live-env.sh's harness declares one router (live-router, 127.0.0.1)
 // and feeds it from that same address, so the real registry never
@@ -55,11 +62,11 @@ await page.route('**/api/devices', async (route) => {
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
 })
 
-// --- The wizard: step 2 ----------------------------------------------------
+// --- The wizard: Send logs (ledger position 3) -----------------------------
 await goTo(page, 'Run setup…')
 const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible' })
-await page.locator('.setup-wizard .steps li:nth-child(2) .step-row').click()
+await page.locator('.setup-wizard .steps li:nth-child(3) .step-row').click()
 
 // The split reads as partial: evidence arrived, composed wrongly. That
 // is the arrived voice, never attention (nothing on mikroview's side
@@ -73,7 +80,7 @@ const detail = ((await observation.textContent()) ?? '').replace(/\s+/g, ' ').tr
 const silent = ((await shortfall.textContent()) ?? '').replace(/\s+/g, ' ').trim()
 check(
   detail === "Connected — but from 10.0.20.1, an address you haven't declared.",
-  `step 2 states what arrived, no diagnosis (${detail})`,
+  `the Send logs step states what arrived, no diagnosis (${detail})`,
 )
 check(
   silent === '192.168.88.1, which you declared in config.yaml, has sent nothing.',
@@ -101,7 +108,7 @@ check(
 check((await page.locator('.setup-wizard .split button.copy').count()) === 1, 'the command has its Copy control')
 
 // The step list carries the split as the receipt.
-const receipt = ((await page.locator('.setup-wizard .steps li:nth-child(2) .step-receipt').textContent()) ?? '').trim()
+const receipt = ((await page.locator('.setup-wizard .steps li:nth-child(3) .step-receipt').textContent()) ?? '').trim()
 check(receipt === 'syslog from 10.0.20.1 · declared 192.168.88.1 silent', `the receipt names both sides (${receipt})`)
 
 // Partial is evidence, so Next proceeds without the heavy warning.
@@ -110,14 +117,14 @@ check((await page.locator('.setup-wizard .heavy').count()) === 0, 'Next proceeds
 await page.click('.setup-wizard header button.close')
 await wizard.waitFor({ state: 'detached' })
 
-// --- The router cards: one echo, pointing at step 2 ------------------------
+// --- The router cards: one echo, pointing back at the ledger ---------------
 await goTo(page, 'Entities')
 const echo = page.locator('.fcard', { hasText: 'Declared as 192.168.88.1, nothing arrived.' })
 await echo.waitFor({ state: 'visible', timeout: 15000 })
 const echoText = ((await echo.textContent()) ?? '').replace(/\s+/g, ' ')
 check(
-  /If 10\.0\.20\.1 below is the same router on another of its addresses, Run setup… step 2 shows the one-line fix\./.test(echoText),
-  `the configured-silent card points at step 2 (${echoText})`,
+  /If 10\.0\.20\.1 below is the same router on another of its addresses, Run setup… ▸ Send logs shows the one-line fix\./.test(echoText),
+  `the configured-silent card points back at the ledger (${echoText})`,
 )
 check(
   (await page.locator('.fcard', { hasText: 'Declared as' }).count()) === 1,

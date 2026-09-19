@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #1240: after an upgrade the operator has to paste step 1 again on each
+// #1240: after an upgrade the operator has to paste the certificate step again on each
 // router. These pin the copy, the two controls, who sees the line, and
 // the two rules that take it away -- `done`, and (#1241) a fleet that
 // has caught up on its own.
@@ -62,7 +62,7 @@ describe('the upgrade notice', () => {
 
     await waitFor(() =>
       expect(container.querySelector('.line')?.textContent).toBe(
-        'upgraded from v0.4.0 · 2 of 3 routers still on the old setup · paste step 1 again on each',
+        'upgraded from v0.4.0 · 2 of 3 routers still on the old setup · paste Trust the certificate again on each',
       ),
     )
     // Every router has reported, so the count is the truth and the line

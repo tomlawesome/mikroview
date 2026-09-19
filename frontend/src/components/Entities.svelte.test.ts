@@ -689,7 +689,7 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.querySelector('.fcard.unreg')?.textContent).toContain('setup behind · paste step 1 again')
+    expect(container.querySelector('.fcard.unreg')?.textContent).toContain('setup behind · paste Trust the certificate again')
   })
 
   it('keeps the berth alongside it, collapsed, rather than giving way (#828)', async () => {
