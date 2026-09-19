@@ -24,6 +24,11 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
 const PASS = process.env.MV_PASS
+
+// Exported for #1291: minting an enrolment token asks the admin to
+// re-enter their password at that moment, so a scenario driving the
+// real ledger has to type it into the wizard as an operator would.
+export const adminPassword = PASS
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
@@ -789,7 +794,14 @@ export async function enrolDevice(request, base, id, addr, { timeoutMs = 15000 }
     check(false, `${id} is declared by name (got ${created.status})`)
     return false
   }
-  const mint = await call('POST', `/api/devices/${encodeURIComponent(id)}/enrolment`)
+  // #1291: minting re-proves the admin's identity at that moment, and
+  // binds the enrolment window to the one address the token may be
+  // redeemed from -- which here is the address this helper is about to
+  // feed the enrol line from.
+  const mint = await call('POST', `/api/devices/${encodeURIComponent(id)}/enrolment`, {
+    password: PASS,
+    expectedAddress: addr,
+  })
   if (!mint.body?.token) {
     check(false, `an enrolment token is minted for ${id} (got ${mint.status})`)
     return false
