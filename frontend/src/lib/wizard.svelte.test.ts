@@ -404,3 +404,32 @@ describe('rebinding the enrolment window is one at a time (#1291)', () => {
     expect(wizardState.enrolRebinding).toBe(false)
   })
 })
+
+// The mint button disables itself while a mint is in flight, but the
+// address field's Enter key calls mintEnrolmentToken directly and never
+// saw that button. Two quick presses mint twice, and the second
+// invalidates the first -- which the operator may already have pasted
+// into the router, so they are left pasting a token the server has
+// forgotten. The guard belongs on the state object, where both entry
+// points meet. Found by the v0.6.0 audit (#1257).
+describe('minting is one at a time whichever way it is asked for (#1291)', () => {
+  it('ignores a second mint while the first is still in flight', async () => {
+    let settleFirst: (v: { token: string; expiresAt: string }) => void = () => {}
+    vi.mocked(mintEnrolment).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleFirst = resolve
+      }),
+    )
+    vi.mocked(fetchSetupCommands).mockResolvedValue({ commands: [], generatedAt: '' } as never)
+
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+    const first = wizardState.mintEnrolmentToken()
+    await wizardState.mintEnrolmentToken()
+
+    expect(mintEnrolment).toHaveBeenCalledTimes(1)
+    settleFirst({ token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' })
+    await first
+  })
+})
