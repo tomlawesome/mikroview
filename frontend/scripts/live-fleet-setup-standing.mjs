@@ -57,7 +57,8 @@ async function api(method, path_, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  // 204 (DELETE) carries no body, so parsing unconditionally threw.
+  return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
 
 async function issueIngestToken(device, name) {
@@ -243,8 +244,8 @@ if (token) {
     await card.waitFor({ timeout: 15000 })
     const cardText = (await card.textContent()) ?? ''
     check(
-      cardText.includes('setup behind · paste step 1 again'),
-      `a viewer's Fleet card for ${CURRENT_ID} carries "setup behind · paste step 1 again" (got: ${cardText.replace(/\s+/g, ' ').trim()})`,
+      cardText.includes('setup behind · paste Trust the certificate again'),
+      `a viewer's Fleet card for ${CURRENT_ID} names the step to paste again (got: ${cardText.replace(/\s+/g, ' ').trim()})`,
     )
     cardChecked = true
   } catch (e) {
@@ -255,6 +256,16 @@ if (token) {
   check(cardChecked, 'the Fleet card check ran to completion')
 } else {
   check(false, 'skipped the current/behind pushes -- no ingest token was issued')
+}
+
+// Leave the fleet as this scenario found it. Both devices above push
+// logging tables, and coverage is read across the whole fleet -- left
+// behind, they make "no rule anywhere logs" false for every scenario
+// that runs after this one (live-watchlist-coverage and
+// live-watchlist-broken-ring both failed on exactly that).
+for (const id of [NEVER_ID, CURRENT_ID]) {
+  const gone = await api('DELETE', `/api/devices/${encodeURIComponent(id)}`)
+  check(gone.status === 204, `${id} is deleted so later scenarios see the fleet as it was (${gone.status})`)
 }
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
