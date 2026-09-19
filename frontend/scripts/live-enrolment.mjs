@@ -166,7 +166,7 @@ await block.waitFor({ timeout: 10000 })
 await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
 check(true, 'entering Send logs shows the mint form rather than a token')
 check(
-  tokenFromBlock((await block.textContent()) ?? '').token === '',
+  tokenFromBlock((await block.textContent()) ?? '').token === null,
   'and the block carries no token until the operator asks for one',
 )
 

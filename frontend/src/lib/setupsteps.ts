@@ -148,7 +148,15 @@ export function syslogStep(
     // the honest line names it and says what is still outstanding --
     // the new line. An arrival at or after this walk's own mint is that
     // new line, and it replaces the address.
-    if (accepted && (!reEnrolSince || (at && at >= reEnrolSince))) {
+    //
+    // Instants, not strings (#1291): the server stamps enrolledAt in its
+    // own zone, the browser mints reEnrolSince in UTC, and the two only
+    // sort alike by luck -- a string compare reads an old enrolment as
+    // new whenever the server's offset pushes its clock digits ahead of
+    // Z. Guard unparseable values the same way: no instant, no "new".
+    const atInstant = at ? Date.parse(at) : NaN
+    const sinceInstant = reEnrolSince ? Date.parse(reEnrolSince) : NaN
+    if (accepted && (!reEnrolSince || (!Number.isNaN(atInstant) && atInstant >= sinceInstant))) {
       return { state: 'done', detail: `Enrolled at ${accepted} · ${when(at)}` }
     }
     if (accepted) {
