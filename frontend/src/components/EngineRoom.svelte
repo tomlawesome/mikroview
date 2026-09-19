@@ -209,7 +209,13 @@
   let droplistUnanswered = $state(false)
 
   function refreshDroplist(): Promise<void> {
-    return fetchDroplist(window.location.host)
+    // wizardState.address (#1213) is the operator's own saved answer to
+    // "what address can your router reach mikroview on?", not this
+    // tab's own window.location.host -- the setup card's four printed
+    // router commands come straight from this response, so they must
+    // be baked against the same address Droplist.svelte's own mintKey
+    // reads (#1260) and copyRouterLines above reads for the push script.
+    return fetchDroplist(wizardState.address)
       .then((r) => {
         droplist = r
         droplistUnanswered = false
