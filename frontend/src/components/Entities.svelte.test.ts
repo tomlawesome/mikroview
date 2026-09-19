@@ -1261,6 +1261,36 @@ describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
     expect(wizardState.ledgerDevice).toBe('edge-1')
   })
 
+  // The unregistered-router card (a router the wizard itself added,
+  // #1291) carries its own copy of the same Re-enrol control -- until
+  // the #1291 audit's stage 5 finding, a second hand-pasted button
+  // rather than one shared piece of markup, so nothing forced the two
+  // to agree. This pins the previously-untested copy's behaviour and
+  // its name-missing fallback (`d.name || d.sourceIp`), the one place
+  // the two copies' aria-labels actually differ.
+  it('opens the router ledger from the unregistered card too, falling back to sourceIp when unnamed', async () => {
+    appState.devices = [
+      {
+        id: 'undeclared-1',
+        name: '',
+        configured: false,
+        status: 'live',
+        sourceIp: '10.0.0.9',
+        firstSeen: new Date().toISOString(),
+        eventCount: 1,
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { getByLabelText } = render(Entities)
+    await settle()
+
+    getByLabelText(/Re-enrol 10\.0\.0\.9/).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(2)
+    expect(wizardState.ledgerDevice).toBe('undeclared-1')
+  })
+
   // A user tier reaches this screen but not the endpoint (admin-only),
   // so it must not ask -- and #657's grammar is absent, not disabled.
   // The berth goes with them: POST /api/devices is admin-only too, so a

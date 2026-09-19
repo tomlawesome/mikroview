@@ -669,6 +669,22 @@
   }
 </script>
 
+{#snippet reEnrolButton(deviceId: string, label: string)}
+  <!-- Re-enrol… (#1284): the ledger at Send logs with a fresh token,
+       for a router that has been replaced or has moved address. Absent
+       rather than disabled for anyone who cannot use it (#657's
+       grammar). One snippet for both cards below it renders on -- a
+       registered router and one only pushing -- so the two can never
+       read the same button differently (#1291 audit, stage 5). -->
+  <button
+    type="button"
+    class="row-action"
+    onclick={() => reEnrol(deviceId)}
+    aria-label="Re-enrol {label} — mint a fresh enrolment token for it"
+  >
+    Re-enrol…
+  </button>
+{/snippet}
 
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
@@ -700,8 +716,10 @@
               {/if}
               {#if multihomedEcho(d)}
                 <!-- The source-address split's echo (#442), the same
-                     sentence Fleet.svelte carries: the wizard's step 2
-                     owns the diagnosis and the command. -->
+                     sentence Fleet.svelte carries: Send logs owns the
+                     diagnosis and the command (named, not numbered --
+                     it read "step 2" until #1284 moved Send logs to
+                     third; see fleet.ts's multihomedEcho comment). -->
                 <div class="frow dim">{multihomedEcho(d)}</div>
               {/if}
               {#if setupEcho(d)}
@@ -711,18 +729,7 @@
               {/if}
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
               {#if isAdmin}
-                <!-- Re-enrol… (#1284): the ledger at Send logs with a
-                     fresh token, for a router that has been replaced or
-                     has moved address. Absent rather than disabled for
-                     anyone who cannot use it (#657's grammar). -->
-                <button
-                  type="button"
-                  class="row-action"
-                  onclick={() => reEnrol(d.id)}
-                  aria-label="Re-enrol {d.name} — mint a fresh enrolment token for it"
-                >
-                  Re-enrol…
-                </button>
+                {@render reEnrolButton(d.id, d.name)}
               {/if}
             </div>
           {/each}
@@ -771,14 +778,7 @@
                      token, and a router the ledger declared is not in
                      config.yaml, so every router the wizard itself adds
                      is drawn here rather than above. -->
-                <button
-                  type="button"
-                  class="row-action"
-                  onclick={() => reEnrol(d.id)}
-                  aria-label="Re-enrol {d.name || d.sourceIp} — mint a fresh enrolment token for it"
-                >
-                  Re-enrol…
-                </button>
+                {@render reEnrolButton(d.id, d.name || d.sourceIp)}
               {/if}
             </div>
           {/each}

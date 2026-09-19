@@ -60,7 +60,7 @@ import {
   dismissSetupWizard,
   goTo,
   unfoldStreamFilter,
-  adminPassword,
+  enrolDevice,
 } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
@@ -94,12 +94,6 @@ async function api(client, method, path, body) {
   })
   return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
-
-// enrolLine builds a syslog line carrying the enrolment marker
-// (device.Registry.TryEnrol's own regex only needs "mikroview-enrol
-// <token>" to appear in the raw bytes) -- it does not need to be a real
-// RouterOS log line, only to carry the marker the way one would.
-const enrolLine = (token) => `<14>Jan  1 00:00:00 ${UNDECLARED_ID} mikroview-enrol ${token}`
 
 const line = (rule, dst) =>
   `firewall,info D|${rule}| forward: in:ether1 out:bridge1, connection-state:new, ` +
@@ -139,44 +133,22 @@ if (!declared) {
 // #1281: a device exists only because the operator declared it (here,
 // by name alone -- POST /api/devices, the admin path for a syslog-only
 // router) or config.yaml did. Declaring it is not attributing anything
-// to it yet -- that takes the enrolment token below, redeemed by the
+// to it yet -- that takes the enrolment token, redeemed by the
 // router's own first line, which is what actually claims 127.0.0.9 as
 // this device's address (AcceptedIP) and lets Resolve match every line
 // after it. (The old #1170 "an unclaimed source sits in `unattributed`"
 // step is gone: under #1281 that source's connection is refused at
 // accept before any line of it is ever read, so it never reaches
 // Resolve to become unattributed in the first place.)
+//
+// The declare-mint-feed-poll sequence itself is enrolDevice's
+// (live-browser.mjs) -- shared since #1281 made it every scenario's
+// prerequisite, so it is driven from there rather than hand-rolled here
+// a second time (#1291 audit, stage 5: the two copies had already
+// started to disagree about what a completed enrolment even asserts).
+const enrolled = await enrolDevice(page.request, URL_BASE, UNDECLARED_ID, UNDECLARED_IP, { timeoutMs: 15000 })
 
-const createRes = await api(page.request, 'POST', '/api/devices', { name: UNDECLARED_ID })
-check(createRes.status === 201, `${UNDECLARED_ID} is declared by name (${createRes.status})`)
-
-let undeclared = null
-if (createRes.status === 201) {
-  check(
-    createRes.body?.acceptedIp === '',
-    `it starts with no accepted address (got ${JSON.stringify(createRes.body?.acceptedIp)})`,
-  )
-
-  // #1291: minting re-proves the admin's identity and binds the
-  // enrolment window to the address the token may be redeemed from.
-  const mint = await api(page.request, 'POST', `/api/devices/${encodeURIComponent(UNDECLARED_ID)}/enrolment`, {
-    password: adminPassword,
-    expectedAddress: UNDECLARED_IP,
-  })
-  check(mint.status === 201 && !!mint.body?.token, `an enrolment token is minted for ${UNDECLARED_ID} (${mint.status})`)
-
-  if (mint.body?.token) {
-    feedRawFrom(UNDECLARED_IP, enrolLine(mint.body.token))
-
-    const deadline = Date.now() + 15000
-    while (Date.now() < deadline && !undeclared?.acceptedIp) {
-      const list = await devices(page.request)
-      undeclared = list.find((d) => d.id === UNDECLARED_ID)
-      if (undeclared?.acceptedIp) break
-      await new Promise((r) => setTimeout(r, 500))
-    }
-  }
-}
+const undeclared = enrolled ? (await devices(page.request)).find((d) => d.id === UNDECLARED_ID) : null
 check(
   undeclared?.acceptedIp === UNDECLARED_IP,
   `the enrol line from ${UNDECLARED_IP} attributes the address to ${UNDECLARED_ID} (got ${JSON.stringify(undeclared?.acceptedIp)})`,

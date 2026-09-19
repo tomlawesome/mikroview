@@ -209,7 +209,7 @@ block, last line included." It clears when the enrol line arrives.
   gains **Re-enrol…**, opening the ledger at step 2 for that router
   with a fresh token; the observation line reads "Enrolled at
   198.51.100.1 · waiting for the new line"; arrival replaces the
-  address. Fleet keeps **Add a router** for its own admin case.
+  address.
 - **Refused senders**: a card per address beside the routers, in the
   unattributed card's quiet vocabulary and present only when non-empty:
   head "refused · 198.51.100.1 ◌ REFUSED", then what it means, then
