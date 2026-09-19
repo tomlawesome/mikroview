@@ -317,7 +317,7 @@ async function settledObservation(want, { timeoutMs = 16000 } = {}) {
   return seen
 }
 
-await page.locator('.setup-wizard .steps li:nth-child(3) .step-row').click()
+await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
 const ruleObservation = await settledObservation((c) => c.includes('counting'))
 check(
   ruleObservation.includes('counting'),
@@ -348,7 +348,7 @@ const alreadyPushed =
 // Same race as step 3, and the same wait: the wizard has to agree with
 // the server before its answer means anything. The target here is
 // whichever answer the server gave, not a fixed one.
-await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
+await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').click()
 const pushObservation = await settledObservation((c) => c.includes('arrived') === alreadyPushed)
 check(
   pushObservation.includes('arrived') === alreadyPushed,
@@ -434,19 +434,30 @@ check(
 )
 
 // --- Skip is quiet, and states its consequence -------------------------
-await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').click()
+//
+// Every `li:nth-child(n)` in this file counts the walking order, which
+// #1284 changed: ca, name, syslog, rules, push, backup, where it used to
+// be ca, syslog, rules, push, name, backup. The numbers stored against a
+// step did not move with it (RECORD_NUMBERS in lib/setupsteps.ts), so a
+// row's position and its recorded number are deliberately different
+// things -- the assertions below read positions.
+await page.locator('.setup-wizard .steps li:nth-child(2) .step-row').click()
 await page.click('.setup-wizard footer button:has-text("Skip this step")')
-await page.locator('.setup-wizard .steps li:nth-child(5) .step-row.skipped').waitFor({ state: 'visible' })
+await page.locator('.setup-wizard .steps li:nth-child(2) .step-row.skipped').waitFor({ state: 'visible' })
 const skippedReceipt =
-  ((await page.textContent('.setup-wizard .steps li:nth-child(5) .step-text')) ?? '').trim()
+  ((await page.textContent('.setup-wizard .steps li:nth-child(2) .step-text')) ?? '').trim()
 check(/skipped by /.test(skippedReceipt), `a skipped step records who and when (${skippedReceipt})`)
 check(
-  /address/.test(skippedReceipt),
+  // Naming a router is what creates it, and since #1281 a router that
+  // does not exist has nothing to enrol -- that is this step's own
+  // consequence, and what the receipt is required to say instead of
+  // reproaching whoever skipped it.
+  /nothing to enrol/.test(skippedReceipt),
   `and states its consequence rather than reproaching anyone (${skippedReceipt})`,
 )
 
 // --- Minting a token produces a script that actually works -------------
-await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
+await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').click()
 if (await page.locator('.setup-wizard .mint select').count()) {
   await page.selectOption('.setup-wizard .mint select', deviceObs.device)
   await page.click('.setup-wizard .mint button.primary')
@@ -526,10 +537,10 @@ check(pushed.status === 200, `the wizard-minted token is accepted for a push (${
 // have pushed other tables, so "green" can be true before this push
 // lands and would prove nothing about it.
 await page
-  .locator('.setup-wizard .steps li:nth-child(4) .step-row.done .step-receipt:has-text("arp")')
+  .locator('.setup-wizard .steps li:nth-child(5) .step-row.done .step-receipt:has-text("arp")')
   .waitFor({ state: 'visible', timeout: 20000 })
 const pushReceipt =
-  ((await page.textContent('.setup-wizard .steps li:nth-child(4) .step-receipt')) ?? '').trim()
+  ((await page.textContent('.setup-wizard .steps li:nth-child(5) .step-receipt')) ?? '').trim()
 check(true, `the push step records this push on its own once the table arrives (${pushReceipt})`)
 
 // --- A partial step's shortfall is its own box (#1132) -----------------
@@ -613,7 +624,7 @@ check(true, 'Esc closes the modal')
 await goTo(page, 'Run setup…')
 await modal.waitFor({ state: 'visible' })
 const reopened =
-  (await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').getAttribute('class')) ?? ''
+  (await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').getAttribute('class')) ?? ''
 check(
   reopened.includes('done'),
   `reopening shows the ledger as it stands — evidence that arrived is already green (${reopened})`,

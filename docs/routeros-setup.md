@@ -759,7 +759,7 @@ has. With the report, each router's card in MikroView says one of:
 
 - nothing at all — what the router has is what the current wizard would
   write;
-- `setup behind · paste step 1 again` — an older wizard wrote this
+- `setup behind · paste Trust the certificate again` — an older wizard wrote this
   script, or the action or its rules no longer match what the wizard
   writes;
 - `setup never reported` — the script predates this report entirely, so
