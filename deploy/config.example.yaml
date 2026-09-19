@@ -203,6 +203,15 @@ store:
 # deviceMac:
 #   storePath: /var/lib/mikroview/mac-registry.json
 
+# The device registry's own enrolments (issue #1281): an enrolled
+# device's acceptedIp/enrolledAt, and the identity of any device declared
+# through the API rather than below under devices:, survive a restart
+# through this file. storePath already defaults to
+# /var/lib/mikroview/device-registry.json -- only uncomment this block to
+# move that path.
+# deviceRegistry:
+#   storePath: /var/lib/mikroview/device-registry.json
+
 # internal/engine's evaluation chassis (docs/decisions/evaluation-engine.md):
 # storePath persists per-definition, per-key baseline state, so a
 # statistical baseline resumes warm across a restart instead of losing

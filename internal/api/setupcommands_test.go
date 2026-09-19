@@ -273,6 +273,79 @@ func TestHandleSetupCommandsPushRendersOnlyWithTokenAndKinds(t *testing.T) {
 	}
 }
 
+// TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken is issue
+// #1281's contract for step 2: the "Send logs" block ends with the
+// enrolment line once the caller's echoed EnrolToken actually matches
+// the named device's current pending token.
+func TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "mv.example.com", Device: "hap-ax3", EnrolToken: token,
+	})
+	want := `/log info "mikroview-enrol ` + token + `"`
+	if !strings.HasSuffix(out.Steps.Syslog.Commands, want) {
+		t.Errorf("syslog commands = %q, want it to end with %q", out.Steps.Syslog.Commands, want)
+	}
+}
+
+// TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken covers
+// every way the check can fail closed: no token sent, a token that
+// names no pending record, a token for a different device, and a device
+// with nothing pending at all. Every case must render step 2 exactly as
+// it did before #1281 -- no enrolment line, nothing else changed.
+func TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Devices.Create("other", "other", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, _, err := s.Devices.MintEnrolment("other", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		req  setupCommandsRequest
+	}{
+		{"no enrolToken at all", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3"}},
+		{"no device named", setupCommandsRequest{Address: "mv.example.com", EnrolToken: token}},
+		{"an unrelated, well-formed token", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3", EnrolToken: "zzzzzzzzzzzzzzzzzzzz"}},
+		{"another device's real pending token", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3", EnrolToken: otherToken}},
+		{"a device with nothing pending", setupCommandsRequest{Address: "mv.example.com", Device: "core"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := postSetupCommands(t, ts.URL, tc.req)
+			if strings.Contains(out.Steps.Syslog.Commands, "mikroview-enrol") {
+				t.Errorf("syslog commands = %q, want no enrolment line", out.Steps.Syslog.Commands)
+			}
+		})
+	}
+}
+
 // TestHandleSetupCommandsBackupRendersOnlyWhenReady covers #394's
 // step 6: the script needs a device, a token, the drop box turned on
 // (BackupPort set) and a retention key (Vault.Enabled()) all at once --
@@ -490,6 +563,11 @@ func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
 		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},
 		{"syslogPort listen address, bad port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "127.0.0.1:abc"}},
 		{"syslogPort listen address, zero port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "[::]:0"}},
+		// #1281's enrolment token: exactly 20 lowercase letters/digits,
+		// nothing else.
+		{"enrolToken too short", setupCommandsRequest{Address: "mv.example.com", EnrolToken: "abc123"}},
+		{"enrolToken uppercase", setupCommandsRequest{Address: "mv.example.com", EnrolToken: "AAAAAAAAAAAAAAAAAAAA"}},
+		{"enrolToken with a quote", setupCommandsRequest{Address: "mv.example.com", EnrolToken: `abcdefghijklmnopqrs"`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -51,6 +51,13 @@
    "usedFor": "the optional push step -- running that script on an interval",
    "properties": ["name", "interval", "policy", "on-event"],
    "verified": "documented by MikroTik's CLI Reference, 2026-09-04. Not yet exercised, for the same reason as system/script."
+  },
+  {
+   "path": "log",
+   "console": "/log info",
+   "usedFor": "issue #1281 -- step 2's enrolment line, a one-shot informational log entry carrying the enrolment token the listener gate matches",
+   "properties": ["message"],
+   "verified": "documented by MikroTik's CLI Reference, 2026-09-19. Not yet exercised on a real CHR."
   }
  ]
 }

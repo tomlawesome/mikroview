@@ -14,15 +14,28 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/hub"
 )
 
-// ingestTestServer registers an admin and issues one ingest token scoped
-// to device, returning the raw token and the running server -- the setup
-// every test in this file needs.
+// ingestTestServerClientIP is the address every request this file's
+// http.DefaultClient sends arrives from, as s.ClientIP(r) reads it --
+// httptest.NewServer binds 127.0.0.1 explicitly. Issue #1281's ingest
+// enrolment check compares this against the pushing device's own
+// sourceIp/acceptedIp, so ingestTestServer enrols device here to keep
+// every existing "a valid push succeeds" test meaning what it always
+// did; TestIngestRouteRefusesAPushFromAnUnenrolledAddress below covers
+// the refusal this check exists to make.
+const ingestTestServerClientIP = "127.0.0.1"
+
+// ingestTestServer registers an admin, issues one ingest token scoped to
+// device, and enrols device at ingestTestServerClientIP (#1281 -- a push
+// must come from the token's own device's enrolled address), returning
+// the raw token and the running server.
 func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, string) {
 	t.Helper()
 	s := newAuthTestServer(t)
+	enrolIngestTestDevice(t, s, device)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
@@ -38,6 +51,28 @@ func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, s
 		t.Fatalf("Tokens.Create: %v", err)
 	}
 	return ts, s, raw
+}
+
+// enrolIngestTestDevice declares device (if it does not already exist,
+// e.g. as newTestServer's own "core") and redeems a fresh enrolment
+// token for it at ingestTestServerClientIP, the same mint/hash/redeem
+// path a real "mikroview-enrol <token>" syslog line takes.
+func enrolIngestTestDevice(t *testing.T, s *Server, device string) {
+	t.Helper()
+	now := time.Now()
+	if _, err := s.Devices.Create(device, device, now); err != nil {
+		// Already exists (e.g. newTestServer's config-declared "core") --
+		// enrolling it again at the same address is harmless.
+		_ = err
+	}
+	token, _, err := s.Devices.MintEnrolment(device, now)
+	if err != nil {
+		t.Fatalf("MintEnrolment(%q): %v", device, err)
+	}
+	line := []byte("mikroview-enrol " + token)
+	if !s.Devices.TryEnrol(ingestTestServerClientIP, line) {
+		t.Fatalf("TryEnrol: failed to enrol %q at %q", device, ingestTestServerClientIP)
+	}
 }
 
 func postIngest(t *testing.T, ts *httptest.Server, token, body string) *http.Response {
@@ -73,6 +108,48 @@ func TestIngestRouteAcceptsAValidPushFromAnIngestToken(t *testing.T) {
 	}
 	if ack.Kind != "arp" || ack.Page != 1 || ack.Pages != 1 || ack.Records != 1 {
 		t.Errorf("ack = %+v, unexpected", ack)
+	}
+}
+
+// TestIngestRouteRefusesAPushFromAnUnenrolledAddress is issue #1281's
+// core ingest-side rule: an ingest token names a device, never an
+// address, so a push must also arrive from that device's own enrolled
+// address (sourceIp or acceptedIp) -- a valid token alone is not
+// enough. Built directly rather than via ingestTestServer, which always
+// enrols its device at the address this file's client actually connects
+// from; this device is declared but deliberately never enrolled
+// anywhere, so IsEnrolledAt is false for every address, including the
+// one the request genuinely arrives from.
+func TestIngestRouteRefusesAPushFromAnUnenrolledAddress(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Devices = device.NewRegistry(nil)
+	if _, err := s.Devices.Create("router-1", "router-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	admin, _ := s.Auth.ByUsername("admin")
+	raw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", admin, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	resp := postIngest(t, ts, raw, validARPPayload)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 -- a valid token from an unenrolled address must be refused", resp.StatusCode)
+	}
+
+	result := s.Audit.Query(audit.Query{})
+	if len(result.Entries) == 0 {
+		t.Fatal("no audit entry was recorded for the refused push")
+	}
+	last := result.Entries[len(result.Entries)-1]
+	if last.Action != "ingest.routeros.refused" || !strings.Contains(last.Detail, "not") {
+		t.Errorf("audit entry = %+v, want ingest.routeros.refused naming the address as not enrolled", last)
 	}
 }
 
@@ -214,6 +291,8 @@ func TestIngestRouteRateLimitsPerToken(t *testing.T) {
 	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
 
+	enrolIngestTestDevice(t, s, "router-a")
+	enrolIngestTestDevice(t, s, "router-b")
 	rawA, _, err := s.Tokens.Create("router-a", auth.TokenKindIngest, "router-a", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
