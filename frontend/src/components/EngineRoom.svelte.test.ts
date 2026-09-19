@@ -128,6 +128,7 @@ import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
+import { wizardState } from '../lib/wizard.svelte'
 import {
   fetchHistorySettings as fetchHistorySettingsReal,
   fetchRouterBackups as fetchRouterBackupsReal,
@@ -183,6 +184,9 @@ beforeEach(() => {
   // as detectorSettingsState.list/flagsState.list above.
   persistenceState.info = null
   deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
+  // Reset between tests the same way Droplist.svelte.test.ts does -- this
+  // is the module-level singleton, not a fixture scoped to one test.
+  wizardState.address = ''
 })
 
 describe('The settings shelf (#633)', () => {
@@ -1301,6 +1305,32 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     // Droplist really is the thing mounted here, wired to the fetched
     // resp -- not an empty shell.
     expect(within(droplist as HTMLElement).getByText('203.0.113.0/24')).toBeTruthy()
+  })
+
+  // #1260: refreshDroplist used to read GET /api/droplist with
+  // window.location.host, this browser tab's own address, rather than
+  // wizardState.address (#1213 -- the operator's own saved answer to
+  // "what address can your router reach mikroview on?"). The four
+  // printed setup commands (scheduler, drop rule, and the two emergency
+  // blocks) the server bakes into that response are only right when
+  // this call uses the same stored address Droplist.svelte's mintKey
+  // already reads (see its own #1260 test).
+  it('polls the drop list against the operator saved address, not this tab\'s own host', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    wizardState.address = 'operator-saved.example:8443'
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [],
+      key: { present: false },
+      ownRangesKnown: false,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(fetchDroplist).toHaveBeenCalledWith('operator-saved.example:8443')
   })
 
   it('"drop list" answers unknown, with a working ask again, when the server does not', async () => {
