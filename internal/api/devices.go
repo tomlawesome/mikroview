@@ -270,6 +270,61 @@ func (s *Server) handleDeviceEnrolmentCreate(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, deviceEnrolmentResponse{Token: token, ExpiresAt: expiresAt})
 }
 
+// deviceEnrolmentRebindRequest is POST
+// /api/devices/{id}/enrolment/address's body: the address to point the
+// pending enrolment window at instead.
+type deviceEnrolmentRebindRequest struct {
+	Address string `json:"address"`
+}
+
+// handleDeviceEnrolmentRebind points a pending enrolment window at a
+// different address without touching the token (issue #1291, ruling
+// 23a) -- the wizard's one-click recovery when the operator named the
+// wrong address before minting and their router was turned away at
+// accept.
+//
+// Admin-only and CSRF-gated like its neighbours, but deliberately no
+// password re-proof, unlike minting. Two reasons, either sufficient.
+// Rebinding grants no acceptance: the window opens, and the token still
+// has to arrive from that address before anything is accepted. And
+// device.Registry.RebindEnrolment only accepts an address already in
+// the refused-senders list, so this can point the window at somewhere
+// that already reached the listener on its own and nowhere else -- no
+// reach a caller did not already have.
+func (s *Server) handleDeviceEnrolmentRebind(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	if s.Devices == nil {
+		http.Error(w, "the device registry is not available", http.StatusServiceUnavailable)
+		return
+	}
+	var req deviceEnrolmentRebindRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.Devices.RebindEnrolment(id, strings.TrimSpace(req.Address)); err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, device.ErrDeviceNotFound), errors.Is(err, device.ErrNoPendingEnrolment):
+			status = http.StatusNotFound
+		case errors.Is(err, device.ErrNotRefused),
+			errors.Is(err, device.ErrExpectedAddressRequired),
+			errors.Is(err, device.ErrExpectedAddressInvalid):
+			status = http.StatusBadRequest
+		}
+		// Safe to echo: each names only a rule about what the caller
+		// asked for, never anything about another device.
+		http.Error(w, err.Error(), status)
+		return
+	}
+	s.Audit.Record(auditActor(r), "device.enrolment_rebound", id, "address="+strings.TrimSpace(req.Address))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleDeviceEnrolmentDelete burns device's pending enrolment token,
 // if it has one -- withdrawing an in-flight enrolment before it is
 // redeemed. Admin-only, same tier as minting one.

@@ -660,3 +660,82 @@ func TestAcceptsConnectionFromIsFalseForAnyOtherAddress(t *testing.T) {
 		}
 	}
 }
+
+// TestRebindEnrolmentMovesTheWindowAndKeepsTheToken is issue #1291's
+// wrong-address recovery (ruling 23a): the operator named the wrong
+// address, their router was turned away at accept and landed in the
+// refused-senders list, and one click points the window at it. The
+// token is untouched, so nothing is pasted into the router again.
+func TestRebindEnrolmentMovesTheWindowAndKeepsTheToken(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, expiresAt, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The real router is at .5, so its connection is turned away.
+	r.RefuseConnection("10.10.0.5")
+	if r.AcceptsConnectionFrom("10.10.0.5") {
+		t.Fatal("AcceptsConnectionFrom(.5) = true before rebinding, want false")
+	}
+
+	if err := r.RebindEnrolment("hap-ax3", "10.10.0.5"); err != nil {
+		t.Fatalf("RebindEnrolment: %v", err)
+	}
+	if !r.AcceptsConnectionFrom("10.10.0.5") {
+		t.Error("AcceptsConnectionFrom(.5) = false after rebinding, want the window moved")
+	}
+	if r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom(.1) = true after rebinding, want the old address closed again")
+	}
+
+	// The same token, never re-pasted, now redeems at the new address.
+	line := []byte("mikroview-enrol " + token)
+	if !r.TryEnrol("10.10.0.5", line) {
+		t.Fatal("TryEnrol() = false at the rebound address, want the original token still good")
+	}
+	if expiresAt.IsZero() {
+		t.Error("mint returned a zero expiry")
+	}
+}
+
+// TestRebindEnrolmentOnlyAcceptsARefusedAddress is what makes the
+// rebind safe to offer as one click rather than another password
+// prompt: it can only point the window at an address that already
+// reached the listener under its own steam.
+func TestRebindEnrolmentOnlyAcceptsARefusedAddress(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RebindEnrolment("hap-ax3", "203.0.113.7"); !errors.Is(err, ErrNotRefused) {
+		t.Errorf("RebindEnrolment(never-refused) error = %v, want ErrNotRefused", err)
+	}
+	if r.AcceptsConnectionFrom("203.0.113.7") {
+		t.Error("a refused rebind still opened the window, want it unchanged")
+	}
+}
+
+// TestRebindEnrolmentNeedsAPendingToken: there is no window to move
+// when nothing is pending, and rebinding must never create one.
+func TestRebindEnrolmentNeedsAPendingToken(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	r.RefuseConnection("10.10.0.5")
+	if err := r.RebindEnrolment("hap-ax3", "10.10.0.5"); !errors.Is(err, ErrNoPendingEnrolment) {
+		t.Errorf("RebindEnrolment(nothing pending) error = %v, want ErrNoPendingEnrolment", err)
+	}
+	if r.AcceptsConnectionFrom("10.10.0.5") {
+		t.Error("rebinding with nothing pending opened the window, want it to grant nothing")
+	}
+}

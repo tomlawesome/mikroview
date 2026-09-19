@@ -442,6 +442,12 @@ var authzMatrix = []routeExpectation{
 			"to a device, the same tier every other token-issuing endpoint in this API holds to (POST /api/tokens, " +
 			"POST /api/droplist/key). Since #1291 the admin tier is the floor, not the whole check: this endpoint " +
 			"also re-verifies the caller's password at the moment of minting, so a stolen session is not enough"},
+	{http.MethodPost, "/api/devices/{id}/enrolment/address", accessAdmin,
+		"points a pending enrolment window at a different address without touching the token (#1291, ruling 23a) -- " +
+			"the one-click recovery when the operator named the wrong address and their router was turned away at " +
+			"accept. No password re-proof, unlike minting: rebinding grants no acceptance (the token still has to " +
+			"arrive from that address), and the registry only accepts an address already in the refused-senders " +
+			"list, so it can open the window to somewhere that already reached the listener and nowhere else"},
 	{http.MethodDelete, "/api/devices/{id}/enrolment", accessAdmin,
 		"revokes a device's pending enrolment token before it is redeemed -- same tier as minting one"},
 	{http.MethodGet, "/api/devices/refused", accessAdmin,
