@@ -253,6 +253,73 @@ func TestRefuseCountsRejectedLinesAndAllowsTheConnectionOn(t *testing.T) {
 	}
 }
 
+// TestRefuseConnectionCountsIntoTheSameRefusedListAsRefuse is issue
+// #1281's connection gate feeding the same GET /api/devices/refused
+// list a refused line already does: a connection refused at accept
+// (RefuseConnection) and a line refused after accept (Refuse) against
+// the same address land in the one entry, and Lines counts both kinds
+// -- the JSON field is not renamed or split for the new source.
+func TestRefuseConnectionCountsIntoTheSameRefusedListAsRefuse(t *testing.T) {
+	r := NewRegistry(nil)
+	r.RefuseConnection("10.10.0.1")
+	r.Refuse("10.10.0.1", []byte("not an enrol line"))
+
+	got := r.Refused()
+	if len(got) != 1 || got[0].Address != "10.10.0.1" || got[0].Lines != 2 {
+		t.Fatalf("Refused() = %+v, want one address with Lines counting one connection refusal and one line refusal", got)
+	}
+}
+
+// TestAcceptsUnknownIsFalseWithNoPendingTokens is the closed-port
+// default: a registry with no device ever having minted a token has
+// nothing pending, so the syslog port must not stay open to unknown
+// addresses.
+func TestAcceptsUnknownIsFalseWithNoPendingTokens(t *testing.T) {
+	r := NewRegistry(nil)
+	if r.AcceptsUnknown() {
+		t.Error("AcceptsUnknown() = true, want false with nothing pending")
+	}
+}
+
+// TestAcceptsUnknownIsTrueWhileATokenIsPending is issue #1281's
+// connection gate opening: while any device has an unexpired pending
+// enrolment token, the port must accept connections from addresses it
+// does not yet recognise, since the enrol line proving the token has to
+// be able to arrive from exactly such an address.
+func TestAcceptsUnknownIsTrueWhileATokenIsPending(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, _, err := r.MintEnrolment("hap-ax3", now); err != nil {
+		t.Fatalf("MintEnrolment: %v", err)
+	}
+	if !r.AcceptsUnknown() {
+		t.Error("AcceptsUnknown() = false, want true while a token is pending")
+	}
+}
+
+// TestAcceptsUnknownIsFalseOnceTheOnlyPendingTokenExpires mints a token
+// far enough in the past (mirroring TestTokenExpires) that it has
+// already expired against the real clock, and checks the port closes
+// back up: a token's 15-minute life, not its mere existence, is what
+// keeps the port open.
+func TestAcceptsUnknownIsFalseOnceTheOnlyPendingTokenExpires(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	longAgo := now.Add(-16 * time.Minute)
+	if _, _, err := r.MintEnrolment("hap-ax3", longAgo); err != nil {
+		t.Fatalf("MintEnrolment: %v", err)
+	}
+	if r.AcceptsUnknown() {
+		t.Error("AcceptsUnknown() = true, want false once the only pending token has expired")
+	}
+}
+
 // TestRefusedIsBoundedAndEvictsOldestLastSeenFirst pins the 256-address
 // cap: past it, the address that has been quietest the longest is the
 // one dropped, so an active flood cannot itself evict the accounting
