@@ -1558,10 +1558,19 @@ export interface VaultLock {
 // GET /api/router-backups (#394, round 44's "router backups" group).
 // Mirrors internal/api's routerBackupsResponse.
 export interface RouterBackupsResponse {
-  // False when no retention key is configured at all -- #394's "no key,
-  // no backups": the drop box refuses every login and routers is always
-  // empty.
+  // False when the retention key is not open and usable -- #394's "no
+  // key, no backups": the drop box refuses every login and routers is
+  // always empty. False covers two different situations -- see
+  // keyUnreadable, which says which one.
   enabled: boolean
+  // keyUnreadable (#1264 finding 5): true when history.keyFile names a
+  // file that exists but could not be read (unreadable, truncated,
+  // wrong), as opposed to enabled being false because no key was
+  // configured at all. Never render the two the same way -- telling an
+  // operator with a broken key to mint a new one strands every backup
+  // already encrypted under the old one, since minting overwrites the
+  // file rather than repairing it.
+  keyUnreadable: boolean
   routers: RouterBackupRouter[]
   totalGenerations: number
   totalRouters: number
@@ -1867,9 +1876,11 @@ export interface RouterosWarningRouter {
 // machine-readable keys (#1217) -- the server says which precondition
 // is missing, the frontend owns the sentence it says about each one.
 // Only backup/backupSchedule ever set this today: no-token, no-device,
-// backups-off, no-retention-key. Undefined/empty means either the block
-// is not blank, or it is blank for a reason not covered here (push and
-// schedule's own token-and-kinds gate).
+// backups-off, no-retention-key, retention-key-unreadable (#1264 finding
+// 5 -- a configured key that could not be read, distinct from
+// no-retention-key's "none configured at all"). Undefined/empty means
+// either the block is not blank, or it is blank for a reason not covered
+// here (push and schedule's own token-and-kinds gate).
 export interface CommandStep {
   commands: string
   note: string

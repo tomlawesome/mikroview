@@ -303,7 +303,19 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		if s.SetupInstance.BackupPort == "" {
 			backupBlockedKeys = append(backupBlockedKeys, "backups-off")
 		}
-		if !s.Vault.Enabled() {
+		// #1264 finding 5: Vault.Enabled() alone cannot tell "no key
+		// configured" from "a key is configured but could not be read"
+		// apart -- both leave the vault's key nil. Presenting the
+		// broken-key case as "no-retention-key" tells the operator to
+		// mint a new one, and minting overwrites the file every backup
+		// already sitting in the vault is encrypted under -- so the two
+		// get distinct keys here, checked in this order because a
+		// broken key is also, incidentally, one Vault.Enabled() reports
+		// as false.
+		switch {
+		case s.SetupInstance.BackupKeyUnreadable:
+			backupBlockedKeys = append(backupBlockedKeys, "retention-key-unreadable")
+		case !s.Vault.Enabled():
 			backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
 		}
 		if req.Device == "" {

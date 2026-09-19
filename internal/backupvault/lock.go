@@ -829,10 +829,14 @@ func hybridInfo(info string, ephPub []byte) string {
 // that is not running them.
 var resealStep func()
 
-// slot names one stored file: a router, one of its generations, and
-// which of the two files that generation holds.
+// slot names one stored file: a router, one of its generations, which
+// of the two files that generation holds, and the directory it lives
+// in -- resolved once here, under v.mu, rather than left for resealSlot
+// to recompute without it (#1294: v.meta.Routers is not safe to read
+// again once the lock storedSlots took is released, which is well
+// before resealSlot runs).
 type slot struct {
-	device, generation, kind string
+	device, generation, kind, dir string
 }
 
 // storedSlots is every file the index currently lists.
@@ -841,6 +845,17 @@ func (v *Vault) storedSlots() []slot {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for device, rm := range v.meta.Routers {
+		if rm.Dir != "" {
+			// Sealed under a device name this entry does not have:
+			// recovered from disk after an index loss whose rebuild
+			// (or an orphan-directory adoption) could not resolve it
+			// (#1294). Re-sealing needs that name to decrypt with, so
+			// every file here would fail to open -- skipped rather than
+			// attempted, which would abort the whole pass over one
+			// generation that cannot succeed until its name comes back.
+			continue
+		}
+		dir := v.dirFor(device, rm)
 		// The protected pool is re-sealed with the rest (#1126).
 		// Leaving it out of a conversion would strand a kept backup in
 		// the old scheme -- and on the way back off a passphrase, that
@@ -848,10 +863,10 @@ func (v *Vault) storedSlots() []slot {
 		// is the one thing the pool exists to prevent.
 		for _, g := range append(append([]*generationMeta{}, rm.Generations...), rm.Protected...) {
 			if !g.BackupArrivedAt.IsZero() {
-				slots = append(slots, slot{device, g.ID, KindBackup})
+				slots = append(slots, slot{device, g.ID, KindBackup, dir})
 			}
 			if !g.RscArrivedAt.IsZero() {
-				slots = append(slots, slot{device, g.ID, KindRsc})
+				slots = append(slots, slot{device, g.ID, KindRsc, dir})
 			}
 		}
 	}
@@ -955,7 +970,7 @@ type resealBuffers struct {
 // resealSlot converts one file, or reports why it could not, reusing
 // bufs rather than allocating its own.
 func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey, priv *ecdh.PrivateKey, bufs *resealBuffers) error {
-	path := filepath.Join(v.routerDir(s.device), v.fileName(s.generation, s.kind))
+	path := filepath.Join(s.dir, v.fileName(s.generation, s.kind))
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {

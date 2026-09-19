@@ -40,6 +40,7 @@ import type { Device, RouterBackupsResponse, SetupMark, SetupStatus } from './ty
 function backups(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse {
   return {
     enabled: true,
+    keyUnreadable: false,
     routers: [],
     totalGenerations: 0,
     totalRouters: 0,

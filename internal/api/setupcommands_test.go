@@ -63,7 +63,7 @@ func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *tes
 	s, _ := newTestServer(t)
 	s.SetupInstance.BackupPort = "47022"
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	}
 
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	// case (#1217's correction note): backups switched off in config,
 	// everything else present.
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,6 +455,33 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
+	}
+}
+
+// TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable covers #1264
+// finding 5: Vault.Enabled() being false covers both "no key configured"
+// and "a key is configured but could not be read" -- so the blocked key
+// must come from SetupInstance.BackupKeyUnreadable, not from Enabled()
+// alone, or an operator whose key merely failed to load gets told the
+// same "no-retention-key, set one" line as one who never had a key --
+// and following it (minting a fresh key) strands every backup already
+// encrypted under the old one.
+func TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupKeyUnreadable = true
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
+	})
+	want := []string{"retention-key-unreadable"}
+	if !slicesEqual(out.Steps.Backup.Blocked, want) {
+		t.Errorf("Backup.Blocked = %v, want %v -- a broken key must never be reported as no-retention-key", out.Steps.Backup.Blocked, want)
+	}
+	if !slicesEqual(out.Steps.BackupSchedule.Blocked, want) {
+		t.Errorf("BackupSchedule.Blocked = %v, want %v (same condition as Backup)", out.Steps.BackupSchedule.Blocked, want)
 	}
 }
 

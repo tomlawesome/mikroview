@@ -200,7 +200,7 @@ func (v *Vault) Unprotect(device, generationID string) error {
 		gen.Comment, gen.ProtectedAt, gen.ProtectedBy = comment, protectedAt, protectedBy
 		return err
 	}
-	dir := v.routerDir(device)
+	dir := v.dirFor(device, rm)
 	for _, g := range evicted {
 		for _, k := range []string{KindBackup, KindRsc} {
 			_ = os.Remove(filepath.Join(dir, v.fileName(g.ID, k)))

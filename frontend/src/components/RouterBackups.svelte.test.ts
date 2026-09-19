@@ -69,6 +69,7 @@ function lock(over: Partial<VaultLock> = {}): VaultLock {
 function resp(over: Partial<RouterBackupsResponse> = {}): RouterBackupsResponse {
   return {
     enabled: true,
+    keyUnreadable: false,
     routers: [],
     totalGenerations: 0,
     totalRouters: 0,
@@ -106,6 +107,23 @@ describe('no key mounted', () => {
   it('says the drop box is closed, with no per-router block', () => {
     render(RouterBackups, { props: { resp: resp({ enabled: false }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText(/none mounted — a backup that arrives has nowhere safe to go/)).toBeTruthy()
+  })
+})
+
+// #1264 finding 5: enabled: false alone cannot tell "no key configured"
+// from "a key is configured but could not be read" apart -- both leave
+// the vault disabled the same way. keyUnreadable is what tells them
+// apart, and a broken key must never read like the plain no-key state,
+// since that state's fix (mint one) is exactly the action that strands
+// every backup already encrypted under the broken one.
+describe('a configured key that could not be read', () => {
+  it('says the key could not be read and warns against minting a new one, not "none mounted"', () => {
+    render(RouterBackups, {
+      props: { resp: resp({ enabled: false, keyUnreadable: true }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+    expect(screen.queryByText(/none mounted — a backup that arrives has nowhere safe to go/)).toBeNull()
+    expect(screen.getByText(/could not be read/)).toBeTruthy()
+    expect(screen.getByText(/do not\s+mint a new one/)).toBeTruthy()
   })
 })
 

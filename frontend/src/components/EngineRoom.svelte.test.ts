@@ -16,7 +16,7 @@
 // (#657), so a `user` or `viewer` session gets neither group at all, not
 // a read-only rendering of one.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
@@ -127,6 +127,7 @@ import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
+import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
 import {
   fetchHistorySettings as fetchHistorySettingsReal,
   fetchRouterBackups as fetchRouterBackupsReal,
@@ -787,6 +788,7 @@ describe('The settings shelf (#633)', () => {
 
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
+      keyUnreadable: false,
       port: ':2222',
       routers: [
         {
@@ -977,6 +979,104 @@ describe('The settings shelf (#633)', () => {
     expect(screen.queryByText('router setup out of date')).toBeNull()
   })
 
+  // #1198: the ingest card's own no-GeoIP line -- same fact, same
+  // wording as the country filter's disabled row (FilterBar.svelte.test.ts),
+  // so a reader who has seen one recognises the other. Set directly
+  // rather than mocking fetchHealthz, same reasoning as that file's own
+  // geoip describe block: ensureLoaded()'s fetch is a same-value no-op
+  // once anything in this module has mounted before.
+  describe('the no-GeoIP row (#1198)', () => {
+    afterEach(() => {
+      geoipState.enabled = null
+    })
+
+    it('says no GeoIP database once the server reports none configured', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      geoipState.enabled = false
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.getByText('geoip')).toBeTruthy()
+      const link = screen.getByRole('link', { name: 'see docs ▸' })
+      expect(link.getAttribute('href')).toBe(GEOIP_DOCS_URL)
+    })
+
+    it('says nothing once a database is configured', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      geoipState.enabled = true
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.queryByText('geoip')).toBeNull()
+    })
+  })
+
+  // #1234: a router whose mikroview logging block was pasted more than
+  // once floods every downstream count without anything downstream
+  // being able to tell -- this row names the source, the apparent copy
+  // count and the fix, mirroring the setup-drift row's own
+  // active-vs-not shape just above.
+  describe('the duplicate logging rules row (#1234)', () => {
+    function syslogWithLoss(duplicate?: { host: string; copyCount: number }) {
+      return stats({
+        syslog: {
+          inUse: 1,
+          capacity: 256,
+          reservedForConfigured: 0,
+          rejected: 0,
+          rejectedConfigured: 0,
+          dropped: 0,
+          oversized: 0,
+          rejectedConfiguredHosts: [],
+          oversizedHost: '',
+          loss: {
+            dropped: { recent: 0, lastAt: null, active: false },
+            rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+            rejected: { recent: 0, lastAt: null, active: false },
+            oversized: { recent: 0, lastAt: null, active: false, declared: false, runs: 0 },
+            ...(duplicate
+              ? {
+                  duplicate: {
+                    recent: 12,
+                    lastAt: new Date().toISOString(),
+                    active: true,
+                    host: duplicate.host,
+                    declared: true,
+                    runs: 0,
+                    copyCount: duplicate.copyCount,
+                  },
+                }
+              : {}),
+          },
+        },
+      })
+    }
+
+    it('names the source, the copy count and the cleanup command while a duplicate is active', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = syslogWithLoss({ host: '203.0.113.9', copyCount: 2 })
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.getByText('duplicate logging rules')).toBeTruthy()
+      expect(screen.getByText(/203\.0\.113\.9 appears to be sending every line twice over/)).toBeTruthy()
+      expect(screen.getByText('/system logging remove [find action=mikroview]')).toBeTruthy()
+    })
+
+    it('says nothing while no duplicate is active', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = syslogWithLoss()
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.queryByText('duplicate logging rules')).toBeNull()
+    })
+  })
+
   // #1109: checking reads events straight out of the buffer by cursor, so
   // the ingest group has to say which of two very different things is
   // true -- running late on a backlog it will work through, or events
@@ -1119,6 +1219,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     authState.role = 'admin'
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: true,
+      keyUnreadable: false,
       port: ':2222',
       routers: [{ device: 'rb5009', generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 }],
       totalGenerations: 1,
@@ -1154,6 +1255,7 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
 
     fetchRouterBackups.mockResolvedValueOnce({
       enabled: false,
+      keyUnreadable: false,
       routers: [],
       totalGenerations: 0,
       totalRouters: 0,
