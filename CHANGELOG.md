@@ -38,8 +38,8 @@ rewritten.
   that this is a router you meant to add. Registering grants the router
   nothing on its own — its logs are accepted because its token arrived
   from its address, and that is unchanged. A router you enrolled before
-  this release counts as registered already; see "Upgrading to 0.6.0" in
-  docs/upgrades.md.
+  this release counts as registered already; see "Upgrading to 0.6.0:
+  routers must be enrolled" in docs/upgrades.md.
 
   If your admin account signs in only through your identity provider it
   has no password to re-check, so minting is refused for now with a
@@ -76,9 +76,9 @@ rewritten.
 
   Router-to-mikroview pushes (the ingest token flow) now hold to the
   same rule: a push is refused unless it also arrives from that device's
-  enrolled address. See "Upgrading to 0.6.0" in docs/upgrades.md for
-  what this means for a router that only ever sent logs and was never
-  given a `sourceIp`.
+  enrolled address. See "Upgrading to 0.6.0: routers must be enrolled" in
+  docs/upgrades.md for what this means for a router that only ever sent
+  logs and was never given a `sourceIp`.
 
 - **Adding a router is a walk through the setup ledger** (#1284). "+ add
   a router", beside your routers on the Entities screen, opens the same
@@ -419,6 +419,18 @@ rewritten.
   apart only by its dashed border; a step forced past without evidence
   moves to a caution colour instead, since pushing through without
   evidence is not the same as choosing to skip.
+
+- **The columns ▸ picker moved from the filter bar to the whisper, right
+  after csv ↓** (#729/#1197). Choosing which optional columns the table
+  draws used to live behind the filter bar's own fold-out strip, one
+  extra tap away from a control a reader who never opened that fold
+  never found at all. Owner ruling: the whisper already commands what
+  the table holds and shows -- hold the lines, fold repeats, empty the
+  screen, give a copy -- and choosing columns is one more of those, not
+  a filter. The desktop trigger and its popover moved there; the filter
+  bar keeps its own always-open column list for mobile, and the
+  checkbox list itself, `ColumnToggles.svelte`, is shared between the
+  two rather than duplicated.
 
 ### Fixed
 

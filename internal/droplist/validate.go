@@ -28,16 +28,18 @@ var ErrTooBroad = errors.New("droplist: entries may not be broader than /24")
 // ErrNotPublic is returned by Validate for a candidate that overlaps
 // private, loopback, link-local, multicast, unspecified or other
 // reserved/documentation address space -- there is no legitimate reason
-// to block traffic to or from any of it, and RouterOS enforcement built
-// on top of this store (a later stage) would otherwise risk cutting off
-// the router's own reachable ranges.
+// to block traffic to or from any of it, and the RouterOS enforcement
+// built on top of this store (the .rsc feed and its scheduled push,
+// #1224, now shipped) would otherwise risk cutting off the router's own
+// reachable ranges.
 var ErrNotPublic = errors.New("droplist: not a public address range")
 
 // ErrRouterOwn is returned by Validate when the candidate overlaps a
 // range the pushed router state (internal/routerstate, via OwnRanges)
 // shows as one of the router's own configured addresses -- blocking a
-// router's own range is never intentional, and stage 2's RouterOS push
-// would otherwise risk the router blocking itself.
+// router's own range is never intentional, and the RouterOS push (the
+// .rsc feed a router's own scheduled /tool fetch imports, #1224, now
+// shipped) would otherwise risk the router blocking itself.
 var ErrRouterOwn = errors.New("droplist: the pushed router state shows this range as the router's own")
 
 // nonPublicRanges is the IPv4 address space Validate refuses regardless
