@@ -292,6 +292,10 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	info.AcceptedIP = key
 	info.EnrolledAt = now
 	r.byAcceptedIP[key] = info
+	// The router logged its own logging-action change before this line
+	// reached us, so its address is already in the refused list; leaving
+	// it there would show the router just enrolled as a wrong sender.
+	delete(r.refused, key)
 	r.burnPendingLocked(device)
 	r.persistLocked()
 	deviceLog.Info("enrolled " + device + " at " + key)
@@ -424,6 +428,7 @@ func (r *Registry) EnrolFromPushedAddresses(addresses AddressTables, now time.Ti
 		info.AcceptedIP = key
 		info.EnrolledAt = now
 		r.byAcceptedIP[key] = info
+		delete(r.refused, key)
 		enrolled = append(enrolled, dev)
 	}
 	if len(enrolled) > 0 {
