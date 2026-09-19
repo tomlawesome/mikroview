@@ -75,6 +75,12 @@ import SetupWizard from './SetupWizard.svelte'
 // has moved once already -- naming moved from last to first when it
 // started creating the router.
 const PANE = { ca: 1, name: 2, syslog: 3, rules: 4, push: 5, backup: 6 } as const
+
+// The number each step's marks and witnesses are recorded under, which
+// is not its pane: the server witnesses by fixed number (step 2 is the
+// first syslog line, step 4 the first push), so those numbers stayed
+// where v0.5 left them when #1284 moved naming to the front.
+const RECORD = { ca: 1, syslog: 2, rules: 3, push: 4, name: 5, backup: 6 } as const
 // Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
 // its own CSS-token assertions (#1216): jsdom does not resolve a scoped
 // custom property through getComputedStyle, so the ink itself is checked
@@ -592,7 +598,7 @@ describe('SetupWizard', () => {
   // a decision that has been recorded goes on saying so.
   it('carries a recorded decision in the step list', () => {
     wizardState.status = status({
-      marks: [{ step: PANE.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+      marks: [{ step: RECORD.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
     })
     const { container } = render(SetupWizard)
     const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
@@ -613,7 +619,7 @@ describe('SetupWizard', () => {
   // checked against the component source below.
   it('marks a skipped step and its receipt with the skipped class, not the muted one', () => {
     wizardState.status = status({
-      marks: [{ step: PANE.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+      marks: [{ step: RECORD.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
     })
     const { container } = render(SetupWizard)
     const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
@@ -629,10 +635,10 @@ describe('SetupWizard', () => {
 
   it('marks a forced-past step with the forced class, distinct from skipped', () => {
     wizardState.status = status({
-      marks: [{ step: 2, outcome: 'forced', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+      marks: [{ step: RECORD.syslog, outcome: 'forced', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
     })
     const { container } = render(SetupWizard)
-    const row = container.querySelectorAll('.steps .step-row')[1]
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
     expect(row.className).toContain('forced')
     expect(row.className).not.toContain('skipped')
     expect(row.querySelector('.step-receipt')).toBeTruthy()
@@ -647,12 +653,14 @@ describe('SetupWizard', () => {
     // re-fetches status on mount, and a mismatched mock would clobber
     // wizardState.status back to the default the moment that resolves.
     const withWitness = status({
-      witnesses: [{ step: 2, receipt: 'syslog connected from 192.0.2.1', at: '2026-09-13T10:27:00Z' }],
+      witnesses: [
+        { step: RECORD.syslog, receipt: 'syslog connected from 192.0.2.1', at: '2026-09-13T10:27:00Z' },
+      ],
     })
     vi.mocked(fetchSetupStatus).mockResolvedValue(withWitness)
     wizardState.status = withWitness
     const { container } = render(SetupWizard)
-    const row = container.querySelectorAll('.steps .step-row')[1]
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
     // Done's own disc, the same as live evidence gets -- the step
     // genuinely happened, which is the whole complaint #1221 fixes.
     expect(row.className).toContain('done')
@@ -2038,7 +2046,7 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
   // because that is what the server stores.
   it('records a forced-past decision under the step number the server keeps', async () => {
     vi.mocked(markSetupStep).mockResolvedValue({
-      step: 3,
+      step: RECORD.syslog,
       outcome: 'forced',
       actor: 'tom',
       at: '2026-09-19T14:05:00Z',
@@ -2049,14 +2057,20 @@ describe('SetupWizard -- the router ledger (#1284)', () => {
     const { container } = render(SetupWizard)
 
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    expect(container.querySelector('.heavy .quote')?.textContent).toContain('setup · step 3 forced past')
+    // Send logs is step 2 of 5 on this ledger and is recorded as step 2
+    // regardless -- that is where the server keeps it.
+    expect(container.querySelector('.heavy .quote')?.textContent).toContain('setup · step 2 forced past')
     expect(container.querySelector('.heavy .quote')?.textContent).toContain(
       'router not enrolled; its logs are refused until it is',
     )
 
     await fireEvent.click(screen.getByRole('button', { name: /Go on anyway/ }))
     await waitFor(() =>
-      expect(markSetupStep).toHaveBeenCalledWith(3, 'forced', 'router not enrolled; its logs are refused until it is'),
+      expect(markSetupStep).toHaveBeenCalledWith(
+        RECORD.syslog,
+        'forced',
+        'router not enrolled; its logs are refused until it is',
+      ),
     )
   })
 

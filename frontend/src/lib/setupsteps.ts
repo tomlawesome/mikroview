@@ -507,12 +507,26 @@ export type Outcome = 'done' | 'skipped' | 'forced' | 'open'
 // the same wherever it is drawn.
 export type StepKey = 'ca' | 'name' | 'syslog' | 'rules' | 'push' | 'backup'
 
-// SETUP_STEPS is the first-run ledger, and the canonical order: a
-// step's position here is the number its marks are recorded under, in
-// internal/setup's ledger and in the forced-past line the amber button
-// quotes. The router ledger below is a slice of this list, not a copy
-// of it -- "the ledger is embedded, not copied", the record's own words.
+// SETUP_STEPS is the first-run ledger in the order it is walked. The
+// router ledger below is a slice of this list, not a copy of it -- "the
+// ledger is embedded, not copied", the record's own words.
 export const SETUP_STEPS: readonly StepKey[] = ['ca', 'name', 'syslog', 'rules', 'push', 'backup']
+
+// RECORD_NUMBERS is the number each step's marks and witnesses are
+// recorded under in internal/setup's ledger. It is the v0.5 walking
+// order, frozen: the server witnesses steps by these numbers
+// (internal/api/setup.go notes step 2 when the first syslog line lands,
+// step 4 when the first push arrives), and ledgers written before
+// #1284 moved "Name your router" forward hold marks under them. Walking
+// order can change; this cannot, or every stored mark changes meaning.
+const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
+  ca: 1,
+  syslog: 2,
+  rules: 3,
+  push: 4,
+  name: 5,
+  backup: 6,
+}
 
 // ROUTER_STEPS is the router ledger (#1284): the same five router-side
 // steps without the certificate step in front, which is an instance
@@ -523,16 +537,15 @@ export const ROUTER_STEPS: readonly StepKey[] = ['name', 'syslog', 'rules', 'pus
 // whichever ledger it is being walked in. A mark is persisted server
 // side, so it cannot mean "second row of whatever list was open".
 export function canonicalStep(key: StepKey): number {
-  return SETUP_STEPS.indexOf(key) + 1
+  return RECORD_NUMBERS[key]
 }
 
 export interface LedgerStep {
   // n is where this step sits in the ledger being walked -- "Step 2 of
   // 5" on the router ledger, "Step 3 of 6" on first-run setup.
   n: number
-  // canonical is the number the same step's marks are recorded under,
-  // which is its position in SETUP_STEPS and never moves. Equal to n on
-  // first-run setup, one higher on the router ledger.
+  // canonical is the number the same step's marks are recorded under
+  // (RECORD_NUMBERS), which never moves whatever order it is walked in.
   canonical: number
   key: StepKey
   title: string
@@ -577,10 +590,16 @@ const TITLES: Record<StepKey, string> = {
   backup: 'Back up the router',
 }
 
-// STEP_TITLES is the canonical six in canonical order -- the list a
-// recorded mark's step number indexes into, wherever that mark is read
-// back (silenceExplanation's empty-state sentence, most of all).
-export const STEP_TITLES: readonly string[] = SETUP_STEPS.map((k) => TITLES[k])
+// STEP_TITLES is the six in RECORD_NUMBERS' order, not the walking
+// order: it is indexed by a stored mark's step number, wherever that
+// mark is read back (silenceExplanation's empty-state sentence, most of
+// all), so it has to name the step the server meant rather than
+// whichever row happens to sit there in the ledger being walked.
+// Sorted from RECORD_NUMBERS rather than written out again, so the two
+// cannot drift apart.
+export const STEP_TITLES: readonly string[] = [...SETUP_STEPS]
+  .sort((a, b) => RECORD_NUMBERS[a] - RECORD_NUMBERS[b])
+  .map((k) => TITLES[k])
 
 export const STEP_COUNT = SETUP_STEPS.length
 
