@@ -534,6 +534,22 @@ class WizardState {
     this.pane = this.steps.indexOf('syslog') + 1
   }
 
+  // openRegister is a router row's Finish registering… (#1291's other
+  // unmet checklist item): the same ledger, opened at Register for a
+  // router that already enrolled, with its device and history kept and
+  // nothing minted. A router only short of the Register step does not
+  // need a fresh token to close it -- that is what Re-enrol… is for,
+  // and it stays offered alongside this for when the enrolment itself
+  // is the problem. openAddRouter's own clearEnrolment() call means no
+  // stale password or address rides along from whatever walk was open
+  // before.
+  openRegister(device: string) {
+    this.openAddRouter()
+    this.ledgerDevice = device
+    this.tokenDevice = device
+    this.pane = this.steps.indexOf('register') + 1
+  }
+
   // createRouter is the name step's own act: naming a router is what
   // creates it, so there is one call and not a field plus a save. The
   // new row becomes this walk's router, and the token the next step

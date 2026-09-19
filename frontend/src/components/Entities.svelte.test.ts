@@ -276,6 +276,59 @@ describe('Entities router cards (#675)', () => {
     )
   })
 
+  // #1291's other unmet checklist item: this router only needs the
+  // Register step, not a whole re-enrolment, so it gets a direct way to
+  // resume there -- keeping its device and history, minting nothing.
+  it('offers to finish registering an enrolled-but-unregistered router, landing on Register with no token minted', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { getByLabelText } = render(Entities)
+    await settle()
+
+    getByLabelText(/Finish registering rb5009/).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    expect(wizardState.ledgerDevice).toBe('rb5009')
+    // Register is the last step of the router ledger.
+    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
+    expect(wizardState.enrolment).toBeNull()
+  })
+
+  // A registered-but-not-yet-enrolled router has nothing left for
+  // Register to finish -- the gap is the token, which only Re-enrol…
+  // mints -- so the Finish registering… control must not appear there.
+  it('does not offer Finish registering… once the router is already registered', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { queryByText } = render(Entities)
+    await settle()
+
+    expect(queryByText('Finish registering…')).toBeNull()
+  })
+
   it('reads a registered-but-not-yet-enrolled router as a normal wait, not an error', async () => {
     appState.devices = [
       {

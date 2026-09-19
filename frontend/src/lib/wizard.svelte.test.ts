@@ -127,6 +127,48 @@ describe('openLostRouter (#394)', () => {
   })
 })
 
+// #1291's other unmet checklist item: a router that enrolled but was
+// never registered must be resumable at Register alone, without being
+// sent through Re-enrol's full mint-a-fresh-token walk to close the one
+// step it is actually short of.
+describe('openRegister resumes an enrolled-but-unregistered router (#1291)', () => {
+  it('lands on Register for the named router, minting nothing', () => {
+    wizardState.close()
+    wizardState.openRegister('edge-1')
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    expect(wizardState.ledgerDevice).toBe('edge-1')
+    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
+    // No fresh proof of identity was asked for and no token exists --
+    // this door only opens the ledger, it never mints.
+    expect(wizardState.enrolment).toBeNull()
+    expect(wizardState.enrolmentMintedAt).toBe('')
+    expect(mintEnrolment).not.toHaveBeenCalled()
+  })
+
+  it('carries no enrolment form leftovers from a previous walk', () => {
+    wizardState.openReEnrol('edge-2')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+
+    wizardState.openRegister('edge-1')
+
+    expect(wizardState.enrolExpectedAddress).toBe('')
+    expect(wizardState.enrolPassword).toBe('')
+  })
+
+  it('is cleared by Run setup…, the same as Re-enrol…', () => {
+    wizardState.status = status()
+    wizardState.openRegister('edge-1')
+
+    wizardState.launch()
+
+    expect(wizardState.ledgerDevice).toBe('')
+    expect(wizardState.steps).toEqual(SETUP_STEPS)
+  })
+})
+
 // #1218 audit finding 11: saveSetupAddress/saveSetupBackupTransport only
 // ever resolve to an error string for a refusal the server actually
 // answered -- a dropped connection rejects instead (postJSON/putJSON's

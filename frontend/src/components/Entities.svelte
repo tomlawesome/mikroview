@@ -212,6 +212,13 @@
     wizardState.openReEnrol(deviceId)
   }
 
+  // Finish registering… (#1291) opens the router ledger straight at
+  // Register, for a router whose only gap is that one step -- its
+  // enrolment already stands, so nothing here mints a fresh token.
+  function finishRegistering(deviceId: string) {
+    wizardState.openRegister(deviceId)
+  }
+
   // Renaming is an edit, so the viewer tier does not get the affordance
   // and its names stop looking clickable. Nothing on this page says why:
   // the read-only fact is declared once, on the account chip
@@ -686,6 +693,23 @@
   </button>
 {/snippet}
 
+{#snippet finishRegisteringButton(deviceId: string, label: string)}
+  <!-- Finish registering… (#1291): the ledger at Register, keeping the
+       router's device and history, with no fresh token minted -- for a
+       router whose enrolment already stands and is only short of the
+       ledger's own confirmation. Re-enrol… stays offered beside it for
+       when the enrolment itself is the problem; this is for the one
+       step nearly finished, not the whole walk again. -->
+  <button
+    type="button"
+    class="row-action"
+    onclick={() => finishRegistering(deviceId)}
+    aria-label="Finish registering {label} — resume the Register step for it"
+  >
+    Finish registering…
+  </button>
+{/snippet}
+
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
     <div class="og">
@@ -773,6 +797,13 @@
                 </div>
               {/if}
               {#if isAdmin}
+                {#if d.acceptedIp && !d.registeredAt}
+                  <!-- #1291: this router's only gap is the Register
+                       step -- offer to finish that directly rather than
+                       sending it through Re-enrol's full mint-a-fresh-
+                       token walk for one step it nearly completed. -->
+                  {@render finishRegisteringButton(d.id, d.name || d.sourceIp)}
+                {/if}
                 <!-- Re-enrol… belongs on this card most of all: since
                      #1281 a router earns its place by presenting a
                      token, and a router the ledger declared is not in
