@@ -93,3 +93,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-account-menu: the foot has no uptime segment
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
+
+## live-watchlist-manage: the drawer's "fence now" button never becomes stable
+
+- 2026-09-19 · 53b935f4 (fix/v060-audit, local `make live-check`) · 102 scenarios, this one the only failure · `waiting for locator('.wt-drawer').getByRole('button', { name: /fence now/ })` → "waiting for element to be visible, enabled and stable" three times, then the 30 s timeout. Run alone at the same commit on a fresh instance: PASS. The suite's previous run at the parent commit passed this scenario; the three other failures in that run were a real ordering fault (routers left behind by earlier scenarios) and are fixed, so this one is on its own. First sighting.
