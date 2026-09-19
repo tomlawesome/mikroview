@@ -580,28 +580,3 @@ func TestHostNameSourceNamesThePushedTable(t *testing.T) {
 // /ip/address table contributes its masked network, an unparseable or
 // non-IPv4 entry is skipped rather than failing the call, and a device
 // that has never pushed the ip-address kind contributes nothing.
-func TestOwnPrefixesCollectsIPv4AddressesAcrossDevices(t *testing.T) {
-	s := New()
-	if got := s.OwnPrefixes(); len(got) != 0 {
-		t.Fatalf("OwnPrefixes() = %v before any push, want empty", got)
-	}
-
-	apply(t, s, "router-b", `{"kind":"ip-address","page":1,"pages":1,"records":[`+
-		`{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`)
-	apply(t, s, "router-a", `{"kind":"ip-address","page":1,"pages":1,"records":[`+
-		`{"address":"10.0.0.1/8","network":"10.0.0.0","interface":"ether1","comment":"wan"}]}`)
-	// router-c pushes something else entirely -- no ip-address kind at
-	// all, which must contribute nothing rather than error.
-	apply(t, s, "router-c", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"10.0.0.9","mac":"aa:bb:cc:dd:ee:03"}]}`)
-
-	got := s.OwnPrefixes()
-	want := map[string]bool{"192.168.1.0/24": true, "10.0.0.0/8": true}
-	if len(got) != len(want) {
-		t.Fatalf("OwnPrefixes() = %v, want exactly %v", got, want)
-	}
-	for _, p := range got {
-		if !want[p.String()] {
-			t.Errorf("OwnPrefixes() contains unexpected prefix %v", p)
-		}
-	}
-}

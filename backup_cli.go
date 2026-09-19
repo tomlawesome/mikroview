@@ -67,6 +67,12 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"seen_values", cfg.Seen.StorePath},
 		{"baseline", cfg.Baseline.StorePath},
 		{"mac_registry", cfg.DeviceMAC.StorePath},
+		// The device registry's own enrolments (issue #1281): an
+		// acceptedIp/enrolledAt and the identity of any device this
+		// registry itself created, neither of which config.yaml can
+		// rebuild -- a restore missing this would silently unenrol
+		// every device that was never given a config.yaml sourceIp.
+		{"device_registry", cfg.DeviceRegistry.StorePath},
 		{"engine_state", cfg.Engine.StorePath},
 		{"definitions", cfg.Engine.DefinitionsStorePath},
 		// Decommission watches (#460): operator-created state with a
