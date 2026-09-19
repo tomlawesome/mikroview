@@ -209,10 +209,12 @@ func isConfiguredSource(host string) bool {
 	return m != nil && (*m)[host]
 }
 
-// EnrolmentGate is issue #1281's per-line admission check: whether a
-// syslog source address is allowed onto the ingest pipeline at all, and
-// whether an as-yet-unrecognised line enrols a pending device at that
-// address. Declared here (rather than the implementation's own
+// EnrolmentGate is issue #1281's admission check, at both the
+// connection and the line level: whether a syslog source address may
+// even open a TCP connection, whether it is allowed onto the ingest
+// pipeline once connected, and whether an as-yet-unrecognised line
+// enrols a pending device at that address. Declared here (rather than
+// the implementation's own
 // package) so this package -- syslog -- need not import the device
 // registry or the API to call it, the same reason OnConnection above is
 // a package-level hook rather than a constructor parameter:
@@ -230,6 +232,19 @@ type EnrolmentGate interface {
 	// Refuse records that a line from host was neither already allowed
 	// nor a valid enrolment line, for the refused-senders list.
 	Refuse(host string, line []byte)
+	// AcceptsUnknown reports whether at least one enrolment token is
+	// currently pending, anywhere -- while true, the accept loop lets an
+	// address through that is neither Allowed nor yet known, since the
+	// enrol line that proves a pending token has to be able to arrive
+	// from the address it is enrolling. Checked once per accepted
+	// connection, before the TLS handshake and before the per-line gate
+	// ever sees a byte.
+	AcceptsUnknown() bool
+	// RefuseConnection records that host's TCP connection was refused at
+	// accept time -- before TLS, before any line -- because host is
+	// neither Allowed nor is any token pending. Counted the same way as
+	// Refuse, into the same refused-senders list.
+	RefuseConnection(host string)
 }
 
 // enrolmentGate holds the installed EnrolmentGate, nil by default --
@@ -749,6 +764,7 @@ var (
 	perSourceRejectGate  = logging.NewLimiter(ingestDropLogInterval)
 	unreservedRejectGate = logging.NewLimiter(ingestDropLogInterval)
 	globalRejectGate     = logging.NewLimiter(ingestDropLogInterval)
+	enrolmentRejectGate  = logging.NewLimiter(ingestDropLogInterval)
 )
 
 // tcpIdleTimeoutNS closes a connection that has gone this long without a
@@ -825,6 +841,32 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		tempDelay = 0
 
 		host := remoteHost(conn)
+
+		// Issue #1281's connection gate, checked before anything else
+		// about this connection -- including the per-source cap below
+		// and, critically, the TLS handshake, which ServeTLS's
+		// tls.Listener never performs eagerly in Accept (see
+		// tls_listener.go's own comment): it happens lazily on this
+		// conn's first Read/Write, inside handleTCPConn, which this
+		// loop never reaches for a refused connection. An address that
+		// is not already Allowed only gets this far while some device,
+		// anywhere, has a pending enrolment token -- AcceptsUnknown --
+		// because the enrol line that redeems such a token has to be
+		// able to arrive from the very address it is enrolling. Once
+		// every pending token is burned or has expired, the port closes
+		// back up to unknown addresses.
+		if p := enrolmentGate.Load(); p != nil && *p != nil {
+			g := *p
+			if !g.Allowed(host) && !g.AcceptsUnknown() {
+				g.RefuseConnection(host)
+				if total, ok := enrolmentRejectGate.Allow(); ok {
+					tcpLog.Warn(fmt.Sprintf("connection from an address that is neither a declared/enrolled router nor covered by a pending enrolment token -- rejecting %s (%d such rejections since start or last clear)", host, total))
+				}
+				conn.Close()
+				continue
+			}
+		}
+
 		configured := isConfiguredSource(host)
 
 		// An undeclared source may only take slots outside the portion
