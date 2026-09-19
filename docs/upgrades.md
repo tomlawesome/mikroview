@@ -84,7 +84,11 @@ For anything the automatic step does not settle, enrol it by hand:
 
 Until you do this, that router's traffic is refused, not silently
 dropped: it is listed under "Refused senders" in Settings > Devices so
-you can see exactly which addresses are waiting on you.
+you can see exactly which addresses are waiting on you. The syslog port
+itself now refuses the connection outright from an address it does not
+recognise, except during the 15 minutes an enrolment token is pending
+for some device — that window is what lets the router's own enrol line
+reach the port in the first place.
 
 ## What happens at start
 

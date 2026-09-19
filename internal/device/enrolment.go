@@ -188,6 +188,29 @@ func (r *Registry) VerifyPendingToken(device, raw string, now time.Time) bool {
 	return p.hash == hashEnrolToken(raw)
 }
 
+// AcceptsUnknown reports whether at least one pending enrolment token
+// exists anywhere and has not yet expired -- issue #1281's connection
+// gate: the syslog port must stay open to an address that is not yet
+// anyone's sourceIp/acceptedIp for as long as some device has a pending
+// token, because the enrol line proving that token has to be able to
+// arrive from the very address it is enrolling. Once every pending
+// token is burned (TryEnrol) or expires, this reports false again and
+// the port closes to unknown addresses. Called once per accepted TCP
+// connection, not per line, so a full walk of pendingByDevice is cheap
+// enough here even though Allowed's map lookups are preferred on the
+// hotter per-line path.
+func (r *Registry) AcceptsUnknown() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := time.Now()
+	for _, p := range r.pendingByDevice {
+		if now.Before(p.expiresAt) {
+			return true
+		}
+	}
+	return false
+}
+
 // Allowed reports whether host is already some device's sourceIp or
 // acceptedIp -- the listener gate's fast path (internal/syslog.
 // EnrolmentGate), one map lookup each. Registry satisfies
@@ -275,17 +298,15 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	return true
 }
 
-// Refuse records that a line from host was neither already allowed nor
-// a valid enrolment line -- the other half of the listener gate
-// (internal/syslog.EnrolmentGate), feeding GET /api/devices/refused.
-// The line's content is not retained, only that one arrived: this is a
-// count against an unauthenticated address, not evidence to display.
-func (r *Registry) Refuse(host string, line []byte) {
+// refuseLocked records one refusal against host, whether it came from a
+// rejected line (Refuse) or a rejected connection (RefuseConnection) --
+// the two count identically into the one refused-senders list, since
+// issue #1281's ruling is that a connection refused at accept time must
+// show up in the wizard's warning box exactly like a refused line does.
+// Must be called with r.mu held.
+func (r *Registry) refuseLocked(host string) {
 	key := normalizeIP(host)
 	now := time.Now()
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	ref, ok := r.refused[key]
 	if !ok {
 		ref = &Refused{Address: key, FirstSeen: now}
@@ -294,6 +315,30 @@ func (r *Registry) Refuse(host string, line []byte) {
 	ref.LastSeen = now
 	ref.Lines++
 	r.pruneRefusedLocked()
+}
+
+// Refuse records that a line from host was neither already allowed nor
+// a valid enrolment line -- the other half of the listener gate
+// (internal/syslog.EnrolmentGate), feeding GET /api/devices/refused.
+// The line's content is not retained, only that one arrived: this is a
+// count against an unauthenticated address, not evidence to display.
+func (r *Registry) Refuse(host string, line []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refuseLocked(host)
+}
+
+// RefuseConnection records that host's TCP connection was refused at
+// accept time -- before any line, and before the TLS handshake, ever
+// had a chance to run -- because host is neither Allowed nor is any
+// enrolment token currently pending anywhere (see AcceptsUnknown).
+// Counts into the same refused-senders list as Refuse, via the same
+// Lines field, so the wizard's warning box shows a refused connection
+// the same way it shows a refused line.
+func (r *Registry) RefuseConnection(host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refuseLocked(host)
 }
 
 // Refused returns every refused source address, in address order.

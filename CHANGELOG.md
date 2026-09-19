@@ -28,7 +28,10 @@ rewritten.
   router's own word about its address was never something to trust
   identity to. Declare a syslog-only router with no address at all from
   the same screen, mint it a token, and paste the one extra line the
-  "Send logs" step now shows into its logging action.
+  "Send logs" step now shows into its logging action. The syslog port
+  itself now refuses a connection from an unrecognised address outright,
+  except while an enrolment token is pending for some device, so the
+  refusal happens before the TLS handshake rather than only at the line.
 
   Router-to-mikroview pushes (the ingest token flow) now hold to the
   same rule: a push is refused unless it also arrives from that device's
