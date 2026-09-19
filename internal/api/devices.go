@@ -310,7 +310,12 @@ func (s *Server) handleDeviceEnrolmentRebind(w http.ResponseWriter, r *http.Requ
 	if err := s.Devices.RebindEnrolment(id, strings.TrimSpace(req.Address)); err != nil {
 		status := http.StatusInternalServerError
 		switch {
-		case errors.Is(err, device.ErrDeviceNotFound), errors.Is(err, device.ErrNoPendingEnrolment):
+		case errors.Is(err, device.ErrDeviceNotFound),
+			errors.Is(err, device.ErrNoPendingEnrolment),
+			// A lapsed token is its own 404: there is no window left to
+			// move, and the message says so rather than claiming there
+			// never was one, because the way on is a fresh mint.
+			errors.Is(err, device.ErrEnrolmentExpired):
 			status = http.StatusNotFound
 		case errors.Is(err, device.ErrNotRefused),
 			errors.Is(err, device.ErrExpectedAddressRequired),

@@ -180,6 +180,16 @@ func (r *Registry) MintEnrolment(device, expected string, now time.Time) (token 
 // else.
 var ErrNotRefused = errors.New("device: that address has not been refused by the listener, so there is nothing to rebind to")
 
+// ErrEnrolmentExpired is returned by RebindEnrolment for a device whose
+// pending token has lapsed. The window is what rebinding moves, and a
+// lapsed token has no window: VerifyPendingToken, TryEnrol and
+// AcceptsConnectionFrom all check the expiry, and this used not to, so
+// the rebind reported success and the gate stayed shut with nothing
+// anywhere saying why. A fresh mint is the way on, which is why this is
+// distinct from ErrNoPendingEnrolment -- the operator needs to be told
+// the token lapsed, not that there never was one.
+var ErrEnrolmentExpired = errors.New("device: that enrolment token has expired, so there is no window to move -- mint a fresh one")
+
 // RebindEnrolment points a device's pending enrolment window at a
 // different address, keeping the token itself exactly as it is (issue
 // #1291, ruling 23a).
@@ -216,6 +226,9 @@ func (r *Registry) RebindEnrolment(device, addr string) error {
 	p, ok := r.pendingByDevice[device]
 	if !ok {
 		return ErrNoPendingEnrolment
+	}
+	if !time.Now().Before(p.expiresAt) {
+		return ErrEnrolmentExpired
 	}
 	if _, refused := r.refused[key]; !refused {
 		return ErrNotRefused
