@@ -850,3 +850,32 @@ func TestCollisionReasonNamesTheWayOut(t *testing.T) {
 		t.Errorf("collisionReason(configured) = %q, want the declared-in-config wording unchanged", got)
 	}
 }
+
+// TestRebindEnrolmentRefusesAnExpiredWindow: rebinding checked the
+// device, the pending token and the refused list, but never the
+// expiry -- unlike VerifyPendingToken, TryEnrol and
+// AcceptsConnectionFrom, which all do. Past the TTL the rebind
+// returned nil, so the wizard reported success and told the operator to
+// connect their router while the gate stayed shut, with no error
+// anywhere to explain the silence. Recovery is a fresh mint, and
+// nothing was telling the operator that. Found by the v0.6.0 audit
+// (#1257), finding 3.
+func TestRebindEnrolmentRefusesAnExpiredWindow(t *testing.T) {
+	r := NewRegistry(nil)
+	minted := time.Now().Add(-2 * enrolTokenTTL)
+	if _, err := r.Create("hap-ax3", "hap-ax3", minted); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", minted); err != nil {
+		t.Fatal(err)
+	}
+	r.RefuseConnection("10.10.0.5")
+
+	err := r.RebindEnrolment("hap-ax3", "10.10.0.5")
+	if !errors.Is(err, ErrEnrolmentExpired) {
+		t.Errorf("RebindEnrolment on a lapsed token = %v, want ErrEnrolmentExpired", err)
+	}
+	if r.AcceptsConnectionFrom("10.10.0.5") {
+		t.Error("the window moved to .5 anyway -- a lapsed token must not reopen the gate")
+	}
+}
