@@ -510,3 +510,49 @@ func TestEnrolmentClearsTheAddressFromTheRefusedList(t *testing.T) {
 		t.Fatalf("Refused() after enrolling 10.10.0.1 = %+v, want only the stranger left", got)
 	}
 }
+
+// TestEnrolRefusesAnAddressAnotherDeviceAlreadyHolds: an address
+// belongs to one router. Enrolling a second device at an address that
+// is already some other device's declared sourceIp or enrolled address
+// used to succeed: the registry logged "enrolled", the row said
+// "Enrolled at ...", and Resolve went on attributing every line to
+// whichever device the lookup order reached first -- so one of the two
+// was silently dead while its card claimed otherwise. The enrolment is
+// refused instead, and the token stays pending so the operator can
+// redeem it from the right address without rerolling.
+func TestEnrolRefusesAnAddressAnotherDeviceAlreadyHolds(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	for _, id := range []string{"held", "claimant"} {
+		if _, err := r.Create(id, id, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enrolAt(t, r, "held", "10.0.0.1")
+
+	token, _, err := r.MintEnrolment("claimant", now)
+	if err != nil {
+		t.Fatalf("MintEnrolment: %v", err)
+	}
+	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
+	if r.TryEnrol("10.0.0.1", line) {
+		t.Fatal("TryEnrol() = true at an address another device already holds, want false")
+	}
+
+	for _, info := range r.List() {
+		if info.ID == "claimant" && info.AcceptedIP != "" {
+			t.Errorf("claimant AcceptedIP = %q, want it left unenrolled", info.AcceptedIP)
+		}
+		if info.ID == "held" && info.AcceptedIP != "10.0.0.1" {
+			t.Errorf("held AcceptedIP = %q, want it kept", info.AcceptedIP)
+		}
+	}
+	if id := r.Resolve("10.0.0.1", now); id != "held" {
+		t.Errorf("Resolve() = %q, want the address still attributing to held", id)
+	}
+	// The token is unspent, so the same token redeems from an address
+	// that is actually free.
+	if !r.TryEnrol("10.0.0.2", line) {
+		t.Error("TryEnrol() = false at a free address, want the unspent token still good")
+	}
+}

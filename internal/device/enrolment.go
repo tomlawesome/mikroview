@@ -285,10 +285,30 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 		return false
 	}
 
+	key := normalizeIP(host)
+	// An address belongs to one router. Taking one another device
+	// already holds -- declared in config.yaml, or enrolled earlier --
+	// would leave both rows claiming it while Resolve's own order gave
+	// every line to just one of them: the loser reads "Enrolled at
+	// <address>" on its card and receives nothing, with nothing
+	// anywhere saying why. Refuse instead, and leave the token unspent
+	// so the operator can redeem it from the right address without
+	// rerolling. The address is counted as refused, so the wizard's
+	// warning box shows that something arrived and was not accepted.
+	if held, taken := r.byIP[key]; taken && held.ID != device {
+		r.refuseLocked(key)
+		deviceLog.Info("refused enrolling " + device + " at " + key + ": declared as " + held.ID)
+		return false
+	}
+	if held, taken := r.byAcceptedIP[key]; taken && held.ID != device {
+		r.refuseLocked(key)
+		deviceLog.Info("refused enrolling " + device + " at " + key + ": already enrolled as " + held.ID)
+		return false
+	}
+
 	if info.AcceptedIP != "" {
 		delete(r.byAcceptedIP, normalizeIP(info.AcceptedIP))
 	}
-	key := normalizeIP(host)
 	info.AcceptedIP = key
 	info.EnrolledAt = now
 	r.byAcceptedIP[key] = info
@@ -425,6 +445,14 @@ func (r *Registry) EnrolFromPushedAddresses(addresses AddressTables, now time.Ti
 		}
 		sort.Strings(addrs)
 		key := normalizeIP(addrs[0])
+		// Same rule as TryEnrol: never take an address another device
+		// already holds.
+		if held, taken := r.byIP[key]; taken && held.ID != dev {
+			continue
+		}
+		if held, taken := r.byAcceptedIP[key]; taken && held.ID != dev {
+			continue
+		}
 		info.AcceptedIP = key
 		info.EnrolledAt = now
 		r.byAcceptedIP[key] = info
