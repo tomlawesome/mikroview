@@ -98,6 +98,17 @@ func (p registryPart) Export() (json.RawMessage, error) {
 // Like the store's part, it refuses a registry that has already seen
 // traffic: the only correct time to restore is at boot, before ingest
 // starts, and merging over live counts would inflate them.
+// AcceptedIP/EnrolledAt (issue #1281) are deliberately left untouched by
+// this whole merge, on every branch: OpenRegistryWithBackend's own
+// persisted document is the durable source for those, loaded earlier in
+// main.go's boot sequence than this warm-restart snapshot ever runs
+// (see main.go's ordering comment beside RunPeriodicSnapshot's caller),
+// so an existing device already carries its real enrolment by the time
+// Import sees it, and the byAcceptedIP index behind it is already
+// correct. A device this merge creates fresh (the "snapshot recorded it,
+// OpenRegistry's own document did not" case -- in practice, an upgrade
+// from before #1281 existed) has never been enrolled either way, so an
+// empty AcceptedIP is simply the truth.
 func (p registryPart) Import(raw json.RawMessage, taken, now time.Time) error {
 	var state registryState
 	if err := json.Unmarshal(raw, &state); err != nil {
@@ -174,7 +185,14 @@ func (p registryPart) Import(raw json.RawMessage, taken, now time.Time) error {
 // one document can hold the same address twice -- a pre-#1170 device
 // row and a source row for it.
 func (r *Registry) restoreAddressLocked(address string, lines uint64, firstSeen, lastSeen time.Time) {
-	if info, ok := r.byIP[address]; ok {
+	info, ok := r.byIP[address]
+	if !ok {
+		// #1281: an address may instead belong to a device enrolled by
+		// token rather than declared in config.yaml -- same merge either
+		// way, just a different map to have found it in.
+		info, ok = r.byAcceptedIP[address]
+	}
+	if ok {
 		info.EventCount += lines
 		if !firstSeen.IsZero() && (info.FirstSeen.IsZero() || firstSeen.Before(info.FirstSeen)) {
 			info.FirstSeen = firstSeen

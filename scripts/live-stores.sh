@@ -53,6 +53,7 @@ watchlist:
   matchLogPath: $dir/matchlog.jsonl
   suggestionsStorePath: $dir/suggestions.json
 deviceMac: {storePath: $dir/mac-registry.json}
+deviceRegistry: {storePath: $dir/device-registry.json}
 engine:
   storePath: $dir/engine-state.json
   definitionsStorePath: $dir/definitions.json
