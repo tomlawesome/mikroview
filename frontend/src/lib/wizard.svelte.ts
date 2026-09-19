@@ -15,29 +15,75 @@
 // it.
 
 import {
+  createDevice,
   fetchDevices,
+  fetchRefusedSenders,
   fetchRouterBackups,
   fetchSetupCommands,
   fetchSetupStatus,
   markSetupStep,
+  mintEnrolment,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
-import { buildLedger, firstOpenStep, silenceExplanation, STEP_COUNT } from './setupsteps'
-import type { BackupTransport, Device, RouterBackupsResponse, SetupCommandsResponse, SetupMark, SetupStatus } from './types'
-
-// FINISH_PANE is the pane after the last step -- the ledger read back.
-// One past the count rather than a separate flag, so "which pane" stays
-// a single number and Back from the finish lands on step 5.
-export const FINISH_PANE = STEP_COUNT + 1
+import {
+  buildLedger,
+  firstOpenStep,
+  refusedSince,
+  ROUTER_STEPS,
+  SETUP_STEPS,
+  silenceExplanation,
+  type StepKey,
+} from './setupsteps'
+import type {
+  BackupTransport,
+  Device,
+  EnrolmentToken,
+  RefusedSender,
+  RouterBackupsResponse,
+  SetupCommandsResponse,
+  SetupMark,
+  SetupStatus,
+} from './types'
 
 class WizardState {
   open = $state(false)
-  // 1..STEP_COUNT for a step, FINISH_PANE for the finish.
+  // steps is which ledger is open (#1284): the full first-run set, or
+  // the router-side five that Add a router and Re-enrol… walk. Held
+  // here rather than passed to the component because the pane number
+  // means nothing without it -- "step 2" is Name your router in one and
+  // Send logs in the other.
+  steps = $state<readonly StepKey[]>(SETUP_STEPS)
+  // 1..steps.length for a step, finishPane for the finish.
   pane = $state(1)
   status = $state<SetupStatus | null>(null)
   devices = $state<Device[]>([])
   error = $state<string | null>(null)
+
+  // ledgerDevice is the router this walk is about (#1284): the row the
+  // name step created, or the one Re-enrol… named. Empty on a plain
+  // first-run walk that has not named anything yet, and the ledger then
+  // reads the fleet as a whole, exactly as it always did.
+  ledgerDevice = $state('')
+
+  // enrolment is the token the Send logs step minted for ledgerDevice
+  // (#1281), and enrolmentMintedAt when it did. The value is shown once
+  // -- the server keeps only its hash -- and lives here rather than in
+  // the component for the same reason `token` below does: a step change
+  // must not mint a second one.
+  enrolment = $state<EnrolmentToken | null>(null)
+  enrolmentMintedAt = $state('')
+  enrolmentError = $state<string | null>(null)
+
+  // refused is GET /api/devices/refused: addresses whose lines were
+  // dropped for not being any router's enrolled address. Read on the
+  // same 5s cadence as the status poll while the modal is open.
+  refused = $state<RefusedSender[]>([])
+
+  // finishTo is where the finish's primary leads out to -- the fall
+  // when the walk was opened from setup, the fleet when it was opened
+  // from there (the record's own rule).
+  finishTo = $state<'fall' | 'fleet'>('fall')
   // The small-screen sheet's body <-> ledger flip. Held here rather than
   // in the component so it survives a step change, which is what makes
   // "Show setup steps" a place you can stay rather than a peek.
@@ -202,12 +248,33 @@ class WizardState {
     }
   }
 
-  // ledger is the six steps as they currently stand. Empty until the
-  // first status arrives, so callers can render a loading state without
-  // a second flag.
+  // finishPane is the pane after the last step -- the ledger read back.
+  // One past the open ledger's own count rather than a separate flag,
+  // so "which pane" stays a single number and Back from the finish
+  // lands on the last step of whichever ledger is open.
+  get finishPane(): number {
+    return this.steps.length + 1
+  }
+
+  // ledger is the open ledger's steps as they currently stand. Empty
+  // until the first status arrives, so callers can render a loading
+  // state without a second flag.
   get ledger() {
     if (!this.status) return []
-    return buildLedger(this.status, this.devices, this.address, this.backups, this.backupTransport)
+    return buildLedger(this.status, this.devices, this.address, this.backups, this.backupTransport, {
+      steps: this.steps,
+      device: this.ledgerDevice,
+      enrolling: !!this.enrolment,
+      reEnrolSince: this.enrolmentMintedAt,
+    })
+  }
+
+  // refusedForThisWalk is what the Send logs step's warning box reads:
+  // only addresses first seen after this walk's token was minted, so
+  // the box speaks about the block the operator has just pasted rather
+  // than about the fleet's history.
+  get refusedForThisWalk(): RefusedSender[] {
+    return refusedSince(this.refused, this.enrolmentMintedAt)
   }
 
   // refreshBackups reads step 6's own evidence (#394): admin-only, so
@@ -330,10 +397,94 @@ class WizardState {
   // that arrived while it was closed is already green, because the
   // ledger is rebuilt from the server's observations every time.
   launch() {
+    this.steps = SETUP_STEPS
+    this.finishTo = 'fall'
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null
     this.open = true
+  }
+
+  // openAddRouter is the fleet's Add a router action and the Entities
+  // berth (#1284): the same ledger, opened at Name your router with no
+  // router yet in hand. The certificate step is not in front of it --
+  // that is an instance question, asked once.
+  openAddRouter() {
+    this.steps = ROUTER_STEPS
+    this.finishTo = 'fleet'
+    this.ledgerDevice = ''
+    this.tokenDevice = ''
+    this.enrolment = null
+    this.enrolmentMintedAt = ''
+    this.enrolmentError = null
+    this.pane = 1
+    this.showStepList = false
+    this.lostRouterDevice = null
+    this.open = true
+  }
+
+  // openReEnrol is a router row's Re-enrol… (#1284): the same ledger,
+  // opened at Send logs for a router that already exists, with a fresh
+  // token. The router is already named, so the step before it has
+  // nothing left to ask.
+  openReEnrol(device: string) {
+    this.openAddRouter()
+    this.ledgerDevice = device
+    this.tokenDevice = device
+    this.pane = this.steps.indexOf('syslog') + 1
+  }
+
+  // createRouter is the name step's own act: naming a router is what
+  // creates it, so there is one call and not a field plus a save. The
+  // new row becomes this walk's router, and the token the next step
+  // mints belongs to it.
+  async createRouter(name: string): Promise<string | null> {
+    const result = await createDevice(name)
+    if (typeof result === 'string') return result
+    this.ledgerDevice = result.id
+    this.tokenDevice = result.id
+    // The new row has to be in `devices` before the ledger is rebuilt,
+    // or the name step reads "no router yet" until the next poll tick
+    // and the operator watches their own act not happen.
+    await this.refresh()
+    return null
+  }
+
+  // mintEnrolmentToken is the Send logs step acting before it waits
+  // (#1281), and the same call is Reroll -- re-minting is what the
+  // control does, which is why there is no second endpoint for it. The
+  // value comes back once and is written into the last line of the
+  // block the server renders.
+  async mintEnrolmentToken(): Promise<void> {
+    if (!this.ledgerDevice) {
+      this.enrolmentError = 'Name the router first — a token is minted for a named router.'
+      return
+    }
+    this.enrolmentError = null
+    let result: EnrolmentToken | string
+    try {
+      result = await mintEnrolment(this.ledgerDevice)
+    } catch (err) {
+      result = err instanceof Error ? err.message : String(err)
+    }
+    if (typeof result === 'string') {
+      this.enrolmentError = result
+      return
+    }
+    this.enrolment = result
+    this.enrolmentMintedAt = new Date().toISOString()
+  }
+
+  // refreshRefused reads the dropped-line addresses (#1281), polled
+  // beside the status while the modal is open. A failure reads as
+  // "nothing refused" rather than as a page-wide error: this list
+  // explains a silence, it is not the silence itself.
+  async refreshRefused(): Promise<void> {
+    try {
+      this.refused = await fetchRefusedSenders()
+    } catch {
+      this.refused = []
+    }
   }
 
   // openLostRouter is the Settings backups group's "is it gone?" link
@@ -343,14 +494,14 @@ class WizardState {
   // asked "is it gone?" already knows steps 1-5 are done; showing them
   // the ledger again would bury the one thing they came for.
   //
-  // Pane 6 is written literally rather than derived from STEP_COUNT:
-  // setupsteps.ts does not have a sixth step yet (#394's build is still
-  // landing it), so this is future-facing -- it lands on the finish
-  // pane until that step exists, and on the step itself once it does,
-  // without this call needing to change either way.
+  // The backup step's own position, looked up rather than written as a
+  // number: it is the sixth of the first-run ledger and the fifth of
+  // the router one (#1284), so a literal would be wrong in one of them.
   openLostRouter(device: string) {
+    this.steps = SETUP_STEPS
+    this.finishTo = 'fall'
     this.lostRouterDevice = device
-    this.pane = 6
+    this.pane = this.steps.indexOf('backup') + 1
     this.showStepList = false
     this.open = true
   }
@@ -396,7 +547,7 @@ class WizardState {
   }
 
   goTo(pane: number) {
-    if (pane < 1 || pane > FINISH_PANE) return
+    if (pane < 1 || pane > this.finishPane) return
     this.pane = pane
   }
 
@@ -435,6 +586,13 @@ class WizardState {
   // and zeroing would let it pass the sequence check instead.
   reset() {
     this.open = false
+    this.steps = SETUP_STEPS
+    this.finishTo = 'fall'
+    this.ledgerDevice = ''
+    this.enrolment = null
+    this.enrolmentMintedAt = ''
+    this.enrolmentError = null
+    this.refused = []
     this.pane = 1
     this.status = null
     this.devices = []
