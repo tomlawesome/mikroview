@@ -51,7 +51,7 @@ async function createToken(body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
 
 // `device` names which enrolled address to push from; an unknown one
@@ -221,6 +221,18 @@ if (scanFlag) {
   )
 } else {
   check(true, `skipped -- five pushes cannot be checked against a flag that never arrived (${raised.message})`)
+}
+
+// Leave the fleet as this scenario found it: four routers left behind
+// sort ahead of the harness's own in GET /api/devices, and the next
+// scenario that takes devices[0] then pushes as one of them and is
+// refused (#1281's push gate).
+for (const id of Object.keys(ADDR)) {
+  const res = await page.request.fetch(`${URL_BASE}/api/devices/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'X-Requested-With': 'mikroview' },
+  })
+  check(res.status() === 204, `${id} is deleted so later scenarios see the fleet as it was (${res.status()})`)
 }
 
 done()

@@ -63,7 +63,7 @@ async function api(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
 
 // Since #1281 a push is refused unless it arrives from the pushing
@@ -631,5 +631,12 @@ if (viewerAccount) {
 } else {
   check(false, `could not find the viewer account "${VIEWER_USER}" to clean it up`)
 }
+
+// Leave the fleet as this scenario found it: a router left behind sorts
+// ahead of the harness's own in GET /api/devices, so the next scenario
+// that takes devices[0] mints a token for it and its pushes are refused
+// (#1281's push gate). live-token-ui failed on exactly that.
+const cleaned = await api('DELETE', `/api/devices/${encodeURIComponent(ROUTER_ID)}`)
+check(cleaned.status === 204, `${ROUTER_ID} is deleted so later scenarios see the fleet as it was (${cleaned.status})`)
 
 done()
