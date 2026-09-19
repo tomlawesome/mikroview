@@ -336,6 +336,16 @@ rewritten.
   `docker kill` — resumes at the first one that did not finish with the
   old documents untouched. `docs/upgrades.md` has the whole contract.
 
+- **Settings ▸ new settings shows the YAML for anything this build
+  understands that your config.yaml hasn't set yet, ready to paste**
+  (#1218). The first boot after an upgrade logs how many it found;
+  opening Settings shows the real block for each one — comment and all,
+  styled like `deploy/config.example.yaml` — meant to paste straight
+  under your own top-level config, not a second hand-written description
+  that could drift from it. The list is worked out fresh every time you
+  open it, so it keeps showing for as long as something is genuinely
+  missing.
+
 ### Changed
 
 - **Detection no longer gives up on a burst** (#1109). Checking used to

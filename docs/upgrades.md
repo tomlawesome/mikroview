@@ -46,6 +46,45 @@ silently losing data (see [docs/install.md](install.md#persistent-data)'s
 "Persistent data" section for what that refusal looks like); chown the
 directory it names and restart.
 
+## Upgrading to 0.6.0: the compose file mounts one app folder, not a named volume
+
+If you run `deploy/docker-compose.yml` as shipped (or copied it), 0.6.0
+changes what it mounts. Before, your config was one file
+(`./config.yaml:/etc/mikroview/config.yaml:ro`) and your data lived in a
+Docker-managed named volume (`mikroview-data`). Now it mounts one app
+folder, `./mikroview` — read-only for config, and `./mikroview/data`
+underneath it read-write for data — and the file no longer declares the
+`mikroview-data` volume at all.
+
+**What you'll see if you just pull and run `docker compose up -d`:**
+Docker creates an empty, root-owned `./mikroview` because nothing is
+there yet. Your old named volume is untouched, but nothing in the new
+file mounts it any more. The container finds no `config.yaml` where it
+now looks and can't write to the read-only folder either, so it exits at
+boot instead of starting on your old data.
+
+**What to do first, before `docker compose up -d`:**
+
+1. Create the folder and put your config where the container now looks
+   for it: `mkdir mikroview && cp config.yaml mikroview/config.yaml`.
+2. Bring your data across, either way:
+   - **Move it into the new bind mount** (matches the shipped file): use
+     `mikroview -migrate-data` to copy the named volume's contents into
+     `./mikroview/data` — the full command and the ownership it needs
+     first are in
+     [docs/configuration.md](configuration.md#moving-the-data-directory)'s
+     "Moving the data directory" section — then do the chown above.
+   - **Keep the named volume**: uncomment the `volumes:` block at the
+     end of `deploy/docker-compose.yml` and swap the data line above it
+     back to `mikroview-data:/var/lib/mikroview`, exactly as the comment
+     there says. Nothing else about your setup changes, and you can skip
+     the chown above too, since nothing moved.
+3. Run `docker compose up -d`.
+
+This only affects the shipped compose file. If you mount config and data
+separately yourself — the old way, still supported, see
+docs/configuration.md — nothing here changes for you.
+
 ## Upgrading to 0.6.0: routers must be enrolled
 
 0.6.0 stops trusting a router's own pushed configuration to say which
