@@ -13,22 +13,30 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/droplist"
 )
 
 // droplistTestServer wires a fresh droplist.Store into an admin test
 // server the same way main.go does for a real deployment (SetAuditor,
-// SetOwnRanges against the same RouterState) -- newTestServer's own
-// Server leaves Droplist nil, since no route touched it before #1224.
+// SetOwnRanges against the registry's own evidence -- issue #1281 moved
+// this off RouterState's pushed tables) -- newTestServer's own Server
+// leaves Droplist nil, since no route touched it before #1224.
 func droplistTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 	t.Helper()
 	s := newAuthTestServer(t)
+	// A fresh, empty registry rather than newTestServer's own (which
+	// pre-declares "core" at a fixed sourceIp for unrelated tests'
+	// convenience): several tests below depend on OwnRangesKnown()
+	// starting false, i.e. genuinely no evidence yet, and a pre-declared
+	// device would make that true from the moment this server exists.
+	s.Devices = device.NewRegistry(nil)
 	ds, err := droplist.Open("")
 	if err != nil {
 		t.Fatalf("droplist.Open: %v", err)
 	}
 	ds.SetAuditor(s.Audit)
-	ds.SetOwnRanges(s.RouterState)
+	ds.SetOwnRanges(s.Devices)
 	s.Droplist = ds
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
@@ -224,6 +232,7 @@ func TestDroplistAddNoWarningOnceOwnRangesAreKnown(t *testing.T) {
 	if !ok {
 		t.Fatal("admin account not found")
 	}
+	enrolIngestTestDevice(t, s, "router-1")
 	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
@@ -246,26 +255,28 @@ func TestDroplistAddNoWarningOnceOwnRangesAreKnown(t *testing.T) {
 	}
 }
 
-// TestDroplistAddRefusesRoutersOwnRange is the router's-own case end to
-// end: a real ingest push carrying an /ip/address entry, then an attempt
-// to drop the same range it names.
+// TestDroplistAddRefusesRoutersOwnRange is the router's-own case under
+// issue #1281's audit: a range overlapping a device's own enrolled
+// address (config.yaml's sourceIp, or a redeemed enrolment token's
+// acceptedIp) is refused. This is narrower than before #1281, which
+// trusted a router's pushed /ip/address table wholesale -- a router
+// with several interfaces could protect subnets mikroview had no other
+// evidence for; only the one address mikroview actually knows the
+// router by is protected now, which is why this test enrols the device
+// directly rather than pushing an address table (that table is still
+// stored and served for display, but Store.Add no longer reads it).
 func TestDroplistAddRefusesRoutersOwnRange(t *testing.T) {
 	s, ts, admin := droplistTestServer(t)
-
-	adminUser, ok := s.Auth.ByUsername("admin")
-	if !ok {
-		t.Fatal("admin account not found")
+	now := time.Now()
+	if _, err := s.Devices.Create("router-1", "router-1", now); err != nil {
+		t.Fatal(err)
 	}
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
+	token, _, err := s.Devices.MintEnrolment("router-1", now)
 	if err != nil {
-		t.Fatalf("Tokens.Create: %v", err)
+		t.Fatalf("MintEnrolment: %v", err)
 	}
-
-	pushResp := postIngest(t, ts, ingestRaw,
-		`{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"203.0.114.9/24","network":"203.0.114.0","interface":"ether1","comment":""}]}`)
-	defer pushResp.Body.Close()
-	if pushResp.StatusCode != http.StatusOK {
-		t.Fatalf("ingest push status = %d, want 200", pushResp.StatusCode)
+	if !s.Devices.TryEnrol("203.0.114.9", []byte("mikroview-enrol "+token)) {
+		t.Fatal("TryEnrol failed to enrol router-1 at 203.0.114.9")
 	}
 
 	createResp := postJSON(t, admin, ts.URL+"/api/droplist", droplistCreateRequest{CIDR: "203.0.114.0/24", Reason: "oops"})
@@ -433,6 +444,7 @@ func TestDroplistPullKeyRevokeLeavesIngestWorking(t *testing.T) {
 	if !ok {
 		t.Fatal("admin account not found")
 	}
+	enrolIngestTestDevice(t, s, "router-1")
 	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
@@ -651,16 +663,11 @@ func TestDroplistListOwnRangesKnownMirrorsStore(t *testing.T) {
 		t.Error("ownRangesKnown = true before any router has pushed its own addresses")
 	}
 
-	adminUser, ok := s.Auth.ByUsername("admin")
-	if !ok {
-		t.Fatal("admin account not found")
-	}
-	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
-	if err != nil {
-		t.Fatalf("Tokens.Create: %v", err)
-	}
-	postIngest(t, ts, ingestRaw,
-		`{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"203.0.114.9/24","network":"203.0.114.0","interface":"ether1","comment":""}]}`).Body.Close()
+	// Issue #1281's audit moved OwnRanges off the pushed /ip/address
+	// table onto the registry's own evidence: enrolling the device --
+	// not merely pushing a table -- is what makes its own range known
+	// from here on.
+	enrolIngestTestDevice(t, s, "router-1")
 
 	after, err := admin.Get(ts.URL + "/api/droplist")
 	if err != nil {
@@ -672,7 +679,7 @@ func TestDroplistListOwnRangesKnownMirrorsStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !afterList.OwnRangesKnown {
-		t.Error("ownRangesKnown = false after a router has pushed its own addresses")
+		t.Error("ownRangesKnown = false after the device was enrolled")
 	}
 }
 
@@ -696,6 +703,7 @@ func TestDroplistListRoutersReportsHeldAgainstPushedSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("admin account not found")
 	}
+	enrolIngestTestDevice(t, s, "router-1")
 	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", adminUser, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
