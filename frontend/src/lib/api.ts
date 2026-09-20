@@ -36,6 +36,7 @@ import type {
   MACRegistryEntry,
   PasswordResetCode,
   PersistenceInfo,
+  PreferencesRecord,
   ReplayResult,
   ReputationResult,
   RouterBackupDiff,
@@ -156,11 +157,16 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
   })
 }
 
-async function putJSON(url: string, body: unknown = {}): Promise<Response> {
+// extra merges into the request init -- #1283's preferences flush is the
+// one caller that needs it, passing { keepalive: true } so a write fired
+// from a pagehide handler survives the page already being torn down
+// (the same guarantee sendBeacon gives, without giving up PUT/JSON).
+async function putJSON(url: string, body: unknown = {}, extra: RequestInit = {}): Promise<Response> {
   return send(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
+    ...extra,
   })
 }
 
@@ -864,6 +870,24 @@ export async function signOutEverywhere(): Promise<string | null> {
   const res = await postJSON('/api/auth/logout-all')
   if (res.ok) return null
   return (await res.text()) || `signOutEverywhere: ${res.status}`
+}
+
+// #1283: the signed-in user's own preferences record. No record yet
+// reads as version 1 with an empty prefs object -- never a 404 -- so a
+// caller never has to special-case "nothing saved yet".
+export async function fetchMyPreferences(): Promise<PreferencesRecord> {
+  const res = await fetch('/api/me/preferences')
+  if (!res.ok) throw new ApiError(`fetchMyPreferences: ${res.status}`, res.status)
+  return res.json()
+}
+
+// Replaces the whole record. keepalive lets lib/preferences.svelte.ts's
+// pagehide flush outlive the page unload that triggers it (see putJSON's
+// own comment on `extra`).
+export async function saveMyPreferences(record: PreferencesRecord, opts: { keepalive?: boolean } = {}): Promise<string | null> {
+  const res = await putJSON('/api/me/preferences', record, opts.keepalive ? { keepalive: true } : {})
+  if (res.ok) return null
+  return await serverSaid(res)
 }
 
 // role chooses between the two tiers this call can create (#653).
