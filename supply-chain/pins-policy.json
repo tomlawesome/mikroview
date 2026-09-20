@@ -213,27 +213,27 @@
     },
     {
       "name": "Go toolchain (CI build/test image)",
-      "reference": "golang:1.27",
+      "reference": "golang:1.27.1",
       "shipped": false,
       "license": "BSD-3-Clause",
       "source": "https://github.com/docker-library/golang",
       "locations": [
         ".gitlab-ci.yml"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-09-20",
+      "reviewBy": "2026-11-20"
     },
     {
       "name": "Go toolchain (Dockerfile build stage)",
-      "reference": "golang:1.27.0-alpine",
+      "reference": "golang:1.27.1-alpine",
       "shipped": false,
       "license": "BSD-3-Clause",
       "source": "https://github.com/docker-library/golang",
       "locations": [
         "Dockerfile"
       ],
-      "reviewedOn": "2026-09-05",
-      "reviewBy": "2026-11-05"
+      "reviewedOn": "2026-09-20",
+      "reviewBy": "2026-11-20"
     },
     {
       "name": "Node.js (frontend build stage and the Alpine CI jobs, #1106)",
