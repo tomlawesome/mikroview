@@ -20,7 +20,7 @@
 > if you prefer working from documentation, if you are scripting a fleet,
 > or when you want the reasoning behind a step.
 
-<!-- shot: the wizard's ledger opened at step 1 -->
+![The wizard's ledger opened at step 1: the seven steps down the left, "Trust the certificate" open beside them](screenshots/setup-wizard-ledger.png)
 
 MikroView never talks to RouterOS's API and never holds a RouterOS
 credential. Instead, RouterOS pushes to MikroView: firewall log lines
@@ -1177,7 +1177,7 @@ for the fleet, so everything below is there; the standalone Fleet screen
 a read-only account sees carries the same router cards without the
 actions.
 
-<!-- shot: the Entities routers row, showing the + add a router berth -->
+![The Entities routers row: a card per router already enrolled, and "+ add a router" as the last berth](screenshots/entities-add-a-router.png)
 
 Each router's card also carries **Re-enrol…**, which opens the ledger at
 **Send logs** with a fresh token for that router — for a router you have
