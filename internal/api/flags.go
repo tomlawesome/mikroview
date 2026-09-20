@@ -184,18 +184,7 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	f, ok, err := s.Flags.SetVerdict(id, req.Verdict, actor, req.Note, now)
-	if err != nil {
-		// R6: a verdict that only exists in memory must not be reported
-		// as kept. SetVerdict has already put its own state back on this
-		// path -- see its own doc comment -- so there is nothing here to
-		// roll back beyond not claiming success. The backend's own words
-		// stay server-side (apiLog), same as every other persistence
-		// failure in this handler group.
-		apiLog.Error("saving a flag verdict failed: " + err.Error())
-		http.Error(w, "the verdict could not be saved, so nothing was changed", http.StatusInternalServerError)
-		return
-	}
+	f, ok := s.Flags.SetVerdict(id, req.Verdict, actor, req.Note, now)
 	if !ok {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
@@ -209,30 +198,12 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 			// declared normal never reached the watchlist would be a
 			// judgement half-recorded, with nothing on screen saying
 			// which half.
-			if _, _, uerr := s.Flags.UndoVerdict(id); uerr != nil {
-				apiLog.Warn("rolling back a verdict after its watchlist write failed: " + uerr.Error())
-			}
+			s.Flags.UndoVerdict(id)
 			http.Error(w, "recording this flag's destinations on the watchlist failed, so the verdict was not kept: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		if wrote {
-			if _, err := s.Flags.RecordPermitted(id, rec); err != nil {
-				// The watchlist write already landed and the verdict is
-				// already saved; only the ledger record tying them
-				// together failed. Take both back rather than leave a
-				// verdict standing with no record of what it permitted --
-				// the same all-or-nothing rule this handler just applied
-				// above when the watchlist write itself failed.
-				if uerr := s.unpermitFlagEvidence(rec, actor); uerr != nil {
-					apiLog.Warn("rolling back a verdict's watchlist write failed: " + uerr.Error())
-				}
-				if _, _, uerr := s.Flags.UndoVerdict(id); uerr != nil {
-					apiLog.Warn("rolling back a verdict after its permitted-destinations record failed to save: " + uerr.Error())
-				}
-				apiLog.Error("saving a flag's permitted-destinations record failed: " + err.Error())
-				http.Error(w, "recording this flag's permitted destinations failed, so the verdict was not kept", http.StatusInternalServerError)
-				return
-			}
+			s.Flags.RecordPermitted(id, rec)
 		}
 	}
 	detail := string(req.Verdict)
@@ -275,14 +246,7 @@ func (s *Server) handleFlagNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	f, known, judged, err := s.Flags.SetNote(id, req.Note)
-	if err != nil {
-		// R6: an edit that only exists in memory must not be reported as
-		// kept -- SetNote has already put the old note back.
-		apiLog.Error("saving a flag note failed: " + err.Error())
-		http.Error(w, "the note could not be saved, so nothing was changed", http.StatusInternalServerError)
-		return
-	}
+	f, known, judged := s.Flags.SetNote(id, req.Note)
 	if !known {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
@@ -348,16 +312,7 @@ func (s *Server) handleFlagsVerdictUndo(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	f, ok, err := s.Flags.UndoVerdict(id)
-	if err != nil {
-		// R6: same reasoning as handleFlagsVerdict's own SetVerdict
-		// check -- an undo that only exists in memory must not be
-		// reported as done, and UndoVerdict has already put its own
-		// state back.
-		apiLog.Error("undoing a flag verdict failed: " + err.Error())
-		http.Error(w, "the undo could not be saved, so nothing was changed", http.StatusInternalServerError)
-		return
-	}
+	f, ok := s.Flags.UndoVerdict(id)
 	if !ok {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
@@ -385,15 +340,7 @@ func (s *Server) handleFlagsClearAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
-	n, err := s.Flags.ClearAll(time.Now())
-	if err != nil {
-		// R6: a bulk clear that only exists in memory must not be
-		// reported as done -- ClearAll has already put every flag it
-		// touched back to active.
-		apiLog.Error("clearing all flags failed: " + err.Error())
-		http.Error(w, "the flags could not be cleared, so nothing was changed", http.StatusInternalServerError)
-		return
-	}
+	n := s.Flags.ClearAll(time.Now())
 	if n > 0 {
 		s.Audit.Record(auditActor(r), "flag.clear_all", "", fmt.Sprintf("cleared %d flags", n))
 	}
@@ -447,15 +394,7 @@ func (s *Server) handleExpectationForget(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PathValue("id")
-	ok, err := s.Flags.RemoveExclusionByID(id)
-	if err != nil {
-		// R6: a forget that only exists in memory must not be reported as
-		// done -- RemoveExclusionByID has already put the expectation back.
-		apiLog.Error("removing an expectation failed: " + err.Error())
-		http.Error(w, "the expectation could not be removed, so nothing was changed", http.StatusInternalServerError)
-		return
-	}
-	if !ok {
+	if !s.Flags.RemoveExclusionByID(id) {
 		http.Error(w, "expectation not found", http.StatusNotFound)
 		return
 	}

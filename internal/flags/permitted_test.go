@@ -21,12 +21,12 @@ func TestRecordPermittedNeedsAnExpectationToHangOn(t *testing.T) {
 	id := flagID(TypeInternalRecon, "192.168.1.50")
 
 	rec := PermittedRecord{EntryID: "entry-1", Dests: []HostPort{{Host: "192.168.1.10", Port: 445}}, Verdict: VerdictExpected, At: now}
-	if ok, _ := s.RecordPermitted(id, rec); ok {
+	if s.RecordPermitted(id, rec) {
 		t.Error("recording a permission against a flag with no expectation must report false: a permission with no expectation beside it is half a judgement")
 	}
 
 	s.SetVerdict(id, VerdictExpected, "alice", "", now)
-	if ok, err := s.RecordPermitted(id, rec); !ok || err != nil {
+	if !s.RecordPermitted(id, rec) {
 		t.Fatal("expected the record to attach once the expectation exists")
 	}
 	ex, ok := s.Expectation(TypeInternalRecon, "192.168.1.50")
@@ -57,8 +57,8 @@ func TestWithdrawPermittedTakesTheLastVerdictsRecord(t *testing.T) {
 	s.RecordPermitted(id, first)
 	s.RecordPermitted(id, second)
 
-	got, ok, err := s.WithdrawPermitted(id)
-	if !ok || err != nil {
+	got, ok := s.WithdrawPermitted(id)
+	if !ok {
 		t.Fatal("expected a record to withdraw")
 	}
 	if len(got.Dests) != 1 || got.Dests[0].Port != 139 {
@@ -69,10 +69,10 @@ func TestWithdrawPermittedTakesTheLastVerdictsRecord(t *testing.T) {
 		t.Errorf("Permitted = %+v, want the earlier verdict's record left standing", ex.Permitted)
 	}
 
-	if _, ok, _ := s.WithdrawPermitted(id); !ok {
+	if _, ok := s.WithdrawPermitted(id); !ok {
 		t.Error("expected the earlier record to be withdrawable too")
 	}
-	if _, ok, _ := s.WithdrawPermitted(id); ok {
+	if _, ok := s.WithdrawPermitted(id); ok {
 		t.Error("withdrawing from an expectation with no records must report false, not an empty record")
 	}
 }

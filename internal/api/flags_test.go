@@ -319,7 +319,7 @@ func TestHandleFlagsVerdictUndoLeavesAlreadyClearedFlagCleared(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.21", "d", time.Now())
 	id := s.Flags.List()[0].ID
-	if _, ok, _ := s.Flags.SetVerdict(id, flags.VerdictChecked, "someone", "", time.Now()); !ok {
+	if _, ok := s.Flags.SetVerdict(id, flags.VerdictChecked, "someone", "", time.Now()); !ok {
 		t.Fatal("setup: expected the first, clearing verdict to succeed")
 	}
 
@@ -907,7 +907,7 @@ func TestHandleExpectationsListServesTheLedger(t *testing.T) {
 	size := 20
 	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", nil, flags.Evidence{}, "", false, &size, time.Now())
 	flagID := s.Flags.List()[0].ID
-	if _, ok, _ := s.Flags.SetVerdict(flagID, flags.VerdictExpected, "someone", "", time.Now()); !ok {
+	if _, ok := s.Flags.SetVerdict(flagID, flags.VerdictExpected, "someone", "", time.Now()); !ok {
 		t.Fatal("expected the flag to be known to SetVerdict")
 	}
 	// A firing inside the tolerance, so the row has an absorbed count to
@@ -959,7 +959,7 @@ func TestHandleExpectationsListServesTheLedger(t *testing.T) {
 func TestHandleExpectationsListKeepsASizelessExpectationSizeless(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypeGlobalSpike, "all", "spike", time.Now())
-	if _, ok, _ := s.Flags.SetVerdict(s.Flags.List()[0].ID, flags.VerdictExpected, "someone", "", time.Now()); !ok {
+	if _, ok := s.Flags.SetVerdict(s.Flags.List()[0].ID, flags.VerdictExpected, "someone", "", time.Now()); !ok {
 		t.Fatal("expected the flag to be known to SetVerdict")
 	}
 

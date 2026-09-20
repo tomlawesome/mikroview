@@ -251,22 +251,12 @@ func (s *Server) unpermitFlagEvidence(rec flags.PermittedRecord, actor string) e
 // verdict that created the expectation deletes the expectation -- and
 // this record with it (see flags.Store.WithdrawPermitted).
 func (s *Server) withdrawPermittedFor(w http.ResponseWriter, id, actor string) bool {
-	rec, ok, err := s.Flags.WithdrawPermitted(id)
-	if err != nil {
-		// R6: a withdrawal that only exists in memory must not be acted
-		// on -- WithdrawPermitted has already put the record back, so
-		// nothing below touches the watchlist.
-		apiLog.Error("withdrawing a flag's permitted-destinations record failed: " + err.Error())
-		http.Error(w, "the permitted destinations could not be withdrawn, so the verdict was left as it was", http.StatusInternalServerError)
-		return false
-	}
+	rec, ok := s.Flags.WithdrawPermitted(id)
 	if !ok {
 		return true
 	}
 	if err := s.unpermitFlagEvidence(rec, actor); err != nil {
-		if _, rerr := s.Flags.RecordPermitted(id, rec); rerr != nil {
-			apiLog.Error("restoring a withdrawn permitted-destinations record failed after its watchlist reversal also failed: " + rerr.Error())
-		}
+		s.Flags.RecordPermitted(id, rec)
 		http.Error(w, "taking the permitted destinations back off the watchlist failed, so the verdict was left as it was: "+err.Error(), http.StatusInternalServerError)
 		return false
 	}

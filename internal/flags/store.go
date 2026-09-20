@@ -904,13 +904,6 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 		if ex.Absorbs(size) {
 			ex.Absorbed++
 			s.excluded[id] = ex
-			// Absorbed is a counter, not a decision -- the expectation
-			// itself was already durably recorded when an operator made
-			// it (see Exclude/SetVerdict's own tryPersistLocked calls).
-			// Losing a count of how many firings it has absorbed to a
-			// transient disk issue costs a display number, not a
-			// suppression an operator was told existed, so this stays on
-			// the swallow-and-log default.
 			s.persistLocked()
 			return false, Flag{}
 		}
@@ -997,12 +990,6 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 	}
 
 	s.pruneLocked()
-	// A detector's raise/re-fire is the ingest hot path issue #400 built
-	// write-behind persistence to get off of -- see persistLocked's own
-	// doc comment. The in-memory flag (what every read, including this
-	// call's own return value, goes through) is correct regardless, so a
-	// transient disk issue here degrades to "won't survive a restart
-	// right now" rather than making a live port scan wait on disk I/O.
 	s.persistLocked()
 	return isNew, *f
 }
@@ -1126,11 +1113,6 @@ func (s *Store) RaiseConfidenceFloor(t Type, target string, floor int) {
 		changed = true
 	}
 	if changed {
-		// A reputation-informed floor is recomputed asynchronously and
-		// re-applied on every subsequent re-fire (see this method's own
-		// doc comment) -- an update lost to a transient disk issue is
-		// re-derived the next time this fires, not a decision an operator
-		// was told was kept. Bookkeeping, not R6's failure mode.
 		s.persistLocked()
 	}
 }
@@ -1179,9 +1161,6 @@ func (s *Store) ApplyReputationSnapshot(t Type, target string, snapshot reputati
 			f.Confidence = &v
 		}
 	}
-	// Same reasoning as RaiseConfidenceFloor above: an async, re-derived
-	// snapshot, not an operator decision -- lost to a transient disk
-	// issue, it is simply recomputed on the next lookup.
 	s.persistLocked()
 }
 
@@ -1260,32 +1239,14 @@ func (s *Store) unclearLocked(f *Flag) {
 // is the ordinary case, and it overwrites whatever the previous verdict
 // carried, since the note belongs to the verdict being set rather than
 // to the flag. SetNote edits it afterwards.
-//
-// Returns a non-nil error if id is known but the change could not be
-// durably saved -- the flag, its expectation and the cleared-count
-// bookkeeping are all put back exactly as they were first (R6): a
-// judgement that only exists in memory must not be reported as kept,
-// since a restart before the next good write would silently revert it
-// while the operator was told it was recorded.
-func (s *Store) SetVerdict(id string, v Verdict, by, note string, now time.Time) (Flag, bool, error) {
+func (s *Store) SetVerdict(id string, v Verdict, by, note string, now time.Time) (Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	f, ok := s.byID[id]
 	if !ok {
-		return Flag{}, false, nil
+		return Flag{}, false
 	}
-
-	// Snapshotted whole, not field by field: undoExpectationLocked and
-	// recordExpectationLocked below can each touch s.excluded[f.ID] as
-	// well as f itself, and copying the lot up front is what lets a
-	// persist failure restore everything exactly, regardless of which
-	// branch ran, without this method having to re-derive what each one
-	// did.
-	prev := *f
-	prevClearedCount := s.clearedCount
-	prevExcl, hadExcl := s.excluded[f.ID]
-
 	// Changing one's mind away from expected withdraws the expectation
 	// that verdict recorded, exactly as undoing it would. Without this,
 	// re-judging an expected flag as checked would leave a suppression
@@ -1306,17 +1267,8 @@ func (s *Store) SetVerdict(id string, v Verdict, by, note string, now time.Time)
 	if v == VerdictExpected {
 		s.recordExpectationLocked(f, now)
 	}
-	if err := s.tryPersistLocked(); err != nil {
-		*f = prev
-		s.clearedCount = prevClearedCount
-		if hadExcl {
-			s.excluded[f.ID] = prevExcl
-		} else {
-			delete(s.excluded, f.ID)
-		}
-		return Flag{}, true, fmt.Errorf("saving flags: %w", err)
-	}
-	return *f, true, nil
+	s.persistLocked()
+	return *f, true
 }
 
 // UndoVerdict reverses SetVerdict (#638's undo affordance, now a real
@@ -1352,25 +1304,14 @@ func (s *Store) SetVerdict(id string, v Verdict, by, note string, now time.Time)
 // Verdict, verdictCleared false) is a deliberate no-op, not an error:
 // the caller may be a stale undo affordance racing a page that already
 // moved on, and it can't always know which is which.
-//
-// Returns a non-nil error if id is known but the change could not be
-// durably saved -- everything this call touched (the flag, its
-// clearedness, its expectation) is put back exactly as it was first,
-// same R6 reasoning as SetVerdict's own doc comment: an undo that only
-// exists in memory must not be reported as done.
-func (s *Store) UndoVerdict(id string) (Flag, bool, error) {
+func (s *Store) UndoVerdict(id string) (Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	f, ok := s.byID[id]
 	if !ok {
-		return Flag{}, false, nil
+		return Flag{}, false
 	}
-
-	prev := *f
-	prevClearedCount := s.clearedCount
-	prevExcl, hadExcl := s.excluded[f.ID]
-
 	if f.verdictCleared {
 		s.unclearLocked(f)
 	}
@@ -1382,17 +1323,8 @@ func (s *Store) UndoVerdict(id string) (Flag, bool, error) {
 	f.VerdictAt = time.Time{}
 	f.Note = ""
 	f.verdictCleared = false
-	if err := s.tryPersistLocked(); err != nil {
-		*f = prev
-		s.clearedCount = prevClearedCount
-		if hadExcl {
-			s.excluded[f.ID] = prevExcl
-		} else {
-			delete(s.excluded, f.ID)
-		}
-		return Flag{}, true, fmt.Errorf("saving flags: %w", err)
-	}
-	return *f, true, nil
+	s.persistLocked()
+	return *f, true
 }
 
 // SetNote edits the note on an already-judged flag (#1232, the owner's
@@ -1412,28 +1344,20 @@ func (s *Store) UndoVerdict(id string) (Flag, bool, error) {
 // else's wording did not make it; moving the name would quietly rewrite
 // who judged this flag. Who edited the words is the audit log's
 // question, and flag.note_edit answers it there.
-//
-// A fourth, non-nil error return means id is known and judged but the
-// edit could not be durably saved -- the old note is put back (R6)
-// rather than this call reporting an edit that only exists in memory.
-func (s *Store) SetNote(id, note string) (f Flag, known, judged bool, err error) {
+func (s *Store) SetNote(id, note string) (f Flag, known, judged bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	fl, ok := s.byID[id]
 	if !ok {
-		return Flag{}, false, false, nil
+		return Flag{}, false, false
 	}
 	if fl.Verdict == "" {
-		return *fl, true, false, nil
+		return *fl, true, false
 	}
-	prevNote := fl.Note
 	fl.Note = note
-	if err := s.tryPersistLocked(); err != nil {
-		fl.Note = prevNote
-		return Flag{}, true, true, fmt.Errorf("saving flags: %w", err)
-	}
-	return *fl, true, true, nil
+	s.persistLocked()
+	return *fl, true, true
 }
 
 // recordExpectationLocked records an expectation from a flag -- "this
@@ -1530,17 +1454,11 @@ func (s *Store) undoExpectationLocked(f *Flag) {
 // cleared too, or the new state and is skipped -- both are acceptable,
 // but N separate lock/unlock cycles would let a caller observe a
 // partially-cleared set mid-call, which a bulk action should not expose.
-//
-// A non-nil error means none of it was kept: every flag this pass
-// touched is put back to active (R6) rather than the caller being told
-// N flags were cleared when the write recording it failed -- a restart
-// before the next good write would otherwise silently reopen an inbox
-// the operator was told was emptied.
-func (s *Store) ClearAll(now time.Time) (int, error) {
+func (s *Store) ClearAll(now time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var touched []*Flag
+	cleared := 0
 	for _, f := range s.byID {
 		if f.Cleared {
 			continue
@@ -1548,20 +1466,12 @@ func (s *Store) ClearAll(now time.Time) (int, error) {
 		f.Cleared = true
 		f.ClearedAt = now
 		s.clearedCount++
-		touched = append(touched, f)
+		cleared++
 	}
-	if len(touched) == 0 {
-		return 0, nil
+	if cleared > 0 {
+		s.persistLocked()
 	}
-	if err := s.tryPersistLocked(); err != nil {
-		for _, f := range touched {
-			f.Cleared = false
-			f.ClearedAt = time.Time{}
-			s.clearedCount--
-		}
-		return 0, fmt.Errorf("saving flags: %w", err)
-	}
-	return len(touched), nil
+	return cleared
 }
 
 // Reset empties the store: every flag, active or cleared, every
@@ -1587,10 +1497,6 @@ func (s *Store) Reset() {
 	s.excluded = make(map[string]Exclusion)
 	s.minuteBuckets = [flagTimeSeriesMinutes]map[Type]uint64{}
 	s.minuteBucketTime = [flagTimeSeriesMinutes]int64{}
-	// Test-only (see this method's own doc comment: "nothing
-	// operator-facing can reach it"), so there is no operator-visible
-	// success to misreport if this doesn't survive a restart -- the test
-	// harness that called it is still running against the same process.
 	s.persistLocked()
 }
 
@@ -1610,19 +1516,14 @@ func (s *Store) Reset() {
 // expectation from a flag the operator actually looked at (#640); this
 // entry point has no flag to take a size from, and inventing one would
 // put a number on the ledger nobody measured.
-//
-// A non-nil error means the exclusion could not be durably saved -- it
-// (and any clear this call made alongside it) is put back exactly as it
-// was first (R6), rather than this call reporting a permanent exclusion
-// that a restart before the next good write would silently undo.
-func (s *Store) Exclude(t Type, target string) error {
+func (s *Store) Exclude(t Type, target string) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, already := s.excluded[id]; already {
-		return nil
+		return
 	}
 	s.excluded[id] = Exclusion{ID: id, Type: t, Target: target}
 	// Clear any entry that is already active for this pair.
@@ -1635,27 +1536,17 @@ func (s *Store) Exclude(t Type, target string) error {
 	// makes this a landmine for the next caller of Exclude rather than a
 	// non-issue: the method's own contract says the pair goes silent from
 	// this call on, and an entry stuck visible is the opposite.
-	f, hasFlag := s.byID[id]
-	clearedIt := false
-	if hasFlag && !f.Cleared {
+	if f, ok := s.byID[id]; ok && !f.Cleared {
 		f.Cleared = true
-		clearedIt = true
 	}
-	if err := s.tryPersistLocked(); err != nil {
-		delete(s.excluded, id)
-		if clearedIt {
-			f.Cleared = false
-		}
-		return fmt.Errorf("saving flags: %w", err)
-	}
-	return nil
+	s.persistLocked()
 }
 
 // RemoveExclusion reverses Exclude for (t, target), letting that pair
 // raise again going forward -- existing flag history (if any) is
 // untouched either way. Reports whether an exclusion was actually
 // present, same true/false contract as every other id-keyed mutator here.
-func (s *Store) RemoveExclusion(t Type, target string) (bool, error) {
+func (s *Store) RemoveExclusion(t Type, target string) bool {
 	return s.RemoveExclusionByID(flagID(t, target))
 }
 
@@ -1664,25 +1555,16 @@ func (s *Store) RemoveExclusion(t Type, target string) (bool, error) {
 // Exclusion values, rather than raw (Type, Target) pairs, has on hand to
 // act on. That is the ledger's prune (#640 part C) and UndoVerdict's own
 // reversal; the admin exclusions API that used to call it is gone.
-//
-// A non-nil error means the removal could not be durably saved -- the
-// expectation is put back (R6) rather than this call reporting it gone
-// when a restart before the next good write would silently bring it
-// back while the operator was told it was forgotten.
-func (s *Store) RemoveExclusionByID(id string) (bool, error) {
+func (s *Store) RemoveExclusionByID(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prev, ok := s.excluded[id]
-	if !ok {
-		return false, nil
+	if _, ok := s.excluded[id]; !ok {
+		return false
 	}
 	delete(s.excluded, id)
-	if err := s.tryPersistLocked(); err != nil {
-		s.excluded[id] = prev
-		return false, fmt.Errorf("saving flags: %w", err)
-	}
-	return true, nil
+	s.persistLocked()
+	return true
 }
 
 // Excluded reports whether (t, target) is currently permanently
@@ -1757,28 +1639,19 @@ func (s *Store) Get(id string) (Flag, bool) {
 // again) permits whatever that firing saw, which may be pairs the first
 // never did -- and undoing the second must take back only its own
 // additions. One record per verdict is what makes that exact.
-//
-// A non-nil error means the record could not be durably saved -- the
-// expectation is put back to what it was before this call (R6), rather
-// than this call reporting the record kept when the watchlist write it
-// describes would disagree with the ledger after a restart.
-func (s *Store) RecordPermitted(flagID string, rec PermittedRecord) (bool, error) {
+func (s *Store) RecordPermitted(flagID string, rec PermittedRecord) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prev, ok := s.excluded[flagID]
+	e, ok := s.excluded[flagID]
 	if !ok {
-		return false, nil
+		return false
 	}
-	e := prev
 	rec.Dests = append([]HostPort(nil), rec.Dests...)
 	e.Permitted = append(e.Permitted, rec)
 	s.excluded[flagID] = e
-	if err := s.tryPersistLocked(); err != nil {
-		s.excluded[flagID] = prev
-		return false, fmt.Errorf("saving flags: %w", err)
-	}
-	return true, nil
+	s.persistLocked()
+	return true
 }
 
 // WithdrawPermitted removes and returns the most recent PermittedRecord
@@ -1791,33 +1664,22 @@ func (s *Store) RecordPermitted(flagID string, rec PermittedRecord) (bool, error
 // Called before the verdict itself is reversed, deliberately: undoing an
 // expected verdict that created the expectation deletes the expectation
 // outright (see undoExpectationLocked), and this record goes with it.
-//
-// A non-nil error means the withdrawal could not be durably saved -- the
-// expectation is put back exactly as it was (R6), and the record is not
-// handed to the caller, since the caller (flags_watchlist.go's
-// withdrawPermittedFor) is about to take real destinations off a
-// device's allow-list on the strength of this call having actually
-// removed the record it describes.
-func (s *Store) WithdrawPermitted(flagID string) (PermittedRecord, bool, error) {
+func (s *Store) WithdrawPermitted(flagID string) (PermittedRecord, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prev, ok := s.excluded[flagID]
-	if !ok || len(prev.Permitted) == 0 {
-		return PermittedRecord{}, false, nil
+	e, ok := s.excluded[flagID]
+	if !ok || len(e.Permitted) == 0 {
+		return PermittedRecord{}, false
 	}
-	e := prev
 	last := e.Permitted[len(e.Permitted)-1]
 	e.Permitted = e.Permitted[:len(e.Permitted)-1]
 	if len(e.Permitted) == 0 {
 		e.Permitted = nil
 	}
 	s.excluded[flagID] = e
-	if err := s.tryPersistLocked(); err != nil {
-		s.excluded[flagID] = prev
-		return PermittedRecord{}, false, fmt.Errorf("saving flags: %w", err)
-	}
-	return last, true, nil
+	s.persistLocked()
+	return last, true
 }
 
 // ListExclusions returns every recorded expectation, sorted by ID for a
@@ -1999,17 +1861,41 @@ var persistMinInterval = time.Second
 // of guessing at it from elapsed time.
 var persistClock persist.Clock
 
-// encodeAndMarkDirtyLocked encodes the current state -- flags and
-// exclusions alike, see persistedState -- and hands it to the
-// write-behind writer (persist.WriteBehind), which coalesces it with
-// whatever else is pending and persists it off this goroutine under its
-// own deadline and rate limit. Shared by persistLocked and
-// tryPersistLocked below so there is exactly one place that builds the
-// on-disk shape. Must be called with s.mu already held -- the "lock
-// covers the in-memory mutation and an encode/snapshot, nothing past
-// that" contract issue #400 asks for; MarkDirty itself never touches the
+// persistLocked encodes the current state -- flags and exclusions alike,
+// see persistedState -- and hands it to the write-behind writer (see
+// persist.WriteBehind), which coalesces it with whatever else is
+// pending and persists it off this goroutine, under its own deadline and
+// rate limit. Marshal failures are swallowed rather than surfaced to
+// Add/Clear/Exclude's callers: the in-memory state (which every read
+// goes through) stays correct either way, so a transient disk issue
+// degrades to "won't survive a restart right now" rather than breaking
+// live use. Must be called with s.mu already held -- the "lock covers
+// the in-memory mutation and an encode/snapshot, nothing past that"
+// contract issue #400 asks for; MarkDirty itself never touches the
 // backend.
-func (s *Store) encodeAndMarkDirtyLocked() error {
+//
+// This store has no tryPersistLocked error-returning half (v0.6.0 audit
+// finding R6, issue #1303): MarkDirty cannot fail -- it only ever hands
+// a snapshot to the write-behind writer's own goroutine -- and the
+// document above is built entirely from this package's own types (Flag,
+// Exclusion, both plain structs of strings/ints/times/slices), so
+// json.MarshalIndent has nothing in it that can fail to encode (no
+// json.RawMessage, no float, no interface{} value someone could hand it
+// something unencodable through). A backend Save that fails happens
+// later, off this goroutine, on the writer's own retry schedule, and is
+// reported through OnSaveError (see OpenWithBackend) -- not silence,
+// just asynchronous, the same #400 trade-off internal/engine's
+// DefinitionsStore.persistLocked documents for its own write-behind
+// document. A synchronous, error-returning wrapper here would have
+// nothing to ever report failing, and forcing one to answer anyway (by
+// calling Flush) would put a disk write under s.mu, on the same lock the
+// detector ingest path's add() takes -- exactly the hot-path wait #400
+// moved off callers in the first place.
+func (s *Store) persistLocked() {
+	if s.wb == nil {
+		return
+	}
+
 	excluded := make([]Exclusion, 0, len(s.excluded))
 	for _, e := range s.excluded {
 		excluded = append(excluded, e)
@@ -2018,62 +1904,8 @@ func (s *Store) encodeAndMarkDirtyLocked() error {
 
 	data, err := json.MarshalIndent(persistedState{Flags: s.listLocked(), Excluded: excluded}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encoding flags for persistence failed: %w", err)
-	}
-	s.wb.MarkDirty(data)
-	return nil
-}
-
-// tryPersistLocked is persistLocked's error-returning half, for the
-// handful of callers (SetVerdict, UndoVerdict, SetNote, ClearAll,
-// Exclude, RemoveExclusionByID, RecordPermitted, WithdrawPermitted) that
-// change something an operator explicitly did -- a judgement, a note, a
-// bulk clear, a permanent exclusion, a permitted destination -- and so
-// must not let the caller believe that change is in place when the
-// write recording it failed (R6, see each of those methods' own
-// restore-on-error comment). Every other caller (a detector's raise/
-// re-fire, an async reputation update, the test-only Reset) keeps
-// calling persistLocked below, which stays fire-and-forget -- that is
-// the ingest hot path issue #400 built write-behind persistence to get
-// off of, and forcing a synchronous round-trip onto every flag a live
-// port scan raises would undo that fix.
-//
-// The write-behind writer never fails synchronously on its own --
-// MarkDirty only ever hands off a snapshot for its own goroutine to save
-// later. This calls its already-provided Flush escape hatch instead (see
-// Flush's own doc comment: "a caller that genuinely needs to know a
-// change has reached the backend before proceeding") to force that save
-// now and wait for it, under the same SaveTimeout bound every backend
-// call in this codebase already carries -- so a genuinely stuck backend
-// degrades to a bounded error here rather than an indefinite hang held
-// under s.mu, and a caller that gets a nil error knows the write
-// actually landed, not merely that it was queued.
-func (s *Store) tryPersistLocked() error {
-	if s.wb == nil {
-		return nil
-	}
-	if err := s.encodeAndMarkDirtyLocked(); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), persist.SaveTimeout)
-	defer cancel()
-	if err := s.wb.Flush(ctx); err != nil {
-		return fmt.Errorf("writing flags to the backend failed: %w", err)
-	}
-	return nil
-}
-
-// persistLocked is the swallow-and-log default every ordinary write
-// uses -- see tryPersistLocked's own doc comment for exactly which
-// callers use that instead and why. Encoding failures are swallowed
-// rather than surfaced: the in-memory state (which every read goes
-// through) stays correct either way, so a transient disk issue degrades
-// to "won't survive a restart right now" rather than breaking live use.
-func (s *Store) persistLocked() {
-	if s.wb == nil {
+		persistLog.Error(fmt.Sprintf("encoding flags for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	if err := s.encodeAndMarkDirtyLocked(); err != nil {
-		persistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
-	}
+	s.wb.MarkDirty(data)
 }

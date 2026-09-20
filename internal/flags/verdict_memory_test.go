@@ -26,7 +26,7 @@ func TestReviveRemembersACheckedVerdict(t *testing.T) {
 
 	s.Add(TypePortScan, "203.0.113.30", "20 ports in 60s", checkedAt)
 	id := s.List()[0].ID
-	if _, ok, _ := s.SetVerdict(id, VerdictChecked, "alice", "", checkedAt); !ok {
+	if _, ok := s.SetVerdict(id, VerdictChecked, "alice", "", checkedAt); !ok {
 		t.Fatal("setup: expected the checked verdict to land")
 	}
 
@@ -170,7 +170,7 @@ func TestUndoExpectedWithdrawsTheExpectationItRecorded(t *testing.T) {
 		t.Fatal("setup: expected the expected verdict to record an expectation")
 	}
 
-	f, ok, _ := s.UndoVerdict(id)
+	f, ok := s.UndoVerdict(id)
 	if !ok {
 		t.Fatal("expected UndoVerdict to find the flag")
 	}
@@ -209,7 +209,7 @@ func TestUndoExpectedRestoresARaisedSize(t *testing.T) {
 		t.Fatalf("setup: expected the recorded size to be raised to 120, got %v", ex.Size)
 	}
 
-	if _, ok, _ := s.UndoVerdict(id); !ok {
+	if _, ok := s.UndoVerdict(id); !ok {
 		t.Fatal("expected UndoVerdict to find the flag")
 	}
 	ex, ok := s.Expectation(TypePortScan, "203.0.113.35")
@@ -258,7 +258,7 @@ func TestNoteIsKeptWithTheVerdictAndRememberedOnRevival(t *testing.T) {
 
 	s.Add(TypePortScan, "203.0.113.40", "20 ports in 60s", checkedAt)
 	id := s.List()[0].ID
-	f, ok, _ := s.SetVerdict(id, VerdictChecked, "alice", note, checkedAt)
+	f, ok := s.SetVerdict(id, VerdictChecked, "alice", note, checkedAt)
 	if !ok {
 		t.Fatal("setup: expected the checked verdict to land")
 	}
@@ -308,7 +308,7 @@ func TestUndoDiscardsTheNote(t *testing.T) {
 	id := s.List()[0].ID
 	s.SetVerdict(id, VerdictChecked, "alice", "checked the upstream list", now)
 
-	f, ok, _ := s.UndoVerdict(id)
+	f, ok := s.UndoVerdict(id)
 	if !ok {
 		t.Fatal("setup: expected the undo to find the flag")
 	}
@@ -327,7 +327,7 @@ func TestSetNoteEditsAJudgedFlag(t *testing.T) {
 	s.Add(TypePortScan, "203.0.113.42", "20 ports in 60s", now)
 	id := s.List()[0].ID
 
-	if _, known, judged, _ := s.SetNote(id, "typo fixed"); !known || judged {
+	if _, known, judged := s.SetNote(id, "typo fixed"); !known || judged {
 		t.Errorf("an unjudged flag must be known but unjudged, got known=%v judged=%v", known, judged)
 	}
 	if f := s.List()[0]; f.Note != "" {
@@ -335,7 +335,7 @@ func TestSetNoteEditsAJudgedFlag(t *testing.T) {
 	}
 
 	s.SetVerdict(id, VerdictChecked, "alice", "first go", now)
-	f, known, judged, _ := s.SetNote(id, "second go, better words")
+	f, known, judged := s.SetNote(id, "second go, better words")
 	if !known || !judged {
 		t.Fatalf("editing a judged flag must succeed, got known=%v judged=%v", known, judged)
 	}
@@ -346,11 +346,11 @@ func TestSetNoteEditsAJudgedFlag(t *testing.T) {
 		t.Errorf("VerdictBy = %q -- an edit must not rewrite who made the call", f.VerdictBy)
 	}
 
-	if f, _, _, _ := s.SetNote(id, ""); f.Note != "" {
+	if f, _, _ := s.SetNote(id, ""); f.Note != "" {
 		t.Errorf("Note = %q, want an empty edit to take the words back", f.Note)
 	}
 
-	if _, known, _, _ := s.SetNote("nonexistent", "anything"); known {
+	if _, known, _ := s.SetNote("nonexistent", "anything"); known {
 		t.Error("SetNote on an unknown id must report it unknown")
 	}
 }
