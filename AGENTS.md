@@ -344,8 +344,10 @@ uncontroversial; shipping a copy is not.
 It also means a stale release cannot ship stale security data — a failure
 nobody would notice, because everything would appear to work.
 
-So: before adopting any feed or dependency, check its licence and record
-what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine.
+So: a new third-party dependency needs the owner's approval on an issue
+before it is added, with the provenance case the global dependencies
+rule asks for (#1288). Before adopting any feed or dependency, check its
+licence and record what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine.
 GPL-family code is compatible with the AGPL, but a copyleft or
 share-alike dependency still needs the explicit consideration the global
 dependencies rule asks for, written on the issue. Attribution terms still bind data that
