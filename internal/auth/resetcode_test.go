@@ -188,7 +188,10 @@ func TestIssueResetCodeKillsTheOldPasswordAndLetsTheCodeIn(t *testing.T) {
 // the next good write would silently un-reset the account while the
 // admin has already read a code out that no longer does anything.
 func TestIssueResetCodeLeavesTheOldPasswordWorkingWhenPersistFails(t *testing.T) {
-	s, err := OpenWithBackend(failingSaveBackend{})
+	// Register and CreateUser below each persist too (createLocked is
+	// R6-converted as well), so the fixture needs a backend that saves
+	// twice before failing, not one that fails outright.
+	s, err := OpenWithBackend(&saveBudgetBackend{left: 2})
 	if err != nil {
 		t.Fatalf("OpenWithBackend: %v", err)
 	}

@@ -45,8 +45,8 @@ func TestAcknowledgementSurvivesAReopen(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	first.NoteUpgrade("v0.4.0", "v0.5.0", time.Now())
-	if _, ok := first.AcknowledgeUpgrade("admin", time.Now()); !ok {
-		t.Fatal("AcknowledgeUpgrade found nothing to acknowledge")
+	if _, ok, err := first.AcknowledgeUpgrade("admin", time.Now()); err != nil || !ok {
+		t.Fatalf("AcknowledgeUpgrade found nothing to acknowledge: ok=%v err=%v", ok, err)
 	}
 
 	reopened, err := Open(path)
@@ -86,7 +86,9 @@ func TestReNotingTheSameCrossingKeepsTheAcknowledgement(t *testing.T) {
 	s := New()
 	noticed := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
 	s.NoteUpgrade("v0.4.0", "v0.5.0", noticed)
-	s.AcknowledgeUpgrade("admin", noticed.Add(time.Minute))
+	if _, _, err := s.AcknowledgeUpgrade("admin", noticed.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 
 	if s.NoteUpgrade("v0.4.0", "v0.5.0", noticed.Add(time.Hour)) {
 		t.Error("re-noting the same crossing rewrote the record")
@@ -105,7 +107,9 @@ func TestReNotingTheSameCrossingKeepsTheAcknowledgement(t *testing.T) {
 func TestALaterCrossingIsNotAcknowledgedByAnEarlierOne(t *testing.T) {
 	s := New()
 	s.NoteUpgrade("v0.4.0", "v0.5.0", time.Now())
-	s.AcknowledgeUpgrade("admin", time.Now())
+	if _, _, err := s.AcknowledgeUpgrade("admin", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 
 	if !s.NoteUpgrade("v0.5.0", "v0.6.0", time.Now()) {
 		t.Fatal("a second, later crossing was not recorded")
@@ -124,10 +128,12 @@ func TestALaterCrossingIsNotAcknowledgedByAnEarlierOne(t *testing.T) {
 func TestAcknowledgeIsIdempotent(t *testing.T) {
 	s := New()
 	s.NoteUpgrade("v0.4.0", "v0.5.0", time.Now())
-	s.AcknowledgeUpgrade("first", time.Now())
-	u, ok := s.AcknowledgeUpgrade("second", time.Now())
-	if !ok || u.AcknowledgedBy != "first" {
-		t.Errorf("second acknowledgement = %+v (ok=%v), want the first admin's name kept", u, ok)
+	if _, _, err := s.AcknowledgeUpgrade("first", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	u, ok, err := s.AcknowledgeUpgrade("second", time.Now())
+	if err != nil || !ok || u.AcknowledgedBy != "first" {
+		t.Errorf("second acknowledgement = %+v (ok=%v err=%v), want the first admin's name kept", u, ok, err)
 	}
 }
 
@@ -135,7 +141,7 @@ func TestAcknowledgeIsIdempotent(t *testing.T) {
 // what to tell the client, and no audit entry is written for a click
 // against nothing.
 func TestAcknowledgeWithNoUpgrade(t *testing.T) {
-	if _, ok := New().AcknowledgeUpgrade("admin", time.Now()); ok {
-		t.Error("acknowledged an upgrade that does not exist")
+	if _, ok, err := New().AcknowledgeUpgrade("admin", time.Now()); ok || err != nil {
+		t.Errorf("acknowledged an upgrade that does not exist (ok=%v err=%v)", ok, err)
 	}
 }

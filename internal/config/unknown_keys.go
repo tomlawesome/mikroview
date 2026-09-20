@@ -25,7 +25,7 @@ type removedKey struct {
 
 // removedOrRenamedKeys is every configuration key CHANGELOG.md records
 // as removed or renamed, keyed by its full dotted yaml path. Sourced
-// from CHANGELOG.md's "### Removed" sections as of 2026-09-13:
+// from CHANGELOG.md's "### Removed" sections as of 2026-09-20:
 //
 //   - listen.syslogUdp / listen.syslogTcp: "## [0.2.0] - 2026-08-14",
 //     "The plaintext syslog listeners" (#189) -- removed wholesale,
@@ -39,6 +39,13 @@ type removedKey struct {
 //     `flags.detectorSettingsStorePath` are gone" (#873) -- the stores
 //     they configured were deleted; both document kinds now live under
 //     engine.definitionsStorePath.
+//   - configDrift: "## [Unreleased]", "`configDrift.storePath` is gone"
+//     (#1277) -- the whole configDrift section is removed (it only ever
+//     had the one key), so an unknown key here is the top-level
+//     "configDrift" itself, never a dotted "configDrift.storePath": the
+//     backend it configured (the config-upgrade notice's per-version
+//     dismissal, #1218) was removed in favor of a plain close button;
+//     nothing reads or writes it any more.
 //
 // Do not add an entry without a matching CHANGELOG.md line: an unknown
 // key with no entry here still refuses to start (see explainYAMLError),
@@ -63,6 +70,12 @@ var removedOrRenamedKeys = map[string]removedKey{
 	"flags.detectorSettingsStorePath": {
 		Version: "v0.5.0",
 		Why:     "the store it configured was deleted (#873) -- detector settings now live under engine.definitionsStorePath. Remove this key.",
+	},
+	"configDrift": {
+		Version: "v0.6.1",
+		Why: "configDrift.storePath, its only key, backed the config-upgrade notice's per-version " +
+			"dismissal (#1218), removed in favor of a plain close button (#1277); nothing reads or writes " +
+			"it any more. Remove this section.",
 	},
 }
 
