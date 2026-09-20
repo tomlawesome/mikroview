@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -314,5 +315,82 @@ func TestRouterBackupsListCarriesTheLowSpaceFlag(t *testing.T) {
 	push(50<<30, 11)
 	if lowSpace() {
 		t.Fatal("lowSpace = true after the disk recovered, so Settings keeps warning")
+	}
+}
+
+// TestRouterBackupsListUnaffectedByAFailedSpaceProbe is R10 (v0.6.0
+// audit, #1304): every SetSpaceProbeForTest use above returns a nil
+// error, so backupvault's "could not measure free space -- carrying on
+// unchanged" branch (updateSpaceModeLocked's space.err != nil case) had
+// no coverage at the API layer at all. A push whose space check fails
+// outright must still succeed, and must neither set nor clear lowSpace:
+// an unmeasurable disk is not evidence the disk is full, and it is not
+// evidence the disk has room either.
+func TestRouterBackupsListUnaffectedByAFailedSpaceProbe(t *testing.T) {
+	s := newAuthTestServer(t)
+	vault := vaultWithOnePush(t)
+	s.Vault = vault
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := setUpAdmin(t, ts)
+
+	lowSpace := func() bool {
+		t.Helper()
+		resp, err := client.Get(ts.URL + "/api/router-backups")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/router-backups = %d, want 200", resp.StatusCode)
+		}
+		var raw map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := raw["lowSpace"].(bool)
+		if !ok {
+			t.Fatalf("lowSpace field missing or not a boolean: %v", raw)
+		}
+		return got
+	}
+
+	probeErr := errors.New("statfs /var/lib/mikroview/router-backups: input/output error")
+	push := func(n int) {
+		t.Helper()
+		body := append([]byte{0x88, 0xac, 0xa1, 0xb1}, bytes.Repeat([]byte("x"), n)...)
+		if err := vault.Store("rb5009", backupvault.KindBackup, body, time.Now()); err != nil {
+			t.Fatalf("Store with a failing space probe returned an error, want the write to succeed regardless: %v", err)
+		}
+	}
+
+	// From a clean start, a push whose probe fails but still returns a
+	// plausible under-floor free/total pair must not set lowSpace: the
+	// numbers are exactly what a real low-space reading would look like,
+	// which is the point -- only the error tells the difference, so a
+	// caller that looked at free/total without checking it first would
+	// get this one right by accident.
+	vault.SetSpaceProbeForTest(func(string) (int64, int64, error) { return 1 << 30, 100 << 30, probeErr })
+	push(10)
+	if lowSpace() {
+		t.Fatal("lowSpace = true from a failed probe alone -- an unmeasured reading must never be trusted, even when its numbers look like a full disk")
+	}
+
+	// Put the vault into low-space mode with a real reading...
+	vault.SetSpaceProbeForTest(func(string) (int64, int64, error) { return 1 << 30, 100 << 30, nil })
+	push(11)
+	if !lowSpace() {
+		t.Fatal("lowSpace = false with the vault's filesystem under its floor")
+	}
+
+	// ...then push again with a failing probe that reports plenty of
+	// free space: if the error were ignored this would read as recovery
+	// and clear the flag, which is the dangerous direction -- a
+	// genuinely full disk would stop being protected on the strength of
+	// a reading that was never actually taken.
+	vault.SetSpaceProbeForTest(func(string) (int64, int64, error) { return 90 << 30, 100 << 30, probeErr })
+	push(12)
+	if !lowSpace() {
+		t.Fatal("lowSpace flipped to false on a failed probe reporting plenty of free space -- a reading that could not be taken must never clear a mode a real one set")
 	}
 }
