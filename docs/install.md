@@ -223,3 +223,61 @@ failed, the uid/gid it is running as versus the directory's actual
 owner, and the exact `chown` that fixes it, then exits. Under
 `restart: unless-stopped` that means a restart loop, not silent data
 loss -- fix the ownership and the next restart comes up clean.
+
+## Running as a different account
+
+MikroView needs no special support to run as an account other than the
+image's own uid `1000` -- Docker's own override does the whole job.
+Add a `user:` line to the compose file:
+
+```yaml
+    user: "2000:2000"
+```
+
+or pass `--user 2000:2000` to `docker run`. The binary has no notion of
+its own uid; it just opens its files, so whichever account Docker hands
+it works as long as that account owns the two mounted paths
+(`/var/lib/mikroview` and `/etc/mikroview`).
+
+**Bind mounts** (the `mikroview/` folder layout above) need nothing
+extra beyond the ownership step in "Persistent data" -- `chown` the
+folder to whichever uid/gid you put in `user:` instead of `1000:1000`,
+and it works exactly as before.
+
+**Named volumes are the trap.** A fresh named volume is filled in from
+the image the first time a container is *created* against it, ownership
+included -- so a new `mikroview-data` volume comes up owned by uid
+`1000`, and `user: "2000:2000"` fails at the very first start:
+
+```
+the auth store at /var/lib/mikroview/users.json is not usable: permission denied
+Refusing to start: continuing would appear to work while silently discarding
+every change to that store on the next restart.
+
+MikroView is running as uid 2000, gid 2000.
+/var/lib/mikroview is owned by uid 1000, gid 1000 with mode 0755.
+
+Fix it by giving MikroView ownership: sudo chown -R 2000:2000 /var/lib/mikroview
+```
+
+Fix it with a throwaway container against the named volume, the same
+idea as the `chown` for a bind mount, just aimed at the volume instead
+of a host path:
+
+```sh
+docker run --rm -v mikroview-data:/var/lib/mikroview alpine \
+    chown 2000:2000 /var/lib/mikroview
+```
+
+One wrinkle: that volume is still completely empty (MikroView never got
+far enough to write anything to it), and Docker repeats the same
+image-owned copy-in on every *new* container it creates against an
+empty volume. So chowning it and then running a fresh `docker run` or
+recreating the container puts you right back at uid `1000`. What you
+want instead is for the *existing, already-failed* container to come
+back up -- under `restart: unless-stopped` (the shipped compose file's
+default) it is already looping and picks the fix up on its own next
+attempt, or start it by hand with `docker start <container>` /
+`docker compose up -d` (which reuses the existing container rather than
+recreating it). Either way, once the chown has happened, that same
+container starts clean.
