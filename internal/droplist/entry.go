@@ -281,9 +281,23 @@ func (s *Store) List() []Entry {
 // " (from flag <id>)" when flagID is given) -- in that order, so nothing
 // is ever audited that did not actually get stored, and nothing is ever
 // stored that was not validated.
-func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, error) {
+//
+// The second return value is ownRangesKnown: whether the own-range check
+// above actually had anything to check cidr against, read from the exact
+// same s.own.OwnPrefixes() call Validate was given, under the one lock
+// acquisition this whole method holds. It exists so a caller deciding
+// whether to warn "not checked against the router's own ranges" (security
+// review, S1 in the v0.6.0 audit, #1304) never has to ask
+// s.OwnRangesKnown() again afterwards: a second, later call reads
+// whatever is true *then*, and internal/device.Registry's own ranges can
+// change between the two calls (a router enrolling in the gap) -- which
+// let a just-added, genuinely unchecked entry read as checked because the
+// answer had moved on by the time anyone asked a second time. Reporting
+// it from inside the same critical section closes that window instead of
+// narrowing it.
+func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, bool, error) {
 	if !validText(actor) || !validText(reason) || !validText(flagID) {
-		return Entry{}, ErrBadText
+		return Entry{}, false, ErrBadText
 	}
 
 	s.mu.Lock()
@@ -293,14 +307,16 @@ func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, error) {
 	if s.own != nil {
 		own = s.own.OwnPrefixes()
 	}
+	ownRangesKnown := len(own) > 0
+
 	p, err := Validate(cidr, own)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ownRangesKnown, err
 	}
 
 	key := p.String()
 	if _, exists := s.entries[key]; exists {
-		return Entry{}, ErrExists
+		return Entry{}, ownRangesKnown, ErrExists
 	}
 
 	e := Entry{CIDR: p, AddedBy: actor, AddedAt: s.now(), Reason: reason, FlagID: flagID}
@@ -311,13 +327,13 @@ func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, error) {
 		// when it was not durably saved would carry on believing the
 		// range is blocked right up until a restart quietly drops it.
 		delete(s.entries, key)
-		return Entry{}, fmt.Errorf("saving droplist: %w", err)
+		return Entry{}, ownRangesKnown, fmt.Errorf("saving droplist: %w", err)
 	}
 
 	if s.auditor != nil {
 		s.auditor.Record(actor, "droplist.add", key, auditDetail(reason, flagID))
 	}
-	return e, nil
+	return e, ownRangesKnown, nil
 }
 
 // Remove deletes the entry for cidr, refusing an unknown range with

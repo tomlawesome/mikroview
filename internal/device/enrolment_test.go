@@ -521,6 +521,37 @@ func TestOwnPrefixesReadsOnlySourceAndAcceptedIP(t *testing.T) {
 	}
 }
 
+// TestOwnPrefixesReflectsALaterEnrolment is #1304's E1/S1: OwnPrefixes
+// is now cached (it used to rebuild its answer from every device on
+// every call, including from droplist's own Add and OwnRangesKnown,
+// which read it on every droplist request), so this pins that the cache
+// is actually invalidated on the writes that change it rather than
+// quietly going stale. A stale "no own ranges yet" answer surviving past
+// a real enrolment is exactly the S1 race: droplist.Store.Add would
+// validate a new entry against an empty set even after the router's own
+// address became known, and the "not checked against the router's own
+// ranges" warning would then be wrong in the other direction, claiming
+// unchecked when a real check was possible.
+func TestOwnPrefixesReflectsALaterEnrolment(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Warm the cache on the empty state before anything is enrolled.
+	if got := r.OwnPrefixes(); len(got) != 0 {
+		t.Fatalf("OwnPrefixes() before enrolment = %v, want none", got)
+	}
+
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	got := r.OwnPrefixes()
+	if len(got) != 1 || got[0].String() != "10.10.0.1/32" {
+		t.Fatalf("OwnPrefixes() after enrolment = %v, want [10.10.0.1/32] -- a cached pre-enrolment answer would still read empty here", got)
+	}
+}
+
 // TestAcceptedIPAndEnrolledAtSurviveRestart is issue #1281's core
 // persistence promise: a device this registry created, once enrolled,
 // keeps its AcceptedIP/EnrolledAt (and continues to exist at all) after
