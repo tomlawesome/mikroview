@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // removedKey documents a configuration key that once existed and no
@@ -68,7 +68,7 @@ var removedOrRenamedKeys = map[string]removedKey{
 
 // unknownFieldPattern matches one line of a yaml.v3 *yaml.TypeError
 // produced by KnownFields(true): "line N: field X not found in type
-// pkg.Type". Confirmed against gopkg.in/yaml.v3 (see explainYAMLError's
+// pkg.Type". Confirmed against go.yaml.in/yaml/v3 (see explainYAMLError's
 // doc comment) rather than assumed -- a decoder upgrade that changes
 // this wording would fall back to the library's own generic error text
 // via the "no match" branch below, not silently mis-parse.
