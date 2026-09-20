@@ -232,7 +232,14 @@ func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "resetting the watchlist failed, so nothing was changed", http.StatusInternalServerError)
 		return
 	}
-	s.Suggest.Reset()
+	if err := s.Suggest.Reset(); err != nil {
+		// R6: the real entries are already gone by this point (the line
+		// above), so there is no honest way to report this request as
+		// failed -- only the suggestion-tracking state that describes
+		// them might not survive a restart. Logged, not turned into a
+		// 500 for a destructive action that already happened.
+		apiLog.Error("saving the suggestion reset failed: " + err.Error())
+	}
 	s.Suggest.Sync(suggest.Generate(s.RouterState))
 
 	s.Audit.Record(auditActor(r), "definition.suggestion.reset", "", fmt.Sprintf("%d entries removed", wiped))
