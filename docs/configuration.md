@@ -108,23 +108,27 @@ devices:
   that name is stored on the server, so everyone signed in sees it.
 
   **Which identity wins, and why.** A device exists because you declared
-  it under `devices` here, or because an ingest token named it on a
-  push — either way it lands in the one list everything in MikroView
-  counts from. What decides which device a syslog source address belongs
-  to, strongest evidence first: (a) a `devices[].sourceIp` you set above
-  — you said so, so that wins outright; (b) failing that, a router's own
-  pushed `/ip/address` table — an address counts as that router's if it
-  appears in exactly one router's table; (c) otherwise the address is
-  left unattributed rather than guessed at. An unattributed address keeps
-  logging exactly as before, stored under its own address, but it is not
-  counted as a router — `/api/devices` lists it separately, and the UI
-  shows it as a source, not a device. To fix that: declare it under
-  `devices` above, or check that the router it belongs to is actually
-  pushing that address in its own address table — a NAT'd syslog relay
-  sitting in front of several routers never will, so `devices` is the
-  only way to name one of those. If two routers both push the same
-  address, it stays unattributed either way: their own tables disagree,
-  so nothing can tell which one sent the lines. Mint one ingest token per
+  it under `devices` here, because an ingest token named it on a push,
+  or because you added it from the Entities screen — either way it lands
+  in the one list everything in MikroView counts from. What decides
+  which device a syslog source address belongs to, strongest evidence
+  first: (a) a `devices[].sourceIp` you set above — you said so, so that
+  wins outright; (b) failing that, the address the router enrolled from
+  — you minted it an enrolment token (the setup ledger's "Send logs"
+  step, or **Re-enrol…** on its card) and the token's line arrived from
+  that address (#1281; see
+  [routeros-setup.md](routeros-setup.md#the-wizards-enrol-line)). There
+  is no (c): an address that is neither is refused at the syslog port,
+  its lines are not stored, and it is listed as a refused sender beside
+  your routers on the Entities screen. A router's own pushed
+  `/ip/address` table is still stored and shown, but it no longer counts
+  as evidence of which address is the router's — a router is not a
+  trustworthy witness to its own identity. One address belongs to one
+  device: enrolling a router from an address another device already
+  holds, declared or enrolled, is refused and the token stays unspent.
+  A NAT'd syslog relay sitting in front of several routers shows one
+  address for all of them, so nothing can tell which router sent a
+  line; name the relay itself under `devices`. Mint one ingest token per
   router — two tokens for one physical router are two devices as far as
   MikroView is concerned.
 
@@ -4464,6 +4468,13 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /ca.crt` | MikroView's self-generated CA certificate, unauthenticated -- present whenever MikroView generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
+| `POST /api/devices` | admin-only (#1281): declare a syslog-only router by name, with no address yet -- the same thing the Entities screen's "+ add router" does. It exists so a router with no ingest token and no `devices[].sourceIp` can still be enrolled |
+| `DELETE /api/devices/{id}` | admin-only: remove a device that was declared through `POST /api/devices`, along with its enrolled address and any pending token. A device declared in `config.yaml` refuses with 400 -- it would only come back at the next restart |
+| `POST /api/devices/{id}/enrolment` | admin-only, and re-checks your password (#1291): mint (or reroll) the device's one-time enrolment token, 15-minute life, bound to the address you name. The response is the token and its expiry; `POST /api/setup/commands` renders it into the `/log info "mikroview-enrol …"` line the ledger shows |
+| `DELETE /api/devices/{id}/enrolment` | admin-only: revoke a pending enrolment token before it is redeemed |
+| `POST /api/devices/{id}/enrolment/address` | admin-only (#1291): point a pending token at a different address without rerolling it -- the way back when the address you named was wrong and the router was turned away. Only an address already in the refused-senders list is accepted |
+| `POST /api/devices/{id}/registration` | admin-only (#1291): record that you have confirmed this router -- the ledger's final Register step. Grants nothing; it stamps the device with a name and a date |
+| `GET /api/devices/refused` | admin-only (#1281): every syslog source address the listener has refused a line from -- `ip`, `firstSeen`, `lastSeen` and a `lines` count. These addresses have proven nothing about themselves, so this sits at the audit-log tier rather than the fleet's own |
 | `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC MikroView has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
 | `GET /api/rules` | every rule label MikroView has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what MikroView actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)). Also `liveSince` (RFC 3339 UTC, when this process started observing) and, only after a warm restart, `restoredTo` (when the snapshot it loaded was taken) -- absent rather than null on a cold start, see [Warm restart](#warm-restart-what-survives-a-restart) |
@@ -4543,6 +4554,7 @@ starting the server. `mikroview -h` lists them too. See
 | `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what MikroView has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
+| `POST /api/setup/address` | admin-only (#1213): the address your routers reach this instance on, as typed into the setup ledger's header field; persisted beside the ledger's own marks and rendered into every router command the ledger shows |
 | `PUT /api/setup/backup-transport` | admin-only (#955): how step 6's router script delivers its backup -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
 | `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
