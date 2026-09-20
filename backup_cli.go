@@ -731,6 +731,8 @@ func runRestore(args []string) int {
 	}
 
 	vaultDir := backupVaultDirectory(cfg)
+	const forceAdvice = "Re-run with --force once you are sure -- copy the data directory " +
+		"somewhere safe first if you want a way back to what is on it now"
 	if !hasFlag(args, "--force") {
 		for name := range env.Stores {
 			if name == vaultStoreName {
@@ -738,14 +740,14 @@ func runRestore(args []string) int {
 			}
 			if _, err := os.Stat(known[name]); err == nil {
 				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
-					"state. Re-run with --force once you are sure", known[name], name))
+					"state. %s", known[name], name, forceAdvice))
 				return 1
 			}
 		}
 		if vaultBundleToRestore != nil {
 			if entries, err := os.ReadDir(vaultDir); err == nil && len(entries) > 0 {
 				logger.Error(fmt.Sprintf("%s already exists and is not empty (store %q) -- refusing to "+
-					"overwrite live state. Re-run with --force once you are sure", vaultDir, vaultStoreName))
+					"overwrite live state. %s", vaultDir, vaultStoreName, forceAdvice))
 				return 1
 			}
 		}
@@ -753,7 +755,7 @@ func runRestore(args []string) int {
 			dir := historyDirectory(cfg)
 			if held, err := retention.DaysHeld(dir); err == nil && len(held) > 0 {
 				logger.Error(fmt.Sprintf("%s already holds retained events -- refusing to overwrite live "+
-					"state. Re-run with --force once you are sure", dir))
+					"state. %s", dir, forceAdvice))
 				return 1
 			}
 		}
@@ -761,7 +763,7 @@ func runRestore(args []string) int {
 			// #nosec G703 -- this deployment's own data directory, from config, not from a request.
 			if _, err := os.Stat(schemaPath); err == nil {
 				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
-					"state. Re-run with --force once you are sure", schemaPath, schemaStoreName))
+					"state. %s", schemaPath, schemaStoreName, forceAdvice))
 				return 1
 			}
 		}
@@ -797,6 +799,22 @@ func runRestore(args []string) int {
 		}
 		return nil
 	}
+	// restoreMarkerName (storage_preflight.go) goes down before the first
+	// byte of any store or schema.json is touched, and startup refuses to
+	// run while it exists -- see checkNoRestoreInProgress. rollback below
+	// removes it again once every target it touched is confirmed back to
+	// its pre-restore state, since at that point there is no mixture left
+	// to warn a startup about; if rollback itself cannot fully put
+	// everything back, the marker is left in place on purpose.
+	restoreMarker := restoreMarkerPath(cfg)
+	markerBody := "A restore (mikroview -restore " + src + " --force) began overwriting this data " +
+		"directory and did not finish. If mikroview refused to start because of this file, re-run " +
+		"that same -restore command again, or replace this data directory with your own copy of it.\n"
+	if err := persist.WriteFileAtomic(restoreMarker, []byte(markerBody), 0o600); err != nil {
+		logger.Error(fmt.Sprintf("writing the restore marker at %s: %v -- nothing has been changed", restoreMarker, err))
+		return 1
+	}
+
 	// rollback puts every target already recorded in before back to what
 	// it held before this restore touched it -- persist.WriteFileAtomic
 	// for one that existed, os.Remove for one that did not -- then logs
@@ -822,6 +840,9 @@ func runRestore(args []string) int {
 		msg := cause + " -- the data directory has been returned to its pre-restore state"
 		if len(mixed) > 0 {
 			msg += "; could not be returned: " + strings.Join(mixed, "; ")
+		} else if err := os.Remove(restoreMarker); err != nil && !os.IsNotExist(err) {
+			msg += fmt.Sprintf("; the restore marker at %s could not be removed: %v -- startup will "+
+				"refuse to run until it is deleted by hand", restoreMarker, err)
 		}
 		logger.Error(msg)
 	}
@@ -878,6 +899,19 @@ func runRestore(args []string) int {
 			return 1
 		}
 	}
+
+	// Every store and, if the backup carried one, schema.json have now
+	// landed together -- the mixture #1293 is about can no longer happen,
+	// so the marker's job is done. The vault bundle and retained corpus
+	// below are not stores in that sense (see their own comments) and
+	// were already outside rollback's coverage above, so the marker does
+	// not need to wait for them.
+	if err := os.Remove(restoreMarker); err != nil && !os.IsNotExist(err) {
+		logger.Error(fmt.Sprintf("restore finished but the marker at %s could not be removed: %v -- "+
+			"startup will refuse to run until it is deleted by hand", restoreMarker, err))
+		return 1
+	}
+
 	if vaultBundleToRestore != nil {
 		if err := writeVaultBundle(vaultDir, *vaultBundleToRestore); err != nil {
 			logger.Error(err.Error())

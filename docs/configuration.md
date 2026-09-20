@@ -3190,7 +3190,8 @@ existing state exactly as it was — which matters most for the accounts
 file, where the alternative to "unchanged" is "locked out".
 
 `-restore` refuses to overwrite stores that already exist unless you pass
-`--force`.
+`--force`. Copy the data directory somewhere safe first if you want a way
+back to what's on it now — `-restore` does not do that for you.
 
 **Peak memory tracks the backup you actually have, not a worst case you
 don't.** A restore holds the decompressed envelope in memory before
