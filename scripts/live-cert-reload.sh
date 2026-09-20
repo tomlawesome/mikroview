@@ -18,6 +18,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
 . "$REPO/scripts/live-slot.sh"
+. "$REPO/scripts/live-web-dist.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -64,7 +65,7 @@ devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]
 EOF
 
 ( cd frontend && npm run build >/dev/null 2>&1 )
-rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
+mv_rebuild_web_dist
 # -buildvcs=false: throwaway binary, nothing reads its VCS stamp, and
 # stamping fails outright in a linked git worktree (#357).
 go build -buildvcs=false -o "$DIR/mikroview" .
