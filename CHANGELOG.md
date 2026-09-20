@@ -16,6 +16,10 @@ rewritten.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.0] - 2026-09-20
+
 ### Security
 
 - **Adding a router now takes your password, and opens the port to one
