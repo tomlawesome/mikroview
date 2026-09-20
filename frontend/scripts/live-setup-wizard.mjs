@@ -12,7 +12,7 @@
 // So every assertion here goes through a real browser against a real
 // server.
 
-import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, waitForStreamRows, grantClipboard } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -695,7 +695,7 @@ const copiedKey = await keyField.inputValue()
 // Clipboard permissions granted explicitly, so this proves what landed on
 // the clipboard rather than only that a toast appeared (live-token-copy's
 // own reasoning).
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await grantClipboard(page)
 await page.click('.setup-wizard .keymint .copy-btn')
 await page.waitForSelector('.toast[role="status"]', { timeout: 3000 })
 const clipboardKey = await page.evaluate(() => navigator.clipboard.readText())

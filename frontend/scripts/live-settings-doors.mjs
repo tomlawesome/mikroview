@@ -15,7 +15,7 @@
 //    window.confirm() dialog, and a stray click actually disarms it;
 //  - a freshly let-in account can actually sign in and reach the app.
 
-import { session, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, check, done, goTo, launchBrowser, grantClipboard } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -84,7 +84,7 @@ check(
 // write landed (`routerCopied ? 'copied for RouterOS' : ...`), so wait
 // for that before reading -- not a arbitrary pause, the same evidence
 // the UI itself shows the operator.
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await grantClipboard(page)
 await page.click(`${KEYS} .reveal button:has-text("copy for RouterOS")`)
 await page.waitForSelector(`${KEYS} .reveal button:has-text("copied for RouterOS")`)
 const routerScript = await page.evaluate(() => navigator.clipboard.readText())
