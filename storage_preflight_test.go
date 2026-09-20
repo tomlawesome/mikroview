@@ -83,6 +83,23 @@ func TestCheckStoresUsableIgnoresUnsetPaths(t *testing.T) {
 	}
 }
 
+// The advice printed alongside a refusal points an operator running as
+// a non-default uid (Docker's user: override, docs/install.md) at the
+// doc section that explains the named-volume trap, rather than leaving
+// them to work out on their own why a directory the image itself
+// created isn't already owned by the uid they chose.
+func TestStoreFailureAdviceNamesTheUserOverrideDocSection(t *testing.T) {
+	e := &storeUnusable{Store: "auth", Path: "/var/lib/mikroview/accounts.json", Dir: "/var/lib/mikroview"}
+	// Joined with spaces, not newlines: the advice wraps the section name
+	// across lines for terminal width, so a raw substring check against
+	// newline-joined text would break on the wrap point rather than on a
+	// real regression.
+	advice := strings.Join(storeFailureAdvice(e), " ")
+	if !strings.Contains(advice, "docs/install.md") || !strings.Contains(advice, "Running as a different account") {
+		t.Errorf("expected the advice to point at docs/install.md's \"Running as a different account\" section, got:\n%s", advice)
+	}
+}
+
 // On Postgres the file paths are unused, so their permissions say
 // nothing about whether the deployment works.
 func TestCheckStoresUsableSkipsPostgresDeployments(t *testing.T) {
