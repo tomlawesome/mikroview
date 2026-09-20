@@ -1406,6 +1406,29 @@ tokens](#api-tokens-read-only)). Minting again **replaces** the existing
 key rather than adding a second one -- every router that fetches the drop
 list uses the same key, so there is only ever one to rotate.
 
+## Preferences: settings live on the server, per user (#1283)
+
+Every preference a user's browser used to keep in `localStorage` --
+saved filter presets, top-talker widgets, accent colour, column widths
+and visibility, and the rest -- is now one versioned JSON record per
+account on the server, read on sign-in and written on change. Signing
+out and signing in as someone else on the same browser shows that
+person's own settings, not the last one's, and a user's settings follow
+them to any browser they sign into. The record is cleared when the
+account itself is deleted. See `GET`/`PUT /api/me/preferences` in the
+[API reference](#api-reference); this package never interprets what is
+inside a record, so the frontend modules that own each key are the
+source of truth for its shape.
+
+```yaml
+prefs:
+  # Where preferences are persisted, as a small JSON file. Same
+  # optional-persistence contract as droplist.storePath: left unset,
+  # preferences still work for the running process, they just don't
+  # survive a restart.
+  storePath: "/var/lib/mikroview/preferences.json"
+```
+
 ## Network attribution (optional, on by default)
 
 When you click "investigate" on an IP, MikroView also labels it with the
@@ -4215,6 +4238,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
 | `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-12231224)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
+| `MIKROVIEW_PREFS_STORE_PATH` | `prefs.storePath` (see [Preferences: settings live on the server, per user](#preferences-settings-live-on-the-server-per-user-1283)) -- where per-user preferences records persist |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
@@ -4542,6 +4566,8 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
+| `GET /api/me/preferences` | open to any signed-in user, not admin-gated: the caller's own preferences record (#1283), as `{"version": 1, "prefs": {...}}`. A user with no stored record yet gets `{"version": 1, "prefs": {}}`, not a 404 -- see [Preferences](#preferences-settings-live-on-the-server-per-user-1283) |
+| `PUT /api/me/preferences` | open to any signed-in user, not admin-gated: replaces the caller's whole preferences record with the given `{"version": 1, "prefs": {...}}`. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
