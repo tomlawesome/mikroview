@@ -858,6 +858,42 @@ export function pushFrom(base, localAddress, token, payload) {
   })
 }
 
+/**
+ * grantClipboard makes `navigator.clipboard.readText()` answer in a
+ * scenario, so a copy control is checked by what it put on the clipboard
+ * and not only by its toast.
+ *
+ * Chromium grants the permission for real, so the read is the browser's
+ * own clipboard. Firefox refuses `clipboard-read` as a permission name
+ * outright, and WebKit gates readText on a user gesture the harness
+ * cannot supply, so on those two the page's writeText is wrapped to keep
+ * the last text handed to it and readText answers from that. That still
+ * proves what the app handed to the clipboard API -- the thing every
+ * caller is checking. The real write still runs, and a rejection still
+ * reaches the app, so an engine refusing the write is not hidden.
+ */
+export async function grantClipboard(page) {
+  if (BROWSER_NAME === 'chromium') {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+    return
+  }
+  await page.evaluate(() => {
+    const real = navigator.clipboard.writeText.bind(navigator.clipboard)
+    let last = ''
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      configurable: true,
+      value: (text) => {
+        last = String(text)
+        return real(text)
+      },
+    })
+    Object.defineProperty(navigator.clipboard, 'readText', {
+      configurable: true,
+      value: async () => last,
+    })
+  })
+}
+
 export function done() {
   browser?.close()
   console.log(failed ? 'RESULT: FAIL' : 'RESULT: PASS')
