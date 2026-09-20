@@ -2,7 +2,7 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent, Flag } from '../lib/types'
   import { countryFlag, formatAddr, formatTimeMs, isPublicIp, rawTooltip } from '../lib/format'
-  import { appState } from '../lib/state.svelte'
+  import { appState, natSide } from '../lib/state.svelte'
   // #1200: both dropped from the row by #644's rewrite, restored here.
   // IpInvestigateButton is the same component EventDetailSheet.svelte
   // already mounts for its Source/Destination rows -- reused, not
@@ -173,13 +173,10 @@
       .concat(event.dstPort ? ` · ${event.dstPort}/${event.protocol ?? '?'}` : '') || 'this line',
   )
 
-  const natFilterKey = $derived(
-    event.chain?.toLowerCase() === 'srcnat'
-      ? 'srcQuery'
-      : event.chain?.toLowerCase() === 'dstnat'
-        ? 'dstQuery'
-        : null,
-  )
+  const natFilterKey = $derived.by(() => {
+    const side = natSide(event)
+    return side === 'src' ? 'srcQuery' : side === 'dst' ? 'dstQuery' : null
+  })
 
   // #439: row tokens (action, addresses, port, protocol, rule) used to be
   // <button> elements. That's *why* row text couldn't be selected/copied
