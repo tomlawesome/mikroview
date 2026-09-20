@@ -138,6 +138,12 @@ func TestTransferAdminLeavesRolesUnchangedWhenPersistFails(t *testing.T) {
 	if !ok || second.Role != RoleUser {
 		t.Errorf("second's role after a failed transfer = %v, want RoleUser unchanged", second)
 	}
+	// RoleChangedAt is what ends sessions issued before a role change,
+	// so a stray update here would log both accounts out for nothing.
+	if !got.RoleChangedAt.Equal(admin.RoleChangedAt) || !second.RoleChangedAt.IsZero() {
+		t.Errorf("RoleChangedAt after a failed transfer = admin %v, second %v; want both untouched",
+			got.RoleChangedAt, second.RoleChangedAt)
+	}
 }
 
 func TestTransferSurvivesReload(t *testing.T) {
