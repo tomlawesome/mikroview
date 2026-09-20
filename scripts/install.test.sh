@@ -72,6 +72,7 @@ echo "$*" >>"$DOCKER_LOG"
 case "$1" in
   info) exit "${STUB_INFO_RC:-0}" ;;
   pull) exit 0 ;;
+  inspect) [ -z "${STUB_DIGEST:-}" ] || echo "$STUB_DIGEST"; exit "${STUB_INSPECT_RC:-0}" ;;
   container) [ "$2" = "inspect" ] && { [ "${STUB_EXISTS:-0}" = "1" ] && exit 0 || exit 1; }; exit 0 ;;
   stop|rm) exit 0 ;;
   run)
@@ -106,6 +107,14 @@ run default
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "default run exits 0 (rc=$rc, out: $out)"
 check "$(case "$calls" in *"run -d --name mikroview --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 -p 6514:6514 -p 443:8080 -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro ghcr.io/tomlawesome/mikroview:latest"*) echo true;; *) echo false;; esac)" \
   "default run line: latest, mikroview name, both named volumes, 6514/443"
+check "$(case "$out" in *"SECURITY.md"*) echo false;; *) echo true;; esac)" \
+  "#1282: no resolvable digest (stub inspect prints nothing) means no SECURITY.md line"
+
+# --- #1282: a resolved digest is printed with a pointer to SECURITY.md -----
+ARGS=(); ENV_VARS=(STUB_DIGEST="ghcr.io/tomlawesome/mikroview@sha256:deadbeef"); WITH_DOCKER=true
+run digest-resolved
+check "$(case "$out" in *"ghcr.io/tomlawesome/mikroview@sha256:deadbeef"*"SECURITY.md"*"cosign verify"*) echo true;; *) echo false;; esac)" \
+  "the resolved digest is printed, pointing at SECURITY.md's cosign verify"
 
 # --- hardening flags (#1286): each must appear on the run line -------------
 for flag in "--read-only" "--cap-drop ALL" "--security-opt no-new-privileges" "--pids-limit 128"; do
@@ -182,6 +191,17 @@ check "$(case "$out" in *"port conflict"*) echo false;; *) echo true;; esac)" \
   "an unrecognized failure gets no port-conflict hint"
 check "$(case "$calls" in *$'\n'"rm -f mikroview"*) echo true;; *) echo false;; esac)" \
   "the half-created container is cleaned up with rm -f after a failed run"
+check "$(case "$out" in *"already gone"*) echo false;; *) echo true;; esac)" \
+  "no existing container was removed, so no recovery message about one being gone"
+
+# --- R3 (#1304): a run failure after the old container was already removed -
+# says plainly that it is gone, that the data volumes are untouched, and
+# that re-running the script recovers.
+ARGS=(); ENV_VARS=(STUB_EXISTS=1 STUB_RUN_RC=1 STUB_RUN_ERR="docker: some other daemon error."); WITH_DOCKER=true
+run run-fails-after-existing-removed
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a failing run after removing the old container still exits non-zero (rc=$rc)"
+check "$(case "$out" in *"already gone"*"mikroview-data"*"mikroview-etc"*"re-running"*) echo true;; *) echo false;; esac)" \
+  "says the previous container is already gone, its data is untouched in both volumes, and re-running recovers"
 
 # --- docker run fails on a port conflict: the operator gets the hint -------
 ARGS=(); ENV_VARS=(STUB_RUN_RC=125 STUB_RUN_ERR="docker: Error response from daemon: driver failed programming external connectivity: Bind for 0.0.0.0:443 failed: port is already allocated."); WITH_DOCKER=true
