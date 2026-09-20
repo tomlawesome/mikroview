@@ -119,3 +119,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-city-river: wg0's bridge chip is not there on first read
 
 - 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.
+
+## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
+
+- 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.
