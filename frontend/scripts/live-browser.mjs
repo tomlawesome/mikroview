@@ -979,6 +979,13 @@ export async function grantClipboard(page) {
  * the centre of its getBoundingClientRect with a real mouse click.
  * Still a hit-tested click: a control the engine itself cannot reach
  * is still reported as one.
+ *
+ * The same click serves a host dot. Its throbbing ring (`.h-halo`,
+ * `.h-nb`) animates stroke-width inside the clickable <g>, and Firefox
+ * alone counts stroke in an SVG element's box, so while the ring throbs
+ * Playwright never sees the dot hold still and its own click times out
+ * ("element is not stable", 30 s). Whether the ring is drawn by click
+ * time depends on the feed, which is why it failed one run in three.
  */
 export async function clickSvgText(page, locator) {
   await locator.waitFor({ state: 'visible' })

@@ -5,7 +5,7 @@
 // what was observed, pasted by the operator, never run by mikroview.
 // Runs after the other topography scenarios and feeds its own denial.
 
-import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal, clickSvgText } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session()
 
@@ -74,7 +74,9 @@ await page.waitForSelector('[data-card="topography"] .zone', { timeout: 10000 })
 await page.locator('[data-card="topography"] .altitude input[type="range"]').fill('1')
 await waitForSettle('[data-card="topography"] .camera')
 await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
-await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]')
+// clickSvgText: the dot's throbbing ring keeps Playwright's own click
+// waiting for a box Firefox never lets settle (see live-browser.mjs).
+await clickSvgText(page, page.locator('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.77"]'))
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 
 // Round 49 (#1016) deleted `.strand-door`: nothing is written on a
