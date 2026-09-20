@@ -78,7 +78,28 @@ check(
   'the scene bar says LIVE while connected',
 )
 
-const mainTopConnected = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)
+// Firefox's own scroll anchoring can still be nudging #main-content's
+// top for a beat after layout settles -- observed here as the *baseline*
+// read (this one, before any banner exists) coming back -12 on some runs
+// and 0 on others, with the later "recovered" read consistently settling
+// at 0. A single instantaneous $eval can land mid-adjustment, so read
+// twice a frame apart and keep going until two consecutive reads agree,
+// rather than trusting whichever instant happens to be sampled.
+async function settledMainTop() {
+  return page.evaluate(async () => {
+    const read = () => document.querySelector('#main-content').getBoundingClientRect().top
+    let last = read()
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      const next = read()
+      if (next === last) return next
+      last = next
+    }
+    return last
+  })
+}
+
+const mainTopConnected = await settledMainTop()
 
 // --- Connection lost -------------------------------------------------------
 await dropConnection()
@@ -148,16 +169,10 @@ check(true, 'the scene bar indicator clears with it')
 
 // The drawer folds away over a 180ms transition (IngestLossDrawer's
 // grid-template-rows), so the content is still on its way back when
-// the banner's selector detaches: read the position once it has
-// settled, not in the same beat. Firefox reached this line mid-fold.
-await page
-  .waitForFunction(
-    (want) => Math.abs(document.querySelector('#main-content').getBoundingClientRect().top - want) < 2,
-    mainTopConnected,
-    { timeout: 5000 },
-  )
-  .catch(() => {})
-const mainTopRecovered = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)
+// the banner's selector detaches: read the position with the same
+// settledMainTop() used for the baseline above, not a bare $eval --
+// otherwise this reading is what wobbles instead.
+const mainTopRecovered = await settledMainTop()
 check(
   Math.abs(mainTopRecovered - mainTopConnected) < 2,
   `content returns to its pre-loss position once the banner clears -- got ${mainTopRecovered}, expected ~${mainTopConnected}`,
