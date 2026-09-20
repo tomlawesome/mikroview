@@ -164,7 +164,7 @@ func TestMarksAreOrderedByStep(t *testing.T) {
 func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
 	s := New()
 	if _, ok := s.NoteMark(6, MarkSkipped, "tom", "", time.Now()); !ok {
-		t.Error("NoteMark refused step 6, but the wizard's setupsteps.ts carries six steps")
+		t.Error("NoteMark refused step 6, but the wizard's setupsteps.ts records a sixth step")
 	}
 }
 

@@ -174,7 +174,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 		for _, m := range file.Marks {
 			// Filtered on the way in, not trusted: a document written by
 			// an older build, or edited by hand, must not put a step 9
-			// into a ledger that has six steps.
+			// into a ledger that has seven steps.
 			if m.Step < 1 || m.Step > maxStep {
 				continue
 			}

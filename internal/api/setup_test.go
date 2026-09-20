@@ -109,8 +109,8 @@ func TestSetupMarkRecordsLedgerAndAudit(t *testing.T) {
 	}
 }
 
-// TestSetupMarkRejectsNonsense keeps the ledger to the six steps the
-// wizard has (round 45/#394 added the sixth) and the two outcomes it
+// TestSetupMarkRejectsNonsense keeps the ledger to the seven steps the
+// wizard has (#1291 added the seventh) and the two outcomes it
 // defines. A mark outside that is a client bug or a probe; either way
 // it has nothing to describe, and must not reach the audit log as
 // though it did.
