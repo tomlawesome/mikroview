@@ -427,6 +427,71 @@ func TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns(t *testing.T) 
 	}
 }
 
+// TestLagNeverDoubleCountsAConcurrentGap pins the race Lag()'s own doc
+// comment promises against: evaluateBatch's gap branch used to add to
+// e.outrun and store e.cursor as two separate, unlocked writes, with
+// nothing to stop a concurrent Lag() call from loading a cursor that
+// hadn't moved yet paired with an outrun that already had -- adding the
+// same one-time loss to both instead of counting it once.
+//
+// The real race window between those two writes is a handful of
+// instructions wide, so a plain concurrent-stress version of this test
+// would pass on an unfixed engine essentially every run -- proving
+// nothing, for the same reason this package's own
+// TestMemoryCorpusReplayReportsTruncatedWhenCursorIsEvicted rejected
+// timing races (#501, #744). afterOutrunIncrementForTest (engine.go)
+// forces the window open deterministically instead: it fires from
+// inside evaluateBatch's locked update, between the outrun increment and
+// the cursor store, and blocks there until this test releases it, so
+// Lag() is given every chance to run while the pair is (or, on the fixed
+// engine, would be) only half-updated.
+func TestLagNeverDoubleCountsAConcurrentGap(t *testing.T) {
+	const capacity = 10
+	e, st := newEngineOnStore(t, capacity)
+
+	for i := 0; i < 50; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 41..50 survive, cursor is still 0
+	}
+	const wantOutrun = 40 // the true one-time loss: IDs 1..40, evicted before the cursor ever reached them
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	e.afterOutrunIncrementForTest = func() {
+		close(entered)
+		<-release
+	}
+
+	batchDone := make(chan struct{})
+	go func() {
+		defer close(batchDone)
+		e.evaluateBatch(context.Background(), time.Time{})
+	}()
+	<-entered // evaluateBatch is mid-update, parked in the hook
+
+	lagDone := make(chan struct{})
+	var outrun uint64
+	go func() {
+		defer close(lagDone)
+		_, _, outrun = e.Lag()
+	}()
+
+	// No signal exists for "a goroutine is now blocked trying to take
+	// e.mu" -- that is precisely the fixed engine's behaviour under
+	// test, not something it can announce -- so this is a deliberate
+	// sleep, not a poll, giving Lag() time to reach the lock before the
+	// hook (and therefore evaluateBatch's own update) is allowed to
+	// finish.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	<-batchDone
+	<-lagDone
+
+	if outrun != wantOutrun {
+		t.Fatalf("Lag() outrun = %d for a concurrent evaluateBatch update, want %d -- the true one-time loss counted once, not the same gap added twice", outrun, wantOutrun)
+	}
+}
+
 // TestLagIsNilSafe -- /api/stats holds the engine behind a narrow
 // interface that is commonly nil (see api.Server.Evaluation), and the
 // nil-receiver convention Nudge and Tick follow applies here too.
