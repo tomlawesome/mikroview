@@ -40,6 +40,20 @@ function slug(s: string): string {
   )
 }
 
+// The log-prefix in MikroView's own convention (docs/routeros-setup.md,
+// "how MikroView reads your rules"): <A|D>|<label>|, the whole thing at
+// most 15 characters, because internal/routeros/prefix.go reads the
+// action off the first letter and the label up to the closing bar, and
+// a prefix in any other shape lands every hit as "unknown" -- the
+// anonymity a named block exists to retire. The label is the host and
+// the port; the comment carries the full names.
+const PREFIX_MAX = 15
+function logPrefix(action: 'accept' | 'drop', hostName: string, port: number): string {
+  const code = action === 'accept' ? 'A' : 'D'
+  const room = PREFIX_MAX - 3 - String(port).length - 1
+  return `${code}|${slug(hostName).slice(0, room).replace(/-+$/, '')}-${port}|`
+}
+
 // Mirrors internal/routeros/commands.go's QuoteScriptString exactly: a
 // RouterOS double-quoted string still expands `$name`/`$[cmd]` wherever
 // one appears, so hostName/targetName/placeBefore -- all read from the
@@ -93,14 +107,14 @@ export function composeCommand(c: ComposeInput): string | null {
   const src = c.direction === 'out' ? c.hostIp : c.target
   const dst = c.direction === 'out' ? c.target : c.hostIp
   const action = c.mode === 'allow' ? 'accept' : 'drop'
-  const name = `${slug(c.hostName)}-${slug(c.targetName)}-${c.port}`
+  const prefix = logPrefix(action, c.hostName, c.port)
   const comment =
     c.mode === 'allow'
       ? `${c.hostName} → ${c.targetName} :${c.port}`
       : `named block: ${c.hostName} → ${c.targetName} :${c.port}`
   const lines = [
     `/ip firewall filter add chain=forward src-address=${src} dst-address=${dst} \\`,
-    `    protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${name}" \\`,
+    `    protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${prefix}" \\`,
     `    comment="${quoteRouterOS(comment)}"${c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${quoteRouterOS(c.placeBefore)}"]` : ''}`,
   ]
   return lines.join('\n')
