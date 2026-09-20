@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -360,6 +362,32 @@ func TestJoinOnShutdownWaitsForShutdownToFinishDraining(t *testing.T) {
 	case <-finished:
 	default:
 		t.Error("wg.Wait() returned before the registered shutdown func finished -- main would exit mid-drain")
+	}
+}
+
+// TestReportListenerFailureRoutesThroughStopNotExit is #1304's R7: a
+// listener dying (a bind failure, or Serve returning a real error) used
+// to call os.Exit(1) on the spot, which skips closeStoreOnShutdown,
+// writeFinalSnapshot and hist.Close() entirely -- the same "a change
+// made right before shutdown is silently dropped" failure issue #400
+// exists to prevent. reportListenerFailure exists so a caller ends up on
+// the exact path a real signal takes (cancelling the context every
+// joinOnShutdown registration waits on, per
+// TestJoinOnShutdownWaitsForShutdownToFinishDraining above) rather than
+// exiting immediately: it must call stop, not os.Exit, which this test
+// pins by supplying a fake stop and checking it actually ran.
+func TestReportListenerFailureRoutesThroughStopNotExit(t *testing.T) {
+	var failed atomic.Bool
+	var stopped atomic.Bool
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	reportListenerFailure(log, errors.New("bind: address already in use"), &failed, func() { stopped.Store(true) })
+
+	if !failed.Load() {
+		t.Error("reportListenerFailure did not mark the failure -- main would exit 0 despite the listener dying")
+	}
+	if !stopped.Load() {
+		t.Error("reportListenerFailure did not call stop -- every joinOnShutdown goroutine would block on <-ctx.Done() forever, and main would hang instead of draining and exiting")
 	}
 }
 

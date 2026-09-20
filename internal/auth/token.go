@@ -248,10 +248,14 @@ func hashTokenValue(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// maxDeviceIDLen bounds a token's device scope. Nothing legitimate comes
+// MaxDeviceIDLen bounds a token's device scope. Nothing legitimate comes
 // close: a configured id is operator-chosen and a discovered one is an
 // IP literal (at most 45 characters for IPv6 with a zone).
-const maxDeviceIDLen = 64
+//
+// Exported (#1304, Q9) so internal/api/setupcommands.go's own device-name
+// limit can be this value directly, rather than a second constant that
+// was only ever kept in step with this one by a comment saying so.
+const MaxDeviceIDLen = 64
 
 // validDeviceID rejects a device scope that could not have come from a
 // real device. Control and Unicode formatting characters are refused for
@@ -262,7 +266,7 @@ func validDeviceID(device string) bool {
 	if device == "" {
 		return true // the required/not-allowed rules above already ruled on this
 	}
-	if len(device) > maxDeviceIDLen {
+	if len(device) > MaxDeviceIDLen {
 		return false
 	}
 	for _, r := range device {

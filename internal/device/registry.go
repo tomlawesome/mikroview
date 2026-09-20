@@ -193,6 +193,18 @@ type Registry struct {
 	// Read under the same lock as byIP, but never on the ingest path:
 	// Resolve returns the id, and only List asks for a name.
 	names NameLookup
+
+	// ownPrefixesCache and ownPrefixesValid cache OwnPrefixes' answer
+	// (#1304, E1): it used to rebuild its map-and-slice from every
+	// device's SourceIP/AcceptedIP on every call, including from
+	// droplist's own Add and OwnRangesKnown, which read it on every
+	// droplist request even though those two fields rarely change.
+	// Invalidated unconditionally in tryPersistLocked, the one place
+	// every write that can touch either field passes through -- see that
+	// function's own comment for why "invalidate on every write" is
+	// safer here than tracking which field actually changed.
+	ownPrefixesCache []netip.Prefix
+	ownPrefixesValid bool
 }
 
 // maxUnattributedSources bounds how many unclaimed syslog source
@@ -371,6 +383,15 @@ type persistedDevice struct {
 // Keeps the same version/conflict handling as persistLocked always
 // has. Must be called with r.mu held.
 func (r *Registry) tryPersistLocked() error {
+	// Every write that reaches here can have changed a device's SourceIP
+	// or AcceptedIP -- the two fields OwnPrefixes reads (#1304, E1) -- so
+	// the cached answer is invalidated unconditionally here rather than
+	// tracked field-by-field at each call site. A false invalidation only
+	// costs one cheap recompute on the next OwnPrefixes call; a missed
+	// one would let a stale "known" answer survive a real change to the
+	// router's own addresses, which is the security-relevant direction to
+	// avoid (see droplist.Store.OwnRangesKnown).
+	r.ownPrefixesValid = false
 	if r.backend == nil {
 		return nil
 	}
@@ -1018,7 +1039,23 @@ func (r *Registry) Delete(id string) error {
 // would check against anyway.
 func (r *Registry) OwnPrefixes() []netip.Prefix {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if r.ownPrefixesValid {
+		out := cloneOwnPrefixes(r.ownPrefixesCache)
+		r.mu.RUnlock()
+		return out
+	}
+	r.mu.RUnlock()
+
+	// The cache was cold: recompute under the write lock. Re-check
+	// validity once inside it -- another goroutine may have already
+	// recomputed between the RUnlock above and this Lock -- so a burst of
+	// concurrent callers arriving cold together rebuilds once, not once
+	// each.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ownPrefixesValid {
+		return cloneOwnPrefixes(r.ownPrefixesCache)
+	}
 
 	var out []netip.Prefix
 	seen := make(map[string]bool)
@@ -1037,5 +1074,19 @@ func (r *Registry) OwnPrefixes() []netip.Prefix {
 		add(info.SourceIP)
 		add(info.AcceptedIP)
 	}
+	r.ownPrefixesCache = out
+	r.ownPrefixesValid = true
+	return cloneOwnPrefixes(out)
+}
+
+// cloneOwnPrefixes returns a copy of the cached slice OwnPrefixes hands
+// out, so a caller mutating its own result (none does today, but nothing
+// stops a future one) can never reach into the cache itself.
+func cloneOwnPrefixes(cached []netip.Prefix) []netip.Prefix {
+	if cached == nil {
+		return nil
+	}
+	out := make([]netip.Prefix, len(cached))
+	copy(out, cached)
 	return out
 }

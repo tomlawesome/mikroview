@@ -495,6 +495,39 @@ func TestAnUnlockNobodyHoldsIsDropped(t *testing.T) {
 	}
 }
 
+// TestLockVaultIfHolderNeverDropsADifferentSessionsClaim is #1304's R4:
+// a decision that one session's unlock has gone stale must never drop a
+// *different* session's, even when the decision is enacted after the
+// swap has already happened. That is the real shape of the race: the
+// idle sweep (or a request whose own session just stopped validating)
+// reads who used to hold the unlock, and only later gets around to
+// acting on it -- and a vault unlocked again by a different session
+// fits in that gap as easily as anything else does.
+func TestLockVaultIfHolderNeverDropsADifferentSessionsClaim(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	holderA := s.vaultUnlock.holder()
+	if holderA == "" {
+		t.Fatal("setting the passphrase did not claim the unlock")
+	}
+
+	// Session B's own unlock claims the vault -- simulating it landing in
+	// the gap between a caller deciding A is stale and this call actually
+	// running.
+	s.vaultUnlock.claim("session-b", "user-b", time.Now())
+
+	if s.lockVaultIfHolder(holderA) {
+		t.Fatal("lockVaultIfHolder(A) reported success against B's claim")
+	}
+	if s.Vault.Locked() {
+		t.Fatal("a decision about session A's stale unlock locked the vault out from under session B's live one")
+	}
+	if got := s.vaultUnlock.holder(); got != "session-b" {
+		t.Fatalf("holder after the refused lock = %q, want session-b left untouched", got)
+	}
+}
+
 func TestUnlockingAVaultWithNoPassphraseIsNotAuditedAsAGuess(t *testing.T) {
 	s, ts, admin, _ := vaultLockFixture(t)
 	resp := postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: testVaultPassphrase})
