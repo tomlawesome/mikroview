@@ -167,6 +167,40 @@ describe('openRegister resumes an enrolled-but-unregistered router (#1291)', () 
     expect(wizardState.ledgerDevice).toBe('')
     expect(wizardState.steps).toEqual(SETUP_STEPS)
   })
+
+  // v0.6.0 pre-release audit: registerError and registering were written
+  // only by launch() and registerRouter(), and close() -- Escape or the
+  // X -- never touched them. Entities.svelte's Finish registering… calls
+  // openRegister() directly, with no launch() on that path, so router
+  // A's refusal was still sitting there when the operator closed the
+  // wizard on A and reopened it on a different router B: B's Register
+  // pane rendered A's error before any request for B had been made.
+  it('does not carry another router\'s register refusal into this one', () => {
+    wizardState.openRegister('edge-1')
+    wizardState.registerError = 'a name is already registered for this router'
+    wizardState.registering = true
+
+    wizardState.close()
+    wizardState.openRegister('edge-2')
+
+    expect(wizardState.registerError).toBeNull()
+    expect(wizardState.registering).toBe(false)
+  })
+
+  // Same gap, the sign-out door: reset() (#1083) was audited and fixed
+  // for most of wizardState's fields but missed these two, so a register
+  // refusal from one account's session could still be sitting there for
+  // whoever signs in next on the same tab.
+  it('reset() clears a stale register error and its busy flag too', () => {
+    wizardState.openRegister('edge-1')
+    wizardState.registerError = 'a name is already registered for this router'
+    wizardState.registering = true
+
+    wizardState.reset()
+
+    expect(wizardState.registerError).toBeNull()
+    expect(wizardState.registering).toBe(false)
+  })
 })
 
 // #1218 audit finding 11: saveSetupAddress/saveSetupBackupTransport only

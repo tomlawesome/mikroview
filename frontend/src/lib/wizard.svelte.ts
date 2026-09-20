@@ -453,8 +453,7 @@ class WizardState {
     this.tokenDevice = ''
     this.token = ''
     this.clearEnrolment()
-    this.registerError = null
-    this.registering = false
+    this.clearRegister()
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
     this.lostRouterDevice = null
@@ -480,6 +479,21 @@ class WizardState {
     this.enrolPassword = ''
     this.enrolMinting = false
     this.rebindError = null
+  }
+
+  // clearRegister wipes the Register step's own fields, the same reason
+  // and the same way clearEnrolment wipes enrolment's: registerError and
+  // registering were being cleared only by launch() and registerRouter()
+  // itself, so openRegister() (Entities.svelte's Finish registering…,
+  // which never goes through launch()) could open the Register pane
+  // still carrying a different router's refusal -- the operator hits an
+  // error on router A, closes the wizard, opens Finish registering… on
+  // router B, and A's message is sitting there before B's request has
+  // even been made. Called from every door onto a walk, same list as
+  // clearEnrolment().
+  clearRegister() {
+    this.registerError = null
+    this.registering = false
   }
 
   // reconcileEnrolment closes the gap the 2026-09-18 audit found
@@ -517,6 +531,7 @@ class WizardState {
     this.ledgerDevice = ''
     this.tokenDevice = ''
     this.clearEnrolment()
+    this.clearRegister()
     this.pane = 1
     this.showStepList = false
     this.lostRouterDevice = null
@@ -540,9 +555,9 @@ class WizardState {
   // nothing minted. A router only short of the Register step does not
   // need a fresh token to close it -- that is what Re-enrol… is for,
   // and it stays offered alongside this for when the enrolment itself
-  // is the problem. openAddRouter's own clearEnrolment() call means no
-  // stale password or address rides along from whatever walk was open
-  // before.
+  // is the problem. openAddRouter's own clearEnrolment() and
+  // clearRegister() calls mean no stale password, address or register
+  // refusal rides along from whatever walk was open before.
   openRegister(device: string) {
     this.openAddRouter()
     this.ledgerDevice = device
@@ -715,6 +730,10 @@ class WizardState {
     // goes with the walk it was typed in, rather than waiting to
     // pre-fill the next router's.
     this.clearEnrolment()
+    // ...and whatever the Register step was told on this walk goes with
+    // it too -- a refusal here must not sit and wait for the next
+    // router's Register pane to open under it.
+    this.clearRegister()
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in
@@ -796,6 +815,7 @@ class WizardState {
     this.finishTo = 'fall'
     this.ledgerDevice = ''
     this.clearEnrolment()
+    this.clearRegister()
     this.refused = []
     this.pane = 1
     this.status = null
