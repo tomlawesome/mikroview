@@ -12,7 +12,7 @@
 // "exactly" (the same reasoning live-topography-reality.mjs gives for
 // its own alarm-count check).
 
-import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
+import { session, check, done, feedRaw, feedPortScan, waitForFlag, goTo, clickSvgText } from './live-browser.mjs'
 
 /**
  * Poll a selector's own transform+opacity signature until it stops
@@ -281,7 +281,9 @@ check(zonesVisibility.edge === false, `the traffic edges are hidden at zones, so
 await range.fill('1')
 await page.waitForSelector('[data-card="topography"] .hostrow .hot', { timeout: 10000 })
 await waitForSettle(page, '[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.60"]')
-await page.click('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.60"]')
+// clickSvgText: the dot's throbbing ring keeps Playwright's own click
+// waiting for a box Firefox never lets settle (see live-browser.mjs).
+await clickSvgText(page, page.locator('[data-card="topography"] .hostrow .hot[aria-label*="192.168.1.60"]').first())
 await page.waitForSelector('[data-card="topography"] .membrane-layer', { timeout: 5000 })
 
 await page.click('[data-card="topography"] .host-node')
