@@ -223,7 +223,10 @@ func TestSetPasswordChangesCredentials(t *testing.T) {
 // would silently restore a credential the operator was told was already
 // dead.
 func TestSetPasswordLeavesTheOldPasswordWorkingWhenPersistFails(t *testing.T) {
-	s, err := OpenWithBackend(failingSaveBackend{})
+	// Register below persists too (createLocked is R6-converted as
+	// well), so the fixture needs a backend that saves once before
+	// failing, not one that fails outright.
+	s, err := OpenWithBackend(&saveBudgetBackend{left: 1})
 	if err != nil {
 		t.Fatalf("OpenWithBackend: %v", err)
 	}
@@ -656,6 +659,81 @@ func TestDeleteUserUnknownIDReturnsNotFound(t *testing.T) {
 	if _, err := s.DeleteUser("no-such-id"); err != ErrUserNotFound {
 		t.Errorf("expected ErrUserNotFound, got %v", err)
 	}
+}
+
+// TestDeleteUserLeavesTheAccountInPlaceWhenPersistFails is the v0.6.0
+// audit's R6 fix: a deletion that cannot be saved must not remove the
+// account from memory either, or a restart before the next good write
+// would bring it back while the caller has already revoked its sessions
+// and tokens on the strength of a deletion that never took hold.
+func TestDeleteUserLeavesTheAccountInPlaceWhenPersistFails(t *testing.T) {
+	// Register and CreateUser below each persist too (createLocked is
+	// R6-converted as well), so the fixture needs a backend that saves
+	// twice before failing, not one that fails outright.
+	s, err := OpenWithBackend(&saveBudgetBackend{left: 2})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("alice", "password123", time.Now()); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	bob, err := s.CreateUser("bob", "password456", RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if _, err := s.DeleteUser(bob.ID); err == nil {
+		t.Fatal("DeleteUser against a backend that cannot save = nil error, want one")
+	}
+
+	got, ok := s.ByUsername("bob")
+	if !ok || got.ID != bob.ID {
+		t.Error("expected the account to still be there after a failed persist")
+	}
+}
+
+// TestRegisterAndCreateUserReportPersistFailure is the v0.6.0 audit's
+// R6 fix: an account that cannot be saved must not exist in memory
+// either, or a restart before the next good write would erase it while
+// the caller has already handed out a session or told an operator it
+// was created.
+func TestRegisterAndCreateUserReportPersistFailure(t *testing.T) {
+	t.Run("Register", func(t *testing.T) {
+		s, err := OpenWithBackend(failingSaveBackend{})
+		if err != nil {
+			t.Fatalf("OpenWithBackend: %v", err)
+		}
+		if _, err := s.Register("alice", "password123", time.Now()); err == nil {
+			t.Fatal("Register against a backend that cannot save = nil error, want one")
+		}
+		if s.Count() != 0 {
+			t.Errorf("Count() = %d after a failed persist, want 0", s.Count())
+		}
+		if _, ok := s.ByUsername("alice"); ok {
+			t.Error("the account is resolvable after a failed persist")
+		}
+	})
+
+	t.Run("CreateUser", func(t *testing.T) {
+		// Register below persists too, so the fixture needs a backend
+		// that saves once before failing, not one that fails outright.
+		s, err := OpenWithBackend(&saveBudgetBackend{left: 1})
+		if err != nil {
+			t.Fatalf("OpenWithBackend: %v", err)
+		}
+		if _, err := s.Register("alice", "password123", time.Now()); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		if _, err := s.CreateUser("bob", "password456", RoleUser, time.Now()); err == nil {
+			t.Fatal("CreateUser against a backend that cannot save = nil error, want one")
+		}
+		if _, ok := s.ByUsername("bob"); ok {
+			t.Error("bob is resolvable after a failed persist")
+		}
+		if s.Count() != 1 {
+			t.Errorf("Count() = %d after a failed persist, want 1 (alice only)", s.Count())
+		}
+	})
 }
 
 // TestRoleAtLeastStacksTheThreeTiers pins #653's ordering: admin implies

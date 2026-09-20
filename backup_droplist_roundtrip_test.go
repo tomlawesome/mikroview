@@ -67,6 +67,10 @@ func TestBackupRestoreRoundTripCarriesDroplist(t *testing.T) {
 	// same way a disaster recovery restores onto a new host.
 	dstDir := t.TempDir()
 	newDroplistPath := filepath.Join(dstDir, "droplist.json")
+	// #1293: the restore marker lives beside the data directory
+	// (derived from Auth.StorePath), which must be writable even for a
+	// restore that never touches the auth store itself.
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", filepath.Join(dstDir, "users.json"))
 	t.Setenv("MIKROVIEW_DROPLIST_STORE_PATH", newDroplistPath)
 
 	if code := runRestore([]string{backupPath}); code != 0 {

@@ -136,8 +136,6 @@ var authzMatrix = []routeExpectation{
 		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 	{http.MethodGet, "/api/config/upgrade", accessAdmin,
 		"the \"N new settings are available\" notice (#1218) and its ready-to-paste YAML -- admin-only like the wizard's own writes, since there is no read-only wizard for a viewer to reach this alongside"},
-	{http.MethodPost, "/api/config/upgrade/dismiss", accessAdmin,
-		"dismisses that same notice for this version (#1218) -- same tier as POST /api/setup/mark and /api/setup/address, which persist beside it"},
 
 	{http.MethodGet, "/api/upgrade", accessViewer,
 		"the upgrade notice's facts (#1240): the version this data directory last ran, this one, and how many of " +
@@ -148,7 +146,7 @@ var authzMatrix = []routeExpectation{
 			"UpgradeNotice.svelte draws it for nobody else"},
 	{http.MethodPost, "/api/upgrade/acknowledge", accessAdmin,
 		"the notice's `done` (#1240) -- an instance-wide, persisted statement that the routers have been dealt with, " +
-			"so it is the admin's to make, same tier as POST /api/setup/mark and /api/config/upgrade/dismiss, and " +
+			"so it is the admin's to make, same tier as POST /api/setup/mark and /api/setup/address, and " +
 			"audited as upgrade.acknowledged with the admin's name"},
 
 	{http.MethodGet, "/api/router-backups", accessAdmin,

@@ -47,7 +47,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -637,6 +636,15 @@ func main() {
 
 	previousVersion := logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
+	// Before checkStoresUsable below, which would otherwise see a
+	// mid-restore data directory as merely "usable" -- every store in it
+	// really is readable and writable, just not in a state that agrees
+	// with itself (#1293).
+	if err := checkNoRestoreInProgress(cfg); err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Before anything is built on top of them (#536). Checked here
 	// rather than at each store's first write so the operator gets one
 	// refusal naming the path, instead of the app coming up and
@@ -809,7 +817,15 @@ func main() {
 	}
 	entityStore, err := entities.OpenWithBackend(entityBackend)
 	mustOpenStore(entitiesLog, err)
-	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
+	// A failed seed write is logged, not fatal (unlike mustOpenStore's
+	// other callers): the store itself opened fine, and refusing to boot
+	// over a one-time migration step that can simply retry on the next
+	// restart would be a disproportionate response -- see Store.Seed's
+	// own doc comment on why it must not mark itself seeded when this
+	// happens (R6).
+	if n, err := entityStore.Seed(cfg.RuleNames, cfg.HostNames); err != nil {
+		entitiesLog.Error(fmt.Sprintf("importing config.yaml's ruleNames/hostNames failed: %v -- will retry on the next restart", err))
+	} else if n > 0 {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
 	}
 
@@ -1374,17 +1390,6 @@ func main() {
 	// re-raised by them.
 	setupStore.NoteUpgrade(previousVersion, version, time.Now())
 
-	// #1218: which "N new settings are available" notice an operator has
-	// already dismissed -- the notice's own content (missingSettings,
-	// computed above) is never persisted, only this. Same optional-
-	// persistence contract as setupStore just above.
-	configDriftLog := logging.New("configdrift")
-	configDriftBackend, err := persistence.backendFor(bootCtx, "config_drift", cfg.ConfigDrift.StorePath)
-	if err != nil {
-		configDriftLog.Warn(err.Error())
-	}
-	configDriftStore, err := configdrift.OpenWithBackend(configDriftBackend)
-	mustOpenStore(configDriftLog, err)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
 	// #600: the registry answers device display names through the same
 	// resolver, so a rename stored by one operator is what every
@@ -1811,7 +1816,6 @@ func main() {
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
-		ConfigDrift:           configDriftStore,
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch

@@ -1873,6 +1873,24 @@ var persistClock persist.Clock
 // the in-memory mutation and an encode/snapshot, nothing past that"
 // contract issue #400 asks for; MarkDirty itself never touches the
 // backend.
+//
+// This store has no tryPersistLocked error-returning half (v0.6.0 audit
+// finding R6, issue #1303): MarkDirty cannot fail -- it only ever hands
+// a snapshot to the write-behind writer's own goroutine -- and the
+// document above is built entirely from this package's own types (Flag,
+// Exclusion, both plain structs of strings/ints/times/slices), so
+// json.MarshalIndent has nothing in it that can fail to encode (no
+// json.RawMessage, no float, no interface{} value someone could hand it
+// something unencodable through). A backend Save that fails happens
+// later, off this goroutine, on the writer's own retry schedule, and is
+// reported through OnSaveError (see OpenWithBackend) -- not silence,
+// just asynchronous, the same #400 trade-off internal/engine's
+// DefinitionsStore.persistLocked documents for its own write-behind
+// document. A synchronous, error-returning wrapper here would have
+// nothing to ever report failing, and forcing one to answer anyway (by
+// calling Flush) would put a disk write under s.mu, on the same lock the
+// detector ingest path's add() takes -- exactly the hot-path wait #400
+// moved off callers in the first place.
 func (s *Store) persistLocked() {
 	if s.wb == nil {
 		return

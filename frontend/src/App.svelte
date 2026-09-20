@@ -8,6 +8,7 @@
   import { watchlistState } from './lib/watchlist.svelte'
   import { authState } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
+  import { isCancelledFetch } from './lib/cancelled'
   import { filtersFromSearchParams } from './lib/types'
   import SceneBar from './components/SceneBar.svelte'
   import Deck from './components/Deck.svelte'
@@ -99,6 +100,11 @@
       authState.handleUnauthorized()
       return
     }
+    // #1298: a poll the browser cut off because this page is leaving is
+    // not a stale-numbers banner, it is a page that is about to be gone.
+    // Only a cancellation is dropped here -- a real failure while the
+    // page is live still raises refreshError exactly as it always has.
+    if (isCancelledFetch(err)) return
     if (!source) return
     const message = err instanceof Error ? err.message : String(err)
     appState.refreshError = `${source}: ${message}`

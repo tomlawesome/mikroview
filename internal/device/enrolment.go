@@ -53,7 +53,28 @@ const (
 // to this list (no credential needed, same reasoning as
 // maxUnattributedSources' own doc comment), so without a cap it grows
 // with whatever reaches the listener.
+//
+// Once full, pruneRefusedLocked does not simply drop the oldest
+// last-seen address: a one-shot entry (Lines == 1, one bare connect and
+// nothing since) is shed before a repeat sender, even one that has been
+// quiet for longer, because a sender still trying is the operator's own
+// misrouted router until proven otherwise, and a one-shot is more
+// likely a stranger's single probe. maxRefusedPerPrefix is the other
+// half of the same issue -- what caps a single range's share of this
+// list in the first place, before this cap is ever reached.
 const maxRefusedAddresses = 256
+
+// maxRefusedPerPrefix bounds how many of maxRefusedAddresses' entries
+// may come from one IPv4 /24 or IPv6 /64 -- issue #1289. A refused
+// entry costs a sender nothing but a bare TCP connect, so a range of
+// addresses cycling through connects can otherwise churn every genuine
+// refusal out of a 256-entry list long before Lines ever tells one
+// sender from another: the operator would see a wall of strangers
+// rather than the one address their own router is mistakenly sending
+// from. 16 is generous enough for a legitimately noisy network's own
+// share while keeping any one range from ever approaching the whole
+// list.
+const maxRefusedPerPrefix = 16
 
 // enrolLineRE matches issue #1281's enrolment marker anywhere in a raw
 // syslog message: "mikroview-enrol <token>". The token itself is
@@ -495,7 +516,7 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	// The router logged its own logging-action change before this line
 	// reached us, so its address is already in the refused list; leaving
 	// it there would show the router just enrolled as a wrong sender.
-	delete(r.refused, key)
+	r.removeRefusedLocked(key)
 	r.burnPendingLocked(device)
 
 	if err := r.tryPersistLocked(); err != nil {
@@ -511,7 +532,7 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 			r.byAcceptedIP[normalizeIP(prevAcceptedIP)] = info
 		}
 		if wasRefused {
-			r.refused[key] = prevRefused
+			r.addRefusedLocked(key, prevRefused)
 		}
 		r.pendingByDevice[device] = p
 		r.pendingByHash[hash] = device
@@ -533,10 +554,16 @@ func (r *Registry) refuseLocked(host string) {
 	now := time.Now()
 	ref, ok := r.refused[key]
 	if !ok {
-		ref = &Refused{Address: key, FirstSeen: now}
-		r.refused[key] = ref
+		ref = &Refused{Address: key, FirstSeen: now, LastSeen: now}
+		r.addRefusedLocked(key, ref)
+		// Only a newly added key can push its prefix over its share
+		// (issue #1289) -- a repeat refusal from an already-known
+		// address never changes prefix membership, so this only runs
+		// on the genuinely rare event, not on every refusal.
+		r.prunePrefixLocked(key)
+	} else {
+		ref.LastSeen = now
 	}
-	ref.LastSeen = now
 	ref.Lines++
 	r.pruneRefusedLocked()
 }

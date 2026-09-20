@@ -328,6 +328,14 @@ func (s *DefinitionsStore) List() []StoredDefinition {
 // blind overwrite or delete of it would discard.
 var ErrDefinitionImmutable = errors.New("engine: this definition cannot be modified or deleted through this store")
 
+// ErrPersistFailed wraps the encoding failure tryPersistLocked returns
+// (v0.6.0 audit finding R6): a mutator that reaches this must not report
+// success, since the change is about to be rolled back rather than left
+// only in memory for a restart to discard silently -- see each mutator's
+// own restore-on-error comment. internal/api's writeDefinitionError maps
+// this to a 5xx without echoing the wrapped detail to the client.
+var ErrPersistFailed = errors.New("engine: saving this change failed")
+
 // Upsert creates or replaces the definition at d.ID. d must validate
 // (Definition.Validate) and must not collide with an existing shipped or
 // unavailable definition at the same ID -- see ErrDefinitionImmutable.
@@ -365,7 +373,8 @@ func (s *DefinitionsStore) upsertLocking(d Definition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, ok := s.raw[d.ID]; ok {
+	existing, hadExisting := s.raw[d.ID]
+	if hadExisting {
 		if err := refuseIfImmutable(d.ID, existing); err != nil {
 			return err
 		}
@@ -376,7 +385,18 @@ func (s *DefinitionsStore) upsertLocking(d Definition) error {
 		return fmt.Errorf("engine: encoding definition %q: %w", d.ID, err)
 	}
 	s.raw[d.ID] = raw
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A definition an operator just created or edited must not read
+		// back as saved when it isn't (R6): put the previous bytes back
+		// (or drop the id entirely for a brand new one) rather than leave
+		// this write only in memory for a restart to discard silently.
+		if hadExisting {
+			s.raw[d.ID] = existing
+		} else {
+			delete(s.raw, d.ID)
+		}
+		return err
+	}
 	return nil
 }
 
@@ -597,7 +617,15 @@ func (s *DefinitionsStore) mutateLocking(id string, fn func(*Definition) error) 
 		return fmt.Errorf("engine: encoding definition %q: %w", id, err)
 	}
 	s.raw[id] = raw
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// SetEnabledAndScope/SetParams/SetName/SetFamily/SetDetection/
+		// ResetParams all route through here: an edit that cannot be
+		// saved must not take effect in memory either, or a restart
+		// before the next good write would silently revert it while the
+		// operator was told it was already applied (R6).
+		s.raw[id] = existing
+		return err
+	}
 	return nil
 }
 
@@ -648,7 +676,13 @@ func (s *DefinitionsStore) deleteLocking(id string) (bool, error) {
 		return false, err
 	}
 	delete(s.raw, id)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A delete that cannot be saved must not read as deleted (R6):
+		// put the definition back rather than report success and have it
+		// reappear, undeleted, after the next restart.
+		s.raw[id] = existing
+		return false, err
+	}
 	return true, nil
 }
 
@@ -666,6 +700,18 @@ func (s *DefinitionsStore) deleteLocking(id string) (bool, error) {
 // was called to get rid of. The caller is expected to re-seed this
 // binary's catalogue immediately afterwards (Server.Reseed in
 // internal/api) -- an empty store evaluates nothing at all.
+//
+// Stays on the swallow-and-log persistLocked rather than tryPersistLocked
+// (v0.6.0 audit finding R6 does not reach this one): resetLocking wipes
+// s.raw to an empty map before ever encoding it, so the document
+// persistLocked marshals here is always exactly
+// {Version, Definitions: map[string]json.RawMessage{}} -- there is no
+// content left that could ever fail to encode, unlike Upsert/mutate/
+// Delete above, which marshal a document that still carries every other
+// stored definition's bytes. A rollback branch here would be dead code
+// with nothing to roll back to prove wrong: encoding an empty map cannot
+// fail, and MarkDirty itself cannot fail (see tryPersistLocked's own doc
+// comment).
 func (s *DefinitionsStore) Reset() int {
 	n := s.resetLocking()
 	s.notifyChange()
@@ -698,15 +744,25 @@ func refuseIfImmutable(id string, existing json.RawMessage) error {
 	return nil
 }
 
-// persistLocked encodes the current document and hands it to the
+// tryPersistLocked is persistLocked's error-returning half, for every
+// mutator above that changes an operator-visible definition or
+// expectation (Upsert, mutate, Delete, Reset; writeExpectationLocked,
+// deleteExpectationLocking and resetExpectationsLocking in
+// definitions_expectations.go) -- see each one's own restore-on-error
+// comment for why a write that cannot be saved must not take effect in
+// memory either (v0.6.0 audit finding R6).
+//
+// Encodes the current document and, on success, hands it to the
 // write-behind writer (see persist.WriteBehind), which coalesces it with
 // whatever else is pending and persists it off this goroutine, under its
-// own deadline and rate limit. Marshal failures are swallowed rather
-// than surfaced to the caller: the in-memory state (which every read
-// goes through) stays correct either way, so a transient encoding issue
-// degrades to "won't survive a restart right now" rather than breaking
-// live use -- same contract every sibling store's persistLocked
-// documents. Must be called with s.mu already held.
+// own deadline and rate limit -- MarkDirty itself cannot fail; the only
+// failure this can report is the encode that has to happen before it.
+// The backend write MarkDirty queues keeps its own separate,
+// already-documented retry/back-off contract (persist.WriteBehind's own
+// doc comment): a save that fails there is retried automatically rather
+// than swallowed once, which is a different, already-ratified trade-off
+// (#400) that this change does not revisit. Must be called with s.mu
+// already held.
 //
 // json.MarshalIndent re-tokenizes (compacts, then re-indents) every
 // embedded json.RawMessage's bytes as part of producing readable
@@ -718,15 +774,29 @@ func refuseIfImmutable(id string, existing json.RawMessage) error {
 // byte-for-byte" means for an unavailable definition in this package's
 // tests: the value survives untouched; incidental whitespace
 // normalization across the whole document is not a mutation of it.
-func (s *DefinitionsStore) persistLocked() {
+func (s *DefinitionsStore) tryPersistLocked() error {
 	if s.wb == nil {
-		return
+		return nil
 	}
 	doc := definitionsDocument{Version: definitionsDocumentVersion, Definitions: s.raw}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		definitionsLog.Error(fmt.Sprintf("encoding the definitions store for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("%w: encoding the definitions store failed: %v", ErrPersistFailed, err)
 	}
 	s.wb.MarkDirty(data)
+	return nil
+}
+
+// persistLocked is the swallow-and-log default for the mutators in this
+// file that record engine-driven bookkeeping rather than an operator
+// action -- RecordObservation and definitions_nights.go's
+// updateNightsLocked (nightly window history, sticky liveness marks):
+// none of those has an operator waiting on a success/failure answer, and
+// re-deriving the bumped count/mark from the next matching event is
+// already how a missed one is recovered. Must be called with s.mu
+// already held.
+func (s *DefinitionsStore) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		definitionsLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }

@@ -3,7 +3,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+
+	"github.com/tomlawesome/mikroview/internal/coverage"
 )
 
 // coverageDeclarationRequest is the wire shape PUT
@@ -54,7 +57,14 @@ func (s *Server) handleCoveragePut(w http.ResponseWriter, r *http.Request) {
 
 	d, err := s.Coverage.Put(key, req.Reason, auditActor(r))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if errors.Is(err, coverage.ErrInvalidDeclaration) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Anything else reaching here is a failed write (Store.Put's
+		// tryPersistLocked branch), whose text can carry the backend's
+		// own path or detail and has no business leaving this process.
+		http.Error(w, "could not save that declaration", http.StatusInternalServerError)
 		return
 	}
 	s.Audit.Record(auditActor(r), "coverage.declare", d.Key, "reason="+d.Reason)
@@ -76,7 +86,12 @@ func (s *Server) handleCoverageDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := r.PathValue("key")
-	if !s.Coverage.Delete(key) {
+	deleted, err := s.Coverage.Delete(key)
+	if err != nil {
+		http.Error(w, "could not delete that declaration", http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

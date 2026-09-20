@@ -221,8 +221,25 @@ func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	wiped := s.Definitions.ResetExpectations()
-	s.Suggest.Reset()
+	wiped, err := s.Definitions.ResetExpectations()
+	if err != nil {
+		// Refused rather than reporting the watchlist cleared: the store
+		// rolled its own wipe back on a failed save (R6) and still holds
+		// every entry it held before this request, so proceeding to
+		// reset the suggestion tracker on top of that would desync the
+		// two exactly the way this handler's own doc comment warns
+		// against.
+		http.Error(w, "resetting the watchlist failed, so nothing was changed", http.StatusInternalServerError)
+		return
+	}
+	if err := s.Suggest.Reset(); err != nil {
+		// R6: the real entries are already gone by this point (the line
+		// above), so there is no honest way to report this request as
+		// failed -- only the suggestion-tracking state that describes
+		// them might not survive a restart. Logged, not turned into a
+		// 500 for a destructive action that already happened.
+		apiLog.Error("saving the suggestion reset failed: " + err.Error())
+	}
 	s.Suggest.Sync(suggest.Generate(s.RouterState))
 
 	s.Audit.Record(auditActor(r), "definition.suggestion.reset", "", fmt.Sprintf("%d entries removed", wiped))

@@ -54,7 +54,7 @@ func (s *Server) handleDeviceCreate(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, device.ErrDeviceExists) {
 			status = http.StatusConflict
 		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, deviceErrorText(err), status)
 		return
 	}
 	s.Audit.Record(auditActor(r), "device.created", info.ID, "")
@@ -120,11 +120,24 @@ func (s *Server) handleDeviceRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		// Safe to echo for both: each names only a rule about the
 		// requested id, never anything about another device.
-		http.Error(w, err.Error(), status)
+		http.Error(w, deviceErrorText(err), status)
 		return
 	}
 	s.Audit.Record(auditActor(r), "device.registered", info.ID, "")
 	writeJSON(w, http.StatusOK, info)
+}
+
+// deviceErrorText is what a device registry error says to the caller.
+// A failed save (device.ErrPersistFailed, #1303) wraps the backend's
+// own error, which names the store's path; the browser gets only the
+// outer "nothing was changed" sentence, and the path stays in the log.
+// Every other registry error names a rule about the requested id and
+// is echoed as-is.
+func deviceErrorText(err error) string {
+	if errors.Is(err, device.ErrPersistFailed) {
+		return device.ErrPersistFailed.Error()
+	}
+	return err.Error()
 }
 
 // handleDeviceDelete removes a device this registry itself created --
@@ -154,7 +167,7 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 		// err.Error() is safe to echo in both cases above: it names only
 		// a rule about the requested id (not found, declared in
 		// config.yaml), never anything about other devices.
-		http.Error(w, err.Error(), status)
+		http.Error(w, deviceErrorText(err), status)
 		return
 	}
 	s.Audit.Record(auditActor(r), "device.removed", id, "")

@@ -160,8 +160,12 @@ func TestLoggingReportDoesNotDisturbTheLedgersOtherHalves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	s.SetAddress("10.0.0.5:8443")
-	s.NoteMark(3, MarkSkipped, "admin", "nothing to tag", time.Now())
+	if _, err := s.SetAddress("10.0.0.5:8443"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.NoteMark(3, MarkSkipped, "admin", "nothing to tag", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	s.NoteLoggingReport("core", loggingPage(t, routeros.WizardVersion, "firewall,info"), time.Now())
 
 	reopened, err := Open(path)
