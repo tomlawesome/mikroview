@@ -45,6 +45,7 @@
   let keyError = $state<string | null>(null)
   let justMinted = $state<{ key: string; scheduler: string } | null>(null)
   let armedRevokeKey = $state(false)
+  let armedReplaceKey = $state(false)
 
   async function mintKey() {
     keyError = null
@@ -63,6 +64,21 @@
     }
     justMinted = { key: result.key, scheduler: result.scheduler }
     await onrefresh()
+  }
+
+  // Replacing a key stops the router's fetch exactly as revoking does,
+  // until the new key is pasted in -- so it takes the same two clicks
+  // (v0.6.0 audit S2, owner ruling 9a). Minting the first key does not:
+  // there is nothing to stop.
+  function onReplaceKeyClick(e: MouseEvent) {
+    e.stopPropagation()
+    if (armedReplaceKey) {
+      armedReplaceKey = false
+      void mintKey()
+      return
+    }
+    disarmAll()
+    armedReplaceKey = true
   }
 
   function onRevokeKeyClick(e: MouseEvent) {
@@ -185,6 +201,7 @@
   // a revoke or a removal.
   function disarmAll() {
     armedRevokeKey = false
+    armedReplaceKey = false
     armedRemove = null
   }
 </script>
@@ -212,7 +229,16 @@
       {#if resp.key.present}
         minted {formatRelative(resp.key.createdAt ?? '', appState.now)} by {resp.key.createdBy}
         · {resp.key.lastUsedAt ? `last fetched ${formatRelative(resp.key.lastUsedAt, appState.now)}` : 'never fetched'}
-        · <button type="button" class="olink" disabled={submittingKey} onclick={mintKey}>replace key</button>
+        ·
+        <button
+          type="button"
+          class="olink revoke"
+          class:armed={armedReplaceKey}
+          disabled={submittingKey}
+          onclick={onReplaceKeyClick}
+        >
+          {armedReplaceKey ? 'confirm — the router cannot fetch until the new key is pasted in' : 'replace key'}
+        </button>
         ·
         <button
           type="button"
