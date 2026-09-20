@@ -38,8 +38,10 @@ rewritten.
   that this is a router you meant to add. Registering grants the router
   nothing on its own — its logs are accepted because its token arrived
   from its address, and that is unchanged. A router you enrolled before
-  this release counts as registered already; see "Upgrading to 0.6.0:
-  routers must be enrolled" in docs/upgrades.md.
+  this release counts as registered already. One that is enrolled but
+  still missing that step can finish just it — **Finish registering…**
+  on its card in the Entities screen — without redoing enrolment. See
+  "Upgrading to 0.6.0: routers must be enrolled" in docs/upgrades.md.
 
   If your admin account signs in only through your identity provider it
   has no password to re-check, so minting is refused for now with a
@@ -342,9 +344,9 @@ rewritten.
   opening Settings shows the real block for each one — comment and all,
   styled like `deploy/config.example.yaml` — meant to paste straight
   under your own top-level config, not a second hand-written description
-  that could drift from it. The list is worked out fresh every time you
-  open it, so it keeps showing for as long as something is genuinely
-  missing.
+  that could drift from it. The list is worked out once at boot, so it
+  keeps showing for as long as something is genuinely missing, and an
+  edit to config.yaml is picked up the next time MikroView restarts.
 
 ### Changed
 

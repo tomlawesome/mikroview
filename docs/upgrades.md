@@ -59,9 +59,12 @@ underneath it read-write for data — and the file no longer declares the
 **What you'll see if you just pull and run `docker compose up -d`:**
 Docker creates an empty, root-owned `./mikroview` because nothing is
 there yet. Your old named volume is untouched, but nothing in the new
-file mounts it any more. The container finds no `config.yaml` where it
-now looks and can't write to the read-only folder either, so it exits at
-boot instead of starting on your old data.
+file mounts it any more. A missing `config.yaml` is not itself fatal —
+defaults cover it — but `./mikroview/data` is root-owned along with the
+rest of that new folder, so it is not writable by the container's uid
+1000, and the startup check refuses to start rather than silently
+discard your writes: it exits at boot instead of starting on your old
+data.
 
 **What to do first, before `docker compose up -d`:**
 
@@ -77,8 +80,11 @@ boot instead of starting on your old data.
    - **Keep the named volume**: uncomment the `volumes:` block at the
      end of `deploy/docker-compose.yml` and swap the data line above it
      back to `mikroview-data:/var/lib/mikroview`, exactly as the comment
-     there says. Nothing else about your setup changes, and you can skip
-     the chown above too, since nothing moved.
+     there says. Nothing else about your setup changes — you're only
+     re-pointing the compose file — but the volume itself still holds
+     files owned by `65532`, so you still need the chown above, in its
+     named-volume form: `docker run --rm -v mikroview-data:/data
+     alpine:3.22 chown -R 1000:1000 /data`.
 3. Run `docker compose up -d`.
 
 This only affects the shipped compose file. If you mount config and data
