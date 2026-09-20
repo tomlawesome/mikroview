@@ -328,6 +328,55 @@ describe('LiveTable row-render cost scales with row count, not worse (#728)', ()
   }, 30000) // generous for the same shared-runner reason as the #232 test above; not the property under test
 })
 
+describe('a new row does not restripe the rows below it (#1308)', () => {
+  // WebKit re-resolves style for every cell of every row whose stripe
+  // class changes. Banding from the top (i % 2) flipped all 800 rows on
+  // every arrival, which Safari paid at ~100 ms a row-set: 450 events
+  // into an 800-row stream took 45-85 s against 4 s in Chromium. So a
+  // row keeps the stripe it was given, and a newcomer takes the opposite
+  // of the row beneath it.
+  function stripes(container: Element): Map<string, boolean> {
+    const out = new Map<string, boolean>()
+    for (const row of container.querySelectorAll('.row')) {
+      out.set(row.getAttribute('title') ?? '', row.classList.contains('banded'))
+    }
+    return out
+  }
+
+  it('keeps every existing stripe when an event arrives at the top, and still alternates', () => {
+    appState.events = Array.from({ length: 5 }, (_, i) => makeEvent(`stripe-${i}`))
+    const { container } = render(LiveTable)
+    flushSync()
+    const before = stripes(container)
+    expect(before.size).toBe(5)
+
+    appState.events = [...appState.events, makeEvent('stripe-5')]
+    flushSync()
+    const after = stripes(container)
+    expect(after.size).toBe(6)
+
+    for (const [title, banded] of before) expect(after.get(title), title).toBe(banded)
+
+    // Top to bottom is newest first, so stripe-5 sits above stripe-4.
+    const rows = [...container.querySelectorAll('.row')].map((r) => r.classList.contains('banded'))
+    for (let i = 1; i < rows.length; i++) expect(rows[i], `row ${i}`).toBe(!rows[i - 1])
+  })
+
+  it('keeps every stripe when the oldest row is evicted past MAX_RENDERED_ROWS', () => {
+    appState.events = Array.from({ length: MAX_RENDERED_ROWS }, (_, i) => makeEvent(`evict-${i}`))
+    const { container } = render(LiveTable)
+    flushSync()
+    const before = stripes(container)
+
+    appState.events = [...appState.events, makeEvent('evict-new')]
+    flushSync()
+    const after = stripes(container)
+
+    expect(after.has('evict-0')).toBe(false)
+    for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
+  }, 30000)
+})
+
 describe('Group mode drawer consistency (issue #381)', () => {
   // Two events that share a group key but differ in rule label, so a rule
   // filter can narrow the group to one member while its drawer is open.
