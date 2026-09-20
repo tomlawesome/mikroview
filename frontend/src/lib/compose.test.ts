@@ -20,7 +20,7 @@ describe('composeCommand', () => {
     const cmd = composeCommand({ ...base, placeBefore: 'iot-to-lan-drop' })
     expect(cmd).toContain('src-address=10.0.20.31 dst-address=10.0.40.10')
     expect(cmd).toContain('protocol=tcp dst-port=445 action=accept log=yes')
-    expect(cmd).toContain('log-prefix="cam-porch-nas-445"')
+    expect(cmd).toContain('log-prefix="A|cam-porc-445|"')
     expect(cmd).toContain('place-before=[find comment="iot-to-lan-drop"]')
   })
 
@@ -31,7 +31,7 @@ describe('composeCommand', () => {
 
   it('the named block drops, still logged, and takes no place-before', () => {
     const cmd = composeCommand({ ...base, mode: 'block', placeBefore: 'iot-to-lan-drop' })
-    expect(cmd).toContain('action=drop log=yes')
+    expect(cmd).toContain('action=drop log=yes log-prefix="D|cam-porc-445|"')
     expect(cmd).toContain('comment="named block: cam-porch → nas :445"')
     expect(cmd).not.toContain('place-before')
   })
@@ -43,7 +43,19 @@ describe('composeCommand', () => {
 
   it('names stay a safe slug in the prefix', () => {
     const cmd = composeCommand({ ...base, hostName: 'Weird "Host"!', targetName: 'the internet' })
-    expect(cmd).toMatch(/log-prefix="weird-host-the-internet-445"/)
+    expect(cmd).toMatch(/log-prefix="A\|weird-ho-445\|"/)
+  })
+
+  // The convention the parser reads (internal/routeros/prefix.go) and
+  // the length cap docs/routeros-setup.md sets: any other shape lands
+  // every hit as "unknown".
+  it('the prefix is <A|D>|label| and at most 15 characters, whatever the names and port', () => {
+    for (const [hostName, port] of [['cam-porch', 445], ['a-very-long-camera-name-indeed', 65535], ['x', 1]] as const) {
+      const cmd = composeCommand({ ...base, hostName, port })!
+      const prefix = /log-prefix="([^"]*)"/.exec(cmd)![1]
+      expect(prefix).toMatch(/^[AD]\|[a-z0-9-]+\|$/)
+      expect(prefix.length).toBeLessThanOrEqual(15)
+    }
   })
 
   it('escapes a hostname carrying a RouterOS command substitution into the comment', () => {
