@@ -199,8 +199,14 @@ describe('reachComposeInput (#868: one strand-to-command translation for both vi
   })
 
   it('the internet counterpart falls back to the WAN interface and "the internet"', () => {
-    const input = reachComposeInput(strand({ counterpart: 'internet', peers: [] }), ctx)
+    // The refusing edge sits on the iot->WAN pair, so placeBefore only
+    // resolves if the counterpart really became ctx.wanInterface.
+    const edges: PolicyEdge[] = [
+      { key: 'vlan-iot|ether1', from: 'vlan-iot', to: 'ether1', accepted: false, refused: true, acceptPorts: [], refusePorts: [], comment: 'iot-to-wan-drop', ruleCount: 1, logged: false },
+    ]
+    const input = reachComposeInput(strand({ counterpart: 'internet', peers: [] }), { ...ctx, edges })
     expect(input?.targetName).toBe('the internet')
+    expect(input?.placeBefore).toBe('iot-to-wan-drop')
   })
 
   it('places the allow before the pushed table\'s own refusing rule on this pair', () => {
