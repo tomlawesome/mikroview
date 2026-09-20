@@ -470,18 +470,6 @@ store:
 # setup:
 #   storePath: /var/lib/mikroview/setup.json
 
-# Nothing reads this any more, and you can leave it alone.
-#
-# The "N new settings are available" notice (#1218) used to record which
-# version you had dismissed, so it would stop appearing. It now just has
-# a close button: closing it puts it away for this visit, nothing is
-# saved, and Settings > Upgrade still shows the list whenever you want
-# to come back to it. That left this file with nothing to keep, so the
-# setting below only still exists to be removed in a later version. See
-# docs/configuration.md's "Upgrade notice" section.
-# configDrift:
-#   storePath: /var/lib/mikroview/config-drift.json
-
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,

@@ -33,6 +33,7 @@
   } from '../lib/fall.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { fetchEventsWindow } from '../lib/api'
+  import { isCancelledFetch } from '../lib/cancelled'
   import { formatHM, formatRelative } from '../lib/format'
   import { lookupPort } from '../lib/commonPorts'
   import { nightlySummary } from '../lib/watchWindow'
@@ -183,6 +184,14 @@
   const spanMs = $derived(spanDef.ms)
   const buckets = $derived(spanDef.buckets)
 
+  // True once the effect below has been torn down -- the span changed,
+  // or the fall was left. A request still in flight then has nowhere to
+  // land, so #1298's shared reading of a cut-off fetch applies to it:
+  // whatever it rejects with is a cancellation, not a failure worth
+  // putting on screen. A failure while the poll is still running is
+  // untouched and still draws the window's own message.
+  let windowPollStopped = false
+
   async function loadWindow() {
     const end = Date.now()
     const start = end - spanMs
@@ -196,7 +205,9 @@
       windowHasMore = res.hasMore
       windowError = null
     } catch (e) {
-      windowError = e instanceof Error ? e.message : String(e)
+      if (!isCancelledFetch(e, windowPollStopped)) {
+        windowError = e instanceof Error ? e.message : String(e)
+      }
     } finally {
       windowStart = start
       windowEnd = end
@@ -218,9 +229,13 @@
     // query, never one computation per arriving event.
     void span
     windowLoading = true
+    windowPollStopped = false
     loadWindow()
     const id = setInterval(loadWindow, POLL_MS)
-    return () => clearInterval(id)
+    return () => {
+      windowPollStopped = true
+      clearInterval(id)
+    }
   })
 
   type Lane = 'accept' | 'drop' | 'nat' | 'other'

@@ -82,8 +82,10 @@ func TestDeleteUnknownDeviceNotFound(t *testing.T) {
 // restart before the next good write would silently un-enrol a router
 // this call just told the caller succeeded.
 func TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails(t *testing.T) {
-	b := &failingSaveBackend{}
-	r, err := OpenRegistryWithBackend(b, nil)
+	// Create refuses against a backend that cannot save (#1303), so the
+	// device is made with no backend and the failing one is swapped in
+	// afterwards: what matters here is TryEnrol's own attempt.
+	r, err := OpenRegistryWithBackend(nil, nil)
 	if err != nil {
 		t.Fatalf("OpenRegistryWithBackend: %v", err)
 	}
@@ -95,12 +97,10 @@ func TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b := &failingSaveBackend{}
+	r.backend = b
 	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
 
-	// Create above already spent one Save attempt (also against this
-	// always-failing backend, swallowed the same way every ordinary write
-	// is); what matters here is TryEnrol's own attempt, not the running
-	// total.
 	before := b.count()
 	if r.TryEnrol("10.10.0.1", line) {
 		t.Fatal("TryEnrol() = true against a backend that cannot save, want false")
@@ -395,6 +395,105 @@ func TestRefusedIsBoundedAndEvictsOldestLastSeenFirst(t *testing.T) {
 
 func ipFromIndex(i int) string {
 	return fmt.Sprintf("10.%d.%d.%d", i/65536, (i/256)%256, i%256)
+}
+
+// TestRefusedPerPrefixShareCapsARange is issue #1289: a refused entry
+// costs a sender nothing but a bare TCP connect, so a range of
+// addresses cycling through connects can otherwise fill the whole
+// refused list from one neighbourhood and push out the one genuine
+// repeat sender an operator's own misrouted router would show up as.
+// prunePrefixLocked's maxRefusedPerPrefix share is what stops a single
+// /24 or /64 from ever taking more than its own slice.
+func TestRefusedPerPrefixShareCapsARange(t *testing.T) {
+	r := NewRegistry(nil)
+
+	// 300 refusals sourced from one /24 -- a documentation range
+	// (RFC 5737), never a real network. A /24 has only 256 distinct
+	// addresses, so this cycles through all of them and then some,
+	// well past the 16-entry share.
+	for i := 0; i < 300; i++ {
+		host := fmt.Sprintf("203.0.113.%d", i%256)
+		r.Refuse(host, []byte("x"))
+	}
+
+	// The genuine repeat sender: one address, in a different /24,
+	// refused several times -- the shape of a router mistakenly pointed
+	// at the wrong instance.
+	const repeatSender = "198.51.100.5"
+	for i := 0; i < 5; i++ {
+		r.Refuse(repeatSender, []byte("x"))
+	}
+
+	got := r.Refused()
+	var inRange int
+	var sawRepeat bool
+	for _, ref := range got {
+		if strings.HasPrefix(ref.Address, "203.0.113.") {
+			inRange++
+		}
+		if ref.Address == repeatSender {
+			sawRepeat = true
+		}
+	}
+	if inRange > maxRefusedPerPrefix {
+		t.Errorf("203.0.113.0/24 holds %d entries, want at most %d", inRange, maxRefusedPerPrefix)
+	}
+	if !sawRepeat {
+		t.Error("the genuine repeat sender was evicted by the /24's own flood, want it to survive")
+	}
+}
+
+// TestRefusedGlobalCapShedsOneShotBeforeRepeatSenders is issue #1289's
+// second preference: once the refused list is genuinely full, a
+// one-shot entry (one refused connect and nothing since) is shed before
+// a repeat sender, even a repeat sender that has gone quiet for longer.
+// A sender still trying is the shape of the operator's own misrouted
+// router; a lone one-shot is more likely a stranger's single probe.
+func TestRefusedGlobalCapShedsOneShotBeforeRepeatSenders(t *testing.T) {
+	r := NewRegistry(nil)
+
+	// The repeat senders: refused twice each, early, so their LastSeen
+	// is the oldest in the whole list -- if plain oldest-last-seen-first
+	// were still the only rule, these would be the first evicted.
+	// Spread across their own /24s, well away from the one-shot flood
+	// below, so maxRefusedPerPrefix never touches them here.
+	repeatSenders := []string{"10.50.1.1", "10.50.2.1", "10.50.3.1"}
+	for _, host := range repeatSenders {
+		r.Refuse(host, []byte("x"))
+		r.Refuse(host, []byte("x"))
+	}
+
+	// Enough one-shot refusals, spread across distinct /24s so
+	// maxRefusedPerPrefix never comes into play here either, to push
+	// the list well past maxRefusedAddresses.
+	const oneShotCount = 300
+	for i := 0; i < oneShotCount; i++ {
+		host := fmt.Sprintf("10.0.%d.%d", i%256, i/256)
+		r.Refuse(host, []byte("x"))
+	}
+
+	got := r.Refused()
+	if len(got) > maxRefusedAddresses {
+		t.Fatalf("Refused() returned %d entries, want at most %d", len(got), maxRefusedAddresses)
+	}
+
+	byAddr := make(map[string]Refused, len(got))
+	for _, ref := range got {
+		byAddr[ref.Address] = ref
+	}
+	for _, host := range repeatSenders {
+		if _, ok := byAddr[host]; !ok {
+			t.Errorf("repeat sender %s was evicted, want a Lines>1 entry to outlast one-shot entries at the cap", host)
+		}
+	}
+
+	// The very first one-shot address refused is the oldest one-shot
+	// entry -- it must be gone before any repeat sender is touched,
+	// even though every repeat sender is chronologically older still.
+	firstOneShot := fmt.Sprintf("10.0.%d.%d", 0, 0)
+	if _, ok := byAddr[firstOneShot]; ok {
+		t.Error("the oldest one-shot address survived the shed at the cap, want it evicted before any repeat sender")
+	}
 }
 
 // TestOwnPrefixesReadsOnlySourceAndAcceptedIP is issue #1281's
