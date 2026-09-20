@@ -445,3 +445,98 @@ export function stateRow(info: PersistenceInfo | null): string | null {
 /** The link to the setup guide's own section on mounting a key. */
 export const HOW_TO_MOUNT_URL =
   'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-optional-off-by-default'
+
+/** Where the wizard tells the operator to write the key, on the host:
+ *  the app folder's own keys/ (#1209, #1243). Beside data/, never inside
+ *  it -- the rule is that the key must not live in the data store, which
+ *  is what a backup of data/ alone carries. */
+export const KEY_DIR = 'mikroview/keys'
+export const KEY_FILE_PATH = `${KEY_DIR}/history.key`
+
+/** The same file seen from inside the container, where the app folder is
+ *  mounted read-only. MikroView reads this path with nothing set, so the
+ *  wizard only quotes it to say what `history.keyFile` would name. */
+export const KEY_FILE_CONTAINER_PATH = '/etc/mikroview/keys/history.key'
+
+/**
+ * newHistoryKey mints a `history.keyFile` value in the browser: 32
+ * random bytes, base64 -- the same shape as the setup guide's
+ * `head -c 32 /dev/urandom | base64`, and comfortably past the 32-byte
+ * floor retention.LoadKey enforces.
+ *
+ * In the browser, and only there (#1133). `history.keyFile` is not
+ * editable from the app and never will be (#853), so there is no
+ * endpoint that would accept a key and nothing here posts one: the
+ * value exists in this tab until the operator saves it, and mikroview
+ * first sees it in the file they mount. That is also why the wizard
+ * cannot show it again.
+ */
+export function newHistoryKey(): string {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary)
+}
+
+// The wizard's step 6 re-mints on every component init -- which used to
+// mean every page reload, not just a fresh visit -- with the exact same
+// "write this to keys/history.key" instructions each time. An operator
+// who had already saved the first key, then reloaded before config.yaml
+// picked it up and restarted (still `blocked`, so the step still
+// shows), was handed a brand new key and told to overwrite the file
+// that held the one they'd saved -- silently making every backup and
+// event kept under the old key unreadable.
+//
+// sessionStorage is exactly the scope the step's own caveat already
+// promises ("generated in this tab... never sent anywhere"): gone the
+// moment the tab closes, unlike localStorage, but -- unlike plain
+// component state -- still there after a reload of that same tab.
+const SESSION_KEY_STORAGE_KEY = 'mikroview-wizard-history-key'
+
+/** Returns the key this tab already minted for step 6, if any, instead
+ * of a fresh one -- a reload must show what a previous mint here showed,
+ * not quietly offer to overwrite it. Falls back to minting (and saving)
+ * a new one on the first visit, or if storage is unavailable (private
+ * browsing, disabled storage) -- the same fresh-key behaviour the step
+ * always had before this fix, just no longer sessionStorage's problem
+ * to solve. */
+export function loadOrMintHistoryKey(): string {
+  try {
+    const existing = sessionStorage.getItem(SESSION_KEY_STORAGE_KEY)
+    if (existing) return existing
+  } catch {
+    // Fall through to a fresh mint below.
+  }
+  const fresh = newHistoryKey()
+  saveHistoryKeyForSession(fresh)
+  return fresh
+}
+
+/** Persists whatever the field currently holds -- a fresh Reroll, or an
+ * operator's own pasted key -- so the next reload in this tab shows that
+ * value rather than reverting to an earlier mint. Best-effort: a storage
+ * failure here just means the field falls back to component state alone,
+ * not a thrown error the wizard has to handle. */
+export function saveHistoryKeyForSession(key: string): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY_STORAGE_KEY, key)
+  } catch {
+    // Best-effort, see above.
+  }
+}
+
+/** Drops this tab's stored key once nothing needs it again -- the step
+ * has left `blocked`, so the server has already read the mounted file
+ * and a later reload cannot want the old value back (v0.6.0
+ * pre-release audit, Security stage). Nothing cleared it before, so the
+ * key stayed readable for the life of the tab: a logout and a second
+ * login rehydrated it into the new session, possibly a different
+ * operator's. Best-effort, for saveHistoryKeyForSession's reasons. */
+export function forgetHistoryKeyForSession(): void {
+  try {
+    sessionStorage.removeItem(SESSION_KEY_STORAGE_KEY)
+  } catch {
+    // Best-effort, see above.
+  }
+}

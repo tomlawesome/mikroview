@@ -20,7 +20,7 @@ describe('composeCommand', () => {
     const cmd = composeCommand({ ...base, placeBefore: 'iot-to-lan-drop' })
     expect(cmd).toContain('src-address=10.0.20.31 dst-address=10.0.40.10')
     expect(cmd).toContain('protocol=tcp dst-port=445 action=accept log=yes')
-    expect(cmd).toContain('log-prefix="cam-porch-nas-445"')
+    expect(cmd).toContain('log-prefix="A|cam-porc-445|"')
     expect(cmd).toContain('place-before=[find comment="iot-to-lan-drop"]')
   })
 
@@ -31,7 +31,7 @@ describe('composeCommand', () => {
 
   it('the named block drops, still logged, and takes no place-before', () => {
     const cmd = composeCommand({ ...base, mode: 'block', placeBefore: 'iot-to-lan-drop' })
-    expect(cmd).toContain('action=drop log=yes')
+    expect(cmd).toContain('action=drop log=yes log-prefix="D|cam-porc-445|"')
     expect(cmd).toContain('comment="named block: cam-porch → nas :445"')
     expect(cmd).not.toContain('place-before')
   })
@@ -43,7 +43,80 @@ describe('composeCommand', () => {
 
   it('names stay a safe slug in the prefix', () => {
     const cmd = composeCommand({ ...base, hostName: 'Weird "Host"!', targetName: 'the internet' })
-    expect(cmd).toMatch(/log-prefix="weird-host-the-internet-445"/)
+    expect(cmd).toMatch(/log-prefix="A\|weird-ho-445\|"/)
+  })
+
+  // The convention the parser reads (internal/routeros/prefix.go) and
+  // the length cap docs/routeros-setup.md sets: any other shape lands
+  // every hit as "unknown".
+  it('the prefix is <A|D>|label| and at most 15 characters, whatever the names and port', () => {
+    for (const [hostName, port] of [['cam-porch', 445], ['a-very-long-camera-name-indeed', 65535], ['x', 1]] as const) {
+      const cmd = composeCommand({ ...base, hostName, port })!
+      const prefix = /log-prefix="([^"]*)"/.exec(cmd)![1]
+      expect(prefix).toMatch(/^[AD]\|[a-z0-9-]+\|$/)
+      expect(prefix.length).toBeLessThanOrEqual(15)
+    }
+  })
+
+  it('escapes a hostname carrying a RouterOS command substitution into the comment', () => {
+    const cmd = composeCommand({ ...base, hostName: 'x$[/system reset-configuration]"\\', placeBefore: 'iot-to-lan-drop' })
+    expect(cmd).not.toBeNull()
+    // The dangerous run must be escaped in the printed comment: every
+    // `$[` in the line is preceded by the escaping backslash, so none
+    // of them are left for RouterOS to expand when the line is pasted.
+    expect(cmd).not.toMatch(/(?<!\\)\$\[/)
+    expect(cmd).toContain('x\\$[/system reset-configuration]\\"\\\\')
+  })
+
+  it('escapes a quote in placeBefore\'s own comment match', () => {
+    const cmd = composeCommand({ ...base, placeBefore: 'drop "iot"' })
+    expect(cmd).not.toBeNull()
+    expect(cmd).toContain('place-before=[find comment="drop \\"iot\\""]')
+  })
+
+  it('refuses to compose when hostIp is not an address or CIDR', () => {
+    const cmd = composeCommand({ ...base, hostIp: '1.2.3.4 dst-address=0.0.0.0/0' })
+    expect(cmd).toBeNull()
+  })
+
+  it('refuses to compose when target is not an address or CIDR', () => {
+    const cmd = composeCommand({ ...base, target: '10.0.40.10; /system reset-configuration' })
+    expect(cmd).toBeNull()
+  })
+
+  it('refuses to compose when the protocol is not a plain RouterOS protocol name or number', () => {
+    expect(composeCommand({ ...base, proto: 'tcp action=drop dst-port=0 place-before=[find]' })).toBeNull()
+    expect(composeCommand({ ...base, proto: 'tcp;' })).toBeNull()
+    expect(composeCommand({ ...base, proto: '' })).toBeNull()
+    expect(composeCommand({ ...base, proto: 'ipv6-icmp' })).toContain('protocol=ipv6-icmp ')
+    expect(composeCommand({ ...base, proto: '47' })).toContain('protocol=47 ')
+  })
+
+  it('refuses to compose when the port is not a whole number in range', () => {
+    expect(composeCommand({ ...base, port: 1.5 })).toBeNull()
+    expect(composeCommand({ ...base, port: 70000 })).toBeNull()
+    expect(composeCommand({ ...base, port: '22 action=drop' as unknown as number })).toBeNull()
+  })
+
+  it('refuses to compose when a name carries a line break or control character', () => {
+    expect(composeCommand({ ...base, hostName: 'nas\n/system reset-configuration' })).toBeNull()
+    expect(composeCommand({ ...base, targetName: 'x\u2028y' })).toBeNull()
+    expect(composeCommand({ ...base, placeBefore: 'drop\r' })).toBeNull()
+  })
+
+  it('still composes for a valid IPv4 address', () => {
+    const cmd = composeCommand({ ...base, hostIp: '10.0.20.31', target: '10.0.40.10' })
+    expect(cmd).toContain('src-address=10.0.20.31 dst-address=10.0.40.10')
+  })
+
+  it('still composes for a valid IPv4 CIDR target', () => {
+    const cmd = composeCommand({ ...base, target: '10.0.40.0/24' })
+    expect(cmd).toContain('dst-address=10.0.40.0/24')
+  })
+
+  it('still composes for a valid IPv6 address', () => {
+    const cmd = composeCommand({ ...base, hostIp: 'fe80::1', target: '2001:db8::1' })
+    expect(cmd).toContain('src-address=fe80::1 dst-address=2001:db8::1')
   })
 })
 
@@ -138,8 +211,14 @@ describe('reachComposeInput (#868: one strand-to-command translation for both vi
   })
 
   it('the internet counterpart falls back to the WAN interface and "the internet"', () => {
-    const input = reachComposeInput(strand({ counterpart: 'internet', peers: [] }), ctx)
+    // The refusing edge sits on the iot->WAN pair, so placeBefore only
+    // resolves if the counterpart really became ctx.wanInterface.
+    const edges: PolicyEdge[] = [
+      { key: 'vlan-iot|ether1', from: 'vlan-iot', to: 'ether1', accepted: false, refused: true, acceptPorts: [], refusePorts: [], comment: 'iot-to-wan-drop', ruleCount: 1, logged: false },
+    ]
+    const input = reachComposeInput(strand({ counterpart: 'internet', peers: [] }), { ...ctx, edges })
     expect(input?.targetName).toBe('the internet')
+    expect(input?.placeBefore).toBe('iot-to-wan-drop')
   })
 
   it('places the allow before the pushed table\'s own refusing rule on this pair', () => {

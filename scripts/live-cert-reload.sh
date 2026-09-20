@@ -56,6 +56,11 @@ tls:
   certFile: $DIR/live.crt
   keyFile: $DIR/live.key
 $(mv_store_block "$DIR" true)
+# Since #1281 the syslog listener refuses an unknown address at accept,
+# before the TLS handshake ever runs -- so the handshake this script reads
+# the certificate off of needs to come from a declared device, not just
+# any loopback connection.
+devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]
 EOF
 
 ( cd frontend && npm run build >/dev/null 2>&1 )

@@ -1,22 +1,75 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open **Admin ▸ Run setup…**. It generates every
-> command below with your own address, port and a token it mints for you
-> — nothing to fill in — and tells you as each step lands, because each
-> one ends with your router arriving at MikroView.
+> an admin and open **your account menu ▸ Run setup…**. It names and
+> enrols the router for you, generates every command below with your own
+> address and port, and tells you as each step lands, because each one
+> ends with your router arriving at MikroView. It asks you for two
+> things: the router's own address, which is the only address the syslog
+> port opens to while its token is pending, and your password, because
+> minting that token is what opens the port.
+>
+> Its seven steps, in order: **Trust the certificate**, **Name your
+> router**, **Send logs**, **Tag firewall rules**, **Push router
+> state**, **Back up the router**, **Register the router**. They do not
+> line up one-to-one with
+> this page's numbered sections below, so where a step is named here it
+> is named in full rather than by number.
 >
 > This page remains the reference: what the wizard emits, and why. Use it
 > if you prefer working from documentation, if you are scripting a fleet,
 > or when you want the reasoning behind a step.
 
-MikroView never talks to RouterOS's API and needs no credentials on the
-router. Instead, RouterOS pushes to MikroView: firewall log lines over
-syslog (steps 1–3, required), optionally a copy of its own config for
-host names and rule lookups (step 4), and optionally a nightly config
-backup MikroView keeps encrypted (step 7, issue #394). Either way, the
-router always initiates; MikroView never connects to it. This is a
+![The wizard's ledger opened at step 1: the seven steps down the left, "Trust the certificate" open beside them](screenshots/setup-wizard-ledger.png)
+
+MikroView never talks to RouterOS's API and never holds a RouterOS
+credential. Instead, RouterOS pushes to MikroView: firewall log lines
+over syslog (steps 1–3, required), optionally a copy of its own config
+for host names and rule lookups (step 4), and optionally a nightly
+config backup MikroView keeps encrypted (step 7, issue #394). The
+wizard's version of **Send logs** adds one line this page's does not — see
+"The wizard's enrol line" there. The optional
+pushes carry an ingest token MikroView mints for that device — a
+MikroView credential on the router, never a router credential in
+MikroView. Either way, the router always initiates; MikroView never
+connects to it. This is a
 one-time configuration on each router you want to monitor.
+
+## Upgrading from a MikroView older than 2026-09-12?
+
+Every released wizard before that date — v0.3.0, v0.4.0 and v0.5.1 —
+printed the logging action below without `remote-log-format=syslog`.
+Without it, RouterOS gives each syslog message no header of its own, so
+a burst of firewall lines can arrive as one undelimited run. If that run
+crosses 64 KiB, MikroView has no choice but to discard the rest of it.
+
+**What you'll see:** MikroView reporting oversized or over-long runs
+from your router (Settings ▸ ingest names the router when it sees this),
+and the Fall and other views looking emptier than they should — the
+traffic was there, but the run it arrived in was too long to read.
+
+**The fix:** re-paste the logging block in step 1 below. It's safe to
+run again — it adds the logging action if it's missing and updates it in
+place if it's already there, so this is exactly how an existing router
+picks up the missing flag.
+
+**If you ran step 3 before 2026-09-13, re-run that too.** Every wizard
+before that date switched logging *on* for your established/related
+accept rule and tried to undo it with an exact match RouterOS 7's own
+default firewall never satisfies (`connection-state=established,
+related,untracked`, not `established,related` — #1230) — so the undo
+silently did nothing and the router logged every packet of every open
+connection, not just the ones worth seeing. **Re-pasting step 1 alone
+does not fix this.** Re-run step 3 (safe to run again, same as step 1),
+or paste just the two repair lines from its end:
+
+```
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+```
+
+Both are safe on a router that was never bitten. Nothing else in this
+guide needs re-running.
 
 ## 1. Point RouterOS at the container over TLS
 
@@ -70,8 +123,11 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes
+:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
 ```
+
+This block is safe to paste again — a second run updates the existing
+action instead of adding another one (#1208).
 
 This does **not** authenticate the router to MikroView — RouterOS's
 logging action has no client-certificate option, so anything able to
@@ -92,8 +148,44 @@ RouterOS tags firewall rule matches with both the `firewall` category and
 `info` severity — forward both:
 
 ```
-/system logging add topics=firewall,info action=mikroview
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 ```
+
+This is also safe to paste again — it only adds the rule when it is not
+already there (#1208).
+
+### The wizard's enrol line
+
+MikroView's own setup wizard prints one more line at the end of this
+block, with a live token already filled in:
+
+```
+/log info "mikroview-enrol <token>"
+```
+
+<!-- shot: the wizard's Send logs step, showing the token line "Token good until HH:MM (15 minutes) · Reroll" -->
+
+Before it mints that token the wizard asks for the router's own address
+and for your password. The address is the only one MikroView opens the
+syslog port to while the token is pending — a pending token does not
+leave the port reachable by everything else on your network — and the
+password is asked for because minting is what opens it, so being signed
+in as the admin is not enough on its own. **Reroll** mints a fresh
+token, so it asks again.
+
+The token is good for 15 minutes; the wizard shows a countdown next to
+it with a **Reroll** control if it expires before you paste. The
+address that line arrives from becomes the only address MikroView
+accepts this router's logs from — lines arriving from any other address
+are refused and dropped. Both the wizard and the Entities screen list
+refused senders (address, lines, last seen), so a router that looks
+silent because it is enrolled under the wrong address is easy to spot
+rather than a mystery. If the address you gave was wrong, the router is
+turned away and appears there: press it to point the enrolment window at
+it, and the token you already pasted stays as it is.
+
+There is no control anywhere to just accept an address by hand: a
+router's logs are accepted only once it has presented a valid token.
 
 ## 3. Tag your firewall rules
 
@@ -157,13 +249,21 @@ reference for the pattern (match condition + `action=` + `log=yes
 log-prefix=...`), not something to paste in blind:
 
 ```
-/ip firewall filter add chain=input connection-state=established,related action=accept log=yes log-prefix="A|est-rel|"
+/ip firewall filter add chain=input connection-state=established,related,untracked action=accept
 /ip firewall filter add chain=input connection-state=invalid action=drop log=yes log-prefix="D|invalid|"
 /ip firewall filter add chain=input protocol=tcp dst-port=22 src-address-list=mgmt action=accept log=yes log-prefix="A|mgmt-ssh|"
 /ip firewall filter add chain=input action=drop log=yes log-prefix="D|input-def|"
 /ip firewall filter add chain=forward action=accept log=yes log-prefix="A|lan-wan|"
 /ip firewall filter add chain=forward action=drop log=yes log-prefix="D|fwd-def|"
 ```
+
+The first rule is the one with no `log=yes` on it, on purpose. An accept
+rule matching established or related traffic sees every packet of every
+open connection, so logging it writes your whole traffic volume into the
+log and tells you nothing a line at connection-open did not already say.
+Section 6 has the measurements. MikroView's setup wizard leaves that
+rule alone for the same reason, and the **Log every rule** page marks it
+and does not tick it for you.
 
 ### NAT rules (optional)
 
@@ -173,7 +273,7 @@ same way as step 2 covers firewall/info, then tag the NAT rules you care
 about:
 
 ```
-/system logging add topics=firewall,info action=mikroview
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 /ip firewall nat set <rule-number> log=yes log-prefix="N|port-fwd|"
 ```
 
@@ -282,7 +382,7 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open **Admin ▸ The engine room**,
+In MikroView, sign in as an admin, open **Settings**,
 find "Which machines may speak" among the side doors, set the kind
 dropdown to **Ingest**, and pick the device the token speaks
 for — this is what scopes it. The list offers every router MikroView
@@ -309,7 +409,7 @@ not the address you declared as `sourceIp`. If pushes return `200` in
 the audit log but the "i" popups still say no data has been pushed,
 check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
-address is the most likely cause. The setup wizard's step 2 names it
+address is the most likely cause. The setup wizard's Send logs step names it
 when it sees it (a declared router that has sent nothing while an
 undeclared address streams) and prints the fix. Keeping the declared
 address is the recommended one, because the token and the tables it
@@ -322,7 +422,33 @@ pushes follow that identity, so nothing has to be reissued:
 The alternative is changing `sourceIp` to the arriving address and
 restarting — then reissue any token minted for the old identity.
 
-Or via the API:
+Or via the API. Minting a token is an admin action, so the call has to
+carry an admin's browser session: `<your session cookie>` is the
+`mikroview_session=…` cookie `POST /api/auth/login` sets (see the
+[API reference](configuration.md#api-reference)). Copy it from your
+browser's developer tools, or sign in with curl first and let it keep
+the cookie for you, then use `-b jar` on the call below in place of the
+placeholder.
+
+Keep the password off the command line when you do. Anything in `-d` is
+recorded in your shell history and is visible in the process list to
+every other account on that machine, for as long as the command runs.
+Read it into a variable instead, and send the body on standard input:
+
+```
+read -rsp 'mikroview password: ' MV_PASS && echo
+curl -k -c jar -X POST https://<mikroview-host>/api/auth/login \
+  -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+  --data-binary @- <<JSON
+{"username":"<your-admin-username>","password":"$MV_PASS"}
+JSON
+unset MV_PASS
+```
+
+`-k` is here because MikroView generates its own certificate on first
+run, which nothing else has signed. Drop it once you have put a
+certificate the machine trusts in front of MikroView — see
+[the TLS section](configuration.md#tls).
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
@@ -386,9 +512,9 @@ the array RouterOS sends or as a comma-joined string, so
 `($v->"connection-state")` can go straight in with no conversion.
 
 `packets` and `bytes` were added for issue #435: RouterOS keeps a
-per-rule hit counter whether or not the rule logs, so the "Tune logging"
-helper can show a rule's real cost — "fired 41,000 times in the last
-day" — beside its tick-box before you switch logging on for it. Same
+per-rule hit counter whether or not the rule logs, so the "Log every
+rule" helper can show a rule's real cost — "fired 41,000 times in the
+last day" — beside its tick-box before you switch logging on for it. Same
 shape as every other RouterOS integer here: `:serialize to=json` emits
 them as a float, which MikroView's decoder already expects.
 
@@ -402,7 +528,7 @@ never has to ask you. Leave it out and everything still works — you just
 get no version-mismatch warning later.
 
 `dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
-feature: without them mikroview has no way to know which ports a rule
+feature: without them MikroView has no way to know which ports a rule
 that's already blocking traffic actually covers. RouterOS's own
 `dst-port` is unset (empty) on most "drop everything on this chain"
 rules and a list or range ("22,23", "1000-2000") on ones that scope by
@@ -567,9 +693,20 @@ failing (say, a momentary network blip) doesn't stop the others in the
 same run.
 
 ```
-/system script add name=mv-push policy=read,test source="<the filter-rule block from 4c, then the dhcp-lease and arp blocks from 4c-ii, each with your host and token filled in>"
-/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"
+:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="<the blocks from 4c and 4c-ii, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>" } else={ /system script set [find name=mv-push] policy=read,test source="<the same escaped blocks>" }
+:if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
+/system script run mv-push
 ```
+
+The escaping is not optional: inside `source="…"` RouterOS reads `$v`
+as a variable to substitute, so an unescaped script is saved with its
+variables already replaced by nothing. If you would rather not do it
+by hand, MikroView's setup wizard (**your account menu ▸ Run setup…**,
+its Push router state step) prints these three lines as one block with
+your host, your token and the escaping already in it — copy, paste,
+done. WinBox's script dialog
+is the other way out: its **Source** field takes the script body as
+written in 4c, unescaped, because there is no enclosing string there.
 
 `policy=read,test` only — no `write`, no `sensitive`. The scheduler
 entry stores no credential of its own; the only secret involved is the
@@ -606,6 +743,50 @@ mention, and its defaults are not the CLI's:
 And paste the source with `<mikroview-host>` and the token already
 filled in — the dialog saves placeholders without complaint, and the
 failure only surfaces later as `failure:` lines in `/log print`.
+
+### 4f. What the script tells MikroView about your own setup
+
+One block of the push script is not router data at all. It reports back
+what the setup wizard left on this router, so MikroView can tell when a
+router is running an out-of-date copy of it.
+
+It sends exactly two things, once per push:
+
+- the `mikroview` logging action — where it sends logs (`remote`,
+  `remote-port`), how (`target`, `remote-protocol`,
+  `remote-log-format`, `check-certificate`);
+- every `/system logging` rule pointing at that action — its `topics`,
+  and whether it is disabled.
+
+Plus one number: which version of the wizard wrote the script you
+pasted.
+
+Nothing else from your logging configuration is sent. Your other
+logging actions, your other rules, and everything else the router logs
+stay on the router — MikroView asks only about its own setup.
+
+Why it needs telling: the script on your router is a copy, and MikroView
+never connects to a router to look at it (that is a design rule, not a
+missing feature). So the router is the only thing that can say what it
+has. With the report, each router's card in MikroView says one of:
+
+- nothing at all — what the router has is what the current wizard would
+  write;
+- `setup behind · paste Trust the certificate again` — an older wizard wrote this
+  script, or the action or its rules no longer match what the wizard
+  writes;
+- `setup never reported` — the script predates this report entirely, so
+  the router has never said.
+
+Only four things count as a mismatch: where the logs are sent
+(`remote`, `remote-port`), the format they are sent in
+(`remote-log-format`), and the rules' `topics`. Anything else you have
+changed on the action is yours, and MikroView leaves it alone.
+
+The fix in every case is the same: **your account menu ▸ Run setup…**,
+and paste the blocks again. The logging block updates what is already
+there rather than adding a second copy of it, so re-pasting a router
+that is already correct changes nothing.
 
 ## 5. Verify
 
@@ -700,6 +881,32 @@ Three caveats that belong next to that table, not in a footnote:
   (This is also why a log-only `action=passthrough` rule placed above
   an accept is a safe way to add logging without touching policy at
   all.)
+- **Match that rule on what its `connection-state` *contains*, never on
+  the whole value.** RouterOS 7's own default firewall writes it as
+  `connection-state=established,related,untracked` — three values, not
+  two — so `[find connection-state=established,related]` selects
+  nothing on a stock RouterOS 7 router and says nothing about having
+  selected nothing. MikroView shipped exactly that mistake once (#1230)
+  and a live router went from ~15 to ~1500 events/sec. Use
+  `[find where connection-state~"established"]` (`~` is RouterOS's
+  regex match, and it does work on this field), and prefer leaving
+  logging off to switching it on and undoing it afterwards: an undo that
+  misses is silent, and it is your log that pays for it.
+
+**If you ran MikroView's step 3 before this was fixed, your router is
+still flooding** — the old block switched logging on and the undo
+missed, so those rules kept `log=yes`. Two lines turn it back off, and
+they are safe to run on a router that was never bitten:
+
+```
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+```
+
+Those same two lines now end the wizard's Tag firewall rules step, so
+re-running it repairs the router as well as tagging it. One line per term rather than
+one with `or`: two `~` tests in a single `find` is the form checked
+against a real router.
 - **Fasttrack changes what the filter chain sees.** With a
   `fasttrack-connection` rule in place, established packets bypass most
   of the chain entirely — which is fine for this posture (the
@@ -726,7 +933,11 @@ the established-accept rules got above.
 
 Issue #394. A router can push a copy of its own configuration to
 MikroView every night — the binary `.backup` that restores it whole on
-a replacement, and the plain-text `.rsc` export kept for reading.
+a replacement, and the readable `.rsc` export you can open in Settings
+and compare against the night before (#895). The export has its secrets
+taken out twice over: once by RouterOS, as the script writes the file,
+and once by MikroView as it arrives, so the readable copy has never
+held a password.
 **MikroView is the place you turn to when the router is gone**, so this
 is worth setting up before that day, not after. See
 [configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default)
@@ -738,9 +949,12 @@ for the trust caveat below.
 
 Set `backup.enabled: true` in `config.yaml` and restart — this opens a
 second listening port (`backup.listen`, default `:47022`), only once
-you have decided to use it. Nothing here needs the wizard, but the
-wizard's step 6 is what actually prints the script below with your own
-values filled in, which is the easier path for most people.
+you have decided to use it. Skip this section entirely if you are
+taking the HTTPS-only path in 7c-ii: it needs no second port, and so
+nothing to turn on here. Nothing here needs the wizard, but the
+wizard's Back up the router step is what actually prints the script
+below with your own values filled in, which is the easier path for
+most people.
 
 ### 7b. The token
 
@@ -752,15 +966,22 @@ for this router, reuse it; nothing here needs a token of its own kind.
 ### 7c. The script
 
 ```
-/system script add name=mv-backup policy=read,write,test,sensitive source="
+:if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source="
   /system backup save name=mv-backup dont-encrypt=yes
-  /export file=mv-backup
+  /export hide-sensitive file=mv-export
   /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
-  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.rsc dst-path=<device>.rsc
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
   /file remove mv-backup.backup
-  /file remove mv-backup.rsc
-"
-/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup"
+  /file remove mv-export.rsc
+" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source="
+  /system backup save name=mv-backup dont-encrypt=yes
+  /export hide-sensitive file=mv-export
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-backup.backup dst-path=<device>.backup
+  /tool fetch mode=sftp upload=yes address=<mikroview-host> port=47022 user=<device> password=\"<token>\" src-path=mv-export.rsc dst-path=<device>.rsc
+  /file remove mv-backup.backup
+  /file remove mv-export.rsc
+" }
+:if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup" disabled=no }
 /system script run mv-backup
 ```
 
@@ -768,10 +989,27 @@ for this router, reuse it; nothing here needs a token of its own kind.
 it must be the router's own device id, the same identity the token is
 scoped to. The binary save is asked for `dont-encrypt=yes` on purpose:
 that copy is the true restore copy and MikroView never holds a second
-password to open an encrypted one; the export is taken without
-`show-sensitive`, so it carries no secrets and is safe to read or scan
-later. The last line runs the script once immediately, so the first
-pair does not wait for 03:00.
+password to open an encrypted one.
+
+The export is taken with `hide-sensitive`, which is RouterOS's own pass
+over the text: passwords, pre-shared keys and private keys are left out
+of the file before it goes anywhere. MikroView runs a second pass of
+its own as the file arrives, and replaces anything that got past the
+first with `"<removed>"`, so the copy it stores has never had a secret
+in it. When that second pass finds something, the stored file gets a
+line at the top saying how many values went and on which lines — a
+removal you can see, rather than a silent gap. That readable copy is
+what **read** and **compare with previous** show you in Settings, and
+reading either is written to the audit log with your name.
+
+The two files have names of their own on purpose: `mv-backup.backup` is
+the restore copy and `mv-export.rsc` is the readable one, so neither
+line has to be read twice to tell which is which. **Push the binary
+first**, as written above: MikroView opens a new stored generation when
+a `.backup` arrives and attaches the `.rsc` to it, so sending them the
+other way round leaves you with two half-generations instead of one
+pair. The last line runs the script once immediately, so the first pair
+does not wait for 03:00.
 
 `policy=read,write,test,sensitive` is wider than the push script's
 `read,test` (4e): `write` and `sensitive` are what `/system backup
@@ -825,14 +1063,20 @@ declared plus eight retries, and is abandoned if more arrive; a piece
 naming a transfer MikroView is not holding — one already finished, given
 up on, or never announced — costs a request like any other push.
 
-The wizard does not offer this step yet — 4b's token is still what
-authenticates it once it does. Until it does, this is a paste-it-yourself
-step:
+The wizard offers this path. On step 6, the line above the script reads
+**The router sends its backup sftp · https** — pick `https` and the step
+prints the script below and its scheduler entry with your own address and
+token already in them. The choice is stored on the MikroView side rather
+than in your browser, so whoever opens the wizard next, on any machine,
+is offered the same one; and it does not wait on 7a, since there is no
+drop box to open. 4b's token is still what authenticates it.
+
+To paste it by hand instead:
 
 ```
 /system backup save name=mv-backup dont-encrypt=yes
 
-/export file=mv-backup
+/export hide-sensitive file=mv-export
 
 :local bakSize [/file get mv-backup.backup size]
 :local bakTotalSlices (($bakSize + 32767) / 32768)
@@ -853,7 +1097,7 @@ step:
 }
 /file remove mv-backup.backup
 
-:local rscSize [/file get mv-backup.rsc size]
+:local rscSize [/file get mv-export.rsc size]
 :local rscTotalSlices (($rscSize + 32767) / 32768)
 :local rscBegin [:serialize to=json value={"op"="begin"; "kind"="rsc"; "totalBytes"=$rscSize; "totalSlices"=$rscTotalSlices}]
 :local rscBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
@@ -863,24 +1107,31 @@ step:
 :while ($rscSent < $rscSize) do={
   :local rscTake ($rscSize - $rscSent)
   :if ($rscTake > 32768) do={ :set rscTake 32768 }
-  :local rscChunk [/file read file=mv-backup.rsc offset=$rscSent chunk-size=$rscTake as-value]
+  :local rscChunk [/file read file=mv-export.rsc offset=$rscSent chunk-size=$rscTake as-value]
   :local rscData64 [:convert ($rscChunk->"data") from=raw to=base64]
   :local rscSlice [:serialize to=json value={"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64}]
   /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
   :set rscSent ($rscSent + $rscTake)
   :set rscIndex ($rscIndex + 1)
 }
-/file remove mv-backup.rsc
+/file remove mv-export.rsc
 ```
 
 ```
-/system script add name=mv-backup-https policy=read,write,test,sensitive source="<paste the script above>"
-/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https"
+:if ([:len [/system script find name=mv-backup-https]] = 0) do={ /system script add name=mv-backup-https policy=read,write,test,sensitive source="<the script above, escaped for the quotes: every " becomes \", every \ becomes \\, and every $ becomes \$>" } else={ /system script set [find name=mv-backup-https] policy=read,write,test,sensitive source="<the same escaped script>" }
+:if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event="/system script run mv-backup-https" disabled=no }
 /system script run mv-backup-https
 ```
 
-Same binary/export pair as 7c (unencrypted restore copy, secret-free
-export), just carried by `/tool fetch` POSTs instead of an SFTP upload:
+Same escaping rule as step 4e, and for the same reason — this script
+is nothing but `$bakSize`, `$rscSlice` and their kin, and an
+unescaped `source="…"` would save it with every one of them expanded
+away. WinBox's **Source** field takes the script as printed above,
+unescaped.
+
+Same binary/export pair as 7c (unencrypted restore copy, `hide-sensitive`
+export into `mv-export.rsc`, binary sent first), just carried by
+`/tool fetch` POSTs instead of an SFTP upload:
 each file is read back in `<=32KiB` pieces (`/file read`'s own
 `chunk-size` cap), base64-encoded, and sent as its own JSON request --
 one `"op":"begin"` declaring the file's size and slice count, then one
@@ -899,11 +1150,49 @@ in this repository render the exact script above, minus the SFTP-specific
 Settings' `router backups` group (admin-only) lists what has arrived
 per router, with `download .backup` / `.rsc` and a note of when each
 was last seen. A router that has pushed at least twice and then misses
-its usual interval shows an amber receipt there — mikroview learns the
+its usual interval shows an amber receipt there — MikroView learns the
 interval from the pushes themselves, never from this scheduler line,
-since an operator could change that on the router without mikroview
+since an operator could change that on the router without MikroView
 knowing.
+
+A `keep…` link on a router's newest generation marks it kept, with a
+comment saying why (`before the 7.16 upgrade`); its other generations
+sit behind an `earlier…` expander, and every kept one for that router
+gets its own line below, with `edit…` and `release…` beside it. A kept
+generation costs nothing to hold — it stops counting towards the ten
+generations retention keeps and is never touched by low-space cycling
+— but releasing one is the one way to free vault space by hand: it
+goes back into the ordinary ten, in its own place by age, where the
+oldest may then be dropped as normal.
 
 Restoring is your own act on the replacement router
 (`/system backup load`) — MikroView never connects to a router to apply
 one; it only ever reads the header to confirm what arrived.
+
+## Adding another router
+
+In the app, the Entities screen's "+ add a router" berth opens the same
+ledger at **Name your router**. That is the screen an administrator gets
+for the fleet, so everything below is there; the standalone Fleet screen
+a read-only account sees carries the same router cards without the
+actions.
+
+![The Entities routers row: a card per router already enrolled, and "+ add a router" as the last berth](screenshots/entities-add-a-router.png)
+
+Each router's card also carries **Re-enrol…**, which opens the ledger at
+**Send logs** with a fresh token for that router — for a router you have
+replaced or given a new address, where the old token's address no longer
+applies. Beside the routers, a card per refused sender appears whenever
+there is something to show — an address that has sent lines without a
+valid enrol line — so you can tell an unrecognised address apart from a
+router that simply is not sending yet. There is no control on it that
+accepts an address: a router is accepted only by presenting a token.
+
+<!-- shot: a refused-sender card beside the routers on Entities -->
+
+**Run setup…** is unchanged: it still opens the first-run ledger with
+**Trust the certificate** in front.
+
+Working from this document instead of the wizard: repeat steps 1–3
+above for the new router, and give it whatever name you use when you
+declare it under `devices:` in `config.yaml` (see step 4b).

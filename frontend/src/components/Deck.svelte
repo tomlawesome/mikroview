@@ -22,6 +22,11 @@
   // Fleet page (frontend/src/components/Fleet.svelte) in place of
   // Entities and Settings -- reused rather than duplicated: it is the
   // same component the phone-width bottom bar has always reached.
+  //
+  // #1134 added Log every rule as the edit tier's eighth card. It used
+  // to render outside the deck, which meant it had no navigation on it
+  // at all -- the owner's ruling is the same shell as every other page,
+  // and this is that shell.
   import { SvelteSet } from 'svelte/reactivity'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -39,6 +44,7 @@
   import Entities from './Entities.svelte'
   import EngineRoom from './EngineRoom.svelte'
   import Fleet from './Fleet.svelte'
+  import LogEveryRule from './LogEveryRule.svelte'
 
   // The card table lives in lib/deckCards.ts, shared with the Settings
   // shelf; the order is the operator's own (#633 rounds 23-25, drag to
@@ -127,10 +133,22 @@
   // an engine that fires no scrollend: latched forever, the deck would
   // stop following a wheel at all.
   const ROLL_BACKSTOP_MS = 3000
+  // Where the roll in flight is going. A scrollend can belong to a roll
+  // that was interrupted: click a second rail name while the first roll
+  // is still moving and the Chromium that Playwright 1.63 ships fires scrollend for the roll it
+  // abandoned, with the deck nowhere near the new target. Taking that
+  // as "the roll is over" dropped `rolling` mid-flight, the observer
+  // named a card the deck was merely passing, the effect rolled back to
+  // it, and the deck parked one card short (live-log-every-rule under
+  // Playwright 1.63, 2026-09-16). So a scrollend only ends the roll
+  // when the deck has actually arrived; the wheel, a finger and the
+  // backstop still end it unconditionally.
+  let rollTarget = 0
 
-  function endRoll() {
-    clearTimeout(rollTimer)
+  function endRoll(ev?: Event) {
     if (!rolling) return
+    if (ev?.type === 'scrollend' && deckEl && Math.abs(deckEl.scrollTop - rollTarget) >= 2) return
+    clearTimeout(rollTimer)
     rolling = false
     rollEndedAt = performance.now()
   }
@@ -168,10 +186,11 @@
     const top = el.getBoundingClientRect().top - deckEl.getBoundingClientRect().top + deckEl.scrollTop
     if (Math.abs(top - deckEl.scrollTop) < 2) return
     rolling = true
+    rollTarget = top
     clearTimeout(rollTimer)
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
     deckEl.scrollTo({ top, behavior: reduced ? 'auto' : 'smooth' })
-    rollTimer = setTimeout(endRoll, ROLL_BACKSTOP_MS)
+    rollTimer = setTimeout(() => endRoll(), ROLL_BACKSTOP_MS)
   })
 
   // Wheel/touch scrolling marks the centred card as the view, so the
@@ -275,6 +294,8 @@
                 <EngineRoom />
               {:else if card.key === 'fleet'}
                 <Fleet />
+              {:else if card.key === 'log-every-rule'}
+                <LogEveryRule />
               {/if}
             </div>
           {/if}

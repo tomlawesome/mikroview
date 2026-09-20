@@ -12,7 +12,7 @@ import (
 // probeNote is attached to every suggested probe. It is written for the
 // operator rather than for a developer, because it is the sentence that
 // has to stop somebody assuming mikroview ran the scan itself.
-const probeNote = "mikroview does not run this and never connects to a host on your network -- it only reads what your routers send it. Copy the command if you want to look yourself."
+const probeNote = "MikroView does not run this and never connects to a host on your network -- it only reads what your routers send it. Copy the command if you want to look yourself."
 
 // maxProbePorts bounds the port list in a suggested nmap command:
 // enough to be worth running, short enough to read at a glance.

@@ -160,6 +160,32 @@ func (s *Server) vaultUnlockedFor(r *http.Request, now time.Time) bool {
 	return true
 }
 
+// requireVaultUnlocked is the passphrase half of the gate every read of
+// a stored export or backup goes through: with a passphrase set, only
+// the session that unlocked may proceed. It writes the refusal and
+// reports false, so a caller's only job is to stop.
+//
+// verb names the read this refusal is about ("download", "read") -- the
+// one word the two call sites' refusals differ by. Used to be two
+// hand-copied blocks, one in handleRouterBackupDownload and one in
+// routerbackuptext.go's readBackupText, identical but for that word
+// (#1262 audit finding): nothing stopped them drifting apart, and
+// nothing tested either. One function now backs both.
+func (s *Server) requireVaultUnlocked(w http.ResponseWriter, r *http.Request, verb string) bool {
+	if s.vaultUnlockedFor(r, time.Now()) {
+		return true
+	}
+	// The list reports `locked: false` while another admin's session
+	// holds the unlock, so "the vault is locked" would contradict what
+	// the caller just saw (#1124): say whose unlock it is not.
+	msg := "the vault is locked -- unlock it with the vault passphrase first"
+	if s.vaultUnlock.holder() != "" {
+		msg = fmt.Sprintf("another session holds the vault unlock -- unlock it in this session to %s", verb)
+	}
+	http.Error(w, msg, http.StatusForbidden)
+	return false
+}
+
 // expireVaultUnlock drops the unlock if whoever holds it has gone idle
 // or lost their session.
 func (s *Server) expireVaultUnlock(now time.Time) {
@@ -310,7 +336,7 @@ func (s *Server) handleRouterBackupUnlock(w http.ResponseWriter, r *http.Request
 	}
 	sessionID := requestSessionID(r)
 	if sessionID == "" {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 
@@ -378,7 +404,7 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 	}
 	sessionID := requestSessionID(r)
 	if sessionID == "" {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 
@@ -404,7 +430,7 @@ func (s *Server) handleRouterBackupSetPassphrase(w http.ResponseWriter, r *http.
 	now := time.Now()
 	s.vaultUnlock.claim(sessionID, callerUserID(r), now)
 	s.Audit.Record(auditActor(r), "router_backup.passphrase_set", "vault",
-		"stored backups re-sealed; mikroview can no longer read them unaided")
+		"stored backups re-sealed; MikroView can no longer read them unaided")
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
 }
 
@@ -450,6 +476,46 @@ func (s *Server) handleRouterBackupRemovePassphrase(w http.ResponseWriter, r *ht
 	s.vaultUnlock.release()
 	s.Audit.Record(auditActor(r), "router_backup.passphrase_removed", "vault",
 		"stored backups are readable with the retention key again")
+	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
+}
+
+type vaultPassphraseChangeRequest struct {
+	Current    string `json:"current"`
+	Passphrase string `json:"passphrase"`
+}
+
+// handleRouterBackupChangePassphrase re-wraps the vault's key under a
+// new passphrase, which needs the current one. Unlike set and remove
+// this never touches a stored file (#1222): the key pair does not
+// change, so s.vaultUnlock is left exactly as it is -- an admin who was
+// unlocked stays unlocked, and one who was not stays that way too.
+func (s *Server) handleRouterBackupChangePassphrase(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var req vaultPassphraseChangeRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	key := vaultUnlockLimiterKey(r)
+	if !s.LoginLimiter.Reserve(key, now) {
+		http.Error(w, "too many attempts -- wait a little and try again", http.StatusTooManyRequests)
+		return
+	}
+	if err := s.Vault.ChangePassphrase(req.Current, req.Passphrase); err != nil {
+		if errors.Is(err, backupvault.ErrWrongPassphrase) {
+			s.Audit.Record(auditActor(r), "router_backup.unlock_failed", "vault", "while changing the passphrase")
+		}
+		writeVaultLockError(w, err)
+		return
+	}
+	s.LoginLimiter.Release(key, now)
+	s.Audit.Record(auditActor(r), "router_backup.passphrase_changed", "vault",
+		"stored backups were not re-sealed; the same key now answers to the new passphrase")
 	writeJSON(w, http.StatusOK, s.vaultLockStatus(r, now))
 }
 

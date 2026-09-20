@@ -73,7 +73,7 @@ await page.waitForSelector(DETAIL, { timeout: 25000 })
 
 const leadText = await page.locator('.banner').first().innerText()
 check(
-  leadText.includes('Non-RouterOS sender'),
+  leadText.includes('Oversized messages'),
   `the oversized message raises its own banner -- got ${JSON.stringify(leadText)}`,
 )
 check(
@@ -182,7 +182,7 @@ await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 const viewerBanner = viewerPage.locator('.banner').first()
 await viewerBanner.waitFor({ timeout: 25000 })
 check(
-  (await viewerBanner.innerText()).includes('Non-RouterOS sender'),
+  (await viewerBanner.innerText()).includes('Oversized messages'),
   'a viewer sees the same ingest-loss banner as an editor',
 )
 check(

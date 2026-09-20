@@ -3,11 +3,22 @@
 package device
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
 )
+
+// pushedAddresses stands in for a device's pushed /ip/address table, in
+// the shape RouterOS writes it: keyed by device, valued by the addresses
+// that device pushed ("a.b.c.d/nn"). Used only to prove Resolve does not
+// consult it (see TestResolveIgnoresThePushedAddressTable) -- the
+// pushed-address-table claim stopped being attribution evidence in
+// issue #1281's audit.
+type pushedAddresses map[string][]string
 
 func TestResolveConfiguredDevice(t *testing.T) {
 	r := NewRegistry([]config.Device{
@@ -28,7 +39,98 @@ func TestResolveConfiguredDevice(t *testing.T) {
 	}
 }
 
-func TestResolveAutoDiscoversUnknownSource(t *testing.T) {
+// #1281's attribution order, step (a): config.yaml is the strongest
+// attribution there is -- the operator said which address is which
+// router -- so a token enrolment cannot take an address it names. The
+// enrolment is refused outright rather than recorded and then outranked
+// at read time: a second row claiming the address would say "Enrolled
+// at 192.168.1.1" on a card that receives nothing.
+func TestResolveAttributesByConfiguredSourceIPFirst(t *testing.T) {
+	r := NewRegistry([]config.Device{
+		{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"},
+	})
+	now := time.Now()
+	if _, err := r.Create("other", "Other", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("other", "192.168.1.1", now)
+	if err != nil {
+		t.Fatalf("MintEnrolment: %v", err)
+	}
+	if r.TryEnrol("192.168.1.1", []byte(`<30>Jan  1 00:00:00 router mikroview-enrol `+token)) {
+		t.Error("TryEnrol() = true at a declared device's own address, want false")
+	}
+
+	if id := r.Resolve("192.168.1.1", now); id != "core" {
+		t.Errorf("Resolve() = %q, want the declared device %q -- config.yaml outranks a token enrolment", id, "core")
+	}
+	if got := r.Unattributed(); len(got) != 0 {
+		t.Errorf("Unattributed() = %+v, want none", got)
+	}
+}
+
+// #1281's attribution order, step (b): a device this registry enrolled
+// by a redeemed token is attributed by its AcceptedIP, no config.yaml
+// entry needed -- the replacement for the pushed-address-table claim
+// #1281's audit removed (TestResolveIgnoresThePushedAddressTable below
+// covers that removal directly).
+func TestResolveAttributesByAcceptedIP(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	if id := r.Resolve("10.10.0.1", now); id != "hap-ax3" {
+		t.Errorf("Resolve() = %q, want %q -- the device enrolled at that address", id, "hap-ax3")
+	}
+	if got := r.Unattributed(); len(got) != 0 {
+		t.Errorf("Unattributed() = %+v, want none: the address was enrolled", got)
+	}
+
+	var seen Info
+	for _, info := range r.List() {
+		if info.ID == "hap-ax3" {
+			seen = info
+		}
+	}
+	if seen.EventCount != 1 || seen.SourceIP != "10.10.0.1" {
+		t.Errorf("attributed device = %+v, want one event and the attributed address as its sourceIp", seen)
+	}
+}
+
+// TestResolveIgnoresThePushedAddressTable is issue #1281's audit,
+// pinned directly: before this issue, an address exactly one device's
+// pushed /ip/address table named was attributed to that device with no
+// token at all. That evidence is no longer trusted for attribution --
+// a router asserting its own address
+// in a payload an ingest token merely let it push is not proof of
+// identity -- so the same setup that used to attribute now leaves the
+// address unattributed.
+func TestResolveIgnoresThePushedAddressTable(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	r.Ensure("hap-ax3", now)
+
+	// A pushed table naming this exact address. Resolve itself must not
+	// consult it at all.
+	_ = pushedAddresses{"hap-ax3": {"10.10.0.1/24"}}
+
+	if id := r.Resolve("10.10.0.1", now); id != "10.10.0.1" {
+		t.Errorf("Resolve() = %q, want the address itself: a pushed table alone is no longer attribution evidence", id)
+	}
+	sources := r.Unattributed()
+	if len(sources) != 1 || sources[0].Address != "10.10.0.1" {
+		t.Fatalf("Unattributed() = %+v, want the one unattributed address", sources)
+	}
+}
+
+// Nothing has claimed the address and nothing has pushed anything: the
+// source is remembered as a source, and no device is invented from it.
+// The lines still have somewhere to go -- Resolve returns the address,
+// so they are stored under it exactly as before.
+func TestResolveLeavesAnUnclaimedSourceUnattributed(t *testing.T) {
 	r := NewRegistry(nil)
 
 	id := r.Resolve("10.0.0.5", time.Now())
@@ -36,14 +138,86 @@ func TestResolveAutoDiscoversUnknownSource(t *testing.T) {
 		t.Errorf("Resolve() = %q, want %q", id, "10.0.0.5")
 	}
 
+	if devices := r.List(); len(devices) != 0 {
+		t.Errorf("List() = %+v, want no devices: a syslog packet carries no identity", devices)
+	}
+	sources := r.Unattributed()
+	if len(sources) != 1 || sources[0].Address != "10.0.0.5" || sources[0].Lines != 1 {
+		t.Errorf("Unattributed() = %+v, want one source with one line", sources)
+	}
+	if sources[0].FirstSeen.IsZero() || len(sources[0].Claimants) != 0 {
+		t.Errorf("unattributed source = %+v, want a first-seen and no claimants", sources[0])
+	}
+}
+
+// A source that arrives before its device is enrolled is unattributed;
+// once a token is redeemed at that address, the next line is attributed
+// and the address stops being listed as unclaimed. The evidence moved,
+// so the answer moves with it.
+func TestATokenAttributesASourceThatArrivedBeforeIt(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+
+	r.Resolve("10.10.0.1", now)
+	if got := r.Unattributed(); len(got) != 1 {
+		t.Fatalf("Unattributed() = %+v, want the source before any enrolment", got)
+	}
+
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	enrolAt(t, r, "hap-ax3", "10.10.0.1")
+
+	if id := r.Resolve("10.10.0.1", now.Add(2*time.Minute)); id != "hap-ax3" {
+		t.Errorf("Resolve() = %q, want %q once the device was enrolled at the address", id, "hap-ax3")
+	}
+	if got := r.Unattributed(); len(got) != 0 {
+		t.Errorf("Unattributed() = %+v, want none: the address is enrolled now", got)
+	}
+}
+
+// Ensure is #1170's "a push from token device X ensures X exists": the
+// device is in the one list every count reads from its first push, and
+// is honestly reported as never having logged anything -- a push is not
+// a log line, and the fleet's never-seen status and the silence
+// detector both depend on not confusing the two.
+func TestEnsureAddsAPushingRouterWithoutFakingSyslog(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	r.Ensure("hap-ax3", now)
+	r.Ensure("hap-ax3", now.Add(time.Hour))
+
 	devices := r.List()
-	if len(devices) != 1 || devices[0].Configured {
-		t.Errorf("expected one auto-discovered, unconfigured device: %+v", devices)
+	if len(devices) != 1 {
+		t.Fatalf("List() = %+v, want the one pushing device", devices)
+	}
+	d := devices[0]
+	if d.ID != "hap-ax3" || d.Name != "hap-ax3" || d.Configured {
+		t.Errorf("device = %+v, want the token's device name, undeclared", d)
+	}
+	if !d.FirstSeen.Equal(now) {
+		t.Errorf("FirstSeen = %v, want the first push at %v", d.FirstSeen, now)
+	}
+	if !d.LastSeen.IsZero() || d.EventCount != 0 {
+		t.Errorf("device = %+v, want no syslog liveness: nothing has been logged", d)
+	}
+}
+
+// A router declared in config.yaml that pushes under the same id stays
+// one device, not two: Ensure finds the declared entry rather than
+// minting a second one beside it.
+func TestEnsureKeepsADeclaredDeviceSingular(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"}})
+	r.Ensure("core", time.Now())
+
+	devices := r.List()
+	if len(devices) != 1 || devices[0].ID != "core" || !devices[0].Configured || devices[0].Name != "Core Router" {
+		t.Errorf("List() = %+v, want the one declared device unchanged", devices)
 	}
 }
 
 func TestResolveIncrementsEventCount(t *testing.T) {
-	r := NewRegistry(nil)
+	r := NewRegistry([]config.Device{{ID: "core", SourceIP: "10.0.0.5"}})
 	now := time.Now()
 	r.Resolve("10.0.0.5", now)
 	r.Resolve("10.0.0.5", now.Add(time.Second))
@@ -56,8 +230,8 @@ func TestResolveIncrementsEventCount(t *testing.T) {
 }
 
 // Different textual forms of the same address (here, IPv6 shorthand vs.
-// its fully-expanded form) must resolve to the same device entry rather
-// than silently splitting one router's events across two -- normalizeIP
+// its fully-expanded form) must land on the same entry rather than
+// silently splitting one source's lines across two -- normalizeIP
 // re-serializes through net.IP.String() specifically to collapse this.
 func TestResolveNormalizesEquivalentIPForms(t *testing.T) {
 	r := NewRegistry(nil)
@@ -66,15 +240,15 @@ func TestResolveNormalizesEquivalentIPForms(t *testing.T) {
 	r.Resolve("::1", now)
 	r.Resolve("0:0:0:0:0:0:0:1", now.Add(time.Second))
 
-	devices := r.List()
-	if len(devices) != 1 {
-		t.Fatalf("expected both forms to resolve to one device, got %d: %+v", len(devices), devices)
+	sources := r.Unattributed()
+	if len(sources) != 1 {
+		t.Fatalf("expected both forms to resolve to one source, got %d: %+v", len(sources), sources)
 	}
-	if devices[0].EventCount != 2 {
-		t.Errorf("EventCount = %d, want 2", devices[0].EventCount)
+	if sources[0].Lines != 2 {
+		t.Errorf("Lines = %d, want 2", sources[0].Lines)
 	}
-	if devices[0].SourceIP != "::1" {
-		t.Errorf("SourceIP = %q, want the normalized form %q", devices[0].SourceIP, "::1")
+	if sources[0].Address != "::1" {
+		t.Errorf("Address = %q, want the normalized form %q", sources[0].Address, "::1")
 	}
 }
 
@@ -95,7 +269,7 @@ func TestNormalizeIPFallsBackForUnparseableInput(t *testing.T) {
 // callers on the /api/devices read path have no other isolation from
 // concurrent ingest-side writes.
 func TestListReturnsIndependentSnapshot(t *testing.T) {
-	r := NewRegistry(nil)
+	r := NewRegistry([]config.Device{{ID: "core", Name: "Core Router", SourceIP: "10.0.0.5"}})
 	r.Resolve("10.0.0.5", time.Now())
 
 	devices := r.List()
@@ -108,37 +282,54 @@ func TestListReturnsIndependentSnapshot(t *testing.T) {
 	}
 }
 
-func TestListIncludesConfiguredAndAutoDiscovered(t *testing.T) {
+// Unattributed() is a copy for the same reason List() is: the API
+// serialises it outside the registry's lock.
+func TestUnattributedReturnsIndependentSnapshot(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	r.Resolve("10.0.0.5", now)
+
+	sources := r.Unattributed()
+	sources[0].Lines = 999
+
+	fresh := r.Unattributed()
+	if fresh[0].Lines == 999 {
+		t.Errorf("mutating an Unattributed() result affected subsequent output: %+v", fresh)
+	}
+}
+
+func TestListIncludesConfiguredAndPushed(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"},
 	})
-	r.Resolve("192.168.1.1", time.Now())
-	r.Resolve("10.0.0.9", time.Now())
+	now := time.Now()
+	r.Resolve("192.168.1.1", now)
+	r.Ensure("hap-ax3", now)
 
 	devices := r.List()
 	if len(devices) != 2 {
-		t.Fatalf("expected 2 devices (1 configured + 1 auto-discovered), got %d: %+v", len(devices), devices)
+		t.Fatalf("expected 2 devices (1 declared + 1 that pushed), got %d: %+v", len(devices), devices)
 	}
 
-	var sawConfigured, sawDiscovered bool
+	var sawConfigured, sawPushed bool
 	for _, d := range devices {
-		if d.SourceIP == "192.168.1.1" && d.Configured {
+		if d.ID == "core" && d.Configured {
 			sawConfigured = true
 		}
-		if d.SourceIP == "10.0.0.9" && !d.Configured {
-			sawDiscovered = true
+		if d.ID == "hap-ax3" && !d.Configured {
+			sawPushed = true
 		}
 	}
-	if !sawConfigured || !sawDiscovered {
-		t.Errorf("expected one configured + one auto-discovered device, got %+v", devices)
+	if !sawConfigured || !sawPushed {
+		t.Errorf("expected one declared + one pushing device, got %+v", devices)
 	}
 }
 
 // TestMultihomedCandidatesFlagsSilentDeclaredDevice is issue #442's core
 // scenario: a router is declared under one address, its syslog actually
-// arrives from another (a different, VLAN-facing interface), so the
-// declared device never receives an event and the real traffic
-// auto-discovers as a second, undeclared device.
+// arrives from another (a different, VLAN-facing interface), and that
+// other address is claimed by nothing -- so the declared device never
+// receives an event while lines arrive unattributed.
 func TestMultihomedCandidatesFlagsSilentDeclaredDevice(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core-router", Name: "Core Router", SourceIP: "192.168.1.1"},
@@ -153,15 +344,15 @@ func TestMultihomedCandidatesFlagsSilentDeclaredDevice(t *testing.T) {
 	if c.DeclaredID != "core-router" || c.DeclaredSourceIP != "192.168.1.1" {
 		t.Errorf("unexpected declared side: %+v", c)
 	}
-	if len(c.Discovered) != 1 || c.Discovered[0].SourceIP != "10.10.0.1" || c.Discovered[0].Configured {
-		t.Errorf("unexpected discovered side: %+v", c.Discovered)
+	if len(c.Unattributed) != 1 || c.Unattributed[0].Address != "10.10.0.1" {
+		t.Errorf("unexpected arriving side: %+v", c.Unattributed)
 	}
 }
 
 // TestMultihomedCandidatesEmptyWhenDeclaredDeviceHasTraffic guards
 // against false positives: a declared device that has actually received
 // its own events is not "silent" just because some other, unrelated
-// device was also discovered.
+// address is also arriving.
 func TestMultihomedCandidatesEmptyWhenDeclaredDeviceHasTraffic(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core-router", Name: "Core Router", SourceIP: "192.168.1.1"},
@@ -174,27 +365,44 @@ func TestMultihomedCandidatesEmptyWhenDeclaredDeviceHasTraffic(t *testing.T) {
 	}
 }
 
-// TestMultihomedCandidatesEmptyWithNoDiscoveredDevices guards the other
+// TestMultihomedCandidatesEmptyWithNoUnattributedSources guards the other
 // false-positive direction: a declared device with no traffic yet is
-// unremarkable on its own when nothing has been discovered either -- the
+// unremarkable on its own when nothing is arriving unclaimed -- the
 // router may simply not have started logging yet.
-func TestMultihomedCandidatesEmptyWithNoDiscoveredDevices(t *testing.T) {
+func TestMultihomedCandidatesEmptyWithNoUnattributedSources(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core-router", Name: "Core Router", SourceIP: "192.168.1.1"},
 	})
 
 	if got := r.MultihomedCandidates(); got != nil {
-		t.Errorf("MultihomedCandidates() = %+v, want nil: nothing discovered at all", got)
+		t.Errorf("MultihomedCandidates() = %+v, want nil: nothing is arriving unclaimed", got)
 	}
 }
 
-// TestMultihomedCandidatesListsEveryDiscoveredDevice: Registry cannot
-// itself tell which discovered device (if any) is the same physical
-// router as a silent declared one, so with more than one discovered
-// device it must report all of them rather than guessing at one -- the
-// same "several rules share a prefix, the honest answer is all of them"
-// rule RulesForLogPrefix follows.
-func TestMultihomedCandidatesListsEveryDiscoveredDevice(t *testing.T) {
+// TestMultihomedCandidatesReadTheSameAttribution: a source the routers'
+// own pushed tables settle is not a multi-homing puzzle at all. #1170
+// gave the registry that evidence, so the candidate list is now only
+// what the tables could not answer.
+func TestMultihomedCandidatesReadTheSameAttribution(t *testing.T) {
+	r := NewRegistry([]config.Device{
+		{ID: "core-router", Name: "Core Router", SourceIP: "192.168.1.1"},
+	})
+	now := time.Now()
+	enrolAt(t, r, "core-router", "10.10.0.1")
+	r.Resolve("10.10.0.1", now)
+
+	if got := r.MultihomedCandidates(); got != nil {
+		t.Errorf("MultihomedCandidates() = %+v, want nil: the address was already enrolled", got)
+	}
+}
+
+// TestMultihomedCandidatesListsEveryUnattributedSource: Registry cannot
+// itself tell which unclaimed address (if any) is the same physical
+// router as a silent declared one, so with more than one it must report
+// all of them rather than guessing at one -- the same "several rules
+// share a prefix, the honest answer is all of them" rule
+// RulesForLogPrefix follows.
+func TestMultihomedCandidatesListsEveryUnattributedSource(t *testing.T) {
 	r := NewRegistry([]config.Device{
 		{ID: "core-router", Name: "Core Router", SourceIP: "192.168.1.1"},
 	})
@@ -202,8 +410,8 @@ func TestMultihomedCandidatesListsEveryDiscoveredDevice(t *testing.T) {
 	r.Resolve("10.10.0.2", time.Now())
 
 	got := r.MultihomedCandidates()
-	if len(got) != 1 || len(got[0].Discovered) != 2 {
-		t.Fatalf("expected 1 candidate with 2 discovered devices, got %+v", got)
+	if len(got) != 1 || len(got[0].Unattributed) != 2 {
+		t.Fatalf("expected 1 candidate with 2 unattributed sources, got %+v", got)
 	}
 }
 
@@ -214,6 +422,23 @@ type fixedNames map[string]string
 
 func (f fixedNames) Device(id string) string { return f[id] }
 
+// enrolAt mints a real enrolment token for device and redeems it at
+// host via TryEnrol, exactly the way the listener gate would on a real
+// "mikroview-enrol <token>" line -- the one path tests should use to
+// put a device's AcceptedIP in place, rather than poking the field
+// directly, so these tests exercise the real mint/hash/redeem sequence.
+func enrolAt(t *testing.T, r *Registry, device, host string) {
+	t.Helper()
+	token, _, err := r.MintEnrolment(device, host, time.Now())
+	if err != nil {
+		t.Fatalf("MintEnrolment(%q): %v", device, err)
+	}
+	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
+	if !r.TryEnrol(host, line) {
+		t.Fatalf("TryEnrol(%q, ...) = false, want the freshly minted token to redeem", host)
+	}
+}
+
 // TestListServesTheStoredName is issue #600's requirement at the layer
 // it is stored: a rename one person saved is what every reader of List
 // gets -- GET /api/devices, the wizard's command blocks, the silence
@@ -221,16 +446,17 @@ func (f fixedNames) Device(id string) string { return f[id] }
 // knows about.
 func TestListServesTheStoredName(t *testing.T) {
 	r := NewRegistry([]config.Device{{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1"}})
-	r.Resolve("192.168.1.1", time.Now())
-	r.Resolve("10.0.0.9", time.Now())
-	r.SetNames(fixedNames{"10.0.0.9": "lab crs"})
+	now := time.Now()
+	r.Resolve("192.168.1.1", now)
+	r.Ensure("lab-crs", now)
+	r.SetNames(fixedNames{"lab-crs": "lab crs"})
 
 	got := map[string]string{}
 	for _, info := range r.List() {
 		got[info.ID] = info.Name
 	}
-	if got["10.0.0.9"] != "lab crs" {
-		t.Errorf("discovered device name = %q, want the stored rename", got["10.0.0.9"])
+	if got["lab-crs"] != "lab crs" {
+		t.Errorf("pushing device name = %q, want the stored rename", got["lab-crs"])
 	}
 	if got["core"] != "Core Router" {
 		t.Errorf("configured device name = %q, want config.yaml's own name", got["core"])
@@ -264,19 +490,163 @@ func TestListOrdersConfiguredFirstThenByID(t *testing.T) {
 		{ID: "zeta", Name: "Zeta", SourceIP: "192.168.1.9"},
 		{ID: "alpha", Name: "Alpha", SourceIP: "192.168.1.1"},
 	})
-	r.Resolve("10.0.0.9", time.Now())
-	r.Resolve("10.0.0.2", time.Now())
+	now := time.Now()
+	r.Ensure("rb5009", now)
+	r.Ensure("hap-ax3", now)
 
 	for i := 0; i < 20; i++ {
 		var ids []string
 		for _, info := range r.List() {
 			ids = append(ids, info.ID)
 		}
-		want := []string{"alpha", "zeta", "10.0.0.2", "10.0.0.9"}
+		want := []string{"alpha", "zeta", "hap-ax3", "rb5009"}
 		for j := range want {
 			if ids[j] != want[j] {
 				t.Fatalf("List() ids = %v, want %v", ids, want)
 			}
+		}
+	}
+}
+
+// TestRegisterRecordsIntentAndGrantsNoAddress is the heart of issue
+// #1291: the ledger's final step records that the operator confirmed
+// this router, and confers nothing on it. If registering could set
+// AcceptedIP, an admin session alone would be enough to have an address
+// treated as a log source -- which is exactly the hole #1291 closes.
+func TestRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := r.Register("hap-ax3", "Upstairs hAP", now)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if info.RegisteredAt.IsZero() {
+		t.Error("registeredAt is zero after registering, want it stamped")
+	}
+	if info.Name != "Upstairs hAP" {
+		t.Errorf("name = %q, want the confirmed name", info.Name)
+	}
+	if info.AcceptedIP != "" {
+		t.Fatalf("acceptedIp = %q after registering, want registering to grant no address at all", info.AcceptedIP)
+	}
+	// And nothing anywhere else in the registry started attributing an
+	// address to it either.
+	if id := r.Resolve("10.10.0.1", now); id == "hap-ax3" {
+		t.Error("Resolve() attributed an address to a merely registered device, want registering to grant nothing")
+	}
+	if r.AcceptsConnectionFrom("10.10.0.1") {
+		t.Error("AcceptsConnectionFrom() = true after registering, want registering to open no window")
+	}
+}
+
+// TestRegisterKeepsTheExistingNameWhenGivenNone: the operator is
+// confirming the router, not necessarily renaming it.
+func TestRegisterKeepsTheExistingNameWhenGivenNone(t *testing.T) {
+	r := NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	info, err := r.Register("hap-ax3", "", now)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if info.Name != "hap-ax3" {
+		t.Errorf("name = %q, want the name it already had", info.Name)
+	}
+	if info.RegisteredAt.IsZero() {
+		t.Error("registeredAt is zero, want registering to stamp it even with no rename")
+	}
+}
+
+// TestRegisterRefusesAConfigDeclaredDevice: config.yaml rebuilds it on
+// every boot, so a registration written here would vanish at the next
+// restart -- the same reason Delete refuses one.
+func TestRegisterRefusesAConfigDeclaredDevice(t *testing.T) {
+	r := NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "10.0.0.1"}})
+	if _, err := r.Register("core", "Renamed", time.Now()); err != ErrDeviceConfigured {
+		t.Errorf("Register(config-declared) error = %v, want ErrDeviceConfigured", err)
+	}
+}
+
+// TestRegisterUnknownDevice is the 404 the API answers with.
+func TestRegisterUnknownDevice(t *testing.T) {
+	r := NewRegistry(nil)
+	if _, err := r.Register("nope", "", time.Now()); err != ErrDeviceNotFound {
+		t.Errorf("Register(unknown) error = %v, want ErrDeviceNotFound", err)
+	}
+}
+
+// TestARouterEnrolledBeforeRegistrationExistedReadsAsRegistered is
+// issue #1291's upgrade path. A registry written before this shipped
+// has no registeredAt at all, so every router already enrolled under
+// #1281 would otherwise come back as an enrolment someone abandoned
+// part way, and the ledger would reopen on routers whose operator did
+// everything the ledger asked of them at the time. An enrolment that
+// predates registration counts as its own registration, dated when it
+// was enrolled.
+func TestARouterEnrolledBeforeRegistrationExistedReadsAsRegistered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.json")
+	enrolled := time.Now().Add(-72 * time.Hour).UTC().Truncate(time.Second)
+	// Exactly what #1281 persisted: no registeredAt key at all.
+	old := `{"devices":[
+		{"id":"hap-ax3","name":"hAP","acceptedIp":"10.10.0.1","enrolledAt":"` + enrolled.Format(time.RFC3339) + `"},
+		{"id":"never-enrolled","name":"Spare"}
+	]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := OpenRegistry(path, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistry: %v", err)
+	}
+	byID := map[string]Info{}
+	for _, info := range r.List() {
+		byID[info.ID] = info
+	}
+
+	got := byID["hap-ax3"]
+	if !got.RegisteredAt.Equal(enrolled) {
+		t.Errorf("registeredAt = %v, want it back-dated to enrolledAt %v", got.RegisteredAt, enrolled)
+	}
+	if got.AcceptedIP != "10.10.0.1" {
+		t.Errorf("acceptedIp = %q, want the enrolled address kept -- the upgrade must grant nothing new", got.AcceptedIP)
+	}
+
+	// A device that never enrolled is not swept along with it: there is
+	// no evidence its operator confirmed anything, so it still has the
+	// Register step to walk.
+	if spare := byID["never-enrolled"]; !spare.RegisteredAt.IsZero() {
+		t.Errorf("registeredAt = %v on a device that never enrolled, want zero", spare.RegisteredAt)
+	}
+}
+
+// TestABareDeviceCarriesNoTimestamps: the wizard reads these two as
+// "absent until it happened" -- frontend/src/lib/types.ts declares both
+// optional, and setupsteps.ts's register witness is `row?.registeredAt
+// ? ... : ”`. A zero time.Time marshals to "0001-01-01T00:00:00Z",
+// which is a non-empty string, so without omitzero every device that
+// has never been registered reads as registered, and the Register step
+// is done before the operator has touched it. persistedDevice's own
+// copies of these fields already carry omitzero; the wire type did not.
+// Found by the v0.6.0 audit (#1257).
+func TestABareDeviceCarriesNoTimestamps(t *testing.T) {
+	data, err := json.Marshal(Info{ID: "hap-ax3", Name: "hap-ax3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"registeredAt", "enrolledAt"} {
+		if v, present := wire[key]; present {
+			t.Errorf("a device that has never been enrolled or registered sent %s = %v, want the key absent", key, v)
 		}
 	}
 }

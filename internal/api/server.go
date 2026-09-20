@@ -16,9 +16,12 @@ import (
 	"github.com/tomlawesome/mikroview/internal/backupslice"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
+	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -32,6 +35,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/seen"
 	"github.com/tomlawesome/mikroview/internal/settings"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -145,16 +149,20 @@ type Server struct {
 	Learning interface {
 		Learning(id string, now time.Time) (engine.LearningState, bool)
 	}
-	// Evaluation reports how many events the engine accepted, stored and
-	// broadcast but never evaluated for detection, because its queue was
-	// full when they arrived (#1107). Narrow and purpose-named for the
-	// same reason as Learning above. Nil is valid and common (tests, and
-	// any Server built before the engine exists), and the field is then
-	// omitted rather than reported as zero: zero is a real answer --
-	// "nothing was skipped" -- and a Server with no engine cannot
-	// honestly give it.
+	// Evaluation reports how far behind the engine's cursor is, how old
+	// the oldest thing it has not checked yet is, and how many events the
+	// store evicted before it reached them at all (#1109). Narrow and
+	// purpose-named for the same reason as Learning above. Nil is valid
+	// and common (tests, and any Server built before the engine exists),
+	// and the field is then omitted rather than reported as zeros: all
+	// zeros is a real answer -- "caught up, nothing missed" -- and a
+	// Server with no engine cannot honestly give it.
 	Evaluation interface {
-		Dropped() uint64
+		Lag() (behind uint64, behindSeconds float64, outrun uint64)
+		// Forget is for handleTestReset only: the store was emptied on
+		// purpose, so the engine starts level with it and carries no
+		// outrun from before -- see engine.Engine.Forget.
+		Forget()
 	}
 	// Suggest is the persisted pool of watchlist entries suggested from
 	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
@@ -209,6 +217,14 @@ type Server struct {
 	// returns a usable, empty, unpersisted register), same always-usable
 	// convention as Hosts above.
 	Baseline *baseline.Register
+	// SeenValues is the register of values the feed has actually shown
+	// for the two filter fields with no option list anywhere else --
+	// protocol and interface (issue #1226). Backs GET /api/seen-values
+	// (see seen.go), which is what turns the stream's Proto and
+	// Interface free-text boxes into pickers. Always non-nil
+	// (internal/seen.Open("") returns a usable, empty, unpersisted
+	// register), same always-usable convention as Baseline above.
+	SeenValues *seen.Register
 	// HostQuietAfter is how long a host may be silent before the map
 	// draws it quiet (config baseline.hostQuietAfter, 24 hours by owner
 	// ratification on 2026-09-07). Served to the browser on
@@ -230,6 +246,17 @@ type Server struct {
 	// unpersisted store), same always-usable convention as Entities/
 	// Flags/Definitions above.
 	Audit *audit.Store
+	// Droplist is the operator-authored drop list entry store (issue
+	// #1223, stage 1 of the design ratified on #461): ranges an admin
+	// has explicitly decided to block, distinct from the fetched
+	// threat-intel feeds internal/blocklist's own doc comment describes
+	// (that half is wired directly into the engine, not here). Always
+	// non-nil (internal/droplist.Open("") returns a usable, empty,
+	// unpersisted store), same always-usable convention as Audit above.
+	// #1224 wired it up: GET/POST /api/droplist, DELETE
+	// /api/droplist/{cidr...}, the key routes and the RouterOS feed
+	// below all read and write through this store.
+	Droplist *droplist.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
 	// same threshold detect.DeviceSilenceDetector uses to raise an actual
@@ -271,6 +298,15 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// GeoIP reports whether a country database was successfully opened
+	// (main sets this from geoip.Lookup.Configured()), surfaced on
+	// GET /api/healthz as `geoip` (#1198). Country flags degrade silently
+	// to blank when there is no database -- indistinguishable, from the
+	// UI's side, from "no public traffic yet" -- so this is the one fact
+	// that lets the country filter and the ingest settings card tell a
+	// reader which case they are looking at instead of staying quiet
+	// about it.
+	GeoIP bool
 	// ThirdPartyNotices is THIRD-PARTY-NOTICES.md, embedded in the
 	// binary at build time (see notices.go) and served verbatim by
 	// handleThirdPartyNotices. Every dependency compiled into this
@@ -293,6 +329,18 @@ type Server struct {
 	// now -- set once at boot from main.go's storage decision. See
 	// persistence.go.
 	Persistence PersistenceInfo
+
+	// ConfigUpgradeSettings is #1218's offer: every optional top-level
+	// setting this build understands that the running config does not
+	// set, each paired with deploy/config.example.yaml's own ready-to-
+	// paste YAML for it. Computed once at boot from the fixed inputs it
+	// depends on (this binary, this process's config) -- see main.go and
+	// config.MissingSettings -- and served as-is by handleConfigUpgrade.
+	ConfigUpgradeSettings []config.MissingSetting
+	// ConfigDrift is where an operator's dismissal of that same notice
+	// is remembered, per version (#1218). Nil when persistence for it is
+	// unconfigured, same optional-persistence contract as Setup below.
+	ConfigDrift *configdrift.Store
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -410,6 +458,19 @@ type Server struct {
 	// permitted somewhere no record still claims. Zero value is ready to
 	// use, same as the two above.
 	verdictWatchlistMu sync.Mutex
+
+	// droplistKeyMintMu serializes handleDroplistKeyCreate's create-then-
+	// revoke sequence (#1224 hardening, security review): at most one
+	// droplist-pull token is ever meant to exist, but Create and the
+	// revoke loop that follows it are two separate steps, so two
+	// concurrent mint requests could otherwise each create a token before
+	// either reaches its revoke loop and leave two live keys instead of
+	// one. Held for the whole create-then-revoke sequence, in that order
+	// -- create first, same as an unserialized request -- so a request
+	// that failed after create still leaves no worse than an extra
+	// revocable token, never zero. Zero value is ready to use, same as
+	// the mutexes above.
+	droplistKeyMintMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather
@@ -464,6 +525,18 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
 		{http.MethodGet, "/api/devices/macs", s.handleDeviceMACs},
+		// Issue #1281: declaring, enrolling and deleting a syslog-only
+		// device, and the addresses the listener gate has refused a line
+		// from. Admin-only writes beside the viewer-tier read above --
+		// see devices.go's own doc comments for why each is gated where
+		// it is.
+		{http.MethodPost, "/api/devices", s.handleDeviceCreate},
+		{http.MethodDelete, "/api/devices/{id}", s.handleDeviceDelete},
+		{http.MethodPost, "/api/devices/{id}/registration", s.handleDeviceRegister},
+		{http.MethodPost, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentCreate},
+		{http.MethodPost, "/api/devices/{id}/enrolment/address", s.handleDeviceEnrolmentRebind},
+		{http.MethodDelete, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentDelete},
+		{http.MethodGet, "/api/devices/refused", s.handleDevicesRefused},
 		{http.MethodGet, "/api/rules", s.handleRules},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push
@@ -513,6 +586,12 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
 		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
 		{http.MethodPost, "/api/flags/{id}/verdict", s.handleFlagsVerdict},
+		// Editing the note a verdict already carries (#1232). Free to
+		// take the wildcard-then-literal shape the POST above uses --
+		// the ambiguity the next comment describes is between patterns
+		// that could match the same request, and no other PUT is
+		// registered under /api/flags/.
+		{http.MethodPut, "/api/flags/{id}/note", s.handleFlagNote},
 		// Not "/{id}/verdict" (which would mirror the POST above): that
 		// shape is structurally ambiguous against any literal-then-
 		// wildcard sibling under /api/flags/ in Go's net/http.ServeMux
@@ -586,6 +665,10 @@ func (s *Server) apiRoutes() []route {
 		// today's off-baseline lines are reachable -- there is
 		// deliberately no endpoint serving the established ones, see
 		// handleBaselineOff.
+		// The seen-values register (issue #1226) -- see seen.go. One
+		// route for both fields; the response is keyed by field name.
+		{http.MethodGet, "/api/seen-values", s.handleSeenValues},
+
 		{http.MethodGet, "/api/baseline/off", s.handleBaselineOff},
 		{http.MethodPut, "/api/baseline/{key}/expected", s.handleBaselineExpectedPut},
 		{http.MethodDelete, "/api/baseline/{key}/expected", s.handleBaselineExpectedDelete},
@@ -618,8 +701,19 @@ func (s *Server) apiRoutes() []route {
 		// The claim ledger's own marks (#487): a step skipped or forced
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
+		// The wizard header field's answer (#1213): what address a
+		// router can reach this instance on. Admin-only, same gate as
+		// the mark endpoint above.
+		{http.MethodPost, "/api/setup/address", s.handleSetupAddress},
+		// How step 6's script delivers its backup (#955): over SFTP to
+		// the drop box, or in slices through the ingest channel for an
+		// HTTPS-only install. A property of the deployment, stored
+		// beside the address above and admin-only for the same reason.
+		{http.MethodPut, "/api/setup/backup-transport", s.handleSetupBackupTransport},
 
-		// "Tune logging" (#435): upload a RouterOS export, get back the
+		// "Log every rule" (#435, named "Tune logging" until #1134,
+		// which left these two paths alone): upload a RouterOS export,
+		// get back the
 		// filter rules that cross a dark boundary with their pushed
 		// counters as the cost of watching them, then render logging
 		// switched on for whichever the operator picks. Same tier as the
@@ -633,10 +727,37 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 		{http.MethodGet, "/api/persistence", s.handlePersistence},
 
+		// The "N new settings are available" notice (#1218) and its
+		// per-version dismissal -- the setup wizard's paste-block
+		// treatment, applied to whatever this version understands that
+		// config.yaml does not set. See configupgrade.go.
+		{http.MethodGet, "/api/config/upgrade", s.handleConfigUpgrade},
+		{http.MethodPost, "/api/config/upgrade/dismiss", s.handleConfigUpgradeDismiss},
+
+		// The upgrade notice (#1240): which build this data directory
+		// last ran, how much of the fleet is still on the old setup, and
+		// the admin's "done". See upgrade.go.
+		{http.MethodGet, "/api/upgrade", s.handleUpgrade},
+		{http.MethodPost, "/api/upgrade/acknowledge", s.handleUpgradeAcknowledge},
+
 		// Router-backup vault (#394): the Settings group's list and the
 		// download an admin uses to actually restore a dead router.
 		{http.MethodGet, "/api/router-backups", s.handleRouterBackupsList},
 		{http.MethodGet, "/api/router-backups/{device}/{generation}/{kind}", s.handleRouterBackupDownload},
+
+		// Reading and comparing the redacted text export (#895). The
+		// `text` route is more specific than the `{kind}` download
+		// above it, so ServeMux picks it first; diff takes its pair as
+		// query parameters because neither generation owns the other.
+		{http.MethodGet, "/api/router-backups/{device}/{generation}/text", s.handleRouterBackupText},
+		{http.MethodGet, "/api/router-backups/{device}/diff", s.handleRouterBackupDiff},
+
+		// The kept pool (#1126): an admin marks one stored backup as
+		// one to hold on to, with a comment saying why, and it stops
+		// counting towards the ten the vault cycles.
+		{http.MethodPost, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupProtect},
+		{http.MethodDelete, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupUnprotect},
+		{http.MethodPatch, "/api/router-backups/{device}/{generation}/protect", s.handleRouterBackupComment},
 
 		// The vault's optional admin passphrase (#956). Reading a backup
 		// needs the passphrase once one is set; a backup still arrives
@@ -645,6 +766,22 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/router-backups/lock", s.handleRouterBackupLock},
 		{http.MethodPost, "/api/router-backups/passphrase", s.handleRouterBackupSetPassphrase},
 		{http.MethodDelete, "/api/router-backups/passphrase", s.handleRouterBackupRemovePassphrase},
+		{http.MethodPut, "/api/router-backups/passphrase", s.handleRouterBackupChangePassphrase},
+
+		// The drop list's admin API (issue #1224): the entry list/add/
+		// remove routes, and the pull key that lets a router fetch the
+		// generated .rsc feed. The pull route itself
+		// (GET /api/droplist.rsc) is bearer-only and lives on its own
+		// mux -- see droplistPullRoutes in auth.go -- deliberately absent
+		// from this session-gated table.
+		{http.MethodGet, "/api/droplist", s.handleDroplistList},
+		{http.MethodPost, "/api/droplist", s.handleDroplistCreate},
+		// Registered before the {cidr...} pattern purely for readability,
+		// same as /api/definitions/schema above it: ServeMux matches the
+		// literal segment regardless of declaration order.
+		{http.MethodPost, "/api/droplist/key", s.handleDroplistKeyCreate},
+		{http.MethodDelete, "/api/droplist/key", s.handleDroplistKeyDelete},
+		{http.MethodDelete, "/api/droplist/{cidr...}", s.handleDroplistDelete},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
@@ -655,6 +792,7 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
+		{http.MethodPost, "/api/auth/users/{id}/reset-password", s.handleAuthResetUserPassword},
 
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/

@@ -24,6 +24,12 @@
   // Everything shown here is pushed router state (issue #186). Nothing
   // in this path contacts the router, and nothing infers a rule the
   // router did not report.
+  //
+  // #1195: the two states that name the router take st.deviceName, the
+  // configured display name, not st.device -- the same fault the issue
+  // found in the popover's header, in the body both surfaces share. The
+  // id is what every fetch here is keyed by and stays in st.device; it
+  // is not what the operator is shown.
   import { routerLookupState as st } from '../lib/routerLookup.svelte'
 
   const partition = $derived(st.natPartition)
@@ -35,7 +41,7 @@
   <div class="status error">{st.error}</div>
 {:else if !st.available}
   <div class="status">
-    No NAT table pushed by “{st.device}” yet — this data arrives via the RouterOS push
+    No NAT table pushed by “{st.deviceName}” yet — this data arrives via the RouterOS push
     integration, not syslog.
   </div>
 
@@ -84,7 +90,7 @@
        NAT -- got an empty box and a footnote explaining how to read
        rules that are not there. -->
   <div class="status">
-    “{st.device}” has pushed its NAT table and it is empty — no NAT rules are configured on that
+    “{st.deviceName}” has pushed its NAT table and it is empty — no NAT rules are configured on that
     router.
   </div>
 

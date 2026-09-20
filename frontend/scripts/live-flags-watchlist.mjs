@@ -35,7 +35,7 @@
 // is ever raised. There is no API to prune an expectation until #640
 // part C lands the ledger.
 
-import { session, check, done, feedInternalRecon, waitForFlag, goTo } from './live-browser.mjs'
+import { session, check, done, feedInternalRecon, waitForFlag, goTo, DESKTOP_VIEWPORT } from './live-browser.mjs'
 
 // Unused by every other scenario here -- checked against the 192.168.1.*
 // literals already in use (the router is .1, the port-scan target .10,
@@ -44,7 +44,12 @@ const EXPECT_IP = '192.168.1.60'
 const RESOLVE_IP = '192.168.1.61'
 const UNDO_IP = '192.168.1.62'
 
-const { page, consoleErrors } = await session()
+// A desktop docket: this scenario judges watchlist flags off the row, and
+// below 1300px the chips move into the row's drawer instead (#1150).
+// Playwright's default 1280 is below that, so the width is said out loud
+// rather than inherited -- live-verdicts.mjs is where both placements are
+// asserted.
+const { page, consoleErrors } = await session({ viewport: DESKTOP_VIEWPORT })
 
 feedInternalRecon(12, EXPECT_IP, 445)
 feedInternalRecon(12, RESOLVE_IP, 3389)

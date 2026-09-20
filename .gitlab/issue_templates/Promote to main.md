@@ -19,8 +19,8 @@
 - [ ] `VERSION` bumped and `CHANGELOG.md` has a `## [<version>] - <date>` heading for it
 - [ ] `README.md` Features and Quickstart describe what this version actually does (read them against the changelog)
 - [ ] `site/index.html` copy and links describe the current product (it is the GitHub Pages site; it only redeploys when `site/` or the screenshots change)
-- [ ] `docs/screenshots/*.png` recaptured from a seeded demo of this version if `frontend/src` changed since the last tag (`scripts/check-release-surfaces.sh` refuses stale ones)
-- [ ] `SECURITY.md` and `CONTRIBUTING.md` reporting and contact channels are live
+- [ ] `docs/screenshots/*.png` recaptured from a seeded demo of this version if the components they depict changed (`scripts/check-release-surfaces.sh`'s `screenshot_sources()` map says which files each screenshot is checked against; it refuses stale ones)
+- [ ] `SECURITY.md` and the README's "Contributions" reporting and contact channels are live
 - [ ] `make release-surfaces` passes locally (same check `policy:release-surfaces` runs on the preview -> main merge request)
 - [ ] the previous release's review record in `docs/reviews/` lists its deferred security findings with fix commits -- no `pending-disclosure` marker left (`make release-surfaces` checks this)
 - [ ] every operator step named on this promote issue (host scripts, config, secrets) is done and verified
@@ -30,7 +30,7 @@
 
 ## Why
 
-Release surfaces (README, site, screenshots, SECURITY, CONTRIBUTING) are not touched by normal development, so they drift. This template plus the CI check are the structure that stops the drift (owner decision, 2026-09-10).
+Release surfaces (README, site, screenshots, SECURITY, docs/development.md) are not touched by normal development, so they drift. This template plus the CI check are the structure that stops the drift (owner decision, 2026-09-10).
 
 ## Done when
 

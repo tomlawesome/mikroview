@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,7 +11,41 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// failingSaveBackend lets Open/Register succeed (nothing stored yet) but
+// fails every Save -- the v0.6.0 audit's R6 fix needs a backend that can
+// never durably record the change a scoped call is about to make.
+type failingSaveBackend struct{}
+
+func (failingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (failingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	return 0, errors.New("backend unavailable")
+}
+func (failingSaveBackend) Close() error     { return nil }
+func (failingSaveBackend) Describe() string { return "failing test backend" }
+
+// saveBudgetBackend allows a fixed number of Saves and then fails every
+// one after, for the R6 cases where the change under test has to land
+// on a store that already holds something.
+type saveBudgetBackend struct{ left int }
+
+func (b *saveBudgetBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (b *saveBudgetBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	if b.left <= 0 {
+		return 0, errors.New("backend unavailable")
+	}
+	b.left--
+	return expect + 1, nil
+}
+func (b *saveBudgetBackend) Close() error     { return nil }
+func (b *saveBudgetBackend) Describe() string { return "save-budget test backend" }
 
 func TestOpenEmptyPathIsUsableButNotPersisted(t *testing.T) {
 	s, err := Open("")
@@ -179,6 +214,32 @@ func TestSetPasswordChangesCredentials(t *testing.T) {
 	}
 	if _, err := s.Authenticate("admin", "new-password", time.Now()); err != nil {
 		t.Errorf("expected the new password to work, got %v", err)
+	}
+}
+
+// TestSetPasswordLeavesTheOldPasswordWorkingWhenPersistFails is the
+// v0.6.0 audit's R6 fix: a password change that cannot be saved must not
+// take effect in memory either, or a restart before the next good write
+// would silently restore a credential the operator was told was already
+// dead.
+func TestSetPasswordLeavesTheOldPasswordWorkingWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("admin", "old-password", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetPassword("admin", "new-password", time.Now()); err == nil {
+		t.Fatal("SetPassword against a backend that cannot save = nil error, want one")
+	}
+
+	if _, err := s.Authenticate("admin", "old-password", time.Now()); err != nil {
+		t.Errorf("expected the old password to still work after a failed persist, got %v", err)
+	}
+	if _, err := s.Authenticate("admin", "new-password", time.Now()); err == nil {
+		t.Error("expected the new password to not have taken effect after a failed persist")
 	}
 }
 

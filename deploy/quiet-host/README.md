@@ -1,6 +1,6 @@
 # Quiet host (issue #1003)
 
-One box runs every `ai` group runner and mikroview's dev gate loop. When
+One box runs every `ai` group runner and MikroView's dev gate loop. When
 `perf:promotion` measures UI performance it needs the box quiet, so it
 writes a flag file (`/srv/quiet-host/hold`) and this root-owned unit sets
 `concurrent = 1` in `/etc/gitlab-runner/config.toml` until the flag goes

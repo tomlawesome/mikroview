@@ -64,6 +64,7 @@ function fallBoundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     inInterface: 'ether9',
     outInterface: 'ether1',
     srcAddressList: 'iot',
+    slugs: [],
     label: 'iot → ether1',
     coverage: 'observed',
     epithet: '',
@@ -150,6 +151,22 @@ function suggestion(
   }
 }
 
+// A registry row as GET /api/devices serves it -- only the fields the
+// suggestions heading reads (#1170); the rest of Device is irrelevant
+// here.
+function device(id: string, name = id) {
+  return {
+    id,
+    name,
+    sourceIp: '10.0.0.1',
+    configured: true,
+    firstSeen: '2026-08-24T09:00:00Z',
+    lastSeen: '2026-08-24T10:00:00Z',
+    eventCount: 1,
+    status: 'live',
+  } as unknown as (typeof appState)['devices'][number]
+}
+
 // The entries come back through the mocked API rather than being
 // assigned onto watchlistState: Watchlist refreshes on mount, so
 // anything written directly onto the store is overwritten by the fetch
@@ -198,6 +215,9 @@ describe('The suggestion body under the watches (#771)', () => {
     suggestState.candidates = []
     matchesState.reset()
     appState.now = new Date('2026-08-24T10:05:00Z').getTime()
+    // #1170: the suggestions heading names routers the registry lists,
+    // so a test that expects a name has to register that router.
+    appState.devices = []
   })
 
   // Round 30's fidelity check (no tab strip at all) still holds under
@@ -218,7 +238,7 @@ describe('The suggestion body under the watches (#771)', () => {
     await renderWatchlist([])
 
     const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
-    expect(heading.textContent).toBe('mikroview suggests')
+    expect(heading.textContent).toBe('MikroView suggests')
     expect(heading.querySelector('b')).toBeNull()
 
     const empty = watchTable().querySelector('.wt-sugg-empty .empty-row') as HTMLElement
@@ -227,6 +247,7 @@ describe('The suggestion body under the watches (#771)', () => {
   })
 
   it('counts only the open candidates in its heading, and names the routers that pushed any of them', async () => {
+    appState.devices = [device('rb5009'), device('hap-ax2')]
     vi.mocked(fetchSuggestions).mockResolvedValue([
       suggestion('s1', 'device', { status: 'off', routerDevice: 'rb5009' }),
       suggestion('s2', 'port', { status: 'off', routerDevice: 'hap-ax2' }),
@@ -238,8 +259,66 @@ describe('The suggestion body under the watches (#771)', () => {
     await renderWatchlist([])
 
     const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
-    expect(heading.textContent).toContain('mikroview suggests · from what rb5009 and hap-ax2 pushed')
+    expect(heading.textContent).toContain('MikroView suggests · from what rb5009 and hap-ax2 pushed')
     expect(heading.querySelector('b')?.textContent).toBe('2')
+    // #1157: the space before the count's own "·" was written as literal
+    // whitespace at the head of an {#if}, which Svelte trims -- the
+    // heading read "…PUSHED· 2".
+    expect(heading.textContent).toMatch(/pushed · 2$/)
+  })
+
+  // #1170 (one device registry). This heading used to print
+  // c.routerDevice straight off the candidates, so it named five
+  // routers while Entities' own card row drew one: a candidate can
+  // carry an id the registry has never listed, and a bare syslog source
+  // is not a router anywhere any more. The heading now reads the
+  // registry -- candidate order, registry names, and any id the
+  // registry does not list is dropped.
+  it("names only the routers GET /api/devices lists, using the registry's own display name", async () => {
+    appState.devices = [device('rb5009', 'border-rb5009'), device('hap-ax2', 'hap-ax2')]
+    vi.mocked(fetchSuggestions).mockResolvedValue([
+      suggestion('s1', 'device', { status: 'off', routerDevice: 'rb5009' }),
+      suggestion('s2', 'port', { status: 'off', routerDevice: 'hap-ax2' }),
+      // Not in the registry: an address that pushed lines and that no
+      // router has claimed. It is not a router, so it cannot be named
+      // as one here.
+      suggestion('s3', 'port', { status: 'off', routerDevice: '172.23.0.1' }),
+    ])
+    await renderWatchlist([])
+
+    const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
+    expect(heading.textContent).toContain('from what border-rb5009 and hap-ax2 pushed')
+    expect(heading.textContent).not.toContain('172.23.0.1')
+    // The registry's name, not the candidate's raw id.
+    expect(heading.textContent).not.toMatch(/what rb5009/)
+  })
+
+  it("falls back to the short heading when the registry lists none of the candidates' routers", async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([
+      suggestion('s1', 'device', { status: 'off', routerDevice: '172.23.0.1' }),
+    ])
+    await renderWatchlist([])
+
+    const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
+    expect(heading.textContent).toContain('MikroView suggests')
+    expect(heading.textContent).not.toContain('from what')
+  })
+
+  // #1160: two drop rules covering the same ports arrive as two
+  // candidates that draw the same row word for word, and the list
+  // printed each of them.
+  it('draws one row where two candidates would read identically, and counts it once', async () => {
+    vi.mocked(fetchSuggestions).mockResolvedValue([
+      suggestion('s1', 'port', { name: 'port 445', ports: [445] }),
+      suggestion('s2', 'port', { name: 'port 445', ports: [445], routerDevice: 'hap-ax2' }),
+      suggestion('s3', 'port', { name: 'port 139', ports: [139] }),
+    ])
+    await renderWatchlist([])
+
+    const heading = watchTable().querySelector('.sdiv .sdl') as HTMLElement
+    expect(heading.querySelector('b')?.textContent).toBe('2')
+    const rows = [...watchTable().querySelectorAll('tbody#sugg tr.wt-sugg')]
+    expect(rows.map((r) => r.querySelector('td.k')?.textContent)).toEqual(['port 445', 'port 139'])
   })
 
   it('keeps set-aside suggestions out of the list until "show them" is clicked, and the pill then reads "hide them"', async () => {
@@ -423,6 +502,9 @@ describe('The match list in a watch drawer (#771)', () => {
     suggestState.candidates = []
     matchesState.reset()
     appState.now = new Date('2026-08-24T10:05:00Z').getTime()
+    // #1170: the suggestions heading names routers the registry lists,
+    // so a test that expects a name has to register that router.
+    appState.devices = []
   })
 
   // Round 30's fidelity check, still true: no Matches tab, no matches
@@ -757,7 +839,7 @@ describe('The ratified watch table (#676)', () => {
 
     const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
     expect(drawer.textContent).toContain('The ring is broken.')
-    expect(drawer.textContent).toContain('No firewall rule mikroview can see is logging this pathway')
+    expect(drawer.textContent).toContain('No firewall rule MikroView can see is logging this pathway')
   })
 
   it('pause watch calls the enable toggle and refreshes the entry', async () => {
@@ -881,6 +963,9 @@ describe('The watch window and its nightly memory (#680)', () => {
     suggestState.candidates = []
     matchesState.reset()
     appState.now = new Date('2026-08-24T10:05:00Z').getTime()
+    // #1170: the suggestions heading names routers the registry lists,
+    // so a test that expects a name has to register that router.
+    appState.devices = []
   })
 
   it("renders the entry's window in the window column, zone and all", async () => {
@@ -976,7 +1061,7 @@ describe('The watch window and its nightly memory (#680)', () => {
     // The recorded break knows which window closed empty, which is why it
     // is written down at the break rather than worked out on read.
     expect(drawer.textContent).toContain('since 1d ago')
-    expect(drawer.textContent).toContain('Nights mikroview could not watch are not counted against it.')
+    expect(drawer.textContent).toContain('Nights MikroView could not watch are not counted against it.')
   })
 
   // paused > no logging visible > ring broken > watching. A watch no rule

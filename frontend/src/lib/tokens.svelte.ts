@@ -39,6 +39,17 @@ class TokensState {
     if (this.justCreated?.id === id) this.justCreated = null
     return null
   }
+
+  // #1083, v0.6.0 pre-release audit Security stage: tokensState was
+  // missed from the original batch. `justCreated` is a raw, live bearer
+  // token -- TokensOverlay's copy-once banner keeps rendering it after
+  // logout, so it must be gone before the next admin signs in on this
+  // tab, not just cleared the one way clearJustCreated() already
+  // covered.
+  reset() {
+    this.list = []
+    this.justCreated = null
+  }
 }
 
 export const tokensState = new TokensState()

@@ -16,7 +16,7 @@
 // checked/undo, investigate, and reload paths each run against their own
 // row rather than several assertions racing one.
 
-import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo, DESKTOP_VIEWPORT } from './live-browser.mjs'
 
 // Unused by every other scenario in this directory (checked against
 // every 198.51.100.* literal already in use here before picking these).
@@ -25,7 +25,12 @@ const INVESTIGATE_IP = '198.51.100.105'
 const RESOLVED_IP = '198.51.100.106'
 const RELOAD_IP = '198.51.100.107'
 
-const { page, consoleErrors } = await session()
+// A desktop docket, said out loud (#1150): below 1300px the trio moves
+// into the row's drawer, and Playwright's default 1280 is below that --
+// so the width this scenario's "straight off the row" claim is about has
+// to be asked for rather than inherited. The narrow side is asserted at
+// the end, on the same page, by resizing to it.
+const { page, consoleErrors } = await session({ viewport: DESKTOP_VIEWPORT })
 
 feedPortScan(20, CHECKED_IP)
 feedPortScan(20, INVESTIGATE_IP)
@@ -239,6 +244,39 @@ if (raised.every((r) => r.ok)) {
   // yet.
   await openFlags()
   check((await rowFor(RELOAD_IP).count()) === 0, 'the reloaded, unpinned UI no longer shows the judged row as open')
+
+  // --- Below 1300px the same trio is in the drawer instead (#1150) ---
+  //
+  // At 1100 the CALL IT cell had no room for three chips and the row's
+  // chevron, so they were pushed off the right edge and a flag could not
+  // be judged at that width at all. They move into the row's own drawer
+  // there -- rendered from the same snippet, so the two places can never
+  // word a verdict differently, and never drawn in both at once.
+  //
+  // CHECKED_IP is the row for it: its call was undone above, so it is an
+  // open, unjudged flag again and still carries its chevron.
+  await page.setViewportSize({ width: 1100, height: 900 })
+  const narrowRow = rowFor(CHECKED_IP)
+  await narrowRow.waitFor({ timeout: 15000 })
+  // The chips are in the DOM right now and must leave it. A timeout here
+  // is not an abort: the count below is what reports, so a failure says
+  // what was still on the row rather than dying on a locator.
+  await narrowRow
+    .locator('button.v')
+    .first()
+    .waitFor({ state: 'detached', timeout: 5000 })
+    .catch(() => {})
+  check(
+    (await narrowRow.locator('button.v').count()) === 0,
+    'at 1100 the row itself offers no verdict chips -- the cell that had no room for them is empty',
+  )
+  await narrowRow.locator('button.openc').click()
+  const narrowDrawer = drawerFor(CHECKED_IP)
+  await narrowDrawer.locator('button.v.expected').waitFor({ timeout: 5000 })
+  check(
+    (await narrowDrawer.locator('button.v').count()) === 3,
+    'and the whole trio is in the drawer the chevron opens, so the flag is still judgeable there',
+  )
 } else {
   check(true, 'skipped -- the verdict row cannot be driven without its four port-scan flags')
 }

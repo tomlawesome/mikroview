@@ -8,9 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync, tick } from 'svelte'
 import { mockupEstate } from '../lib/city/fixture'
+import { bufferHost } from '../lib/city/presence'
 import { layoutGround } from '../lib/city/layout'
 import { roadEnds } from '../lib/city/baselineRoads'
 import { faceOf } from '../lib/city/walls'
+import { STAGE_W, ringHalfW } from '../lib/city/project'
 import { appState } from '../lib/state.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { policyState } from '../lib/policy.svelte'
@@ -81,6 +83,15 @@ describe('City', () => {
     expect(container.querySelector('.mini rect.viewport')).not.toBeNull()
   })
 
+  // #1159: the same VLAN was a lane on Entities, a district here and a
+  // zone on the router card. Zone is the plain word now, and the city
+  // keeps district -- so the estate map ties the two together once,
+  // rather than leaving a reader to work it out across three screens.
+  it('ties its own word for a VLAN to the plain one, once (#1159)', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    expect(container.querySelector('.mini .key')?.textContent).toBe('district — a zone (VLAN or bridge)')
+  })
+
   it("says how many zones a router's plate has no room for (#1073)", () => {
     const zone = (id: string) => ({
       id,
@@ -103,6 +114,63 @@ describe('City', () => {
     // borough level.
     const { container } = render(City, { props: { stop: 'city', ground: overflowGround } })
     expect(container.textContent).toContain('+1 zone not shown')
+  })
+
+  it('keeps every borough header inside the stage (#1139)', () => {
+    const input = mockupEstate()
+    // The operator's own estate: a router with no name but its address,
+    // and five districts, so the hull the header hangs off ends past the
+    // stage. At the borough stop it read "172.23.0.1 BOR" and the rest
+    // was over the edge.
+    input.routers[0].name = '172.23.0.1'
+    input.zones.push({ id: 'vlan-lab', name: 'Lab', cidr: '10.70.0.0/24', hosts: [], hostCount: 2, eventCount: 10, routerId: 'rb5009', coverage: 'logged', dark: false })
+    const wide = layoutGround(input)
+    const { container } = render(City, { props: { stop: 'borough', ground: wide } })
+
+    // The labels are drawn inside the view transform, so they are read
+    // through it -- `translate(ox oy) scale(k)`, the only transform on
+    // the stage's own top-level group.
+    const t = container.querySelector('svg > g[transform]')?.getAttribute('transform') ?? ''
+    const m = /translate\((-?[\d.]+) (-?[\d.]+)\) scale\((-?[\d.]+)\)/.exec(t)
+    expect(m).not.toBeNull()
+    const [ox, , k] = [Number(m![1]), Number(m![2]), Number(m![3])]
+
+    const labels = [...container.querySelectorAll('.boro-t')]
+    expect(labels.length).toBeGreaterThan(0)
+    for (const el of labels) {
+      const half = ringHalfW(el.textContent ?? '') * k
+      const centre = ox + Number(el.getAttribute('x')) * k
+      expect(centre - half).toBeGreaterThanOrEqual(0)
+      expect(centre + half).toBeLessThanOrEqual(STAGE_W)
+    }
+  })
+
+  it('never prints one minimap name through another (#1140)', () => {
+    const input = mockupEstate()
+    // What the operator zoomed into: several VLANs whose names are long
+    // and nearly identical, in a 264px-wide panel.
+    const names = ['vlan-srv sfp-sfpplus1', 'bridge-workshop', 'vlan-guest sfp-sfpplus2', 'vlan-iot wlan1']
+    input.zones.forEach((z, i) => (z.name = names[i] ?? z.name))
+    const { container } = render(City, { props: { stop: 'city', ground: layoutGround(input) } })
+
+    const boxes = [...container.querySelectorAll('.mini-name')].map((el) => {
+      const x = Number(el.getAttribute('x'))
+      const y = Number(el.getAttribute('y'))
+      const half = ((el.textContent ?? '').length * 4.8 + 5) / 2
+      return { x0: x - half, x1: x + half, y0: y - 8, y1: y + 3 }
+    })
+    expect(boxes.length).toBeGreaterThan(0)
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i]
+        const b = boxes[j]
+        expect(a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0).toBe(false)
+      }
+
+    // The estate that already fitted still names every plate: the pass
+    // only ever drops a name that had nowhere of its own to go.
+    const roomy = render(City, { props: { stop: 'city', ground } })
+    expect(roomy.container.querySelectorAll('.mini-name').length).toBe(ground.districts.length)
   })
 
   it('walks buildings within a district and districts within the map', async () => {
@@ -925,6 +993,114 @@ describe('standing on a building (#868)', () => {
     expect(container.querySelector('.port-t')).toBeNull()
     const svgText = [...container.querySelectorAll('.city svg text')].map((t) => t.textContent ?? '')
     for (const t of svgText) expect(t).not.toMatch(/:\d/)
+  })
+})
+
+describe('Escape takes any pinned card down, and the ✕ says what it does (#1177)', () => {
+  const GUEST = 'vlan-guest/10.40.0.10'
+
+  // Standing first, so Escape's lower rung has something to take: the
+  // point of the ladder is that the card goes before the stand does.
+  async function standingWithPinnedHostCard() {
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    await fireEvent.click(container.querySelector('.bcard.hcard .pin') as HTMLElement)
+    flushSync()
+    return container
+  }
+
+  it('takes a pinned host card down, then surfaces on the next press', async () => {
+    // Only the drop card was on this rung; a pinned host, wall or line
+    // card could be let go with its ✕ and nothing else, though
+    // DESIGN.md "Cards" gives Escape to every card.
+    const container = await standingWithPinnedHostCard()
+    expect(container.querySelector('.bcard.hcard.pinned')).not.toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.bcard.hcard')).toBeNull()
+    expect(container.querySelector('.crumb')).not.toBeNull()
+
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+
+  it('leaves a merely hovered card alone, so that press still surfaces from standing', async () => {
+    const { container } = render(City, { props: { stop: 'street', ground } })
+    fireEvent.click(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    expect(container.querySelector('.bcard.hcard')).not.toBeNull()
+    expect(container.querySelector('.bcard.hcard.pinned')).toBeNull()
+
+    // A hovered card goes when the pointer goes, and the composer's own
+    // door sits on one (#1035) -- so this press belongs to the composer
+    // and the stand, which is the sequence live-city-reach.mjs reads.
+    key(document.body, 'Escape')
+    flushSync()
+    expect(container.querySelector('.crumb')).toBeNull()
+  })
+
+  it('names the pin rather than leaving ✕ as the whole of its accessible name', async () => {
+    const container = await standingWithPinnedHostCard()
+    const pin = container.querySelector('.bcard.hcard .pin') as HTMLElement
+    expect(pin.textContent).toBe('✕')
+    expect(pin.getAttribute('aria-label')).toBe('unpin this card')
+    expect(pin.getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('the host card says each fact once, and only the ones it has (#1165)', () => {
+  // An unnamed host the event buffer has seen and the register has not:
+  // its name IS its address, and it carries no stamps and no count.
+  const unnamed = layoutGround({
+    ...mockupEstate(),
+    zones: mockupEstate().zones.map((z) => (z.id === 'vlan-guest' ? { ...z, hosts: [bufferHost('10.40.0.10', '10.40.0.10')] } : z)),
+  })
+  const GUEST = 'vlan-guest/10.40.0.10'
+
+  async function openCard(g: typeof unnamed) {
+    const { container } = render(City, { props: { stop: 'street', ground: g } })
+    fireEvent.pointerEnter(container.querySelector('[data-cid="' + GUEST + '"]') as Element)
+    flushSync()
+    await tick()
+    return container.querySelector('.bcard.hcard') as HTMLElement
+  }
+
+  it('prints an unnamed host’s address once, not twice', async () => {
+    const card = await openCard(unnamed)
+    expect(card.querySelector('.n')?.textContent).toBe('10.40.0.10')
+    expect(card.querySelector('.n small')).toBeNull()
+  })
+
+  it('keeps the address beside a real name', async () => {
+    const card = await openCard(ground)
+    expect(card.querySelector('.n')?.textContent).toBe('guest-110.40.0.10')
+    expect(card.querySelector('.n small')?.textContent).toBe('10.40.0.10')
+  })
+
+  it('does not claim "live" for a host with no events and nothing recorded', async () => {
+    const card = await openCard(unnamed)
+    // "live" above "0 events · last seen not recorded" contradicted
+    // itself. The feed is all that has heard it, on the line and in the
+    // card's accessible name alike.
+    expect(card.querySelector('.s')?.textContent?.trim()).toBe('seen in the feed')
+    expect(card.getAttribute('aria-label')).toBe('10.40.0.10: seen in the feed')
+  })
+
+  it('says "1 host" on a district plate holding one', () => {
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    const guest = [...container.querySelectorAll('.plate')].find((p) => p.getAttribute('aria-label')?.startsWith('Guest'))
+    expect(guest?.getAttribute('aria-label')).toContain('1 host,')
+    expect(guest?.getAttribute('aria-label')).not.toContain('1 hosts')
   })
 })
 

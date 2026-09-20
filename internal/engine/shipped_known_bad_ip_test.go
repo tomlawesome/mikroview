@@ -220,7 +220,7 @@ func TestShippedKnownBadIPReinforcesAFlagRaisedByTheSameEvent(t *testing.T) {
 	reinforcer := newShippedKnownBadIPDefinition(t, fs, bl)
 	portScan := newShippedPortScanDefinition(t, fs, Scope{})
 
-	eng := New()
+	eng := New(nil)
 	eng.Register(reinforcer) // registered FIRST, deliberately
 	eng.Register(portScan)
 

@@ -6,9 +6,14 @@ import { flushSync } from 'svelte'
 import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { ROUTER_STEPS } from '../lib/setupsteps'
+import { wizardState } from '../lib/wizard.svelte'
 import Fleet from './Fleet.svelte'
 
-// Fleet reads appState.devices directly -- no request of its own to mock.
+// Fleet reads appState.devices directly and asks the server for nothing
+// of its own: Re-enrol… and the refused senders moved to Entities, the
+// surface an admin's deck actually draws (#785). The mock stays so an
+// accidental new call fails loudly rather than hitting fetch.
 vi.mock('../lib/api', () => ({}))
 
 function device(overrides: Record<string, unknown>) {
@@ -91,8 +96,7 @@ describe('Fleet deck identity (#657/#706)', () => {
     expect(container.querySelector('table')).toBeNull()
   })
 
-  it('carries no page heading and no add-router affordance for anyone', () => {
-    authState.role = 'admin'
+  it('carries no page heading, and no add-router affordance for a viewer', () => {
     setDevices([device({})])
     const { container } = render(Fleet)
     flushSync()
@@ -103,7 +107,7 @@ describe('Fleet deck identity (#657/#706)', () => {
     // absent, not disabled -- no berth, no button but the flag door.
     expect(container.querySelector('.berth')).toBeNull()
     for (const b of container.querySelectorAll('button')) {
-      expect(b.textContent?.toLowerCase()).not.toMatch(/add/)
+      expect(b.textContent?.toLowerCase()).not.toMatch(/add|re-enrol/)
     }
   })
 
@@ -162,7 +166,7 @@ describe('Fleet deck identity (#657/#706)', () => {
     const cards = [...container.querySelectorAll('.fcard')]
     const office = cards.find((c) => c.textContent?.includes('office'))
     expect(office?.textContent).toContain(
-      'Declared as 192.168.88.1, nothing arrived. If 10.0.20.1 below is the same router on another of its addresses, Run setup… step 2 shows the one-line fix.',
+      'Declared as 192.168.88.1, nothing arrived. If 10.0.20.1 below is the same router on another of its addresses, Run setup… ▸ Send logs shows the one-line fix.',
     )
     const arriving = cards.find((c) => c.textContent?.includes('seen on the wire'))
     expect(arriving?.textContent).not.toContain('Declared as')
@@ -201,5 +205,46 @@ describe('Fleet deck identity (#657/#706)', () => {
     flushSync()
 
     expect(container.querySelector('.flag-door')).toBeNull()
+  })
+})
+
+// #1284: adding a router is the wizard's own router steps, opened from
+// the fleet -- and #657's grammar still holds, so the action is drawn
+// for an admin and is simply not there for anyone else. Re-enrol… and
+// the refused senders are Entities' now (#785: an admin's deck answers
+// the fleet view with that card and never draws this one).
+describe('Fleet -- Add a router (#1284)', () => {
+  beforeEach(() => {
+    appState.devices = []
+    appState.initialLoadDone = true
+    authState.role = 'admin'
+    flagsState.list = []
+    wizardState.reset()
+  })
+
+  it('opens the router ledger at Name your router from the header row', () => {
+    setDevices([device({})])
+    const { getByRole } = render(Fleet)
+    flushSync()
+
+    getByRole('button', { name: 'Add a router' }).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    expect(wizardState.pane).toBe(1)
+    expect(wizardState.ledgerDevice).toBe('')
+    // Opened from the fleet, so the finish leads back to it.
+    expect(wizardState.finishTo).toBe('fleet')
+  })
+
+  it('draws no action for a viewer', () => {
+    authState.role = 'viewer'
+    setDevices([device({})])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.querySelector('.og-action')).toBeNull()
+    expect(container.querySelector('.row-action')).toBeNull()
   })
 })

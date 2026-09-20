@@ -50,7 +50,7 @@ compress 5–10×. So:
    (single construction site, `corpus.go` `NewMemoryCorpus`). A receipt
    states the window actually held, never the setting — the standing rule
    that an absence of ours is never reported as a fact about the network.
-6. Retained files are excluded from any backup mikroview itself produces
+6. Retained files are excluded from any backup MikroView itself produces
    (#394) unless a later decision says otherwise.
 
 ## Superseded
@@ -80,10 +80,10 @@ recorded verbatim on #853 and not reopened here:
    event retention (`history.keyFile` / `MIKROVIEW_HISTORY_KEY_FILE`).
    There is no second key file to generate, mount or lose track of.
 2. **No key, no storage.** Without a key, the file-backed state store
-   refuses to persist. No plaintext fallback: nothing mikroview writes to
+   refuses to persist. No plaintext fallback: nothing MikroView writes to
    disk is ever in the clear. This is a **severe change from every earlier
    release** for a default install: before this amendment, none of the
-   state store needed a key at all, and every mikroview release before it
+   state store needed a key at all, and every MikroView release before it
    persisted accounts, flags, entities and the rest to plain JSON with no
    configuration. From this build, a deployment with no `history.keyFile`
    mounted keeps all of that in memory only -- including accounts and API
@@ -98,7 +98,7 @@ recorded verbatim on #853 and not reopened here:
    not silently treated as absent.
 4. **Postgres is unaffected.** Encrypting a Postgres-backed store was
    considered and rejected for this build: Postgres already has its own
-   at-rest custody, and mikroview already requires `sslmode=verify-full`
+   at-rest custody, and MikroView already requires `sslmode=verify-full`
    for the connection (see `docs/decisions/postgres-backend.md`), so a
    second encryption layer on top would protect against a narrower threat
    (the database's own storage being read directly) that the operator's
@@ -162,7 +162,7 @@ Resolved the same day; see the addendum below.
 Rule 2 above ("no key, no storage ... no exception carved out for any one
 store") is amended. The question left open in "Not settled" was put to the
 owner and answered the other way: three stores keep persisting to a plain
-JSON file with no key configured, exactly as every mikroview release
+JSON file with no key configured, exactly as every MikroView release
 before this issue --
 
 - `auth` (accounts, `cfg.Auth.StorePath`)
@@ -173,7 +173,7 @@ The reasoning: all three hold only one-way hashes -- Argon2id password
 hashes, SHA-256 token hashes, hashed recovery keys -- so encrypting them
 protects nothing that a plaintext copy would actually expose. What a
 plaintext copy discloses instead (usernames and roles for accounts, token
-names for tokens) is accepted, the same trade every earlier mikroview
+names for tokens) is accepted, the same trade every earlier MikroView
 release made by default. With a key configured, all three are still
 encrypted like every other store -- this only changes what happens with no
 key.
@@ -187,3 +187,32 @@ definitions remain memory-only with no key, no exceptions.
 `openAuthStoreForCLI`/`openRecoveryStoreForCLI` (main.go) keep their nil
 check -- an empty configured path still yields `nil` -- but no longer word
 the refusal as needing a key, since that can no longer be the reason.
+
+## Addendum, 2026-09-18: droplist joins the no-key exception (v0.6.0 pre-release audit)
+
+**Status:** Decided (owner ruling, during the v0.6.0 audit).
+
+`internal/droplist`'s entry store fell through rule 2 like any other store:
+memory-only with no `history.keyFile` configured, the common case on a
+default install. That meant every operator-authored blocklist entry was
+gone on the next restart -- and because the `.rsc` feed a router fetches is
+a full sync (`internal/droplist.Script`'s own doc comment: clear the live
+list, then rebuild it from whatever the store currently holds), the next
+scheduled fetch after a restart pushed an *empty* list, wiping the
+router's real entries.
+
+Owner ruling: persist droplist by default, the same way, without needing
+`history.keyFile` configured. The reasoning is different from rule 6's --
+droplist holds plaintext CIDRs and operator-typed reasons, not a hash of
+anything -- but the conclusion is the same: this is not a secret the way a
+password is, so encrypting it protects nothing a plaintext copy would
+expose, and losing it silently is worse than that exposure.
+
+`storage.go`'s exemption set was renamed `plaintextWithoutKeyStores` (from
+`hashedStores`) and now also lists `droplist`; see its own doc comment for
+both reasons side by side. As a second, independent safeguard,
+`droplist.Store.Persisted()` reports whether a real backend is behind the
+store at all, and `handleDroplistPull` refuses to serve the feed
+(503) when the store is both empty and unpersisted -- so an operator who
+explicitly sets `droplist.storePath` to `""` (still a supported choice)
+cannot have that combine with a restart to silently wipe a router's list.

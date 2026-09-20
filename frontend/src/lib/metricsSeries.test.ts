@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  beforeCounting,
   buildAxis,
   buildHour,
   inkFor,
@@ -138,5 +139,31 @@ describe('the metrics hour', () => {
     expect(hour.brink).toBeNull()
     expect(hour.eventsInHour).toBe(0)
     expect(hour.traffic.every((s) => s.scale === SCALE_FLOOR && s.now === 0)).toBe(true)
+  })
+})
+
+// #1169: the table printed "0" for the minutes that ended before this
+// process started counting, which reads as "nothing happened" where it
+// means "nobody was watching".
+describe('beforeCounting (#1169)', () => {
+  it('claims the minutes that ended before counting started, and no others', () => {
+    expect(beforeCounting(minute(0), minute(2))).toBe(true)
+    expect(beforeCounting(minute(1), minute(2))).toBe(true)
+    expect(beforeCounting(minute(3), minute(2))).toBe(false)
+  })
+
+  // Partial, not unknown: counting began part-way through it, so what
+  // was recorded is real if incomplete, and a figure that undercounts is
+  // still a figure.
+  it('leaves the minute counting began in alone', () => {
+    expect(beforeCounting(minute(2), minute(2))).toBe(false)
+    expect(beforeCounting(minute(2), new Date(Date.UTC(2026, 7, 24, 13, 2, 30)).toISOString())).toBe(false)
+  })
+
+  it('claims nothing when the server sent no start, or sent an unreadable one', () => {
+    expect(beforeCounting(minute(0), null)).toBe(false)
+    expect(beforeCounting(minute(0), undefined)).toBe(false)
+    expect(beforeCounting(minute(0), 'not a time')).toBe(false)
+    expect(beforeCounting('not a time', minute(2))).toBe(false)
   })
 })

@@ -28,9 +28,9 @@ import (
 //
 //   - ExportState runs every few minutes for the life of the process, so
 //     it borrows the evaluation goroutine for the duration of one export
-//     -- the caller's own goroutine blocks, the ingest queue absorbs
-//     what arrives meanwhile, and nothing on the per-event path takes a
-//     new lock.
+//     -- the caller's own goroutine blocks, arriving events wait in the
+//     store where they already are, and nothing on the per-event path
+//     takes a new lock.
 //   - ImportState runs once, at boot, before evaluation starts. There is
 //     nothing to borrow yet, so it does the work inline and refuses
 //     outright if evaluation has already begun.
@@ -63,7 +63,7 @@ type engineStateDocument struct {
 // other definition its warm restart. The returned error is reserved for
 // a failure to encode the document itself.
 //
-// A nil *Engine is a valid no-op, the same convention Enqueue and Tick
+// A nil *Engine is a valid no-op, the same convention Nudge and Tick
 // use, so wiring that runs without the chassis needs no nil check.
 func (e *Engine) ExportState() (json.RawMessage, error) {
 	if e == nil {

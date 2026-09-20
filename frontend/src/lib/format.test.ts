@@ -11,6 +11,7 @@ import {
   formatDaysSince,
   formatDayMonth,
   formatLastHeard,
+  isPublicIp,
 } from './format'
 
 describe('formatTimeMs', () => {
@@ -235,5 +236,21 @@ describe('formatLastHeard', () => {
 
   it('returns the input unchanged when it does not parse, same as its neighbours', () => {
     expect(formatLastHeard('not a date', Date.now())).toBe('not a date')
+  })
+})
+
+describe('isPublicIp', () => {
+  it('accepts a public address and refuses private ones', () => {
+    expect(isPublicIp('203.0.113.9')).toBe(true)
+    expect(isPublicIp('10.0.0.1')).toBe(false)
+    expect(isPublicIp('192.168.1.1')).toBe(false)
+    expect(isPublicIp('127.0.0.1')).toBe(false)
+  })
+
+  it('refuses an octet over 255, which the backend would reject anyway', () => {
+    // The shape pattern alone admits this, and the row would then offer
+    // a lookup button for an address no lookup can succeed on.
+    expect(isPublicIp('999.1.1.1')).toBe(false)
+    expect(isPublicIp('203.0.113.256')).toBe(false)
   })
 })

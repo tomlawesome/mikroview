@@ -156,7 +156,14 @@ check(settled?.coverage === 'covered', `the entry's own boundary is covered by t
 // the plain one ------------------------------------------------------------
 await page.waitForFunction(
   () =>
-    [...document.querySelectorAll('.fall .band .band-label')].some((e) => e.textContent.includes('ether20') && e.textContent.includes('bridge20')),
+    // The drawn text node alone, not textContent: #1114 nests a <title>
+    // holding the full name inside the label's own <text>, so textContent
+    // returns the name twice and would match even a label truncated away
+    // to nothing.
+    [...document.querySelectorAll('.fall .band .band-label')].some((e) => {
+      const t = e.firstChild?.textContent ?? ''
+      return t.includes('ether20') && t.includes('bridge20')
+    }),
   null,
   { timeout: 25000 },
 )

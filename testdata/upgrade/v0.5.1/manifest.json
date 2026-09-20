@@ -1,0 +1,32 @@
+{
+  "adminUsername": "upgrade-fixture-admin",
+  "apiTokenName": "upgrade-fixture-token",
+  "coverage": {
+    "key": "upgrade-fixture-boundary",
+    "reason": "upgrade-fixture-coverage-reason"
+  },
+  "entity": {
+    "key": "172.20.30.40",
+    "label": "upgrade-fixture-host",
+    "type": "host"
+  },
+  "flag": {
+    "target": "aa:bb:cc:00:ff:10",
+    "type": "new_device"
+  },
+  "historyKeyEncrypted": true,
+  "hostMark": {
+    "key": "ether1|172.20.30.40",
+    "kind": "intended",
+    "reason": "upgrade-fixture-host-reason"
+  },
+  "recordedAt": "2026-09-16T11:21:08Z",
+  "version": "v0.5.1",
+  "viewerUsername": "upgrade-fixture-viewer",
+  "watchlist": {
+    "name": "upgrade-fixture-watch",
+    "ports": [
+      443
+    ]
+  }
+}

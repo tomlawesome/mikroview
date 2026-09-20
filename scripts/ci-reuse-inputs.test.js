@@ -13,7 +13,7 @@ const {
   candidateJobs,
 } = require('./ci-reuse-inputs');
 
-test('candidateJobs names the seven jobs #1066 covers', () => {
+test('candidateJobs names the jobs #1066 and #1242 cover', () => {
   assert.deepEqual(
     [...candidateJobs()].sort(),
     [
@@ -23,6 +23,7 @@ test('candidateJobs names the seven jobs #1066 covers', () => {
       'gate:scenarios 3/4',
       'gate:scenarios 4/4',
       'test:container',
+      'test:install-line',
       'test:postgres',
     ].sort(),
   );
@@ -111,6 +112,13 @@ test('a change to .gitlab-ci.yml moves every job\'s hash (COMMON)', () => {
   for (const job of candidateJobs()) {
     assert.notEqual(jobInputHash(job, before), jobInputHash(job, after), job);
   }
+});
+
+test('install.sh moves test:install-line\'s hash but not test:container\'s (#1242)', () => {
+  const before = [{ path: 'install.sh', sha: 'a' }];
+  const after = [{ path: 'install.sh', sha: 'b' }];
+  assert.notEqual(jobInputHash('test:install-line', before), jobInputHash('test:install-line', after));
+  assert.equal(jobInputHash('test:container', before), jobInputHash('test:container', after));
 });
 
 test('jobInputHash throws on an unknown job rather than hashing nothing', () => {

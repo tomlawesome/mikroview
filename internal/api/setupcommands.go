@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 // setupCommandsRequest is what the wizard sends to render RouterOS
@@ -27,8 +29,20 @@ type setupCommandsRequest struct {
 	// for -- the SFTP username and the destination file stem
 	// (routeros.BackupScript). The push script above needs no such
 	// field: PushBlock's payload carries no destination filename, only
-	// the token.
+	// the token. It also names the device step 2's enrolment line is
+	// rendered for -- see EnrolToken.
 	Device string `json:"device"`
+	// EnrolToken is issue #1281's raw enrolment token, echoed back by
+	// the caller exactly the way Token above is: minted once by
+	// POST /api/devices/{id}/enrolment, held client-side, and handed
+	// back here on every render so the "Send logs" step can keep
+	// showing it until it is redeemed or expires. Never looked up from
+	// storage -- the registry keeps only a hash (see
+	// device.Registry.MintEnrolment) -- so this is verified against that
+	// hash (VerifyPendingToken) rather than trusted outright: a stale or
+	// unrelated value the caller echoes back is silently dropped rather
+	// than rendered into a command.
+	EnrolToken string `json:"enrolToken"`
 }
 
 // routerosTable is the dialect table itself, so the wizard can quote its
@@ -64,9 +78,19 @@ type setupCommandsRouter struct {
 // note that belongs beside this specific step (currently only
 // ruleTagging ever carries one -- a row's Note, when the selected
 // version's row has one).
+//
+// Blocked carries every reason this block came back blank, as
+// machine-readable keys (#1217): the server says which precondition is
+// missing, the frontend owns the sentence it says about it. Only
+// Backup/BackupSchedule ever set this today -- see the keys listed
+// beside backupBlockedKeys below. Empty/omitted means either the block
+// is not blank, or it is blank for a reason this field does not cover
+// (Push/Schedule's own token-and-kinds gate, unrelated to #1217's
+// backup-step complaint).
 type commandStep struct {
-	Commands string `json:"commands"`
-	Note     string `json:"note"`
+	Commands string   `json:"commands"`
+	Note     string   `json:"note"`
+	Blocked  []string `json:"blocked,omitempty"`
 }
 
 type setupCommandsSteps struct {
@@ -74,7 +98,13 @@ type setupCommandsSteps struct {
 	Syslog      commandStep `json:"syslog"`
 	RuleTagging commandStep `json:"ruleTagging"`
 	Push        commandStep `json:"push"`
-	Schedule    commandStep `json:"schedule"`
+	// Schedule is step 4's whole hand-over since #1131: the push script
+	// saved, scheduled and run once, in one block the operator pastes
+	// as it stands. Push stays beside it as the bare script body, which
+	// is what the Engine Room's "copy the router lines" re-key affordance
+	// wants -- an existing mv-push script's source, not a second
+	// `/system script add`.
+	Schedule commandStep `json:"schedule"`
 	// Backup/BackupSchedule are step 6's two blocks (#394, round 45):
 	// the script that saves, exports and pushes both files, and the
 	// nightly scheduler entry. Both stay blank when the drop box is not
@@ -107,9 +137,18 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Address == "" {
-		http.Error(w, "address is required", http.StatusBadRequest)
-		return
+	// Address falls back to the operator's own stored answer (#1213) the
+	// same way syslogPort below falls back to the running configuration
+	// when the wizard didn't send one -- this endpoint is open to any
+	// signed-in user and re-renders text, not a source of truth in its
+	// own right, so a caller that omits it gets what the header field
+	// actually holds rather than nothing. It is no longer required at
+	// the door either way: an operator who has not yet answered that
+	// field gets every address-dependent block back blank with the
+	// noAddressKey below, the same "blank rather than half-formed"
+	// contract every other missing precondition here already gets.
+	if req.Address == "" && s.Setup != nil {
+		req.Address = s.Setup.Address()
 	}
 	if err := validateSetupCommandsRequest(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -176,12 +215,53 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// A push script only means something with both a token and at least
-	// one kind to push; either missing leaves it blank rather than
-	// rendering an empty or half-formed script.
-	pushCommands := ""
-	if req.Token != "" && len(req.Kinds) > 0 {
+	// noAddressKey is #1213's own precondition, checked ahead of every
+	// other one below: CaTrust, Syslog, Push/Schedule and Backup all
+	// embed req.Address somewhere in what they render, so with nothing
+	// answered yet none of them mean anything -- not even the caTrust
+	// step, which used to render unconditionally against
+	// window.location.host and now has as much reason to be blank as the
+	// rest. Reuses commandStep.Blocked, #1217's mechanism for saying why
+	// a block is blank, with one more key rather than a second shape for
+	// the same idea.
+	const noAddressKey = "no-address"
+	noAddress := req.Address == ""
+	var addressBlocked []string
+	if noAddress {
+		addressBlocked = []string{noAddressKey}
+	}
+
+	caTrustCommands, syslogCommands := "", ""
+	if !noAddress {
+		caTrustCommands = routeros.CaTrustCommands(req.Address, dialect)
+		// The enrolment line only renders once the caller's echoed
+		// EnrolToken actually matches the chosen device's current,
+		// unexpired pending token (#1281) -- never merely because a
+		// value was sent. A device with no pending token, an expired
+		// one, or a caller that omitted Device/EnrolToken all render
+		// this block exactly as it was before #1281.
+		enrolToken := ""
+		if req.Device != "" && req.EnrolToken != "" && s.Devices != nil {
+			if s.Devices.VerifyPendingToken(req.Device, req.EnrolToken, time.Now()) {
+				enrolToken = req.EnrolToken
+			}
+		}
+		syslogCommands = routeros.SyslogCommands(req.Address, syslogPort, dialect, enrolToken)
+	}
+
+	// A push script only means something with an address to embed, a
+	// token, and at least one kind to push; any missing leaves it blank
+	// rather than rendering an empty or half-formed script. Schedule
+	// follows it: since #1131 it carries the script body itself, so with
+	// nothing to carry it is a `/system script add` around an empty
+	// source, which is exactly the half-formed block this blankness rule
+	// exists for. Only the address gets a Blocked key, matching the
+	// existing "the token/kinds gate is unrelated to #1217's complaint"
+	// carve-out just below for that half of the precondition.
+	pushCommands, scheduleCommands := "", ""
+	if !noAddress && req.Token != "" && len(req.Kinds) > 0 {
 		pushCommands = routeros.PushScript(req.Address, req.Token, req.Kinds, dialect)
+		scheduleCommands = routeros.ScheduleCommands(pushCommands, dialect)
 	}
 
 	// The backup script only means something with a device to name, a
@@ -192,14 +272,76 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// blocks blank, same "blank rather than half-formed" contract Push
 	// already has above; the wizard reads a blank Backup block as its
 	// wnokey state (round 45).
+	//
+	// backupBlockedKeys names every missing piece, all that apply rather
+	// than just the first (#1217, the owner's "cover all possibilities"
+	// ruling): the operator's instance was missing two at once, and a
+	// key naming only one would have sent them round the loop a second
+	// time to find the other. Wording stays out of Go entirely -- the
+	// frontend owns every operator-facing sentence, same split #436
+	// already draws for the commands themselves.
+	//
+	// Which of the two step-6 scripts is rendered is the operator's
+	// stored answer, not a per-request field (#955): the transport is a
+	// property of the deployment, so it is read from the setup store
+	// here the same way the address above falls back to it.
+	backupTransport := setup.BackupTransportSFTP
+	if s.Setup != nil {
+		backupTransport = s.Setup.BackupTransport()
+	}
+	httpsTransport := backupTransport == setup.BackupTransportHTTPS
+	var backupBlockedKeys []string
+	if noAddress {
+		backupBlockedKeys = append(backupBlockedKeys, noAddressKey)
+	}
+	// The drop box's own preconditions belong to the SFTP script alone.
+	// The HTTPS push needs none of them (#955's ruling): it goes through
+	// the ingest channel that is already open, so the only thing it
+	// waits on beyond the address is the token -- the same precondition
+	// step 4 has.
+	if !httpsTransport {
+		if s.SetupInstance.BackupPort == "" {
+			backupBlockedKeys = append(backupBlockedKeys, "backups-off")
+		}
+		// #1264 finding 5: Vault.Enabled() alone cannot tell "no key
+		// configured" from "a key is configured but could not be read"
+		// apart -- both leave the vault's key nil. Presenting the
+		// broken-key case as "no-retention-key" tells the operator to
+		// mint a new one, and minting overwrites the file every backup
+		// already sitting in the vault is encrypted under -- so the two
+		// get distinct keys here, checked in this order because a
+		// broken key is also, incidentally, one Vault.Enabled() reports
+		// as false.
+		switch {
+		case s.SetupInstance.BackupKeyUnreadable:
+			backupBlockedKeys = append(backupBlockedKeys, "retention-key-unreadable")
+		case !s.Vault.Enabled():
+			backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
+		}
+		if req.Device == "" {
+			backupBlockedKeys = append(backupBlockedKeys, "no-device")
+		}
+	}
+	if req.Token == "" {
+		backupBlockedKeys = append(backupBlockedKeys, "no-token")
+	}
 	backupCommands, backupScheduleCommands := "", ""
-	if req.Token != "" && req.Device != "" && s.SetupInstance.BackupPort != "" && s.Vault.Enabled() {
-		// The drop box listens on its own port, not the HTTPS port
-		// req.Address carries -- same reasoning SyslogCommands' Hostname
-		// call gives for stripping the web port off before pairing it
-		// with the syslog port.
-		backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
-		backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
+	if len(backupBlockedKeys) == 0 {
+		if httpsTransport {
+			// The whole address, port and all: this one is posted to
+			// mikroview's own HTTPS listener, the same value
+			// CaTrustCommands and PushBlock embed -- not the bare host
+			// the SFTP form below pairs with the drop box's port.
+			backupCommands = routeros.BackupPushScript(req.Address, req.Token, dialect)
+			backupScheduleCommands = routeros.BackupPushScheduleCommands(backupCommands, dialect)
+		} else {
+			// The drop box listens on its own port, not the HTTPS port
+			// req.Address carries -- same reasoning SyslogCommands' Hostname
+			// call gives for stripping the web port off before pairing it
+			// with the syslog port.
+			backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
+			backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, setupCommandsResponse{
@@ -211,13 +353,15 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		Picked:  picked,
 		Routers: routers,
 		Steps: setupCommandsSteps{
-			CaTrust:        commandStep{Commands: routeros.CaTrustCommands(req.Address, dialect)},
-			Syslog:         commandStep{Commands: routeros.SyslogCommands(req.Address, syslogPort, dialect)},
-			RuleTagging:    commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
-			Push:           commandStep{Commands: pushCommands},
-			Schedule:       commandStep{Commands: routeros.ScheduleCommands(dialect)},
-			Backup:         commandStep{Commands: backupCommands},
-			BackupSchedule: commandStep{Commands: backupScheduleCommands},
+			CaTrust:     commandStep{Commands: caTrustCommands, Blocked: addressBlocked},
+			Syslog:      commandStep{Commands: syslogCommands, Blocked: addressBlocked},
+			RuleTagging: commandStep{Commands: routeros.RuleTaggingCommands(dialect), Note: ruleTaggingNote},
+			// Push/Schedule only carry the address key, never the
+			// token/kinds gate -- see the comment above pushCommands.
+			Push:           commandStep{Commands: pushCommands, Blocked: addressBlocked},
+			Schedule:       commandStep{Commands: scheduleCommands, Blocked: addressBlocked},
+			Backup:         commandStep{Commands: backupCommands, Blocked: backupBlockedKeys},
+			BackupSchedule: commandStep{Commands: backupScheduleCommands, Blocked: backupBlockedKeys},
 		},
 	})
 }
@@ -230,19 +374,49 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 // '"', '\', ';', space or newline reaching one of those templates is
 // never a value worth rendering.
 func validateSetupCommandsRequest(req setupCommandsRequest) error {
-	if !validSetupAddress(req.Address) {
-		return errors.New("address must be a hostname or IP address, optionally with :port")
+	// Empty is the "not answered yet" case (#1213) -- handleSetupCommands
+	// reads it as noAddress and blanks every block that needs one, rather
+	// than refusing the whole request the way an empty value used to.
+	// Anything non-empty still has to be a plausible address: it is about
+	// to sit bare inside a RouterOS command.
+	if req.Address != "" && !validSetupAddress(req.Address) {
+		return errors.New("address must be empty, a hostname, or an IP address, optionally with :port")
 	}
 	if !validSetupSyslogPort(req.SyslogPort) {
 		return errors.New("syslogPort must be empty or a number from 1 to 65535")
 	}
 	if !validSetupToken(req.Token) {
-		return errors.New("token must be printable ASCII with no quotes, backslashes or whitespace, up to 256 characters")
+		return errors.New("token must be letters, digits, '_' or '-', up to 256 characters")
 	}
 	if !validSetupDevice(req.Device) {
 		return errors.New("device must be 1 to 64 characters from letters, digits, '.', '_' and '-'")
 	}
+	if !validEnrolToken(req.EnrolToken) {
+		return errors.New("enrolToken must be empty or exactly 20 lowercase letters/digits")
+	}
 	return nil
+}
+
+// validEnrolToken restricts EnrolToken to device.Registry's own
+// enrolment-token alphabet and length (issue #1281) -- it is about to
+// be embedded bare inside a RouterOS command (routeros.SyslogCommands),
+// same #1095 reasoning as every other field validated here. Empty is
+// fine: EnrolToken is optional, and handleSetupCommands already treats
+// "" as "render step 2 with no enrolment line."
+func validEnrolToken(token string) bool {
+	if token == "" {
+		return true
+	}
+	if len(token) != 20 {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // maxSetupDeviceLen mirrors internal/auth/token.go's maxDeviceIDLen --
@@ -289,13 +463,15 @@ func validSetupDevice(device string) bool {
 // commands (#1095).
 const maxSetupTokenLen = 256
 
-// validSetupToken restricts Token to printable ASCII with no quote,
-// backslash, dollar or whitespace -- the charset both places Token
-// reaches in internal/routeros/commands.go need to stay well-formed:
-// BackupScript's password=\"...\" wrapper, and PushBlock's bare Bearer
-// header value. Dollar because RouterOS expands $name inside a
-// double-quoted string, so "$x" is not the literal token either. Tokens
-// internal/auth issues are hex, so nothing legitimate is refused.
+// validSetupToken restricts Token to [A-Za-z0-9_-] -- the alphabet
+// internal/auth actually mints tokens in, so nothing legitimate is
+// refused. Narrower than "printable ASCII, no quote/backslash/dollar/
+// whitespace" on purpose: Token also lands bare inside PushBlock and
+// loggingPushBlock's http-header-field=("Content-Type: ...,
+// Authorization: Bearer <token>") in internal/routeros/commands.go, and
+// RouterOS splits that value on commas into separate headers regardless
+// of quoting -- a comma in Token would add a header, which quoting
+// cannot prevent, so the alphabet itself is the gate.
 func validSetupToken(token string) bool {
 	if token == "" {
 		return true
@@ -305,7 +481,10 @@ func validSetupToken(token string) bool {
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if c <= ' ' || c >= 0x7f || c == '"' || c == '\\' || c == '$' {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_' || c == '-':
+		default:
 			return false
 		}
 	}

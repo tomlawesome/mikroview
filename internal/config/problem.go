@@ -141,6 +141,18 @@ const CheckHint = `check a configuration without starting the server:
 type Result struct {
 	Fatal    []Problem `json:"fatal"`
 	Warnings []Problem `json:"warnings"`
+	// ConfigPath is the config file that was actually read, empty when
+	// there was none. The caller cannot work this out from what it
+	// passed in any more: with nothing named, the file may still have
+	// come from the app folder (#1243), and a caller that re-reads the
+	// raw YAML -- #1218's "new settings are available" notice -- would
+	// otherwise report every setting as unset.
+	ConfigPath string `json:"-"`
+	// AppFolder is every optional file looked for in the app folder,
+	// found or not, in the order looked. The boot log prints one line
+	// each so an operator can see what MikroView picked up and where it
+	// looked (#1209, #1243).
+	AppFolder []AppFolderLookup `json:"-"`
 }
 
 // HasProblems reports whether anything at all was found. Used by

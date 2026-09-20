@@ -21,7 +21,7 @@
   import { policyState } from '../lib/policy.svelte'
   import { coverageState } from '../lib/coverage.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
-  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { addressInCidr, parseCidr } from '../lib/addressMatch'
   import { realityEdges } from '../lib/reality'
   // The decommission ghost (#460, round 55), on the city's own
@@ -35,7 +35,7 @@
   import { markFor, type BuildingMark } from '../lib/city/marks'
   import { buildingDepth, paintOrder, pieceDepth } from '../lib/city/depth'
   import { cityInputFrom, ghostCityZones } from '../lib/city/input'
-  import { layoutGround } from '../lib/city/layout'
+  import { CIDR_FALLBACK, layoutGround, plaqueWidth } from '../lib/city/layout'
   import {
     IK,
     R2,
@@ -50,6 +50,7 @@
     cam,
     cityFitS,
     clampCentre,
+    clampRingX,
     clearDropLabels,
     diamond,
     ease,
@@ -484,9 +485,16 @@
   let svgEl: SVGSVGElement | undefined = $state()
 
   /** The height a stop's camera moves to: the city stop opens wide
-   * enough to take in the whole estate (#979, cityFitS -- capped so it
-   * never zooms in), every other stop keeps its fixed height. */
-  const stopS = (s: Stop): number => (s === 'city' ? cityFitS(ground.bounds) : STOP_HEIGHT[s])
+   * enough to take in the whole town (#979, cityFitS -- capped so it
+   * never zooms in), every other stop keeps its fixed height.
+   *
+   * The town, not the estate (#1180): fitting `ground.bounds` meant
+   * fitting the far bank and the roads fading across the river too, so
+   * at 1920 the town sat in the lower-left third with the top-right of
+   * the stage empty. The river is scenery and may run off both edges of
+   * the frame; `bounds` still frames the minimap and clamps the pan, so
+   * the water is a pan away. */
+  const stopS = (s: Stop): number => (s === 'city' ? cityFitS(ground.townBounds) : STOP_HEIGHT[s])
 
   const viewCam = $derived(cam(centre[0], centre[1], S))
   const viewTransform = $derived('translate(' + R2(viewCam.ox) + ' ' + R2(viewCam.oy) + ') scale(' + R2(S / Sgeom) + ')')
@@ -510,23 +518,27 @@
     return [(b.u0 + b.u1) / 2, (b.v0 + b.v1) / 2]
   }
 
-  /** Where the camera looks at a stop: the whole estate, the borough,
-   * the district or the building in focus, or the first of each. */
+  /** Where the camera looks at a stop: the whole town, the borough,
+   * the district or the building in focus, or the first of each.
+   *
+   * The town rather than everything (#1180) for the same reason the fit
+   * uses it: centring on bounds that include the far bank pushes the
+   * town off toward one corner. */
   function centreFor(s: Stop, f: Focus): Pt {
     const fd = districtOf(f?.districtId ?? (f?.id ?? null))
     const fb = f && f.districtId ? (fd?.buildings.find((b) => b.id === f.id) ?? null) : null
     const fn = f && !f.districtId ? (ground.nodes.find((n) => n.id === f.id) ?? null) : null
-    if (s === 'city') return boundsCentre(ground.bounds)
+    if (s === 'city') return boundsCentre(ground.townBounds)
     if (s === 'borough') {
       const rid = fd?.routerId ?? fn?.routerId ?? ground.boroughs[0]?.routerId
       const b = ground.boroughs.find((x) => x.routerId === rid) ?? ground.boroughs[0]
-      return b ? boundsCentre(b.bounds) : boundsCentre(ground.bounds)
+      return b ? boundsCentre(b.bounds) : boundsCentre(ground.townBounds)
     }
     if (fb) return [fb.u, fb.v]
     if (fn) return [fn.u, fn.v]
     if (fd) return [fd.u, fd.v]
     const d0 = ground.districts[0]
-    return d0 ? [d0.u, d0.v] : boundsCentre(ground.bounds)
+    return d0 ? [d0.u, d0.v] : boundsCentre(ground.townBounds)
   }
 
   function moveCamera(toS: number, to: Pt) {
@@ -575,7 +587,7 @@
       if (stand) return
       if (!started) {
         started = true
-        S = initialS ?? (s === 'city' ? cityFitS(g.bounds) : STOP_HEIGHT[s])
+        S = initialS ?? (s === 'city' ? cityFitS(g.townBounds) : STOP_HEIGHT[s])
         centre = clampCentre(initialCentre ?? centreFor(s, focus), g.bounds)
         return
       }
@@ -791,9 +803,19 @@
     // A ladder, top rung first (#1002): a card was opened on purpose, so
     // Escape takes that back before it takes back where you are
     // standing. Two Escapes to do both, and never both at once.
-    if (openDropId) {
+    // #1177: every pinned card, not only the drop card. DESIGN.md
+    // "Cards" says "Escape takes a card down before it surfaces from
+    // standing", and a pinned wall, host or line card could be let go
+    // with its ✕ and nothing else.
+    //
+    // Pinned, not merely hovered: a hovered card follows the pointer and
+    // goes when the pointer does, and the composer's own door sits on a
+    // hovered host card -- consuming the press there would cost the
+    // operator the rung below, which is the sequence live-city-reach.mjs
+    // reads. The drop card keeps the hover state #1002 gave it.
+    if (openDropId || pinnedWall || pinnedHost || pinnedRoad) {
       e.preventDefault()
-      closeDropCard()
+      closeCards()
       return
     }
     // The filter is the outermost thing the operator turned on, so it
@@ -1906,7 +1928,8 @@
         (d.cidr ? ' ' + d.cidr : '') +
         ', ' +
         (d.buildings.length + d.more) +
-        ' hosts' +
+        // #1165: "1 hosts" on a district holding one.
+        (d.buildings.length + d.more === 1 ? ' host' : ' hosts') +
         (!d.rulesPushed
           ? ', no rule table has been pushed yet -- walls show no gates'
           : d.dark
@@ -2460,7 +2483,7 @@
     for (const d of g.districts) {
       const x = R2(X(c, d.u))
       const y = R2(Y(c, d.v + d.r) + 5)
-      const w = compact ? d.name.length * 7.2 + 26 : 200
+      const w = compact ? d.name.length * 7.2 + 26 : plaqueWidth(d)
       const h = compact ? 20 : d.rulesPushed ? 28 : 40
       if (!claim(x, y, w, h)) continue
       plaques.push({ d, x, y, w: R2(w), ink: inkOf(d) })
@@ -2656,11 +2679,11 @@
   }
 
   /** The same second way in the 2D map's declare panel offers (#435): a
-   * dark boundary is exactly what tune-logging exists to fix. */
+   * dark boundary is exactly what Log every rule exists to fix. */
   function openRulesForBoundary() {
     const c = wallCard
     if (!c || !primaryDevice) return
-    tuneLoggingNavState.request(primaryDevice.id, c.gate.key)
+    logEveryRuleNavState.request(primaryDevice.id, c.gate.key)
     appState.view = 'tune-logging'
   }
 
@@ -2902,6 +2925,14 @@
 
   /** What the card's first line says the host is. */
   const PRESENCE_WORD: Record<string, string> = { live: 'live', quiet: 'quiet', intended: 'quiet on purpose', dismissed: 'dismissed' }
+
+  /** #1165: a host only the event buffer has seen carries no stamps and
+   * no count, so the card said "live" directly above "0 events · last
+   * seen not recorded" and contradicted itself. The feed is all that has
+   * heard it, and that is what the card says -- the register line below
+   * already explains why there is nothing else. One function so the
+   * card's aria-label and its first line cannot disagree. */
+  const hostWord = (h: CityHost): string => (h.presence === 'live' && h.events === 0 && !h.lastSeen ? 'seen in the feed' : PRESENCE_WORD[h.presence])
 
   const stamp = (iso: string | null): string => (iso ? new Date(iso).toLocaleString() : 'not recorded')
 
@@ -3340,12 +3371,22 @@
     hoverDrop = id
   }
 
-  /** Escape's first rung (#1002). A card is opened on purpose, so it is
-   * the first thing Escape takes back; surfacing from standing is the
-   * rung below, and `onWindowKeydown` reads them in that order. */
-  function closeDropCard() {
+  /** Escape's first rung (#1002, widened to every card by #1177). A card
+   * is opened on purpose, so it is the first thing Escape takes back;
+   * surfacing from standing is the rung below, and `onWindowKeydown`
+   * reads them in that order. Both halves of each card's state go, pin
+   * and hover alike: the pointer is usually still resting on the card
+   * the press was meant to dismiss, so clearing only the pin would leave
+   * it on screen and read as Escape doing nothing. */
+  function closeCards() {
     pinnedDrop = null
     hoverDrop = null
+    pinnedWall = null
+    hoverWall = null
+    pinnedHost = null
+    hoverHost = null
+    pinnedRoad = null
+    hoverRoad = null
   }
 
   $effect(() => {
@@ -3399,19 +3440,38 @@
     const g = ground
     const bank = (a: Pt[]) => a.map((p, i) => (i ? 'L' : 'M') + R2(X(mc, p[0])) + ' ' + R2(Y(mc, p[1]))).join('')
     const river = g.river ? bank(g.river.bankN) + bank(g.river.bankF.slice().reverse()).replace('M', 'L') + 'Z' : ''
-    const plates = g.districts.map((d) => ({
-      d: diamond(mc, d.u, d.v, d.r, 0),
-      ink: inkOf(d),
-      fo: d.plateDark ? 0.22 : 0.5,
-      name: d.name,
-      x: R2(X(mc, d.u)),
+    // The same claim-a-rectangle pass the main map runs (#1140): a name
+    // that would land on one already placed is dropped rather than drawn
+    // over it. The panel is 264 wide, so on an estate of similarly-named
+    // VLANs the names printed through each other and through the
+    // diamonds between them -- unreadable, and worse than a plate going
+    // unnamed. Names cannot shrink out of the collision instead: 8px is
+    // the app's legibility floor (#978, owner 2026-09-06). Only the
+    // names claim, exactly as on the main map -- a name is drawn under
+    // its own plate's bottom vertex, so claiming the plates as well
+    // would drop names for touching a neighbouring diamond they sit
+    // clear of on the drawing.
+    const placed: [number, number, number, number][] = []
+    const claim = (x: number, y: number, w: number, h: number) => {
+      const r: [number, number, number, number] = [x - w / 2, y, x + w / 2, y + h]
+      for (const p of placed) if (r[0] < p[2] && r[2] > p[0] && r[1] < p[3] && r[3] > p[1]) return false
+      placed.push(r)
+      return true
+    }
+    const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
+    const plates = g.districts.map((d) => ({ d: diamond(mc, d.u, d.v, d.r, 0), ink: inkOf(d), fo: d.plateDark ? 0.22 : 0.5 }))
+    const names: { name: string; x: number; y: number }[] = []
+    for (const d of g.districts) {
       // The name sits under the plate's bottom vertex (#978), not over
       // the diamond and its device dots -- clamped so a plate at the
       // panel's own bottom edge keeps its name inside the svg.
-      y: R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8)),
-    }))
-    const nodes = g.nodes.filter((n) => n.kind !== 'post').map((n) => ({ x: R2(X(mc, n.u)), y: R2(Y(mc, n.v)) }))
-    return { river, plates, nodes }
+      const x = R2(X(mc, d.u))
+      const y = R2(Math.min(MINI_H - 3, Y(mc, d.v + d.r) + 8))
+      // 8px monospace: about 4.8 to the character, plus a little air on
+      // either side so two names never sit shoulder to shoulder.
+      if (claim(x, y - 8, d.name.length * 4.8 + 5, 11)) names.push({ name: d.name, x, y })
+    }
+    return { river, plates, names, nodes }
   })
   const miniView = $derived.by(() => {
     const mc = miniCam
@@ -3437,6 +3497,16 @@
     const whole = (b.u1 - b.u0) * (b.v1 - b.v0) || 1
     return Math.round((a / whole) * 100)
   })
+
+  /**
+   * The borough ring labels, each pulled back inside the stage (#1139).
+   * Held apart from `scene` on purpose: the clamp needs the view camera,
+   * and `scene` is built on geomCam alone so that a pan is a transform
+   * on what is already drawn rather than a redraw of all of it.
+   */
+  const ringLabels = $derived(
+    scene.rings.map((r) => ({ ...r, x: R2(clampRingX(r.x, r.label, viewCam.ox, S / Sgeom)) })),
+  )
 
   const tabbable = (id: string) => (focus ? focus.id === id : ground.districts[0]?.id === id) ? 0 : -1
 </script>
@@ -3498,7 +3568,7 @@
             {/each}
           </g>
         {/if}
-        {#each scene.rings as r (r.label)}
+        {#each ringLabels as r (r.label)}
           <path d={r.d} fill="none" stroke="var(--accent)" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="2 6" stroke-linejoin="round" />
         {/each}
         {#each scene.plates as p (p.d.id)}
@@ -3767,7 +3837,7 @@
                 <circle cx={R2(-p.w / 2 + 13)} cy="14" r="3.4" fill={p.ink} />
               {/if}
               <text x={R2(-p.w / 2 + 22)} y="18" class="p-name" class:gname={gs}>{p.d.name}</text>
-              <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? 'no address pushed'}</text>
+              <text x={R2(p.w / 2 - 11)} y="17.5" text-anchor="end" class="p-cidr">{p.d.cidr ?? CIDR_FALLBACK}</text>
               {#if gs}
                 <text x={R2(-p.w / 2 + 13)} y="32" class="p-note" style:fill={GHOST_INK[gs]}
                   >{ghostNote(gs, ghostWatchFor(p.d.id), ghostOfferFor(p.d.id), nowMs)}</text
@@ -3827,7 +3897,7 @@
             <text x={cx - 141} y={cy + 35} class="chip-t">{call.detail} · open ▸</text>
           </g>
         {/if}
-        {#each scene.rings as r (r.label)}
+        {#each ringLabels as r (r.label)}
           <text x={r.x} y={r.y} text-anchor="middle" class="boro-t">{r.label}</text>
         {/each}
         {#each scene.bridgeChips as ch (ch.t)}
@@ -4131,6 +4201,7 @@
           class="pin"
           class:on={wallPinned}
           aria-pressed={wallPinned}
+          aria-label={wallPinned ? 'unpin this card' : 'pin this card'}
           title={wallPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={toggleWallPin}>{wallPinned ? '✕' : '⊙'}</button
         >
@@ -4221,17 +4292,21 @@
       bind:this={hcardEl}
       role="dialog"
       tabindex="-1"
-      aria-label="{c.b.name}: {PRESENCE_WORD[c.h.presence]}"
+      aria-label="{c.b.name}: {hostWord(c.h)}"
       onpointerenter={hostGrace.hold}
       onpointerleave={releaseHostCard}
     >
       <div class="bc-t">
-        <span class="n">{c.b.name}<small>{c.b.ip}</small></span>
+        <!-- #1165: an unnamed host's name is its address, and the card
+             printed it twice side by side. The address is a second fact
+             only where there is a name in front of it. -->
+        <span class="n">{c.b.name}{#if c.b.ip && c.b.ip !== c.b.name}<small>{c.b.ip}</small>{/if}</span>
         <button
           type="button"
           class="pin"
           class:on={hostPinned}
           aria-pressed={hostPinned}
+          aria-label={hostPinned ? 'unpin this card' : 'pin this card'}
           title={hostPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={toggleHostPin}>{hostPinned ? '✕' : '⊙'}</button
         >
@@ -4243,6 +4318,8 @@
         </div>
       {:else if c.h.presence === 'intended'}
         <div class="s quiet"><i class="sw quiet"></i>quiet on purpose</div>
+      {:else if c.h.events === 0 && !c.h.lastSeen}
+        <div class="s quiet"><i class="sw quiet"></i>{hostWord(c.h)}</div>
       {:else}
         <div class="s logged"><i class="sw logged"></i>live</div>
       {/if}
@@ -4272,10 +4349,19 @@
       {/if}
 
       {#if !c.h.key}
-        <!-- Nothing to write to: the register has not recorded this host
-             yet, so the marks would have no key to hang on. Said plainly
-             rather than offering a button that cannot work. -->
-        <div class="s">not in the host register yet · nothing to mark</div>
+        {#if hostsState.unreadable}
+          <!-- The last read of the register failed, so "not registered"
+               is not a claim MikroView has evidence for (#1236) -- it
+               might just as well be sitting there unread. Say that
+               instead, and re-check on the same 60s tick every other
+               read of the register uses. -->
+          <div class="s">host register unreadable · checks again in a minute</div>
+        {:else}
+          <!-- Nothing to write to: the register has not recorded this
+               host yet, so the marks would have no key to hang on. Said
+               plainly rather than offering a button that cannot work. -->
+          <div class="s">not in the host register yet · nothing to mark</div>
+        {/if}
       {/if}
 
       {#if hostPinned && authState.canEdit && c.h.key && !c.h.reason}
@@ -4378,6 +4464,7 @@
           class="pin"
           class:on={roadPinned}
           aria-pressed={roadPinned}
+          aria-label={roadPinned ? 'unpin this card' : 'pin this card'}
           title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleRoadPin(rc.road.id)}>{roadPinned ? '✕' : '⊙'}</button
         >
@@ -4484,6 +4571,7 @@
           class="pin"
           class:on={roadPinned}
           aria-pressed={roadPinned}
+          aria-label={roadPinned ? 'unpin this card' : 'pin this card'}
           title={roadPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleRoadPin(lc.id)}>{roadPinned ? '✕' : '⊙'}</button
         >
@@ -4570,6 +4658,7 @@
           class="pin"
           class:on={dropPinned}
           aria-pressed={dropPinned}
+          aria-label={dropPinned ? 'unpin this card' : 'pin this card'}
           title={dropPinned ? 'pinned — click to let it go' : 'pin this card'}
           onclick={() => toggleDropPin(dc.id)}>{dropPinned ? '✕' : '⊙'}</button
         >
@@ -4598,8 +4687,8 @@
       {#each mini.plates as p, i (i)}
         <path d={p.d} fill={p.ink} fill-opacity={p.fo} />
       {/each}
-      {#each mini.plates as p, i (i)}
-        <text x={p.x} y={p.y} text-anchor="middle" class="mini-name">{p.name}</text>
+      {#each mini.names as n, i (i)}
+        <text x={n.x} y={n.y} text-anchor="middle" class="mini-name">{n.name}</text>
       {/each}
       {#each mini.nodes as n, i (i)}
         <circle cx={n.x} cy={n.y} r="2" fill="var(--accent)" />
@@ -4608,6 +4697,12 @@
       </svg>
     </button>
     <div class="mk"><span>viewport ≈ {viewShare}%</span><span>drag · arrows to walk</span></div>
+    <!-- The metaphor, anchored once (#1159). The city keeps its own
+         words -- a district is a place on this map, a borough is a
+         router's territory -- but the same thing is a zone everywhere
+         data is listed, so the estate map says which is which rather
+         than leaving a reader to guess between three screens. -->
+    <div class="key">district — a zone (VLAN or bridge)</div>
   </div>
 </div>
 
@@ -4805,6 +4900,19 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     font: 10.5px var(--font-mono);
     color: var(--fg-muted);
+    /* A card is as tall as what it has to say, up to the stage (#1138):
+       a road with 80 off-baseline lines drew a card 6373px tall, which
+       covered the dials, the borough header and the plaques on the way
+       down and left its own "mark all 80 expected" control off the
+       bottom of the screen with no way to reach it. The content is all
+       still there -- it scrolls inside the card instead. Capped here
+       rather than on the road card alone, so every card in the family
+       is bounded by the same rule; the short ones are unchanged.
+       lib/cardAnchor.ts measures the card it is placing, so the capped
+       height is what the placement fits into the stage. */
+    max-height: calc(100% - 64px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* Placed, the card is positioned from its own top-left, so the
@@ -5402,6 +5510,16 @@
     margin-top: 5px;
     display: flex;
     justify-content: space-between;
+  }
+
+  /* The metaphor key (#1159), under the minimap's own footer line and
+     in the same dim mono the panel already uses. */
+  .mini .key {
+    font: 9px var(--font-mono);
+    color: var(--fg-dim);
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--hair-2);
   }
 
   /* District names on the minimap (#978): the app's own 8px legibility

@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -40,6 +41,7 @@ func TestDecodePayloadAcceptsEachKind(t *testing.T) {
 		{"wireguard-interface", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"site-to-site","publicKey":"abc123","listenPort":51820}]}`},
 		{"wireguard-peer", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`},
 		{"ip-address", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`},
+		{"logging", `{"kind":"logging","page":1,"pages":1,"wizardVersion":1,"records":[{"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},{"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}]}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -783,4 +785,86 @@ func TestDecodePPPActiveRejectsUnknownRecordField(t *testing.T) {
 
 func TestDecodePPPActiveRejectsControlCharacterInField(t *testing.T) {
 	decodeErr(t, "{\"kind\":\"ppp-active\",\"page\":1,\"pages\":1,\"records\":[{\"name\":\"n\x01\",\"service\":\"l2tp\"}]}")
+}
+
+// #1241's setup report, as the ratified document on #1206 spells it:
+// the mikroview logging action and the rules feeding it, with the wizard
+// script version on the envelope beside routerosVersion.
+func TestDecodeLoggingPageRoundTripsTheRatifiedDocument(t *testing.T) {
+	p := decodeOK(t, `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":5,
+ "records":[
+  {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},
+  {"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}
+ ]}`)
+	if p.WizardVersion != 5 {
+		t.Errorf("WizardVersion = %d, want 5", p.WizardVersion)
+	}
+	if p.RecordCount() != 2 || len(p.Logging) != 2 {
+		t.Fatalf("Logging = %+v, want two records", p.Logging)
+	}
+	action, rule := p.Logging[0], p.Logging[1]
+	if action.Type != LoggingTypeAction || action.Remote != "10.0.0.5" || action.RemotePort != "6514" ||
+		action.RemoteLogFormat != "syslog" || action.CheckCertificate != "yes" {
+		t.Errorf("action record = %+v, unexpected", action)
+	}
+	if rule.Type != LoggingTypeRule || rule.Action != "mikroview" || rule.Disabled != "no" {
+		t.Errorf("rule record = %+v, unexpected", rule)
+	}
+	// topics is a set RouterOS renders joined, read back as the list
+	// every other set-shaped field here decodes to.
+	if len(rule.Topics) != 2 || rule.Topics[0] != "firewall" || rule.Topics[1] != "info" {
+		t.Errorf("rule topics = %v, want [firewall info]", rule.Topics)
+	}
+}
+
+// TestDecodeLoggingPageAcceptsRemotePortAsANumber is the v0.6.0
+// pre-release audit's finding: RouterOS's own /system logging action
+// serialises remote-port the same way every other single-port property
+// here does -- a JSON number (:serialize to=json's usual float shape,
+// e.g. 6514.000000), not the JSON string the ratified document's own
+// fixture above happened to use. A LoggingEntry declaring RemotePort as
+// a plain string refuses that page outright (DisallowUnknownFields
+// doesn't even get a chance: json.Unmarshal fails on the type mismatch
+// first), so the setup-report page never decoded from a real router.
+func TestDecodeLoggingPageAcceptsRemotePortAsANumber(t *testing.T) {
+	p := decodeOK(t, `{"kind":"logging","page":1,"pages":1,"records":[
+	 {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":6514.000000,"remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"}
+	]}`)
+	if got := p.Logging[0].RemotePort; got != "6514" {
+		t.Errorf("RemotePort = %q, want %q", got, "6514")
+	}
+}
+
+// A yes/no field may arrive as a JSON boolean depending on how RouterOS
+// types the property -- the whole page must not be refused over a field
+// nothing compares. Normalised either way, so a reader never has to know
+// which shape arrived.
+func TestDecodeLoggingPageTakesAYesNoFieldInEitherShape(t *testing.T) {
+	p := decodeOK(t, `{"kind":"logging","page":1,"pages":1,"records":[{"type":"rule","topics":["firewall","info"],"action":"mikroview","disabled":false}]}`)
+	if got := p.Logging[0].Disabled; got != "no" {
+		t.Errorf("Disabled = %q, want %q", got, "no")
+	}
+}
+
+// The page is a contract with the wizard's own script, not a window into
+// /system logging: anything else the router might send about its logging
+// is refused, like every other kind's unknown field.
+func TestDecodeLoggingPageRefusesAFieldTheWizardNeverSends(t *testing.T) {
+	decodeErr(t, `{"kind":"logging","page":1,"pages":1,"records":[{"type":"action","name":"mikroview","srcAddress":"192.168.1.1"}]}`)
+}
+
+// A script predating the stamp sends no wizardVersion at all, which
+// decodes as 0 -- "never said", and itself the first signal that a
+// router's setup is behind.
+func TestDecodeWizardVersionIsOptionalAndBounded(t *testing.T) {
+	arp := `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`
+	if p := decodeOK(t, arp); p.WizardVersion != 0 {
+		t.Errorf("WizardVersion = %d, want 0 when the script does not stamp one", p.WizardVersion)
+	}
+	if err := decodeErr(t, `{"kind":"arp","page":1,"pages":1,"wizardVersion":-1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`); !errors.Is(err, ErrBadWizardVersion) {
+		t.Errorf("a negative wizardVersion gave %v, want ErrBadWizardVersion", err)
+	}
+	if err := decodeErr(t, `{"kind":"arp","page":1,"pages":1,"wizardVersion":100000,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`); !errors.Is(err, ErrBadWizardVersion) {
+		t.Errorf("an absurd wizardVersion gave %v, want ErrBadWizardVersion", err)
+	}
 }

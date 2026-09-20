@@ -3,7 +3,7 @@
 MikroView was originally built for one specific deployment shape: a
 single instance, on a trusted home/office LAN, with no authentication,
 over plain HTTP. Two things have since changed that: local accounts
-(on first load, mikroview asks for an admin account and will not serve
+(on first load, MikroView asks for an admin account and will not serve
 anything until one exists; see "Authentication" below), and TLS being
 on by default -- an app serving
 real login credentials and session cookies has no business doing so over
@@ -14,12 +14,12 @@ implicit for anyone deciding whether/how to deploy this.
 ## Threat model
 
 **Before an admin account exists** (the brief window between first load
-and someone completing the registration screen), mikroview restricts
+and someone completing the registration screen), MikroView restricts
 every endpoint except the handful needed to render and complete that
 screen -- there is no window where live event data is readable before
 someone has claimed the deployment.
 
-There is no way to run mikroview without authentication. An earlier
+There is no way to run MikroView without authentication. An earlier
 version offered "continue without an account" as a first-run choice; it
 was removed, and the code path with it -- see "Authentication" below for
 the full model and the reasoning. What follows describes the risks that
@@ -31,12 +31,12 @@ accept any well-formed line from any source and never authenticate the
 sender as a real RouterOS device, because RouterOS's logging action has
 no client-certificate option to authenticate with. TLS on that port
 gets you confidentiality on the wire and the router verifying
-mikroview, not the reverse.
+MikroView, not the reverse.
 
-**It is not safe to expose mikroview's HTTP or syslog ports to the
+**It is not safe to expose MikroView's HTTP or syslog ports to the
 internet, to an untrusted network, or to a network segment shared with
 devices you don't control** -- and this matters more than it used to:
-mikroview accumulates real network-activity insight (behavioral flags,
+MikroView accumulates real network-activity insight (behavioral flags,
 per-host baselines, friendly host/rule names) which is precisely a
 reconnaissance map of the network it is watching, and the syslog port
 lets an attacker write into that picture as well as read the
@@ -68,7 +68,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   for setup; the security-relevant properties are below.
   - **Identity is `(issuer, subject)` only, never email/username.** A
     provider-side email or username reassignment can never silently
-    inherit an existing mikroview account -- the display name shown
+    inherit an existing MikroView account -- the display name shown
     for a JIT-provisioned account is a hint only, and falls back to a
     generated one on any collision with an existing account.
   - **Only asymmetric-signed ID tokens are accepted** (RS256/ES256/PS256)
@@ -88,7 +88,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     unavailable"** (logged once at startup) and never affects local
     login.
   - **Only self-hosted identity providers are supported, and that is
-    enforced, not advised.** Mikroview's OIDC support rests on the
+    enforced, not advised.** MikroView's OIDC support rests on the
     issuer URL *being* the access control: tokens are verified against
     the configured issuer's own keys and your client ID, so a
     self-hosted Authentik/Keycloak/Zitadel issuer already restricts
@@ -124,10 +124,10 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     session flow, including a repeat login correctly reusing the same
     account.
 - **First-run registration happens in the web UI**, not via a CLI
-  command -- whoever loads mikroview first sees a one-time screen asking
+  command -- whoever loads MikroView first sees a one-time screen asking
   them to create the admin account. There is no second option on that
   screen; see the "no way to run without authentication" point below.
-  Don't leave mikroview reachable by an untrusted network before it is
+  Don't leave MikroView reachable by an untrusted network before it is
   completed: whoever gets there first claims the admin role.
 - **"Whoever gets there first" means exactly one winner, enforced
   atomically.** First-run registration is resolved under a single lock:
@@ -137,9 +137,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   would otherwise leave a wide window. Without this, N simultaneous
   registrations would each create an admin. A regression test exercises
   the race directly (`internal/auth/store_test.go`).
-- **There is no way to run mikroview without authentication.** An
+- **There is no way to run MikroView without authentication.** An
   earlier version offered "no authentication" as a first-run choice.
-  It was removed. An unauthenticated mikroview publishes which hosts are
+  It was removed. An unauthenticated MikroView publishes which hosts are
   being scanned, which rules fire, which ports are under pressure, and
   which accounts exist -- a reconnaissance map of the network it is
   meant to be watching -- and "it's only for a few minutes" does not
@@ -152,7 +152,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   operator to work out why a system that has been open since they
   installed it is suddenly asking for a login.
 - **A corrupt or unreadable accounts file fails closed, not open.**
-  mikroview refuses to start (rather than silently falling back to an
+  MikroView refuses to start (rather than silently falling back to an
   empty, zero-account state) if the accounts file exists but can't be
   loaded -- a fresh install (no file at all) is unaffected and boots
   normally. Without this, a lost/corrupted accounts file would look
@@ -200,6 +200,37 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   on the very system they're locked out of. A password reset immediately
   invalidates every existing session for that account, including on an
   already-running server.
+- **An admin resets somebody else's password with a one-time code, and
+  MikroView never emails anyone.** Accounts carry no email address by
+  design (SSO identity is `(issuer, subject)`; any `email` claim is a
+  display hint), so there is no reset-by-mail path to attack and no
+  SMTP dependency in the authentication surface. `POST
+  /api/auth/users/{id}/reset-password` (admin-only) mints a 16-character
+  code over an alphabet with no `0`/`O`/`1`/`I`, stores only its Argon2id
+  hash, and returns the code in that one response — it is not persisted
+  in clear, not written to the audit log or any server log, and cannot be
+  shown again. A second reset issues a new code and kills the first.
+
+  The reset acts immediately rather than when the person gets round to
+  the code: the account's password hash is replaced with an unmatchable
+  one, `PasswordChangedAt` is bumped (which ends every session for that
+  account, including in another process and across a restart), and the
+  live sessions are dropped there and then. The code is valid for 24
+  hours and for one login. That login produces a session which may reach
+  `POST /api/auth/password` and nothing else — enforced in the
+  authentication middleware, not per handler, and pinned by the
+  route-authorization matrix — so a credential somebody else chose never
+  opens the application.
+
+  What an admin **cannot** do with it: reset their own account (409 —
+  since MikroView holds a single admin, that keeps the admin account out
+  of this route entirely, and the console's recovery-key-gated
+  `-recover-admin-account` remains the only way back into it), reset an
+  SSO-only account (409 — its provider owns the credential), or set
+  another person's password directly. There is no route anywhere that
+  writes a chosen password onto somebody else's account: the only thing
+  an admin can hand over is a code that forces its holder to choose their
+  own.
 - **Recovery-key digests and the pepper are kept apart, and follow
   different storage.** A recovery key is never stored -- what is stored
   is an HMAC-SHA-256 digest of it, computed under a 256-bit server-side
@@ -213,8 +244,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   which protects against a partial leak (one file in a backup, a stray
   copy, a wrong bind-mount) and nothing more. When Postgres is
   configured the digests follow the accounts into the database while the
-  pepper stays a local file on the mikroview host -- so a database dump
-  yields digests nothing can test, and compromising the mikroview host
+  pepper stays a local file on the MikroView host -- so a database dump
+  yields digests nothing can test, and compromising the MikroView host
   yields a pepper with no digests to apply it to. Neither prize is
   useful alone.
 
@@ -249,7 +280,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   at all against a lower-privileged local account or container exec that
   could run the binary. Recovery keys are the second factor -- see
   "Recovery keys" below.
-- **Nothing mikroview runs is loaded from disk at runtime.** There is no
+- **Nothing MikroView runs is loaded from disk at runtime.** There is no
   `os/exec`, no `plugin.Open`, no shared-library loading, and no
   interpreter anywhere in the module. The database schema migrations are
   compiled into the binary with `go:embed` -- verified by running the
@@ -259,7 +290,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   distroless, so even a written-in script would have nothing to execute
   it.
 
-  Every file mikroview *does* read at runtime is data, not code:
+  Every file MikroView *does* read at runtime is data, not code:
   `config.yaml`, the JSON stores, TLS material, the Postgres DSN. Editing
   those requires host access, which is already the declared trust anchor
   for the CLI recovery commands -- an attacker holding it does not need
@@ -296,7 +327,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   not work. The check lives inside the thing being verified, so tampered
   code simply skips it; it makes a network service a startup dependency
   and a new trust anchor for every deployment; and it tells a third party
-  when and where mikroview is running. Signing moves the trust anchor
+  when and where MikroView is running. Signing moves the trust anchor
   outside the artefact, which is the only place it can usefully be.
 
 - **Persisted state can live in Postgres instead of JSON files (issue
@@ -309,7 +340,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   rather than taking an argument: a password in argv is visible to every
   process on the host.
 
-  **A same-host database, including a container beside mikroview,
+  **A same-host database, including a container beside MikroView,
   provides none of that benefit** -- its credential sits inside the
   exact compromise it was meant to survive, making it strictly worse
   than the files it replaced. `deploy/docker-compose.yml` therefore
@@ -339,6 +370,47 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   session is re-checked against that sealed value at the callback, so a
   sign-out-and-in mid-flow can't attach an identity to the wrong
   account.
+- **SSO is additive; the admin keeps both ways in.** A dead identity
+  provider must never lock the operator out. MikroView holds exactly one
+  admin and never authenticates to the provider on its own behalf, so if
+  the provider cannot answer, SSO cannot let anybody in — that one
+  account is the whole break-glass path (owner ruling, 2026-09-18, #1252).
+
+  So the admin keeps its local password when it is connected to SSO, and
+  keeps it permanently. `auth.Store.LinkOIDCIdentity` holds that as an
+  invariant rather than the handlers arranging it, the same way the
+  destructive conversion below is an invariant: a rule kept at the call
+  sites is one forgetful caller away from being lost. **Every other role
+  still loses its local password on linking**, for the reason in the
+  bullet above — the admin's exception buys a way back into the
+  deployment, which an ordinary account's would not.
+
+  First run follows from it: MikroView always creates a local admin,
+  with a username and a password, and never offers SSO as an
+  alternative there. With OIDC configured, that creation is followed by
+  a sign-in at the provider and the returning identity is linked to the
+  admin just created — the proof that it is the right person is session
+  continuity, the browser that made the account being the browser sent
+  to the provider and back. No email is compared, and none is stored.
+
+  **A local account's username may not be an email address**
+  (`auth.ValidateLocalUsername`, enforced at creation only). Identity
+  providers send an email as `preferred_username`, so a namespace that
+  excludes them cannot collide with one — which is why nothing has to
+  compare addresses to tell a returning identity from an existing local
+  person, and why MikroView still holds no email for anyone. Validation
+  runs at creation and never at sign-in, so an account created before
+  the rule is not locked out by it.
+
+  One state is still worth a warning, and MikroView logs it at every
+  start: an admin that never had a password, which is what a deployment
+  bootstrapped entirely through SSO gets (the first identity to sign in
+  is made the admin). Recovery from it is CLI-only and recovery-key
+  gated: `mikroview -transfer-admin <username>` moves the admin role to
+  an account that does have a password.
+  `mikroview -recover-admin-account` deliberately refuses an SSO-only
+  admin — there is no password there to reset — which is why transfer
+  is the one that helps.
 - **Admin is a single, transferable role, and transfer is CLI-only**
   (`mikroview -transfer-admin <username>`, recovery-key gated). No
   authenticated session can grant or move admin. The reasoning is that
@@ -346,7 +418,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   if an admin's IdP account is compromised, the attacker can sign in,
   but cannot make themselves the durable owner of the deployment or
   demote the real admin out of it. A second admin tier was considered
-  and rejected -- for the amount of administration mikroview actually
+  and rejected -- for the amount of administration MikroView actually
   has, it adds attack surface without adding capability.
 - **API tokens (`internal/auth.Token`, issue #101) are read-only and
   scoped by construction, not by convention.** A valid
@@ -365,13 +437,13 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 ## TLS
 
-- **On by default, on mikroview's main listener** -- the application
+- **On by default, on MikroView's main listener** -- the application
   itself is never served over plain HTTP. A reverse proxy in front
-  doesn't close the underlying problem on its own: mikroview's own
+  doesn't close the underlying problem on its own: MikroView's own
   listener stays fully reachable and functional over plain HTTP
   regardless of whether an RP exists upstream, so anyone who reaches it
   directly (by IP, by habit, by not knowing the RP's hostname) gets the
-  same authenticated app in cleartext. TLS at mikroview's own listener
+  same authenticated app in cleartext. TLS at MikroView's own listener
   closes that regardless of how it's reached.
 - **A second, redirect-only listener** (`listen.httpRedirect`, off by
   setting it to `""`) exists purely so a client that guesses plain HTTP
@@ -387,17 +459,17 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   you already control, not a substitute for a real cert if you have one
   (`tls.certFile`/`tls.keyFile` take priority over generation).
 - **The CA is served at `/ca.crt`, unauthenticated** (only when
-  mikroview generated one -- never for a supplied cert), specifically so
+  MikroView generated one -- never for a supplied cert), specifically so
   a browser or reverse proxy can fetch it to establish trust. Its
   fingerprint is also logged at startup for out-of-band verification
   instead of blind trust-on-first-use, if you want it.
-- **One documented exception**: `tls.enabled: false` keeps mikroview's
+- **One documented exception**: `tls.enabled: false` keeps MikroView's
   listener on plain HTTP, same as before this feature existed. This is
-  **only** safe when mikroview's listener is provably unreachable except
+  **only** safe when MikroView's listener is provably unreachable except
   from your own reverse proxy over an isolated docker network -- never
   published to a LAN or the internet. In that specific topology the RP
   already owns TLS termination for real clients, and there's no bypass
-  surface for mikroview to additionally protect on that internal hop.
+  surface for MikroView to additionally protect on that internal hop.
   Logged clearly at startup whenever set, so it's never a silent state.
   See [docs/configuration.md](docs/configuration.md#tls) for the
   reverse-proxy backend-TLS pattern this is an alternative to (pointing
@@ -413,7 +485,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   RouterOS's syslog output to a second, dedicated logging destination as
   well.
 - **What a warm restart saves, and what it does not.** So that a restart
-  does not silently reset every counter to zero, mikroview writes a
+  does not silently reset every counter to zero, MikroView writes a
   small snapshot of its *derived* state every few minutes and reads the
   newest one back on the next boot (`snapshot.dir`,
   `snapshots/` beside its other state by default, mode 0600 in a 0700
@@ -459,7 +531,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   hashes -- Argon2id password hashes, SHA-256 token hashes, hashed
   recovery keys -- so encryption adds nothing a plaintext copy could
   expose beyond usernames and roles. They keep persisting to a plain
-  JSON file with no key configured, exactly as every mikroview release
+  JSON file with no key configured, exactly as every MikroView release
   before #853, and are sealed like everything else once a key is
   mounted.
 
@@ -490,7 +562,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
   Postgres-backed deployments are unaffected by any of this: that backend
   keeps whatever protection Postgres itself provides at rest, plus the
-  `sslmode=verify-full` connection mikroview already requires -- see
+  `sslmode=verify-full` connection MikroView already requires -- see
   `docs/decisions/event-retention.md`'s amendment for why a second
   encryption layer there was not judged to add real value for this
   build.
@@ -512,7 +584,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
 | HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above; or an ingest bearer token, scoped to one device, for `POST /api/ingest/routeros` and `POST /api/ingest/router-backup` only — the latter is the sliced HTTPS router-backup push, up to 16MiB reassembled from `<=32KiB` pieces, one transfer per device at a time and 64MiB across every device's transfer combined, spending one ingest-rate-limit reservation per whole transfer rather than per piece); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
-| Syslog TLS | None | Always (mikroview's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and mikroview authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
+| Syslog TLS | None | Always (MikroView's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and MikroView authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 | Router-backup SFTP drop box (`internal/backupsftp`, issue #394) | Username = device name, password = that device's ingest token, checked against the same token store the syslog push uses; write-only, per-device, no listing/reading/deleting/renaming | SSH transport (host key generated on first start), but see the caveat below — **the router never verifies it** | Off by default (`backup.enabled: false`); opens a second listening port only once turned on. Login isolation, write-only scope and header/quota checks are enforced in `internal/backupvault`/`internal/backupsftp`, not by the transport. |
 
@@ -556,7 +628,7 @@ damage a hostile or misbehaving LAN device can do:
   has no catastrophic-backtracking behavior — an expensive or malicious
   regex in a filter can't peg a CPU core (`internal/store/query.go`).
 - The behavioral detectors (`internal/detect`) bound their per-source
-  tracking state the same way every other buffer in mikroview has an
+  tracking state the same way every other buffer in MikroView has an
   explicit ceiling — a scan using many spoofed or ephemeral source IPs
   can't grow that state without bound; the least-recently-active source
   is evicted first once the cap is reached.
@@ -597,7 +669,7 @@ damage a hostile or misbehaving LAN device can do:
   VPN (e.g. WireGuard/Tailscale) rather than port-forwarding it onto the
   open internet -- creating an account rather than skipping (see
   "Authentication" above), plus TLS being on by default (see "TLS"
-  above), meaningfully raise the bar versus mikroview's original
+  above), meaningfully raise the bar versus MikroView's original
   no-auth/no-TLS posture, but neither is a substitute for not exposing
   an admin interface to the open internet at all in the first place.
 - Keep `config.yaml` itself off of any shared/multi-tenant filesystem —
@@ -618,7 +690,7 @@ damage a hostile or misbehaving LAN device can do:
   `/var/lib/mikroview` — it holds real IP addresses and short
   descriptions of what they triggered, so keep it off a shared
   filesystem the same way.
-- **Create an account before exposing mikroview beyond a fully trusted
+- **Create an account before exposing MikroView beyond a fully trusted
   network** — see "Authentication" above; leaving it open on anything
   wider than a trusted LAN means anyone who reaches it first claims the
   admin account. Keep `auth.storePath`'s file off a shared filesystem

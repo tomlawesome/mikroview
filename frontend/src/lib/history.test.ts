@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DAY_TICKS,
   addDays,
@@ -12,13 +12,16 @@ import {
   dayX,
   daysAtX,
   heldRow,
+  loadOrMintHistoryKey,
   memoryHint,
   mibOf,
+  newHistoryKey,
   pageStepDays,
   proposeCap,
   proposeDays,
   proposeOff,
   restartRow,
+  saveHistoryKeyForSession,
   stateRow,
   stepDays,
 } from './history'
@@ -319,5 +322,52 @@ describe('the disk group’s state row', () => {
     expect(stateRow({ backend: 'memory' })).toBe(
       'memory only — no key configured, so flags, definitions, watchlist and entities do not survive a restart (accounts and tokens still do, as one-way hashes)',
     )
+  })
+})
+
+// #1133: the wizard's backup step mints a key file value in the
+// browser. The shape has to match what retention.LoadKey accepts and
+// what docs/configuration.md tells an operator to generate by hand --
+// 32 random bytes, base64 -- because the operator may well have one of
+// each in play.
+describe('newHistoryKey', () => {
+  it('is 32 bytes, base64 — the same shape as `head -c 32 /dev/urandom | base64`', () => {
+    const key = newHistoryKey()
+    expect(key).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+    expect(atob(key).length).toBe(32)
+  })
+
+  it('is a fresh key every time, so Reroll is not decoration', () => {
+    const keys = new Set(Array.from({ length: 50 }, () => newHistoryKey()))
+    expect(keys.size).toBe(50)
+  })
+})
+
+// #1218 audit finding 4: a bare newHistoryKey() on every wizard init
+// meant a reload while step 6 was still `blocked` (key written, but
+// config.yaml not yet updated and restarted) handed back a *different*
+// key with the same "write this to keys/history.key" instructions --
+// silently offering to overwrite the file the operator had already
+// saved, which would make everything kept under the old key unreadable.
+describe('loadOrMintHistoryKey', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
+  it('mints and saves a key on the first call', () => {
+    const key = loadOrMintHistoryKey()
+    expect(key).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBe(key)
+  })
+
+  it('returns the same key this tab already minted, not a fresh one', () => {
+    const first = loadOrMintHistoryKey()
+    const second = loadOrMintHistoryKey()
+    expect(second).toBe(first)
+  })
+
+  it('picks up a key saveHistoryKeyForSession already stored -- what a Reroll or a pasted key leaves behind', () => {
+    saveHistoryKeyForSession('an-operators-own-key')
+    expect(loadOrMintHistoryKey()).toBe('an-operators-own-key')
   })
 })

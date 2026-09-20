@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mockupEstate } from './fixture'
-import { bankV, layoutGround, plateHalfWidth, plateRadius } from './layout'
+import { CIDR_FALLBACK, PLAQUE_W, bankV, layoutGround, plaqueWidth, plateHalfWidth, plateRadius } from './layout'
 import { bezAt, bezTangent, dm, segsOf } from './roads'
 import type { CityInput } from './input'
 import type { Pt } from './project'
@@ -39,6 +39,26 @@ describe('city layout: the ground plan', () => {
     const longName = { r: plateRadius(2), name: "uplink -- inside rb5009's LAN", cidr: '10.0.0.0/24' }
     const hostFloor = Math.max(38, longName.r * S * 0.9)
     expect(plateHalfWidth(longName, S)).toBeGreaterThan(hostFloor)
+  })
+
+  it("sizes a plaque so its name and its subnet never meet (#1137)", () => {
+    // A short name leaves the plaque at the 200 the round drew.
+    expect(plaqueWidth({ name: 'lan', cidr: '10.0.0.0/24' })).toBe(PLAQUE_W)
+
+    // "bridge-workshop" with a subnet beside it is what the operator saw
+    // printed on top of itself: the name starts 22 in from the left, the
+    // subnet is anchored 11 in from the right, and 200 was not enough
+    // room for both.
+    const long = { name: 'bridge-workshop', cidr: '192.168.88.0/24' }
+    expect(plaqueWidth(long)).toBeGreaterThan(PLAQUE_W)
+    const nameEnd = 22 + long.name.length * 0.55 * 12.5
+    const cidrStart = plaqueWidth(long) - 11 - long.cidr.length * 0.6 * 10
+    expect(cidrStart).toBeGreaterThan(nameEnd)
+
+    // No subnet is not a blank caption: the slot reads the fallback, and
+    // the plaque is wide enough to hold that instead.
+    const none = { name: 'bridge-workshop', cidr: null }
+    expect(plaqueWidth(none)).toBeGreaterThan(22 + none.name.length * 0.55 * 12.5 + CIDR_FALLBACK.length * 0.6 * 10)
   })
 
   it('lays out every zone as a plate, none overlapping', () => {
@@ -119,6 +139,42 @@ describe('city layout: the ground plan', () => {
     const link = ground.roads.find((r) => r.id === 'link-hapax3') as Road
     const lan = ground.districts.find((d) => d.id === 'bridge-lan') as District
     expect(dm(link.pts[link.pts.length - 1], [lan.u, lan.v])).toBeCloseTo(lan.r)
+  })
+
+  // #1180: the default camera frames the town, not the water. At 1920
+  // it framed `bounds` -- which reaches the far bank and the end of the
+  // roads fading across it -- so the town sat in the lower-left third
+  // with the top-right of the stage empty.
+  it('frames the town without the far bank, and keeps both boroughs in it', () => {
+    const town = ground.townBounds
+    const all = ground.bounds
+    expect(town.v0).toBeGreaterThan(all.v0)
+    expect(town.u0).toBeGreaterThan(all.u0)
+
+    // Every district and node, with its own radius, is inside it -- a
+    // second borough is part of the town and stays in the fit.
+    for (const d of ground.districts) {
+      expect(d.u - d.r).toBeGreaterThanOrEqual(town.u0)
+      expect(d.u + d.r).toBeLessThanOrEqual(town.u1)
+      expect(d.v - d.r).toBeGreaterThanOrEqual(town.v0)
+      expect(d.v + d.r).toBeLessThanOrEqual(town.v1)
+    }
+    for (const b of ground.boroughs) {
+      expect(b.bounds.v1).toBeLessThanOrEqual(town.v1)
+      expect(b.bounds.v0).toBeGreaterThanOrEqual(town.v0)
+    }
+
+    // The spans that fade away across the river end outside it; the
+    // estate's own bounds still hold them, so the minimap and the pan
+    // clamp are unchanged.
+    const spans = ground.roads.filter((r) => r.fade)
+    expect(spans.length).toBeGreaterThan(0)
+    for (const r of spans) {
+      const end = r.pts[r.pts.length - 1]
+      expect(end[0] < town.u0 || end[1] < town.v0).toBe(true)
+      expect(end[0]).toBeGreaterThanOrEqual(all.u0)
+      expect(end[1]).toBeGreaterThanOrEqual(all.v0)
+    }
   })
 
   it('keeps the river clear of the town with a bridge per way out', () => {

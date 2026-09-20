@@ -64,8 +64,15 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"entities", cfg.Entities.StorePath},
 		{"coverage", cfg.Coverage.StorePath},
 		{"hosts", cfg.Hosts.StorePath},
+		{"seen_values", cfg.Seen.StorePath},
 		{"baseline", cfg.Baseline.StorePath},
 		{"mac_registry", cfg.DeviceMAC.StorePath},
+		// The device registry's own enrolments (issue #1281): an
+		// acceptedIp/enrolledAt and the identity of any device this
+		// registry itself created, neither of which config.yaml can
+		// rebuild -- a restore missing this would silently unenrol
+		// every device that was never given a config.yaml sourceIp.
+		{"device_registry", cfg.DeviceRegistry.StorePath},
 		{"engine_state", cfg.Engine.StorePath},
 		{"definitions", cfg.Engine.DefinitionsStorePath},
 		// Decommission watches (#460): operator-created state with a
@@ -75,9 +82,15 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"decommission", cfg.Engine.DecommissionStorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
+		// The "N new settings are available" notice's per-version
+		// dismissal (#1218) -- small operator state, same reasoning as
+		// setup just above: a restore that dropped it would bring the
+		// notice back for a version already dealt with.
+		{"config_drift", cfg.ConfigDrift.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
+		{"droplist", cfg.Droplist.StorePath},
 	}
 }
 
@@ -113,9 +126,9 @@ var excludedFromBackup = map[string]string{
 		"trusted yet), and regenerating it is one restart away, so there is nothing here a restore " +
 		"is actually saving.",
 	"GeoIP.DBPath": "an external MaxMind database file the operator downloads themselves (#372), not " +
-		"a store mikroview writes -- there is nothing here for a restore to reproduce that a fresh " +
+		"a store MikroView writes -- there is nothing here for a restore to reproduce that a fresh " +
 		"download would not already give back.",
-	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not mikroview's own state -- the " +
+	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not MikroView's own state -- the " +
 		"next refresh re-fetches it in seconds, so a restore saves nothing. It is also somebody " +
 		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +
 		"and a backup is a copy that travels: keeping it out means an operator's backup carries " +
@@ -216,6 +229,25 @@ func unwrapFromEnvelope(name string, raw []byte) ([]byte, error) {
 // (readVaultBundle, writeVaultBundle), called directly from runBackup
 // and runRestore.
 const vaultStoreName = "router_backup_vault"
+
+// schemaStoreName is the data directory's schema document (#1238,
+// internal/persist/schema.go) in the envelope, added by #1244.
+//
+// Like vaultStoreName just above, it is deliberately not a
+// backedUpStores entry: its path is derived from dataDir(cfg), not a
+// config.Config *Path field on its own, so it never trips
+// backup_coverage_test.go's reflection walk either. Without it, a
+// restore into an empty data directory read as schema 0 -- indistinguishable
+// from an install that predates #1238 -- and the next start ran every
+// migration again over data that was already in the new shape. Carrying
+// schema.json with the rest of the bundle means a restore comes back
+// stamped at the schema it was actually taken at.
+//
+// A backup taken by a build before #1238 never had a schema.json to
+// carry, so its envelope simply lacks this entry -- runRestore treats
+// that the same way a missing document always has: schema 0, correct
+// for data that old.
+const schemaStoreName = "schema"
 
 // vaultBundle is the router-backup vault's envelope shape: every file
 // under the vault directory, keyed by its path relative to it (a
@@ -331,7 +363,9 @@ func writeVaultBundle(dir string, bundle vaultBundle) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return fmt.Errorf("router backup vault: %w", err)
 		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
+		// Atomic like every other publish here: a router backup found
+		// short at the moment it is needed is worse than one missing.
+		if err := persist.WriteFileAtomic(path, data, 0o600); err != nil {
 			return fmt.Errorf("router backup vault: %w", err)
 		}
 	}
@@ -432,6 +466,26 @@ func runBackup(args []string) int {
 			return 1
 		}
 		stores[vaultStoreName] = encoded
+	}
+
+	// schema.json (#1238) is not a document backedUpStores' loop above
+	// reads through persist.LoadDocument -- see schemaStoreName's own
+	// doc comment for why it is not one of that list's entries. Carried
+	// as-is, like every other store already written in the clear: it
+	// holds no operator data, so it needs no encryption pass even when
+	// history.keyFile is configured. A build before #1238 never wrote
+	// one, and that missing-document case is folded into the same
+	// "nothing to carry" reasoning as every other store here -- os.Stat
+	// via os.ReadFile's os.IsNotExist just skips it rather than erroring.
+	schemaPath := filepath.Join(dataDir(cfg), persist.SchemaDocumentName)
+	// #nosec G304 G703 -- this deployment's own data directory, from config, not from a request.
+	schemaData, err := os.ReadFile(schemaPath)
+	if err != nil && !os.IsNotExist(err) {
+		logger.Error(fmt.Sprintf("reading %s: %v", schemaPath, err))
+		return 1
+	}
+	if err == nil {
+		stores[schemaStoreName] = schemaData
 	}
 
 	if len(stores) == 0 {
@@ -552,6 +606,30 @@ func runRestore(args []string) int {
 		}
 	}
 
+	// schemaStoreName is pulled out and validated here for the same two
+	// reasons as retainedEventsStore just above: it must not trip the
+	// known-store loop below (backedUpStores never lists it -- see its
+	// own doc comment), and the downgrade guard has to run in the same
+	// fully-validated-before-anything-is-touched pass as everything
+	// else -- a bundle stamped newer than this build knows gets the same
+	// refusal opening it directly would (persist.CheckFileSchema), with
+	// nothing yet written. A bundle with no schemaStoreName entry (taken
+	// by a build before #1238) is not an error: schemaData stays nil and
+	// nothing is written for it below, which restores as schema 0 --
+	// correct for data that old.
+	schemaPath := filepath.Join(dataDir(cfg), persist.SchemaDocumentName)
+	var schemaData []byte
+	haveSchema := false
+	if raw, ok := env.Stores[schemaStoreName]; ok {
+		haveSchema = true
+		delete(env.Stores, schemaStoreName)
+		if err := persist.CheckSchemaDocument(dataDir(cfg), raw); err != nil {
+			logger.Error(fmt.Sprintf("%v -- nothing has been changed", err))
+			return 1
+		}
+		schemaData = raw
+	}
+
 	known := map[string]string{}
 	for _, s := range backedUpStores(cfg) {
 		known[s.Name] = s.Path
@@ -623,6 +701,73 @@ func runRestore(args []string) int {
 				return 1
 			}
 		}
+		if haveSchema {
+			// #nosec G703 -- this deployment's own data directory, from config, not from a request.
+			if _, err := os.Stat(schemaPath); err == nil {
+				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
+					"state. Re-run with --force once you are sure", schemaPath, schemaStoreName))
+				return 1
+			}
+		}
+	}
+
+	// Before a store or the schema document is written, its current
+	// bytes are recorded -- the raw bytes if it exists (plain
+	// os.ReadFile, never decode/decrypt: putting it back never needs to
+	// understand it, only to reproduce it), or that nothing is there
+	// yet. rollback below uses this to put every target the loop or the
+	// schema step already touched back exactly as it was found, so one
+	// store's write failing partway through does not leave a mix of
+	// restored and pre-restore stores with nothing done about it (the
+	// v0.6.0 audit's Robustness stage, #1257, owner ruling 11a).
+	type priorState struct {
+		data    []byte
+		existed bool
+	}
+	before := map[string]priorState{}
+	recordPriorState := func(path string) error {
+		if _, ok := before[path]; ok {
+			return nil
+		}
+		// #nosec G703 -- a store path from this deployment's own config (known[name]) or schemaPath, never from the restore file.
+		data, readErr := os.ReadFile(path)
+		switch {
+		case readErr == nil:
+			before[path] = priorState{data: data, existed: true}
+		case os.IsNotExist(readErr):
+			before[path] = priorState{}
+		default:
+			return readErr
+		}
+		return nil
+	}
+	// rollback puts every target already recorded in before back to what
+	// it held before this restore touched it -- persist.WriteFileAtomic
+	// for one that existed, os.Remove for one that did not -- then logs
+	// the one failure that triggered it. A path that cannot itself be
+	// put back is named inline, so the operator knows exactly which
+	// files are left mixed rather than finding out later.
+	rollback := func(cause string) {
+		var mixed []string
+		for path, prior := range before {
+			var restoreErr error
+			if prior.existed {
+				restoreErr = persist.WriteFileAtomic(path, prior.data, 0o600)
+			} else {
+				restoreErr = os.Remove(path)
+				if restoreErr != nil && os.IsNotExist(restoreErr) {
+					restoreErr = nil
+				}
+			}
+			if restoreErr != nil {
+				mixed = append(mixed, fmt.Sprintf("%s: %v", path, restoreErr))
+			}
+		}
+		msg := cause + " -- the data directory has been returned to its pre-restore state"
+		if len(mixed) > 0 {
+			msg += "; could not be returned: " + strings.Join(mixed, "; ")
+		}
+		logger.Error(msg)
 	}
 
 	// Write every store through its backend -- persist.Backend.Save
@@ -634,6 +779,10 @@ func runRestore(args []string) int {
 	// file, say) is still one --restore can overwrite.
 	for name, data := range decoded {
 		path := known[name]
+		if err := recordPriorState(path); err != nil {
+			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", path, name, err))
+			return 1
+		}
 		backend := backupBackendFor(path, ourKey)
 		// The version to overwrite with, read without needing the
 		// existing document to actually decrypt -- see
@@ -650,11 +799,26 @@ func runRestore(args []string) int {
 			expect = snap.Version
 		}
 		if err != nil {
-			logger.Error(fmt.Sprintf("reading the current version of %s (store %q): %v", path, name, err))
+			rollback(fmt.Sprintf("reading the current version of %s (store %q): %v", path, name, err))
 			return 1
 		}
 		if _, err := backend.Save(ctx, data, expect); err != nil {
-			logger.Error(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+			rollback(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+			return 1
+		}
+	}
+	if haveSchema {
+		if err := recordPriorState(schemaPath); err != nil {
+			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", schemaPath, schemaStoreName, err))
+			return 1
+		}
+		// Written raw, like it was read in runBackup: schema.json holds
+		// no operator data (see its own doc comment in
+		// internal/persist/schema.go), so there is no encryption pass to
+		// reverse here, only the same atomic-publish-by-rename every
+		// other document in the data directory gets.
+		if err := persist.WriteFileAtomic(schemaPath, schemaData, 0o600); err != nil {
+			rollback(fmt.Sprintf("writing %s (store %q): %v", schemaPath, schemaStoreName, err))
 			return 1
 		}
 	}
@@ -670,9 +834,15 @@ func runRestore(args []string) int {
 	// framing a live process writes, under this deployment's own key --
 	// never the encrypted bytes themselves, which is what
 	// retainedEventsStore's own doc comment means by "the tools run with
-	// the key available". Written after every other store, same as the
-	// rest of this loop: nothing here is transactional across stores, and
-	// this was already true before retainedEventsStore existed.
+	// the key available". Written after every other store and the schema
+	// document: those now land together or roll back together on failure
+	// (#1257, owner ruling 11a), but the vault bundle above and this
+	// retained corpus still follow separately, outside that rollback --
+	// neither is a single document the way a store or schema.json is, so
+	// neither fits before/rollback's record-raw-bytes-and-put-them-back
+	// shape: the vault bundle is a directory of many per-router,
+	// per-generation files, and the retained corpus is its own
+	// append-only store.
 	if haveRetainedEvents {
 		dir := historyDirectory(cfg)
 		// #nosec G703 -- history.dir from this deployment's own config, not from a request.

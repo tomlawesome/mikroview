@@ -47,9 +47,11 @@ import (
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -67,6 +69,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/seen"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/snapshot"
@@ -168,20 +171,65 @@ func versionBootMessage(prev, current string) string {
 	return fmt.Sprintf("version %s", current)
 }
 
-// logVersionAndMigration logs versionBootMessage's result and updates
-// the persisted marker for next time. Like every other optional
+// logVersionAndMigration logs versionBootMessage's result, updates the
+// persisted marker for next time, and returns the version that marker
+// held ("" on a first install, or when it could not be read).
+//
+// It returns it rather than only logging it because the marker is the
+// only record of what this data directory last ran, and it is gone the
+// moment this function overwrites it -- so the upgrade notice (#1240)
+// has to be handed the previous version from here or not at all. The
+// caller passes it to the setup ledger, which is where the crossing and
+// its acknowledgement are persisted; see setup.Store.NoteUpgrade.
+//
+// Like every other optional
 // persistence in this codebase (see flags.Open's doc comment), a
 // read/write failure is never fatal -- it just means upgrade detection
 // silently doesn't work until the underlying path issue is fixed.
-func logVersionAndMigration(logger *slog.Logger) {
+//
+// newSettingsCount is #1218's other half: how many settings this build
+// understands that the running config does not set (config.MissingSettings,
+// computed once by the caller). It only ever gets a line of its own on
+// the boot that actually crosses a version -- not a routine restart,
+// and not repeated on every later boot at the same version -- because a
+// log line cannot be dismissed the way Settings ▸ Upgrade can, and one
+// operators cannot make stop is one they learn to ignore.
+func logVersionAndMigration(logger *slog.Logger, newSettingsCount int) string {
 	prev, err := os.ReadFile(versionMarkerPath)
 	if err != nil && !os.IsNotExist(err) {
 		logger.Warn(fmt.Sprintf("reading version marker: %v", err))
 	}
-	logger.Info(versionBootMessage(string(prev), version))
+	prevVersion := strings.TrimSpace(string(prev))
+	logger.Info(versionBootMessage(prevVersion, version))
+	if prevVersion != "" && prevVersion != version && newSettingsCount > 0 {
+		logger.Info(fmt.Sprintf("%d new setting(s) are available -- see Settings ▸ Upgrade to review and copy them in", newSettingsCount))
+	}
 	if err := os.WriteFile(versionMarkerPath, []byte(version), 0o600); err != nil {
 		logger.Warn(fmt.Sprintf("writing version marker: %v (upgrade detection won't work on the next restart)", err))
 	}
+	return prevVersion
+}
+
+// readRawConfigYAML reads the operator's config file bytes for
+// config.MissingSettings, treating no path or an unreadable one as "no
+// keys set" rather than fatal -- config.LoadWithProblems has already
+// read and validated this same file moments before any caller reaches
+// this, so a failure here only means the "new settings available"
+// notice cannot be computed this boot, not that anything is actually
+// wrong.
+func readRawConfigYAML(path string) []byte {
+	if path == "" {
+		return nil
+	}
+	// #nosec G703 -- this deployment's own config path, from
+	// MIKROVIEW_CONFIG or -config, and already opened and parsed by
+	// config.LoadWithProblems before any caller reaches here. It never
+	// comes from a request.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // securityHeaders wraps next, setting baseline defense-in-depth headers
@@ -375,26 +423,73 @@ func localRedirectHosts() []string {
 	if name, err := os.Hostname(); err == nil {
 		add(name)
 	}
-	if addrs, err := net.InterfaceAddrs(); err == nil {
-		for _, a := range addrs {
-			ipNet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			addr, ok := netip.AddrFromSlice(ipNet.IP)
-			if !ok {
-				continue
-			}
-			addr = addr.Unmap()
-			if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
-				continue
-			}
-			add(addr.String())
-		}
+	for _, addr := range boundInterfaceAddrs() {
+		add(addr.String())
 	}
 	add("localhost")
 	add("127.0.0.1")
 	return hosts
+}
+
+// boundInterfaceAddrs is the "real address" enumeration localRedirectHosts
+// and setupAddressCandidates below both need -- every address this host
+// holds on any interface, minus loopback, link-local and unspecified,
+// which are never an address a router elsewhere on the network could
+// reach it on. Pulled out so the two lists cannot silently disagree
+// about what counts as real.
+func boundInterfaceAddrs() []netip.Addr {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Addr
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		addr, ok := netip.AddrFromSlice(ipNet.IP)
+		if !ok {
+			continue
+		}
+		addr = addr.Unmap()
+		if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
+}
+
+// setupAddressCandidates is the wizard header field's server-known
+// defaults (#1213): every real address this instance is bound to, on
+// the configured HTTPS port, so the field the operator answers ("what
+// address can your router reach mikroview on?") starts from something
+// mikroview actually knows about itself rather than only the browser's
+// own host (that fallback stays in
+// frontend/src/lib/wizard.svelte.ts). This is not a new discovery
+// mechanism -- it reads net.InterfaceAddrs, the same source
+// localRedirectHosts already trusts, and the configured listen address,
+// nothing polled from a router.
+//
+// A container with no real interface enumerates nothing (host
+// networking not in use, or every address filtered as loopback/
+// link-local); in that case this falls back to whatever host
+// cfg.Listen.HTTP itself names, since that is the one address
+// configuration actually states, rather than guessing further.
+func setupAddressCandidates(listenHTTP string) []string {
+	host, port, err := net.SplitHostPort(listenHTTP)
+	if err != nil || port == "" {
+		return nil
+	}
+	var out []string
+	for _, addr := range boundInterfaceAddrs() {
+		out = append(out, net.JoinHostPort(addr.String(), port))
+	}
+	if len(out) == 0 && host != "" {
+		out = append(out, net.JoinHostPort(host, port))
+	}
+	return out
 }
 
 // joinOnShutdown registers a goroutine with wg that waits for ctx to be
@@ -480,6 +575,13 @@ func main() {
 	configLog := logging.New("config")
 	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
+		// Asking for help is not a broken configuration. The usage --
+		// the flags, then config.OtherCommands' block naming the modes
+		// dispatched above -- has already been printed, so exit on it
+		// rather than printing an ERROR line under the help (#1176).
+		if config.HelpRequested(err) {
+			os.Exit(0)
+		}
 		// The structured report rather than err.Error(): this is the
 		// message that stops the server, so the line telling the
 		// operator what to change should not be the tail of a long
@@ -498,8 +600,42 @@ func main() {
 	// in place, not a per-logger setting fixed at New() time.
 	logging.SetLevel(cfg.Log.Level)
 
+	// One line per optional file the app folder was asked for, found or
+	// not, naming the path (#1243). Said out loud at every boot because
+	// the whole contract is "drop the file in and restart": an operator
+	// who put the GeoIP database one directory too deep otherwise has
+	// only a feature that stayed off and nothing to compare against.
+	// Nothing is printed for a setting config or the environment
+	// already named -- the folder was not consulted for it.
+	for _, found := range configResult.AppFolder {
+		configLog.Info("app folder -- " + found.String())
+	}
+
+	// #1218: every optional top-level setting this build understands
+	// that config.yaml does not set, computed once here since neither
+	// input (this binary, the running config) changes before the next
+	// restart -- both the boot log line below and GET /api/config/upgrade
+	// read the same slice rather than recomputing it. A failure just
+	// means the notice can't be shown this boot; see readRawConfigYAML's
+	// own comment for why that's never treated as fatal.
+	missingSettings, err := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(configResult.ConfigPath))
+	if err != nil {
+		configLog.Warn(fmt.Sprintf("checking for newly available settings: %v", err))
+		missingSettings = nil
+	}
+
 	logging.PrintBanner()
-	logVersionAndMigration(logging.New("mikroview"))
+
+	// #1238: bring the data directory up to the schema this build knows,
+	// and refuse outright if a newer build wrote it. Before anything else
+	// touches the data directory -- including the version marker below --
+	// because the refusal's promise is that nothing was written.
+	if err := upgradeDataDirSchema(cfg); err != nil {
+		logging.New("schema").Error(err.Error())
+		os.Exit(1)
+	}
+
+	previousVersion := logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
 	// Before anything is built on top of them (#536). Checked here
 	// rather than at each store's first write so the operator gets one
@@ -517,12 +653,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	devices := device.NewRegistry(cfg.Devices)
 	// Tell the syslog listener which sources are the operator's declared
 	// routers, so a flood of undeclared ones cannot take every
 	// connection slot and lock them out -- see syslog.reservedFraction.
 	// Set here, before any listener starts, which is the contract
-	// SetConfiguredSources documents.
+	// SetConfiguredSources documents. (The device registry itself --
+	// device.OpenRegistry -- opens later, alongside every other
+	// persisted store, since issue #1281 gave it a backend of its own;
+	// nothing here needs it yet.)
 	configuredSources := make([]string, 0, len(cfg.Devices))
 	for _, d := range cfg.Devices {
 		if d.SourceIP != "" {
@@ -535,6 +673,16 @@ func main() {
 	geo, err := geoip.Open(cfg.GeoIP.DBPath)
 	if err != nil {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
+	}
+	// One info line on every start, not just on a failed open (#1198): the
+	// unset and the opened-fine cases were both silent before this, so the
+	// owner had no way to tell from the logs whether geoip.dbPath had
+	// actually taken. A failed open still gets the Warn above as well --
+	// this line only adds the two cases that previously said nothing.
+	if geo.Configured() {
+		geoLog.Info(fmt.Sprintf("%s opened", cfg.GeoIP.DBPath))
+	} else if cfg.GeoIP.DBPath == "" {
+		geoLog.Info("no database configured (country flags off)")
 	}
 	defer geo.Close()
 	// rep: always built (AbuseIPDBKey empty just means that one source
@@ -571,6 +719,20 @@ func main() {
 	}
 	fs, err := flags.OpenWithBackend(flagsBackend)
 	mustOpenStore(flagsLog, err)
+
+	// devices is the one device registry every count reads (#1170), now
+	// with its own optional persistence (issue #1281): an enrolled
+	// device's acceptedIp/enrolledAt, and the identity of any device
+	// this registry itself created (Create/Ensure) rather than
+	// config.yaml, survive a restart -- see device.Registry's own doc
+	// comment for what is and is not written back.
+	deviceRegistryLog := logging.New("device")
+	deviceRegistryBackend, err := persistence.backendFor(bootCtx, "device_registry", cfg.DeviceRegistry.StorePath)
+	if err != nil {
+		deviceRegistryLog.Warn(err.Error())
+	}
+	devices, err := device.OpenRegistryWithBackend(deviceRegistryBackend, cfg.Devices)
+	mustOpenStore(deviceRegistryLog, err)
 
 	// macRegistry backs the new-device/new-MAC detector (issue #103
 	// phase 1) -- see internal/device.MACRegistry's doc comment for why
@@ -628,7 +790,7 @@ func main() {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
 	default:
-		authLog.Info("no account yet -- mikroview is showing the create-account screen (see docs/configuration.md)")
+		authLog.Info("no account yet -- MikroView is showing the create-account screen (see docs/configuration.md)")
 	}
 
 	// entities (issue #107): the persisted, admin-manageable (type, key)
@@ -679,6 +841,23 @@ func main() {
 	hostRegister, err := hosts.OpenWithBackend(hostsBackend)
 	mustOpenStore(hostsLog, err)
 
+	// The seen-values register (issue #1226): which protocols and which
+	// interface names this instance has actually observed, so the
+	// stream's Proto and Interface filters can be pickers over a real
+	// list instead of free-text boxes the operator has to guess into.
+	// Sits beside the two registers above because it is fed from the
+	// same place on the same terms -- one map update per ingested event,
+	// a rate-limited encode, never a disk write on that path. Retention
+	// (90 days, 200 values a field) is internal/seen's own, applied at
+	// write time, so nothing here schedules anything.
+	seenLog := logging.New("seen")
+	seenBackend, err := persistence.backendFor(bootCtx, "seen_values", cfg.Seen.StorePath)
+	if err != nil {
+		seenLog.Warn(err.Error())
+	}
+	seenRegister, err := seen.OpenWithBackend(seenBackend)
+	mustOpenStore(seenLog, err)
+
 	// The baseline line register (issue #1016, round 49): which
 	// source/destination/port/protocol lines the feed has shown and on
 	// which of the last few days, so the map can draw a line off the
@@ -718,10 +897,12 @@ func main() {
 
 	// Router-backup vault (#394): the SFTP drop box (started further
 	// below, once the listen address is finalised) writes into this,
-	// and the admin API reads it back. Needs tokenStore above (a login's
-	// password is checked against it) so it is opened here, not
-	// earlier.
-	routerBackupVault := openRouterBackupVault(logging.New("backupvault"), cfg)
+	// and the admin API reads it back. Needs tokenStore above (a
+	// login's password is checked against it) so it is opened here, not
+	// earlier -- and it also needs both tokenStore and devices to try a
+	// lost index's rebuild against every name it might recognise
+	// (#1294's recoveryCandidates), so it stays below devices too.
+	routerBackupVault, routerBackupKeyUnreadable := openRouterBackupVault(logging.New("backupvault"), cfg, tokenStore, devices)
 
 	// Audit (issue #112): the persisted admin-action accountability log.
 	// Persistence itself is optional -- a missing/unconfigured path just
@@ -750,6 +931,23 @@ func main() {
 	}
 	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
 	mustOpenStore(suggestLog, err)
+
+	// The droplist entry store (issue #1223, stage 1 of the design
+	// ratified on #461): operator-authored ranges to block, distinct
+	// from the fetched threat-intel feeds internal/blocklist.Blocklist
+	// (bl, opened further down) matches against -- see internal/droplist's
+	// own doc comment for how the two are unrelated. Persistence itself
+	// is optional, same contract as Audit.StorePath above; SetOwnRanges
+	// is wired once routerState exists below, and SetAuditor now, since
+	// auditStore already does.
+	droplistLog := logging.New("droplist")
+	droplistBackend, err := persistence.backendFor(bootCtx, "droplist", cfg.Droplist.StorePath)
+	if err != nil {
+		droplistLog.Warn(err.Error())
+	}
+	droplistStore, err := droplist.OpenWithBackend(droplistBackend)
+	mustOpenStore(droplistLog, err)
+	droplistStore.SetAuditor(auditStore)
 
 	// The watchlist's match log has no in-memory-only mode (durability
 	// is the entire point of it, see internal/matchlog's package doc
@@ -792,19 +990,24 @@ func main() {
 				cfg.Watchlist.MatchLogPath, fi.Size()))
 		}
 	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
-		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
+		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and MikroView is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
 		defer ml.Close()
 	}
 	// eng is the evaluation chassis (issue #398, part of the v0.3.0
-	// unification -- see docs/decisions/evaluation-engine.md): one ingest
-	// queue, one backpressure policy, one lifecycle, one panic boundary.
+	// unification -- see docs/decisions/evaluation-engine.md): one
+	// lifecycle, one panic boundary, and one cursor over the ring store.
 	// internal/detect collapsed onto it and was deleted (issue #405);
 	// internal/watchlist's evaluator followed (issue #406), so this is
 	// now the only thing in the process that evaluates an ingested
 	// event at all.
-	eng := engine.New()
+	//
+	// It reads what it evaluates from st, the same ring the API and the
+	// live view read from (issue #1109): the events are already there, so
+	// a second bounded copy of the stream could only add a way to lose
+	// them under a burst that the store itself would have survived.
+	eng := engine.New(st)
 
 	// engineState (#399/#400) persists every definition's per-key
 	// Baseline state -- opened here, under the same fail-closed
@@ -981,6 +1184,22 @@ func main() {
 	// API server for the ingest endpoint to write and the table endpoints
 	// to read.
 	routerState := routerstate.New()
+	// droplistStore.Add can refuse a range that is one of mikroview's
+	// own enrolled/declared addresses (issue #1223's ErrRouterOwn) --
+	// see internal/droplist.OwnRanges and device.Registry.OwnPrefixes.
+	// Issue #1281's audit moved this off routerState's pushed
+	// /ip/address tables (a router's own claim about itself) onto the
+	// registry's actual evidence -- config.yaml's sourceIp and a
+	// redeemed enrolment token's acceptedIp -- the same narrowing
+	// Resolve's own attribution went through.
+	droplistStore.SetOwnRanges(devices)
+	// Issue #1281's listener gate: a syslog source is allowed onto the
+	// ingest pipeline only once it is sourceIp or acceptedIp; anything
+	// else is checked for the enrolment marker and refused otherwise.
+	// device.Registry satisfies syslog.EnrolmentGate structurally --
+	// see that interface's own doc comment for why syslog declares it
+	// rather than importing this package.
+	syslog.SetEnrolmentGate(devices)
 
 	// Everything the engine evaluates, registered from the one
 	// definitions document and kept in step with it (issues #405/#406/
@@ -1146,6 +1365,26 @@ func main() {
 	setupStore, err := setup.OpenWithBackend(setupBackend)
 	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
+
+	// #1240: the build this data directory last ran, read out of the
+	// version marker by logVersionAndMigration above before it was
+	// overwritten. A first install and an ordinary restart both record
+	// nothing; a crossing is recorded once and stays until an admin
+	// presses done, so the notice survives restarts rather than being
+	// re-raised by them.
+	setupStore.NoteUpgrade(previousVersion, version, time.Now())
+
+	// #1218: which "N new settings are available" notice an operator has
+	// already dismissed -- the notice's own content (missingSettings,
+	// computed above) is never persisted, only this. Same optional-
+	// persistence contract as setupStore just above.
+	configDriftLog := logging.New("configdrift")
+	configDriftBackend, err := persistence.backendFor(bootCtx, "config_drift", cfg.ConfigDrift.StorePath)
+	if err != nil {
+		configDriftLog.Warn(err.Error())
+	}
+	configDriftStore, err := configdrift.OpenWithBackend(configDriftBackend)
+	mustOpenStore(configDriftLog, err)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
 	// #600: the registry answers device display names through the same
 	// resolver, so a rename stored by one operator is what every
@@ -1183,8 +1422,9 @@ func main() {
 	switch {
 	case snapshotDir == "":
 		// Already explained above.
-	case persistence.key == nil:
-		snapshotLog.Info("warm-restart snapshots are off: no history.keyFile configured -- counters, detector windows and device first-seen dates all start cold after every restart")
+	case !snapshotKeyState(snapshotLog, persistence.key != nil, persistence.keyErr):
+		// Already explained by snapshotKeyState, which also distinguishes
+		// "not configured" from "configured but unusable" (#1211).
 	default:
 		restoreSnapshot(snapshotLog, snapshotDir, persistence.key, time.Now(), snapshotParts...)
 	}
@@ -1204,7 +1444,7 @@ func main() {
 	// process runs. See history_runtime.go.
 	hist := newHistoryRuntime(logging.New("history"), cfg, settingsStore, st)
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister, seenRegister)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
 	// one goroutine at the finest cadence any shipped definition
@@ -1401,7 +1641,7 @@ func main() {
 		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
 		// off is the fail-closed outcome; local login is unaffected.
 		oidcLog.Error(fmt.Sprintf(
-			"%s is a multi-tenant provider and is not supported -- mikroview only supports self-hosted identity providers "+
+			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
 				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
 				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
 			cfg.OIDC.IssuerURL))
@@ -1427,6 +1667,17 @@ func main() {
 				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
 			} else {
 				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
+			}
+			// "SSO is additive; keep a local admin" (#1252). Said out
+			// loud at every start while it is untrue, because the day it
+			// matters is the day the provider is down and nobody is
+			// reading the docs. Not a refusal: turning SSO off here
+			// would leave a deployment whose admin already signs in
+			// through the provider with no way in at all, which is the
+			// lock-out this rule exists to prevent.
+			if authStore.Count() > 0 && !authStore.HasLocalAdmin() {
+				oidcLog.Warn("no MikroView admin has a local password, so SSO is the only way in -- if the provider goes down, " +
+					"signing in needs `mikroview -transfer-admin <username>` at the command line. See SECURITY.md, \"SSO is additive\"")
 			}
 		}
 	}
@@ -1519,10 +1770,12 @@ func main() {
 		Coverage:                coverageStore,
 		Hosts:                   hostRegister,
 		Baseline:                baselineRegister,
+		SeenValues:              seenRegister,
 		HostQuietAfter:          cfg.Baseline.HostQuietAfter,
 		Naming:                  names,
 		Rules:                   ru,
 		Audit:                   auditStore,
+		Droplist:                droplistStore,
 		Suggest:                 suggestStore,
 		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
 		MatchLog:                matchLog,
@@ -1541,19 +1794,24 @@ func main() {
 		Vault:                   routerBackupVault,
 		BackupSlices:            routerBackupSlices,
 		SetupInstance: api.SetupInstance{
-			TLSEnabled: cfg.TLS.Enabled,
-			Hosts:      cfg.TLS.Hosts,
-			SyslogPort: cfg.Listen.SyslogTLS,
-			BackupPort: routerBackupPort(cfg),
+			TLSEnabled:          cfg.TLS.Enabled,
+			Hosts:               cfg.TLS.Hosts,
+			SyslogPort:          cfg.Listen.SyslogTLS,
+			BackupPort:          routerBackupPort(cfg),
+			BackupKeyUnreadable: routerBackupKeyUnreadable,
+			Candidates:          setupAddressCandidates(cfg.Listen.HTTP),
 		},
-		OIDC:              oidcClient,
-		OIDCState:         oidcState,
-		OIDCPolicy:        oidcPolicy,
-		StartTime:         time.Now(),
-		Version:           version,
-		ThirdPartyNotices: thirdPartyNotices,
-		ConfigProblems:    configProblems,
-		Persistence:       persistenceInfo,
+		OIDC:                  oidcClient,
+		OIDCState:             oidcState,
+		OIDCPolicy:            oidcPolicy,
+		StartTime:             time.Now(),
+		Version:               version,
+		GeoIP:                 geo.Configured(),
+		ThirdPartyNotices:     thirdPartyNotices,
+		ConfigProblems:        configProblems,
+		Persistence:           persistenceInfo,
+		ConfigUpgradeSettings: missingSettings,
+		ConfigDrift:           configDriftStore,
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
@@ -1771,7 +2029,7 @@ func main() {
 			}()
 		}
 	} else {
-		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
+		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- MikroView is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}
 	if cfg.Listen.SyslogTLS != "" {
 		// RouterOS's remote-protocol=tls (issue #188), presenting the
@@ -1840,7 +2098,7 @@ func main() {
 	// Best-effort: each store already logs its own save failures, so a
 	// Close error here is just the shutdown-budget case, worth one
 	// line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions, decommissions, hostRegister, baselineRegister, seenRegister)
 
 	// One last snapshot, for the same reason and under the same budget
 	// (#795). Ingest and evaluation have both stopped by now, so this
@@ -1930,7 +2188,7 @@ func runValidateConfig(args []string) int {
 		// the fix on the end.
 		if len(result.Fatal) > 0 {
 			fmt.Fprint(os.Stderr, config.Report(result.Fatal))
-			fmt.Fprintf(os.Stderr, "\n%d problem(s). mikroview would refuse to start.\n", len(result.Fatal))
+			fmt.Fprintf(os.Stderr, "\n%d problem(s). MikroView would refuse to start.\n", len(result.Fatal))
 			return validateConfigExitProblems
 		}
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -1942,11 +2200,30 @@ func runValidateConfig(args []string) int {
 	_ = args
 	_ = cfg
 
+	// #1218's item 4: the same "N new settings are available" list the
+	// server itself would log on its next restart if this were an
+	// upgrade, so it can be checked before one. Informational only --
+	// never itself a reason for a non-zero exit, since every setting
+	// here is optional by definition.
+	if missing, mErr := config.MissingSettings(exampleConfigYAML, readRawConfigYAML(result.ConfigPath)); mErr != nil {
+		fmt.Fprintf(os.Stderr, "checking for newly available settings: %v\n", mErr)
+	} else if len(missing) > 0 {
+		fmt.Printf("%d new setting(s) understood by this build are not set:\n", len(missing))
+		for _, m := range missing {
+			fmt.Printf("  %s\n", m.Key)
+		}
+		fmt.Println("  (see deploy/config.example.yaml, or Settings ▸ Upgrade once running, for the exact YAML to paste)")
+	}
+
 	if !result.HasProblems() {
-		if path == "" {
-			fmt.Println("No config file set (MIKROVIEW_CONFIG is empty) -- built-in defaults are valid.")
+		if result.ConfigPath == "" {
+			// Names the path it looked at, not just the env var: with
+			// #1243's app-folder default there are now two ways to
+			// have no config file, and an operator who mounted the
+			// folder needs to see which name MikroView expected.
+			fmt.Printf("No config file (MIKROVIEW_CONFIG is empty and there is no %s) -- built-in defaults are valid.\n", config.DefaultConfigPath())
 		} else {
-			fmt.Printf("%s: no problems found.\n", path)
+			fmt.Printf("%s: no problems found.\n", result.ConfigPath)
 		}
 		return validateConfigExitOK
 	}
@@ -1960,7 +2237,7 @@ func runValidateConfig(args []string) int {
 			fmt.Printf("         %s\n", p.Remediation)
 		}
 	}
-	fmt.Printf("\n%d warning(s). mikroview would start, using the values shown above.\n", len(result.Warnings))
+	fmt.Printf("\n%d warning(s). MikroView would start, using the values shown above.\n", len(result.Warnings))
 	return validateConfigExitProblems
 }
 
@@ -2228,7 +2505,7 @@ func runTransferAdmin(args []string) int {
 		fmt.Println()
 		fmt.Printf("WARNING: %q signs in through your identity provider and has no local\n", next.Username)
 		fmt.Println("password. After this transfer, admin recovery goes through your identity")
-		fmt.Println("provider -- mikroview will not be able to recover that account itself.")
+		fmt.Println("provider -- MikroView will not be able to recover that account itself.")
 		fmt.Println()
 		if !confirmYes(fmt.Sprintf("Transfer admin to %q anyway?", next.Username)) {
 			fmt.Println("Nothing was changed, and your recovery keys are unchanged.")
@@ -2432,7 +2709,7 @@ func runRecoverAdminAccount(args []string) int {
 	// and only then learning it was never going to work.
 	if !admin.LocalPassword() {
 		logger.Error(fmt.Sprintf("%q signs in through your identity provider and has no local password "+
-			"-- mikroview cannot recover it. Reset it at your identity provider, or use "+
+			"-- MikroView cannot recover it. Reset it at your identity provider, or use "+
 			"-transfer-admin to move admin to an account that does have one", logging.Printable(admin.Username)))
 		return 1
 	}
@@ -2528,14 +2805,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister, seenRegister)
 		}
 	}
 }
@@ -2546,7 +2823,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2641,13 +2918,13 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// is the ordinary memory-only default and costs a nil check.
 	hist.Append(stored)
 	h.Broadcast(stored)
-	// Every definition, of either intent, evaluates off this one hand-off
-	// (issues #405 and #406): internal/detect's queue, worker and
-	// drop-log gate, and internal/watchlist's own duplicate of all three,
-	// are gone. The chassis's queue -- with one backpressure policy, one
-	// panic boundary and one fault report -- is what receives every
-	// stored event.
-	eng.Enqueue(stored)
+	// Every definition, of either intent, evaluates off this one doorbell
+	// (issues #405, #406 and #1109): internal/detect's queue, worker and
+	// drop-log gate, internal/watchlist's own duplicate of all three, and
+	// the chassis's own queue that replaced them, are all gone. The event
+	// is already in st above; this only tells the engine to look, and
+	// never blocks ingest for it.
+	eng.Nudge()
 	// Keeps internal/rules' long-lived per-rule usage record in sync with
 	// internal/store/ring.go's own totalByRule bump inside Insert above --
 	// same per-event trigger, so RuleUsage never drifts out of step with
@@ -2679,6 +2956,12 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		outcome = baseline.OutcomeDrop
 	}
 	baselineRegister.Observe(stored.InInterface, stored.SrcIP, stored.DstIP, stored.DstPort, stored.Protocol, outcome, stored.ReceivedAt)
+	// The seen-values register (issue #1226), on the same terms as the
+	// two registers above: one mutex-protected map update, never a disk
+	// write here. Both interface names go in, because the stream's
+	// interface filter matches an event on either (store.Query.Interface)
+	// -- one filter, one list.
+	seenRegister.Observe(stored.Protocol, stored.InInterface, stored.OutInterface, stored.ReceivedAt)
 }
 
 // resolveTransferTarget works out which account admin is moving to,
@@ -2735,7 +3018,7 @@ func resolveTransferTarget(store *auth.Store, current *auth.User, target string)
 			// Flagged in the list, not only after choosing, so the
 			// consequence is visible while choosing rather than as a
 			// surprise afterwards.
-			note = "   (signs in via SSO -- mikroview cannot recover this account)"
+			note = "   (signs in via SSO -- MikroView cannot recover this account)"
 		}
 		fmt.Printf("  %2d) %s%s\n", i+1, logging.Printable(u.Username), note)
 	}
@@ -2869,7 +3152,7 @@ func watchForCertificateReload(ctx context.Context, reloader *servertls.Reloader
 			if operatorSupplied {
 				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- new connections to both the https and syslog listeners use it from now on", fingerprint))
 			} else {
-				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- this deployment uses mikroview's own generated certificate, so this only re-reads what is already on disk", fingerprint))
+				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- this deployment uses MikroView's own generated certificate, so this only re-reads what is already on disk", fingerprint))
 			}
 		}
 	}
