@@ -83,6 +83,12 @@ func TestKnownRemovedKeyGetsItsSpecificMessage(t *testing.T) {
 			wantKey:   "flags.detectorSettingsStorePath",
 			wantInMsg: []string{"flags.detectorSettingsStorePath", "v0.5.0", "#873"},
 		},
+		{
+			name:      "configDrift.storePath",
+			src:       "configDrift:\n  storePath: /var/lib/mikroview/config-drift.json\n",
+			wantKey:   "configDrift",
+			wantInMsg: []string{"configDrift", "#1277", "#1218"},
+		},
 	}
 
 	for _, tc := range cases {

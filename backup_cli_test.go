@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -438,5 +440,88 @@ func TestRestoreRollsBackEveryStoreWhenOneWriteFails(t *testing.T) {
 
 	if _, err := os.Stat(coveragePath); !os.IsNotExist(err) {
 		t.Errorf("coverage store after the failed restore: stat = %v, want it to still not exist", err)
+	}
+}
+
+// TestRetiredStoreIsSkippedAndReported is #1277's Done-when for
+// retiredStoresIn: a store name a past release stopped writing (see
+// retiredStores) is pulled out of the envelope and never written to
+// disk, and the reason -- which version retired it, and why -- lands in
+// the restore's own log output rather than the generic "unknown store"
+// refusal.
+func TestRetiredStoreIsSkippedAndReported(t *testing.T) {
+	stores := map[string]json.RawMessage{
+		"config_drift": json.RawMessage(`{"dismissedVersion":"v0.5.0"}`),
+	}
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	got := retiredStoresIn(stores, log)
+
+	if len(got) != 1 || got[0] != "config_drift" {
+		t.Fatalf("retiredStoresIn returned %v, want [config_drift]", got)
+	}
+	if _, ok := stores["config_drift"]; ok {
+		t.Error("config_drift is still in the stores map -- it should have been removed rather than restored")
+	}
+	out := buf.String()
+	for _, want := range []string{"config_drift", retiredStores["config_drift"].Version, "#1218", "#1277"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log output %q lacks %q", out, want)
+		}
+	}
+}
+
+// TestRestoreSkipsARetiredStoreAndRestoresTheRest is the end-to-end
+// pin: a backup made before config_drift was retired restores cleanly
+// (the known stores it also carries land on disk) instead of the whole
+// bundle being refused for carrying a name backedUpStores may no longer
+// list.
+func TestRestoreSkipsARetiredStoreAndRestoresTheRest(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"auth":         []byte(`{"users":[]}`),
+		"config_drift": []byte(`{"dismissedVersion":"v0.5.0"}`),
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath}); code != 0 {
+		t.Fatalf("runRestore() = %d, want 0 (a retired store must not stop the rest of the backup restoring)", code)
+	}
+
+	if _, err := os.Stat(authPath); err != nil {
+		t.Errorf("auth store was not restored: %v", err)
+	}
+}
+
+// TestRestoreRefusesAnUnknownStoreNotOnTheRetiredList confirms
+// retiredStoresIn does not widen the "unknown store" refusal into a
+// blanket amnesty: a name that is neither a current store nor
+// documented in retiredStores still stops the restore rather than being
+// silently skipped or guessed at.
+func TestRestoreRefusesAnUnknownStoreNotOnTheRetiredList(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"totally_made_up_store": []byte(`{}`),
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath}); code != 1 {
+		t.Fatalf("runRestore() with an unrecognised, non-retired store = %d, want 1 (refused)", code)
 	}
 }
