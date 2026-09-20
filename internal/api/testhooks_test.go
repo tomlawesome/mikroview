@@ -174,11 +174,18 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 		t.Fatal(err)
 	}
 	devicesBefore := len(s.Devices.List())
+	// The engine is told the wipe was deliberate (#1109): otherwise a
+	// backlog at reset time reads as outrun in the next scenario.
+	forgot := &forgetStub{}
+	s.Evaluation = forgot
 
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/test/reset", map[string]any{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/test/reset = %d, want 200", resp.StatusCode)
+	}
+	if forgot.calls != 1 {
+		t.Errorf("engine Forget() called %d times by the reset, want 1", forgot.calls)
 	}
 
 	if got := st.Stats().Total; got != 0 {
@@ -264,3 +271,9 @@ func ringFor(t *testing.T, base, id string) watchlist.Ring {
 	t.Fatalf("definition %s is not in the list response", id)
 	return watchlist.Ring{}
 }
+
+// forgetStub records whether the reset told the engine to start level.
+type forgetStub struct{ calls int }
+
+func (f *forgetStub) Lag() (uint64, float64, uint64) { return 0, 0, 0 }
+func (f *forgetStub) Forget()                        { f.calls++ }

@@ -54,6 +54,11 @@ export function deckCards(isAdmin: boolean, canEdit: boolean = isAdmin): DeckCar
     // LANDING_BY_CARD contract is unchanged.
     cards.push({ key: 'entities', name: 'Entities', views: ['entities', 'fleet'] })
     cards.push({ key: 'engineroom', name: 'Settings', views: ['engineroom'] })
+    // Log every rule (#1134). Same `edit` gate the nav row and the two
+    // /api/tune-logging endpoints already carry, so a viewer neither
+    // sees the card nor could use it. The view key is still
+    // 'tune-logging': #1134 renamed the page, not the endpoints.
+    cards.push({ key: 'log-every-rule', name: 'Log every rule', views: ['tune-logging'] })
   } else {
     cards.push({ key: 'fleet', name: 'Fleet', views: ['fleet'] })
   }
@@ -72,4 +77,5 @@ export const LANDING_BY_CARD: Record<string, View> = {
   entities: 'entities',
   engineroom: 'engineroom',
   fleet: 'fleet',
+  'log-every-rule': 'tune-logging',
 }

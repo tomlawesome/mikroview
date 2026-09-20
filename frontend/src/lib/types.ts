@@ -112,6 +112,90 @@ export interface Device {
   // the name so a reader gets the fact and the reason together, the way
   // GET /api/naming/provenance reports a host name's origin.
   nameSource?: NameSource
+  // setup (#1241) is the router-side half of the upgrade contract: what
+  // this router last reported of the logging setup the wizard pasted on
+  // it, judged against what the current wizard would paste. Mirrors
+  // internal/setup.RouterSetup. Absent only on a server built without a
+  // setup ledger -- "never reported" is itself an answer, never a
+  // missing field.
+  setup?: RouterSetupReport
+  // acceptedIp (#1281) is the one address this router's logs are
+  // accepted from: the address the enrol line arrived from. Absent
+  // until a router has enrolled, which is exactly what the wizard's
+  // Send logs step waits for -- lines from any other address are
+  // refused (see RefusedSender below).
+  acceptedIp?: string
+  // enrolledAt is when that line arrived, for the step's arrived
+  // observation ("Enrolled at 192.168.88.1 · 14:02").
+  enrolledAt?: string
+  // enrolment is the token standing for this router: whether one is
+  // minted and waiting to be used, and when it lapses. Absent on a
+  // router nobody is currently enrolling.
+  enrolment?: DeviceEnrolment
+  // registeredAt (#1291) is when the operator confirmed this router on
+  // the device itself -- the ledger's final Register step. Absent until
+  // they do, and independent of acceptedIp: registering records intent
+  // and grants nothing, so a router can be registered without being
+  // enrolled, or enrolled without being registered. The pair is how the
+  // fleet tells a finished setup from one someone walked away from part
+  // way through.
+  registeredAt?: string
+}
+
+// DeviceEnrolment is the enrolment token's standing as GET /api/devices
+// reports it (#1281). Never the token itself: that is shown once, by
+// the response that minted it, and the server keeps only its hash.
+export interface DeviceEnrolment {
+  pending: boolean
+  expiresAt?: string
+}
+
+// EnrolmentToken is what POST /api/devices/{id}/enrolment answers with
+// (#1281) -- the value the wizard writes into its last logging line,
+// and the moment it lapses. Shown once; re-minting is Reroll.
+export interface EnrolmentToken {
+  token: string
+  expiresAt: string
+}
+
+// RefusedSender mirrors an entry of GET /api/devices/refused (#1281):
+// an address whose syslog lines were dropped because it is not any
+// router's enrolled address. A fact to read, never a thing to accept --
+// there is no accept control anywhere, by ruling: an address is
+// accepted only by a router presenting a token.
+export interface RefusedSender {
+  ip: string
+  firstSeen: string
+  lastSeen: string
+  lines: number
+}
+
+// Mirrors internal/setup.RouterSetup (#1241). scriptVersion is what the
+// router's own script reported (0 when it never has); currentVersion is
+// routeros.WizardVersion, so a reader can say "script v3, current v5"
+// without asking a second question.
+export interface RouterSetupReport {
+  standing: 'current' | 'behind' | 'never reported'
+  scriptVersion: number
+  currentVersion: number
+  reportedAt?: string
+}
+
+// Mirrors an entry of GET /api/devices' `unattributed` list (#1170):
+// a syslog source no router has claimed -- it matches no configured
+// devices[].sourceIp, and no single router's pushed /ip/address table
+// carries it. Deliberately NOT a Device and never widened into one: it
+// is a source, not a router, so nothing here may count it as one.
+// `lines` is how many lines have arrived from that address. explanation
+// is present only in the one case that needs a sentence -- two routers
+// have both pushed the address as their own, so nothing can tell which
+// of them sent those lines.
+export interface UnattributedSource {
+  address: string
+  lines: number
+  firstSeen: string
+  lastSeen: string
+  explanation?: string
 }
 
 // Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
@@ -169,6 +253,12 @@ export interface Healthz {
   uptime: string
   uptimeSeconds: number
   version: string
+  // geoip (#1198): whether a country database is actually open. Country
+  // flags degrade silently to blank with none configured -- the same
+  // blank a quiet buffer with no public traffic yet would show -- so this
+  // is what lets the country filter and the Settings > ingest card tell
+  // the two apart instead of both just staying quiet.
+  geoip: boolean
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -196,15 +286,15 @@ export interface Stats {
   liveSince?: string
   restoredTo?: string
   connectedClients: number
-  // What the detection engine never evaluated (#1107). Under a burst
-  // the engine sheds events it cannot keep up with: they are still
-  // stored and still broadcast, so the stream looks normal, but no
+  // How detection is keeping up, and what it never saw at all (#1109).
+  // The engine checks events straight out of the event buffer, in order,
+  // so falling behind loses nothing -- behind/behindSeconds is a backlog
+  // it will work through, and the readout says so. outrun is the real
+  // gap: events that left the buffer before checking reached them, so no
   // detector ever saw them and no flag could be raised from them.
   // Optional because a server built without an engine omits it, and
-  // because zero is a real answer that such a server cannot give. How
-  // this should be shown to an operator is #1109 -- nothing reads it
-  // yet.
-  engine?: { droppedFromEvaluation: number }
+  // because zeros are a real answer that such a server cannot give.
+  engine?: { behind: number; behindSeconds: number; outrun: number }
   // The event buffer's budget, the range it may be moved within, and
   // what the process is actually costing (#796) -- mirrors
   // internal/api.StoreSettings. Optional so a test fixture or an older
@@ -290,8 +380,12 @@ export interface SyslogListenerStats {
   // real router records that were received and then thrown away.
   dropped: number
   // Continuation reads discarded from a message over the 64 KiB
-  // per-message limit. Above zero means something is sending log lines
-  // no RouterOS device produces.
+  // per-message limit -- a read, not a message (#1203): one over-long
+  // run can cross the cap many times before a delimiter turns up. The
+  // commoner cause by far is a RouterOS router whose logging action
+  // lacks remote-log-format=syslog; a genuinely foreign sender is
+  // possible but rarer. See loss.oversized.runs for the same activity
+  // counted as runs instead of reads.
   oversized: number
   // The most recently rejected declared hosts, most-recent-first,
   // bounded server-side (see internal/syslog.maxRejectedConfiguredHosts).
@@ -299,10 +393,16 @@ export interface SyslogListenerStats {
   // router instead of only counting it. Empty when nothing declared has
   // been turned away.
   rejectedConfiguredHosts: string[]
-  // The source of the most recent oversized message -- what the yellow
-  // "non-RouterOS sender" banner's "received from <ip>" names. Empty
-  // string until the first oversized message.
+  // The source of the most recent oversized message -- what the
+  // ingest-loss banner's "Oversized messages" row names. Empty string
+  // until the first oversized message.
   oversizedHost: string
+  // #1234: all-time count of duplicate sightings across every source --
+  // the same arriving-raw-line already logged once from that source
+  // within a very short window (see loss.duplicate for the windowed,
+  // per-source view). Optional so a test fixture predating #1234 leaves
+  // the duplicate-detection drawer row inactive rather than throwing.
+  duplicateSightings?: number
   // #1015: the freshness signal the totals above cannot give -- a total
   // that stopped growing is indistinguishable from one that never grew.
   // Optional so an older server (or a test fixture) that predates this
@@ -335,6 +435,28 @@ export interface IngestLossHostsCounter extends IngestLossCounter {
 // it were current.
 export interface IngestLossHostCounter extends IngestLossCounter {
   host?: string
+  // declared (#1203) is whether host names a device the operator
+  // declared under `devices:` -- computed server-side (internal/syslog
+  // already has that address list) so the banner never needs its own
+  // copy of it. False whenever host is absent.
+  declared: boolean
+  // runs (#1203) is the current episode's count of over-long *runs*,
+  // not discarded reads -- one run can span many reads (a single
+  // stalled RouterOS logging action can discard tens of thousands of
+  // reads), so this is the honest number for "how many times has this
+  // happened", unlike `recent` above which still counts reads.
+  runs: number
+  // setupDrift (#1205) is true when a sustained run of oversized
+  // activity is coming from a declared device -- almost always a
+  // router still missing remote-log-format=syslog. Optional so the
+  // (unrelated) oversized-banner fixtures committed for #1203 don't
+  // all need updating just to add a field they never read.
+  setupDrift?: boolean
+  // copyCount (#1234) is the apparent number of copies a duplicated
+  // logging rule is producing -- the most common multiplicity among a
+  // drifting source's recent duplicate sightings. Only ever set on the
+  // duplicate entry.
+  copyCount?: number
 }
 
 // Mirrors GET /api/stats' new `syslog.loss` block (internal/syslog.
@@ -352,6 +474,12 @@ export interface SyslogIngestLoss {
   // traffic that also matters here has stopped.
   rejected: IngestLossCounter
   oversized: IngestLossHostCounter
+  // duplicate (#1234) reports a source whose mikroview logging block
+  // looks pasted more than once: the same raw line arriving several
+  // times over from one router. host/copyCount are only present while
+  // active is true. Optional so fixtures predating #1234 keep
+  // compiling without it.
+  duplicate?: IngestLossHostCounter
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.
@@ -364,6 +492,17 @@ export interface AuthSession {
   // Gates whether "Connect SSO" is offered -- there is nothing left to
   // convert otherwise.
   hasLocalPassword?: boolean
+  // True once this account has an SSO identity attached. Separate from
+  // hasLocalPassword since #1252: the admin keeps its password through
+  // a link, so "has a password" no longer answers "is there anything
+  // left to connect". Absent on an older server, read as false.
+  ssoConnected?: boolean
+  // True while an administrator's reset (#1251) is still outstanding:
+  // this session signed in with the one-time code and may reach nothing
+  // but the set-a-new-password screen until it has. Absent on an older
+  // server, which is read as false -- the safe direction, since a server
+  // that does not know about the flag has no route to enforce it either.
+  mustChangePassword?: boolean
   ssoAvailable: boolean
   // This session's own start (#677's sessions row: "signed in 4 d") --
   // when this login happened, not when the account was created. Absent
@@ -382,6 +521,18 @@ export interface UserSummary {
   lastLogin?: string
   hasLocalPassword: boolean
   sso: boolean
+}
+
+// Mirrors internal/api/auth.go's resetPasswordResponse -- the response
+// to an admin reset, and the only place the code exists in clear. It is
+// not stored and cannot be fetched again: a second reset issues a new
+// code and kills this one.
+export interface PasswordResetCode {
+  username: string
+  // Grouped xxxx-xxxx-xxxx-xxxx for reading aloud. The server accepts it
+  // back in any case, with or without the dashes.
+  code: string
+  expiresAt: string
 }
 
 // Mirrors internal/api/tokens.go's tokenResponse. value is present only
@@ -1038,6 +1189,15 @@ export interface Flag {
   // fine" or "resolved on 2 Sept -- it's back".
   priorVerdict?: Verdict
   priorVerdictAt?: string
+  // note/priorNote (#1232): the operator's own reason for the verdict,
+  // written in the drawer before the verdict was clicked, and the one
+  // the remembered priorVerdict carried. Both always optional -- absent
+  // is the ordinary case, and a verdict never requires one. The note
+  // belongs to the verdict: it is discarded when the verdict is undone,
+  // and carried to priorNote on a revival exactly as verdict is carried
+  // to priorVerdict.
+  note?: string
+  priorNote?: string
   // size/expectedSize (#640): this firing's own size (the measure the
   // detector compares against its threshold -- distinct ports for
   // port_scan, and so on), and the size an expectation for this pair had
@@ -1377,13 +1537,40 @@ export interface PersistenceInfo {
   dir?: string
 }
 
+// VaultLock (#1115, #956) is the optional admin passphrase's state --
+// every control that touches it returns one, and the frontend always
+// replaces what it shows from the object a call returned rather than
+// inferring the new state from which call was made. Mirrors internal/
+// api's vaultLockStatusResponse.
+export interface VaultLock {
+  passphraseSet: boolean
+  // locked is the vault's own state: no private key held anywhere.
+  locked: boolean
+  // unlockedForYou is the narrower, session-scoped question: another of
+  // the admin's own sign-ins can hold the unlock while this is false.
+  unlockedForYou: boolean
+  // minPassphraseLength lets the set/change form refuse early, before
+  // the server has to say no to something it could have said first.
+  minPassphraseLength: number
+  idleTimeoutSeconds: number
+}
+
 // GET /api/router-backups (#394, round 44's "router backups" group).
 // Mirrors internal/api's routerBackupsResponse.
 export interface RouterBackupsResponse {
-  // False when no retention key is configured at all -- #394's "no key,
-  // no backups": the drop box refuses every login and routers is always
-  // empty.
+  // False when the retention key is not open and usable -- #394's "no
+  // key, no backups": the drop box refuses every login and routers is
+  // always empty. False covers two different situations -- see
+  // keyUnreadable, which says which one.
   enabled: boolean
+  // keyUnreadable (#1264 finding 5): true when history.keyFile names a
+  // file that exists but could not be read (unreadable, truncated,
+  // wrong), as opposed to enabled being false because no key was
+  // configured at all. Never render the two the same way -- telling an
+  // operator with a broken key to mint a new one strands every backup
+  // already encrypted under the old one, since minting overwrites the
+  // file rather than repairing it.
+  keyUnreadable: boolean
   routers: RouterBackupRouter[]
   totalGenerations: number
   totalRouters: number
@@ -1391,6 +1578,12 @@ export interface RouterBackupsResponse {
   // The SFTP drop box's own listening port ("arrive by"), absent when
   // backup.enabled is false.
   port?: string
+  lock: VaultLock
+  // True while the vault's own filesystem is nearly full (#1125): every
+  // arrival now replaces the oldest generation instead of adding one.
+  // Nothing is refused while it is true -- releasing a kept backup is
+  // the one thing an admin can do here to free space (#1126).
+  lowSpace?: boolean
 }
 
 // One router's block (round 44's per-router strip). IntervalSeconds/
@@ -1400,6 +1593,10 @@ export interface RouterBackupsResponse {
 export interface RouterBackupRouter {
   device: string
   generations: RouterBackupGeneration[] // oldest first
+  // The kept pool (#1126), oldest first as well: generations an admin
+  // marked with a comment saying why. They are not in generations, do
+  // not count towards the ten, and only a release takes one out.
+  protected?: RouterBackupGeneration[]
   intervalKnown: boolean
   intervalSeconds?: number
   lastArrival?: string
@@ -1419,7 +1616,114 @@ export interface RouterBackupGeneration {
   // The .backup's header label ("plain" or "encrypted"), absent until
   // that half of this generation has arrived.
   header?: string
+  // Carried only by an entry in a router's `protected` array (#1126):
+  // why this one is kept, when that was said and by whom.
+  comment?: string
+  protectedAt?: string
+  protectedBy?: string
 }
+
+// GET /api/router-backups/{device}/{generation}/text (#895): one
+// generation's stored export, as mikroview kept it -- redacted at the
+// point it arrived, so there is nothing here to hide at display time.
+// `redacted` is the server saying its ingest pass had to take something
+// out, so the screen can say so without reading the marker comment out
+// of the text itself.
+export interface RouterBackupText {
+  device: string
+  generation: string
+  text: string
+  lines: number
+  redacted: boolean
+}
+
+// One line two stored exports do not share. `op` is '+' for a line the
+// newer export has and the older did not, '-' the other way round; a
+// line they share is not in the list at all. `line` is counted in
+// whichever side owns it.
+export interface RouterBackupDiffLine {
+  op: '+' | '-'
+  line: number
+  text: string
+}
+
+// GET /api/router-backups/{device}/diff?from=&to= (#895): what changed
+// between two of a router's stored exports, ignoring the date header
+// RouterOS stamps on every one of them. `same` is the empty case said
+// plainly, so the screen never has to read "no lines" as "nothing
+// changed" on its own.
+export interface RouterBackupDiff {
+  device: string
+  from: string
+  to: string
+  lines: RouterBackupDiffLine[]
+  same: boolean
+}
+
+// GET /api/droplist (#1225, #461): the router-pulled block list, third
+// of Settings' admin-only "what mikroview holds" groups alongside keys
+// and router backups. Mirrors internal/api's droplistResponse.
+export interface DroplistEntry {
+  cidr: string
+  addedBy: string
+  addedAt: string
+  reason: string
+  // Set when the entry came from a flag's "block…" action -- the row's
+  // "from flag" link opens that flag. Absent for an entry typed in by
+  // hand.
+  flagID?: string
+}
+
+// One router's own account of what it is holding, from the last
+// address-list snapshot it pushed -- held/total let a mismatch (the
+// router dropped some, or has more than mikroview knows about) read at
+// a glance rather than as a bare count.
+export interface DroplistRouterHold {
+  device: string
+  held: number
+  total: number
+  confirmedAt: string
+}
+
+// The pull key's state -- present says whether the router can fetch the
+// list at all; the rest is provenance for the key row, all absent until
+// one is minted.
+export interface DroplistKeyInfo {
+  present: boolean
+  createdAt?: string
+  createdBy?: string
+  lastUsedAt?: string
+}
+
+// The setup card's four printed blocks -- never applied by mikroview,
+// only ever copied and pasted onto the router by hand. scheduler carries
+// the `<DROP-LIST-KEY>` placeholder here; POST /api/droplist/key's own
+// response carries the same line with the real key filled in.
+export interface DroplistSetup {
+  scheduler: string
+  rule: string
+  disableRule: string
+  emptyList: string
+}
+
+export interface DroplistResponse {
+  listName: string
+  entries: DroplistEntry[]
+  key: DroplistKeyInfo
+  // Absent or empty when no router has pushed an address-list snapshot
+  // yet -- distinct from an empty array meaning "reported and holds
+  // nothing".
+  routers?: DroplistRouterHold[]
+  // False until some router has reported its own address ranges -- new
+  // entries can't be checked against them until then.
+  ownRangesKnown: boolean
+  setup: DroplistSetup
+}
+
+// BackupTransport is how the router hands its backup over (#955) --
+// the two values internal/setup will store and internal/routeros can
+// render a script for.
+export type BackupTransport = 'sftp' | 'https'
 
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
@@ -1434,6 +1738,24 @@ export interface SetupStatus {
     hosts: string[]
     syslogPort: string
     syslogEnabled: boolean
+    // The operator's own answer (#1213) to "what address can your
+    // router reach mikroview on?" -- empty until they have answered
+    // once. Persisted server-side beside the setup ledger's marks, so a
+    // restart mid-wizard does not lose it.
+    address: string
+    // The server's own guesses at that answer: every address it is
+    // bound to, on its own HTTPS port. Offered as candidates for the
+    // field above, alongside the browser's own host -- never sent on
+    // the operator's behalf.
+    addressCandidates: string[]
+    // How step 6's router script delivers its backup (#955): 'sftp'
+    // through the drop box, or 'https' in /file read slices over the
+    // ingest channel, for an install reachable only through its reverse
+    // proxy. Stored server-side beside the address, because it is a
+    // property of the deployment rather than of the browser looking at
+    // the wizard. Never empty -- an install that has never chosen reads
+    // as 'sftp'.
+    backupTransport: BackupTransport
   }
   sources: {
     source: string
@@ -1455,6 +1777,9 @@ export interface SetupStatus {
   // The claim ledger's own marks (#487) -- see SetupMark. Always
   // present, empty when nothing has been skipped or forced past.
   marks: SetupMark[]
+  // The server's own witnesses (#1221) -- see SetupWitness. Always
+  // present, empty for a step never yet seen satisfied.
+  witnesses: SetupWitness[]
 }
 
 // Mirrors internal/setup.Mark (#487): the operator's own statement about
@@ -1463,7 +1788,7 @@ export interface SetupStatus {
 // are not only the wizard -- an empty stream explains its own silence
 // with the forced-past line that accounts for it.
 export interface SetupMark {
-  // 1-5, matching the wizard's five steps.
+  // 1-7, matching the wizard's seven steps.
   step: number
   // 'skipped' is quiet and moves on; 'forced' went past the heavy
   // warning and is recorded loudly. There is no third outcome: a step
@@ -1475,6 +1800,21 @@ export interface SetupMark {
   // What had not arrived when the decision was made, as the wizard's own
   // observation line worded it.
   note?: string
+}
+
+// Mirrors internal/api's setupWitness (#1221): a step mikroview itself
+// watched turn satisfied, kept as a floor under evidence that lives only
+// in memory and so does not survive a restart. Unlike SetupMark, nobody
+// decided this -- there is no actor, and no client can ever send one
+// (internal/setup.NoteMark keeps refusing the outcome).
+export interface SetupWitness {
+  step: number
+  // The fact observed at the moment this step was first seen satisfied,
+  // in the present tense the live receipts elsewhere use -- see
+  // witnessReceipt in lib/setupsteps.ts for how that becomes honestly
+  // past tense once it is all a restart has left.
+  receipt: string
+  at: string
 }
 
 // --- RouterOS version-aware commands (#436) --------------------------
@@ -1532,9 +1872,19 @@ export interface RouterosWarningRouter {
 // note that goes with this exact step (e.g. the 7.24.0 rule-tagging
 // caveat) -- distinct from the router-standing warning, which is about
 // the router's version generally rather than one step's content.
+// blocked carries every reason a step's commands came back blank, as
+// machine-readable keys (#1217) -- the server says which precondition
+// is missing, the frontend owns the sentence it says about each one.
+// Only backup/backupSchedule ever set this today: no-token, no-device,
+// backups-off, no-retention-key, retention-key-unreadable (#1264 finding
+// 5 -- a configured key that could not be read, distinct from
+// no-retention-key's "none configured at all"). Undefined/empty means
+// either the block is not blank, or it is blank for a reason not covered
+// here (push and schedule's own token-and-kinds gate).
 export interface CommandStep {
   commands: string
   note: string
+  blocked?: string[]
 }
 
 export interface SetupCommandsResponse {
@@ -1563,7 +1913,11 @@ export interface SetupCommandsResponse {
 // anything to embed, version is omitted until the operator has picked
 // one or a router has reported, and device is omitted until step 4 or
 // 6 has a router chosen (it names step 6's backup script is being
-// rendered for; the push script needs no such field).
+// rendered for; the push script needs no such field). address itself
+// may be sent empty (#1213: the operator has not answered the wizard's
+// header field yet) -- every block that embeds it then comes back
+// blank with the "no-address" key on its own commandStep.blocked,
+// rather than the request being refused.
 export interface SetupCommandsRequest {
   address: string
   syslogPort?: string
@@ -1571,14 +1925,20 @@ export interface SetupCommandsRequest {
   kinds?: string[]
   version?: string
   device?: string
+  // enrolToken is the raw enrolment token minted for device (#1281),
+  // echoed back so the server can write it into the block's last line.
+  // Only a hash of it is stored, so the server cannot look it up; it
+  // verifies this value against that hash and renders nothing if it
+  // does not match device's current, unexpired token.
+  enrolToken?: string
 }
 
-// --- Tune logging (#435) ----------------------------------------------
+// --- Log every rule (#435) --------------------------------------------
 //
 // Mirrors internal/routeros/export and the two /api/tune-logging
 // handlers (the #435 fixed contract). The upload never leaves this
 // request/response pair -- nothing here is persisted, mirrored by the
-// component that renders it (TuneLogging.svelte) never writing the
+// component that renders it (LogEveryRule.svelte) never writing the
 // export text anywhere but its own component state.
 
 // TuneLoggingObserving is how long mikroview has been watching this
@@ -1614,6 +1974,11 @@ export interface TuneLoggingRule {
   outInterfaceList: string
   boundary: string
   crossesDark: boolean
+  // everyPacket: this rule's connection-state names established or
+  // related, so switching logging on writes a line per packet rather
+  // than per connection (#1230). The row says so, and the rule starts
+  // unticked whatever crossesDark says.
+  everyPacket: boolean
   log: boolean
   logPrefix: string
   packets: number

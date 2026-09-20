@@ -209,6 +209,102 @@ func isConfiguredSource(host string) bool {
 	return m != nil && (*m)[host]
 }
 
+// EnrolmentGate is issue #1281's admission check, at both the
+// connection and the line level: whether a syslog source address may
+// even open a TCP connection, whether it is allowed onto the ingest
+// pipeline once connected, and whether an as-yet-unrecognised line
+// enrols a pending device at that address. Declared here (rather than
+// the implementation's own
+// package) so this package -- syslog -- need not import the device
+// registry or the API to call it, the same reason OnConnection above is
+// a package-level hook rather than a constructor parameter:
+// device.Registry satisfies this interface structurally, with no import
+// in either direction beyond main.go wiring the two together.
+type EnrolmentGate interface {
+	// Allowed reports whether host is already some device's sourceIp or
+	// acceptedIp -- the fast path, checked before touching line at all.
+	Allowed(host string) bool
+	// TryEnrol inspects one line for the enrolment marker; if it names a
+	// device's current, unexpired, unused pending token, that device is
+	// enrolled at host (the token burned) and TryEnrol reports true.
+	// Any other line reports false and changes nothing.
+	TryEnrol(host string, line []byte) bool
+	// EnrolLine reports whether line carries the enrolment marker at
+	// all, valid token or not. Lets gateAllows hand a marker from an
+	// already-allowed address to TryEnrol, so a collision (a token
+	// minted for an address another device already holds) is refused
+	// and counted rather than read as that device's ordinary traffic.
+	EnrolLine(line []byte) bool
+	// Refuse records that a line from host was neither already allowed
+	// nor a valid enrolment line, for the refused-senders list.
+	Refuse(host string, line []byte)
+	// AcceptsConnectionFrom reports whether host is the address some
+	// unexpired pending enrolment token was minted for -- while true,
+	// the accept loop lets that one address through even though it is
+	// not yet Allowed, since the enrol line proving the token has to be
+	// able to arrive from the address it is enrolling. Every other
+	// unknown address stays refused. Checked once per accepted
+	// connection, before the TLS handshake and before the per-line gate
+	// ever sees a byte.
+	AcceptsConnectionFrom(host string) bool
+	// RefuseConnection records that host's TCP connection was refused at
+	// accept time -- before TLS, before any line -- because host is
+	// neither Allowed nor is any token pending. Counted the same way as
+	// Refuse, into the same refused-senders list.
+	RefuseConnection(host string)
+}
+
+// enrolmentGate holds the installed EnrolmentGate, nil by default --
+// same "unconfigured means inert" convention as OnConnection/
+// configuredSources above, so the many tests that never call
+// SetEnrolmentGate see every line allowed through unconditionally, the
+// behaviour this package always had before #1281.
+var enrolmentGate atomic.Pointer[EnrolmentGate]
+
+// SetEnrolmentGate installs the gate. Call once at startup; nil clears
+// it back to "everything allowed", which is also what a test's
+// t.Cleanup should restore.
+func SetEnrolmentGate(g EnrolmentGate) {
+	enrolmentGate.Store(&g)
+}
+
+// gateAllows applies the installed EnrolmentGate (if any) to one
+// resolved line from host, in the order issue #1281 specifies: already
+// allowed, else a valid enrolment line, else refused. A nil gate allows
+// everything, unconditionally -- see enrolmentGate's own doc comment.
+//
+// The enrolment line itself is never forwarded as an event either way:
+// it is a synthetic marker (`/log info "mikroview-enrol <token>"`), not
+// real router traffic, so a successful TryEnrol reports false here too
+// -- "lines from this address pass from then on" means the lines after
+// it, which is exactly what host being Allowed from this call onward
+// (device.Registry.TryEnrol sets AcceptedIP before returning) already
+// gives every later line on this connection.
+func gateAllows(host string, line []byte) bool {
+	p := enrolmentGate.Load()
+	if p == nil || *p == nil {
+		return true
+	}
+	g := *p
+	if g.Allowed(host) {
+		// A marker from an address some router already holds is still
+		// a redemption attempt. Without this branch TryEnrol never saw
+		// it, so a token minted for that address was silently swallowed
+		// as the holder's traffic and stayed pending with nothing under
+		// refused senders to say why; TryEnrol refuses and counts it.
+		if g.EnrolLine(line) {
+			g.TryEnrol(host, line)
+			return false
+		}
+		return true
+	}
+	if g.TryEnrol(host, line) {
+		return false
+	}
+	g.Refuse(host, line)
+	return false
+}
+
 // reservedSlots is how many of maxTCPConnections only declared devices
 // may occupy. Zero when nothing is declared -- see SetConfiguredSources.
 func reservedSlots() int {
@@ -438,8 +534,15 @@ type ListenerStats struct {
 	// log line at all.
 	Dropped uint64 `json:"dropped"`
 	// Oversized counts continuation reads discarded from a message
-	// larger than the 64 KiB per-message limit. Above zero means
-	// something is sending log lines no RouterOS device produces.
+	// larger than the 64 KiB per-message limit -- a read, not a
+	// message: one over-long run can cross the cap many times before a
+	// delimiter ever turns up, so this number is not "messages lost"
+	// (#1203). The commoner cause by far is a RouterOS router whose
+	// logging action lacks remote-log-format=syslog: with no
+	// per-message header there is no delimiter, so a fast burst reads
+	// as one long run. A genuinely foreign, non-RouterOS sender is
+	// possible but rarer. See LossStats.Oversized.Runs for the same
+	// activity counted as runs instead of reads.
 	Oversized uint64 `json:"oversized"`
 	// RejectedConfiguredHosts names the most recently rejected declared
 	// hosts, most-recent-first -- so the UI can say *which* router was
@@ -451,6 +554,14 @@ type ListenerStats struct {
 	// address to look at rather than leaving that half of its own copy
 	// unfillable. Empty until the first oversized message.
 	OversizedHost string `json:"oversizedHost"`
+	// DuplicateSightings is issue #1234's all-time total: how many
+	// arriving raw lines matched one already seen from the same source
+	// within dupSightingWindow (see duplicate.go). Paired with
+	// Loss.Duplicate the same way Dropped/Oversized are paired with
+	// their own Loss entries -- this is the plain running count for
+	// Settings, Loss.Duplicate is the windowed "is this still
+	// happening, and from where" view.
+	DuplicateSightings uint64 `json:"duplicateSightings"`
 	// Loss is issue #1015's freshness signal for the four counters
 	// above: per-counter "is this still happening", not just "has this
 	// ever happened". Nothing existing above changes shape -- this is
@@ -481,14 +592,44 @@ type LossCounterStats struct {
 	// only while that message's own lastAt is still within window. Only
 	// ever set on the oversized entry.
 	Host string `json:"host,omitempty"`
+	// Declared is whether Host names a device declared under `devices:`
+	// in config.yaml (#1203) -- computed here so the frontend never
+	// needs its own copy of that address list just to phrase the
+	// oversized banner: a declared source gets "known router" copy,
+	// anything else stays an unidentified sender. Only ever set on the
+	// oversized entry.
+	Declared bool `json:"declared,omitempty"`
+	// Runs is the current episode's count of over-long *runs*, not
+	// discarded reads: a single run can generate many Recent hits
+	// (#1203's 138,309-read report was very likely a handful of runs
+	// from one stalled RouterOS logging action, not that many lost
+	// messages). Only ever set on the oversized entry.
+	Runs uint64 `json:"runs,omitempty"`
+	// SetupDrift is #1205's narrow, detectable case: Declared plus a
+	// sustained run of oversized activity almost always means this
+	// router's logging action still lacks remote-log-format=syslog, the
+	// flag every wizard before 2026-09-12 omitted. Only ever set on the
+	// oversized entry -- see oversizedIsSetupDrift.
+	SetupDrift bool `json:"setupDrift,omitempty"`
+	// CopyCount is issue #1234's apparent copy count: the most common
+	// multiplicity (2, 3, ...) among a drifting source's recent
+	// duplicate sightings -- see duplicate.go. Only ever set on the
+	// duplicate entry.
+	CopyCount uint64 `json:"copyCount,omitempty"`
 }
 
-// LossStats is ListenerStats.Loss's shape -- issue #1015.
+// LossStats is ListenerStats.Loss's shape -- issue #1015 (plus
+// Duplicate, added by #1234).
 type LossStats struct {
 	Dropped            LossCounterStats `json:"dropped"`
 	RejectedConfigured LossCounterStats `json:"rejectedConfigured"`
 	Rejected           LossCounterStats `json:"rejected"`
 	Oversized          LossCounterStats `json:"oversized"`
+	// Duplicate is issue #1234's detection of a router whose mikroview
+	// logging block has been pasted more than once: Host names the
+	// source currently sending each line more than once, CopyCount the
+	// apparent number of copies. See duplicate.go.
+	Duplicate LossCounterStats `json:"duplicate"`
 }
 
 // lossCounterStats builds one LossCounterStats entry from a freshness
@@ -515,48 +656,76 @@ func lossStats() LossStats {
 	oversized := lossCounterStats(&tcpOversizedFreshness, lossWindowOversized, now)
 	if host, active := oversizedHostIfActive(lossWindowOversized, now); active {
 		oversized.Host = host
+		oversized.Declared = isConfiguredSource(host)
 	}
+	oversized.Runs, _, _ = tcpOversizedRunsFreshness.snapshot(lossWindowOversized, now)
+	oversized.SetupDrift = oversizedIsSetupDrift(oversized.Declared, oversized.Active, oversized.Runs)
 
 	return LossStats{
 		Dropped:            lossCounterStats(&tcpDroppedFreshness, lossWindowDropped, now),
 		RejectedConfigured: rejectedConfigured,
 		Rejected:           lossCounterStats(&tcpRejectedFreshness, lossWindowRejected, now),
 		Oversized:          oversized,
+		Duplicate:          duplicateLossCounterStats(now),
 	}
 }
 
+// sustainedOversizedRuns is #1205's threshold for "not a one-off": a
+// single large legitimate log line proves nothing, but a second
+// over-long run inside the same active window is a pattern rather than
+// a fluke.
+const sustainedOversizedRuns = 2
+
+// oversizedIsSetupDrift is #1205's narrow detection rule: a declared
+// device sending a sustained run of oversized activity almost always
+// means its logging action still lacks remote-log-format=syslog (the
+// commoner cause #1203 identified), so Settings should say so and name
+// the fix. An address nobody declared is left alone -- undeclared
+// traffic already gets its own explanation from #1203's banner, and
+// this package has no evidence to say more about it than that.
+func oversizedIsSetupDrift(declared, active bool, runs uint64) bool {
+	return declared && active && runs >= sustainedOversizedRuns
+}
+
 // ClearLossResult is what ClearLoss hands its caller for an audit entry
-// -- the four totals as they stood immediately before the reset.
+// -- the totals as they stood immediately before the reset.
 type ClearLossResult struct {
 	Dropped            uint64
 	RejectedConfigured uint64
 	Rejected           uint64
 	Oversized          uint64
+	// DuplicateSightings is issue #1234's all-time total -- see
+	// ListenerStats.DuplicateSightings.
+	DuplicateSightings uint64
 }
 
 // ClearLoss zeroes every ingest-loss counter this package tracks: the
-// four monotonic totals, their episodes and lastAt, and both host
-// records (rejectedConfiguredHosts and tcpOversizedHost) -- issue
-// #1015's "Clear all". It does not affect InUse/Capacity/
-// ReservedForConfigured, which are current listener state, not loss
-// history.
+// monotonic totals, their episodes and lastAt, and every host record
+// (rejectedConfiguredHosts, tcpOversizedHost, and #1234's duplicate
+// rings) -- issue #1015's "Clear all". It does not affect InUse/
+// Capacity/ReservedForConfigured, which are current listener state,
+// not loss history.
 func ClearLoss() ClearLossResult {
 	result := ClearLossResult{
 		Dropped:            tcpDropped.Load(),
 		RejectedConfigured: tcpRejectedConfigured.Load(),
 		Rejected:           tcpRejected.Load(),
 		Oversized:          tcpOversized.Load(),
+		DuplicateSightings: tcpDuplicateSightingsTotal.Load(),
 	}
 
 	tcpDropped.Store(0)
 	tcpRejectedConfigured.Store(0)
 	tcpRejected.Store(0)
 	tcpOversized.Store(0)
+	tcpOversizedRuns.Store(0)
+	tcpDuplicateSightingsTotal.Store(0)
 
 	tcpDroppedFreshness.clear()
 	tcpRejectedConfiguredFreshness.clear()
 	tcpRejectedFreshness.clear()
 	tcpOversizedFreshness.clear()
+	tcpOversizedRunsFreshness.clear()
 
 	rejectedConfiguredHostsMu.Lock()
 	rejectedConfiguredHosts = nil
@@ -566,6 +735,8 @@ func ClearLoss() ClearLossResult {
 	tcpOversizedHost = ""
 	tcpOversizedHostLastAt = time.Time{}
 	tcpOversizedHostMu.Unlock()
+
+	clearDuplicateState()
 
 	return result
 }
@@ -582,6 +753,7 @@ func Stats() ListenerStats {
 		Oversized:               tcpOversized.Load(),
 		RejectedConfiguredHosts: rejectedConfiguredHostsSnapshot(),
 		OversizedHost:           oversizedHostSnapshot(),
+		DuplicateSightings:      tcpDuplicateSightingsTotal.Load(),
 		Loss:                    lossStats(),
 	}
 }
@@ -608,6 +780,7 @@ var (
 	perSourceRejectGate  = logging.NewLimiter(ingestDropLogInterval)
 	unreservedRejectGate = logging.NewLimiter(ingestDropLogInterval)
 	globalRejectGate     = logging.NewLimiter(ingestDropLogInterval)
+	enrolmentRejectGate  = logging.NewLimiter(ingestDropLogInterval)
 )
 
 // tcpIdleTimeoutNS closes a connection that has gone this long without a
@@ -684,6 +857,35 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		tempDelay = 0
 
 		host := remoteHost(conn)
+
+		// Issue #1281's connection gate, checked before anything else
+		// about this connection -- including the per-source cap below
+		// and, critically, the TLS handshake, which ServeTLS's
+		// tls.Listener never performs eagerly in Accept (see
+		// tls_listener.go's own comment): it happens lazily on this
+		// conn's first Read/Write, inside handleTCPConn, which this
+		// loop never reaches for a refused connection. An address that
+		// is not already Allowed only gets this far while it is the one
+		// address a pending enrolment token was minted for --
+		// AcceptsConnectionFrom -- because the enrol line that redeems
+		// that token has to be able to arrive from the very address it
+		// is enrolling. Since #1291 that is one address rather than
+		// every unknown address at once: a pending token elsewhere on
+		// the fleet no longer opens the port to anybody. Once every
+		// pending token is burned or has expired, the port closes back
+		// up to unknown addresses entirely.
+		if p := enrolmentGate.Load(); p != nil && *p != nil {
+			g := *p
+			if !g.Allowed(host) && !g.AcceptsConnectionFrom(host) {
+				g.RefuseConnection(host)
+				if total, ok := enrolmentRejectGate.Allow(); ok {
+					tcpLog.Warn(fmt.Sprintf("connection from an address that is neither a declared/enrolled router nor the address a pending enrolment token was minted for -- rejecting %s (%d such rejections since start or last clear)", host, total))
+				}
+				conn.Close()
+				continue
+			}
+		}
+
 		configured := isConfiguredSource(host)
 
 		// An undeclared source may only take slots outside the portion
@@ -801,7 +1003,20 @@ func rfc3164HeaderLen(data []byte) int {
 	}
 	i := 0
 	if data[0] == '<' {
-		end := bytes.IndexByte(data, '>')
+		// A legal PRI is at most "<191>": '<' plus up to 3 digits plus
+		// '>', 5 bytes wide. Bound the search for '>' to that window
+		// instead of scanning the rest of data -- otherwise a run of
+		// '<' bytes with no '>' anywhere (and no newline, so nothing
+		// else trims the buffer first) makes every such offset scan
+		// everything after it, turning one read into O(n^2) work. A
+		// '>' beyond this window was already rejected below (end > 4),
+		// so bounding the scan can't change which inputs are accepted.
+		const maxPRIWidth = 5
+		limit := len(data)
+		if limit > maxPRIWidth {
+			limit = maxPRIWidth
+		}
+		end := bytes.IndexByte(data[:limit], '>')
 		if end <= 0 || end > 4 {
 			return -1
 		}
@@ -1208,6 +1423,15 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 		if len(data) == 0 {
 			return
 		}
+		// Issue #1281: a source address that is not already some
+		// device's sourceIp/acceptedIp gets no further than this check
+		// unless the line itself carries a valid enrolment token -- see
+		// EnrolmentGate. The connection is left open either way (the
+		// existing per-source caps bound it); only the line is dropped.
+		if !gateAllows(host, data) {
+			return
+		}
+		noteDuplicateLine(host, data)
 		cp := make([]byte, len(data))
 		copy(cp, data)
 
@@ -1292,6 +1516,12 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				emit(pending[:maxTCPMessageBytes])
 				tcpOversized.Add(1)
 				noteOversizedHost(host)
+				// This over-cap line resolved within the same read that
+				// crossed the cap -- start and end of one run, never
+				// picked up by the continuation-read branch above, so it
+				// has to count itself here (#1203's honest run total).
+				tcpOversizedRuns.Add(1)
+				tcpOversizedRunsFreshness.hit(lossWindowOversized)
 				pending = pending[idx+1:]
 				headerScanned = 0
 			}
@@ -1367,6 +1597,12 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				pending = pending[:0]
 				oversized = true
 				headerScanned = 0
+				// The run starts here (oversized flips false -> true);
+				// every further read while it stays true is the same run
+				// continuing, counted at the continuation branch above
+				// without touching this counter again.
+				tcpOversizedRuns.Add(1)
+				tcpOversizedRunsFreshness.hit(lossWindowOversized)
 			}
 		}
 
@@ -1438,6 +1674,21 @@ var (
 	tcpOversized atomic.Uint64
 	dropLogGate  = logging.NewLimiter(ingestDropLogInterval)
 )
+
+// tcpOversizedRuns counts over-long *runs* rather than discarded reads
+// -- one run's worth of continuation reads all land under the one
+// tcpOversized increment that started it, never a second one, so this
+// stays the honest "how many times has this happened" figure #1203
+// asked for beside the existing read-level total. See
+// tcpOversizedRunsFreshness for the windowed view the API exposes as
+// LossStats.Oversized.Runs.
+var tcpOversizedRuns atomic.Uint64
+
+// tcpOversizedRunsFreshness is tcpOversizedRuns' own #1015-style
+// episode tracker, on the same window as tcpOversizedFreshness --
+// separate instance because it counts a different event (a run
+// starting, not a read being discarded).
+var tcpOversizedRunsFreshness lossFreshness
 
 // tcpOversizedHost holds the source host of the most recent oversized
 // message, so the UI can say which sender is producing lines no

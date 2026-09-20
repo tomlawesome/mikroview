@@ -46,6 +46,16 @@ const (
 	// a session exists here only while it is up, which is exactly the
 	// presence-means-up reading #874 settled on.
 	KindPPPActive Kind = "ppp-active"
+	// KindLogging is #1241's setup-report page: not a table of router
+	// data at all, but what the router has of *mikroview's own* logging
+	// setup -- the `mikroview` logging action and the rules feeding it,
+	// and nothing else from /system logging. It is how a router says
+	// what the pasted wizard script left behind, so mikroview can tell
+	// a setup that is behind the current wizard from one that is
+	// current, without ever connecting to the router to look
+	// (docs/decisions/upgrade-framework.md, "Router-side drift joins
+	// the framework").
+	KindLogging Kind = "logging"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -152,7 +162,7 @@ type FilterRule struct {
 	// under-counts, and re-pushing corrects it.
 	Disabled bool `json:"disabled"`
 	// Packets and Bytes were added for #435: RouterOS keeps a per-rule
-	// hit counter whether or not the rule logs, so the tune-logging
+	// hit counter whether or not the rule logs, so the Log every rule
 	// helper can show "fired 41,000 times in the last day" beside a
 	// tick-box before any logging is switched on -- cost, from the
 	// router's own evidence, ahead of the decision to watch. Both are
@@ -358,6 +368,80 @@ type PPPActiveSession struct {
 	Address  string `json:"address"`
 	CallerID string `json:"callerId"`
 	Uptime   string `json:"uptime"`
+}
+
+// LoggingEntry is one record of a KindLogging page (#1241): either the
+// `mikroview` logging action itself (Type "action") or one
+// /system logging rule pointing at it (Type "rule"). One record type
+// for both, rather than two, because the page is a single list and the
+// fields a rule leaves unset simply decode as empty -- the same
+// absent-means-unset reading every other record here uses.
+//
+// The field set is closed on purpose and is the whole of what the
+// router sends about its logging: the ratified document on #1206 says
+// exactly these keys and nothing more. A router that sends anything
+// else is refused by DecodePayload's DisallowUnknownFields, which is
+// the point -- this page is a contract with the wizard's own script,
+// not a general window into /system logging.
+type LoggingEntry struct {
+	Type string `json:"type"`
+	// Name/Target and the four remote-* fields are the action's;
+	// Topics/Action/Disabled are a rule's. Disabled is shared -- an
+	// action has no disabled property, a rule does.
+	Name   string `json:"name"`
+	Target string `json:"target"`
+	Remote string `json:"remote"`
+	// RemotePort is a single port, the same shape as DstPort above:
+	// RouterOS's :serialize to=json emits it as a JSON number (e.g.
+	// 6514.000000), not the JSON string a self-authored fixture had
+	// this decoding as before (v0.6.0 pre-release audit -- confirmed
+	// against a real router, the same landmine RouterOSPortSpec exists
+	// for generally).
+	RemotePort       RouterOSPortSpec `json:"remotePort"`
+	RemoteProtocol   string           `json:"remoteProtocol"`
+	RemoteLogFormat  string           `json:"remoteLogFormat"`
+	CheckCertificate RouterOSFlag     `json:"checkCertificate"`
+	// Topics is a set RouterOS renders as "firewall,info", so it takes
+	// RouterOSList like every other set-shaped field here and a caller
+	// reads a []string whichever shape arrived.
+	Topics   RouterOSList `json:"topics"`
+	Action   string       `json:"action"`
+	Disabled RouterOSFlag `json:"disabled"`
+}
+
+// LoggingEntry record types, as the page's own `type` key spells them.
+const (
+	LoggingTypeAction = "action"
+	LoggingTypeRule   = "rule"
+)
+
+// RouterOSFlag decodes a yes/no field that :serialize to=json may emit
+// either as the string RouterOS prints ("yes"/"no") or as a JSON
+// boolean, depending on how the property is typed internally -- the
+// fourth member of the shape-depends-on-content family RouterOSInt,
+// RouterOSPortSpec and RouterOSList already belong to. The ratified
+// #1241 document spells both check-certificate and disabled as
+// strings; a router that emits true/false instead would otherwise have
+// its whole page refused over a field nothing compares. Normalised to
+// "yes"/"no" so a reader never has to know which shape arrived.
+type RouterOSFlag string
+
+func (f *RouterOSFlag) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*f = RouterOSFlag(s)
+		return nil
+	}
+	var b bool
+	if err := json.Unmarshal(data, &b); err != nil {
+		return fmt.Errorf("ingest: expected a yes/no string or a boolean: %w", err)
+	}
+	if b {
+		*f = "yes"
+	} else {
+		*f = "no"
+	}
+	return nil
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may

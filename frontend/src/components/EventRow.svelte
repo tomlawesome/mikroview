@@ -1,8 +1,24 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  import type { FirewallEvent } from '../lib/types'
-  import { formatAddr, formatTimeMs, rawTooltip } from '../lib/format'
-  import { appState } from '../lib/state.svelte'
+  import type { FirewallEvent, Flag } from '../lib/types'
+  import { countryFlag, formatAddr, formatTimeMs, isPublicIp, rawTooltip } from '../lib/format'
+  import { appState, natSide } from '../lib/state.svelte'
+  // #1200: both dropped from the row by #644's rewrite, restored here.
+  // IpInvestigateButton is the same component EventDetailSheet.svelte
+  // already mounts for its Source/Destination rows -- reused, not
+  // reimplemented, so the popover it opens (lib/ipLookup.svelte) stays
+  // the one instance both surfaces share.
+  import IpInvestigateButton from './IpInvestigateButton.svelte'
+  // #1201: the ⚑ mark's own click target -- which flag(s) it should
+  // open. #1269: this used to be read here by filtering the whole
+  // flagsState.list against event.srcIp, independently, on every
+  // flagged row -- undoing the one-pass join LiveTable already built
+  // (lib/grouping.ts's flagsBySource) to decide *whether* to draw the
+  // mark in the first place. sourceFlags below is that join's own
+  // answer for this row, handed down as a prop instead of re-scanned.
+  // topologyNavState is #724's own dial-to-docket handoff, reused
+  // unchanged for the one-flag case.
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   // #729: LiveTable and this component share one flat CSS Grid (`.row` is
   // `display: contents`, so these cells become direct grid items, not
   // children of a row element the grid can reason about on its own) --
@@ -38,17 +54,21 @@
     // the time is the same second on every row at any real rate, so it
     // is the least useful thing in the most prominent column.
     count = 1,
-    // flagged means "this row's source has an active flag against it",
-    // not "this event caused that flag": a flag records what it was
-    // raised about, not which events evidenced it (#341). Drives the
-    // full-row wash (the-whole.html's tr.hl) *and* a ⚑ after the time
-    // (its .rmk): round 30 draws both, and the mark annotates the wash
-    // rather than replacing it. Round 29 drew no mark, which is why #685
-    // took one out; that ruling is superseded (#691's round-30 audit).
-    // The mark rides after the time, never before it -- ahead of the
-    // figures it pushes the first digit right and breaks the left edge
-    // the tabular numerals line up on.
-    flagged = false,
+    // sourceFlags is this row's slice of LiveTable's one-pass join
+    // (lib/grouping.ts's flagsBySource): the open flags, if any, against
+    // this row's source -- not "this event caused that flag", a flag
+    // records what it was raised about, not which events evidenced it
+    // (#341). A non-empty list drives the full-row wash (the-whole.html's
+    // tr.hl) *and* a ⚑ after the time (its .rmk): round 30 draws both,
+    // and the mark annotates the wash rather than replacing it. Round 29
+    // drew no mark, which is why #685 took one out; that ruling is
+    // superseded (#691's round-30 audit). The mark rides after the time,
+    // never before it -- ahead of the figures it pushes the first digit
+    // right and breaks the left edge the tabular numerals line up on.
+    // #1117: DOM order alone does not keep it there -- see .time/.rmk
+    // below for why the mark draws in its own reserved gutter instead of
+    // sharing the timestamp's box.
+    sourceFlags = [],
     expandable = false,
     expanded = false,
     onToggle,
@@ -76,7 +96,7 @@
     event: FirewallEvent
     deviceName?: string
     count?: number
-    flagged?: boolean
+    sourceFlags?: Flag[]
     expandable?: boolean
     expanded?: boolean
     onToggle?: () => void
@@ -94,6 +114,45 @@
   // way -- authState.canEdit does not change mid-row -- so this only
   // removes redundant bookkeeping, not behaviour.
   const editAvailable = $derived(nameEditorState.available)
+
+  // #1200: the flag emoji beside Source/Destination's address, restored
+  // after #644 left only a bare two-letter code and only when the
+  // hostname was missing. countryFlag() already returns '' for an
+  // unresolved/missing code (#1198 explains why elsewhere -- a country
+  // filter select and a settings line, not a per-row guess), so `{#if
+  // srcFlag}` below is enough; there is no separate "unknown" case to
+  // render here.
+  const srcFlag = $derived(countryFlag(event.srcCountry))
+  const dstFlag = $derived(countryFlag(event.dstCountry))
+
+  // flagged (#1201, #1269): whether this row's source carries any open
+  // flag at all -- derived from the sourceFlags prop LiveTable already
+  // built for this row (lib/grouping.ts's flagsBySource), not a fresh
+  // scan of the flag list. Drives the row wash and whether the mark
+  // draws at all.
+  const flagged = $derived(sourceFlags.length > 0)
+
+  // "open this source's flag ▸" for the one honest choice, or a count
+  // when there is more than one to choose among (#1201's ruling, items
+  // 1 and 3).
+  const flagMarkTitle = $derived(
+    sourceFlags.length > 1 ? `${sourceFlags.length} open flags for this source ▸` : "open this source's flag ▸",
+  )
+
+  // Exactly one open flag: reuse #724's own dial-to-docket handoff
+  // unchanged (topologyNavState.pendingFlagId), so Flags.svelte opens
+  // straight to its drawer. Several: no single flag is the honest
+  // choice, so the docket gets the source address to filter on instead
+  // (topologyNavState.pendingFlagsFilter).
+  function openSourceFlag() {
+    if (sourceFlags.length === 0 || !event.srcIp) return
+    if (sourceFlags.length === 1) {
+      topologyNavState.requestFlag(sourceFlags[0].id)
+    } else {
+      topologyNavState.requestFlagsFilter(event.srcIp)
+    }
+    appState.view = 'flags'
+  }
 
   // Which Filters field (if either) a NAT token's translated address
   // belongs to (#438's NAT-parity section). Only the two dedicated NAT
@@ -114,13 +173,10 @@
       .concat(event.dstPort ? ` · ${event.dstPort}/${event.protocol ?? '?'}` : '') || 'this line',
   )
 
-  const natFilterKey = $derived(
-    event.chain?.toLowerCase() === 'srcnat'
-      ? 'srcQuery'
-      : event.chain?.toLowerCase() === 'dstnat'
-        ? 'dstQuery'
-        : null,
-  )
+  const natFilterKey = $derived.by(() => {
+    const side = natSide(event)
+    return side === 'src' ? 'srcQuery' : side === 'dst' ? 'dstQuery' : null
+  })
 
   // #439: row tokens (action, addresses, port, protocol, rule) used to be
   // <button> elements. That's *why* row text couldn't be selected/copied
@@ -227,10 +283,12 @@
         tabindex="0"
         title="Show this event's details"
         use:activate={() => onOpen?.()}
-      >{formatTimeMs(event.time)}</span>{#if flagged}<i
+      >{formatTimeMs(event.time)}</span>{#if flagged}<button
+          type="button"
           class="rmk"
-          title="this row's source has an open flag against it"
-          aria-hidden="true">&#9873;</i>{/if}
+          title={flagMarkTitle}
+          onclick={openSourceFlag}>&#9873;</button
+        >{/if}
     </span>
   {/if}
 
@@ -301,10 +359,14 @@
 
   <!-- Source and Destination each split into a name column and a dim
        address column (#644): the name column shows the resolved host
-       name when one exists, otherwise the bare address itself (dim, with
-       the country code appended) -- and the address column then repeats
-       nothing, showing the raw IP only where the name column is showing
-       a name, an em dash otherwise. -->
+       name when one exists, otherwise the bare address itself (dim) --
+       and the address column then repeats nothing, showing the raw IP
+       only where the name column is showing a name, an em dash
+       otherwise. The country flag (#1200, restoring what #644's rewrite
+       dropped) sits beside that name-column token either way -- with a
+       resolved hostname too, not only on a bare address -- and the
+       manual IP lookup trigger (also #1200) follows the copy/edit
+       affordances, shown whenever the address is public. -->
   {#snippet sourceAddrCell()}
     {#if event.srcIp}
       <span class="cell addr">
@@ -316,20 +378,26 @@
           title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
           use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
         >
-          {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
-            <span class="geo">{event.srcCountry}</span>{/if}
+          {event.srcHostName || event.srcIp}{#if srcFlag}
+            <span class="geo">{srcFlag}</span>{/if}
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
     {/if}
   {/snippet}
+  <!-- #1149: title on the dim address and MAC cells -- both are fixed-width
+       columns holding content that can overrun them (a 15-character IPv4,
+       a 17-character MAC), and unlike the name column beside them they had
+       nothing to hover when the text was cut. Only where there is a value:
+       a tooltip reading "—" says nothing. -->
   {#snippet sourceIpCell()}
-    <span class="cell ip">{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
+    <span class="cell ip" title={event.srcIp && event.srcHostName ? event.srcIp : undefined}>{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
   {/snippet}
 
   <!-- #717: restored, riding beside Source's own facts (its
@@ -363,7 +431,7 @@
        includes src-mac on some chains/firmwares and not others (see
        internal/routeros/parser.go), never a separate per-row lookup. -->
   {#snippet macCell()}
-    <span class="cell mac">{event.srcMac || '—'}</span>
+    <span class="cell mac" title={event.srcMac || undefined}>{event.srcMac || '—'}</span>
   {/snippet}
 
   {#snippet destAddrCell()}
@@ -377,20 +445,21 @@
           title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
           use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
         >
-          {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
-            <span class="geo">{event.dstCountry}</span>{/if}
+          {event.dstHostName || event.dstIp}{#if dstFlag}
+            <span class="geo">{dstFlag}</span>{/if}
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
     {/if}
   {/snippet}
   {#snippet destIpCell()}
-    <span class="cell ip">{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
+    <span class="cell ip" title={event.dstIp && event.dstHostName ? event.dstIp : undefined}>{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
   {/snippet}
 
   {#snippet protoCell()}
@@ -561,18 +630,19 @@
           title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
           use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
         >
-          {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
-            <span class="geo">{event.srcCountry}</span>{/if}
+          {event.srcHostName || event.srcIp}{#if srcFlag}
+            <span class="geo">{srcFlag}</span>{/if}
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
     {/if}
-    <span class="cell ip">{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
+    <span class="cell ip" title={event.srcIp && event.srcHostName ? event.srcIp : undefined}>{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
 
     {#if event.srcPort}
       <span class="cell port srcport">
@@ -590,7 +660,7 @@
       <span class="cell port srcport">—</span>
     {/if}
 
-    <span class="cell mac">{event.srcMac || '—'}</span>
+    <span class="cell mac" title={event.srcMac || undefined}>{event.srcMac || '—'}</span>
 
     {#if event.dstIp}
       <span class="cell addr">
@@ -602,18 +672,19 @@
           title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
           use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
         >
-          {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
-            <span class="geo">{event.dstCountry}</span>{/if}
+          {event.dstHostName || event.dstIp}{#if dstFlag}
+            <span class="geo">{dstFlag}</span>{/if}
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
           <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} available={editAvailable} />
         {/if}
+        {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
       </span>
     {:else}
       <span class="cell addr">—</span>
     {/if}
-    <span class="cell ip">{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
+    <span class="cell ip" title={event.dstIp && event.dstHostName ? event.dstIp : undefined}>{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
 
     {#if event.protocol}
       <span
@@ -829,12 +900,50 @@
 
   /* The mark that annotates that wash (the-whole.html's .rmk). Sized and
      coloured from the scene: alarm ink, a step down from the row's text,
-     and set clear of the time so the figures keep their own edge. */
+     and set clear of the time so the figures keep their own edge.
+     #1201 turned it into a button (it opens the flag it points at) --
+     reset to plain button chrome rather than the .cell-btn most of this
+     file's click targets use, since that class is `display: block;
+     width: 100%` for a text cell filling its grid track, and would pull
+     the mark off the end of the time it rides beside (#691's round-30
+     audit: its position there does not move). */
+  /* #1117 (reopened twice: !1029, !1051): the mark used to be a plain
+     flex sibling of .time-btn, sharing one flex line with `gap: 6px`.
+     On a flagged row that line's total content -- timestamp plus gap
+     plus mark -- ran wider than the time column, and because the line
+     was right-anchored (`.time`'s `justify-content: flex-end`) the
+     overflow spilled off the *left*: the leading, most significant
+     digit, not the mark. Nothing ellipted to say so -- text-overflow
+     only ever truncates the inline end (the right side), never the
+     start -- so the digit was simply gone, and widening the column
+     twice (both prior MRs) never fixed it because the mark was still
+     competing for the same shrinking line. It now draws absolutely
+     positioned inside `.time`'s own padding-right gutter (below),
+     entirely out of that flex line, so it can never again cost the
+     timestamp any width. */
   .rmk {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font: inherit;
     font-style: normal;
-    color: var(--alarm);
-    margin-left: 8px;
     font-size: 11px;
+    color: var(--alarm);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .rmk:hover {
+    text-decoration: underline;
+  }
+
+  .rmk:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: 2px;
   }
 
   .row:hover .cell {
@@ -872,8 +981,16 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 6px;
     font-variant-numeric: tabular-nums;
+    /* #1117: a fixed gutter for .rmk (position: absolute, below),
+       reserved whether or not this row is flagged -- not extra flex
+       width a flagged row's mark used to share with the timestamp (see
+       .rmk's own comment). Sticky already makes this a valid
+       containing block for the mark's absolute position, so no
+       wrapper element is needed. Constant on every row means the
+       timestamp's own box is identical whether the row is flagged or
+       not, rather than reflowing based on flag state. */
+    padding-right: 26px;
   }
 
   .row.banded .time {
@@ -907,8 +1024,8 @@
   }
 
   /* The name columns: a resolved host name reads bright; a bare address
-     standing in for one reads dim (the-whole.html's .host / .geo split),
-     with its country code dimmer and smaller beside it. */
+     standing in for one reads dim (the-whole.html's .host / .geo split).
+     The country flag (#1200) rides beside either, dimmer and smaller. */
   .cell.addr {
     display: flex;
     align-items: center;
@@ -973,13 +1090,52 @@
     color: var(--fg-muted);
   }
 
+  /* #1150 (breakpoint revised to ~1600px by #1117): below it the middle columns scroll out of reach and the
+     pinned Rule column went with them, so a row could be read but not
+     attributed to the rule that made it. Rule sticks to the right edge
+     the way the time cell sticks to the left, leaving the row's two
+     pinned facts -- when it happened and which rule matched -- both in
+     view while the middle scrolls between them. Same opaque-paint
+     requirement as .time above, and the same
+     gradient-layer-over-a-color trick for the translucent band, hover
+     and flag washes: a background shorthand only allows a plain color
+     in its last layer, so each wash is wrapped as a same-color-to-
+     itself gradient over an opaque --bg-elevated. Each state needs its
+     own rule at .row.banded .cell's specificity, or that rule wins and
+     the cell goes translucent again. */
+  .row.banded .rule {
+    background:
+      linear-gradient(
+        color-mix(in srgb, var(--bg-hover) 55%, transparent),
+        color-mix(in srgb, var(--bg-hover) 55%, transparent)
+      ),
+      var(--bg-elevated);
+  }
+
+  .row.flagged .rule {
+    background:
+      linear-gradient(
+        color-mix(in srgb, var(--alarm) 5%, transparent),
+        color-mix(in srgb, var(--alarm) 5%, transparent)
+      ),
+      var(--bg-elevated);
+  }
+
+  .row:hover .rule {
+    background: linear-gradient(var(--bg-hover), var(--bg-hover)), var(--bg-elevated);
+  }
+
   /* The rule cell holds the click-to-filter button, its copy button, the
      pencil, and the pushed-table lookup trigger side by side -- same
-     layout the name cells use. */
+     layout the name cells use. Pinned to the right edge per #1150 above. */
   .cell.rule {
     display: flex;
     align-items: center;
     gap: 4px;
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    background: var(--bg-elevated);
   }
 
   .rule-btn {
@@ -1012,9 +1168,20 @@
     gap: 4px;
   }
 
-  .iface-btn {
-    flex: none;
+  /* #1148: qualified with .cell-btn so it outranks that rule's
+     `width: 100%` below -- at equal specificity the later rule won, and
+     every in-interface token stretched to the whole cell, pushing the
+     arrow and the out-interface out past the cell's clip. Shrinkable
+     (`0 1 auto`) with its own ellipsis so two long interface names
+     degrade the way the rest of the row's tokens do rather than being
+     cut mid-character. */
+  .cell-btn.iface-btn {
+    flex: 0 1 auto;
     width: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .iface-sep {
@@ -1078,14 +1245,14 @@
   }
 
   /* #439: hover-revealed per-token copy glyph (CopyButton.svelte).
-     Hidden by opacity (never display/visibility) so it stays in the tab
-     order and reachable by keyboard -- :focus-within covers tabbing to
-     it directly, without first hovering the row. Scoped to `.row` (not
-     each `.cell`) to match hovering *anywhere* in the row revealing
-     every token's glyph at once, not just the one directly under the
-     pointer -- and scoped to *this component's* rows at all, not bare
-     :global, because EventDetailSheet renders the same components
-     always-visible on a surface with no hover concept. */
+     Hidden by transparent paint (never display/visibility) so it stays
+     in the tab order and reachable by keyboard -- :focus-within covers
+     tabbing to it directly, without first hovering the row. Scoped to
+     `.row` (not each `.cell`) to match hovering *anywhere* in the row
+     revealing every token's glyph at once, not just the one directly
+     under the pointer -- and scoped to *this component's* rows at all,
+     not bare :global, because EventDetailSheet renders the same
+     components always-visible on a surface with no hover concept. */
   /* #413's pencil rides in the same reveal, immediately after the copy
      glyph -- the slot #439 reserved for it. #644 adds the rule cell's
      pushed-table lookup trigger: the quiet rows the restyle asks for
@@ -1093,26 +1260,37 @@
      terms rather than sitting on every row. All listed together rather
      than given rules of their own so the three can never drift into
      revealing at different moments. */
-  .row :global(.copy-btn),
-  .row :global(.edit-btn),
-  .row :global(.investigate) {
-    opacity: 0;
-  }
-
-  .row:hover :global(.copy-btn),
-  .row:focus-within :global(.copy-btn),
-  .row:hover :global(.edit-btn),
-  .row:focus-within :global(.edit-btn),
-  .row:hover :global(.investigate),
-  .row:focus-within :global(.investigate) {
-    opacity: 1;
+  /* Transparent paint, not `opacity: 0` (#1102): opacity below 1 gives
+     every hidden button its own paint layer -- three per row, 1500 at
+     500 rows -- and Blink hit-tests layers one by one, so every
+     `elementFromPoint` (which Chrome also runs itself after each
+     re-layout) walked all of them, ~9 ms of a 12.5 ms hit test.
+     Zeroing color/background/border-color hides the same paint without
+     creating any layer. Written as :not(hover, focus-within) so the
+     *hidden* state is the override and the revealed state is simply
+     each button's own stylesheet -- their colors differ (fg-dim
+     glyphs, accent-bordered investigate rings) and are not repeated
+     here, and their :focus-visible rings apply unmodified, since a
+     focused button gives the row :focus-within and lifts the hide
+     entirely. One knowing trade: forced-colors mode overrides
+     transparent ink with system colors, so there the buttons are
+     always visible -- acceptable, arguably clearer. */
+  .row:not(:hover, :focus-within) :global(.copy-btn),
+  .row:not(:hover, :focus-within) :global(.edit-btn),
+  .row:not(:hover, :focus-within) :global(.investigate) {
+    color: transparent;
+    background: none;
+    border-color: transparent;
   }
 
   @media (prefers-reduced-motion: no-preference) {
     .row :global(.copy-btn),
     .row :global(.edit-btn),
     .row :global(.investigate) {
-      transition: opacity 0.12s ease;
+      transition:
+        color 0.12s ease,
+        background-color 0.12s ease,
+        border-color 0.12s ease;
     }
   }
 </style>

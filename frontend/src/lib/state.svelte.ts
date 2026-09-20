@@ -8,9 +8,13 @@ import { deckOrderState } from './deckOrder.svelte'
 import { matchesCountry, UNKNOWN_COUNTRY } from './countryMatch'
 import { countryFlag, isPublicIp } from './format'
 import {
+  EMPTY_LOSS_EPISODE,
   EMPTY_WS_DROPPED_EPISODE,
+  lossEpisodeActive as isLossEpisodeActive,
+  noteLossEpisode,
   noteWsDropped,
   wsDroppedActive as isWsDroppedActive,
+  type LossEpisode,
   type WsDroppedEpisode,
 } from './ingestLossBanners'
 import { matchesPortQuery } from './portMatch'
@@ -88,13 +92,14 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Fall.svelte. It retires #544's interim ("Stream as landing") wholesale:
 // the default view below is 'fall', not 'live', and Stream keeps its own
 // Live-group row rather than being the entry point.
-// 'tune-logging' (#435) is the config-annotation helper -- its own
-// surface, not a wizard step (the issue's decision 2), reached from the
-// wizard's finish screen and from the topography's coverage lens on a
-// dark pair. Deliberately outside the deck (see App.svelte's DECK_VIEWS
-// and its own comment): a workflow you step into and leave, not a
-// dashboard you'd swipe to, the same shape Fleet historically had before
-// #647/#785 folded it in.
+// 'tune-logging' (#435) is Log every rule, the config-annotation helper
+// -- its own surface, not a wizard step (the issue's decision 2),
+// reached from the wizard's finish screen and from the topography's
+// coverage lens on a dark pair. It sat outside the deck until #1134, on
+// the reading that it was a workflow you step into and leave; that left
+// it the one page with no navigation, so it is a deck card now
+// (deckCards.ts's `log-every-rule`). The key keeps the spelling of the
+// two /api/tune-logging endpoints, which #1134 did not rename.
 export type View =
   | 'fall'
   | 'topography'
@@ -145,6 +150,13 @@ class AppState {
   // total the server has never seen. wsDroppedActive is declared below,
   // beside `now`, which it depends on -- see that field's own comment.
   wsDroppedEpisode = $state<WsDroppedEpisode>(EMPTY_WS_DROPPED_EPISODE)
+  // #1109: the same treatment for the engine's `outrun` total -- events
+  // that left the buffer before checking reached them. The server reports
+  // it as a lifetime count with no freshness of its own, so "still
+  // happening" is worked out here, from successive stats polls (see
+  // setStats). outrunActive is declared below beside `now`, for the same
+  // reason wsDroppedActive is.
+  outrunEpisode = $state<LossEpisode>(EMPTY_LOSS_EPISODE)
   // ruleMatches holds the ids matching the current regex pattern, or
   // null when there is nothing usable to filter by. Kept here rather than
   // inside the Worker so eviction is handled where eviction already
@@ -300,10 +312,24 @@ class AppState {
   // in filteredEvents actually re-evaluates over time, not just when the
   // buffer itself changes.
   now = $state(Date.now())
+  // #1109 audit fix: outrun's episode has to keep aging while paused, so
+  // it cannot share `now` above -- that clock deliberately freezes on
+  // pause (tick()'s own comment), which is right for the display-duration
+  // cutoff `now` exists for but wrong for a system-health signal with no
+  // relationship to whether this tab happens to be paused right now. A
+  // flood that actually stopped while the operator had the view paused
+  // must still read as stopped once the 60s window passes, not stay
+  // "active" until they resume. wallNow is tick()'s other output,
+  // unconditional, kept separate rather than un-freezing `now` itself
+  // and breaking the cutoff that freeze exists for.
+  wallNow = $state(Date.now())
   // #1015: wsDropped's `active`, recomputed against `now` above so a tab
   // that stopped dropping events falls quiet on the next tick without
   // needing a new WS message to tell it to.
   wsDroppedActive = $derived(isWsDroppedActive(this.wsDroppedEpisode, this.now))
+  // #1109: outrun's `active`, on the same rule, against wallNow rather
+  // than `now` -- see wallNow's own comment above.
+  outrunActive = $derived(isLossEpisodeActive(this.outrunEpisode, this.wallNow))
 
   private pendingBuffer: ClientEvent[] = []
 
@@ -441,12 +467,17 @@ class AppState {
     if (dropped) this.ruleMatches = next
   }
 
-  // Skipped while paused so the age-based display-duration cutoff in
-  // filteredEvents freezes at the moment of pausing instead of continuing
-  // to age out whatever's on screen -- otherwise a short "Last Xs" window
-  // would keep shrinking the paused view out from under you, defeating
-  // the point of pausing to look at something before it scrolls past.
+  // wallNow always advances, paused or not -- it feeds outrunActive
+  // (see its own comment), not the display-duration cutoff below.
+  //
+  // `now` itself is skipped while paused so the age-based display-
+  // duration cutoff in filteredEvents freezes at the moment of pausing
+  // instead of continuing to age out whatever's on screen -- otherwise a
+  // short "Last Xs" window would keep shrinking the paused view out from
+  // under you, defeating the point of pausing to look at something
+  // before it scrolls past.
   tick() {
+    this.wallNow = Date.now()
     if (this.paused) return
     this.now = Date.now()
   }
@@ -723,7 +754,7 @@ class AppState {
       ])
       this.setInitialEvents(events)
       this.devices = devices
-      this.stats = stats
+      this.setStats(stats)
       this.fetchFailed = false
     } catch (err) {
       // Left the buffer exactly as it was (empty, on first load) rather
@@ -761,6 +792,33 @@ class AppState {
   async refreshDevicesAndStats() {
     const [devices, stats] = await Promise.all([fetchDevices(), fetchStats()])
     this.devices = devices
+    this.setStats(stats)
+  }
+
+  // #1109: every stats poll folds the engine's cumulative outrun total
+  // into its episode, which is what turns a lifetime number into "this is
+  // still happening" -- the freshness the server gives its own four
+  // ingest-loss counters, computed here because this counter arrives
+  // without it.
+  //
+  // The first poll of a session is not folded the same way: outrun is a
+  // server-side *lifetime* count, so whatever figure it already carries
+  // on that first read accumulated over however long the server has been
+  // running, not in the last 60 seconds this tab has been open. Folding
+  // it in through noteLossEpisode against a brand-new EMPTY_LOSS_EPISODE
+  // (whose lastAt is null) read that whole lifetime total as a burst that
+  // just happened, raising a fresh outrun episode on every page load even
+  // when nothing had outrun the buffer in months. `this.stats === null`
+  // is the same "nothing has landed yet" signal initialLoadDone's own
+  // comment describes -- true only before this function's first call in
+  // the session (or straight after reset()) -- so the first sight of the
+  // counter only seeds the baseline it needs to measure *future* growth
+  // against; it takes a second poll's increase to actually read as
+  // recent activity, the same as any other rate computed from a counter.
+  setStats(stats: Stats) {
+    const outrun = stats.engine?.outrun ?? 0
+    this.outrunEpisode =
+      this.stats === null ? { total: outrun, recent: 0, lastAt: null } : noteLossEpisode(this.outrunEpisode, outrun, this.wallNow)
     this.stats = stats
   }
 
@@ -820,6 +878,7 @@ class AppState {
     this.filters = emptyFilters()
     this.devices = []
     this.stats = null
+    this.outrunEpisode = EMPTY_LOSS_EPISODE
     this.ruleMatches = null
     this.ruleMatchStatus = 'idle'
     this.matchedPattern = ''
@@ -836,6 +895,7 @@ class AppState {
     this.heldOpen = false
     this.frozenPool = null
     this.now = Date.now()
+    this.wallNow = Date.now()
     this.pendingBuffer = []
     this.incomingBuffer = []
     this.eventsFetchesInFlight = 0
@@ -862,15 +922,17 @@ function toCandidate(e: FirewallEvent): MatchCandidate {
   return { id: e.id, ruleLabel: e.ruleLabel, raw: e.raw }
 }
 
-// isNatSide reports which side (if either) a NAT annotation's translated
+// natSide reports which side (if either) a NAT annotation's translated
 // address belongs to, mirroring internal/routeros/parser.go's
 // isNATChain exactly: only the two dedicated NAT chains say which side
 // was rewritten. A NAT annotation inherited onto a forward/input/output
 // line by an earlier NAT rule (see that file's parseNAT doc comment) has
 // no such chain to read the direction off, so it is left out of address
 // matching entirely rather than guessed -- matching the wrong side would
-// be worse than not matching it at all.
-function natSide(e: FirewallEvent): 'src' | 'dst' | null {
+// be worse than not matching it at all. Exported for EventRow's NAT
+// cell, so its click-to-filter reads the same rule rather than a third
+// copy of it.
+export function natSide(e: FirewallEvent): 'src' | 'dst' | null {
   const chain = e.chain?.toLowerCase()
   if (chain === 'srcnat') return 'src'
   if (chain === 'dstnat') return 'dst'

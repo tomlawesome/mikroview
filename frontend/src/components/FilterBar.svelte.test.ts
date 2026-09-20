@@ -21,7 +21,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import type { FirewallEvent } from '../lib/types'
-import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 
 // jsdom has no window.matchMedia -- viewport.svelte.ts's ViewportState
 // singleton calls it at module-load time (same fix used throughout this
@@ -44,6 +43,11 @@ const { default: FilterBar } = await import('./FilterBar.svelte')
 const { appState } = await import('../lib/state.svelte')
 const { emptyFilters } = await import('../lib/types')
 const { retentionState } = await import('../lib/retention.svelte')
+const { geoipState } = await import('../lib/geoip.svelte')
+const { seenValuesState } = await import('../lib/seenValues.svelte')
+const { presetState } = await import('../lib/presets.svelte')
+const { viewportState } = await import('../lib/viewport.svelte')
+const { COLUMNS, columnState } = await import('../lib/columns.svelte')
 
 // The box div carries no role -- it holds the chips' own remove buttons,
 // and a screen reader flattens the contents of anything with
@@ -58,15 +62,6 @@ function getBox() {
 // there is no button any more, so this clicks the box itself.
 async function expandRow() {
   await fireEvent.click(getBox())
-  flushSync()
-}
-
-// #710: the desktop column chooser folds behind its own "columns ▸"
-// toggle now (see FilterBar.svelte's columnsOpen comment) rather than
-// sitting always-open on a forced second row -- opens it the same way a
-// reader would, by clicking the toggle.
-async function openColumns() {
-  await fireEvent.click(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
   flushSync()
 }
 
@@ -355,10 +350,17 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     render(FilterBar)
     await expandRow()
 
-    // #729's "Columns" field is not one of these any more (#710): on the
-    // desktop row it is a "columns ▸" toggle beside clear/fold, not an
-    // fb-field with its own micro-label -- see the next test.
-    const labels = Array.from(document.querySelectorAll('.fb-label')).map((el) => el.textContent)
+    // #729's "Columns" field is not one of these any more (#710), and
+    // #1197 moved its desktop "columns ▸" toggle off this strip entirely
+    // -- it lives on Whisper.svelte's own hand now (Whisper.svelte.test.ts
+    // covers it), so there is no trace of it left to assert here.
+    // Direct children of the strip: #1191 captions the three controls
+    // inside each address group with the same micro-label, and those are
+    // that group's business, not the strip's field order (they have
+    // their own test at the foot of this file).
+    const labels = Array.from(document.querySelectorAll('.bar.thin > .fb-field > .fb-label')).map(
+      (el) => el.textContent,
+    )
     expect(labels).toEqual([
       'Device',
       'Action',
@@ -370,21 +372,6 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
       'Interface',
       'Rule',
     ])
-  })
-
-  // #710 round-30 fidelity: the column chooser used to force itself and
-  // everything after it (clear, fold) onto a second row via
-  // flex-basis: 100%. It now rides in the same one-line strip as every
-  // other control, collapsed to a toggle so thirteen checkboxes never
-  // have to fit inline.
-  it('draws the column chooser as a toggle in the one-line strip, not a field of its own', async () => {
-    render(FilterBar)
-    await expandRow()
-
-    expect(screen.getByRole('button', { name: 'Choose which columns the stream shows' }).textContent?.trim()).toBe(
-      'columns ▸',
-    )
-    expect(screen.queryByRole('checkbox')).toBeNull()
   })
 
   it('does not draw Presets or Export to CSV -- later additions round 29 does not draw', async () => {
@@ -435,138 +422,496 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
   })
 })
 
-// #729: the column chooser rides in the same fold-out strip as the rest
-// of the filter fields -- no new bar, no new button beside the search
-// box. columnState is a module-level singleton (shared with
-// columns.svelte.test.ts and LiveTable.svelte.test.ts), so every test
-// below restores it rather than leaking a toggle into whichever test
-// runs next.
-describe('FilterBar, the column chooser (#729)', () => {
+// #1191: SOURCE and DESTINATION each carried three unlabelled controls,
+// and the middle one was a bare underline with nothing saying what it
+// took. The aria-labels had said scope/name-IP-or-CIDR/country all
+// along; the owner's ruling makes them visible and keeps the text
+// field's hint on desktop as well as on phones.
+describe('FilterBar, the source and destination captions (#1191)', () => {
+  it('captions the three controls in each address group', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    const groups = Array.from(document.querySelectorAll('.addr-group'))
+    expect(groups.length).toBe(2)
+    for (const group of groups) {
+      const captions = Array.from(group.querySelectorAll('.fb-label')).map((el) => el.textContent?.trim())
+      expect(captions).toEqual(['Scope', 'Name, IP or CIDR', 'Country'])
+    }
+  })
+
+  it('keeps the address query hint on screen at desktop width', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    expect(screen.getByLabelText('Source — name, IP or CIDR').getAttribute('placeholder')).toBe('name, IP or CIDR')
+    expect(screen.getByLabelText('Destination — name, IP or CIDR').getAttribute('placeholder')).toBe(
+      'name, IP or CIDR',
+    )
+  })
+})
+
+// #1198: a bare empty country select was indistinguishable from "no
+// public traffic yet" -- this disabled row says why instead. Both tests
+// set geoipState.enabled directly rather than mocking fetchHealthz: the
+// singleton's ensureLoaded() only ever runs its fetch once per module
+// lifetime (see lib/geoip.svelte.ts's own loaded guard), so a real
+// mount's onMount call is a same-value no-op here and never overwrites
+// what the test sets.
+describe("FilterBar, the country select's no-GeoIP row (#1198)", () => {
+  afterEach(() => {
+    geoipState.enabled = null
+  })
+
+  it('shows a disabled explainer row on both country selects with no database configured', async () => {
+    geoipState.enabled = false
+    render(FilterBar)
+    await expandRow()
+
+    for (const label of ['Source country', 'Destination country']) {
+      const select = screen.getByLabelText(label) as HTMLSelectElement
+      const opt = Array.from(select.options).find((o) => o.textContent === 'no GeoIP database — see docs ▸')
+      expect(opt).toBeTruthy()
+      expect(opt?.disabled).toBe(true)
+    }
+  })
+
+  it('omits the row once a database is configured', async () => {
+    geoipState.enabled = true
+    render(FilterBar)
+    await expandRow()
+
+    const select = screen.getByLabelText('Source country') as HTMLSelectElement
+    expect(Array.from(select.options).some((o) => o.textContent?.includes('no GeoIP database'))).toBe(false)
+  })
+})
+
+// #1226: Proto and Interface were the only two controls in the strip
+// with no list behind them -- free-text boxes an operator typed `tcp`
+// into and hoped. They are now pickers over what this instance has
+// actually seen, which is a store and an endpoint away (internal/seen,
+// GET /api/seen-values), read here through seenValuesState.
+//
+// The load-bearing test is the last one. A picker that refused an unseen
+// value would be worse than the box it replaced: a filter you cannot set
+// up until the traffic arrives cannot be used to watch for traffic that
+// has not arrived, which is most of what an operator wants one for. So
+// the list is a suggestion, never a closed set -- a <datalist> combo,
+// the same idiom the watchers station's scope boxes already use, not a
+// <select>.
+//
+// mount's ensureLoaded() call cannot reach a server here and is caught,
+// so what these tests put on the state is what the strip draws.
+describe('FilterBar, the Proto and Interface pickers (#1226)', () => {
+  afterEach(() => {
+    seenValuesState.reset()
+  })
+
+  function optionsOf(id: string): string[] {
+    const list = document.getElementById(id)
+    expect(list?.tagName.toLowerCase()).toBe('datalist')
+    return Array.from(list?.querySelectorAll('option') ?? []).map((o) => (o as HTMLOptionElement).value)
+  }
+
+  it('offers the protocols this instance has actually seen, not a hardcoded set', async () => {
+    seenValuesState.proto = ['udp', 'tcp', 'gre']
+    render(FilterBar)
+    await expandRow()
+
+    const input = screen.getByLabelText('Protocol') as HTMLInputElement
+    expect(input.getAttribute('list')).toBe('fb-seen-protos')
+    expect(optionsOf('fb-seen-protos')).toEqual(['udp', 'tcp', 'gre'])
+  })
+
+  it('offers one interface list for both directions, because there is one interface filter', async () => {
+    seenValuesState.interfaces = ['ether1', 'bridge-lan', 'wg0']
+    render(FilterBar)
+    await expandRow()
+
+    const input = screen.getByLabelText('Interface') as HTMLInputElement
+    expect(input.getAttribute('list')).toBe('fb-seen-interfaces')
+    expect(optionsOf('fb-seen-interfaces')).toEqual(['ether1', 'bridge-lan', 'wg0'])
+  })
+
+  it('leaves both boxes usable on a fresh instance that has seen nothing yet', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    expect(optionsOf('fb-seen-protos')).toEqual([])
+    expect(optionsOf('fb-seen-interfaces')).toEqual([])
+
+    const proto = screen.getByLabelText('Protocol') as HTMLInputElement
+    expect(proto.disabled).toBe(false)
+    expect(proto.tagName.toLowerCase()).toBe('input')
+  })
+
+  it('still accepts a value that has never been seen -- typing is not restricted to the list', async () => {
+    seenValuesState.proto = ['tcp', 'udp']
+    seenValuesState.interfaces = ['ether1']
+    render(FilterBar)
+    await expandRow()
+
+    // Neither value is in either list: this is the operator setting a
+    // filter up before the traffic they are waiting for has arrived.
+    await fireEvent.input(screen.getByLabelText('Protocol'), { target: { value: 'sctp' } })
+    await fireEvent.input(screen.getByLabelText('Interface'), { target: { value: 'ether9' } })
+    flushSync()
+
+    expect(appState.filters.protocol).toBe('sctp')
+    expect(appState.filters.interface).toBe('ether9')
+  })
+})
+
+// #1246 (round 57, ratified): the box's third face. A field menu on
+// focus, a value menu under the field picked, and a committed token that
+// is the chip face two already drew -- same markup, same aria-label, same
+// appState.filters. Nothing here is a second filter store, so every
+// assertion below reads the filter back off appState.
+//
+// The strip's own named-field controls are untouched by all of this, and
+// so is the mobile drawer: this face is the wide-screen box only.
+describe('FilterBar, the token bar (#1246)', () => {
+  function menu() {
+    return document.querySelector('.token-menu')
+  }
+
+  function menuNames(): string[] {
+    return Array.from(document.querySelectorAll('.token-menu .tm-name')).map((n) => n.textContent?.trim() ?? '')
+  }
+
+  function pick(label: string) {
+    const item = Array.from(document.querySelectorAll('.token-menu .tm-item')).find(
+      (el) => el.querySelector('.tm-name')?.textContent?.trim() === label,
+    )
+    expect(item).toBeTruthy()
+    return fireEvent.click(item as HTMLElement)
+  }
+
+  // The menu opens on focus, which a click into the box also causes.
+  async function focusBox() {
+    await fireEvent.focus(getBox())
+    flushSync()
+  }
+
+  // Once a token commits the menu gets out of the way, with the caret
+  // still in the box -- so a second token starts from a click, the
+  // pointer's own way back in.
+  async function clickBox() {
+    await fireEvent.click(getBox())
+    flushSync()
+  }
+
+  afterEach(() => {
+    seenValuesState.reset()
+    for (const p of [...presetState.presets]) presetState.remove(p.name)
+  })
+
+  it('opens the field menu on focus, listing the eight token fields', async () => {
+    render(FilterBar)
+    expect(menu()).toBeNull()
+
+    await focusBox()
+    expect(menu()).toBeTruthy()
+    expect(menuNames()).toEqual(['device', 'action', 'chain', 'proto', 'interface', 'port', 'source', 'destination'])
+  })
+
+  // The menu goes with the focus: it hangs over the table's first
+  // columns, so left open after the caret has gone it covers rows the
+  // reader is trying to reach (live-token-copy's row hover found it).
+  it('closes the menu when focus leaves the box, but not when it moves to a menu item', async () => {
+    render(FilterBar)
+    await focusBox()
+    expect(menu()).toBeTruthy()
+
+    // Into the menu's own item: still the box's business, stays open.
+    const item = document.querySelector('.token-menu .tm-item') as HTMLElement
+    await fireEvent.focusOut(getBox(), { relatedTarget: item })
+    flushSync()
+    expect(menu()).toBeTruthy()
+
+    // Out to nothing (a blur, a tab away): closes.
+    await fireEvent.focusOut(getBox(), { relatedTarget: null })
+    flushSync()
+    expect(menu()).toBeNull()
+  })
+
+  it('shortens the action hint to a count, and leaves the full list to the value menu (verdict 2)', async () => {
+    render(FilterBar)
+    await focusBox()
+
+    const action = Array.from(document.querySelectorAll('.token-menu .tm-item')).find(
+      (el) => el.querySelector('.tm-name')?.textContent?.trim() === 'action',
+    )
+    expect(action?.querySelector('.tm-hint')?.textContent?.trim()).toBe('7 values')
+
+    await pick('action')
+    expect(menuNames()).toEqual(['Accept', 'Drop', 'Reject', 'Log', 'Marked (mangle)', 'Natted (NAT)', 'Unknown'])
+  })
+
+  it('shows a pending token and the field\'s own values once a field is picked', async () => {
+    appState.devices = [
+      { id: 'dev-cam', name: 'cam-porch' },
+      { id: 'dev-nas', name: 'nas' },
+    ] as unknown as (typeof appState)['devices']
+    render(FilterBar)
+    await focusBox()
+    await pick('device')
+
+    // Pending, not committed: the box must not claim a filter that is not
+    // yet active.
+    expect(document.querySelector('.chip.pending')?.textContent?.replace(/\s+/g, '')).toBe('device:')
+    expect(appState.filters.device).toBe('')
+    expect(menuNames()).toEqual(['cam-porch', 'nas'])
+  })
+
+  it('commits a value as the chip face two already draws, writing the same appState.filters', async () => {
+    appState.devices = [{ id: 'dev-cam', name: 'cam-porch' }] as unknown as (typeof appState)['devices']
+    render(FilterBar)
+    await focusBox()
+    await pick('device')
+    await pick('cam-porch')
+    flushSync()
+
+    expect(appState.filters.device).toBe('dev-cam')
+    expect(document.querySelector('.chip.pending')).toBeNull()
+    const chip = screen.getByLabelText('Remove the device filter')
+    expect(chip.tagName).toBe('BUTTON')
+    expect(chip.parentElement?.textContent?.replace(/\s+/g, '')).toBe('device:cam-porch⌫')
+  })
+
+  it('removes a token from its own chip, the way the strip already does', async () => {
+    appState.devices = [{ id: 'dev-cam', name: 'cam-porch' }] as unknown as (typeof appState)['devices']
+    appState.filters = { ...emptyFilters(), device: 'dev-cam', action: 'drop' }
+    render(FilterBar)
+
+    await fireEvent.click(screen.getByLabelText('Remove the device filter'))
+    flushSync()
+    expect(appState.filters.device).toBe('')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('offers proto and interface only what this instance has really seen (verdict 1)', async () => {
+    seenValuesState.proto = ['tcp', 'udp']
+    render(FilterBar)
+    await focusBox()
+    await pick('proto')
+
+    expect(menuNames()).toEqual(['tcp', 'udp'])
+    await pick('udp')
+    flushSync()
+    expect(appState.filters.protocol).toBe('udp')
+  })
+
+  it('takes a port as typed text, committed on Enter', async () => {
+    render(FilterBar)
+    await focusBox()
+    await pick('port')
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: '8291' } })
+    flushSync()
+    // A pending value is not the rule search: free text is untouched
+    // while a field is waiting for its value.
+    expect(appState.filters.rule).toBe('')
+
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    flushSync()
+    expect(appState.filters.port).toBe('8291')
+    expect(document.querySelector('.chip.pending')).toBeNull()
+  })
+
+  it('commits a side to ONE composite token, however many of its parts are picked', async () => {
+    appState.events = [
+      evt({ id: 1, sourceIp: '185.220.101.34', srcIp: '185.220.101.34', srcCountry: 'DE' }),
+    ] as unknown as (typeof appState)['events']
+    render(FilterBar)
+    await focusBox()
+    await pick('source')
+
+    expect(menuNames()).toEqual(['internal', 'external', '🇩🇪 DE'])
+    await pick('external')
+    flushSync()
+    expect(appState.filters.srcScope).toBe('external')
+
+    // A second part of the same side lands in the same chip, not a
+    // second one -- sideValue() joins what is set.
+    await clickBox()
+    await pick('source')
+    await pick('🇩🇪 DE')
+    flushSync()
+    expect(appState.filters.srcCountry).toBe('DE')
+    expect(document.querySelectorAll('.chip').length).toBe(1)
+    expect(screen.getByLabelText('Remove the source filter').parentElement?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'source:external · DE⌫',
+    )
+  })
+
+  it('takes a typed address for a side on Enter, into the same composite token', async () => {
+    render(FilterBar)
+    await focusBox()
+    await pick('destination')
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: '10.0.40.5' } })
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    flushSync()
+    expect(appState.filters.dstQuery).toBe('10.0.40.5')
+    expect(appState.filters.rule).toBe('')
+  })
+
+  it('never swallows plain typing -- it lands in free text, beside the tokens', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    await focusBox()
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: 'iot-to-lan' } })
+    flushSync()
+    expect(appState.filters.rule).toBe('iot-to-lan')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('enters the menu on ArrowDown with the first item focused, and picks it on Enter', async () => {
+    render(FilterBar)
+    await focusBox()
+    const box = getBox()
+
+    await fireEvent.keyDown(box, { key: 'ArrowDown' })
+    flushSync()
+    const focused = document.querySelector('.token-menu .tm-item.focused')
+    expect(focused?.querySelector('.tm-name')?.textContent?.trim()).toBe('device')
+    expect(focused?.getAttribute('aria-selected')).toBe('true')
+
+    await fireEvent.keyDown(box, { key: 'Enter' })
+    flushSync()
+    expect(document.querySelector('.chip.pending')?.textContent?.replace(/\s+/g, '')).toBe('device:')
+  })
+
+  it('closes the menu on Escape', async () => {
+    render(FilterBar)
+    await focusBox()
+    expect(menu()).toBeTruthy()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    flushSync()
+    expect(menu()).toBeNull()
+  })
+
+  it('deletes the last token on Backspace in an empty free-text box', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop', chain: 'input' }
+    render(FilterBar)
+    await focusBox()
+
+    await fireEvent.keyDown(getBox(), { key: 'Backspace' })
+    flushSync()
+    expect(appState.filters.chain).toBe('')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('leaves the free-text term alone -- Backspace takes the last token, never the rule search', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop', rule: 'iot-to-lan' }
+    render(FilterBar)
+    // The box is not empty: it holds the rule search, so Backspace is
+    // editing that character-by-character and reaches no token at all.
+    await fireEvent.keyDown(getBox(), { key: 'Backspace' })
+    flushSync()
+    expect(appState.filters.rule).toBe('iot-to-lan')
+    expect(appState.filters.action).toBe('drop')
+  })
+
+  it('never reaches past a half-typed value to the last token (verdict 3)', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    await focusBox()
+    await pick('port')
+
+    const box = getBox()
+    await fireEvent.input(box, { target: { value: '829' } })
+    await fireEvent.keyDown(box, { key: 'Backspace' })
+    flushSync()
+    // The character is the browser's to delete; the token stands.
+    expect(appState.filters.action).toBe('drop')
+    expect(document.querySelector('.chip.pending')).toBeTruthy()
+  })
+
+  it('applies a saved filter as individually removable tokens, not one opaque named one', async () => {
+    presetState.save('WAN scans', { ...emptyFilters(), action: 'drop', chain: 'input', srcCountry: 'DE' })
+    render(FilterBar)
+
+    await fireEvent.click(document.querySelector('.fbox .fsaved') as HTMLElement)
+    flushSync()
+    await fireEvent.click(document.querySelector('.fpname') as HTMLElement)
+    flushSync()
+
+    expect(screen.getByLabelText('Remove the action filter')).toBeTruthy()
+    expect(screen.getByLabelText('Remove the chain filter')).toBeTruthy()
+    expect(screen.getByLabelText('Remove the source filter')).toBeTruthy()
+    expect(screen.queryByText('WAN scans', { selector: '.chip' })).toBeNull()
+
+    await fireEvent.click(screen.getByLabelText('Remove the chain filter'))
+    flushSync()
+    expect(appState.filters.chain).toBe('')
+    expect(appState.filters.action).toBe('drop')
+  })
+})
+
+// #1218 audit finding 13: the mobile drawer's always-open column list
+// used to be FilterBar's own copy of ColumnChoice/PLAIN_COLUMNS/etc and
+// the columnCheckbox/columnCheckboxes snippets, byte-for-byte identical
+// to Whisper.svelte's desktop popover -- and unlike Whisper's, it had no
+// test at all. The checkbox logic itself is ColumnToggles.svelte now,
+// covered directly by ColumnToggles.svelte.test.ts; these check that
+// FilterBar actually mounts it, in the drawer, with the mobile touch
+// sizing, rather than re-covering the checkboxes here too.
+describe('FilterBar, the mobile drawer’s column chooser (#729/#1218 finding 13)', () => {
   beforeEach(() => {
+    viewportState.isMobile = true
     columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
   })
 
   afterEach(() => {
+    viewportState.isMobile = false
     columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
   })
 
-  it('offers a checkbox for every optional column, and none for the pinned two', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
+  // Mobile's own way into the drawer is the "Filters" trigger button,
+  // not the desktop box expandRow() elsewhere in this file clicks --
+  // {#if viewportState.isMobile} draws that button instead of the box.
+  async function openMobileDrawer() {
+    await fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    flushSync()
+  }
 
-    // Time and Rule are each a unique label in this list -- a plain
-    // queryByRole miss proves no checkbox exists for either.
-    for (const key of PINNED_COLUMNS) {
-      const label = COLUMNS.find((c) => c.key === key)?.label as string
-      expect(screen.queryByRole('checkbox', { name: `${label} column` })).toBeNull()
-    }
+  it('shows the always-open list, with a checkbox that writes through to columnState', async () => {
+    const { container } = render(FilterBar)
+    await openMobileDrawer()
 
-    // 15 columns, 2 pinned -- 13 checkboxes total.
-    expect(screen.getAllByRole('checkbox').length).toBe(COLUMNS.length - PINNED_COLUMNS.size)
-
-    // Spot-check a couple of ordinary columns with unique labels.
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Chain column' })).toBeTruthy()
-  })
-
-  // #710: "Address column" used to name two different checkboxes (source's
-  // and destination's), which is exactly the kind of thing an accessible
-  // name is supposed to rule out. Each one now carries its own
-  // disambiguated aria-label even though the two read identically on
-  // screen ("address" under each of two headings) -- this is what makes a
-  // by-name lookup for either possible at all.
-  it('disambiguates the address/port/MAC checkboxes that repeat visually, by aria-label', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-
-    expect(screen.getByRole('checkbox', { name: 'Source address column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Destination address column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Source port column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Destination port column' })).toBeTruthy()
-    expect(screen.getByRole('checkbox', { name: 'Source MAC column' })).toBeTruthy()
-  })
-
-  // The visible word is the bare column name, not "<Label> column" --
-  // the "column" suffix and the disambiguation both still exist, just in
-  // the aria-label (checked above), not on screen where two "Address
-  // column"s side by side is what read as clunky in the first place.
-  it('draws the bare column name on screen, grouped under source/destination headings for the repeated ones', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-
-    const panel = document.querySelector('.col-panel') as HTMLElement
-    const labelTexts = Array.from(panel.querySelectorAll('.col-toggle')).map((el) => el.textContent?.trim())
-    expect(labelTexts).toContain('device')
-    expect(labelTexts).toContain('NAT')
-    // "address" appears twice on screen -- once per heading -- which is
-    // exactly the point: the heading, not the checkbox's own text, is
-    // what tells the two apart now.
-    expect(labelTexts.filter((t) => t === 'address').length).toBe(2)
-
-    const headings = Array.from(panel.querySelectorAll('.col-group-heading')).map((el) => el.textContent?.trim())
-    expect(headings).toEqual(['source', 'destination'])
-  })
-
-  it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toHaveProperty('checked', true)
-  })
-
-  it('unchecking a column writes through to columnState, and is a reader preference -- not tied to any filter term', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
+    const group = container.querySelector('.col-toggles[role="group"]')
+    expect(group).toBeTruthy()
+    expect(group?.getAttribute('aria-label')).toBe('Choose which columns the stream shows')
 
     const device = screen.getByRole('checkbox', { name: 'Device column' })
     await fireEvent.click(device)
     flushSync()
-
     expect(columnState.isColumnVisible('device')).toBe(false)
-    expect(appState.hasActiveFilters).toBe(false)
   })
 
-  // #710: the toggle itself -- opens on click, closes again on a second
-  // click, on Escape (returning focus to the toggle, same convention as
-  // the strip's own fold), and on a click elsewhere in the open strip.
-  it('opens and closes the panel by clicking the toggle again', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
+  // The drawer's own 44px touch-target convention (issue #85) -- the
+  // component's `touch` prop, not a bare mount.
+  it('sizes the rows for touch, unlike Whisper’s compact desktop popover', async () => {
+    const { container } = render(FilterBar)
+    await openMobileDrawer()
 
-    await openColumns()
-    expect(screen.queryByRole('checkbox')).toBeNull()
+    const toggle = container.querySelector('.col-toggle')
+    expect(toggle).toBeTruthy()
+    expect(toggle?.classList.contains('touch')).toBe(true)
   })
 
-  it('closes the panel on Escape, without also folding the whole strip', async () => {
-    render(FilterBar)
+  it('is not rendered at all off the mobile breakpoint', async () => {
+    viewportState.isMobile = false
+    const { container } = render(FilterBar)
     await expandRow()
-    await openColumns()
 
-    await fireEvent.keyDown(window, { key: 'Escape' })
-    flushSync()
-
-    expect(screen.queryByRole('checkbox')).toBeNull()
-    // The strip itself stayed open -- Escape closed only the popover.
-    expect(screen.getByLabelText('Device')).toBeTruthy()
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Choose which columns the stream shows' }))
-  })
-
-  it('closes the panel on a click elsewhere in the strip, without folding the strip itself', async () => {
-    render(FilterBar)
-    await expandRow()
-    await openColumns()
-
-    await fireEvent.click(screen.getByLabelText('Protocol'))
-    flushSync()
-
-    expect(screen.queryByRole('checkbox')).toBeNull()
-    expect(screen.getByLabelText('Device')).toBeTruthy()
+    expect(container.querySelector('.columns-field')).toBeNull()
   })
 })

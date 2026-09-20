@@ -25,7 +25,7 @@
   import AccountMenu from './AccountMenu.svelte'
   import {
     fallState,
-    boundaryKeyOf,
+    boundaryMatcher,
     brokenWatchesByKey,
     laneColors,
     openBoundaryInStream as openInStream,
@@ -94,6 +94,21 @@
   // still clear of RIG_H below.
   const QUIETER_Y = PORTLAB_Y + 16
   const RIG_H = 800
+  // ── A band's own caption sits at the head of the pour (#1204) ───────
+  // Fable's ruling of 2026-09-15: every lane shares one time axis, so a
+  // quiet lane cannot be shorter than a busy one without breaking the
+  // reading that a mark at the same height happened at the same moment.
+  // Lanes keep equal height; what moves is the caption. It used to sit
+  // at y=420, two thirds of the way down, with ~400 units of black above
+  // it -- an all-quiet estate then said nothing in the first screenful
+  // and the eye had to go looking for the sentence. Here, just under the
+  // NOW line and inside the pour's first rows, the estate states itself
+  // straight away and the black below is honest empty time.
+  // Both captions ride these two lines -- "quiet, not dark" on a logged
+  // band that caught nothing, "blank because nothing is logged" on a
+  // dark one -- so the two read as one row across the rig.
+  const ANNO_HEAD_Y1 = FALL_TOP + 12
+  const ANNO_HEAD_Y2 = ANNO_HEAD_Y1 + 14 // the plate's own 14-unit leading
   const DASH_W = 2.4 // a carrier dash's width — thin, never a fill
   const HIT_W = 14 // a carrier's invisible click/focus target width
 
@@ -131,6 +146,21 @@
   // pages instead.
   const MIN_PITCH = 150
   const GUTTER = 10 // the shipped rig's own band-to-band gutter -- unchanged, not part of this issue
+  // Per-character pixel widths for the rig's own type, measured rather
+  // than guessed (#1114): `.rig svg text { font-family: var(--font-mono) }`
+  // puts every label in the rig -- band names, the epithet, peak and
+  // carrier labels alike -- in the same monospace stack regardless of
+  // which class sets its font-size or weight, so a flat per-class figure
+  // is legitimate as long as it's measured for that class's actual size
+  // and weight. Measured by rendering representative label/carrier text
+  // (hostname-shaped strings, not a bare alphabet average) in a real
+  // Chromium instance against this component's own font stack, then
+  // rounded up for a safety margin across platforms whose installed
+  // monospace font differs from the one this workstation resolved to --
+  // the previous flat 6.2px/char guess pre-dates the shared monospace
+  // rule and under-measured against it.
+  const CHAR_W_13_BOLD = 8 // .blab: 13px / weight 700 -- the band label line
+  const CHAR_W_10 = 6.5 // .bsub/.plab: 10px / weight 400 -- epithet, peak + carrier labels
   // Only used to size a carrier's invisible click target (below) before
   // the render pass has counted this page's bands and settled on a real
   // pitch; imprecision here only affects a hit-target's width slightly,
@@ -270,6 +300,10 @@
     // exact boundary -- empty on every band until an entry both names
     // this boundary and its ring actually breaks.
     brokenWatches: WatchlistEntry[]
+    // #1196: only ever true on the unmatched lane, and only when its
+    // traffic is there because of the interfaces rather than because
+    // nothing in its chain was pushed at all.
+    interfaceMiss: boolean
   }
 
   // portX maps carriers onto [10, 90] linearly by port number.
@@ -300,9 +334,6 @@
   // never one DOM node per event.
   const bandsData = $derived.by((): BandView[] => {
     const boundaries = fallState.boundaries
-    const byKey = new Map<string, FallBoundary>()
-    for (const b of boundaries) byKey.set(b.key, b)
-
     const bucketCount = buckets
     type PortMap = Map<number, Bucket[]>
     const portsByKey = new Map<string, PortMap>()
@@ -313,23 +344,31 @@
     for (const b of boundaries) portsByKey.set(b.key, new Map())
     let unmatchedPorts: PortMap | null = null
     let unmatchedTotal = 0
+    // #1196: true once some event in the unmatched lane is there for the
+    // narrower reason -- its chain IS in a pushed table, and no rule in
+    // that chain names the interfaces it came through. The lane says
+    // which of the two it is rather than one sentence for both.
+    let unmatchedInterfaceMiss = false
     const ipToKey = new Map<string, string>()
 
+    // #1196: a blank interface on the rule side is a wildcard, most
+    // specific match wins, a unique log-prefix slug outranks both. Built
+    // once per pass, not per event.
+    const matcher = boundaryMatcher(boundaries)
+
     for (const e of windowEvents) {
-      const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
-      let ports = portsByKey.get(key)
-      let isUnmatched = false
-      if (!ports) {
-        if (!byKey.has(key)) {
-          if (!unmatchedPorts) unmatchedPorts = new Map()
-          ports = unmatchedPorts
-          isUnmatched = true
-        } else {
-          continue
-        }
-      }
       const t = new Date(e.time).getTime()
       if (Number.isNaN(t)) continue
+      const key = matcher.keyFor(e)
+      const isUnmatched = key === ''
+      let ports: PortMap
+      if (isUnmatched) {
+        if (!unmatchedPorts) unmatchedPorts = new Map()
+        ports = unmatchedPorts
+        if (matcher.chainIsPushed(e.chain)) unmatchedInterfaceMiss = true
+      } else {
+        ports = portsByKey.get(key)!
+      }
       // The flag join: a flag names only its target IP, so a flag is
       // placed on the band its target actually appeared on this window
       // -- an honest join, never a guess. First sighting wins.
@@ -456,19 +495,21 @@
         deepestActive,
         flagMarks: flagsByKey.get(b.key) ?? [],
         brokenWatches: brokenByKey.get(b.key) ?? [],
+        interfaceMiss: false,
       }
     }
 
     const known = boundaries.map((b) => toView(b, portsByKey.get(b.key)!, totalByKey.get(b.key) ?? 0))
     if (unmatchedPorts)
-      known.push(
-        toView(
+      known.push({
+        ...toView(
           {
             key: '__unmatched__',
             chain: '',
             inInterface: '',
             outInterface: '',
             srcAddressList: '',
+            slugs: [],
             label: 'other traffic',
             coverage: 'unknown',
             epithet: '',
@@ -476,7 +517,8 @@
           unmatchedPorts,
           unmatchedTotal,
         ),
-      )
+        interfaceMiss: unmatchedInterfaceMiss,
+      })
     return known
   })
 
@@ -652,6 +694,28 @@
     return Math.max(MIN_PITCH, natural)
   })
   const bandW = $derived(Math.max(20, pitch - GUTTER))
+  // Character budgets for the band header's two free-text lines (#1114):
+  // the inset the text starts at (6px, matching the `x={slot.bx + 6}`
+  // the template already draws at) subtracted from the band's own
+  // width, divided by that line's measured per-character width.
+  const bandLabelBudget = $derived(Math.max(1, Math.floor((bandW - 6) / CHAR_W_13_BOLD)))
+  const bandEpithetBudget = $derived(Math.max(1, Math.floor((bandW - 6) / CHAR_W_10)))
+
+  // Middle-ellipsis truncation (#1114): an end ellipsis reads
+  // "bridge-lan..." and "vlan-iot..." as the same prefix once both
+  // overflow, which is exactly the pair a boundary name most needs to
+  // stay distinguishable. Splitting the kept characters between both
+  // ends (favouring the head by one on an odd remainder) keeps enough
+  // of each side legible instead.
+  function truncateMiddle(text: string, maxChars: number): string {
+    if (maxChars < 1) return text.slice(0, 1)
+    if (text.length <= maxChars) return text
+    if (maxChars === 1) return '…'
+    const keep = maxChars - 1
+    const head = Math.ceil(keep / 2)
+    const tail = Math.floor(keep / 2)
+    return `${text.slice(0, head)}…${tail > 0 ? text.slice(text.length - tail) : ''}`
+  }
 
   // ── Rig layout: every band on this page gets its own pitch-wide slot ─
   interface BandSlot {
@@ -685,7 +749,11 @@
     const spanLen = windowEnd - windowStart
     for (let t = Math.ceil(windowStart / stepMs) * stepMs; t < windowEnd - stepMs * 0.08; t += stepMs) {
       const y = FALL_TOP + ((windowEnd - t) / spanLen) * (FALL_BOT - FALL_TOP)
-      if (y < FALL_TOP + 12 || y > FALL_BOT - 4) continue
+      // Only the floor is the rail's own business now: a tick crowding
+      // the brink at the top is dropped by rank below (#1204), not by a
+      // guard of the rail's own that the other two label sources knew
+      // nothing about.
+      if (y > FALL_BOT - 4) continue
       const d = new Date(t)
       const label =
         span === '14d'
@@ -759,59 +827,154 @@
     )
   }
 
-  // Peak labels, culled so neighbours never collide: strongest first,
-  // then any label whose text would overlap one already kept is dropped.
+  // ── Label placement: port of round-66/67's own placeLabel(placed, x,
+  // y, w, lo, hi) (docs/design/concepts) ────────────────────────────
+  // Two known-good moves from those theme concepts, ported rather than
+  // copied: clamp a label into its own band's [lo, hi] bounds by
+  // switching text-anchor instead of letting it run past the edge
+  // (#1254 fault 2 -- :5001 Synology-HTTPS clipped at the rig's own
+  // right edge), and lift a label clear of anything already occupying
+  // that space rather than only checking other labels' baselines
+  // within a fixed vertical band. The old peakLabels cull compared
+  // candidates' y within 20 units of each other -- fine for two peaks
+  // of similar height, but a short peak's label sits close to its own
+  // (low) tip, and a much taller neighbour's curve reaches all the way
+  // down to the same baseline, so the two can be 60+ units apart in y
+  // and still visually cross (#1254 fault 1 -- :123 NTP drawn over the
+  // :53 DNS peaks). Checking against the neighbour's actual rendered
+  // curve footprint, not just its label, catches that.
+  const LABEL_MARGIN = 6 // clamp margin off a band's own edge
+  const LABEL_LIFT = 13 // one line, matching the concept's own step
+  const LABEL_LIFT_MAX = 6 // bounded, matching the concept's own guard
+  const LABEL_ASCENT = 9 // a 10px label's rendered height above its baseline (#1114)
+  const LABEL_DESCENT = 3
+
+  type LabelAnchor = 'start' | 'middle' | 'end'
+
+  interface OccupiedBox {
+    x1: number
+    x2: number
+    y1: number // top (smaller svg y)
+    y2: number // bottom (larger svg y)
+  }
+
+  function boxesOverlap(a: OccupiedBox, b: OccupiedBox): boolean {
+    return a.x1 < b.x2 + 4 && a.x2 > b.x1 - 4 && a.y1 < b.y2 && a.y2 > b.y1
+  }
+
+  function clampLabelX(x: number, w: number, lo: number, hi: number): { tx: number; anchor: LabelAnchor } {
+    let anchor: LabelAnchor = 'middle'
+    let tx = x
+    if (tx + w / 2 > hi) {
+      anchor = 'end'
+      tx = hi
+    }
+    if (tx - w / 2 < lo) {
+      anchor = 'start'
+      tx = lo
+    }
+    return { tx, anchor }
+  }
+
+  // Clamps horizontally (clampLabelX above), then lifts the label by
+  // LABEL_LIFT steps, up to LABEL_LIFT_MAX times or until minY, while
+  // its box overlaps anything already in `occupied` -- another placed
+  // label, or a neighbouring carrier's own curve. Pushes its own final
+  // box into `occupied` before returning, so later candidates see it.
+  function placeLabel(
+    occupied: OccupiedBox[],
+    x: number,
+    y: number,
+    w: number,
+    lo: number,
+    hi: number,
+    minY: number,
+  ): { tx: number; ty: number; anchor: LabelAnchor } {
+    const { tx, anchor } = clampLabelX(x, w, lo, hi)
+    const x1 = anchor === 'middle' ? tx - w / 2 : anchor === 'end' ? tx - w : tx
+    const x2 = x1 + w
+    const boxAt = (cy: number): OccupiedBox => ({ x1, x2, y1: cy - LABEL_ASCENT, y2: cy + LABEL_DESCENT })
+    let ty = y
+    let guard = 0
+    while (guard++ < LABEL_LIFT_MAX && ty - LABEL_LIFT >= minY && occupied.some((o) => boxesOverlap(boxAt(ty), o)))
+      ty -= LABEL_LIFT
+    occupied.push(boxAt(ty))
+    return { tx, ty, anchor }
+  }
+
+  // Peak labels: one per active carrier, tallest placed first so a
+  // shorter neighbour's label is the one that lifts clear.
   const peakLabels = $derived.by(() => {
-    const cands: { x: number; y: number; text: string; lane: Lane; h: number }[] = []
+    const cands: { x: number; y: number; text: string; lane: Lane; h: number; slot: BandSlot }[] = []
+    const occupiedByBand = new Map<string, OccupiedBox[]>()
     for (const slot of rig.slots) {
       if (slot.band.coverage === 'dark') continue
-      for (const n of needlesFor(slot))
-        cands.push({ x: n.x, y: n.tipY - 8, text: portLabel(n.port), lane: n.lane, h: SPEC_BASE - n.tipY })
+      const needles = needlesFor(slot)
+      // Seed each band's occupied space with every one of its own
+      // curves' rendered footprints up front (wavePath's halfW=8),
+      // so a short peak's label can never land on a taller
+      // neighbour's curve regardless of placement order.
+      occupiedByBand.set(
+        slot.band.key,
+        needles.map((n) => ({ x1: n.x - 8, x2: n.x + 8, y1: n.tipY, y2: SPEC_BASE })),
+      )
+      for (const n of needles)
+        cands.push({ x: n.x, y: n.tipY - 8, text: portLabel(n.port), lane: n.lane, h: SPEC_BASE - n.tipY, slot })
     }
     cands.sort((a, b) => b.h - a.h)
-    const kept: typeof cands = []
+    const placed: { x: number; y: number; anchor: LabelAnchor; text: string; lane: Lane }[] = []
     for (const c of cands) {
-      const w = c.text.length * 6.2
-      // Round 30 places one label above each curve, never stacked on
-      // another (#700) -- the build's own 11-unit vertical tolerance was
-      // tight enough that two peaks differing in height by just over
-      // that still rendered close enough for a 10px label (which draws
-      // roughly a full line's height either side of its baseline) to
-      // visibly overlap. Widened to a margin that actually clears a
-      // label's own rendered height, alongside a slightly wider
-      // horizontal gap.
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 8 && Math.abs(k.y - c.y) < 15)) continue
-      kept.push(c)
+      const w = c.text.length * CHAR_W_10
+      const occupied = occupiedByBand.get(c.slot.band.key)!
+      const lo = c.slot.bx + LABEL_MARGIN
+      const hi = c.slot.bx + bandW - LABEL_MARGIN
+      const { tx, ty, anchor } = placeLabel(occupied, c.x, c.y, w, lo, hi, SPEC_TOP + 12)
+      placed.push({ x: tx, y: ty, anchor, text: c.text, lane: c.lane })
     }
-    return kept
+    return placed
   })
 
-  // Port labels under the floor, culled the same way (heaviest carrier
-  // keeps its label; a crowded band folds the rest) -- but only ever
-  // against another candidate on the *same* band (#700). Comparing
-  // across bands let a heavy carrier on one boundary silently suppress
-  // a lighter one several bands away whenever the two candidates'
-  // absolute x (adjacent bands sit only pitch-bandW apart, i.e. one
-  // gutter) happened to
-  // fall inside the text-width gap, which is how the build ended up
-  // labelling only a couple of ports total instead of every band along
-  // the foot.
+  // Port labels under the floor, culled the same way as before
+  // (heaviest carrier keeps its label; a crowded band folds the rest)
+  // -- but only ever against another candidate on the *same* band
+  // (#700). Comparing across bands let a heavy carrier on one boundary
+  // silently suppress a lighter one several bands away whenever the
+  // two candidates' absolute x (adjacent bands sit only pitch-bandW
+  // apart, i.e. one gutter) happened to fall inside the text-width
+  // gap, which is how the build ended up labelling only a couple of
+  // ports total instead of every band along the foot. Kept labels are
+  // then clamped into their own band's bounds (#1254 fault 2): a
+  // carrier scaled toward the high end of its band (assignX maps port
+  // number onto [10, 90]) otherwise centres a long label past the
+  // rig's own right edge and gets clipped by the viewBox.
   const portLabels = $derived.by(() => {
-    const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; w: number }[] = []
+    const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; bx: number; w: number }[] = []
     for (const slot of rig.slots) {
       for (const c of slot.band.carriers) {
         const text = portLabel(c.port)
-        cands.push({ x: cx(slot, c), text, lane: c.lane, port: c.port, bandKey: slot.band.key, w: c.total })
+        cands.push({ x: cx(slot, c), text, lane: c.lane, port: c.port, bandKey: slot.band.key, bx: slot.bx, w: c.total })
       }
     }
     cands.sort((a, b) => b.w - a.w)
     const kept: typeof cands = []
     for (const c of cands) {
-      const w = c.text.length * 6.2
-      if (kept.some((k) => k.bandKey === c.bandKey && Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
+      const w = c.text.length * CHAR_W_10
+      // #1114: same measured-width correction as peakLabels above, plus
+      // a wider same-band gap (4 -> 8) -- the flat 6.2 guess left too
+      // little room between two carrier labels sharing one band's foot.
+      if (
+        kept.some(
+          (k) => k.bandKey === c.bandKey && Math.abs(k.x - c.x) < (k.text.length * CHAR_W_10 + w) / 2 + 8,
+        )
+      )
+        continue
       kept.push(c)
     }
-    return kept
+    return kept.map((c) => {
+      const w = c.text.length * CHAR_W_10
+      const { tx, anchor } = clampLabelX(c.x, w, c.bx + LABEL_MARGIN, c.bx + bandW - LABEL_MARGIN)
+      return { x: tx, anchor, text: c.text, lane: c.lane, port: c.port, bandKey: c.bandKey }
+    })
   })
 
   // Flag horizons: each flagged moment draws the mockup's dotted line
@@ -825,6 +988,65 @@
     return list
   })
 
+  // ── One label column, one rhythm (#1204) ────────────────────────────
+  // The rail's ticks already land on clock multiples of the step (:00,
+  // :03, :06 … at the 15 m span) -- see railLines above. The unevenness
+  // Fable's 2026-09-15 ruling names ("09:07, 09:06, then 09:03, 09:00")
+  // is not the rail's rhythm at all: it is three sources printing into
+  // the same column at once -- the brink (the NOW row), an alarm row,
+  // and a rail tick -- with each source guarding only itself.
+  //
+  // The rule is rank, not order of drawing: brink > alarm row > rail
+  // tick, and a label is dropped when it would sit within LABEL_MIN_GAP
+  // rig units of one that outranks it. The brink suppresses a rail
+  // label beside it, and an alarm row at 09:03 replaces the rail's
+  // 09:03 rather than doubling it. Equal rank never suppresses: two
+  // alarm rows a few units apart are two different moments, and both
+  // are theirs to state.
+  //
+  // The build had the rank backwards at the top of the axis: the brink
+  // stood down for any flag within 16 units of it, which is the one
+  // label on this axis that always means "now".
+  //
+  // Ink is not part of the rank: round 30 draws every gutter time in
+  // the same quiet dim (`.gut`, the-whole.html #s2) and only the brink
+  // carries its own colour, so this loop varies `now-t` and nothing
+  // else.
+  const LABEL_MIN_GAP = 12
+  const LABEL_RANK = { brink: 0, alarm: 1, rail: 2 } as const
+  type AxisRank = keyof typeof LABEL_RANK
+  interface AxisLabel {
+    y: number // the text's own baseline, in rig units
+    text: string
+    rank: AxisRank
+  }
+
+  const axisLabels = $derived.by(() => {
+    const candidates: AxisLabel[] = [
+      { y: FALL_TOP + 4, text: formatHM(new Date(windowEnd || Date.now()).toISOString()), rank: 'brink' },
+    ]
+    // One column means one label per moment: a flag horizon is carried
+    // once per band it crosses, and those are all the same minute.
+    const seen = new Set<string>()
+    for (const f of flagHorizons) {
+      const key = `${Math.round(f.y)}|${f.hm}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      candidates.push({ y: f.y + 3, text: f.hm, rank: 'alarm' })
+    }
+    for (const l of railLines) candidates.push({ y: l.y + 3, text: l.label, rank: 'rail' })
+
+    const kept: AxisLabel[] = []
+    for (const rank of ['brink', 'alarm', 'rail'] as const)
+      for (const c of candidates)
+        if (
+          c.rank === rank &&
+          !kept.some((k) => LABEL_RANK[k.rank] < LABEL_RANK[c.rank] && Math.abs(k.y - c.y) < LABEL_MIN_GAP)
+        )
+          kept.push(c)
+    return kept
+  })
+
   // The same identity join bandsData's own flagsByKey uses (a flag names
   // only its target IP; the boundary it belongs to is whichever band
   // that IP actually appeared on this window) -- kept as its own
@@ -832,11 +1054,13 @@
   // resolve a boundary label without being tied to bandsData's window
   // gating.
   const ipToBoundaryKey = $derived.by(() => {
-    const knownKeys = new Set(fallState.boundaries.map((b) => b.key))
+    // The same matcher bandsData buckets with (#1196), so a flag chip
+    // names the boundary its target's traffic was actually drawn on.
+    const matcher = boundaryMatcher(fallState.boundaries)
     const m = new Map<string, string>()
     for (const e of windowEvents) {
-      const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
-      if (!knownKeys.has(key)) continue
+      const key = matcher.keyFor(e)
+      if (!key) continue
       if (e.srcIp && !m.has(e.srcIp)) m.set(e.srcIp, key)
       if (e.dstIp && !m.has(e.dstIp)) m.set(e.dstIp, key)
     }
@@ -900,9 +1124,23 @@
     return `watch broken -- ${e.name || 'unnamed watch'}: nothing has matched inside its window${since}${nights ? ` (${nights})` : ''}`
   }
 
+  // #1164: the same sentence the band head's aria description carries,
+  // so the caption explains itself to a sighted reader too rather than
+  // only to a screen reader.
+  const UNMATCHED_EXPLANATION = 'events whose boundary is not in a pushed rule table yet'
+  // #1196: the narrower reason, when there is one. "Not in a pushed
+  // table" is true of both cases but only explains the first; an
+  // operator who can see their own forward rules right there needs to
+  // be told it is the interfaces that missed, not the chain.
+  const UNMATCHED_INTERFACE_EXPLANATION = 'their chain is in a pushed table, but no rule there names these interfaces'
+
+  function unmatchedExplanation(b: BandView): string {
+    return b.interfaceMiss ? UNMATCHED_INTERFACE_EXPLANATION : UNMATCHED_EXPLANATION
+  }
+
   function bandHeadSummary(b: BandView): string {
     const parts: string[] = [b.label]
-    if (b.key === '__unmatched__') parts.push('events whose boundary is not in a pushed rule table yet')
+    if (b.key === '__unmatched__') parts.push(unmatchedExplanation(b))
     else if (b.coverage === 'dark') parts.push('dark -- blank because nothing is logged, not because nothing is sent')
     else if (b.coverage === 'unknown') parts.push('coverage unknown -- no router has pushed its rule table yet')
     else if (b.brokenWatches.length > 0) parts.push(watchBrokenSummary(b.brokenWatches[0]))
@@ -1084,17 +1322,12 @@
           </linearGradient>
         </defs>
 
-        <!-- ══ the time gutter (a flag's moment outranks a colliding
-             time label or now label) -- round 30 draws no grid at all,
-             here or between bands: the labels are the only marks in
-             this margin (#700). ══ -->
-        {#if !flagHorizons.some((f) => Math.abs(f.y - (FALL_TOP + 4)) < 16)}
-          <text class="tlab now-t" x={RAIL - 14} y={FALL_TOP + 4} text-anchor="end">{formatHM(new Date(windowEnd || Date.now()).toISOString())}</text>
-        {/if}
-        {#each railLines as l (l.y)}
-          {#if !flagHorizons.some((f) => Math.abs(f.y - l.y) < 12)}
-            <text class="tlab" x={RAIL - 14} y={l.y + 3} text-anchor="end">{l.label}</text>
-          {/if}
+        <!-- ══ the time gutter: one label column, ranked brink > alarm
+             row > rail tick (#1204, axisLabels above) -- round 30 draws
+             no grid at all, here or between bands: the labels are the
+             only marks in this margin (#700). ══ -->
+        {#each axisLabels as l (`${l.rank}|${l.y}|${l.text}`)}
+          <text class="tlab" class:now-t={l.rank === 'brink'} x={RAIL - 14} y={l.y} text-anchor="end">{l.text}</text>
         {/each}
 
         {#each rig.slots as slot (slot.band.key)}
@@ -1110,10 +1343,16 @@
               onkeydown={(e) => keyActivate(e, () => openInStream(b))}
             >
               <rect class="head-hit" x={slot.bx} y="6" width={bandW} height="56" />
-              <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
-              {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
+              <text class="blab band-label" x={slot.bx + 6} y="22"
+                >{truncateMiddle(b.label, bandLabelBudget)}<title>{b.label}</title></text
+              >
+              {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36"
+                  >{truncateMiddle(b.epithet, bandEpithetBudget)}<title>{b.epithet}</title></text
+                >{/if}
               {#if b.key === '__unmatched__'}
-                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED TABLE</text>
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50"
+                  ><title>{unmatchedExplanation(b)}</title>NOT IN A PUSHED TABLE</text
+                >
               {:else if b.coverage === 'dark'}
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
               {:else if b.coverage === 'unknown'}
@@ -1174,9 +1413,9 @@
             <g class="waterfall">
               {#if b.coverage === 'dark'}
                 <rect class="darkband" x={slot.bx} y={FALL_TOP} width={bandW} height={FALL_BOT - FALL_TOP} />
-                <text class="anno bad-anno strong" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
+                <text class="anno bad-anno strong dark-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y1} text-anchor="middle"
                   >blank because nothing is logged</text>
-                <text class="anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
+                <text class="anno dark-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y2} text-anchor="middle"
                   >— not because nothing is sent</text>
               {:else}
                 {#if b.dropShare > 0.5 && b.total > 0}
@@ -1270,9 +1509,9 @@
                      "15 m": the sentence counts the window it is drawn
                      over. -->
                 {#if b.coverage === 'observed' && b.total === 0 && b.carriers.length === 0}
-                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
+                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y1} text-anchor="middle"
                     >nothing in these {spanDef.label}</text>
-                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
+                  <text class="anno quiet-anno" x={slot.bx + bandW / 2} y={ANNO_HEAD_Y2} text-anchor="middle"
                     >logged — quiet, not dark</text>
                 {/if}
               {/if}
@@ -1304,27 +1543,22 @@
           </g>
         {/each}
 
-        <!-- ══ peak + port labels, collision-culled across the rig ══ -->
+        <!-- ══ peak + port labels, clamped to band bounds and lifted
+             clear of collisions (#1254) ══ -->
         {#each peakLabels as p, pi (pi)}
-          <text class="plab {p.lane}" x={p.x} y={p.y} text-anchor="middle">{p.text}</text>
+          <text class="plab {p.lane}" x={p.x} y={p.y} text-anchor={p.anchor}>{p.text}</text>
         {/each}
         {#each portLabels as p (p.bandKey + p.port)}
-          <text class="plab carrier-label {p.lane}" data-port={p.port} x={p.x} y={PORTLAB_Y} text-anchor="middle"
+          <text class="plab carrier-label {p.lane}" data-port={p.port} x={p.x} y={PORTLAB_Y} text-anchor={p.anchor}
             >{p.text}</text>
         {/each}
 
         <!-- ══ flag horizons: the line through every band ══ -->
         {#each flagHorizons as f, fi (fi)}
+          <!-- The line only: this moment's time is printed by the one
+               ranked label column above (#1204), which is what keeps an
+               alarm row from doubling a rail tick on the same minute. -->
           <line class="horizon" x1={RAIL} y1={f.y} x2={rig.width - 14} y2={f.y} />
-          <!-- Round 30 draws every gutter time in the same quiet dim ink
-               (the-whole.html #s2's `.gut`) -- no per-minute colouring
-               and no mark beside a flagged minute's label, even though
-               the horizon line through the bands still shows where it
-               fired. This label used to ride `.flag-t` (alarm-coloured,
-               bold, with a trailing ◉) as a leftover of the pre-round-30
-               build; that read as if some minutes were flagged red/pink
-               and others weren't, which round 30 never draws. -->
-          <text class="tlab" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm}</text>
         {/each}
 
         <!-- ══ the NOW edge ══ -->
@@ -1380,7 +1614,21 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    overflow-y: auto;
+    /* The rig is the only thing that scrolls (#1204). This box used to
+       carry `overflow-y: auto`, which made the whole scene a second
+       scrolling box wrapped around the first, with the alert chip row
+       inside it -- so anything that scrolled the scene carried the chips
+       up off the top of the screen, which is the clipping the owner
+       reported. Honest about what was measured: with the demo estate
+       live-fall-composition.mjs seeds, the chips were never actually cut
+       at 1920×1080 or 1366×768; the scene only overflows (and the chips
+       only become scrollable out of view) once the window is short
+       enough that the rig's own floor no longer fits, which that
+       scenario pins at 1366×420. The rule stands either way -- the head
+       of the fall is a fixed frame around the pour: the bar and the
+       chips stay put, and `.rig` below scrolls to its own foot inside it
+       (#1141's scroll-not-scale, unchanged). */
+    overflow: hidden;
     height: 100%;
     background: var(--fall-canvas);
   }
@@ -1556,9 +1804,25 @@
   /* ── the rig ─────────────────────────────────────────────────────── */
   .rig {
     flex: 1;
-    min-height: 320px;
+    /* Whatever height is left, and no more (#1204). A floor here used to
+       be harmless because the scene itself scrolled; with the scene
+       fixed, a floor taller than the space available would push the
+       fall's own foot off the bottom of a short window instead. The rig
+       scrolls inside itself, so even a short one reaches all of its
+       own drawing. */
+    min-height: 0;
     display: flex;
     justify-content: center;
+    /* The rig is drawn at its own pixel size, 800 units tall, which is
+       more than a 1366×768 screen has room for: the foot -- the port
+       labels and each band's "+n quieter ▸" -- fell off the bottom with
+       no way to reach it (#1141). It scrolls to the foot instead of
+       being scaled down to fit, because scaling shrinks the labels
+       through the app's 8px legibility floor and undoes the deliberate
+       band width #722 chose. `onwheel` above only ever acts on a
+       horizontal wheel, so an ordinary scroll down reaches the foot. */
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
   }
   .rig svg {
     /* No width: 100% here (#722) -- the svg's own width/height

@@ -64,7 +64,7 @@ const backupBusyMessage = "the router-backup channel is busy; try again later"
 // mikroview's filesystem -- "no space left on device", with the vault's
 // absolute path -- and that goes to the server log, not to a router
 // (#1122).
-const backupSinkFailedMessage = "mikroview could not store this backup; try again later"
+const backupSinkFailedMessage = "MikroView could not store this backup; try again later"
 
 // auditActorServer is the actor for an entry recording mikroview's own
 // failure rather than something a caller did. Device pushes are audited
@@ -88,7 +88,7 @@ func (s *Server) handleIngestRouterBackup(w http.ResponseWriter, r *http.Request
 	if tok == nil {
 		// Same unreachable-but-guarded case as handleIngestRouterOS: the
 		// ingest mux is only dispatched to with a token in context.
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeUnauthorized(w, "unauthorized")
 		return
 	}
 	if s.BackupSlices == nil || !s.Vault.Enabled() {

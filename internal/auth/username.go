@@ -31,6 +31,9 @@ var (
 	ErrUsernameInvalid = errors.New("auth: username contains characters that are not allowed")
 	// ErrUsernameLength is returned for an empty or over-long username.
 	ErrUsernameLength = fmt.Errorf("auth: username must be between %d and %d characters", minUsernameLength, maxUsernameLength)
+	// ErrUsernameIsEmail is returned by ValidateLocalUsername for a
+	// locally-created account named as an email address.
+	ErrUsernameIsEmail = errors.New("auth: a local account's username may not be an email address")
 )
 
 // ValidateUsername rejects a username that would be unsafe downstream.
@@ -58,6 +61,12 @@ var (
 // Deliberately not an allowlist of ASCII. Plenty of legitimate people
 // have non-ASCII names, and refusing them to save a validation function
 // is not a security decision.
+//
+// The "no email addresses" rule (#1252) is deliberately *not* here: an
+// identity provider's preferred_username claim is usually an email, and
+// this function is what sanitiseUsernameHint runs over that claim. It
+// lives in ValidateLocalUsername instead, which only local account
+// creation calls.
 func ValidateUsername(username string) error {
 	if !utf8.ValidString(username) {
 		return ErrUsernameInvalid
@@ -77,9 +86,49 @@ func ValidateUsername(username string) error {
 	return nil
 }
 
-// sanitiseUsernameHint applies ValidateUsername to an identity
-// provider's preferred_username/email claim, returning "" if it is not
-// usable as a username.
+// ValidateLocalUsername is ValidateUsername plus the one rule that
+// applies to an account mikroview creates itself: its username may not
+// be an email address (owner, 2026-09-18, #1252).
+//
+// The reason is that it makes a clash impossible rather than checkable.
+// An SSO-provisioned account is usually named by the provider's
+// preferred_username or email claim, which is an email address; a local
+// account never is; so the two namespaces are disjoint and nothing ever
+// has to compare an address to decide whether a returning identity is
+// "the same person" as an existing local account. It also means
+// mikroview stores no email address anywhere, which is the standing
+// rule this keeps (#1245 decision 3).
+//
+// Any "@" is refused, not just a well-formed address. The purpose is a
+// namespace that cannot overlap with what providers send, so something
+// half-way to an address ("tom@", "tom@corp") is refused too; there is
+// no legitimate local name that needs one.
+//
+// Called from createLocked -- the single funnel for Register and
+// CreateUser -- and so at creation only. It is never applied at
+// sign-in: an account created before this rule and named as an email
+// keeps working, because refusing it then would lock out someone who
+// cannot fix it.
+func ValidateLocalUsername(username string) error {
+	if err := ValidateUsername(username); err != nil {
+		return err
+	}
+	if strings.ContainsRune(username, '@') {
+		return ErrUsernameIsEmail
+	}
+	return nil
+}
+
+// sanitiseUsernameHint applies ValidateUsername -- not
+// ValidateLocalUsername -- to an identity provider's
+// preferred_username/email claim, returning "" if it is not usable as a
+// username.
+//
+// The email rule is deliberately skipped here. An SSO-provisioned
+// account being named by its email claim is the normal case and what
+// keeps the two namespaces disjoint (see ValidateLocalUsername);
+// refusing it would rename half of an operator's people to
+// `oidc-<hash>` for no gain.
 //
 // Returning "" rather than an error is the point. The claim is
 // controlled by the identity provider, not by mikroview, and the person

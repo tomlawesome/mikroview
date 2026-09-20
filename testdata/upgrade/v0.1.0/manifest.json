@@ -1,0 +1,17 @@
+{
+  "adminUsername": "upgrade-fixture-admin",
+  "apiTokenName": "upgrade-fixture-token",
+  "entity": {
+    "key": "172.20.30.40",
+    "label": "upgrade-fixture-host",
+    "type": "host"
+  },
+  "flag": {
+    "target": "aa:bb:cc:00:ff:10",
+    "type": "new_device"
+  },
+  "historyKeyEncrypted": false,
+  "recordedAt": "2026-09-16T11:22:11Z",
+  "version": "v0.1.0",
+  "viewerUsername": "upgrade-fixture-viewer"
+}

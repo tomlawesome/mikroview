@@ -13,7 +13,9 @@ vi.mock('../lib/api', () => ({
 
 import { fetchAuditLog } from '../lib/api'
 import { appState } from '../lib/state.svelte'
-import type { AuditEntry } from '../lib/types'
+import { watchlistState } from '../lib/watchlist.svelte'
+import { detectorSettingsState } from '../lib/detectorSettings.svelte'
+import type { AuditEntry, DetectorSettings, WatchlistEntry } from '../lib/types'
 import AuditLog from './AuditLog.svelte'
 
 function entry(overrides: Partial<AuditEntry> = {}): AuditEntry {
@@ -99,7 +101,7 @@ describe('AuditLog sort and filter (#649)', () => {
     flushSync()
 
     expect(actorTexts()).toEqual(['tom'])
-    expect(document.querySelector('tbody')?.textContent).toContain('revoked API token')
+    expect(document.querySelector('tbody')?.textContent).toContain('revoked key')
     expect(document.querySelector('tbody')?.textContent).not.toContain('updated entity')
   })
 
@@ -121,6 +123,12 @@ describe('AuditLog composes a three-column, human-readable table (round 30)', ()
   beforeEach(() => {
     vi.resetAllMocks()
     appState.now = new Date('2026-08-30T12:00:00Z').getTime()
+    // definitionNoun (#1161) reads these two lists -- start each test
+    // from neither knowing anything, so a case that wants a known watch
+    // or detector says so explicitly rather than inheriting a prior
+    // test's state.
+    watchlistState.entries = []
+    detectorSettingsState.list = []
   })
 
   function headerTexts() {
@@ -150,6 +158,136 @@ describe('AuditLog composes a three-column, human-readable table (round 30)', ()
     expect(cell?.textContent).toContain('expected, speed test')
     // The raw action string never appears verbatim in the row.
     expect(cell?.textContent).not.toContain('flag.clear')
+  })
+
+  // #1161: the log is the one place an operator checks what happened,
+  // and it named three things differently from the screens that did
+  // them.
+  it('calls a key a key, the word Settings uses to mint one', async () => {
+    await renderLog([
+      entry({ id: 1, action: 'token.create', target: 'setup-172.23.0.1', detail: 'kind=ingest' }),
+      entry({ id: 2, action: 'token.revoke', target: 'setup-172.23.0.1', timestamp: '2026-08-30T09:00:00Z' }),
+    ])
+
+    const text = document.querySelector('tbody')?.textContent ?? ''
+    expect(text).toContain('minted key')
+    expect(text).toContain('revoked key')
+    expect(text).not.toContain('API token')
+  })
+
+  it('leads a created definition with its name, not its 32-hex id', async () => {
+    await renderLog([
+      entry({
+        action: 'definition.create',
+        target: '3805d355a9bf611facb9df741ad6d0ea',
+        detail: 'nas-shares-watch',
+      }),
+    ])
+
+    const cell = document.querySelector('tbody td:nth-child(3)')
+    // The name is the emphasised subject; the id follows it rather than
+    // standing where the name should be.
+    expect(cell?.querySelector('.k')?.textContent).toBe('nas-shares-watch')
+    expect(cell?.textContent).toContain('created definition nas-shares-watch · 3805d355a9bf611facb9df741ad6d0ea')
+  })
+
+  it('leaves a created definition alone when its detail is a sentence, not a name', async () => {
+    // The same action is recorded when a verdict promotes a flag into an
+    // observing entry, and there the detail is prose (flags_watchlist.go).
+    await renderLog([
+      entry({
+        action: 'definition.create',
+        target: '3805d355a9bf611facb9df741ad6d0ea',
+        detail: 'observing entry for 192.0.2.1, from an expected verdict on port_scan:198.51.100.77',
+      }),
+    ])
+
+    const cell = document.querySelector('tbody td:nth-child(3)')
+    expect(cell?.querySelector('.k')?.textContent).toBe('3805d355a9bf611facb9df741ad6d0ea')
+  })
+
+  // #1161: this used to invent its own reading from the id's words
+  // ("DISTRIBUTED BRUTE FORCE", no hyphen) instead of the docket's own
+  // label (lib/metricsSeries.ts's FLAG_TYPE_LABELS, "Distributed
+  // brute-force", which the docket's own CSS then uppercases to
+  // "DISTRIBUTED BRUTE-FORCE").
+  it('reads a flag verdict with the flag the docket names, not the raw id', async () => {
+    await renderLog([
+      entry({ id: 1, action: 'flag.verdict', target: 'distributed_brute_force:port 22', detail: 'checked' }),
+      entry({
+        id: 2,
+        action: 'flag.verdict_undo',
+        target: 'distributed_brute_force:port 22',
+        timestamp: '2026-08-30T09:00:00Z',
+      }),
+    ])
+
+    const text = document.querySelector('tbody')?.textContent ?? ''
+    expect(text).toContain('flag verdict DISTRIBUTED BRUTE-FORCE · port 22 · checked')
+    expect(text).toContain('undid the verdict on flag DISTRIBUTED BRUTE-FORCE · port 22')
+    expect(text).not.toContain('distributed_brute_force')
+    expect(text).not.toContain('BRUTE FORCE')
+  })
+
+  // #1161's fourth mismatch: a watch and a custom detector share the
+  // same "definition.*" audit action and the same shape of generated
+  // id, so the row has to ask the app's own watch/detector lists which
+  // one this was -- the same lists Watchlist.svelte and
+  // EngineRoomWatchers.svelte already keep.
+  it('calls a created definition a watch when its id is a live watch', async () => {
+    watchlistState.entries = [
+      { id: '3805d355a9bf611facb9df741ad6d0ea', name: 'nas-shares-watch', enabled: true } as WatchlistEntry,
+    ]
+    await renderLog([
+      entry({
+        action: 'definition.create',
+        target: '3805d355a9bf611facb9df741ad6d0ea',
+        detail: 'nas-shares-watch',
+      }),
+    ])
+
+    const cell = document.querySelector('tbody td:nth-child(3)')
+    expect(cell?.textContent).toContain('created watch nas-shares-watch')
+    expect(cell?.textContent).not.toContain('definition')
+  })
+
+  it('calls an updated definition a detector when its id is a live detector', async () => {
+    detectorSettingsState.list = [
+      { name: 'ssh-brute', label: 'SSH brute force', enabled: true, scope: {} } as DetectorSettings,
+    ]
+    await renderLog([entry({ action: 'definition.update', target: 'ssh-brute', detail: 'threshold=5' })])
+
+    const cell = document.querySelector('tbody td:nth-child(3)')
+    expect(cell?.textContent).toContain('updated detector ssh-brute')
+    expect(cell?.textContent).not.toContain('updated definition')
+  })
+
+  it('still says "definition" for an id neither list recognises -- most often one since deleted', async () => {
+    await renderLog([entry({ action: 'definition.delete', target: 'long-gone', detail: 'Long Gone' })])
+
+    const cell = document.querySelector('tbody td:nth-child(3)')
+    expect(cell?.textContent).toContain('deleted definition long-gone')
+  })
+
+  // reset only ever applies to a shipped detector's params, and promote
+  // only ever applies to an inverted watch's permitted list (both
+  // internal/api/definitions.go) -- always the one kind, so these are
+  // never ambiguous the way create/update/delete/clone are.
+  it('always calls a reset a "detector" and a promote a "watch"', async () => {
+    await renderLog([
+      entry({ id: 1, action: 'definition.reset', target: 'port_scan' }),
+      entry({
+        id: 2,
+        action: 'definition.promote',
+        target: '3805d355a9bf611facb9df741ad6d0ea',
+        detail: '2 destination(s)',
+        timestamp: '2026-08-30T09:00:00Z',
+      }),
+    ])
+
+    const text = document.querySelector('tbody')?.textContent ?? ''
+    expect(text).toContain('reset detector')
+    expect(text).toContain('promoted watch')
   })
 
   it('falls back to a readable phrase, not a raw dump, for an action it does not recognize', async () => {

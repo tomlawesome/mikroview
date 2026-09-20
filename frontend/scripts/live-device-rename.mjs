@@ -21,14 +21,35 @@
 //
 // Two devices, and the harness only declares one. The live-env.sh
 // config declares live-router on 127.0.0.1 and every feeder sends from
-// there, so the undeclared router this needs is fed from 127.0.0.9
-// instead (feedRaw's second argument). That leaves a discovered device
-// behind on the shared instance for every scenario sorting after this
-// one, which is safe in a way it was not before: Registry.List now
-// orders configured devices first and then by id (#600), so the
-// devices[0] a dozen scenarios read is still live-router. The entity
-// this scenario writes is deleted at the end, so the leftover device is
-// named after its own address again, exactly as it arrived.
+// there.
+//
+// #1281 changed how the second, undeclared router comes to exist, and
+// broke this scenario's old mechanism outright: the syslog listener now
+// refuses a connection at accept from any address that is neither a
+// device's declared/enrolled address nor has an enrolment token
+// currently pending anywhere, so 127.0.0.9 logging first -- before
+// anything names it -- no longer arrives as an "unattributed" source to
+// prove a point about; the connection itself is refused, and the old
+// #1170 assertion that used to run against it is gone along with the
+// mechanism it tested. The former "arrives by push" step is gone too:
+// an ingest token's first push used to both Ensure the device and claim
+// 127.0.0.9 as evidence Resolve trusted on every line, and #1281
+// retired that per-line trust entirely -- a router's own pushed address
+// table is no longer consulted for attribution at all (see
+// device.Registry.Resolve's own doc comment).
+//
+// The router now arrives the same way any router does under #1281: an
+// admin declares it by name (POST /api/devices), mints it an enrolment
+// token (POST /api/devices/{id}/enrolment), and the router's own first
+// line carries the token (`mikroview-enrol <token>`) -- which is what
+// actually attributes 127.0.0.9 to it, not merely sending from there.
+// That leaves an enrolled device behind on the shared instance for
+// every scenario sorting after this one, which is safe in the same way
+// it always was: Registry.List orders configured devices first and
+// then by id (#600), so the devices[0] a dozen scenarios read is still
+// live-router. The entity this scenario writes is deleted at the end,
+// so the leftover device is named after its own id again, exactly as
+// it arrived.
 
 import {
   session,
@@ -40,15 +61,23 @@ import {
   dismissSetupWizard,
   goTo,
   unfoldStreamFilter,
+  enrolDevice,
 } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
 const PASS = process.env.MV_PASS
 
-// The undeclared router: an address in 127.0.0.0/8 that nothing else
-// feeds from, so the device it creates is this scenario's alone.
+// The undeclared router's syslog address: in 127.0.0.0/8, nothing else
+// feeds from it, so it is this scenario's alone. It is the address its
+// enrolment token gets redeemed at (device.Registry.TryEnrol's
+// AcceptedIP), a different thing on purpose from the id below.
 const UNDECLARED_IP = '127.0.0.9'
+// The undeclared router's actual identity: the name POST /api/devices
+// declares it under (Create sets both id and name to it). Deliberately
+// not UNDECLARED_IP -- a device id is never merely a syslog source
+// address.
+const UNDECLARED_ID = 'mv-rename-undeclared'
 // Neither label is a prefix of the other: the filter box matches on a
 // substring, so "live-device-rename" alone would show both routers'
 // rows and every locator below would be ambiguous.
@@ -75,49 +104,80 @@ async function devices(client) {
   return (await api(client, 'GET', '/api/devices')).body?.devices ?? []
 }
 
-// --- Both routers, as the server sees them -------------------------------
+// --- The declared router, as the server sees it ---------------------------
 
 feedRaw(line(RULE_DECLARED, '192.168.1.10'))
-feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 
-let undeclared = null
 let declared = null
-const deadline = Date.now() + 25000
-while (Date.now() < deadline && !undeclared) {
-  const list = await devices(page.request)
-  undeclared = list.find((d) => d.id === UNDECLARED_IP)
-  declared = list.find((d) => d.configured)
-  if (undeclared) break
-  await new Promise((r) => setTimeout(r, 2000))
-  feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
+{
+  const deadline = Date.now() + 25000
+  while (Date.now() < deadline && !declared) {
+    const list = await devices(page.request)
+    declared = list.find((d) => d.configured)
+    if (declared) break
+    await new Promise((r) => setTimeout(r, 1500))
+    feedRaw(line(RULE_DECLARED, '192.168.1.10'))
+  }
 }
-
 check(!!declared, `the harness's declared router is reported (${declared?.id})`)
 check(
   declared?.nameSource === 'config-device',
   `and says config.yaml decides its name (nameSource=${declared?.nameSource}, name="${declared?.name}")`,
 )
-check(!!undeclared, `an undeclared router appears once its own address logs (${UNDECLARED_IP})`)
+if (!declared) {
+  check(true, 'skipped -- the rename cannot be exercised without the declared-router baseline')
+  done()
+}
+
+// --- The undeclared router arrives by enrolment, not by syslog source -----
+//
+// #1281: a device exists only because the operator declared it (here,
+// by name alone -- POST /api/devices, the admin path for a syslog-only
+// router) or config.yaml did. Declaring it is not attributing anything
+// to it yet -- that takes the enrolment token, redeemed by the
+// router's own first line, which is what actually claims 127.0.0.9 as
+// this device's address (AcceptedIP) and lets Resolve match every line
+// after it. (The old #1170 "an unclaimed source sits in `unattributed`"
+// step is gone: under #1281 that source's connection is refused at
+// accept before any line of it is ever read, so it never reaches
+// Resolve to become unattributed in the first place.)
+//
+// The declare-mint-feed-poll sequence itself is enrolDevice's
+// (live-browser.mjs) -- shared since #1281 made it every scenario's
+// prerequisite, so it is driven from there rather than hand-rolled here
+// a second time (#1291 audit, stage 5: the two copies had already
+// started to disagree about what a completed enrolment even asserts).
+const enrolled = await enrolDevice(page.request, URL_BASE, UNDECLARED_ID, UNDECLARED_IP, { timeoutMs: 15000 })
+
+const undeclared = enrolled ? (await devices(page.request)).find((d) => d.id === UNDECLARED_ID) : null
+check(
+  undeclared?.acceptedIp === UNDECLARED_IP,
+  `the enrol line from ${UNDECLARED_IP} attributes the address to ${UNDECLARED_ID} (got ${JSON.stringify(undeclared?.acceptedIp)})`,
+)
 if (!undeclared) {
   check(true, 'skipped -- the rename cannot be exercised without a device to rename')
   done()
 }
 check(
-  undeclared.name === UNDECLARED_IP && undeclared.nameSource === 'none',
-  `and arrives named after its raw address (name="${undeclared.name}", nameSource=${undeclared.nameSource})`,
+  undeclared.name === UNDECLARED_ID && undeclared.nameSource === 'none',
+  `and arrives named after its own device id (name="${undeclared.name}", nameSource=${undeclared.nameSource})`,
 )
 
 // --- The rename, from the live view --------------------------------------
+
+// Fed now that 127.0.0.9 is enrolled: Resolve attributes this line, and
+// everything after it, to UNDECLARED_ID.
+feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 
 await page.fill('input.rule', RULE_UNDECLARED)
 
 let rowFound = true
 try {
-  await page.locator('.row', { hasText: UNDECLARED_IP }).first().waitFor({ timeout: 15000 })
+  await page.locator('.row', { hasText: UNDECLARED_ID }).first().waitFor({ timeout: 15000 })
 } catch {
   rowFound = false
 }
-check(rowFound, `a row from the undeclared router rendered, showing ${UNDECLARED_IP}`)
+check(rowFound, `a row from the undeclared router rendered, showing ${UNDECLARED_ID}`)
 if (!rowFound) {
   check(true, 'skipped -- the editor cannot be exercised on a row that never rendered')
   done()
@@ -165,12 +225,12 @@ check(renamedHere, `the row already on screen reads "${NEW_NAME}" -- no reload`)
 const entities = await api(page.request, 'GET', '/api/entities')
 check(
   (entities.body?.entities ?? []).some(
-    (e) => e.type === 'device' && e.key === UNDECLARED_IP && e.label === NEW_NAME,
+    (e) => e.type === 'device' && e.key === UNDECLARED_ID && e.label === NEW_NAME,
   ),
-  `the name is stored against the device id ${UNDECLARED_IP}, which is untouched`,
+  `the name is stored against the device id ${UNDECLARED_ID}, which is untouched`,
 )
 
-const served = (await devices(page.request)).find((d) => d.id === UNDECLARED_IP)
+const served = (await devices(page.request)).find((d) => d.id === UNDECLARED_ID)
 check(
   served?.name === NEW_NAME && served?.nameSource === 'entity',
   `GET /api/devices serves the new name to anyone who asks (name="${served?.name}", nameSource=${served?.nameSource})`,
@@ -215,7 +275,7 @@ try {
 }
 check(fleetSees, 'and reads it on the routers surface too, not just in the stream')
 
-const otherServed = (await devices(other.request)).find((d) => d.id === UNDECLARED_IP)
+const otherServed = (await devices(other.request)).find((d) => d.id === UNDECLARED_ID)
 check(
   otherServed?.name === NEW_NAME && otherServed?.sourceIp === UNDECLARED_IP,
   'the second session is served the same name over the same raw address',
@@ -245,6 +305,11 @@ check(declaredRow, `a row from the declared router rendered, showing "${declared
 if (declaredRow) {
   await page.locator('.row', { hasText: declared.name }).first().locator('.cell.device .edit-btn').click()
   await editor.waitFor({ timeout: 5000 })
+  // The popover opens loading (NameEditorPopover.svelte's `st.loading`
+  // branch) and only renders `p.refusal` once fetchNameProvenance
+  // resolves -- reading the text before that landed read the loading
+  // copy instead and made the checks below flaky (#1128).
+  await editor.locator('p.refusal').waitFor({ timeout: 5000 })
   const refusal = (await editor.textContent()) ?? ''
 
   // Counting the elements, not reading a `disabled` attribute: a
@@ -280,19 +345,27 @@ check(
 //
 // run-scenarios.sh runs one shared instance in filename order, so an
 // entity left here is an input to every scenario after this one. The
-// discovered device itself cannot be removed and does not need to be:
-// with its label gone it is named after its own address again.
-await api(page.request, 'DELETE', '/api/entities', { type: 'device', key: UNDECLARED_IP })
+// enrolled device itself is left in place rather than deleted -- other
+// scenarios' devices[0] assumptions rely on Registry.List's ordering
+// (#600), not on the fleet being empty -- and with its label gone it is
+// named after its own device id again, exactly as it arrived.
+await api(page.request, 'DELETE', '/api/entities', { type: 'device', key: UNDECLARED_ID })
 const leftovers = await api(page.request, 'GET', '/api/entities')
 check(
   !(leftovers.body?.entities ?? []).some((e) => e.type === 'device'),
   'no device entity is left behind for the next scenario to trip over',
 )
-const restored = (await devices(page.request)).find((d) => d.id === UNDECLARED_IP)
+const restored = (await devices(page.request)).find((d) => d.id === UNDECLARED_ID)
 check(
-  restored?.name === UNDECLARED_IP,
-  `and the device shows its raw address again (name="${restored?.name}")`,
+  restored?.name === UNDECLARED_ID,
+  `and the device shows its own id again (name="${restored?.name}")`,
 )
+
+// Leave the fleet as this scenario found it -- a router left behind
+// sorts ahead of the harness's own and the next scenario's pushes get
+// refused (#1281's push gate).
+const cleanedUp = await api(page.request, 'DELETE', `/api/devices/${encodeURIComponent(UNDECLARED_ID)}`)
+check(cleanedUp.status === 204, `${UNDECLARED_ID} is deleted so later scenarios see the fleet as it was (${cleanedUp.status})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()

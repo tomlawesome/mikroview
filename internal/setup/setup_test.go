@@ -4,6 +4,7 @@ package setup
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,32 @@ func TestMarksAreOrderedByStep(t *testing.T) {
 // TestMarksRefuseWhatTheyCannotDescribe. The step numbers and outcomes
 // are the ratified design's, not free text: a mark on step 9 describes
 // nothing, and neither the ledger nor the audit log should carry it.
+// TestMarkAcceptsTheWizardsSixthStep covers #1267: maxStep was still 5
+// with a comment claiming "five steps, per the ratified design", but
+// round 45 (#394) added a sixth ("Back up the router") -- see
+// frontend/src/lib/setupsteps.ts's STEP_TITLES, the six-entry list this
+// package's step count must match. NoteMark refused any skip or force
+// decision on that sixth step until maxStep caught up.
+func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
+	s := New()
+	if _, ok := s.NoteMark(6, MarkSkipped, "tom", "", time.Now()); !ok {
+		t.Error("NoteMark refused step 6, but the wizard's setupsteps.ts records a sixth step")
+	}
+}
+
+// TestMarkAcceptsTheWizardsSeventhStep is #1267 recurring: #1291 added
+// "Register this router" as RECORD_NUMBERS.register = 7 in
+// frontend/src/lib/setupsteps.ts and maxStep stayed at 6, so skipping
+// that step 400s while the wizard advances anyway -- the operator sees
+// the step pass and the ledger never records the decision. Found by the
+// v0.6.0 audit (#1257).
+func TestMarkAcceptsTheWizardsSeventhStep(t *testing.T) {
+	s := New()
+	if _, ok := s.NoteMark(7, MarkSkipped, "tom", "", time.Now()); !ok {
+		t.Error("NoteMark refused step 7, but setupsteps.ts records the register step under it")
+	}
+}
+
 func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 	s := New()
 	now := time.Now()
@@ -188,5 +215,153 @@ func TestMarkNoteIsBounded(t *testing.T) {
 	}
 	if len(m.Note) != maxNote {
 		t.Errorf("note length = %d, want it capped at %d", len(m.Note), maxNote)
+	}
+}
+
+// TestSetAddressRejectsEmptyAndOverlong covers SetAddress's own
+// backstop: charset and structure are validSetupAddress's job in
+// internal/api (#1095), checked before this is ever reached, but an
+// empty value (there is no "clear the address" operation) or an
+// absurdly long one must not reach the persisted document either way.
+func TestSetAddressRejectsEmptyAndOverlong(t *testing.T) {
+	s := New()
+	if s.SetAddress("") {
+		t.Error("SetAddress accepted an empty address")
+	}
+	if s.SetAddress(strings.Repeat("a", maxAddress+1)) {
+		t.Error("SetAddress accepted a value past maxAddress")
+	}
+	if s.Address() != "" {
+		t.Errorf("Address() = %q, want empty -- both attempts above should have been refused", s.Address())
+	}
+	if !s.SetAddress(strings.Repeat("a", maxAddress)) {
+		t.Error("SetAddress refused a value exactly at maxAddress")
+	}
+}
+
+// TestWitnessSurvivesRestart is #1221's whole point: a step witnessed
+// before the process stops still reads back as witnessed, receipt and
+// all, from a fresh Store opened against the same file -- the same
+// simulation of a restart persist's own contract tests use, since the
+// witness lives in the same on-disk document as marks.
+// TestSetBackupTransportRefusesAnythingElse: the store is what must
+// never hold a third value (#955), since handleSetupCommands renders a
+// script from it and has no "unrenderable" state to fall back on.
+func TestSetBackupTransportRefusesAnythingElse(t *testing.T) {
+	s := New()
+	for _, bad := range []string{"", "SFTP", "ftp", "https ", "scp"} {
+		if s.SetBackupTransport(bad) {
+			t.Errorf("SetBackupTransport(%q) was accepted", bad)
+		}
+	}
+	if got := s.BackupTransport(); got != BackupTransportSFTP {
+		t.Errorf("BackupTransport() = %q, want the sftp default -- every attempt above should have been refused", got)
+	}
+	if !s.SetBackupTransport(BackupTransportHTTPS) {
+		t.Fatal("SetBackupTransport refused https")
+	}
+	if got := s.BackupTransport(); got != BackupTransportHTTPS {
+		t.Errorf("BackupTransport() = %q, want https", got)
+	}
+}
+
+func TestWitnessSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	now := time.Unix(1_757_000_000, 0)
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, ok := s1.NoteWitnessed(1, "ca.crt fetched by 192.0.2.1", now); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	witnessed := s2.Witnessed()
+	if len(witnessed) != 1 {
+		t.Fatalf("Witnessed() after reopening = %d entries, want 1", len(witnessed))
+	}
+	w := witnessed[0]
+	if w.Step != 1 || w.Outcome != MarkWitnessed {
+		t.Errorf("witness = step %d %q, want step 1 witnessed", w.Step, w.Outcome)
+	}
+	if w.Note != "ca.crt fetched by 192.0.2.1" {
+		t.Errorf("witness receipt = %q, want the original receipt to survive", w.Note)
+	}
+	if !w.At.Equal(now) {
+		t.Errorf("witness time = %v, want %v", w.At, now)
+	}
+}
+
+// TestWitnessDoesNotDisturbMarks pins the two halves of #1221's
+// architecture call: a witness never overwrites an operator's mark for
+// the same step, and an operator's later decision never erases a
+// witness already recorded -- the two are read back together by
+// whichever caller decides which wins, not merged here.
+func TestWitnessDoesNotDisturbMarks(t *testing.T) {
+	s := New()
+	now := time.Now()
+
+	if _, ok := s.NoteMark(2, MarkSkipped, "tom", "no router has opened a syslog connection", now); !ok {
+		t.Fatal("NoteMark refused a valid skip")
+	}
+	if _, ok := s.NoteWitnessed(2, "syslog connected from 192.0.2.1", now.Add(time.Minute)); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+
+	marks := s.Marks()
+	if len(marks) != 1 || marks[0].Outcome != MarkSkipped {
+		t.Fatalf("Marks() = %+v, want the skip untouched by the witness", marks)
+	}
+	witnessed := s.Witnessed()
+	if len(witnessed) != 1 || witnessed[0].Outcome != MarkWitnessed {
+		t.Fatalf("Witnessed() = %+v, want the witness recorded alongside the skip", witnessed)
+	}
+
+	// The operator changes their mind after the witness exists -- the
+	// witness must still be there afterwards.
+	if _, ok := s.NoteMark(2, MarkForced, "tom", "still nothing", now.Add(2*time.Minute)); !ok {
+		t.Fatal("NoteMark refused a valid force")
+	}
+	if witnessed := s.Witnessed(); len(witnessed) != 1 {
+		t.Fatalf("Witnessed() after a later mark = %+v, want the witness to survive it", witnessed)
+	}
+}
+
+// TestSecondWitnessIsANoOp: NoteWitnessed writes once per step. A second
+// call for a step already witnessed must neither change the recorded
+// receipt nor persist again -- the point made in its own doc comment,
+// pinned here via the version counter persistLocked advances on every
+// real write.
+func TestSecondWitnessIsANoOp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	now := time.Unix(1_757_000_000, 0)
+
+	if _, ok := s.NoteWitnessed(3, "2 of 2 events carried a decoded action", now); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+	versionAfterFirst := s.version
+
+	if _, ok := s.NoteWitnessed(3, "5 of 5 events carried a decoded action", now.Add(time.Hour)); !ok {
+		t.Fatal("NoteWitnessed refused a valid step")
+	}
+
+	if s.version != versionAfterFirst {
+		t.Errorf("version advanced from %d to %d on a repeat witness -- the file was rewritten", versionAfterFirst, s.version)
+	}
+	witnessed := s.Witnessed()
+	if len(witnessed) != 1 || witnessed[0].Note != "2 of 2 events carried a decoded action" {
+		t.Errorf("witness = %+v, want the first receipt kept, not the second", witnessed)
+	}
+	if !witnessed[0].At.Equal(now) {
+		t.Errorf("witness time = %v, want the first observation's time", witnessed[0].At)
 	}
 }

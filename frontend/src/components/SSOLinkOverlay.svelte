@@ -8,11 +8,25 @@
   // rather than "OK" -- the same reasoning SECURITY.md applies to the
   // "skip auth" choice, which is likewise a permanent decision rather
   // than a default someone falls into.
+  //
+  // #1252, owner's ruling: none of that applies to the admin, whose
+  // password survives linking (auth.Store.LinkOIDCIdentity). mikroview
+  // holds exactly one admin and never authenticates to the provider on
+  // its own behalf, so that account is the only thing standing between
+  // a provider outage and nobody getting in at all -- SSO is added to
+  // it rather than swapped for it. So the admin reads a different
+  // dialog: what is gained, not what is destroyed. Warning somebody
+  // about a deletion that will not happen is how real warnings stop
+  // being read.
   import { authState } from '../lib/auth.svelte'
   import { startSSOLink } from '../lib/api'
 
   let error = $state<string | null>(null)
   let submitting = $state(false)
+
+  // The admin is the deployment's way in when the provider is down, and
+  // the only account that keeps its password through a link.
+  const keepsPassword = $derived(authState.isAdmin)
 
   function close() {
     authState.showSSOLink = false
@@ -31,7 +45,20 @@
   async function confirm() {
     error = null
     submitting = true
-    const result = await startSSOLink()
+    // startSSOLink answers a refusal as a string, and since api.ts's
+    // send() a dropped connection too; a body that is not JSON can
+    // still throw outright. Left to propagate, it escapes confirm() with
+    // submitting still true: the button stays on "Redirecting…", no
+    // error is shown, and there is no way to try again without
+    // reloading. AuthSetup.svelte guards its own call to this function
+    // for the same reason (#1218 audit finding 7); this caller was
+    // missed.
+    let result: { url: string } | string
+    try {
+      result = await startSSOLink()
+    } catch (err) {
+      result = err instanceof Error ? err.message : String(err)
+    }
     if (typeof result === 'string') {
       error = result
       submitting = false
@@ -57,17 +84,29 @@
       <div class="body">
         <p>
           You'll be sent to your identity provider to sign in. When you come back,
-          this account will use SSO from then on.
+          this account and that identity are connected for good.
         </p>
 
-        <div class="warning">
-          <strong>Your MikroView password will be deleted.</strong>
-          <p>
-            This can't be undone from MikroView. After connecting, signing in goes
-            through your identity provider only — and if you ever lose access to it,
-            MikroView can't recover this account for you.
-          </p>
-        </div>
+        {#if keepsPassword}
+          <div class="kept">
+            <strong>Your MikroView password stays.</strong>
+            <p>
+              You're the MikroView admin, so SSO becomes an extra way in rather than
+              a replacement: the password is what still lets you in on the day your
+              identity provider can't be reached. Everyone else's password is
+              deleted when they connect.
+            </p>
+          </div>
+        {:else}
+          <div class="warning">
+            <strong>Your MikroView password will be deleted.</strong>
+            <p>
+              This can't be undone from MikroView. After connecting, signing in goes
+              through your identity provider only — and if you ever lose access to it,
+              MikroView can't recover this account for you.
+            </p>
+          </div>
+        {/if}
 
         <p class="muted">
           You'll stay signed in here. Anywhere else you're signed in will be
@@ -81,8 +120,17 @@
 
       <div class="actions">
         <button type="button" class="cancel" onclick={close} disabled={submitting}>Cancel</button>
-        <button type="button" class="danger" onclick={confirm} disabled={submitting}>
-          {submitting ? 'Redirecting…' : 'Delete my password and connect SSO'}
+        <!-- The label names the consequence rather than saying "OK", so
+             it cannot be clicked through unread -- and the consequence
+             is not the same for the admin, so neither is the label. -->
+        <button type="button" class:danger={!keepsPassword} class:go={keepsPassword} onclick={confirm} disabled={submitting}>
+          {#if submitting}
+            Redirecting…
+          {:else if keepsPassword}
+            Connect SSO and keep my password
+          {:else}
+            Delete my password and connect SSO
+          {/if}
         </button>
       </div>
     </div>
@@ -172,6 +220,24 @@
     color: var(--reject);
   }
 
+  .kept {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: var(--bg-elevated);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .kept strong {
+    color: var(--fg);
+  }
+
+  .kept p {
+    margin: 0;
+  }
+
   .muted {
     color: var(--fg-muted);
     font-size: 12px;
@@ -215,7 +281,18 @@
     font-weight: 600;
   }
 
+  .go {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--bg);
+    border-radius: 5px;
+    padding: 7px 14px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
   .danger:disabled,
+  .go:disabled,
   .cancel:disabled {
     opacity: 0.6;
   }

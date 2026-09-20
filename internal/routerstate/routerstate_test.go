@@ -574,3 +574,9 @@ func TestHostNameSourceNamesThePushedTable(t *testing.T) {
 		t.Errorf("HostNameSource(router-victim, ...) = (%q, %q) -- another device's pushed name leaked", name, source)
 	}
 }
+
+// TestOwnPrefixesCollectsIPv4AddressesAcrossDevices is issue #1223's
+// reproducer for internal/droplist.OwnRanges: every device's pushed
+// /ip/address table contributes its masked network, an unparseable or
+// non-IPv4 entry is skipped rather than failing the call, and a device
+// that has never pushed the ip-address kind contributes nothing.

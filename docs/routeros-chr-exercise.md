@@ -3,7 +3,7 @@
 `scripts/routeros-freshness.sh` (GitHub Actions, weekly) already notices
 when MikroTik ships a stable RouterOS release nobody has read the
 release notes for. This job is the other half: it actually **runs**
-mikroview's setup commands against that release, rather than relying
+MikroView's setup commands against that release, rather than relying
 only on a human having read about it.
 
 ## What it does, in order
@@ -22,8 +22,8 @@ only on a human having read about it.
    straight from `internal/routeros`, the same table
    `POST /api/setup/commands` renders from — for the wizard's starting
    commands: CA trust, syslog, and rule tagging (the commands that get a
-   router logging to mikroview; not the optional push/schedule steps,
-   which need a live mikroview instance this job doesn't have). Reading
+   router logging to MikroView; not the optional push/schedule steps,
+   which need a live MikroView instance this job doesn't have). Reading
    from the table, rather than a copy typed into this job, is what
    keeps the exercise from silently disagreeing with what the wizard
    actually shows an operator.

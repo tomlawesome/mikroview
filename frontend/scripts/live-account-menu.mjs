@@ -121,8 +121,10 @@ await page.click('.account .menu button.row:has-text("About & licence")')
 const about = page.locator('[role="dialog"][aria-label="About MikroView"]')
 await about.waitFor({ state: 'visible', timeout: 5000 })
 check(true, 'About & licence opens the about overlay')
+// The overlay spells the licence out in full; the short form "AGPL" only
+// ever appeared in the commercial-licence paragraph, gone since #1229.
 check(
-  (await about.textContent())?.includes('AGPL'),
+  (await about.textContent())?.includes('GNU Affero General Public License'),
   'the overlay names the licence -- reachable from the running app, per AGPL 5(d)/13',
 )
 await page.keyboard.press('Escape')

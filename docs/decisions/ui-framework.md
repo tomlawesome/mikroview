@@ -100,14 +100,15 @@ is re-derived the original way: measured + ~15%.
 
 - **Visual component libraries** (Skeleton, Flowbite-Svelte,
   shadcn-svelte ports, and kin). Screened before taste: copyleft or
-  share-alike licensing conflicts with the commercial licence for
-  anything shipped; the survivors arrive with a runtime, an icon set
+  share-alike licensing conflicted with the commercial licence then on
+  offer (withdrawn 2026-09-16, #1229 — the dependency-light reason
+  stands on its own); the survivors arrive with a runtime, an icon set
   and a theming engine — a large swing against a stated product value
   (dependency-light) — and their components would have to be bent to
   match interaction specs the owner has already ratified.
 - **Headless behaviour libraries** (Bits UI, Melt UI — MIT, small,
   accessibility-focused; the serious candidate). Rejected on three
-  counts: the behaviours mikroview needs are few and already specified
+  counts: the behaviours MikroView needs are few and already specified
   to the letter, so the library's generality is dead weight; part of
   the behaviour is already implemented and shipped; and every
   inner-loop dependency is supply-chain surface on a product whose

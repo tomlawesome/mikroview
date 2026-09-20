@@ -23,7 +23,7 @@ func TestCheckStoresUsableAcceptsAWritableDirectory(t *testing.T) {
 }
 
 // The case the operator actually hits: a bind mount owned by the host
-// user, which uid 65532 inside the container cannot write.
+// user, which uid 1000 inside the container cannot write.
 func TestCheckStoresUsableRefusesAnUnwritableDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores the permission bits this test depends on")

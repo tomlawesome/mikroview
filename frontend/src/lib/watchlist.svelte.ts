@@ -13,6 +13,21 @@ import {
 } from './api'
 import type { WatchlistCoverage, WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from './types'
 
+// #680's ratified precedence for what counts as "broken", in one place
+// so every surface that needs a broken/healthy split -- the scene bar's
+// eye, the Topography dial's arc, its own broken-watch panel, the
+// docket -- reads the same answer. A disabled entry is never broken,
+// it is paused (Watchlist.svelte's own watchState draws that
+// separately); an enabled one is broken if either mikroview cannot see
+// it at all right now (coverage 'no-logging', read live from router
+// state) or its recorded ring has gone quiet (e.ring.broken, read from
+// nights actually watched). #1156: the Topography dial's arc used to
+// check coverage alone, so a ring-broken watch the panel marked with
+// '○' still counted as healthy on the dial for the same entry.
+export function isWatchBroken(entry: WatchlistEntry, coverage: Record<string, WatchlistCoverage>): boolean {
+  return entry.enabled && (coverage[entry.id] === 'no-logging' || !!entry.ring?.broken)
+}
+
 // Live, admin-managed watchlist entries (#243) -- mirrors
 // entities.svelte.ts's shape: a thin reactive wrapper over the API
 // calls, refreshing the full list after every mutation rather than
@@ -31,27 +46,28 @@ class WatchlistState {
   // "not loaded" rather than silently "nothing watched").
   loaded = $state(false)
 
-  // #546's broken ring: how many *enabled* expectations currently answer
-  // 'no-logging' -- the operator declared a watch and no pushed firewall
-  // rule can ever produce an event it would match. 'unknown' and
-  // 'out-of-scope' deliberately do not count (see the ratified decision
-  // on #546): 'unknown' means mikroview has no answer at all, and ringing
-  // on it would assert a problem it cannot see; 'out-of-scope' is a
-  // scoping fact, not a failure. A disabled entry does not count either
-  // -- switching a watch off is not promising mikroview can see it.
-  // #367's evidence-completeness guard already downgrades an
-  // under-evidenced 'no-logging'/'out-of-scope' to 'unknown' server-side
-  // (definitionCoverage, internal/api/definitions.go), so this inherits
-  // that honesty guarantee for free rather than needing to reimplement it.
-  brokenCount = $derived.by(() => this.entries.filter((e) => e.enabled && this.coverage[e.id] === 'no-logging').length)
+  // #546's broken ring, widened by #1156 to isWatchBroken's full
+  // precedence (coverage 'no-logging' OR a recorded e.ring.broken, both
+  // gated on enabled): how many watches are currently broken by either
+  // of the two different kinds of broken #680 ratified. 'unknown' and
+  // 'out-of-scope' coverage deliberately do not count (see the ratified
+  // decision on #546): 'unknown' means mikroview has no answer at all,
+  // and ringing on it would assert a problem it cannot see;
+  // 'out-of-scope' is a scoping fact, not a failure. A disabled entry
+  // does not count either -- switching a watch off is not promising
+  // mikroview can see it. #367's evidence-completeness guard already
+  // downgrades an under-evidenced 'no-logging'/'out-of-scope' to
+  // 'unknown' server-side (definitionCoverage, internal/api/
+  // definitions.go), so this inherits that honesty guarantee for free
+  // rather than needing to reimplement it.
+  brokenCount = $derived.by(() => this.entries.filter((e) => isWatchBroken(e, this.coverage)).length)
 
   // The scene bar's "◉ 7 ○ 1" (#683, ratified round 29): watchers
-  // actually holding, i.e. enabled and not ring-broken -- the same
-  // predicate Watchlist.svelte's own class:watching already uses, so
-  // the bar's count and the page's own per-row marker never disagree.
-  heldCount = $derived.by(
-    () => this.entries.filter((e) => e.enabled && this.coverage[e.id] !== 'no-logging').length,
-  )
+  // actually holding, i.e. enabled and not broken by isWatchBroken's
+  // precedence -- the same predicate Watchlist.svelte's own
+  // class:watching already uses, so the bar's count and the page's own
+  // per-row marker never disagree.
+  heldCount = $derived.by(() => this.entries.filter((e) => e.enabled && !isWatchBroken(e, this.coverage)).length)
 
   async refresh() {
     const { entries, coverage } = await fetchWatchlistEntries()

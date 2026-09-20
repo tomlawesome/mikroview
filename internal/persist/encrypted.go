@@ -45,6 +45,25 @@ func NewEncryptedFileBackend(path string, key *retention.Key) *EncryptedFileBack
 	return &EncryptedFileBackend{inner: NewFileBackend(path), key: key, aad: []byte(path)}
 }
 
+// NewEncryptedFileBackendForPath is NewEncryptedFileBackend with the
+// bytes-on-disk location and the AAD-binding location told apart, for
+// the one legitimate case they differ: a document read from somewhere
+// other than where it was originally written and sealed.
+//
+// internal/persist/upgrade_test.go is the reason this exists (#1239):
+// every recorded upgrade fixture was written by a real container at the
+// file backend's fixed default data directory
+// (config.DefaultDataDir, "/var/lib/mikroview"), which is where its
+// ciphertext is bound to -- but the test unpacks the recording into a
+// t.TempDir() to read it back, and NewEncryptedFileBackend has no way to
+// open a document at one path while treating it as though it still
+// lived at another. Ordinary callers -- every store main.go opens --
+// always read a document from exactly where it lives, so they keep
+// using NewEncryptedFileBackend; this is deliberately not the default.
+func NewEncryptedFileBackendForPath(realPath, logicalPath string, key *retention.Key) *EncryptedFileBackend {
+	return &EncryptedFileBackend{inner: NewFileBackend(realPath), key: key, aad: []byte(logicalPath)}
+}
+
 func (b *EncryptedFileBackend) Describe() string { return b.inner.Describe() }
 
 func (b *EncryptedFileBackend) Close() error { return b.inner.Close() }

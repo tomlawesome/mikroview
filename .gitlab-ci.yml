@@ -535,9 +535,18 @@ test:go:
   # permission bits (CAP_DAC_OVERRIDE) — not because the code is wrong.
   # Dropping to a non-root user for the actual `go test` run matches both
   # GitHub's environment and mikroview's own production posture (its
-  # Dockerfile runs USER nonroot:nonroot). See
+  # Dockerfile runs USER 1000:1000). See
   # docs/decisions/gitlab-ci-root-in-container-test-failure.md.
   script:
+    # Every recorded upgrade fixture (#1239) into .upgrade-fixtures/,
+    # gitignored, so internal/persist/upgrade_test.go has something to
+    # open -- CI_JOB_TOKEN authenticates against the generic package
+    # registry the fixtures were recorded and uploaded to (see
+    # scripts/record-upgrade-fixture.sh). Run before the chown below so
+    # the fetched files end up owned by ci-test along with everything
+    # else, and before the useradd/su split so a fetch failure fails the
+    # job at the step that actually failed rather than inside `su`.
+    - scripts/fetch-upgrade-fixtures.sh
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
     - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
@@ -662,6 +671,13 @@ test:postgres:
       [ "$ready" = 1 ] || { echo "postgres never became ready"; false; }
   script:
     - *reuse_gate
+    # The recorded upgrade fixtures (#1247), exactly as test:go fetches
+    # them: the pg_dump per schema version this job restores lives in the
+    # same generic package as the file backend's tarballs, and
+    # internal/persist/upgrade_postgres_test.go has nothing to open
+    # without it. After the reuse gate, so a reused run does not pay for
+    # downloads it will not use.
+    - scripts/fetch-upgrade-fixtures.sh
     # internal/matchlog alongside internal/persist (#243 slice 6): its
     # Postgres backend is a second, independent SQL sink with its own
     # table and needs the same real-database coverage.
@@ -697,7 +713,7 @@ test:postgres:
 #   image tag whatever happened. The layer cache stays on the daemon,
 #   which is what keeps the build quick when the Dockerfile inputs have
 #   not changed.
-# - The image runs as uid 65532 (Dockerfile), so the tmpfs at the data
+# - The image runs as uid 1000 (Dockerfile), so the tmpfs at the data
 #   directory is created with that owner: without a writable data
 #   directory the container has nowhere to persist its CA, and the app
 #   once carried a "persistence is optional" contract purely to keep this
@@ -725,7 +741,7 @@ test:container:
     - >-
       docker run --detach --name "$APP"
       --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
-      --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=65532,gid=65532
+      --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=1000,gid=1000
       --cap-drop ALL --security-opt no-new-privileges
       --pids-limit 64 --memory 128m --cpus 0.5
       "$APP"
@@ -747,6 +763,87 @@ test:container:
   after_script:
     - docker rm --force "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
     - docker image rm "mikroview-test-$CI_JOB_ID" >/dev/null 2>&1 || true
+  artifacts:
+    paths:
+      - ci-reuse-evidence/
+    expire_in: 1 week
+
+# The one-line pastable install (#1242) tested against a real daemon,
+# beside test:container above -- same image, same rootless-daemon-on-the-
+# runner-host caveats, so read that job's header first.
+#
+# Ports: install.sh's docker run really publishes -p on the daemon's own
+# host (unlike test:container, which never publishes), so two jobs on one
+# runner would collide on a fixed port. $CI_JOB_ID picks a pair in
+# 20000-39999 per job instead -- never 443/6514/8080 (what a real install
+# uses) and never the workstation's own live-test ranges.
+#
+# No curl in this image on purpose: install.sh's own healthz wait then
+# just says so and skips, which is the real behaviour for an operator who
+# hasn't got curl either -- the network-namespace trick below (same as
+# test:container's) is what actually asserts health here.
+#
+# Reuse gate: kept, like test:container's. install.sh isn't under
+# scripts/ or any tree test:container's IMAGE_PATHS already watches, so
+# scripts/ci-reuse-inputs.js gets its own INSTALL_LINE_PATHS (IMAGE_PATHS
+# plus install.sh) rather than reusing IMAGE_PATHS unchanged -- otherwise
+# an install.sh-only push would wrongly stand on an earlier run that
+# never touched it.
+test:install-line:
+  stage: test
+  tags: [light]
+  image: docker:29-cli
+  <<: *dev_or_mr_code
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    APP: mikroview-install-$CI_JOB_ID
+    IMG: mikroview-install-image-$CI_JOB_ID
+  script:
+    - apk add --no-cache nodejs >/dev/null
+    - *reuse_gate
+    - docker build --tag "$IMG" .
+    - |
+      HTTPS_PORT=$((20000 + CI_JOB_ID % 20000))
+      SYSLOG_PORT=$((HTTPS_PORT + 1))
+      echo "test:install-line: using ports https=$HTTPS_PORT syslog=$SYSLOG_PORT"
+      export MIKROVIEW_IMAGE="$IMG" MIKROVIEW_CONTAINER="$APP" \
+        MIKROVIEW_HTTPS_PORT="$HTTPS_PORT" MIKROVIEW_SYSLOG_PORT="$SYSLOG_PORT"
+    - sh install.sh
+    - |
+      for attempt in $(seq 1 20); do
+        if docker run --rm --network "container:$APP" alpine:3.22 \
+             wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8080/api/healthz; then
+          echo "healthz answered on attempt $attempt"
+          break
+        fi
+        sleep 1
+        if [ "$attempt" = 20 ]; then
+          echo "healthz never answered; container log follows"
+          docker logs "$APP"
+          exit 1
+        fi
+      done
+    - id1="$(docker container inspect --format '{{.Id}}' "$APP")"
+    # The same line is also the upgrade line (#1240) -- running it twice
+    # must stop and remove the first container, re-creating it on the
+    # same two named volumes, not just leave it be.
+    - echo "test:install-line -- running install.sh a second time"
+    - sh install.sh
+    - |
+      id2="$(docker container inspect --format '{{.Id}}' "$APP")"
+      [ "$id1" != "$id2" ] || { echo "test:install-line: container was not re-created on the second run"; exit 1; }
+      for vol in "${APP}-data" "${APP}-etc"; do
+        if ! docker volume ls --format '{{.Name}}' | grep -Fxq "$vol"; then
+          echo "test:install-line: missing volume $vol after re-create"
+          exit 1
+        fi
+      done
+      echo "test:install-line: re-create verified, both named volumes survived"
+    - *reuse_evidence
+  after_script:
+    - docker rm --force "$APP" >/dev/null 2>&1 || true
+    - docker volume rm "${APP}-data" "${APP}-etc" >/dev/null 2>&1 || true
+    - docker image rm "$IMG" >/dev/null 2>&1 || true
   artifacts:
     paths:
       - ci-reuse-evidence/
@@ -975,6 +1072,8 @@ gate:scripts:
     - scripts/wait-quiet-host.test.sh
     - scripts/assert-ui-built.test.sh
     - scripts/check-release-surfaces.test.sh
+    - scripts/dockerignore.test.sh
+    - scripts/install.test.sh
   artifacts:
     when: always
     paths:
@@ -1140,7 +1239,7 @@ perf:promotion:
 security:semgrep:
   stage: security
   tags: [light]
-  image: semgrep/semgrep:1.176.0
+  image: semgrep/semgrep:1.177.0
   <<: *dev_or_mr_code
   variables:
     # The whole history, as gitleaks below. On a merge request the scan
@@ -1549,6 +1648,132 @@ sync:mirror-to-github:
     # A tag refused as already existing means GitHub has a different
     # commit under that name -- a release that was never made here.
     - git push github "HEAD:$MIRROR_REF"
+
+# ---------------------------------------------------------------------------
+# RECORD:UPGRADE-FIXTURE — #1247, the second half of the upgrade
+# framework (docs/decisions/upgrade-framework.md). Every release needs a
+# recording of what it actually wrote, so the next release's gate can
+# open it; without this job someone has to remember to run
+# scripts/record-upgrade-fixture.sh by hand after every tag, and a
+# release nobody remembered is a release nothing tests.
+#
+# The wait is the whole reason this is a job of its own. The recording
+# boots the *released image*, which .github/workflows/docker.yml publishes
+# to GHCR from the same tag — so at the moment this pipeline starts, the
+# image usually does not exist yet. It polls for it rather than assuming
+# an ordering between two CI systems.
+#
+# allow_failure is scoped to exit code 75 (EX_TEMPFAIL), deliberately,
+# not a blanket true (#1268 finding 6). A release that builds slowly, a
+# GHCR outage, or an image that never appears must not turn a tag
+# pipeline red: the tag is already cut and the artefacts already
+# published by then, so there is nothing to fix by failing -- the poll
+# loop below exits 75 for exactly that case, and only that case is
+# allowed to pass quietly. Any other failure -- a bug in
+# record-upgrade-fixture.sh or upgrade-fixture-session.py, a Docker
+# problem, pg_dump breaking -- exits some other code and blocks the
+# pipeline for real, because those mean the recording nobody is
+# watching for (see below) silently did not happen for a reason that
+# recurs on the next tag too. A red-but-allowed job (the 75 case) says
+# "run scripts/record-upgrade-fixture.sh <tag> by hand", which is
+# exactly the remedy.
+#
+# Nothing in this job watches for either kind of failure and says so
+# out loud: check:upgrade-fixture-recorded below does (#1274), by
+# listing the registry against the committed fixtures on every push
+# to dev. This job only stopped lying about which failures are fine.
+#
+# Stage `sync`, beside the GitHub mirror: it is the same kind of work —
+# something published outside this pipeline once the commit is final. The
+# two stages after it exist only for the scheduled CHR and Renovate
+# lanes, which a release job has no business sitting in. `needs: []`
+# because it waits on GHCR, not on this pipeline's lint and test.
+#
+# Uploads use CI_JOB_TOKEN. That token can write a package and nothing
+# else — it cannot push a branch or open a merge request — which is why
+# the manifest is uploaded beside the recording rather than committed
+# (#1247's decision, 2026-09-16). Committing it stays a review step;
+# scripts/fetch-upgrade-fixtures.sh and the two upgrade tests already
+# prefer the committed copy and fall back to the uploaded one, so dev's
+# next run tests the new release either way.
+# ---------------------------------------------------------------------------
+
+record:upgrade-fixture:
+  stage: sync
+  # Light lane (#949): it waits, then runs three short-lived containers.
+  tags: [light]
+  # Same image and socket as test:container -- read that job's header for
+  # what the runner's shared rootless daemon does and does not allow.
+  # Nothing here publishes a port, which is what makes that work: the
+  # recording drives the released container from inside its own network
+  # namespace (scripts/upgrade-fixture-session.py).
+  image: docker:29-cli
+  needs: []
+  # #952: this job uploads packages -- never cut mid-write.
+  interruptible: false
+  # 75 (EX_TEMPFAIL) is only the "GHCR never published it in time" exit
+  # below -- everything else fails the job for real. See the header
+  # comment above for why a blanket true was wrong.
+  allow_failure:
+    exit_codes: 75
+  # 45 minutes of polling plus three container starts and a pg_dump.
+  timeout: 1h
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  script:
+    # bash because both scripts are `#!/usr/bin/env bash` and Alpine
+    # ships ash; python3 for the manifest the recording writes; curl for
+    # the package upload; coreutils for `sort -V`, which busybox's sort
+    # does not have and the script's version comparison needs. No
+    # postgresql-client: pg_dump runs inside the Postgres container
+    # itself, so the client is always the server's own major version.
+    - apk add --no-cache bash coreutils curl python3 >/dev/null
+    - |
+      image="ghcr.io/tomlawesome/mikroview:$CI_COMMIT_TAG"
+      echo "waiting for $image on GHCR (every 60s, up to 45 minutes)"
+      found=0
+      for attempt in $(seq 1 45); do
+        if docker manifest inspect "$image" >/dev/null 2>&1; then found=1; break; fi
+        echo "  attempt $attempt/45: not published yet"
+        [ "$attempt" = 45 ] || sleep 60
+      done
+      # 75 (EX_TEMPFAIL): the one exit code allow_failure above tolerates
+      # -- see this job's header comment.
+      [ "$found" = 1 ] || { echo "$image never appeared -- record it by hand with scripts/record-upgrade-fixture.sh $CI_COMMIT_TAG"; exit 75; }
+      echo "$image is published"
+    # The file backend's recording: uploads the tarball and the manifest.
+    - bash scripts/record-upgrade-fixture.sh "$CI_COMMIT_TAG"
+    # The database's: the same scripted session against a throwaway
+    # postgres:18-alpine, uploaded as a gzip'd pg_dump. Recorded on every
+    # tag even where the schema version has not moved -- the job cannot
+    # know that it has not, and a spare dump costs kilobytes, while a
+    # missing one costs a hand step nobody will remember.
+    - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
+
+# record:upgrade-fixture above is allow_failure (a slow build or a GHCR
+# blip must not redden a tag already cut -- see its own header), so it
+# can fail unseen. This is #1274's automated replacement for the manual
+# "Promote to main" checklist line that used to be the only thing
+# catching that: it asserts every released v[0-9]* tag has a fixture
+# recorded, in the registry or committed to testdata/upgrade/, and names
+# the exact command for whichever one is missing. Not gated by #1038 (a
+# docs-only push must not skip it) and needs full tag history, not
+# GitLab's shallow default.
+check:upgrade-fixture-recorded:
+  stage: sync
+  tags: [light]
+  image: alpine:3.24
+  needs: []
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
+  variables:
+    GIT_DEPTH: 0
+  before_script:
+    - apk add --no-cache bash git curl
+  script:
+    - bash scripts/check-upgrade-fixtures-recorded.sh
 
 # ---------------------------------------------------------------------------
 # CHR-EXERCISE — #894: weekly, boots MikroTik's own CHR image under

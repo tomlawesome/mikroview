@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Package export parses the text RouterOS's `/export hide-sensitive`
-// produces, for #435's "Tune logging" helper and, per that issue's own
-// decision record, #895's later scheduled-config-backup reader -- one
-// parser, built once, shared by both rather than each growing its own.
+// produces, for #435's Log every rule helper ("Tune logging" until #1134
+// renamed the page) and, per that issue's own decision record, #895's
+// later scheduled-config-backup reader -- one parser, built once, shared
+// by both rather than each growing its own.
 //
 // Every source line is kept verbatim (Export.Lines); only the
 // /ip firewall filter section's `add` lines are decoded into
@@ -17,6 +18,8 @@
 // means the text handed in is a plain, unredacted /export instead, and
 // this package will not carry that further.
 package export
+
+import "strings"
 
 // Rule is one /ip firewall filter add line, decoded.
 //
@@ -40,6 +43,7 @@ type Rule struct {
 	OutInterface     string
 	InInterfaceList  string
 	OutInterfaceList string
+	ConnectionState  string
 	Log              bool
 	LogPrefix        string
 	Disabled         bool
@@ -56,6 +60,26 @@ type Rule struct {
 type ruleToken struct {
 	key string
 	raw string
+}
+
+// LogsEveryPacket reports whether switching logging on for r would
+// write a line per packet rather than a line per connection: its
+// connection-state names established or related, so every packet of
+// every already-open connection matches it (#1230).
+//
+// Substring matching on purpose, and it is the same rule the wizard's
+// bulk `[find ... !(connection-state~"established")]` exclusion uses.
+// connection-state is a list, and RouterOS 7's own default firewall
+// writes it as `established,related,untracked` -- an exact comparison
+// against `established,related` is exactly the mistake #1230 was: it
+// misses the list that matters most and says nothing about having
+// missed it. A negated value (`!established`) is caught too, which is
+// the conservative direction: the page's worst outcome then is one rule
+// the operator has to tick by hand, not a router logging its whole
+// throughput.
+func (r Rule) LogsEveryPacket() bool {
+	s := strings.ToLower(r.ConnectionState)
+	return strings.Contains(s, "established") || strings.Contains(s, "related")
 }
 
 // Fingerprint is a rule's identity for a logging-only-diff check: every
@@ -117,7 +141,7 @@ func (e *Export) Text() string {
 
 // LoggingOnlyDiff reports whether after differs from before only in
 // filter rules' log and log-prefix attributes. This is the mechanical
-// guarantee behind Tune logging (#435): the lines outside the filter
+// guarantee behind Log every rule (#435): the lines outside the filter
 // rules must be the same lines in the same order, the rule count must
 // match, and each rule's other tokens must match key by key and byte by
 // byte in their original order. A rule's own physical layout is not

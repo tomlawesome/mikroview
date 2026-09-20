@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity, Flag, FlagType, RuleUsage } from '../lib/types'
+import type { Entity, Flag, FlagType, RefusedSender, RuleUsage, UnattributedSource } from '../lib/types'
 import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
@@ -33,6 +33,13 @@ const fetchRouterRules = vi.fn(async (): Promise<{ available: boolean; rules: Ro
   available: false,
   rules: [],
 }))
+// #1170: GET /api/devices' second list, fetched on its own so
+// fetchDevices' signature (and every mock of it) stays as it was.
+const fetchUnattributedSources = vi.fn(async (): Promise<UnattributedSource[]> => [])
+// #1281's refused senders, moved here from Fleet.svelte: an admin's
+// deck answers the fleet view with this card and never draws that one
+// (deckCards.ts, #785), and the endpoint behind it is admin-only.
+const fetchRefusedSenders = vi.fn(async (): Promise<RefusedSender[]> => [])
 
 vi.mock('../lib/api', () => ({
   fetchEntities: () => fetchEntities(),
@@ -42,6 +49,8 @@ vi.mock('../lib/api', () => ({
   fetchRouterRules: () => fetchRouterRules(),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRules: () => fetchRules(),
+  fetchUnattributedSources: () => fetchUnattributedSources(),
+  fetchRefusedSenders: () => fetchRefusedSenders(),
   fetchSetupStatus: vi.fn(
     async () =>
       ({
@@ -78,6 +87,9 @@ import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { zonesState } from '../lib/zones.svelte'
 import { authState } from '../lib/auth.svelte'
+import { UNATTRIBUTED_FIX, unattributedLabel } from '../lib/fleet'
+import { ROUTER_STEPS } from '../lib/setupsteps'
+import { wizardState } from '../lib/wizard.svelte'
 import Entities from './Entities.svelte'
 
 async function settle() {
@@ -93,6 +105,7 @@ beforeEach(() => {
   upsertEntity.mockResolvedValue(null)
   fetchRules.mockResolvedValue([])
   fetchRouterRules.mockResolvedValue({ available: false, rules: [] })
+  fetchUnattributedSources.mockResolvedValue([])
   appState.devices = []
   appState.events = []
   appState.initialLoadDone = true
@@ -232,7 +245,133 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  it('draws the empty berth as one more card at the end of the router row, with no visible label (#718)', async () => {
+  // #1291: registering (the ledger's final Register step) and enrolling
+  // (a router's logs being accepted) are independent, so a card has to
+  // say plainly when only one of the two ever happened.
+  // configured: false throughout -- every router the wizard adds is
+  // drawn on the unregistered cards, and a config.yaml-declared one can
+  // never carry a registeredAt at all (the server refuses to register
+  // one, since config.yaml rebuilds it on every boot). A test written
+  // against the declared cards would be asserting about a state that
+  // cannot happen.
+  it('reads an enrolled-but-never-registered router as an unfinished setup, not the finished state', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.unreg')
+    expect(card?.textContent).toContain(
+      'its logs are accepted, but the Register step was never finished',
+    )
+  })
+
+  // #1291's other unmet checklist item: this router only needs the
+  // Register step, not a whole re-enrolment, so it gets a direct way to
+  // resume there -- keeping its device and history, minting nothing.
+  it('offers to finish registering an enrolled-but-unregistered router, landing on Register with no token minted', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { getByLabelText } = render(Entities)
+    await settle()
+
+    getByLabelText(/Finish registering rb5009/).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    expect(wizardState.ledgerDevice).toBe('rb5009')
+    // Register is the last step of the router ledger.
+    expect(wizardState.pane).toBe(ROUTER_STEPS.indexOf('register') + 1)
+    expect(wizardState.enrolment).toBeNull()
+  })
+
+  // A registered-but-not-yet-enrolled router has nothing left for
+  // Register to finish -- the gap is the token, which only Re-enrol…
+  // mints -- so the Finish registering… control must not appear there.
+  it('does not offer Finish registering… once the router is already registered', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { queryByText } = render(Entities)
+    await settle()
+
+    expect(queryByText('Finish registering…')).toBeNull()
+  })
+
+  it('reads a registered-but-not-yet-enrolled router as a normal wait, not an error', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'never_seen',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 0,
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).toContain(
+      'the Register step is done; still waiting for its enrolment token to arrive',
+    )
+  })
+
+  it('shows neither unfinished-setup nor waiting-for-token copy once both registered and enrolled', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        acceptedIp: '10.0.0.1',
+        registeredAt: new Date().toISOString(),
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).not.toContain('the Register step was never finished')
+    expect(container.textContent).not.toContain('still waiting for its enrolment token to arrive')
+  })
+
+  it('draws the empty berth as one more card at the end of the router row, saying what it does (#718, #1168)', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },
     ] as unknown as (typeof appState)['devices']
@@ -242,7 +381,9 @@ describe('Entities router cards (#675)', () => {
     const cards = [...container.querySelectorAll('.fcards > .fcard')]
     expect(cards.length).toBe(2) // one router card, one berth
     expect(cards.at(-1)?.className).toContain('berth')
-    expect(cards.at(-1)?.textContent?.trim()).toBe('') // the shape is the affordance, no words
+    // #1168: the shape alone was the affordance under #718; at rest it
+    // now says so in words too, here and on first run.
+    expect(cards.at(-1)?.textContent?.trim()).toBe('+ add a router')
   })
 
   it('is the whole row when there are no routers at all -- the correct first-run state (#718)', async () => {
@@ -254,35 +395,39 @@ describe('Entities router cards (#675)', () => {
     expect(cards[0].className).toContain('berth')
   })
 
-  it('names itself to a screen reader even though the visual carries no words (#718)', async () => {
-    const { getByRole } = render(Entities)
+  it('names itself to a screen reader (#718) and on screen at rest (#1168)', async () => {
+    const { container, getByRole } = render(Entities)
     await settle()
 
     expect(getByRole('button', { name: 'Add a router' })).toBeTruthy()
+    // #1168: #718 left the resting state wordless, so with no routers
+    // registered the operator met one blank dashed box.
+    expect(container.querySelector('.berth-trigger')?.textContent?.trim()).toBe('+ add a router')
   })
 
-  it('keeps the add-router explanation and commands off the page until the berth is activated (#718)', async () => {
+  it('keeps the add-router explanation and commands off the page (#718, #1284)', async () => {
     const { container } = render(Entities)
     await settle()
 
-    expect(container.textContent).not.toContain('Routers push to mikroview')
+    expect(container.textContent).not.toContain('Routers push to MikroView')
     expect(container.querySelector('.paste')).toBeNull()
   })
 
-  it('reveals the port, the paste-able RouterOS lines and the never-connects assurance when the berth is clicked (#718)', async () => {
-    const { container, getByRole } = render(Entities)
+  // #1284: the berth used to unfold into a second copy of the syslog
+  // block. It opens the router ledger instead -- the same modal, the
+  // same steps -- so two surfaces can no longer print the same commands
+  // in different words.
+  it('opens the router ledger at Name your router when the berth is clicked', async () => {
+    const { getByRole } = render(Entities)
     await settle()
 
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(container.textContent).toContain(':16893')
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
-    expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
-
-    const pre = container.querySelector('.paste')
-    expect(pre?.textContent).toContain('remote-port=16893')
-    expect(pre?.textContent).toContain('remote-protocol=tls')
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(1)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    expect(wizardState.ledgerDevice).toBe('')
   })
 
   it('is a real <button> element, focusable and Enter/Space-activatable for free under HTML\'s own semantics (#718)', async () => {
@@ -301,33 +446,18 @@ describe('Entities router cards (#675)', () => {
     expect(trigger.getAttribute('tabindex')).toBeNull() // native focusability, not a synthetic tabindex
   })
 
-  it('closes the unfolded berth on Escape and returns focus to the trigger, without moving the table (#718)', async () => {
+  // The berth no longer unfolds in place, so there is no panel of its
+  // own to close and nothing on this page moves when it is pressed --
+  // the table stays exactly where it was and the modal takes over.
+  it('never unfolds a panel of its own, and leaves the table where it was', async () => {
     const { container, getByRole } = render(Entities)
     await settle()
 
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
-    await settle()
-    expect(container.querySelector('.berth-panel')).toBeTruthy()
-
-    await fireEvent.keyDown(window, { key: 'Escape' })
     await settle()
 
     expect(container.querySelector('.berth-panel')).toBeNull()
     expect(container.querySelector('.etable')).toBeTruthy()
-    expect(document.activeElement).toBe(container.querySelector('.berth-trigger'))
-  })
-
-  it('closes the unfolded berth from its own close control', async () => {
-    const { container, getByRole } = render(Entities)
-    await settle()
-
-    await fireEvent.click(getByRole('button', { name: 'Add a router' }))
-    await settle()
-
-    await fireEvent.click(getByRole('button', { name: 'Close' }))
-    await settle()
-
-    expect(container.querySelector('.berth-panel')).toBeNull()
   })
 
   it('replaces the dashed "another router?" card and the old pill with the empty berth (#718)', async () => {
@@ -342,12 +472,12 @@ describe('Entities router cards (#675)', () => {
 })
 
 describe('Entities named-things table (#675)', () => {
-  it('renders name · lane · address · mac · first seen · last seen · marks', async () => {
+  it('renders name · zone · address · mac · first seen · last seen · marks', async () => {
     const { container } = render(Entities)
     await settle()
 
     const headers = [...container.querySelectorAll('.etable th')].map((th) => th.textContent)
-    expect(headers).toEqual(['name', 'lane', 'address', 'mac', 'first seen', 'last seen', 'marks'])
+    expect(headers).toEqual(['name', 'zone', 'address', 'mac', 'first seen', 'last seen', 'marks'])
   })
 
   it('shows a named host entity with its label and address', async () => {
@@ -371,7 +501,29 @@ describe('Entities named-things table (#675)', () => {
     expect(container.textContent).toContain('— click to name —')
   })
 
-  it('elides a known MAC and reads "private" when none is known', async () => {
+  // #1152: the placeholder is one phrase and broke across two lines at
+  // 1100px wide, stranding its closing dash. The nowrap that fixes it
+  // rides on this class so a real host name, which may be long, still
+  // wraps.
+  it('marks the unnamed placeholder so it cannot break mid-phrase, but not a real name', async () => {
+    appState.events = [
+      { srcIp: '10.0.10.9', dstIp: '', time: new Date().toISOString(), receivedAt: Date.now() },
+    ] as unknown as (typeof appState)['events']
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '10.0.10.2', label: 'tom-desktop', tags: [] }])
+    const { container } = render(Entities)
+    await settle()
+
+    const buttons = [...container.querySelectorAll('.etable .rename-btn')]
+    const placeholder = buttons.find((b) => b.textContent?.includes('click to name'))
+    const named = buttons.find((b) => b.textContent?.includes('tom-desktop'))
+    expect(placeholder?.classList.contains('unnamed')).toBe(true)
+    expect(named?.classList.contains('unnamed')).toBe(false)
+  })
+
+  // #1158: an unknown MAC reads as the table's own em dash. It used to
+  // say "private", which on a row for a public address (1.1.1.1) read as
+  // a claim about the address rather than a value nothing here knows.
+  it('elides a known MAC and falls back to the unknown-value dash', async () => {
     const { fetchDeviceMACs } = await import('../lib/api')
     vi.mocked(fetchDeviceMACs).mockResolvedValue([
       { mac: '2c:f0:5d:11:22:8a', firstSeen: '2025-01-01T00:00:00Z', lastSeen: new Date().toISOString(), lastIp: '10.0.10.2' },
@@ -386,8 +538,10 @@ describe('Entities named-things table (#675)', () => {
     const rows = [...container.querySelectorAll('.etable tbody tr')]
     const named = rows.find((tr) => tr.textContent?.includes('tom-desktop'))
     const guest = rows.find((tr) => tr.textContent?.includes('guest-e8b2'))
-    expect(named?.textContent).toContain('2c:f0:5d:…:8a')
-    expect(guest?.textContent).toContain('private')
+    // name · zone · address · mac · first seen · last seen · marks
+    expect(named?.children[3]?.textContent?.trim()).toBe('2c:f0:5d:…:8a')
+    expect(guest?.children[3]?.textContent?.trim()).toBe('—')
+    expect(container.textContent).not.toContain('private')
   })
 
   it('renames inline: click the name, edit, Enter saves', async () => {
@@ -649,6 +803,21 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     expect(card?.textContent).toContain('its lines are kept; it has no name and no zones until it is registered')
   })
 
+  // #1241: the setup line Fleet.svelte shows on every card was missing
+  // here, on exactly the card most likely to need it -- a router
+  // discovered by its own push and never declared in config.yaml is the
+  // common case, and it is the one that has only ever been set up by
+  // pasting the wizard's step 1.
+  it('carries the same setup line Fleet shows, when the router reports one behind (#1241)', async () => {
+    appState.devices = [
+      { ...unregistered[0], setup: { standing: 'behind', scriptVersion: 1, currentVersion: 2 } },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.unreg')?.textContent).toContain('setup behind · paste Trust the certificate again')
+  })
+
   it('keeps the berth alongside it, collapsed, rather than giving way (#828)', async () => {
     appState.devices = unregistered
     const { container } = render(Entities)
@@ -663,16 +832,16 @@ describe('Entities unregistered router (#804, moved from #802)', () => {
     expect(cards.at(-1)?.className).toContain('berth')
   })
 
-  it('still opens into the add-router instructions with an unregistered router already pushing (#828)', async () => {
+  it('still opens the ledger with an unregistered router already pushing (#828)', async () => {
     appState.devices = unregistered
-    const { container, getByRole } = render(Entities)
+    const { getByRole } = render(Entities)
     await settle()
 
     await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
-    expect(container.querySelector('.berth-panel')).toBeTruthy()
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
   })
 
   it('leaves the berth in place when every router is registered', async () => {
@@ -737,7 +906,7 @@ describe('Entities views (#804, rounds 37-38)', () => {
     await settle()
     expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
       'name',
-      'lane',
+      'zone',
       'address',
       'mac',
       'first seen',
@@ -947,5 +1116,251 @@ describe('Entities ports view (#681, reachable again since #804)', () => {
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('syncthing'))
     expect(row).toBeTruthy()
     expect(row?.textContent).toContain('8384')
+  })
+})
+
+// #1170 (one device registry): a syslog source that matches no
+// configured devices[].sourceIp, and that no single router's pushed
+// address table claims, is no longer invented as a device row. It
+// arrives in GET /api/devices' `unattributed` list and is drawn here as
+// what it is -- a source, never a router. These tests are as much about
+// what the card is NOT (no .unreg, no router vocabulary, no router
+// count) as what it says.
+describe('Entities unattributed sources (#1170)', () => {
+  function source(over: Partial<UnattributedSource> = {}): UnattributedSource {
+    return {
+      address: '172.23.0.1',
+      lines: 412,
+      firstSeen: '2026-09-16T09:00:00Z',
+      lastSeen: '2026-09-16T10:00:00Z',
+      ...over,
+    }
+  }
+
+  it('draws one card per unattributed source: what it is, how many lines it sent, and the fix', async () => {
+    fetchUnattributedSources.mockResolvedValue([source()])
+    const { container } = render(Entities)
+    await settle()
+
+    const cards = [...container.querySelectorAll('.fcard.unattr')]
+    expect(cards).toHaveLength(1)
+    const text = cards[0].textContent ?? ''
+    // The card states the label's two halves in its own layout -- the
+    // head names the address, the row underneath says what it means.
+    expect(unattributedLabel(source())).toBe(
+      'unattributed · 172.23.0.1 — syslog from an address no router has claimed',
+    )
+    expect(cards[0].querySelector('.fhead b')?.textContent).toBe('unattributed · 172.23.0.1')
+    expect(text).toContain('syslog from an address no router has claimed')
+    expect(text).toContain('412 lines seen')
+    expect(text).toContain('first seen')
+    expect(text).toContain(UNATTRIBUTED_FIX)
+  })
+
+  it('says "1 line seen", never "1 lines seen"', async () => {
+    fetchUnattributedSources.mockResolvedValue([source({ lines: 1 })])
+    const { container } = render(Entities)
+    await settle()
+
+    const text = container.querySelector('.fcard.unattr')?.textContent ?? ''
+    expect(text).toContain('1 line seen')
+    expect(text).not.toContain('1 lines seen')
+  })
+
+  it('is not drawn as a router: no .unreg card, no router card, and the chip says so', async () => {
+    fetchUnattributedSources.mockResolvedValue([source()])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelectorAll('.fcard.unreg')).toHaveLength(0)
+    expect(container.querySelectorAll('.fcard.live')).toHaveLength(0)
+    const card = container.querySelector('.fcard.unattr') as HTMLElement
+    expect(card.classList.contains('unreg')).toBe(false)
+    expect(card.querySelector('.fstate')?.textContent).toContain('NOT A ROUTER')
+    expect(card.querySelector('.fstate')?.className).toContain('quiet')
+    // None of the registered/unregistered router vocabulary.
+    expect(card.textContent).not.toContain('PUSHING')
+    expect(card.textContent).not.toContain('RouterOS')
+  })
+
+  it('carries the conflict explanation only when the server sends one', async () => {
+    const explanation =
+      'border-rb5009 and lab-crs have both pushed this address as their own, so nothing here can tell which of them sent these lines.'
+    fetchUnattributedSources.mockResolvedValue([source({ explanation })])
+    const { container } = render(Entities)
+    await settle()
+    expect(container.querySelector('.fcard.unattr')?.textContent).toContain(explanation)
+
+    fetchUnattributedSources.mockResolvedValue([source()])
+    const plain = render(Entities)
+    await settle()
+    expect(plain.container.querySelector('.fcard.unattr')?.textContent).not.toContain('both pushed this address')
+  })
+
+  it('leaves the row out entirely when the read fails', async () => {
+    fetchUnattributedSources.mockRejectedValue(new Error('nope'))
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelectorAll('.fcard.unattr')).toHaveLength(0)
+  })
+
+  // #1269: App.svelte's global 5s device/stats poll reassigns
+  // appState.devices to a brand-new array every tick regardless of
+  // whether anything in it changed (a live router's rate/lastSeen
+  // update every cycle). Re-reading the effect straight off that array
+  // re-asked GET /api/devices a second time, every 5 seconds, purely to
+  // read the `unattributed` field of the very response the poll's own
+  // GET /api/devices had just downloaded.
+  it('does not re-ask for the unattributed list on a poll tick that changes nothing about the fleet', async () => {
+    const device = {
+      id: 'rb5009',
+      name: 'rb5009',
+      configured: true,
+      status: 'live',
+      lastSeen: new Date().toISOString(),
+      sourceIp: '10.0.0.1',
+      eventCount: 3,
+    }
+    fetchUnattributedSources.mockResolvedValue([source()])
+    appState.devices = [device] as unknown as (typeof appState)['devices']
+    render(Entities)
+    await settle()
+    expect(fetchUnattributedSources).toHaveBeenCalledTimes(1)
+
+    // A new array, same id/sourceIp/configured -- exactly what the
+    // poll's wholesale replacement looks like when nothing about the
+    // fleet moved (only eventCount changed here, which cannot turn a
+    // source attributed or not).
+    appState.devices = [{ ...device, eventCount: 4 }] as unknown as (typeof appState)['devices']
+    await settle()
+    expect(fetchUnattributedSources).toHaveBeenCalledTimes(1)
+
+    // A real fleet change -- a second router shows up -- still asks
+    // again.
+    appState.devices = [
+      device,
+      { ...device, id: 'rb5010', sourceIp: '10.0.0.2' },
+    ] as unknown as (typeof appState)['devices']
+    await settle()
+    expect(fetchUnattributedSources).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The refused senders (#1281) and Re-enrol… (#1284), both moved here
+// from Fleet.svelte: an admin's deck answers the fleet view with the
+// Entities card and never draws Fleet at all (deckCards.ts, #785),
+// while GET /api/devices/refused is admin-only -- so on Fleet neither
+// could be reached by anybody.
+describe('Entities refused senders and Re-enrol (#1281, #1284)', () => {
+  function refused(over: Partial<RefusedSender> = {}): RefusedSender {
+    return {
+      ip: '192.168.88.1',
+      firstSeen: '2026-09-19T14:03:00Z',
+      lastSeen: '2026-09-19T14:09:00Z',
+      lines: 12,
+      ...over,
+    }
+  }
+
+  it('draws no refused card when nothing has been refused', async () => {
+    fetchRefusedSenders.mockResolvedValue([])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.refused')).toBeNull()
+  })
+
+  it('names each address, its lines and when it was seen -- and offers no way to accept it', async () => {
+    fetchRefusedSenders.mockResolvedValue([refused()])
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.refused')
+    expect(card).not.toBeNull()
+    const text = card?.textContent ?? ''
+    expect(card?.querySelector('.fhead b')?.textContent).toBe('refused · 192.168.88.1')
+    expect(text).toContain('syslog from an address no router is enrolled at')
+    expect(text).toContain('12 lines')
+    expect(text).toContain('Refused senders — logs from an address that is not enrolled are dropped.')
+    // No accept control, by ruling: an address is accepted only by a
+    // router presenting a one-time token.
+    expect(card?.querySelector('button')).toBeNull()
+    expect(text.toLowerCase()).not.toContain('accept it')
+  })
+
+  it('says "1 line", never "1 lines"', async () => {
+    fetchRefusedSenders.mockResolvedValue([refused({ lines: 1 })])
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.refused')?.textContent).toContain('1 line ·')
+  })
+
+  it('opens the router ledger at Send logs for one router, from its own card', async () => {
+    appState.devices = [
+      { id: 'edge-1', name: 'edge-1', configured: true, status: 'live', sourceIp: '10.0.0.1', eventCount: 3 },
+    ] as unknown as (typeof appState)['devices']
+    const { getByLabelText } = render(Entities)
+    await settle()
+
+    getByLabelText(/Re-enrol edge-1/).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.steps).toEqual(ROUTER_STEPS)
+    // Send logs is the second step of the router ledger.
+    expect(wizardState.pane).toBe(2)
+    expect(wizardState.ledgerDevice).toBe('edge-1')
+  })
+
+  // The unregistered-router card (a router the wizard itself added,
+  // #1291) carries its own copy of the same Re-enrol control -- until
+  // the #1291 audit's stage 5 finding, a second hand-pasted button
+  // rather than one shared piece of markup, so nothing forced the two
+  // to agree. This pins the previously-untested copy's behaviour and
+  // its name-missing fallback (`d.name || d.sourceIp`), the one place
+  // the two copies' aria-labels actually differ.
+  it('opens the router ledger from the unregistered card too, falling back to sourceIp when unnamed', async () => {
+    appState.devices = [
+      {
+        id: 'undeclared-1',
+        name: '',
+        configured: false,
+        status: 'live',
+        sourceIp: '10.0.0.9',
+        firstSeen: new Date().toISOString(),
+        eventCount: 1,
+      },
+    ] as unknown as (typeof appState)['devices']
+    const { getByLabelText } = render(Entities)
+    await settle()
+
+    getByLabelText(/Re-enrol 10\.0\.0\.9/).click()
+    flushSync()
+
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(2)
+    expect(wizardState.ledgerDevice).toBe('undeclared-1')
+  })
+
+  // A user tier reaches this screen but not the endpoint (admin-only),
+  // so it must not ask -- and #657's grammar is absent, not disabled.
+  // The berth goes with them: POST /api/devices is admin-only too, so a
+  // user who could open it would name a router, press Next and meet a
+  // 403 with nothing to do about it.
+  it('asks for nothing and draws no add-or-enrol affordance below admin', async () => {
+    authState.role = 'user'
+    fetchRefusedSenders.mockClear()
+    appState.devices = [
+      { id: 'edge-1', name: 'edge-1', configured: true, status: 'live', sourceIp: '10.0.0.1', eventCount: 3 },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    expect(fetchRefusedSenders).not.toHaveBeenCalled()
+    expect(container.querySelector('.fcard.refused')).toBeNull()
+    expect(container.querySelector('.row-action')).toBeNull()
+    expect(container.querySelector('.berth-trigger')).toBeNull()
   })
 })

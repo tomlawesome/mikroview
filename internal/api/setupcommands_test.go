@@ -15,6 +15,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/setup"
 )
 
 // testRetentionKey builds a usable retention key for tests that need
@@ -51,21 +52,71 @@ func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setu
 	return out
 }
 
-// TestHandleSetupCommandsRequiresAddress covers the one required field
-// the contract states: every other field is optional, address is not.
-func TestHandleSetupCommandsRequiresAddress(t *testing.T) {
+// TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress
+// covers #1213: an empty address is no longer refused at the door (that
+// used to be the whole point of the field the operator's browser filled
+// in for them). It is instead read the same way every other missing
+// precondition here is -- every block that embeds it comes back blank
+// with the "no-address" key, RuleTagging (which needs no address at all)
+// renders regardless, and the request itself still succeeds.
+func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	key := testRetentionKey(t)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// Every other precondition met, so if address were not itself gating
+	// these blocks, they would render.
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Token: "tok-123", Kinds: []string{"filter-rule"}, Device: "rb5009",
+	})
+	for name, step := range map[string]commandStep{
+		"caTrust":  out.Steps.CaTrust,
+		"syslog":   out.Steps.Syslog,
+		"push":     out.Steps.Push,
+		"schedule": out.Steps.Schedule,
+	} {
+		if step.Commands != "" {
+			t.Errorf("%s commands = %q, want empty with no address", name, step.Commands)
+		}
+		if !slicesEqual(step.Blocked, []string{"no-address"}) {
+			t.Errorf("%s.Blocked = %v, want [no-address]", name, step.Blocked)
+		}
+	}
+	if !slicesEqual(out.Steps.Backup.Blocked, []string{"no-address"}) {
+		t.Errorf("Backup.Blocked = %v, want [no-address] with every other precondition met", out.Steps.Backup.Blocked)
+	}
+	if !slicesEqual(out.Steps.BackupSchedule.Blocked, []string{"no-address"}) {
+		t.Errorf("BackupSchedule.Blocked = %v, want [no-address]", out.Steps.BackupSchedule.Blocked)
+	}
+	if out.Steps.RuleTagging.Commands == "" {
+		t.Error("RuleTagging.Commands is empty, want it to render regardless -- it embeds no address")
+	}
+}
+
+// TestHandleSetupCommandsRejectsAMalformedAddress covers the other half
+// of #1213's contract change: empty is now fine (not answered yet), but
+// a non-empty value still has to be a plausible address, since it is
+// about to sit bare inside a RouterOS command.
+func TestHandleSetupCommandsRejectsAMalformedAddress(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
-	body, _ := json.Marshal(setupCommandsRequest{})
+	body, _ := json.Marshal(setupCommandsRequest{Address: "not a valid host\naddress"})
 	resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for a missing address", resp.StatusCode)
+		t.Errorf("status = %d, want 400 for a malformed address", resp.StatusCode)
 	}
 }
 
@@ -202,6 +253,97 @@ func TestHandleSetupCommandsPushRendersOnlyWithTokenAndKinds(t *testing.T) {
 	if !strings.Contains(both.Steps.Push.Commands, "Bearer tok-123") {
 		t.Errorf("push commands = %q, want the token embedded", both.Steps.Push.Commands)
 	}
+
+	// Schedule carries the script itself since #1131, so it follows
+	// Push exactly: blank when there is nothing to save, and the whole
+	// pastable block when there is.
+	if tokenOnly.Steps.Schedule.Commands != "" || kindsOnly.Steps.Schedule.Commands != "" {
+		t.Errorf("schedule commands rendered with nothing to schedule: %q / %q",
+			tokenOnly.Steps.Schedule.Commands, kindsOnly.Steps.Schedule.Commands)
+	}
+	schedule := both.Steps.Schedule.Commands
+	if !strings.HasPrefix(schedule, `:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("schedule commands = %q, want the guarded script add that saves the push script", schedule)
+	}
+	if !strings.Contains(schedule, "Bearer tok-123") || !strings.HasSuffix(schedule, "\n/system script run mv-push") {
+		t.Errorf("schedule commands = %q, want the push script inside it and one run now", schedule)
+	}
+	if strings.Contains(schedule, "paste the script") {
+		t.Errorf("schedule commands still ask the operator to paste a script in: %q", schedule)
+	}
+}
+
+// TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken is issue
+// #1281's contract for step 2: the "Send logs" block ends with the
+// enrolment line once the caller's echoed EnrolToken actually matches
+// the named device's current pending token.
+func TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "mv.example.com", Device: "hap-ax3", EnrolToken: token,
+	})
+	want := `/log info "mikroview-enrol ` + token + `"`
+	if !strings.HasSuffix(out.Steps.Syslog.Commands, want) {
+		t.Errorf("syslog commands = %q, want it to end with %q", out.Steps.Syslog.Commands, want)
+	}
+}
+
+// TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken covers
+// every way the check can fail closed: no token sent, a token that
+// names no pending record, a token for a different device, and a device
+// with nothing pending at all. Every case must render step 2 exactly as
+// it did before #1281 -- no enrolment line, nothing else changed.
+func TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Devices.Create("other", "other", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, _, err := s.Devices.MintEnrolment("other", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		req  setupCommandsRequest
+	}{
+		{"no enrolToken at all", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3"}},
+		{"no device named", setupCommandsRequest{Address: "mv.example.com", EnrolToken: token}},
+		{"an unrelated, well-formed token", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3", EnrolToken: "zzzzzzzzzzzzzzzzzzzz"}},
+		{"another device's real pending token", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3", EnrolToken: otherToken}},
+		{"a device with nothing pending", setupCommandsRequest{Address: "mv.example.com", Device: "core"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := postSetupCommands(t, ts.URL, tc.req)
+			if strings.Contains(out.Steps.Syslog.Commands, "mikroview-enrol") {
+				t.Errorf("syslog commands = %q, want no enrolment line", out.Steps.Syslog.Commands)
+			}
+		})
+	}
 }
 
 // TestHandleSetupCommandsBackupRendersOnlyWhenReady covers #394's
@@ -225,7 +367,7 @@ func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	}
 
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,6 +389,166 @@ func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	if !strings.Contains(ready.Steps.BackupSchedule.Commands, "mv-backup") {
 		t.Errorf("backup schedule commands = %q, want the scheduler entry", ready.Steps.BackupSchedule.Commands)
 	}
+	if len(ready.Steps.Backup.Blocked) != 0 {
+		t.Errorf("Backup.Blocked = %v, want none once every precondition is met", ready.Steps.Backup.Blocked)
+	}
+	if len(ready.Steps.BackupSchedule.Blocked) != 0 {
+		t.Errorf("BackupSchedule.Blocked = %v, want none once every precondition is met", ready.Steps.BackupSchedule.Blocked)
+	}
+}
+
+// TestHandleSetupCommandsBackupBlockedKeys covers #1217: the server
+// names every missing precondition as a machine-readable key, all that
+// apply rather than just the first, so the wizard can say why the
+// backup step printed nothing instead of showing empty boxes. Wording
+// stays out of Go entirely -- these keys are exactly what the frontend
+// switches on.
+func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// Nothing present at all: every key fires, in the order the wizard
+	// wants them read -- config problems first, then the two the
+	// operator fixes in the wizard.
+	none := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5"})
+	want := []string{"backups-off", "no-retention-key", "no-device", "no-token"}
+	if !slicesEqual(none.Steps.Backup.Blocked, want) {
+		t.Errorf("Backup.Blocked = %v, want %v", none.Steps.Backup.Blocked, want)
+	}
+	if !slicesEqual(none.Steps.BackupSchedule.Blocked, want) {
+		t.Errorf("BackupSchedule.Blocked = %v, want %v (same condition as Backup)", none.Steps.BackupSchedule.Blocked, want)
+	}
+
+	// Exactly one precondition missing at a time -- the owner's actual
+	// case (#1217's correction note): backups switched off in config,
+	// everything else present.
+	key := testRetentionKey(t)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Vault = v
+	s.SetupInstance.BackupPort = ""
+	onlyBackupsOff := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
+	})
+	if !slicesEqual(onlyBackupsOff.Steps.Backup.Blocked, []string{"backups-off"}) {
+		t.Errorf("Backup.Blocked = %v, want just [backups-off]", onlyBackupsOff.Steps.Backup.Blocked)
+	}
+
+	s.SetupInstance.BackupPort = "47022"
+	onlyNoDevice := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
+	if !slicesEqual(onlyNoDevice.Steps.Backup.Blocked, []string{"no-device"}) {
+		t.Errorf("Backup.Blocked = %v, want just [no-device]", onlyNoDevice.Steps.Backup.Blocked)
+	}
+
+	onlyNoToken := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Device: "rb5009"})
+	if !slicesEqual(onlyNoToken.Steps.Backup.Blocked, []string{"no-token"}) {
+		t.Errorf("Backup.Blocked = %v, want just [no-token]", onlyNoToken.Steps.Backup.Blocked)
+	}
+
+	// Several missing at once -- the owner's instance actually hit this:
+	// two preconditions unmet together, and both keys must come back,
+	// not just the first one found.
+	s.SetupInstance.BackupPort = ""
+	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
+	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
+		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
+	}
+}
+
+// TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable covers #1264
+// finding 5: Vault.Enabled() being false covers both "no key configured"
+// and "a key is configured but could not be read" -- so the blocked key
+// must come from SetupInstance.BackupKeyUnreadable, not from Enabled()
+// alone, or an operator whose key merely failed to load gets told the
+// same "no-retention-key, set one" line as one who never had a key --
+// and following it (minting a fresh key) strands every backup already
+// encrypted under the old one.
+func TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupKeyUnreadable = true
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
+	})
+	want := []string{"retention-key-unreadable"}
+	if !slicesEqual(out.Steps.Backup.Blocked, want) {
+		t.Errorf("Backup.Blocked = %v, want %v -- a broken key must never be reported as no-retention-key", out.Steps.Backup.Blocked, want)
+	}
+	if !slicesEqual(out.Steps.BackupSchedule.Blocked, want) {
+		t.Errorf("BackupSchedule.Blocked = %v, want %v (same condition as Backup)", out.Steps.BackupSchedule.Blocked, want)
+	}
+}
+
+// TestHandleSetupCommandsHTTPSTransport covers #955's ruling: with
+// "https" stored, step 6's two blocks are the slice-push script and its
+// scheduler entry instead of the SFTP pair -- and they are not held back
+// by the drop box's own preconditions, because the push goes through the
+// ingest channel that is already open. Its only precondition beyond the
+// address is the token, the same one step 4 has.
+func TestHandleSetupCommandsHTTPSTransport(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// The default, with nothing chosen: the SFTP pair, which needs the
+	// drop box turned on, a retention key and a device -- none of which
+	// this fixture has.
+	sftp := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443", Token: "tok-123"})
+	if !slicesEqual(sftp.Steps.Backup.Blocked, []string{"backups-off", "no-retention-key", "no-device"}) {
+		t.Errorf("Backup.Blocked on the default transport = %v, want the drop box's own preconditions", sftp.Steps.Backup.Blocked)
+	}
+
+	if !s.Setup.SetBackupTransport(setup.BackupTransportHTTPS) {
+		t.Fatal("SetBackupTransport refused https")
+	}
+	https := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443", Token: "tok-123"})
+	if len(https.Steps.Backup.Blocked) != 0 || len(https.Steps.BackupSchedule.Blocked) != 0 {
+		t.Errorf("Backup.Blocked = %v / BackupSchedule.Blocked = %v, want none: the HTTPS push waits on nothing the drop box needs",
+			https.Steps.Backup.Blocked, https.Steps.BackupSchedule.Blocked)
+	}
+	if !strings.Contains(https.Steps.Backup.Commands, "https://10.0.40.5:8443/api/ingest/router-backup") ||
+		!strings.Contains(https.Steps.Backup.Commands, "Bearer tok-123") {
+		t.Errorf("backup commands = %q, want the ingest URL and token embedded", https.Steps.Backup.Commands)
+	}
+	if strings.Contains(https.Steps.Backup.Commands, "mode=sftp") {
+		t.Errorf("backup commands = %q, want no SFTP upload in the HTTPS script", https.Steps.Backup.Commands)
+	}
+	if !strings.Contains(https.Steps.BackupSchedule.Commands, "mv-backup-https") {
+		t.Errorf("backup schedule commands = %q, want the mv-backup-https scheduler entry", https.Steps.BackupSchedule.Commands)
+	}
+
+	// The token is the one thing it does still wait on, the same as
+	// step 4 -- and the address, which every block here needs.
+	noToken := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443"})
+	if !slicesEqual(noToken.Steps.Backup.Blocked, []string{"no-token"}) {
+		t.Errorf("Backup.Blocked with no token = %v, want just [no-token]", noToken.Steps.Backup.Blocked)
+	}
+	noAddress := postSetupCommands(t, ts.URL, setupCommandsRequest{Token: "tok-123"})
+	if !slicesEqual(noAddress.Steps.Backup.Blocked, []string{"no-address"}) {
+		t.Errorf("Backup.Blocked with no address = %v, want just [no-address]", noAddress.Steps.Backup.Blocked)
+	}
+	if noAddress.Steps.Backup.Commands != "" {
+		t.Errorf("backup commands with no address = %q, want blank", noAddress.Steps.Backup.Commands)
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestHandleSetupCommandsRejectsUnsafeInput covers #1095: every field
@@ -276,11 +578,23 @@ func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
 		{"token with a dollar", setupCommandsRequest{Address: "mv.example.com", Token: "abc$def"}},
 		{"token with a quote", setupCommandsRequest{Address: "mv.example.com", Token: `abc"def`}},
 		{"token with a backslash", setupCommandsRequest{Address: "mv.example.com", Token: `abc\def`}},
+		// A comma in Token reaches PushBlock/loggingPushBlock's
+		// http-header-field=("Content-Type: ...,Authorization: Bearer
+		// <token>") bare -- RouterOS splits that value on commas into
+		// separate headers regardless of quoting, so a comma there adds
+		// a header rather than merely appearing inside one's value.
+		{"token with a comma", setupCommandsRequest{Address: "mv.example.com", Token: "a,b"}},
+		{"token with a colon and comma, header-injection shaped", setupCommandsRequest{Address: "mv.example.com", Token: "a:b,X-Injected:1"}},
 		{"syslogPort non-numeric", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "abc"}},
 		{"syslogPort zero", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "0"}},
 		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},
 		{"syslogPort listen address, bad port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "127.0.0.1:abc"}},
 		{"syslogPort listen address, zero port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "[::]:0"}},
+		// #1281's enrolment token: exactly 20 lowercase letters/digits,
+		// nothing else.
+		{"enrolToken too short", setupCommandsRequest{Address: "mv.example.com", EnrolToken: "abc123"}},
+		{"enrolToken uppercase", setupCommandsRequest{Address: "mv.example.com", EnrolToken: "AAAAAAAAAAAAAAAAAAAA"}},
+		{"enrolToken with a quote", setupCommandsRequest{Address: "mv.example.com", EnrolToken: `abcdefghijklmnopqrs"`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,6 +644,24 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("device %q: status = %d, want 200", device, resp.StatusCode)
+		}
+	}
+
+	// Tokens internal/auth actually mints are hex; validSetupToken's
+	// charset also allows '-' and '_' so a hand-entered or future token
+	// shape in that alphabet is not refused.
+	for _, token := range []string{"deadbeef1234567890abcdef12345678", "abc-123_XYZ"} {
+		body, err := json.Marshal(setupCommandsRequest{Address: "mv.example.com", Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("token %q: status = %d, want 200", token, resp.StatusCode)
 		}
 	}
 

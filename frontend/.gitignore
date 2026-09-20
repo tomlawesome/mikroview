@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.svelte-check
+# Written by the JSON reporter when a run asks for one. Generated, like
+# .svelte-check above -- and 93 of those reached a commit once (#1268).
+.vitest
 
 # Editor directories and files
 .vscode/*

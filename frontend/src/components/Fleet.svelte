@@ -24,10 +24,18 @@
   // - No page heading and no strap (#697, "I meant all... No page
   //   heading, no strap"); the row keeps only the .og h3 label, the
   //   same one Entities prints over the same cards.
-  // - No berth, no add-router affordance of any kind: adding a router
-  //   is a change, and #657's grammar is absent, never disabled. This
-  //   card exists so a viewer can read why the log looks wrong -- a
-  //   quiet router is presented as a fact to read, not a fault to fix.
+  // - Adding a router is a change, and #657's grammar is absent rather
+  //   than disabled -- so Add a router is drawn for an admin and is
+  //   simply not there for anyone else (#1284). For a viewer this is
+  //   still what it always was: a card that says why the log looks
+  //   wrong, where a quiet router is a fact to read and not a fault to
+  //   fix.
+  // - Re-enrol… and the refused senders are *not* here, though #1284
+  //   first put them here: an admin's deck answers the fleet view with
+  //   the Entities card and never draws this component at all
+  //   (deckCards.ts, #785), and GET /api/devices/refused is admin-only,
+  //   so on this card they could be reached by nobody. Both live on
+  //   Entities' own routers row.
   // - Status is a mark plus a written label (#616: never colour alone),
   //   and a router with an active silence flag carries a real link into
   //   the docket's flags tab -- the one place a viewer can take that
@@ -40,10 +48,22 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatLastHeard } from '../lib/format'
-  import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { deviceState, multihomedEcho, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import { wizardState } from '../lib/wizard.svelte'
   import GhostRows from './GhostRows.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
+
+  // The same read the empty state below already makes -- one admin
+  // test on this card, not two that could disagree.
+  const isAdmin = $derived(authState.role === 'admin')
+
+  // Adding a router is the setup wizard's own router steps, opened at
+  // Name your router (#1284) -- not a second dialog that would have to
+  // say the same things in different words.
+  function addRouter() {
+    wizardState.openAddRouter()
+  }
 
   // True when this device has an active (unacknowledged) device_silence
   // flag -- distinct from status === 'stale': the flag only exists for a
@@ -76,7 +96,7 @@
       kind: 'text',
       text:
         authState.role === 'admin'
-          ? 'No RouterOS devices seen yet — your account menu ▸ Run setup… to point one at mikroview.'
+          ? 'No RouterOS devices seen yet — your account menu ▸ Run setup… to point one at MikroView.'
           : 'No RouterOS devices seen yet. Ask an administrator to run setup.',
     }
   })
@@ -85,7 +105,12 @@
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
     <div class="og">
-      <h3>routers — every one that pushes here</h3>
+      <div class="oghead">
+        <h3>routers — every one that pushes here</h3>
+        {#if isAdmin}
+          <button type="button" class="og-action" onclick={addRouter}>Add a router</button>
+        {/if}
+      </div>
       {#if rows.length === 0}
         {#if emptyState.kind === 'ghost'}
           <GhostRows label="Loading devices…" rows={4} />
@@ -113,10 +138,19 @@
                 </div>
               {/if}
               {#if multihomedEcho(d)}
-                <!-- The source-address split's echo (#442): the wizard's
-                     step 2 owns the diagnosis and the command; this card
-                     only says the pair is visible and where the fix is. -->
+                <!-- The source-address split's echo (#442): Send logs
+                     owns the diagnosis and the command (named, not
+                     numbered -- it read "step 2" until #1284 moved Send
+                     logs to third; see fleet.ts's multihomedEcho
+                     comment); this card only says the pair is visible
+                     and where the fix is. -->
                 <div class="frow dim">{multihomedEcho(d)}</div>
+              {/if}
+              {#if setupEcho(d)}
+                <!-- The router's own report of the setup the wizard left
+                     on it (#1241): this line and no more -- the fuller
+                     upgrade notice is #1240's. -->
+                <div class="frow dim">{setupEcho(d)}</div>
               {/if}
               {#if d.sourceIp}
                 <div class="frow dim">syslog from <span class="mono">{d.sourceIp}</span></div>
@@ -134,6 +168,7 @@
         </div>
       {/if}
     </div>
+
   </div></div>
 </div>
 
@@ -171,6 +206,41 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-dim);
+  }
+
+  /* The header row: the label the deck's other cards print, with the
+     screen's one action beside it. */
+  .oghead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  .oghead h3 {
+    margin: 0;
+  }
+
+  .og-action {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .og-action:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .og-action:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .empty {

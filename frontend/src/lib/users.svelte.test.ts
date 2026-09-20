@@ -7,9 +7,10 @@ vi.mock('./api', () => ({
   createUser: vi.fn(),
   deleteUser: vi.fn(),
   fetchUsers: vi.fn(),
+  resetUserPassword: vi.fn(),
 }))
 
-import { createUser, deleteUser, fetchUsers } from './api'
+import { createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
 import { usersState } from './users.svelte'
 
 function user(overrides: Partial<UserSummary> = {}): UserSummary {
@@ -85,5 +86,48 @@ describe('UsersState.remove', () => {
 
     expect(result).toBe('the admin account cannot be deleted')
     expect(usersState.list).toHaveLength(1)
+  })
+})
+
+
+// #1251. The code comes back once and is handed straight to the caller:
+// usersState is a module-level singleton, and a credential parked on it
+// would outlive the dialog that showed it for the rest of the session.
+describe('UsersState.resetPassword', () => {
+  const issued = {
+    username: 'bob',
+    code: 'ABCD-EFGH-JKLM-NPQR',
+    expiresAt: '2026-09-19T00:00:00Z',
+  }
+
+  it('returns the issued code and refreshes the list', async () => {
+    vi.mocked(resetUserPassword).mockResolvedValue(issued)
+    vi.mocked(fetchUsers).mockResolvedValue([user()])
+
+    const result = await usersState.resetPassword('id-1')
+
+    expect(result).toEqual(issued)
+    expect(resetUserPassword).toHaveBeenCalledWith('id-1')
+    expect(fetchUsers).toHaveBeenCalled()
+  })
+
+  it('keeps no copy of the code on the store itself', async () => {
+    vi.mocked(resetUserPassword).mockResolvedValue(issued)
+    vi.mocked(fetchUsers).mockResolvedValue([user()])
+
+    await usersState.resetPassword('id-1')
+
+    expect(JSON.stringify(usersState)).not.toContain(issued.code)
+  })
+
+  it('surfaces a refusal and does not refresh', async () => {
+    vi.mocked(resetUserPassword).mockResolvedValue(
+      'this account signs in through your identity provider',
+    )
+
+    const result = await usersState.resetPassword('id-1')
+
+    expect(result).toBe('this account signs in through your identity provider')
+    expect(fetchUsers).not.toHaveBeenCalled()
   })
 })

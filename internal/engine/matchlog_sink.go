@@ -19,8 +19,8 @@ import (
 // than one, so a capacity-reached steady state cannot drown out a
 // genuinely unexpected failure.
 var (
-	matchLogFullGate = logging.NewLimiter(dropLogInterval)
-	matchFailGate    = logging.NewLimiter(dropLogInterval)
+	matchLogFullGate = logging.NewLimiter(logFloodInterval)
+	matchFailGate    = logging.NewLimiter(logFloodInterval)
 )
 
 // MatchlogSink returns an OnRoutedEmission callback (see

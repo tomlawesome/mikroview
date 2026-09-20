@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to mikroview. Format follows
+Notable changes to MikroView. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -17,6 +17,622 @@ rewritten.
 ## [Unreleased]
 
 Nothing yet.
+
+## [0.6.0] - 2026-09-20
+
+### Security
+
+- **Adding a router now takes your password, and opens the port to one
+  address** (#1291). Minting a router's enrolment token asks you to
+  re-enter your password at that moment — being signed in as the admin
+  is no longer enough on its own, so a stolen session cookie, a
+  cross-site request riding your browser, or script injected into a page
+  you are viewing cannot add a log source behind your back. **Reroll
+  asks every time**, because it mints a token too.
+
+  You also give the router's own address before minting, and MikroView
+  listens for it on that address alone until its token arrives or lapses
+  — where before, a single pending token anywhere left the syslog port
+  reachable by any unknown address on your network. If you get the
+  address wrong, whatever was turned away is listed under the step's
+  refused senders and one press points the window at it; the token you
+  already pasted into the router stays as it is.
+
+  The setup ledger gains a last step, **Register the router**, recording
+  that this is a router you meant to add. Registering grants the router
+  nothing on its own — its logs are accepted because its token arrived
+  from its address, and that is unchanged. A router you enrolled before
+  this release counts as registered already. One that is enrolled but
+  still missing that step can finish just it — **Finish registering…**
+  on its card in the Entities screen — without redoing enrolment. See
+  "Upgrading to 0.6.0: routers must be enrolled" in docs/upgrades.md.
+
+  If your admin account signs in only through your identity provider it
+  has no password to re-check, so minting is refused for now with a
+  message saying so — declare those routers in `config.yaml` instead.
+
+- **The one-line installer applies the same hardening as Compose**
+  (#1286). `install.sh`'s container now runs `--read-only`, with all
+  Linux capabilities dropped, `no-new-privileges`, a process cap, and
+  the app folder (`/etc/mikroview` — your config, TLS pair and history
+  key) mounted read-only, which is what `deploy/docker-compose.yml` has
+  always done. A release check keeps the two from drifting apart again.
+  Because the app folder is read-only, put files into it from outside
+  the container rather than with `docker cp` — see docs/install.md. No
+  memory or CPU cap is set by the installer on purpose: the right number
+  depends on your host, and a wrong one is a silent outage.
+
+### Added
+
+- **Routers now enrol before their logs count** (#1281). A syslog
+  address is trusted only once it is the address you declared in
+  config.yaml, or once it has redeemed a one-time enrolment token you
+  mint for it (the setup wizard's "Send logs" step, or **Re-enrol…** on
+  a router's card; 15-minute life, single use). Until then its lines are
+  refused and shown as refused senders beside your routers on the
+  Entities screen, rather than silently attributed to whichever router
+  happened to claim an address in its own pushed configuration -- a
+  router's own word about its address was never something to trust
+  identity to. Declare a syslog-only router with no address at all from
+  the same screen, mint it a token, and paste the one extra line the
+  "Send logs" step now shows into its logging action. The syslog port
+  itself now refuses a connection from an unrecognised address outright,
+  except while an enrolment token is pending for some device, so the
+  refusal happens before the TLS handshake rather than only at the line.
+
+  Router-to-mikroview pushes (the ingest token flow) now hold to the
+  same rule: a push is refused unless it also arrives from that device's
+  enrolled address. See "Upgrading to 0.6.0: routers must be enrolled" in
+  docs/upgrades.md for what this means for a router that only ever sent
+  logs and was never given a `sourceIp`.
+
+- **Adding a router is a walk through the setup ledger** (#1284). "+ add
+  a router", beside your routers on the Entities screen, opens the same
+  ledger the first-run setup uses, starting at **Name your router**:
+  naming it is what creates it, and the next step mints its enrolment
+  token and prints the block to paste, enrol line included. Each router's
+  card carries **Re-enrol…** for one you have replaced or given a new
+  address — a fresh token, the same walk, the router's history kept. The
+  ledger's steps are walked in the order you do them now (the
+  certificate, then naming, then logs), while the step numbers recorded
+  against past decisions keep their old meaning, so nothing already in
+  your setup record changes what it says.
+
+- **Your admin account keeps its password when you connect it to SSO**
+  (#1252). MikroView has exactly one admin, and it never signs in to
+  your identity provider on its own behalf -- so if the provider is
+  down, misconfigured after an upgrade, or has lost the admin's
+  directory entry, nobody gets in. The admin now keeps both ways in
+  permanently: single sign-on when the provider is there, the password
+  when it isn't. **Every other account still loses its password when it
+  connects** -- that is unchanged.
+
+  First run follows from the same rule. MikroView always asks for a
+  username and a password first, and never offers SSO instead. If your
+  OIDC details are already in the config file you are sent to your
+  provider right afterwards, and the identity you sign in with is
+  connected to the admin account you just made; if they are not,
+  MikroView says the account exists and where those details go.
+
+  **A local username can no longer be an email address.** Identity
+  providers send an email as the username, so keeping local names clear
+  of them means a local account and an SSO one can never be the same
+  name and MikroView never has to compare addresses -- it still stores
+  none. Accounts created before this keep working and still sign in;
+  only new ones are refused. See
+  [docs/configuration.md](docs/configuration.md), "SSO is additive: keep
+  a local admin".
+
+- **An admin can reset someone's password with a one-time code** (#1251).
+  Somebody forgets their password, or you think someone else has learned
+  it: Settings -> people -> "reset password" on their row. MikroView
+  shows you a code like `K7RM-4TQD-9WXF-3HJP` once -- no `0`, `O`, `1` or
+  `I` in it, so it is safe to read aloud -- and you hand it over in
+  person or on a call you trust. **MikroView still sends no email**: it
+  holds no address for anyone, so there is no reset link and nothing to
+  send one to.
+
+  The moment you confirm, their old password stops working and they are
+  signed out everywhere. The code works once, or for 24 hours, whichever
+  comes first, and it goes in the password box where their password used
+  to. MikroView then shows them "Set a new password" and nothing else
+  until they have chosen one.
+
+  The code is shown once and cannot be shown again -- only its hash is
+  kept, and it appears in no log and no audit entry. Lost it? Reset
+  again; that mints a new code and kills the old one. You cannot reset
+  your own account (use the account menu, or
+  `mikroview -recover-admin-account` from the console) or an SSO-only
+  account (its password belongs to your identity provider). See
+  [docs/configuration.md](docs/configuration.md), "Resetting someone's
+  password".
+
+- **Every release is now checked against a real database it wrote, not
+  just real files** (#1247). Alongside the recorded data directory each
+  release already gets, there is now a `pg_dump` per schema version --
+  taken from the first release that carried that migration, v0.1.0,
+  v0.2.0 and v0.3.0 today -- restored and opened by the current build on
+  every change. Tagging a release records both halves automatically
+  instead of waiting for someone to remember, so the next change is
+  tested against the release that just shipped. See
+  [docs/upgrades.md](docs/upgrades.md), "How this is tested".
+
+- **After an upgrade, MikroView says so and tells you what to paste
+  again** (#1240). A calm line at the top of the page -- `upgraded from
+  v0.4.0 · paste step 1 of the setup again on each router` -- with
+  **open setup**, which opens the wizard at step 1 with this version's
+  script, and **done**, which puts it away. The gap it closes is a real
+  one: an install upgraded through three releases said nothing, and the
+  router quietly stayed on the old setup (#1206). `done` is recorded on
+  the server, not in your browser, so one admin settles it for every
+  session and it stays settled across restarts. Once routers report
+  their own setup (#1241) the line counts them -- `2 of 3 routers still
+  on the old setup` -- and clears itself when the last one catches up,
+  with nothing to press. Nothing is shown on a first install, and only
+  admins see it. `GET /api/upgrade` and `POST /api/upgrade/acknowledge`;
+  see [docs/upgrades.md](docs/upgrades.md).
+
+- **One line to install and run MikroView** (#1242): `curl -fsSL
+  https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh
+  | sh` pulls the image, starts one container on two named volumes (data
+  and the #1243 app folder), and prints the address to open — the same
+  line is also the upgrade line. `docs/install.md` has the no-script
+  `docker run` form.
+- **Drop a file into the app folder and restart — no setting to change**
+  (#1243, the contract ruled on in #1209). When nothing in config or the
+  environment names a path, MikroView now looks in `/etc/mikroview`:
+  `config.yaml`, `GeoLite2-Country.mmdb` for country flags,
+  `keys/history.key` for history encryption, and `certs/tls.crt` +
+  `certs/tls.key` for your own certificate. So `/etc/mikroview/config.yaml`
+  is the built-in default as well as the compose default — a bare
+  `docker run` with the folder mounted needs no `MIKROVIEW_CONFIG` — and
+  an empty folder is not an error: the container starts and runs on
+  defaults. Every boot logs one line per file, saying found or not found
+  and the path it looked at, so a file put one directory too deep shows
+  up as a line rather than as a feature that stayed off.
+
+  Nothing changes for an install that already sets these. A value in
+  config or the environment always wins over the folder, so old per-file
+  mounts keep working exactly as before and there is nothing to migrate.
+  The one new refusal is half a certificate pair: `certs/tls.crt`
+  without `certs/tls.key`, or the reverse, stops startup naming the file
+  that is missing, rather than quietly serving MikroView's own
+  certificate under the name yours was meant to serve.
+- **A router backup can be kept, so retention and low-space cycling
+  leave it alone** (#1126). Mark any stored generation kept from
+  Settings' router-backups group, with a comment saying why (`before
+  the 7.16 upgrade`) — required, one line, up to 120 characters. A kept
+  generation moves into a pool of its own per router: it stops
+  counting towards the ten generations retention keeps, and low-space
+  cycling (#1125) never reaches it either. There is no limit on how
+  many a router keeps. Releasing one puts it back into the cycling
+  ten, in its place by age — the only way to free vault space by hand.
+  `POST`/`DELETE`/`PATCH
+  /api/router-backups/{device}/{generation}/protect` do the keeping,
+  releasing and comment-editing; `GET /api/router-backups` gains a
+  `protected` array alongside the existing `lowSpace` flag. The
+  comment lives in the vault's sealed index and is never logged; the
+  audit log records only who kept, released or re-worded which
+  generation (`router_backup.protected`, `router_backup.unprotected`,
+  `router_backup.comment_changed`).
+- **The setup wizard now offers the HTTPS-only way of sending a router
+  backup** (#955). Step 6 has one new line above the script — *The
+  router sends its backup* `sftp · https`. Pick `https` and the step
+  prints the script that reads the backup in small pieces and posts them
+  to the address your router already reaches, instead of the SFTP upload
+  that needs a second port open. That is the whole point of it: an
+  install behind a reverse proxy, with nothing but HTTPS reachable, can
+  now be set up from the wizard rather than by pasting the script out of
+  [routeros-setup.md](docs/routeros-setup.md) by hand. The choice is
+  kept on the MikroView side (`PUT /api/setup/backup-transport`,
+  admin-only, audited), not in your browser, so whoever opens the wizard
+  next sees the way this deployment actually works; and the `https`
+  script does not wait for `backup.enabled`, because it needs no drop
+  box.
+- **Proto and Interface are pickers now, over the values this instance
+  has actually seen** (#1226). They were the last two filters in the
+  stream's strip with no list behind them: you typed `tcp`, or your best
+  guess at an interface name, and hoped. MikroView now keeps the list
+  itself -- every event records its protocol and its in and out
+  interface names, with when each was first and last seen -- and both
+  boxes offer what has actually arrived. Nothing is guessed and nothing
+  is asked of your network. **Typing still works**: the menus are
+  suggestions, not a closed set, so you can still set a filter up before
+  the traffic you are waiting for appears. The list survives a restart
+  (`seen.storePath`) and travels in `-backup` envelopes. A value is kept
+  while it has been seen in the last 90 days, at most 200 per field with
+  the one seen longest ago dropped first -- fixed in MikroView, not
+  settings. Read via `GET /api/seen-values`.
+
+- **A flag's drawer now has a note box: record why you called it what
+  you called it** (#1232). It sits across the bottom of the drawer,
+  above the verdict buttons, and grows as you type. Write whatever you
+  want about the flag first, then click Expected, Checked or
+  Investigate — what you wrote is kept with that verdict, and read back
+  in full the next time the same flag returns, under the line that
+  already says when you last looked at it. It is never required, you can
+  edit it afterwards, and undoing the verdict discards it: the note is
+  the reason for a decision, so withdrawing the decision withdraws the
+  reason. The audit log records that a verdict carried a note and that a
+  note was edited, never the words — the flag is the only place they
+  live. `POST /api/flags/{id}/verdict` takes an optional `note`, and
+  `PUT /api/flags/{id}/note` edits one.
+- **Settings ▸ ingest now tells you when your router's own setup is out
+  of date** (#1205). A router still logging without
+  `remote-log-format=syslog` — every wizard before 2026-09-12 shipped
+  without it, fixed in #1208 — shows up as a sustained run of oversized
+  syslog reads. When that pattern comes from a device you've declared,
+  Settings ▸ ingest now names the router and points at
+  [routeros-setup.md](docs/routeros-setup.md)'s new upgrade note, rather
+  than leaving you to work it out from #1203's banner alone.
+
+- **The drop list store and its server-side validation** (#1223, stage 1
+  of the design ratified on #461): somewhere to keep operator-authored
+  ranges to block (`droplist.storePath`), and the rules on what may
+  become one — public IPv4 only, no broader than /24, and never a range
+  the pushed router state shows as the router's own. Every add and
+  remove is audited. Nothing is served yet: no API, no UI, no RouterOS
+  push — that is #1224/#1225.
+
+- **The drop list's admin API and RouterOS feed** (#1224, stage 2):
+  `GET`/`POST /api/droplist` and `DELETE /api/droplist/{cidr}` manage
+  entries, and `GET /api/droplist.rsc` is the script a router imports to
+  actually block them. The router pulls this itself, on its own
+  schedule, with its own pull-only key (`POST`/`DELETE
+  /api/droplist/key`) — a third bearer-token kind that can read the
+  generated feed and nothing else, the same structural, separate-mux
+  guarantee the read-only and ingest tokens already carry. The fetched
+  script builds the new generation in a staging address list first and
+  only swaps it onto the live one in its last two lines, so a `/import`
+  that aborts partway through — RouterOS's own documented behaviour on a
+  bad line — leaves the live list exactly as it was, never emptied.
+  The Settings group and setup card writing this from the UI are the
+  next bullet.
+
+- **The drop list's router drift and setup scripts, on the backend**
+  (#1225, stage 3's backend half): `GET /api/droplist` now says how many
+  of the store's entries each router's last pushed address-list snapshot
+  actually holds and when that snapshot was confirmed, whether the
+  router's own ranges are known at all, and the four RouterOS commands
+  (the scheduled fetch, the drop rule, and their two undo commands)
+  rendered for the address a router would reach mikroview on. Minting
+  the pull key now also returns the scheduler command with the real key
+  already filled in. The Settings group and setup card that render these
+  for an operator are the next bullet.
+
+- **The drop list's Settings group and setup card, and a block button in
+  the flag drawer** (#1225, the UI half): admins see, add and remove
+  drop-list entries with who/when/why, read one honest drift line per
+  router, mint or revoke the pull key and copy the setup scripts already
+  filled in — Settings ▸ Engine room's new drop list group. `block…` on
+  a flag prefills the add form from that flag's source and commits
+  nothing until you confirm.
+
+- **A router's stored export can be read and compared, not just
+  downloaded** (#895). `GET
+  /api/router-backups/{device}/{generation}/text` returns the redacted
+  export text and `GET /api/router-backups/{device}/diff?from=&to=`
+  returns the line-by-line difference between two generations — read on
+  the generation row, next to the existing download, behind the same
+  admin gate and vault passphrase. A stored export is now redacted a
+  second time on MikroView's own side, independent of RouterOS's own
+  `hide-sensitive`, so a secret RouterOS missed does not survive into a
+  comparison either. Both reads are audited: reading a configuration on
+  screen is reading it.
+
+- **The stream's filter box gains a token bar** (#1246). Focus it and a
+  field menu offers the eight bounded filters — device, action, chain,
+  proto, interface, port, source, destination — pick one and its own
+  values follow, committing into the same filters the named-field strip
+  and a row's click-to-filter already write. Free text in the same box
+  is still the rule search and never a token.
+
+- **Your data directory now records which schema it is on, and MikroView
+  refuses to start on data a newer build wrote** (#1238). The JSON files
+  gain what the database has had since #131: one numbered list of
+  migrations covering both, and a `schema.json` beside the stores saying
+  which of them have run and which build ran them. A missing file means
+  schema 0, so every existing install is stamped on its next start and
+  nothing else changes — there are no data migrations yet. Start an older
+  MikroView on a newer install's data and it now stops before it writes
+  anything, naming the version that wrote the data and telling you to
+  run that one or later, rather than quietly rewriting every document in
+  shapes it does not understand. Migrations land one at a time and are
+  stamped as they land, so an upgrade interrupted half-way — power cut,
+  `docker kill` — resumes at the first one that did not finish with the
+  old documents untouched. `docs/upgrades.md` has the whole contract.
+
+- **Settings ▸ new settings shows the YAML for anything this build
+  understands that your config.yaml hasn't set yet, ready to paste**
+  (#1218). The first boot after an upgrade logs how many it found;
+  opening Settings shows the real block for each one — comment and all,
+  styled like `deploy/config.example.yaml` — meant to paste straight
+  under your own top-level config, not a second hand-written description
+  that could drift from it. The list is worked out once at boot, so it
+  keeps showing for as long as something is genuinely missing, and an
+  edit to config.yaml is picked up the next time MikroView restarts.
+
+### Changed
+
+- **Detection no longer gives up on a burst** (#1109). Checking used to
+  be fed from a 4,096-slot queue, and anything that arrived while it was
+  full was stored and shown but never checked -- 500 port scans in one
+  burst raised no flags at all (#1107). Checking now reads events
+  straight out of the event buffer, in order, keeping a marker of where
+  it got to, so a burst is checked late rather than never. The Engine
+  Room's ingest group says which it is -- `Checking: caught up`, or how
+  far behind and how old the oldest unchecked event is. The one gap left
+  is a flood so large that events leave the buffer before checking
+  reaches them; that gets its own count, `Outrun`, and a banner telling
+  you to raise the memory setting or find what is flooding. `/api/stats`
+  reports `engine` as `{behind, behindSeconds, outrun}` in place of
+  `droppedFromEvaluation`.
+- **A router that only ever pushed is now in the same device list
+  everything counts from** (#1170). Before this, a push from an
+  undeclared router's ingest token had no effect on that list at all, so
+  the Watchlist header could name five routers while the Entities page
+  showed one. A syslog source address is now attributed to a router by
+  `devices[].sourceIp` first, then by the router's own pushed
+  `/ip/address` table if the address belongs to exactly one router's
+  table, and an address neither claims is shown as an unattributed
+  source instead of being counted as a router.
+- **A flag's confidence is now a rating in its drawer, not a number on
+  its row** (#1231). Beside the type — `▲ ACTIVITY SPIKE 72`, one column
+  away from COUNT's `26×` — the figure read as a count of events. It
+  moves under the drawer's sparkline, where there is room to name it:
+  the number and its band (low, moderate, high) in the band's colour, a
+  meter, and one line saying it measures distance from this subject's
+  usual against how much history backs that — the detector's number, not
+  a verdict. Unscored detectors still show nothing.
+
+- **The container now runs as uid/gid `1000`, not `65532`** (#1210).
+  1000 is the first account created on an ordinary Linux host, so it is
+  almost always the operator: a file you mount in — the Postgres DSN,
+  `history.keyFile`, a TLS key — is now readable by MikroView as it
+  stands, where 65532 was nobody on your host and every mounted file
+  needed a `chown` first. Getting that wrong showed up as a bare
+  "permission denied" at startup. Ports are unchanged (8080/8081): an
+  unprivileged uid still cannot bind below 1024, and `runAsNonRoot`
+  checks still pass.
+
+  **Upgrading an existing install needs one command.** A data directory
+  or volume written by the old image is owned by 65532, and the new
+  container cannot write to it. Stop MikroView, then hand it over:
+
+  ```sh
+  # bind mount
+  sudo chown -R 1000:1000 /path/on/host/data
+  ```
+
+  ```sh
+  # named volume
+  docker run --rm -v mikroview-data:/data alpine:3.22 chown -R 1000:1000 /data
+  ```
+
+  Mounted secret files want the same treatment —
+  `sudo chown 1000:1000 postgres-dsn` and so on — unless you already own
+  them as uid 1000, in which case there is nothing to do.
+
+- **"Tune logging" is now "Log every rule"** (#1134), and the page has
+  been rebuilt around the owner's ruling on three faults in 0.5.1. It
+  used to render outside the deck, so it was the one page in the app
+  with no navigation on it — it is a deck card now, with the same roll
+  rail every other page has. Its input was a raw file-picker beside a
+  bare text box; it is one drop zone now — drop a file on it, click it
+  to choose one, or paste — which names the file and says how many
+  firewall rules are in it. And it now says what it is for before any
+  control: *"Drop in your router's export (`/export hide-sensitive`).
+  You get it back with logging switched on for every firewall rule that
+  is not logging yet, ready to paste into the router. Nothing you paste
+  is stored."* The never-stored promise is unchanged and still printed
+  under the drop zone. The two `/api/tune-logging` endpoints and the
+  tier that may call them are unchanged.
+
+- **A skipped setup step now reads as a choice, not a gap** (#1216). Its
+  disc used to be dashed but otherwise uncoloured, so a step you
+  deliberately skipped looked the same as one nobody had reached yet.
+  Skipped now takes the same solid disc-and-receipt colour as done, kept
+  apart only by its dashed border; a step forced past without evidence
+  moves to a caution colour instead, since pushing through without
+  evidence is not the same as choosing to skip.
+
+- **The columns ▸ picker moved from the filter bar to the whisper, right
+  after csv ↓** (#729/#1197). Choosing which optional columns the table
+  draws used to live behind the filter bar's own fold-out strip, one
+  extra tap away from a control a reader who never opened that fold
+  never found at all. Owner ruling: the whisper already commands what
+  the table holds and shows -- hold the lines, fold repeats, empty the
+  screen, give a copy -- and choosing columns is one more of those, not
+  a filter. The desktop trigger and its popover moved there; the filter
+  bar keeps its own always-open column list for mobile, and the
+  checkbox list itself, `ColumnToggles.svelte`, is shared between the
+  two rather than duplicated.
+
+### Fixed
+
+- **Safari no longer stalls while the stream fills** (#1308). Once the
+  stream held a few hundred rows, each new line made Safari restyle
+  every row below it, and a burst of events could freeze the page for
+  a minute where Chrome and Firefox took seconds. A row now keeps its
+  stripe when newer lines arrive above it. The alternating pattern is
+  unchanged; which row it starts on now depends on arrival order rather
+  than always being the top one.
+- **"Run setup" on the map's degraded statement can be tapped in
+  Safari** (#1307). Safari never registers taps on the highlighted word
+  of an SVG line, so the whole line is the control now.
+- **Signing out now clears everything the last admin saw** (#1083).
+  The API and ingest token list, the account list, the admin-action
+  log, the storage panel's backend details, the config diagnostics, the
+  setup ledger, a pasted export and the history key all lived on past
+  sign-out on the same tab, and were shown to whoever signed in next.
+  Sign-out and a 401 bounce now reset each of them, and the page reloads
+  so nothing is left in memory at all.
+- **Losing the vault index no longer loses the router backups** (#1294).
+  Deleting an unreadable `meta.enc` to get the service started came
+  back to a vault that adopted new pushes and then, at the next
+  restart, removed every file the rebuilt index did not name -- kept
+  generations included. The vault now rebuilds its index from the files
+  it finds, keeps every recovered generation, and re-keys each one by
+  its router's real name from the ingest tokens and the device list.
+  Repair demotes a generation missing one of its two files instead of
+  deleting the survivor, and the sweep only takes crash temp files and
+  malformed names. The error for an index that is present but
+  unreadable now says what deleting it costs (the notes, kept-since
+  dates and anchor) and what it does not (the backups). Separately, a
+  configured backup key that cannot be read is no longer reported as
+  "no key": the wizard's step 6 and Settings say the key is unreadable
+  and warn against minting a replacement, which would strand every
+  backup encrypted under the old one.
+- **Settings ▸ Upgrade's dismiss is now a plain close button** (#1218).
+  The old "dismiss for this version" button swapped itself for a note
+  saying it was dismissed, but never actually hid the list of unset
+  settings, so the same list came back every time Settings was reopened
+  regardless. What it did save was a versioned dismissal on the server
+  (`configDrift.storePath`), tied to the version that was current when
+  you clicked it. Owner ruling, verbatim: "Just have a close button.
+  It's simple." Closing it now hides the panel for this visit only,
+  with nothing saved and no server round trip; it shows again next time
+  you open Settings, or after a restart, for as long as something is
+  genuinely missing. The versioned dismissal state and its API are gone.
+
+- **The drop list is now persisted by default, so entries survive a
+  restart** (#1260; an addendum to #853). It used to be memory-only unless
+  `history.keyFile` was configured -- the common case on a default
+  install -- so a restart silently emptied every operator-authored
+  entry. Worse, the RouterOS feed is a full sync (clear the address
+  list, then rebuild it from the store), so the next scheduled fetch
+  after that restart pushed an *empty* list and wiped whatever the
+  router still had, too. The drop list now persists the same way
+  accounts, tokens and recovery keys already do, with no key needed.
+  As a second, independent safeguard, `GET /api/droplist.rsc` now
+  refuses (503) to serve the feed when the store is both empty and was
+  never persisted, rather than handing a router back an empty block
+  list. See `docs/decisions/event-retention.md`'s addendum.
+
+- **The setup wizard's step 5 push script and step 6 backup script --
+  and both their scheduler entries -- are now safe to paste twice**
+  (#1266). This is separate from #1208's fix for step 1's logging
+  commands, below. Re-running step 5 or step 6 used to append a second
+  `/system script add` and a second `/system scheduler add` alongside
+  the one already there, so a router that had already been set up
+  ended up with two schedulers of the same name, both firing -- the
+  router pushed its tables, or ran its backup, twice as often as
+  configured. Both the script add and the scheduler add now update the
+  existing entry in place instead of adding a second one. The wizard
+  version is now 2, since the rendered block changed. The hand-paste
+  alternatives `docs/routeros-setup.md` offers beside those blocks --
+  step 4e's `mv-push` and step 7c-ii's `mv-backup-https` -- now carry
+  the same guard; they were left bare when the generated blocks were
+  fixed, so an operator who set one up by hand and re-pasted it got a
+  second script of that name with no way to tell which one the
+  scheduler ran. The drop list generates a scheduler entry and a raw
+  firewall rule of its own (#1225) and was missed by that fix entirely:
+  minting a pull key reprints the same block, so rotating a key and
+  pasting it again left two `mikroview-drop` schedulers -- the older
+  still fetching every five minutes with the key that had just been
+  replaced -- and a second identical raw rule. Both are guarded now, in
+  the commands MikroView generates and in the copy of them
+  `docs/configuration.md` prints.
+
+- **Fall traffic now matches the rules that actually catch it** (#1196).
+  A pushed rule that did not name both interfaces exactly as the log
+  line prints them keyed differently from its own traffic, so almost
+  every lane read zero and nearly all traffic sat in "not in a pushed
+  table" — true of most rules on a real router, which are scoped by
+  address list, connection state or port rather than by naming both
+  interfaces. A blank interface on the rule side is now read as "any",
+  the same as RouterOS itself means it, and a boundary scoped by an
+  address list is now labelled as a list rather than the one machine it
+  happened to be named after.
+- **`-backup`/`-restore` now carry the data directory's schema number**
+  (`schema.json`, #1244). It was never on the bundled list, so a restore
+  into an empty data directory read as schema 0 — indistinguishable from
+  an install that predates #1238 — and the first real file migration
+  would have run again on the next start, over data already in the new
+  shape. A restore now carries whatever schema its stores were actually
+  at; a bundle stamped newer than this build knows is refused the same
+  way opening one directly is. A backup taken by a build before #1238
+  never had a `schema.json` to carry and still restores as schema 0,
+  which is correct for it.
+- **The setup wizard no longer switches logging on for your
+  established/related accept rule** (#1230). Step 3's bulk tagging used
+  to tag every accept rule and then take it back off that one with
+  `set [find connection-state=established,related] log=no`. That is an
+  exact match on the whole value, and RouterOS 7's own default firewall
+  writes the rule as `established,related,untracked`, so the undo
+  matched nothing, said nothing, and the router logged every packet of
+  every open connection — measured on a live instance as ~15 events/sec
+  becoming ~1500. The wizard now excludes any rule whose
+  `connection-state` mentions established or related instead of enabling
+  and undoing, verified against a CHR running 7.23.3. **If you already
+  ran step 3 against a RouterOS 7 default firewall your router is still
+  flooding — excluding the rule does not switch it back off.** Step 3
+  now ends with two lines that do, so re-running it repairs the router:
+  `/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""`
+  and the same line for `related`. They are safe to run on a router that
+  was never bitten. **Log every rule**
+  marks such a rule "logs every packet, not every connection" and leaves
+  it unticked even when it crosses a dark boundary, where the default
+  selection used to tick it for you.
+- **The docs now say who has to own a mounted file, for every file you
+  mount** (#1212). That note existed only for the Postgres DSN file, so
+  mounting `history.keyFile`, your own TLS certificate and key, or a
+  GeoIP database and hitting `permission denied` left you with nothing
+  to go on. `docs/configuration.md` has one section that states the rule
+  and the `chown`, ["Files you mount into the
+  container"](docs/configuration.md#files-you-mount-into-the-container),
+  and each of those settings links to it; `deploy/config.example.yaml`
+  and `deploy/docker-compose.yml` carry the short version beside the
+  settings themselves.
+- **Changing the vault passphrase is now one atomic step** (#1222).
+  There was no dedicated call for it, so changing meant removing the old
+  passphrase and setting a new one — two API calls, and a process that
+  died between them left the vault with no passphrase at all. `PUT
+  /api/router-backups/passphrase` re-wraps the existing key pair under
+  the new passphrase in a single write; no stored backup is touched, so
+  nothing can be interrupted half-way.
+- **The setup wizard's logging commands are now safe to paste twice**
+  (#1208). Re-running step 1 used to append a second copy of the logging
+  action and rule every time — a real router ended up with three
+  identical rules, tripling its firewall event volume. The block now
+  adds the action if it's missing and updates it in place if it's
+  already there, and only adds the rule when it isn't already present.
+- **The oversized-run banner now names the likely cause, instead of
+  blaming a "non-RouterOS sender"** (#1203). It used to print a count of
+  discarded continuation reads as if each were a lost message. It now
+  counts over-long runs honestly, and when the sender is a router you've
+  declared, says so and points at the fix — the far commoner cause than
+  a stray non-RouterOS sender.
+- **A setup step MikroView watched happen now survives a restart**
+  (#1221). A step whose only evidence lived in memory — syslog
+  connecting, a table being pushed — used to read back as "waiting"
+  after a restart mid-setup, even though it had genuinely happened. The
+  wizard now keeps a dated, past-tense record of what it witnessed
+  ("syslog connected from 1.2.3.4 — seen on 13 Sep at 10:27"), separate
+  from an operator's own skip or force marks, so a restart no longer
+  undoes progress.
+- **Step 6's backup block says why there's no script yet, instead of
+  showing empty boxes** (#1217). It used to render blank input boxes and
+  Copy buttons whenever a token, a device name, backups being enabled,
+  or a mounted retention key was missing. It now names which of those is
+  missing and drops the prose promising a script until one actually
+  exists.
+- **The wizard asks which address the router can reach MikroView on,
+  instead of assuming it's your browser's** (#1213). Every RouterOS
+  command used to fill in `window.location.host` — the address your own
+  browser happened to be using — which is wrong behind a reverse proxy,
+  on a multi-homed host, or wherever ports are mapped, and could
+  silently send logs nowhere. It's now a field in the wizard's header
+  that every command reads from, defaulting to a real address on this
+  instance when one can be detected.
+- **A 401 now always carries `WWW-Authenticate`, so RouterOS can read
+  it** (#1118). RouterOS's own `/tool fetch` — the client behind the
+  drop-list pull and the ingest routes — refused to parse any 401 that
+  omitted the header ("ERROR parsing http: 401 should contain
+  www-authenticate header"), per RFC 9110 §15.5.2, and reported that
+  parse failure instead of the actual refusal. Every 401 MikroView sends
+  now carries `WWW-Authenticate: Bearer realm="mikroview"`, including
+  session-gated routes.
 
 ## [0.5.1] - 2026-09-11
 

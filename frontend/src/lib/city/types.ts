@@ -263,4 +263,7 @@ export interface Ground {
   bridges: Bridge[]
   /** Everything, for the minimap fit and the pan clamp. */
   bounds: { u0: number; u1: number; v0: number; v1: number }
+  /** The town alone -- no far bank, no roads fading out of it -- which
+   * is what the default camera frames (#1180). */
+  townBounds: { u0: number; u1: number; v0: number; v1: number }
 }

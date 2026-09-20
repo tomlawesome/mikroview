@@ -56,7 +56,6 @@ set -euo pipefail
 MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT${MV_SHARD_INDEX:+-shard$MV_SHARD_INDEX}}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
 HTTP_PORT="${MV_HTTP_PORT:-$MV_SLOT_HTTP_PORT}"
-SYSLOG_PORT="${MV_SYSLOG_PORT:-$MV_SLOT_SYSLOG_PORT}"
 SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$MV_SLOT_SYSLOG_TLS_PORT}"
 MV_USER="live-admin"
 MV_PASS="live-password-123"
@@ -344,7 +343,7 @@ up() {
     if mv_port_in_use "$port"; then
       echo "live-env: port $port is still in use after teardown." >&2
       echo "live-env: another live check is probably running from a different checkout." >&2
-      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
+      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
       exit 1
     fi
   done
@@ -445,7 +444,7 @@ PY
 # is what caps SCANS at 508 -- raising it needs a range to put them in,
 # not a bigger number here.
 perfseed() {
-  local scans="${1:-500}" events="${2:-3000}" chunk=50
+  local scans="${1:-500}" events="${2:-3000}"
   if [ "$scans" -gt 508 ]; then
     echo "perfseed: SCANS is capped at 508 -- one source per address in the two documentation ranges" >&2
     exit 2
@@ -460,33 +459,25 @@ for i in range(events):
           f"203.0.113.{i%250}:{5000+i%1000}->192.168.1.10:443, len 60")
 PY
 
-  # One connection per chunk of sources, with a pause between them. The
-  # whole scan half in a single burst does not work: the listener stores
-  # and broadcasts every line (its own loss counters stay at zero), but
-  # the engine's evaluation queue is a 4096-slot channel with a
-  # non-blocking send, so a burst that outruns evaluation is dropped from
-  # *detection* while still looking delivered. Measured on 2026-09-10: 5
-  # sources raised 5 flags and 100 raised 100, then 500 in one burst
-  # raised none at all. Filed as its own defect; the seed's job is to
-  # stay under it, not to work around it silently.
-  local sent=0 batch
-  while [ "$sent" -lt "$scans" ]; do
-    batch=$(( scans - sent ))
-    [ "$batch" -gt "$chunk" ] && batch=$chunk
-    python3 - "$sent" "$batch" <<'PY' | send_tls
+  # All scans in one burst, deliberately. Until #1109 the engine read
+  # events from its own 4096-slot queue and dropped the rest of a burst
+  # from *detection* while the listener stored every line: 500 sources
+  # sent at once raised no flags at all (2026-09-10, #1107), and this
+  # seed had to pace itself in chunks of 50 to stay under it. The engine
+  # now checks every event straight from the store by cursor, so the
+  # burst is the proof: SCANS sources sent at once must raise SCANS
+  # port_scan flags.
+  python3 - "$scans" <<'PY' | send_tls
 import sys
-first, batch = int(sys.argv[1]), int(sys.argv[2])
+scans = int(sys.argv[1])
 nets = ("198.51.100", "192.0.2")
-for s in range(first, first + batch):
+for s in range(scans):
     src = f"{nets[s // 254]}.{1 + s % 254}"
     for p in range(20):
         print(f"firewall,info D|perf-seed-scan| forward: in:ether1 out:bridge1, "
               f"connection-state:new, proto TCP (SYN), "
               f"{src}:{40000 + p}->192.168.1.10:{1000 + p}, len 60")
 PY
-    sent=$(( sent + batch ))
-    sleep 1
-  done
 
   echo "sent ${events} stream events and ${scans} port scans" >&2
 }

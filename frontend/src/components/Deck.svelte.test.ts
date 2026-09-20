@@ -336,6 +336,44 @@ describe('a roll the deck is only passing through never becomes the view (#1049)
     expect(deck.rolls).toEqual([deck.indexOf('live') * CARD_H])
   })
 
+  it('ignores a scrollend that belongs to a roll the operator interrupted', async () => {
+    render(Deck)
+    flushSync()
+    const deck = layOutDeck()
+    deck.park('fall')
+
+    // Two clicks in quick succession: Metrics, then Stream while the
+    // first roll is still moving. The Chromium Playwright 1.63 ships
+    // fires scrollend for the abandoned roll, with the deck part-way
+    // there.
+    await clickRail('Metrics')
+    const secondClick = await clickRail('Stream')
+    expect(appState.view).toBe('live')
+    deck.el.scrollTop = deck.indexOf('topography') * CARD_H
+    deck.el.dispatchEvent(new Event('scrollend'))
+
+    // The deck rolls on past Metrics; the observer reports it.
+    deck.el.scrollTop = deck.indexOf('metrics') * CARD_H
+    arrivalObserver()?.callback([
+      { target: deck.card('metrics'), isIntersecting: true, time: secondClick + 400 },
+    ])
+    flushSync()
+
+    // Still bound for Stream, and no roll back to Metrics.
+    expect(appState.view).toBe('live')
+    expect(deck.rolls.at(-1)).toBe(deck.indexOf('live') * CARD_H)
+
+    // Arriving really does end the roll: the next observation counts.
+    deck.el.scrollTop = deck.indexOf('live') * CARD_H
+    deck.el.dispatchEvent(new Event('scrollend'))
+    deck.el.scrollTop = deck.indexOf('metrics') * CARD_H
+    arrivalObserver()?.callback([
+      { target: deck.card('metrics'), isIntersecting: true, time: performance.now() },
+    ])
+    flushSync()
+    expect(appState.view).toBe('metrics')
+  })
+
   it('still follows an ordinary scroll once the roll is over', async () => {
     render(Deck)
     flushSync()

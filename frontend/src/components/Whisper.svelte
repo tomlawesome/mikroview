@@ -42,10 +42,21 @@
   // or a fence turns it off and the pill reads `follow` in the now ink
   // until it is taken; taking it follows again and clears the cursor
   // and the window -- see whisperState.resumeFollowing.
+  //
+  // `columns ▸` joined this row after csv ↓ per the owner's ruling on
+  // #1197: this hand is already control over what the table holds and
+  // shows (hold the lines, fold repeats, empty the screen, give a copy),
+  // and choosing which columns it draws is one more of those -- not a
+  // filter, which is what FilterBar.svelte's own strip is for. It used
+  // to live behind that strip's fold, where a reader who never opened it
+  // never found the picker at all; FilterBar carries no second copy any
+  // more (see the comment on its mobile-only column list, which the
+  // ruling left alone).
   import { appState } from '../lib/state.svelte'
   import { whisperState } from '../lib/whisper.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
   import { viewportState } from '../lib/viewport.svelte'
+  import { columnState } from '../lib/columns.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import { formatEps, formatHM, formatTime } from '../lib/format'
   import {
@@ -59,6 +70,30 @@
     topTalker,
   } from '../lib/whisperStats'
   import type { TimeBucket } from '../lib/types'
+  import ColumnToggles from './ColumnToggles.svelte'
+
+  // The desktop columns ▸ trigger and its popover (#1197, moved here from
+  // FilterBar.svelte's own always-visible strip -- see the top-of-file
+  // comment for why this row is where it belongs now). Same disclosure
+  // shape as the rest of this file's popovers-that-aren't: closes on a
+  // second click of the trigger, on Escape (focus returns to the
+  // trigger), or on a click landing outside the panel.
+  let columnsOpen = $state(false)
+  let columnsMenuEl: HTMLDivElement | undefined = $state()
+  let columnsTriggerEl: HTMLButtonElement | undefined = $state()
+
+  function onColumnsWindowClick(e: MouseEvent) {
+    const path = e.composedPath()
+    if (columnsOpen && columnsMenuEl && !path.includes(columnsMenuEl)) columnsOpen = false
+  }
+
+  function onColumnsWindowKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return
+    if (columnsOpen) {
+      columnsOpen = false
+      columnsTriggerEl?.focus()
+    }
+  }
 
   // A drag shorter than this (screen pixels) is a sloppy click, not a
   // fence -- click and drag must never be ambiguous.
@@ -369,6 +404,8 @@
   }
 </script>
 
+<svelte:window onclick={onColumnsWindowClick} onkeydown={onColumnsWindowKeydown} />
+
 <div
   class="whisper"
   aria-label="The last {WHISPER_WINDOW_MINUTES} minutes, whispered — click the curve to seek, drag to fence a time range"
@@ -516,6 +553,53 @@
     onclick={() => downloadEventsCsv(heldEvents)}>csv ↓</button
   >
 
+  <!-- #1197 (owner ruling, 2026-09-13): columns ▸ stands on this
+       always-visible hand now, after csv ↓ -- not inside FilterBar's
+       fold, where an operator who never opens the filters never learned
+       the table had hidden columns at all. Same popover panel, same
+       persistence, same columnsOpen/columnsMenuEl/columnsTriggerEl state
+       -- only the trigger's home moved (#1197), and FilterBar's own copy
+       of the trigger/panel is gone: one door to this panel, not two.
+       Desktop only -- the mobile drawer keeps its own always-open list
+       (FilterBar.svelte). The checkbox list itself is ColumnToggles.svelte
+       now, shared with that drawer rather than duplicated (#1218 audit
+       finding 13). -->
+  {#if !viewportState.isMobile}
+    <div class="columns-menu" bind:this={columnsMenuEl}>
+      <button
+        type="button"
+        class="wpill tf-columns"
+        class:on={columnsOpen}
+        bind:this={columnsTriggerEl}
+        onclick={(e) => {
+          e.stopPropagation()
+          columnsOpen = !columnsOpen
+        }}
+        aria-haspopup="true"
+        aria-expanded={columnsOpen}
+        aria-label="Choose which columns the stream shows"
+        title="Choose which columns the stream shows">columns ▸</button
+      >
+      {#if columnsOpen}
+        <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
+          <ColumnToggles />
+          <!-- One click undoes a bad drag. Disabled once every width
+               already matches DEFAULT_WIDTHS -- nothing to reset, same
+               idiom csv ↓'s own disabled state uses for "nothing to
+               give". -->
+          <button
+            type="button"
+            class="col-reset"
+            onclick={() => columnState.reset()}
+            disabled={columnState.isDefault}
+            title="Reset every column back to its default width"
+            >reset widths</button
+          >
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <p class="sr-only" role="status">{announcement}</p>
 </div>
 
@@ -525,6 +609,21 @@
     gap: 14px;
     align-items: center;
     padding: 2px 0 6px;
+    /* #1197's own move: neither .card nor .card-body (the shared
+       ancestor of this row and LiveTable's .table-wrap) is itself a
+       stacking context, so a descendant's z-index and .table-wrap's
+       sticky header cells' own (.header-cell, z-index 2-4) climb straight
+       past both and are compared as if they were siblings at the
+       document root -- the same defect FilterBar's own .bar.thin
+       comment recorded for the fold-out strip, caught there as the
+       header painting straight through the open column panel despite
+       its z-index of 40 nominally outranking it. This row sits directly
+       above LiveTable in that same flex column, so it inherits the same
+       fix: position + a z-index clear of LiveTable's own puts it in the
+       race and gives the columns ▸ panel (below) the header's own
+       weapon back. */
+    position: relative;
+    z-index: 10;
   }
 
   .wbar {
@@ -671,6 +770,81 @@
   .wpill:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+  }
+
+  /* columns ▸ (#1197, moved from FilterBar.svelte): a .wpill like wipe
+     and csv ↓ either side of it, plus its own open-state ink so the
+     picker being open reads as clearly here as `pause`/`group` do above. */
+  .columns-menu {
+    position: relative;
+  }
+
+  .tf-columns.on {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  /* Floats over the row (the account menu's dress, same as
+     FilterPresetsMenu's .fpmenu) instead of joining the flex flow, so
+     opening it never pushes anything after it onto another line. */
+  .col-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    /* Right-anchored, not left: the trigger is the last pill on the row,
+       so a panel opening rightward from there would run past the
+       viewport edge (the defect this ported from, FilterBar's own #710).
+       Opening leftward keeps it over the row that's already on screen. */
+    right: 0;
+    z-index: 40;
+    width: 320px;
+    max-width: 80vw;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    cursor: default;
+  }
+
+  .col-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+  }
+
+  /* .col-toggle/.col-group-heading are ColumnToggles.svelte's own
+     styles now (#1218 audit finding 13) -- this container's flex
+     layout is all that stays here. */
+
+  /* One click undoes a bad drag, set off from the checkboxes above it by
+     the same hairline .col-group-heading already uses, so it doesn't
+     read as one more column toggle. */
+  .col-reset {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 8px 0 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    background: none;
+    color: var(--fg-dim);
+    font: 11px var(--font-mono);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .col-reset:hover:not(:disabled) {
+    color: var(--fg);
+  }
+
+  .col-reset:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .col-reset:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

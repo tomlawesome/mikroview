@@ -30,6 +30,10 @@ export function isPublicIp(ip?: string): boolean {
   if (!ip) return false
   const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
   if (!m) return false
+  // Each octet must actually be an octet: the pattern above admits
+  // 999.1.1.1, which would offer a lookup button for an address the
+  // backend then rejects as malformed.
+  if (m.slice(1).some((o) => Number(o) > 255)) return false
   const [a, b] = [Number(m[1]), Number(m[2])]
   if (a === 10) return false
   if (a === 172 && b >= 16 && b <= 31) return false

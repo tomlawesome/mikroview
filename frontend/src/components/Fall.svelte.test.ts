@@ -40,6 +40,7 @@ vi.mock('../lib/api', () => ({
 }))
 
 import { fetchEventsWindow } from '../lib/api'
+import { formatHM } from '../lib/format'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { appState } from '../lib/state.svelte'
@@ -116,6 +117,7 @@ function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     inInterface: 'iot',
     outInterface: 'bridge1',
     srcAddressList: 'iot',
+    slugs: [],
     label: 'iot → bridge1',
     coverage: 'observed',
     epithet: '',
@@ -390,6 +392,57 @@ describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #
     expect(container.textContent).toContain('✱ NEW DEVICE')
     expect(container.textContent).not.toContain('ALARM FIRED')
   })
+
+  it('explains NOT IN A PUSHED TABLE on the caption itself, not only in aria (#1164)', async () => {
+    // An event on a boundary no pushed rule names makes the "other
+    // traffic" band; the three words on its caption meant nothing
+    // without a screen reader.
+    // The chain here is one nothing was pushed for at all -- #1196 gives
+    // the other case (a pushed chain, other interfaces) its own sentence,
+    // tested below.
+    const events = [makeEvent({ chain: 'srcnat', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const caption = [...container.querySelectorAll('.band-caption')].find((n) => n.textContent?.includes('NOT IN A PUSHED TABLE'))
+    expect(caption?.querySelector('title')?.textContent).toBe('events whose boundary is not in a pushed rule table yet')
+    // The same words, not a second wording of them.
+    const head = caption?.closest('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain('events whose boundary is not in a pushed rule table yet')
+  })
+})
+
+// #1196: a pushed rule that names no interface used to key as
+// `forward||` while its own traffic keyed as `forward|bridge|ether1`, so
+// every lane read zero and everything sat in "other traffic".
+describe('the fall matches traffic to the rules that actually catch it (#1196)', () => {
+  const wildcard = boundary({
+    key: 'forward||',
+    inInterface: '',
+    outInterface: '',
+    srcAddressList: '',
+    label: 'forward',
+  })
+
+  it('draws interfaced traffic on the band whose rule names no interface', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'bridge', outInterface: 'ether1', dstPort: 443 })]
+    const { container } = await renderFall({ boundaries: [wildcard], events })
+    expect(container.textContent).not.toContain('NOT IN A PUSHED TABLE')
+    const head = [...container.querySelectorAll('.band-head')].find((n) => n.getAttribute('aria-label')?.startsWith('forward'))
+    expect(head?.getAttribute('aria-label')).toContain('1 events this window')
+  })
+
+  it('tells the unmatched lane why when the chain is pushed but the interfaces are not', async () => {
+    // boundary() names both interfaces; this event is in the same chain
+    // through different ones, so "not in a pushed table" would be true
+    // but would point the operator at the wrong thing.
+    const events = [makeEvent({ chain: 'forward', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const caption = [...container.querySelectorAll('.band-caption')].find((n) => n.textContent?.includes('NOT IN A PUSHED TABLE'))
+    expect(caption?.querySelector('title')?.textContent).toBe(
+      'their chain is in a pushed table, but no rule there names these interfaces',
+    )
+    const head = caption?.closest('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain('their chain is in a pushed table, but no rule there names these interfaces')
+  })
 })
 
 describe('the flag badge never blocks the carrier it names (#1026)', () => {
@@ -561,6 +614,86 @@ describe('port labels along the foot cover every band (#700 fault 8)', () => {
     expect(text).toContain(':22')
     expect(text).toContain(':8291')
     expect(text).toContain(':51820')
+  })
+})
+
+// #1254: a real capture of the bridge-lan -> vlan-srv band put :123 NTP
+// (a small, recent carrier) on top of :53 DNS's own peak (a much
+// bigger one, port-scaled to nearly the same x by assignX's port-range
+// mapping once :5001 also shares the band), and separately clipped
+// :5001 Synology-HTTPS at the rig's right edge. Both fixtures below
+// recreate that exact three-port band; the port numbers, not just the
+// traffic shape, are what made assignX squeeze DNS and NTP together.
+function spectrumBandEvents(now: number) {
+  const at = (dstPort: number, n: number) =>
+    Array.from({ length: n }, () =>
+      makeEvent({
+        chain: 'forward',
+        inInterface: 'bridge-lan',
+        outInterface: 'vlan-srv',
+        dstPort,
+        time: new Date(now - 1000).toISOString(),
+      }),
+    )
+  // DNS busy but not the band's busiest; NTP barely active; Synology
+  // the busiest (sets nowMax) -- see the comment above needlesFor for
+  // why bucket[0]'s share of nowMax drives a carrier's peak height.
+  return [...at(53, 24), ...at(123, 2), ...at(5001, 40)]
+}
+
+const spectrumBandBoundary = boundary({
+  key: 'forward|bridge-lan|vlan-srv',
+  chain: 'forward',
+  inInterface: 'bridge-lan',
+  outInterface: 'vlan-srv',
+  label: 'bridge-lan → vlan-srv',
+})
+
+function peakLabelY(container: HTMLElement, text: string): number {
+  const el = [...container.querySelectorAll('text.plab:not(.carrier-label)')].find((e) => e.textContent === text)
+  expect(el, `expected a peak label reading "${text}"`).toBeTruthy()
+  return Number(el!.getAttribute('y'))
+}
+
+describe('a short peak’s label never crosses a taller neighbour’s curve (#1254 fault 1)', () => {
+  it('lifts :123 NTP clear of :53 DNS’s own peak instead of drawing over it', async () => {
+    const { container } = await renderFall({
+      boundaries: [spectrumBandBoundary],
+      events: spectrumBandEvents(Date.now()),
+    })
+    const dnsY = peakLabelY(container, ':53 DNS')
+    const ntpY = peakLabelY(container, ':123 NTP')
+    // A label's own baseline sits 8 rig units above its own peak's tip
+    // (see the comment above needlesFor) whenever nothing displaced
+    // it -- DNS is this band's tallest carrier after NTP and is placed
+    // first, so it is never displaced, making dnsY + 8 a solid stand-in
+    // for DNS's own curve top. NTP's label must never sit numerically
+    // below that (SVG y grows downward), or it is drawn across DNS's
+    // curve rather than above it.
+    expect(ntpY).toBeLessThanOrEqual(dnsY + 8)
+  })
+})
+
+describe('a long port label stays inside its own band, not clipped at the rig edge (#1254 fault 2)', () => {
+  it('anchors :5001 Synology-HTTPS so it ends inside the band instead of running past it', async () => {
+    const { container } = await renderFall({
+      boundaries: [spectrumBandBoundary],
+      events: spectrumBandEvents(Date.now()),
+    })
+    const band = headHitBoxes(container)[0]
+    const label = [...container.querySelectorAll('text.plab.carrier-label')].find(
+      (el) => el.getAttribute('data-port') === '5001',
+    )
+    expect(label, 'expected a :5001 port label').toBeTruthy()
+    const x = Number(label!.getAttribute('x'))
+    const anchor = label!.getAttribute('text-anchor')
+    const text = label!.textContent ?? ''
+    // CHAR_W_10 in Fall.svelte: this rig's own measured per-character
+    // width for its 10px label type (#1114).
+    const CHAR_W_10 = 6.5
+    const w = text.length * CHAR_W_10
+    const rightEdge = anchor === 'end' ? x : anchor === 'start' ? x + w : x + w / 2
+    expect(rightEdge).toBeLessThanOrEqual(band.x + band.width)
   })
 })
 
@@ -776,5 +909,167 @@ describe('the overview strip (#722 amendment, 2026-08-31): replaces the pager', 
     flushSync()
     expect(strip.getAttribute('aria-valuenow')).toBe('8') // clamped to maxStart
     expect(container.textContent).toContain('b15 → x')
+  })
+})
+
+// A band's own text node, excluding the full-name <title> nested inside
+// it (#1114) -- reading el.textContent would concatenate both.
+function drawnText(el: Element): string {
+  const node = [...el.childNodes].find((n) => n.nodeType === Node.TEXT_NODE)
+  return node?.textContent ?? ''
+}
+
+describe('band header text stays inside its own band (#1114)', () => {
+  // 10 boundaries on the default 1600px frame shrinks every band to the
+  // width the sizing policy test above already calls "just above the
+  // MIN_PITCH floor" (142px, GUTTER already subtracted) -- the narrowest
+  // a band gets on one page without paginating.
+  it('truncates an over-budget band label with a middle ellipsis, keeping the full name in a nested title', async () => {
+    const longLabel = 'bridge-lan-uplink-to-vlan-iot-gateway-core-switch'
+    const boundaries = makeBoundaries(10)
+    boundaries[0] = { ...boundaries[0], label: longLabel }
+    const { container } = await renderFall({ boundaries })
+
+    const labelEl = container.querySelector('.band-label')!
+    const drawn = drawnText(labelEl)
+    // (142 - 6) / 8 (measured 13px/bold monospace char width) = 17
+    expect(drawn.length).toBeLessThanOrEqual(17)
+    expect(drawn).not.toBe(longLabel)
+    expect(drawn).toContain('…')
+    // Both ends survive the truncation, not just a trailing "...".
+    expect(drawn.startsWith(longLabel.slice(0, 3))).toBe(true)
+    expect(drawn.endsWith(longLabel.slice(-3))).toBe(true)
+    expect(labelEl.querySelector('title')?.textContent).toBe(longLabel)
+  })
+
+  it('truncates an over-budget epithet the same way, and leaves a short one untouched', async () => {
+    const longEpithet = 'a fairly long epithet sentence that will not fit in the header'
+    const boundaries = makeBoundaries(10)
+    boundaries[0] = { ...boundaries[0], epithet: longEpithet }
+    const { container } = await renderFall({ boundaries })
+
+    const epithetEl = container.querySelector('.band-epithet')!
+    const drawn = drawnText(epithetEl)
+    // (142 - 6) / 6.5 (measured 10px monospace char width) = 20
+    expect(drawn.length).toBeLessThanOrEqual(20)
+    expect(drawn).toContain('…')
+    expect(epithetEl.querySelector('title')?.textContent).toBe(longEpithet)
+  })
+
+  it('leaves a short label undisturbed -- no ellipsis, no title needed to recover it', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(10) })
+    const labelEl = container.querySelector('.band-label')!
+    expect(drawnText(labelEl)).toBe('b0 → x')
+    expect(labelEl.querySelector('title')?.textContent).toBe('b0 → x')
+  })
+
+  it("doesn't touch the band head's own aria-label, which still carries the full summary", async () => {
+    const longLabel = 'bridge-lan-uplink-to-vlan-iot-gateway-core-switch'
+    const boundaries = makeBoundaries(10)
+    boundaries[0] = { ...boundaries[0], label: longLabel }
+    const { container } = await renderFall({ boundaries })
+    const head = container.querySelector('.band-head')
+    expect(head?.getAttribute('aria-label')).toContain(longLabel)
+  })
+})
+
+// ── #1204: the fall's composition ─────────────────────────────────────
+// Fable's ruling of 2026-09-15 on the three faults the owner's
+// full-width screenshot showed: a caption stranded two thirds of the way
+// down an empty lane, a chip row cut off by the top of the screen, and
+// an axis whose labels came from three sources with no shared rhythm.
+// The chip row is a layout fact and is pinned in the browser instead
+// (frontend/scripts/live-fall-composition.mjs); the two below are claims
+// about the drawing itself.
+
+// The rig's own geometry, restated here because these tests are about
+// exactly those coordinates: the pour runs FALL_TOP..FALL_BOT, and the
+// 15 m span divides it into 60 bucket rows.
+const FALL_TOP = 196
+const FALL_BOT = 760
+const BUCKET_H = (FALL_BOT - FALL_TOP) / 60
+// The ruling's own figure: a label is dropped when it would sit within
+// 12 rig units of one that outranks it.
+const LABEL_GAP = 12
+
+function annoYs(container: HTMLElement, selector: string): number[] {
+  return [...container.querySelectorAll(selector)].map((el) => Number(el.getAttribute('y')))
+}
+
+describe('a band caption sits at the head of the pour (#1204)', () => {
+  it('states "quiet, not dark" in the pour\'s first rows, not two thirds of the way down it', async () => {
+    const { container } = await renderFall({ boundaries: [boundary()], events: [] })
+    const ys = annoYs(container, '.quiet-anno')
+    expect(ys).toHaveLength(2)
+    // Under the NOW line (186) and inside the pour, within its first
+    // couple of bucket rows -- the whole point of the ruling is that an
+    // all-quiet estate states itself in the first screenful. The value
+    // this replaces was y=420, nearly half the rig below the head.
+    for (const y of ys) {
+      expect(y).toBeGreaterThan(FALL_TOP)
+      expect(y).toBeLessThanOrEqual(FALL_TOP + 3 * BUCKET_H)
+    }
+    // One two-line plate, not two sentences that happen to be near each
+    // other: the second line rides the plate's own leading.
+    expect(ys[1] - ys[0]).toBe(14)
+  })
+
+  it("puts the dark band's caption on the same two lines, so the two read as one row", async () => {
+    const boundaries = [
+      boundary(),
+      boundary({ key: 'forward|guest|bridge9', inInterface: 'guest', outInterface: 'bridge9', label: 'guest → bridge9', coverage: 'dark' }),
+    ]
+    const { container } = await renderFall({ boundaries, events: [] })
+    expect(annoYs(container, '.dark-anno')).toEqual(annoYs(container, '.quiet-anno'))
+  })
+})
+
+describe('one label column, one rhythm (#1204)', () => {
+  // Every time label in the gutter, as drawn.
+  function gutter(container: HTMLElement): { y: number; text: string; brink: boolean }[] {
+    return [...container.querySelectorAll('.tlab')].map((el) => ({
+      y: Number(el.getAttribute('y')),
+      text: el.textContent ?? '',
+      brink: el.classList.contains('now-t'),
+    }))
+  }
+
+  it('keeps the brink and drops an alarm row landing within 12 rig units of it', async () => {
+    // A flag that fired seconds ago lands in the pour's first bucket,
+    // roughly 4 units under the brink's own label. Rank says the brink
+    // wins: it is the one label on this axis that always means "now".
+    const target = '198.51.100.44'
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', srcIp: target })]
+    const flags = [makeFlag('new_device', target, { firstSeen: new Date(Date.now() - 1000).toISOString() })]
+    const { container } = await renderFall({ boundaries: [boundary()], events, flags })
+
+    const head = gutter(container).filter((l) => l.y < FALL_TOP + LABEL_GAP)
+    expect(head).toHaveLength(1)
+    expect(head[0].brink).toBe(true)
+    // The flag's moment is not lost with its label: the horizon still
+    // draws its line through every band.
+    expect(container.querySelectorAll('.horizon').length).toBeGreaterThan(0)
+  })
+
+  it('keeps an alarm row and drops the rail tick it lands on', async () => {
+    // A flag fired exactly on one of the rail's own 3-minute ticks, far
+    // enough down the pour to be clear of the brink. The minute is
+    // printed once, by the alarm row, rather than twice.
+    const step = 3 * 60 * 1000
+    const tick = Math.floor((Date.now() - 4 * 60 * 1000) / step) * step
+    const hm = formatHM(new Date(tick).toISOString())
+    const target = '198.51.100.45'
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1', srcIp: target })]
+    const flags = [makeFlag('new_device', target, { firstSeen: new Date(tick).toISOString() })]
+    const { container } = await renderFall({ boundaries: [boundary()], events, flags })
+
+    const onTheMinute = gutter(container).filter((l) => l.text === hm)
+    expect(onTheMinute).toHaveLength(1)
+    expect(onTheMinute[0].brink).toBe(false)
+    // And it is the alarm row's own y, not the rail's: the two agree to
+    // within half a bucket, so this only pins that the label survived
+    // somewhere in the pour rather than being dropped with the tick.
+    expect(onTheMinute[0].y).toBeGreaterThan(FALL_TOP)
+    expect(onTheMinute[0].y).toBeLessThan(FALL_BOT)
   })
 })

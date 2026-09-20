@@ -148,7 +148,7 @@ func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, reusedCA bool, er
 				"servertls: persisting to %s: %w -- refusing to start, because a CA "+
 					"that cannot be saved is regenerated on every restart, and each "+
 					"one has to be trusted again by every browser, reverse proxy and "+
-					"router. Give mikroview a writable data directory (the shipped "+
+					"router. Give MikroView a writable data directory (the shipped "+
 					"deploy/docker-compose.yml mounts the mikroview-data volume at "+
 					"/var/lib/mikroview for this)", cfg.StorePath, saveErr)
 		}

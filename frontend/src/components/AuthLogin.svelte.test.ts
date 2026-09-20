@@ -14,9 +14,10 @@ vi.mock('../lib/api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
+  setNewPasswordAfterReset: vi.fn(),
 }))
 
-import { fetchAuthSession, login } from '../lib/api'
+import { fetchAuthSession, login, setNewPasswordAfterReset } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import AuthLogin from './AuthLogin.svelte'
 
@@ -28,6 +29,7 @@ beforeEach(() => {
   authState.ssoAvailable = false
   authState.ssoError = null
   authState.justSignedOut = false
+  authState.mustChangePassword = false
 })
 
 async function fillAndSubmit(username: string, password: string) {
@@ -72,6 +74,23 @@ describe('AuthLogin', () => {
     expect(screen.getByRole('button', { name: /enter/i })).toBeTruthy()
   })
 
+  // #1187: an empty field used to raise the browser's own "Please fill
+  // out this field." bubble -- the engine's words, in the browser's
+  // language, over a form that already has its own error line.
+  it('answers an empty form in its own error line, with the browser kept out of it', async () => {
+    const { container } = render(AuthLogin)
+    expect(container.querySelector('form')?.hasAttribute('novalidate')).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+    expect(await screen.findByText('Enter your account name.')).toBeTruthy()
+    expect(login).not.toHaveBeenCalled()
+
+    await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'tom' } })
+    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
+    expect(await screen.findByText('Enter your password.')).toBeTruthy()
+    expect(login).not.toHaveBeenCalled()
+  })
+
   it('shows the SSO link only when the backend reports SSO is configured', async () => {
     authState.ssoAvailable = true
 
@@ -100,9 +119,82 @@ describe('AuthLogin', () => {
     expect(authState.justSignedOut).toBe(false)
   })
 
+  // #1214 extracted the door's rain into the shared Fullfall component
+  // -- this pins that the extraction left the door still raining, with
+  // its own centre mask variant.
+  it('still rains the fullfall across the door, masked out of the centre', () => {
+    const { container } = render(AuthLogin)
+
+    expect(container.querySelectorAll('.fullfall.door i').length).toBe(40)
+  })
+
   it('does not play the way-out beat on a plain page load', () => {
     const { container } = render(AuthLogin)
 
     expect(container.querySelector('.reverse')).toBeNull()
+  })
+})
+
+
+// #1251: after signing in with a one-time code, the door does not open.
+// It asks for a password of your own and shows nothing else -- the
+// server 403s everything but that one route, so anything else on screen
+// would be a promise the session cannot keep.
+describe('AuthLogin after a one-time code sign-in', () => {
+  beforeEach(() => {
+    authState.state = 'must-change-password'
+    authState.mustChangePassword = true
+  })
+
+  it('asks only for a new password, with no account field and no SSO way round it', () => {
+    authState.ssoAvailable = true
+
+    render(AuthLogin)
+
+    expect(screen.getByText('Set a new password')).toBeTruthy()
+    expect(screen.queryByLabelText('account')).toBeNull()
+    expect(screen.getByLabelText('new password')).toBeTruthy()
+    expect(screen.getByLabelText('confirm password')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+  })
+
+  it('refuses two passwords that do not match without calling the server', async () => {
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('new password'), {
+      target: { value: 'new-password-placeholder' },
+    })
+    await fireEvent.input(screen.getByLabelText('confirm password'), {
+      target: { value: 'a-different-placeholder' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /set password/i }))
+
+    expect(await screen.findByText('Passwords do not match.')).toBeTruthy()
+    expect(setNewPasswordAfterReset).not.toHaveBeenCalled()
+  })
+
+  it('sets the password and opens the app', async () => {
+    vi.mocked(setNewPasswordAfterReset).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'bilbo',
+      role: 'user',
+      mustChangePassword: false,
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('new password'), {
+      target: { value: 'new-password-placeholder' },
+    })
+    await fireEvent.input(screen.getByLabelText('confirm password'), {
+      target: { value: 'new-password-placeholder' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: /set password/i }))
+
+    expect(setNewPasswordAfterReset).toHaveBeenCalledWith('new-password-placeholder')
+    expect(authState.state).toBe('authenticated')
   })
 })

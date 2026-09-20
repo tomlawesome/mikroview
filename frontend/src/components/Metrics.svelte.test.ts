@@ -20,6 +20,12 @@ import { metricsPref } from '../lib/metrics.svelte'
 import { formatHM } from '../lib/format'
 import type { Stats } from '../lib/types'
 import Metrics from './Metrics.svelte'
+// Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
+// its own CSS assertions: vitest leaves `test.css` off, so jsdom applies
+// no stylesheet and a getComputedStyle() check would pass whatever the
+// rule said. Reading the source text is the only way to prove a style
+// rule from here.
+import componentSource from './Metrics.svelte?raw'
 
 // jsdom implements no ResizeObserver, and `bind:clientWidth` -- how the
 // drawn views measure their own box, so the SVG can be sized in real CSS
@@ -251,5 +257,14 @@ describe('Metrics', () => {
     // The base fixture is a pre-#795 stats payload.
     const { container } = render(Metrics)
     expect(statement(container)).toBeNull()
+  })
+})
+
+// #1189: over-scrolling the minute table past its last row chained into
+// the deck's own scroll and snapped the next card into view -- the
+// operator landed on Stream with nothing saying why.
+describe('the metrics scroll stops at the metrics view (#1189)', () => {
+  it('contains its own over-scroll rather than chaining into the deck', () => {
+    expect(componentSource).toMatch(/\.metrics\s*\{[^}]*overscroll-behavior:\s*contain/)
   })
 })

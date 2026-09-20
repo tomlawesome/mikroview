@@ -250,7 +250,7 @@ export function deviceKindVerdict(input: DeviceKindInput): DeviceKindVerdict {
     }
   }
 
-  return { kind: 'puck', source: 'fallback', why: 'nothing mikroview saw suggests a type' }
+  return { kind: 'puck', source: 'fallback', why: 'nothing MikroView saw suggests a type' }
 }
 
 /** The shape alone. See deviceKindVerdict for where it came from. */

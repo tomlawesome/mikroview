@@ -63,14 +63,14 @@ RUN printf 'export PATH=/usr/local/go/bin:$PATH\n' > /etc/profile.d/go.sh
 # above the engine are out of reach on any Linux host. It catches
 # engine-level differences, which is most of what bites, and nothing
 # beyond that should be claimed from it.
-ARG PLAYWRIGHT_VERSION=1.62.1
+ARG PLAYWRIGHT_VERSION=1.63.0
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -eux; \
     npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium firefox webkit; \
     chmod -R a+rX /ms-playwright
 
 # The gate runs as an unprivileged user, and that is load-bearing rather
-# than hygiene. mikroview's own container runs `USER nonroot:nonroot`, and
+# than hygiene. mikroview's own container runs `USER 1000:1000` (#1210), and
 # this repo has already been caught out once by the difference: test:go
 # failed on GitLab CI purely because it ran as root, and the fix was to
 # drop privileges (docs/decisions/gitlab-ci-root-in-container-test-failure.md).

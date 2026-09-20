@@ -82,10 +82,12 @@ var (
 	// ErrPassphraseTooShort reports a passphrase below MinPassphraseRunes.
 	ErrPassphraseTooShort = fmt.Errorf("backupvault: the vault passphrase must be at least %d characters", MinPassphraseRunes)
 	// ErrPassphraseBusy reports that another passphrase change is
-	// already running. Setting, changing and removing a passphrase each
-	// re-seal every stored file, so they cannot overlap: the loser is
-	// refused outright rather than queued, because a caller waiting
-	// behind a whole-vault conversion cannot tell that from a hang.
+	// already running. Setting and removing a passphrase each re-seal
+	// every stored file; changing one does not, but it still claims the
+	// vault for the length of the re-wrap, so none of the three can
+	// overlap another. The loser is refused outright rather than queued,
+	// because a caller waiting behind a whole-vault conversion cannot
+	// tell that from a hang.
 	ErrPassphraseBusy = errors.New("backupvault: another vault passphrase change is in progress -- try again when it has finished")
 	// ErrResealIncomplete reports a passphrase change that was recorded
 	// but did not convert every stored file -- a disk that filled, a
@@ -441,6 +443,114 @@ func (v *Vault) RemovePassphrase(passphrase string) error {
 	return nil
 }
 
+// ChangePassphrase re-wraps the vault's private key under a new
+// passphrase and a fresh salt, replacing the lock document in one
+// atomic write.
+//
+// Unlike SetPassphrase and RemovePassphrase this touches no stored
+// file: the key pair backups are sealed to does not change, only the
+// passphrase its private half is wrapped under does. So there is
+// nothing to re-seal and nothing a failure can leave half-done -- the
+// lock document on disk is either the old one or the new one, whatever
+// happens in between.
+func (v *Vault) ChangePassphrase(current, next string) error {
+	if v == nil || v.key == nil {
+		return ErrDisabled
+	}
+	if utf8.RuneCountInString(next) < MinPassphraseRunes {
+		return ErrPassphraseTooShort
+	}
+
+	v.lockMu.RLock()
+	st := v.lock
+	var doc lockDoc
+	var busy bool
+	if st != nil {
+		doc = st.doc
+		busy = st.busy
+	}
+	v.lockMu.RUnlock()
+	if st == nil {
+		return ErrNoPassphrase
+	}
+	if busy {
+		return ErrPassphraseBusy
+	}
+	if doc.Version != lockDocVersion {
+		// A passphrase operation is claiming the vault this moment and
+		// its document is not on disk yet, same reasoning as Unlock.
+		return ErrPassphraseBusy
+	}
+
+	// Prove current before claiming anything -- same reasoning as
+	// RemovePassphrase's comment above: a wrong guess, which anyone who
+	// can reach the route can make repeatedly, must not disturb the
+	// vault. The unwrapped bytes are kept in a local and never assigned
+	// to st.priv, so this call leaves the vault exactly as locked or
+	// unlocked as it found it.
+	wrapKey, err := wrapKeyFor(current, doc.Salt, doc.KDF)
+	if err != nil {
+		return err
+	}
+	privBytes, err := wrapKey.OpenDocument(lockPrivateInfo, doc.WrappedPrivate)
+	if err != nil {
+		// Every failure below the passphrase arrives here too, same as
+		// Unlock -- see ErrWrongPassphrase.
+		return ErrWrongPassphrase
+	}
+
+	// Claim the vault. Not `changing`: that field diverts an arriving
+	// backup to the retention key while the key pair itself is moving,
+	// which is wrong here -- the pair is not changing, only the
+	// passphrase wrapping its private half is, so arrivals must keep
+	// sealing to st.pub exactly as they do outside any passphrase
+	// operation.
+	v.lockMu.Lock()
+	if v.lock != st || st.busy {
+		v.lockMu.Unlock()
+		return ErrPassphraseBusy
+	}
+	st.busy = true
+	v.lockMu.Unlock()
+
+	salt, err := auth.NewKDFSalt()
+	if err != nil {
+		v.finishChange(st)
+		return fmt.Errorf("backupvault: %w", err)
+	}
+	params := auth.DefaultKDFParams()
+	newWrapKey, err := wrapKeyFor(next, salt, params)
+	if err != nil {
+		v.finishChange(st)
+		return err
+	}
+	wrapped, err := newWrapKey.SealDocument(lockPrivateInfo, privBytes)
+	if err != nil {
+		v.finishChange(st)
+		return fmt.Errorf("backupvault: sealing the vault private key: %w", err)
+	}
+	newDoc := lockDoc{
+		Version:        lockDocVersion,
+		PublicKey:      doc.PublicKey,
+		Salt:           salt,
+		KDF:            params,
+		WrappedPrivate: wrapped,
+	}
+	if err := v.writeLockDoc(newDoc); err != nil {
+		// Nothing on disk changed: writeLockDoc replaces the file
+		// atomically or not at all.
+		v.finishChange(st)
+		return err
+	}
+
+	v.lockMu.Lock()
+	st.doc = newDoc
+	st.busy = false
+	v.lockMu.Unlock()
+	v.log.Info("the vault passphrase was changed -- stored backups were not re-sealed and stay readable with the new passphrase")
+	return nil
+}
+
 // restoreAfterFailedChange puts the vault back the way a removal that
 // could not finish found it: nothing in flight, and the private key
 // dropped again if nobody had the vault unlocked when the removal
@@ -719,10 +829,14 @@ func hybridInfo(info string, ephPub []byte) string {
 // that is not running them.
 var resealStep func()
 
-// slot names one stored file: a router, one of its generations, and
-// which of the two files that generation holds.
+// slot names one stored file: a router, one of its generations, which
+// of the two files that generation holds, and the directory it lives
+// in -- resolved once here, under v.mu, rather than left for resealSlot
+// to recompute without it (#1294: v.meta.Routers is not safe to read
+// again once the lock storedSlots took is released, which is well
+// before resealSlot runs).
 type slot struct {
-	device, generation, kind string
+	device, generation, kind, dir string
 }
 
 // storedSlots is every file the index currently lists.
@@ -731,12 +845,28 @@ func (v *Vault) storedSlots() []slot {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for device, rm := range v.meta.Routers {
-		for _, g := range rm.Generations {
+		if rm.Dir != "" {
+			// Sealed under a device name this entry does not have:
+			// recovered from disk after an index loss whose rebuild
+			// (or an orphan-directory adoption) could not resolve it
+			// (#1294). Re-sealing needs that name to decrypt with, so
+			// every file here would fail to open -- skipped rather than
+			// attempted, which would abort the whole pass over one
+			// generation that cannot succeed until its name comes back.
+			continue
+		}
+		dir := v.dirFor(device, rm)
+		// The protected pool is re-sealed with the rest (#1126).
+		// Leaving it out of a conversion would strand a kept backup in
+		// the old scheme -- and on the way back off a passphrase, that
+		// is a file nothing can open once the key pair is gone, which
+		// is the one thing the pool exists to prevent.
+		for _, g := range append(append([]*generationMeta{}, rm.Generations...), rm.Protected...) {
 			if !g.BackupArrivedAt.IsZero() {
-				slots = append(slots, slot{device, g.ID, KindBackup})
+				slots = append(slots, slot{device, g.ID, KindBackup, dir})
 			}
 			if !g.RscArrivedAt.IsZero() {
-				slots = append(slots, slot{device, g.ID, KindRsc})
+				slots = append(slots, slot{device, g.ID, KindRsc, dir})
 			}
 		}
 	}
@@ -840,7 +970,7 @@ type resealBuffers struct {
 // resealSlot converts one file, or reports why it could not, reusing
 // bufs rather than allocating its own.
 func (v *Vault) resealSlot(s slot, pub *ecdh.PublicKey, priv *ecdh.PrivateKey, bufs *resealBuffers) error {
-	path := filepath.Join(v.routerDir(s.device), v.fileName(s.generation, s.kind))
+	path := filepath.Join(s.dir, v.fileName(s.generation, s.kind))
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {

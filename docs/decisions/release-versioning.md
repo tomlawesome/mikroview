@@ -101,7 +101,7 @@ push it to `gitlab`; watch the tag pipeline's mirror job, then the
 
 The public surfaces ordinary development never touches — `README.md`,
 `site/index.html` (GitHub Pages), `docs/screenshots/`, `SECURITY.md`,
-`CONTRIBUTING.md` — are refreshed as part of every release, not left
+`docs/development.md` (`CONTRIBUTING.md` until 2026-09-16) — are refreshed as part of every release, not left
 to chance. Two pieces of structure hold that: the "Promote to main"
 issue template (`.gitlab/issue_templates/`) carries the checklist, and
 `scripts/check-release-surfaces.sh` (CI job `policy:release-surfaces`,
@@ -109,9 +109,14 @@ on every merge request into `preview` or `main`; locally `make
 release-surfaces`) refuses a promotion whose surfaces are stale:
 changelog heading missing for `VERSION`, links to the switched-off
 GitHub issue tracker, relative links to files that do not exist, a
-`docs/*.md` file linked from neither README nor CONTRIBUTING, a Go
-version in CONTRIBUTING that does not match `go.mod`, or a referenced
+`docs/*.md` file linked from neither README nor the dev guide, a Go
+version in the dev guide that does not match `go.mod`, or a referenced
 screenshot whose last change predates the previous `v*` tag while
 `frontend/src` changed since it. GitHub Pages redeploys only when
 `site/` or the screenshots change, so a release with no such change
-leaves the site as it was, by design.
+leaves the site as it was, by design. It also checks that
+`docs/reviews/` has a record for the version being cut, and that no
+older record still carries the literal marker `<!-- pending-disclosure:
+#n #m -->` -- a review may defer naming its security findings with that
+line, but the line must be replaced by the real findings before the
+next release.

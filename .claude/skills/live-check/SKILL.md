@@ -183,7 +183,7 @@ standalone scripts now refuse the same way, naming the port and the
 process holding it; before #660 they said only "server never came up",
 and one collision surfaced as five failures across two scripts that
 mentioned no port at all. To run alongside another check deliberately,
-set `MV_DIR`, `MV_HTTP_PORT`, `MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` —
+set `MV_DIR`, `MV_HTTP_PORT` and `MV_SYSLOG_TLS_PORT` —
 explicit values always win over the derived ones.
 
 An interrupted run used to leave its instance behind for good: `up`

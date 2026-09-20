@@ -26,7 +26,7 @@ import (
 func backupIngestServer(t *testing.T, device string) (*httptest.Server, *Server, string) {
 	t.Helper()
 	ts, s, token := ingestTestServer(t, device)
-	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t))
+	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

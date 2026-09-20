@@ -72,7 +72,7 @@
   const title = $derived(
     st.mode === 'rule'
       ? `Rules with log-prefix “${st.ruleLabel}”`
-      : natTitle(st.device, st.natMode),
+      : natTitle(st.deviceName, st.natMode),
   )
 
   const chip = $derived(natChip(st.natMode))
@@ -101,7 +101,7 @@
       <div class="status error">{st.error}</div>
     {:else if !st.available}
       <div class="status">
-        No rule table pushed by “{st.device}” yet — this data arrives via the RouterOS push
+        No rule table pushed by “{st.deviceName}” yet — this data arrives via the RouterOS push
         integration, not syslog.
       </div>
     {:else if st.rules.length === 0}

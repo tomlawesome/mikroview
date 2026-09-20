@@ -15,6 +15,7 @@
   // emptying this component puts the project out of compliance -- if the
   // UI is restructured, the notices move, they don't disappear.
   import { versionState } from '../lib/version.svelte'
+  import { trapFocus } from '../lib/focusTrap'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
 
@@ -48,7 +49,7 @@
 
 {#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="About MikroView" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="About MikroView" tabindex="-1" use:trapFocus>
       <div class="modal-header">
         <span class="title">About MikroView</span>
         <button type="button" class="close" onclick={close} aria-label="Close">✕</button>
@@ -84,14 +85,6 @@
           The complete source code for this version is available at
           <a href={SOURCE_URL} target="_blank" rel="noopener noreferrer">
             {SOURCE_URL}
-          </a>.
-        </p>
-
-        <p class="commercial">
-          A commercial licence is available if you want to use MikroView in a
-          way the AGPL doesn't permit — see
-          <a href="{SOURCE_URL}/blob/main/COMMERCIAL-LICENSE.md" target="_blank" rel="noopener noreferrer">
-            COMMERCIAL-LICENSE.md
           </a>.
         </p>
 
@@ -180,12 +173,6 @@
     color: var(--fg-muted);
     font-family: var(--font-mono, monospace);
     font-size: 0.8rem;
-  }
-
-  .commercial {
-    color: var(--fg-muted);
-    border-top: 1px solid var(--border);
-    padding-top: 0.75rem;
   }
 
   .third-party {

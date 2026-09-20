@@ -31,3 +31,10 @@
 # The remote gate tees its full run here (scripts/gate-remote.sh). It is a
 # 2700-line log of one run, not content.
 /gate-run.log
+
+# scripts/fetch-upgrade-fixtures.sh downloads here; scripts/record-
+# upgrade-fixture.sh packs here before uploading. A recorded data
+# directory holds password/token hashes and a TLS key, made-up or not,
+# and gitleaks would flag every one -- see docs/upgrades.md, "How this
+# is tested". Never committed.
+/.upgrade-fixtures/

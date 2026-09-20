@@ -63,6 +63,7 @@ function ground(overrides: Partial<Ground> = {}): Ground {
     river: null,
     bridges: [],
     bounds: { u0: -60, u1: 100, v0: -30, v1: 10 },
+    townBounds: { u0: -60, u1: 100, v0: -30, v1: 10 },
     ...overrides,
   }
 }

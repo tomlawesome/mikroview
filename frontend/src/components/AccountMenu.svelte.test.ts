@@ -50,7 +50,35 @@ async function openMenu() {
 beforeEach(() => {
   authState.username = 'tom'
   authState.hasLocalPassword = true
+  authState.ssoConnected = false
   authState.ssoAvailable = false
+})
+
+// #1252: the admin keeps its password after connecting to SSO, so
+// "has a password" stopped answering "is there anything left to
+// connect". Offering it again could only mean a second identity, which
+// the server refuses -- so the row goes once the account is connected.
+describe('the single sign-on row (#1252)', () => {
+  it('is offered while the account has a password and no identity', async () => {
+    authState.role = 'admin'
+    authState.ssoAvailable = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.getByRole('menuitem', { name: /use single sign-on/i })).toBeTruthy()
+  })
+
+  it('is gone once the account is connected, even though it kept its password', async () => {
+    authState.role = 'admin'
+    authState.ssoAvailable = true
+    authState.ssoConnected = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /use single sign-on/i })).toBeNull()
+    // The password is still there, so changing it still is too.
+    expect(screen.getByRole('menuitem', { name: /change password/i })).toBeTruthy()
+  })
 })
 
 describe('the slimmed account menu (#647)', () => {
@@ -105,14 +133,15 @@ describe('the account chip declares the read-only viewer once (#804)', () => {
   })
 
   // "user" can edit, so calling that tier read-only would be a plain
-  // untruth -- and the drawing gives it no variant of its own.
-  it('claims nothing for a user', () => {
+  // untruth. It is still named, though (#1171): a bare "sam" left the
+  // middle tier the only account that said nothing about itself.
+  it('names the user tier without claiming it is read-only', () => {
     authState.username = 'sam'
     authState.role = 'user'
     render(AccountMenu)
 
     const chip = screen.getByTitle('Account and operate pages').textContent?.replace(/\s+/g, ' ').trim()
-    expect(chip).toBe('sam')
+    expect(chip).toBe('sam (user)')
     expect(chip).not.toContain('read-only')
   })
 })

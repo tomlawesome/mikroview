@@ -1,35 +1,36 @@
-# Mikroview agent instructions
+# MikroView agent instructions
 
 Applies to Claude Code and any other AI tooling working in this
 repository, alongside the global agent instructions (instruction
 authority, trust of outside content, git-state discipline, issue and
 decision recording, and credential rules all live there).
 
-Outside pull requests are not accepted at all — see `CONTRIBUTING.md`.
+Outside pull requests are not accepted at all — see the README's
+"Contributions" section.
 
-## What mikroview is for, and what belongs somewhere else
+## What MikroView is for, and what belongs somewhere else
 
-Mikroview is a **firewall-log interrogation helper**: it ingests the log
+MikroView is a **firewall-log interrogation helper**: it ingests the log
 stream a MikroTik router exports, and helps someone view, filter and make
 sense of it. It is not a security suite and does not grow into one.
 
 When a security-adjacent feature is proposed, the test is where its signal
 comes from:
 
-- **Derived from mikroview's own event stream** — belongs inside
-  mikroview. The behavioural flags subsystem and its detectors qualify:
-  every judgement they make is computed from traffic mikroview already
+- **Derived from MikroView's own event stream** — belongs inside
+  MikroView. The behavioural flags subsystem and its detectors qualify:
+  every judgement they make is computed from traffic MikroView already
   sees.
 - **Produced by a separate tool, and merely correlated alongside
-  mikroview's data** — belongs in a companion project. Default
+  MikroView's data** — belongs in a companion project. Default
   recommendation for anything in this category is a separate repo, not an
   integration here.
 
 The worked example is OpenCanary. Centralising honeypot alerts went
 through several rounds and settled on **no OpenCanary-specific logic in
-mikroview at all**: a rare honeypot hit flushed into the live view is lost
+MikroView at all**: a rare honeypot hit flushed into the live view is lost
 in a stream of real firewall lines, and a multi-instance honeypot
-dashboard is a different product — it became `birdcage`. Mikroview's only
+dashboard is a different product — it became `birdcage`. MikroView's only
 part is deliberately generic: a bounded before/after lookback query by IP
 and timestamp (#29) that *any* external trigger can call to pull
 surrounding traffic context. Not honeypot-aware, not coupled to birdcage.
@@ -41,7 +42,7 @@ neighbouring tool also inherits its failure modes, its dependencies and
 its data licensing — see the next two sections for why the last of those
 is not free.
 
-## Why mikroview suggests, and why there is a wizard
+## Why MikroView suggests, and why there is a wizard
 
 A real deployment's accept-rule logging was ~90% of volume, burying the deny
 signal; dropping it cut volume 97–99%
@@ -55,10 +56,10 @@ boundary, not the rule's action. The volume story above is about noise, not
 about which action to log -- the owner has corrected the "log denies, not
 accepts" reading more than once (last 2026-09-03, designing #435).
 
-## mikroview observes; it never scans or connects
+## MikroView observes; it never scans or connects
 
 Owner decision, ratified 2026-08-15, and a design invariant, not a
-current limitation: **mikroview never probes, scans, or initiates a
+current limitation: **MikroView never probes, scans, or initiates a
 connection to any host on the operator's network — the router
 included.** It ingests what is pushed to it (syslog, router-state
 pushes) and fetches only its own external reference feeds (blocklists,
@@ -70,7 +71,7 @@ Two reasons, either sufficient alone. An observer that starts probing
 changes character: it appears in other tools' logs as a scanner, and
 its trust model shifts from "a place logs go" to "a thing with reach
 into the network", which is a different product with a different
-security posture. And the honesty ethos depends on it: mikroview's
+security posture. And the honesty ethos depends on it: MikroView's
 evidence is what *arrived*, not what was elicited — a claim built on
 traffic the product itself provoked is a different kind of claim, and
 the interface has no way to mark the difference.
@@ -79,7 +80,7 @@ The permitted shape for anything identification- or diagnosis-flavoured
 (#410 is the worked example): assemble the evidence already flowing,
 state conclusions with their confidence, and where an active step would
 genuinely help, **print the command for the operator to run** — never
-run it. A feature that needs mikroview itself to touch the network is
+run it. A feature that needs MikroView itself to touch the network is
 either redesigned around pushed or passive data, or it belongs in a
 different tool.
 
@@ -107,7 +108,7 @@ assuming the checkout had done the right thing.
 
 ## Where development happens: GitLab, with GitHub as the mirror
 
-Owner decision, 2026-09-04, tracked on #935: mikroview is developed on the
+Owner decision, 2026-09-04, tracked on #935: MikroView is developed on the
 self-hosted GitLab instance, project `ai/mikroview` (project id 53), remote
 name `gitlab`. Branches, merge requests and the `dev` → `preview` → `main`
 promotions all happen there; full CI is `.gitlab-ci.yml` at the repo root.
@@ -310,7 +311,7 @@ not:
   `loginctl terminate-user` returns. Editing the single line out of
   `/etc/subuid` and `/etc/subgid` avoids the fight entirely.
 
-Unrelated to mikroview but observed on that host: `gitlab-runner` and
+Unrelated to MikroView but observed on that host: `gitlab-runner` and
 `tom` are assigned the *same* subordinate range in both files, so the
 isolation between those two accounts' containers is thinner than it
 looks. Reported to the owner; not an agent's to change.
@@ -329,29 +330,25 @@ and inflated severity scores.
 ## List and lookup data: why the no-vendoring rule is absolute here
 
 The global rule (fetch feeds at runtime, never vendor) applies; what is
-project-specific is that for mikroview it is a licensing constraint
+project-specific is that for MikroView it is a licensing constraint
 before it is a design preference.
-Mikroview ships under the **GNU AGPL-3.0** (see [LICENSE](LICENSE)), with
-a commercial licence offered alongside it for anyone who needs to escape
-the AGPL's obligations (see
-[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). That second option is
-what turns share-alike data into a real conflict rather than a formality:
-CC BY-SA sources (IP2Location LITE, IPinfo's free tier, older GeoLite2)
-cannot be sublicensed on commercial terms, so vendoring one would quietly
-make the commercial licence undeliverable for every copy that contained
-it. Separately, the cloud providers grant no redistribution licence on
-their published IP-range documents at all. Fetching at runtime is
+MikroView ships under the **GNU AGPL-3.0** (see [LICENSE](LICENSE)) and
+nothing else: the commercial licence that used to sit beside it was
+withdrawn on 2026-09-16 (#1229). Vendoring is still out. CC BY-SA sources
+(IP2Location LITE, IPinfo's free tier, older GeoLite2) carry share-alike
+and attribution terms of their own that would travel with every copy,
+and the cloud providers grant no redistribution licence on their
+published IP-range documents at all. Fetching at runtime is
 uncontroversial; shipping a copy is not.
 
 It also means a stale release cannot ship stale security data — a failure
 nobody would notice, because everything would appear to work.
 
 So: before adopting any feed or dependency, check its licence and record
-what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine;
-copyleft and share-alike are not — **not** because they conflict with the
-AGPL (GPL-family code is compatible with it), but because of the
-commercial licence above: a copyleft dependency you do not own cannot be
-sublicensed on those terms. Attribution terms still bind data that
+what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine.
+GPL-family code is compatible with the AGPL, but a copyleft or
+share-alike dependency still needs the explicit consideration the global
+dependencies rule asks for, written on the issue. Attribution terms still bind data that
 is fetched rather than shipped — Spamhaus DROP requires credit, and its
 date and copyright text must travel with the data.
 
@@ -383,7 +380,7 @@ upgrade was rejected because taking it would have made a *check* quieter
 while still reporting success, which is the same failure this file warns
 about for CI gates.
 
-The cost of the alternative is not hypothetical: mikroview's `go`
+The cost of the alternative is not hypothetical: MikroView's `go`
 directive sat at 1.23.4 long enough for Go 1.23 to leave its support
 window entirely, leaving 22–29 unpatched standard-library CVEs in the
 build. Nothing chose that; it simply happened because nothing bumped it.
@@ -590,7 +587,7 @@ The first two were found on PR #257 (Watchlist frontend), the third on
 
 The demo cannot wait seven nights for real watchlist streaks and a week of
 retained corpus, and faking them by ingesting back-dated events would break
-what mikroview promises: a night is only ever claimed once this process
+what MikroView promises: a night is only ever claimed once this process
 watched it end to end, or it was already recorded (`internal/engine/
 definitions_nights.go`). Owner decision on #959: **restore it, don't ingest
 it**. `-restore` writes a store straight to disk -- it is not the live
@@ -646,7 +643,7 @@ for it explicitly.
     MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
     echo $! > "$MV_DIR/pid"
 
-    export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
+    export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_TLS_PORT=<what `up` exported>
     scripts/seed-demo.py push
     scripts/seed-demo.py entities
     scripts/seed-demo.py accounts

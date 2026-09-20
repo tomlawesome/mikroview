@@ -26,7 +26,7 @@ func TestReviveRemembersACheckedVerdict(t *testing.T) {
 
 	s.Add(TypePortScan, "203.0.113.30", "20 ports in 60s", checkedAt)
 	id := s.List()[0].ID
-	if _, ok := s.SetVerdict(id, VerdictChecked, "alice", checkedAt); !ok {
+	if _, ok := s.SetVerdict(id, VerdictChecked, "alice", "", checkedAt); !ok {
 		t.Fatal("setup: expected the checked verdict to land")
 	}
 
@@ -55,7 +55,7 @@ func TestReviveRemembersAResolvedVerdict(t *testing.T) {
 
 	s.Add(TypeCriticalPort, "198.51.100.30", "6 attempts on port 22", resolvedAt)
 	id := s.List()[0].ID
-	s.SetVerdict(id, VerdictResolved, "alice", resolvedAt)
+	s.SetVerdict(id, VerdictResolved, "alice", "", resolvedAt)
 
 	if s.Excluded(TypeCriticalPort, "198.51.100.30") {
 		t.Fatal("a resolved verdict must not record an expectation -- it is not a suppression")
@@ -82,7 +82,7 @@ func TestReviveForgetsAnInvestigateVerdict(t *testing.T) {
 
 	s.Add(TypePortScan, "203.0.113.31", "d", now)
 	id := s.List()[0].ID
-	s.SetVerdict(id, VerdictInvestigate, "alice", now)
+	s.SetVerdict(id, VerdictInvestigate, "alice", "", now)
 	s.ClearAll(now.Add(time.Minute))
 
 	s.Add(TypePortScan, "203.0.113.31", "d", now.Add(time.Hour))
@@ -106,9 +106,9 @@ func TestLaterVerdictReplacesTheRememberedOne(t *testing.T) {
 
 	s.Add(TypePortScan, "203.0.113.32", "d", now)
 	id := s.List()[0].ID
-	s.SetVerdict(id, VerdictChecked, "alice", now)
+	s.SetVerdict(id, VerdictChecked, "alice", "", now)
 	s.Add(TypePortScan, "203.0.113.32", "d", now.Add(time.Hour)) // back, remembering "checked"
-	s.SetVerdict(id, VerdictInvestigate, "alice", now.Add(2*time.Hour))
+	s.SetVerdict(id, VerdictInvestigate, "alice", "", now.Add(2*time.Hour))
 	s.ClearAll(now.Add(3 * time.Hour))
 	s.Add(TypePortScan, "203.0.113.32", "d", now.Add(4*time.Hour))
 
@@ -135,7 +135,7 @@ func TestRememberedVerdictSurvivesReload(t *testing.T) {
 	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
 	s1.Add(TypePortScan, "203.0.113.33", "d", checkedAt)
 	id := s1.List()[0].ID
-	s1.SetVerdict(id, VerdictChecked, "alice", checkedAt)
+	s1.SetVerdict(id, VerdictChecked, "alice", "", checkedAt)
 	s1.Add(TypePortScan, "203.0.113.33", "d", checkedAt.Add(time.Hour))
 	flushForTest(t, s1)
 
@@ -165,7 +165,7 @@ func TestUndoExpectedWithdrawsTheExpectationItRecorded(t *testing.T) {
 
 	raiseSized(s, TypePortScan, "203.0.113.34", intPtr(30), now)
 	id := flagID(TypePortScan, "203.0.113.34")
-	s.SetVerdict(id, VerdictExpected, "alice", now)
+	s.SetVerdict(id, VerdictExpected, "alice", "", now)
 	if !s.Excluded(TypePortScan, "203.0.113.34") {
 		t.Fatal("setup: expected the expected verdict to record an expectation")
 	}
@@ -200,10 +200,10 @@ func TestUndoExpectedRestoresARaisedSize(t *testing.T) {
 	id := flagID(TypePortScan, "203.0.113.35")
 
 	raiseSized(s, TypePortScan, "203.0.113.35", intPtr(30), now)
-	s.SetVerdict(id, VerdictExpected, "alice", now)
+	s.SetVerdict(id, VerdictExpected, "alice", "", now)
 	raiseSized(s, TypePortScan, "203.0.113.35", intPtr(120), now.Add(time.Minute)) // back, above 45
 	mustFlag(t, s, TypePortScan, "203.0.113.35")
-	s.SetVerdict(id, VerdictExpected, "alice", now.Add(2*time.Minute)) // raises 30 -> 120
+	s.SetVerdict(id, VerdictExpected, "alice", "", now.Add(2*time.Minute)) // raises 30 -> 120
 
 	if ex, _ := s.Expectation(TypePortScan, "203.0.113.35"); ex.Size == nil || *ex.Size != 120 {
 		t.Fatalf("setup: expected the recorded size to be raised to 120, got %v", ex.Size)
@@ -231,13 +231,126 @@ func TestRejudgingAwayFromExpectedWithdrawsTheExpectation(t *testing.T) {
 	id := flagID(TypePortScan, "203.0.113.36")
 
 	raiseSized(s, TypePortScan, "203.0.113.36", intPtr(30), now)
-	s.SetVerdict(id, VerdictExpected, "alice", now)
-	s.SetVerdict(id, VerdictChecked, "bob", now.Add(time.Minute)) // changed their mind
+	s.SetVerdict(id, VerdictExpected, "alice", "", now)
+	s.SetVerdict(id, VerdictChecked, "bob", "", now.Add(time.Minute)) // changed their mind
 
 	if s.Excluded(TypePortScan, "203.0.113.36") {
 		t.Error("re-judging away from expected must withdraw the expectation that verdict recorded")
 	}
 	if f := s.List()[0]; !f.Cleared || f.Verdict != VerdictChecked {
 		t.Errorf("the flag should still be cleared, now as checked, got %+v", f)
+	}
+}
+
+// The verdict's note (#1232): the operator's own reason, written in the
+// drawer before the verdict is clicked and kept with the judgement it
+// explains. Same file as the memory tests above because it follows the
+// same rule -- it is remembered exactly where the verdict is remembered
+// and forgotten exactly where the verdict is forgotten.
+
+// TestNoteIsKeptWithTheVerdictAndRememberedOnRevival is the whole point
+// of the feature: the flag comes back and the operator's own words come
+// back with the "you checked this on 2 Sept" the card already says.
+func TestNoteIsKeptWithTheVerdictAndRememberedOnRevival(t *testing.T) {
+	s, _ := Open("")
+	checkedAt := time.Now()
+	const note = "every source already on the upstream block list. Left it alone."
+
+	s.Add(TypePortScan, "203.0.113.40", "20 ports in 60s", checkedAt)
+	id := s.List()[0].ID
+	f, ok := s.SetVerdict(id, VerdictChecked, "alice", note, checkedAt)
+	if !ok {
+		t.Fatal("setup: expected the checked verdict to land")
+	}
+	if f.Note != note {
+		t.Errorf("Note = %q, want the note the verdict was given with", f.Note)
+	}
+
+	s.Add(TypePortScan, "203.0.113.40", "20 ports in 60s", checkedAt.Add(time.Hour))
+	f = mustFlag(t, s, TypePortScan, "203.0.113.40")
+	if f.Note != "" {
+		t.Errorf("the new episode must start with an empty note, got %q", f.Note)
+	}
+	if f.PriorNote != note {
+		t.Errorf("PriorNote = %q, want %q", f.PriorNote, note)
+	}
+}
+
+// TestRevivalForgetsTheNoteOfAnUnrememberedVerdict: the note travels
+// with the verdict and nowhere else. An investigate verdict leaves no
+// PriorVerdict, so it leaves no PriorNote either -- a remembered reason
+// with no remembered decision behind it would be prose the drawer could
+// not introduce.
+func TestRevivalForgetsTheNoteOfAnUnrememberedVerdict(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.41", "20 ports in 60s", now)
+	id := s.List()[0].ID
+	s.SetVerdict(id, VerdictInvestigate, "alice", "looking at it now", now)
+	s.ClearAll(now.Add(time.Minute))
+
+	s.Add(TypePortScan, "203.0.113.41", "20 ports in 60s", now.Add(time.Hour))
+	f := mustFlag(t, s, TypePortScan, "203.0.113.41")
+	if f.PriorVerdict != "" || f.PriorNote != "" {
+		t.Errorf("PriorVerdict/PriorNote = %q/%q, want both empty", f.PriorVerdict, f.PriorNote)
+	}
+}
+
+// TestUndoDiscardsTheNote is the owner's ruling of 2026-09-13 in one
+// test: "if the verdict is undone, the note is lost". The store holds
+// the only copy, so this is the whole of what "lost" has to mean.
+func TestUndoDiscardsTheNote(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypeCriticalPort, "198.51.100.40", "6 attempts on port 22", now)
+	id := s.List()[0].ID
+	s.SetVerdict(id, VerdictChecked, "alice", "checked the upstream list", now)
+
+	f, ok := s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("setup: expected the undo to find the flag")
+	}
+	if f.Note != "" {
+		t.Errorf("Note = %q, want it gone with the verdict", f.Note)
+	}
+}
+
+// TestSetNoteEditsAJudgedFlag covers "we should be able to edit",
+// including taking the words back entirely, and the two refusals the
+// handler turns into 404 and 409.
+func TestSetNoteEditsAJudgedFlag(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.42", "20 ports in 60s", now)
+	id := s.List()[0].ID
+
+	if _, known, judged := s.SetNote(id, "typo fixed"); !known || judged {
+		t.Errorf("an unjudged flag must be known but unjudged, got known=%v judged=%v", known, judged)
+	}
+	if f := s.List()[0]; f.Note != "" {
+		t.Errorf("a refused edit must store nothing, got Note = %q", f.Note)
+	}
+
+	s.SetVerdict(id, VerdictChecked, "alice", "first go", now)
+	f, known, judged := s.SetNote(id, "second go, better words")
+	if !known || !judged {
+		t.Fatalf("editing a judged flag must succeed, got known=%v judged=%v", known, judged)
+	}
+	if f.Note != "second go, better words" {
+		t.Errorf("Note = %q, want the edited text", f.Note)
+	}
+	if f.VerdictBy != "alice" {
+		t.Errorf("VerdictBy = %q -- an edit must not rewrite who made the call", f.VerdictBy)
+	}
+
+	if f, _, _ := s.SetNote(id, ""); f.Note != "" {
+		t.Errorf("Note = %q, want an empty edit to take the words back", f.Note)
+	}
+
+	if _, known, _ := s.SetNote("nonexistent", "anything"); known {
+		t.Error("SetNote on an unknown id must report it unknown")
 	}
 }

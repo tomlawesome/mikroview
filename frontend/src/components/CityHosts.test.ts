@@ -20,6 +20,16 @@ import { authState } from '../lib/auth.svelte'
 import type { Ground } from '../lib/city/types'
 import City from './City.svelte'
 
+// City.svelte's own mount effect calls hostsState.refresh() in the
+// background (#1236 gave that failure a visible flag), which would
+// otherwise hit the real network in jsdom, fail, and flip every test's
+// card to "register unreadable" regardless of what it means to check.
+// Only fetchHosts is stubbed; everything else in the module stays real.
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>()
+  return { ...actual, fetchHosts: vi.fn().mockResolvedValue([]) }
+})
+
 // The same 20000ms City.svelte.test.ts sets, and for the same reason:
 // the cost is jsdom's, building the wide SVG this component renders.
 vi.setConfig({ testTimeout: 20000 })
@@ -69,6 +79,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW)
   hostsState.hosts = []
   hostsState.error = null
+  hostsState.unreadable = false
   flagsState.list = []
   watchlistState.entries = []
   authState.role = 'admin'
@@ -79,6 +90,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   hostsState.hosts = []
+  hostsState.unreadable = false
   flagsState.list = []
   watchlistState.entries = []
   authState.role = ''
@@ -355,6 +367,22 @@ describe('the host card', () => {
     const g = groundWith([bufferHost('newcomer', '10.10.0.20')])
     const { card } = await open('newcomer', g)
     expect(card.textContent).toContain('not in the host register yet')
+    expect([...card.querySelectorAll('.acts button')].map((b) => b.textContent?.trim())).not.toContain('dismiss ▸')
+  })
+
+  // #1236: "not in the host register yet" is a positive claim about the
+  // register's contents. When the last read of it failed, MikroView has
+  // no evidence for that claim and must say so instead.
+  it('says the register is unreadable, not "not registered", when the last read failed', async () => {
+    const g = groundWith([bufferHost('newcomer', '10.10.0.20')])
+    const { card } = await open('newcomer', g)
+    // Set after the card is open, not before: the component's own mount
+    // effect refreshes the register in the background, and a resolved
+    // mock would otherwise race this back to false.
+    hostsState.unreadable = true
+    flushSync()
+    expect(card.textContent).toContain('host register unreadable · checks again in a minute')
+    expect(card.textContent).not.toContain('not in the host register yet')
     expect([...card.querySelectorAll('.acts button')].map((b) => b.textContent?.trim())).not.toContain('dismiss ▸')
   })
 

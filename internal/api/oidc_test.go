@@ -450,14 +450,17 @@ func TestOIDCLinkStartRefusesAnAlreadySSOOnlyAccount(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	// An ordinary user, because only a non-admin is left with no local
+	// password after a link (#1252): the admin keeps its own.
+	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
-	alice, _ := s.Auth.ByUsername("alice")
-	if err := s.Auth.LinkOIDCIdentity(alice.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
+	bob, _ := s.Auth.ByUsername("bob")
+	if err := s.Auth.LinkOIDCIdentity(bob.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
 		t.Fatalf("LinkOIDCIdentity: %v", err)
 	}
 	// The link above invalidated the session, so sign in via SSO-less
 	// means is no longer possible -- use a fresh session for the user.
-	sess := s.Sessions.Create(alice.ID, time.Now())
+	sess := s.Sessions.Create(bob.ID, time.Now())
 	linked := &http.Client{Jar: mustCookieJar(t)}
 	u, _ := url.Parse(ts.URL)
 	linked.Jar.SetCookies(u, []*http.Cookie{{Name: sessionCookieName, Value: sess.ID}})

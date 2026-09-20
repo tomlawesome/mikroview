@@ -148,7 +148,7 @@ describe('headlineFor / storyFor per flag type (#678)', () => {
 
   it('new_device: never seen before', () => {
     const f = baseFlag({ type: 'new_device', target: 'AA:BB:CC:DD:EE:FF' })
-    expect(headlineFor(f)).toBe('A device mikroview has never seen before.')
+    expect(headlineFor(f)).toBe('A device MikroView has never seen before.')
     expect(storyFor(f)).toContain('AA:BB:CC:DD:EE:FF')
     expect(storyFor(f)).toContain('never been seen')
   })

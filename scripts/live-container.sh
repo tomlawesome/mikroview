@@ -171,14 +171,14 @@ EOF
     #   ERROR storage │ postgres: reading DSN file /etc/mikroview/pg.dsn:
     #                   open /etc/mikroview/pg.dsn: permission denied
     #
-    # The image runs as uid 65532, which is not the host user that wrote
-    # the file, so a 0600 file mounted in is unreadable to it and
-    # mikroview refuses to start. A real deployment should keep 0600 and
-    # chown the file to 65532 (now documented in docs/configuration.md,
-    # which did not say so). Here the credential is "e2e", against a
-    # throwaway container on a private network, deleted when the run
-    # ends -- so widening the mode is the simpler of the two and costs
-    # nothing.
+    # The image runs as uid 1000 (#1210), which is the operator on most
+    # hosts but need not be the user running this harness, so a 0600 file
+    # mounted in can be unreadable to it and mikroview then refuses to
+    # start. A real deployment keeps 0600 and chowns the file to 1000
+    # (documented in docs/configuration.md). Here the credential is
+    # "e2e", against a throwaway container on a private network, deleted
+    # when the run ends -- so widening the mode is the simpler of the two
+    # and costs nothing.
     chmod 644 "$MV_DIR/pg.dsn"
     PG_ENV="-e MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/pg.dsn"
   fi
@@ -196,6 +196,7 @@ EOF
     -v "$MV_DIR/pg.dsn:/etc/mikroview/pg.dsn:ro" \
     -v "$APP_NAME-data:/var/lib/mikroview" \
     -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+    -e MV_TEST_HOOKS=1 \
     $PG_ENV \
     -p "$BIND:$HTTP_PORT:8080" \
     -p "$BIND:$SYSLOG_TLS_PORT:6514" \
@@ -211,6 +212,7 @@ EOF
         -v "$MV_DIR/config.yaml:/etc/mikroview/config.yaml:ro" \
         -v "$APP_NAME-data:/var/lib/mikroview" \
         -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+        -e MV_TEST_HOOKS=1 \
         -p "$BIND:$HTTP_PORT:8080" \
         -p "$BIND:$SYSLOG_TLS_PORT:6514" \
         "$MV_IMAGE" >/dev/null

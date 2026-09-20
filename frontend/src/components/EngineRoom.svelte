@@ -45,21 +45,33 @@
   import { deckCards } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
   import { versionState } from '../lib/version.svelte'
+  import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchSetupStatus, fetchDevices, fetchSetupCommands, fetchHistorySettings, fetchRouterBackups } from '../lib/api'
+  import {
+    fetchSetupStatus,
+    fetchDevices,
+    fetchSetupCommands,
+    fetchHistorySettings,
+    fetchRouterBackups,
+    fetchDroplist,
+  } from '../lib/api'
+  import { duplicateDrift, duplicateDriftMessage, duplicateCleanupCommand } from '../lib/ingestDuplicates'
+  import ConfigUpgrade from './ConfigUpgrade.svelte'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
   import DiskControl from './DiskControl.svelte'
   import RouterBackups from './RouterBackups.svelte'
+  import Droplist from './Droplist.svelte'
   import { usersState } from '../lib/users.svelte'
+  import ResetCodeOverlay from './ResetCodeOverlay.svelte'
   import { tokensState } from '../lib/tokens.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
-  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse } from '../lib/types'
+  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse, DroplistResponse, PasswordResetCode } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -80,6 +92,7 @@
       })
     detectorSettingsState.refresh().catch(() => {})
     versionState.ensureLoaded().catch(() => {})
+    geoipState.ensureLoaded().catch(() => {})
     // 403s for a non-admin (see persistenceState's own doc comment) --
     // the disk group's `state` row is simply left out for that caller,
     // same swallow-and-degrade shape as fetchSetupStatus above.
@@ -110,6 +123,14 @@
       refreshRouterBackups()
       routerBackupsTimer = setInterval(refreshRouterBackups, 60_000)
     }
+    // The drop list group (#1225, #461) is admin-only end to end, same
+    // reason as router backups just above -- GET /api/droplist 403s
+    // anyone else.
+    let droplistTimer: ReturnType<typeof setInterval> | undefined
+    if (isAdmin) {
+      refreshDroplist()
+      droplistTimer = setInterval(refreshDroplist, 60_000)
+    }
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule the former tokens door applied -- an
@@ -130,6 +151,7 @@
       clearInterval(historyTimer)
       if (historyRetry) clearTimeout(historyRetry)
       if (routerBackupsTimer) clearInterval(routerBackupsTimer)
+      if (droplistTimer) clearInterval(droplistTimer)
     }
   })
 
@@ -149,10 +171,22 @@
   // block since there is no settings object to render a control from.
   let routerBackupsUnanswered = $state(false)
 
+  // When the request behind the data in hand was issued -- not when it
+  // came back. RouterBackups holds its own optimistic writes until a
+  // refresh that started *after* the write returns, which is the only
+  // thing that proves the answer includes it; a poll already in flight
+  // when the write landed resolves afterwards with data from before it.
+  // Comparing the two rows instead cannot work: a row carries a
+  // missed-backup count and a timing estimate that move on their own,
+  // so it may never equal what was written.
+  let routerBackupsFetchedAt = $state(0)
+
   function refreshRouterBackups() {
+    const startedAt = Date.now()
     fetchRouterBackups()
       .then((r) => {
         routerBackups = r
+        routerBackupsFetchedAt = startedAt
         routerBackupsUnanswered = false
       })
       .catch(() => {
@@ -165,6 +199,30 @@
   // reached only from here (owner decision, issue note 10572).
   function openLostRouter(device: string) {
     wizardState.openLostRouter(device)
+  }
+
+  // --- drop list (#1225, #461) --------------------------------------------
+  let droplist = $state<DroplistResponse | null>(null)
+  // The disk group's own `dfail` idiom, same reason router backups above
+  // draws it directly: the GET did not answer for a reason other than
+  // role, and there is no settings object yet to render a control from.
+  let droplistUnanswered = $state(false)
+
+  function refreshDroplist(): Promise<void> {
+    // wizardState.address (#1213) is the operator's own saved answer to
+    // "what address can your router reach mikroview on?", not this
+    // tab's own window.location.host -- the setup card's four printed
+    // router commands come straight from this response, so they must
+    // be baked against the same address Droplist.svelte's own mintKey
+    // reads (#1260) and copyRouterLines above reads for the push script.
+    return fetchDroplist(wizardState.address)
+      .then((r) => {
+        droplist = r
+        droplistUnanswered = false
+      })
+      .catch(() => {
+        droplistUnanswered = true
+      })
   }
 
   function refreshHistory() {
@@ -428,6 +486,25 @@
     ),
   )
 
+  // #1205: sustained oversized runs from a *declared* router almost
+  // always mean its logging action still lacks
+  // remote-log-format=syslog -- every wizard before 2026-09-12 omitted
+  // it. The detection itself is server-side (internal/syslog's
+  // oversizedIsSetupDrift): this just reads the one flag it sets.
+  const oversizedSetupDriftHost = $derived.by(() => {
+    const oversized = appState.stats?.syslog?.loss?.oversized
+    return oversized?.setupDrift ? oversized.host : undefined
+  })
+  // #1234: the same shape as the line above, for the other router-side
+  // fault an upgraded install carries -- the wizard's logging block
+  // pasted more than once, so every line arrives two or three times
+  // over. Detection is server-side too (internal/syslog/duplicate.go);
+  // the wording lives in lib/ingestDuplicates.
+  const ingestDuplicates = $derived(duplicateDrift(appState.stats?.syslog))
+
+  const ROUTEROS_SETUP_DOCS_URL =
+    'https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md'
+
   function quietFor(lastSeen: string): string | null {
     const days = Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
     return days >= 1 ? `quiet ${days} d — quiet is a fact, not a fault` : null
@@ -500,14 +577,16 @@
 
   // copyRouterLines hands back the same push script the setup wizard
   // would -- POST /api/setup/commands' steps.push.commands (#436 moved
-  // the RouterOS syntax itself server-side), keyed to this instance's
-  // address and status.pushKinds -- with the freshly-minted key already
-  // embedded, so rotating an ingest key never sends the operator back
-  // through setup for a line-by-line diff.
+  // the RouterOS syntax itself server-side), keyed to wizardState.address
+  // (#1213 -- the operator's own answer to "what address can your router
+  // reach mikroview on?", not this tab's own URL) and status.pushKinds --
+  // with the freshly-minted key already embedded, so rotating an ingest
+  // key never sends the operator back through setup for a line-by-line
+  // diff.
   async function copyRouterLines(value: string) {
     if (!status) return
     const result = await fetchSetupCommands({
-      address: window.location.host,
+      address: wizardState.address,
       syslogPort: status.instance.syslogPort,
       token: value,
       kinds: status.pushKinds,
@@ -551,6 +630,16 @@
   let personError = $state<string | null>(null)
   let addingPerson = $state(false)
   let armedRemove = $state<string | null>(null)
+  // #1251's reset. Armed the same way remove and revoke are -- one
+  // click arms, the next confirms, a click anywhere else disarms -- and
+  // for the same reason: it kills the person's password outright, so it
+  // must not be reachable by a stray click on a row.
+  let armedReset = $state<string | null>(null)
+  let resetting = $state<string | null>(null)
+  // The issued code, held only for as long as the dialog showing it is
+  // open. Cleared on close: this is the one place it exists in clear,
+  // and it has no second use.
+  let issuedReset = $state<PasswordResetCode | null>(null)
 
   // Your own row leads the list, then everyone else's, matching the
   // drawing's "your account, then everyone else's" -- the server has no
@@ -602,6 +691,29 @@
     if (err) personError = err
   }
 
+  function onResetClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedReset === id) {
+      armedReset = null
+      resetPersonPassword(id)
+      return
+    }
+    disarmAll()
+    armedReset = id
+  }
+
+  async function resetPersonPassword(id: string) {
+    personError = null
+    resetting = id
+    const result = await usersState.resetPassword(id)
+    resetting = null
+    if (typeof result === 'string') {
+      personError = result
+      return
+    }
+    issuedReset = result
+  }
+
   // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all
   // bubble is the other example): a click anywhere that isn't the armed
   // button itself disarms it, so an armed revoke/remove can't be
@@ -609,6 +721,7 @@
   function disarmAll() {
     armedRevoke = null
     armedRemove = null
+    armedReset = null
   }
 </script>
 
@@ -716,10 +829,19 @@
             {#if card.key === 'fall' && epsText}
               <span class="lv">{epsText} events/s now</span>
             {:else if card.key === 'docket'}
+              <!-- #1156: the same two counts the scene bar is already
+                   carrying two inches above this card, so the flag
+                   count is the bar's alone now -- printing "⚑ 67" here
+                   as well said the same thing twice on one screen. The
+                   watch count is the bar's own reading too:
+                   `heldCount`, watchers enabled and not ring-broken,
+                   partitioned against `brokenCount` beside it. It used
+                   to be `entries.length`, which counted the broken and
+                   the switched-off ones as well and so read one or two
+                   higher than the eye in the bar. -->
               <span class="lv">
-                {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
-                {#if isAdmin && watchlistState.entries.length > 0}
-                  <b class="wct">◉ {watchlistState.entries.length}</b>
+                {#if isAdmin && (watchlistState.heldCount > 0 || watchlistState.brokenCount > 0)}
+                  <b class="wct">◉ {watchlistState.heldCount}</b>
                   {#if watchlistState.brokenCount > 0}<b class="ct">○{watchlistState.brokenCount}</b>{/if}
                 {/if}
               </span>
@@ -738,11 +860,14 @@
       <div class="stsection wide" id="engineroom-ingest">
         <h3>ingest</h3>
         <div class="wleft">
+          <!-- 560 wide, not 520: the two door labels start at x=396 and the
+               longest of them ("10 events/s arriving now" at 9.5px mono) runs
+               past 520, so it was clipped mid-word (#1142). -->
           <svg
             class="stpath"
-            viewBox="0 0 520 92"
+            viewBox="0 0 560 92"
             role="img"
-            aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
+            aria-label="Routers push their logs one way into MikroView's listening port; nothing travels back"
           >
             {#if routers[0]}
               <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4" />
@@ -781,7 +906,7 @@
               <text x="396" y="57" class="sp-n">{epsText} events/s arriving now</text>
             {/if}
           </svg>
-          <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
+          <p class="oghint">the logs travel one way — MikroView never connects to your router</p>
         </div>
         <div class="wrows">
           {#if status}
@@ -797,6 +922,19 @@
             <span>who may speak</span>
             <span class="ov">holders of an ingest key — the keys group below</span>
           </div>
+          {#if geoipState.enabled === false}
+            <!-- #1198: matches the country filter's own disabled row --
+                 same fact, same wording, so a reader who has seen one
+                 recognises the other. Only shown when off: a database
+                 that is working needs no line here. -->
+            <div class="orow">
+              <span>geoip</span>
+              <span class="ov"
+                >no GeoIP database — <a href={GEOIP_DOCS_URL} target="_blank" rel="noopener noreferrer">see docs ▸</a
+                ></span
+              >
+            </div>
+          {/if}
           {#if appState.stats?.syslog}
             {@const syslog = appState.stats.syslog}
             <div class="orow">
@@ -831,6 +969,24 @@
                   : ''}
               </span>
             </div>
+            {#if oversizedSetupDriftHost}
+              <div class="orow sub">
+                <span>router setup out of date</span>
+                <span class="ov ink-caution">
+                  {oversizedSetupDriftHost} is likely missing <code>remote-log-format=syslog</code> — see
+                  <a href={ROUTEROS_SETUP_DOCS_URL} target="_blank" rel="noopener noreferrer">RouterOS setup</a>
+                </span>
+              </div>
+            {/if}
+            {#if ingestDuplicates}
+              <div class="orow sub">
+                <span>duplicate logging rules</span>
+                <span class="ov ink-caution">
+                  {duplicateDriftMessage(ingestDuplicates)} — run
+                  <code>{duplicateCleanupCommand}</code> on it, then paste the wizard's step 1 block again
+                </span>
+              </div>
+            {/if}
             <div class="orow sub">
               <span>not shown in this tab</span>
               <span class="ov" class:ink-info={ingestLoss.wsDropped > 0}>
@@ -838,8 +994,46 @@
               </span>
             </div>
           {/if}
+          {#if appState.stats?.engine}
+            {@const engine = appState.stats.engine}
+            <!-- #1109: checking reads events straight out of the buffer
+                 in order, so being behind is late, not lost -- the first
+                 row says which of the two it is in those words, and the
+                 second appears only when something really was missed.
+                 Outside the syslog block above because these are facts
+                 about checking, not about the listener. -->
+            <div class="orow sub">
+              <span>Checking:</span>
+              <span class="ov">
+                {engine.behind === 0
+                  ? 'caught up'
+                  : `${engine.behind.toLocaleString()} ${engine.behind === 1 ? 'event' : 'events'} behind (${Math.round(engine.behindSeconds)} s)`}
+              </span>
+            </div>
+            {#if engine.outrun > 0}
+              <div class="orow sub">
+                <span>Outrun:</span>
+                <span class="ov ink-warn">{engine.outrun.toLocaleString()}</span>
+              </div>
+            {/if}
+          {/if}
         </div>
       </div>
+
+      <!-- #1218: the settings this version understands that the running
+           config.yaml does not set, as YAML ready to paste. Mounted
+           straight after ingest rather than further down because an
+           operator who has just upgraded is the reader it exists for,
+           and admin-only because it names configuration. It renders its
+           own reassuring line when there is nothing new, so the group
+           itself is always here and Settings' order never depends on
+           what the config happens to be missing. -->
+      {#if isAdmin}
+        <div class="stsection wide" id="engineroom-new-settings">
+          <h3>new settings</h3>
+          <ConfigUpgrade />
+        </div>
+      {/if}
 
       {#if isAdmin}
         <div class="stsection" id="keys">
@@ -865,7 +1059,7 @@
                   done
                 </button>
               </div>
-              <div class="rnote">shown once — mikroview keeps only its fingerprint, so copy it now</div>
+              <div class="rnote">shown once — MikroView keeps only its fingerprint, so copy it now</div>
               {#if jc.kind === 'ingest'}
                 <div class="rnote">
                   the router lines, with this key already in them:
@@ -883,7 +1077,17 @@
               <span class="pr" class:ingest={tok.kind === 'ingest'}>
                 {tok.kind === 'ingest' ? `ingest · speaks for ${tok.device}` : 'read-only'}
               </span>
+              <!-- #1194: the mint time, so two keys the wizard left with
+                   the same name and the same "never spoke — yet" can be
+                   told apart and the older one revoked with confidence.
+                   Relative, the voice this row already speaks in, with
+                   the exact stamp on hover for two minted in the same
+                   minute. -->
               <span class="pf">
+                <span title={new Date(tok.createdAt).toLocaleString()}
+                  >minted {formatRelative(tok.createdAt, appState.now)}</span
+                >
+                ·
                 {tok.lastUsedAt ? `spoke ${formatRelative(tok.lastUsedAt, appState.now)}` : 'never spoke — yet'}
               </span>
               <button
@@ -1177,9 +1381,20 @@
            onMount), so absent rather than shown a 403 it cannot act on. -->
       {#if isAdmin}
         {#if routerBackups}
-          <div id="bakg" class="stsection wide">
+          <!-- The generation strips are the left column's diagram, and
+               there are none until backups are on and a router has
+               pushed a pair. Without one the rows sat alone in column
+               two, starting 600px in with the whole left half blank
+               (#1153) -- so with nothing to draw the group stacks, the
+               same answer the disk group's own no-diagram states give
+               (`dnokey`/`dfail`). -->
+          <div
+            id="bakg"
+            class="stsection wide"
+            class:dnodiagram={!routerBackups.enabled || routerBackups.routers.length === 0}
+          >
             <h3>router backups</h3>
-            <RouterBackups resp={routerBackups} onopenlost={openLostRouter} />
+            <RouterBackups resp={routerBackups} fetchedAt={routerBackupsFetchedAt} onopenlost={openLostRouter} />
           </div>
         {:else if routerBackupsUnanswered}
           <!-- The disk group's own `dfail` idiom: one row, no control,
@@ -1192,6 +1407,32 @@
                 <span class="ov">
                   unknown — the server did not answer ·
                   <button class="olink" onclick={refreshRouterBackups}>ask again</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      {/if}
+
+      <!-- The drop list group (#1225, #461), straight after router
+           backups: the third thing mikroview hands the router rather
+           than keeps for itself. Admin-only, same reason as backups
+           above. -->
+      {#if isAdmin}
+        {#if droplist}
+          <div id="engineroom-droplist" class="stsection wide">
+            <h3>drop list</h3>
+            <Droplist resp={droplist} onrefresh={refreshDroplist} />
+          </div>
+        {:else if droplistUnanswered}
+          <div id="engineroom-droplist" class="stsection wide dfail">
+            <h3>drop list</h3>
+            <div class="wrows">
+              <div class="orow">
+                <span>entries</span>
+                <span class="ov">
+                  unknown — the server did not answer ·
+                  <button class="olink" onclick={refreshDroplist}>ask again</button>
                 </span>
               </div>
             </div>
@@ -1244,6 +1485,10 @@
             <div class="prow">
               <span class="pn">{user.username}</span>
               {#if user.role === 'admin'}<span class="pr admin">admin</span>{/if}
+              <!-- #1171: the user tier was the only one with no pill, so
+                   a row for it said nothing about what the account may
+                   do. The words are the let-someone-in form's own. -->
+              {#if user.role === 'user'}<span class="pr">can change things</span>{/if}
               {#if user.role === 'viewer'}<span class="pr look">can only look</span>{/if}
               {#if user.sso}<span class="pr">sso</span>{/if}
               <span class="pf">
@@ -1256,6 +1501,27 @@
                   console-only
                 </span>
               {:else}
+                <!-- Absent, not disabled, for an SSO account: its
+                     provider owns the password and the server refuses
+                     (409), so offering the verb would only promise
+                     something that cannot happen. #548's grammar. -->
+                {#if user.hasLocalPassword}
+                  <button
+                    type="button"
+                    class="olink quiet"
+                    class:armed={armedReset === user.id}
+                    disabled={resetting === user.id}
+                    onclick={(e) => onResetClick(e, user.id)}
+                  >
+                    {#if resetting === user.id}
+                      resetting…
+                    {:else if armedReset === user.id}
+                      confirm — their password stops working now
+                    {:else}
+                      reset password
+                    {/if}
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="olink quiet remove"
@@ -1305,6 +1571,10 @@
     </div>
   </div>
 </div>
+
+{#if issuedReset}
+  <ResetCodeOverlay reset={issuedReset} onclose={() => (issuedReset = null)} />
+{/if}
 
 <style>
   .page {
@@ -1385,8 +1655,11 @@
 
   /* No key mounted: the disk group is two statements and no diagram, so
      it stacks like account rather than holding an empty left column
-     (round 42's `#set.dnokey #diskg { display: block }`). */
+     (round 42's `#set.dnokey #diskg { display: block }`). `dnodiagram`
+     is the same answer for router backups before any pair has arrived
+     (#1153). */
   .stsection.wide.dnokey,
+  .stsection.wide.dnodiagram,
   .stsection.wide.dfail {
     display: block;
   }
@@ -1531,6 +1804,14 @@
 
   .orow .ov.dim {
     color: var(--fg-dim);
+  }
+
+  /* #1205's setup-drift line links out to the docs -- inherit the
+     row's ink (caution, here) rather than the browser's default blue,
+     underlined so it still reads as a link. */
+  .orow .ov a {
+    color: inherit;
+    text-decoration: underline;
   }
 
   /* #995: the ingest-loss counters' sub-rows under "syslog slots" --
@@ -1804,9 +2085,14 @@
     flex-wrap: wrap;
   }
 
+  /* #1147: fixed at 220px these clipped their own placeholders mid-word
+     ("name it — birdcage, grafana, th") on a row with hundreds of pixels
+     going spare. They take a share of what the row has left instead,
+     never narrower than the 220px they were. */
   .pform input {
-    width: 220px;
-    flex: none;
+    flex: 1 1 220px;
+    min-width: 220px;
+    max-width: 420px;
   }
 
   .pform .acts {

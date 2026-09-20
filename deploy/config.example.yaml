@@ -7,7 +7,7 @@
 
 listen:
   # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port) --
-  # mikroview's only syslog listener. Confidentiality for log traffic on
+  # MikroView's only syslog listener. Confidentiality for log traffic on
   # the wire, using the same certificate the HTTPS listener below
   # presents when TLS is on, or a self-generated one otherwise -- a
   # certificate is loaded for this even if tls.enabled is false, since
@@ -21,12 +21,12 @@ listen:
   httpRedirect: ":8081"
 
   # Reverse-proxy support. Leave both commented out unless a proxy
-  # fronts mikroview.
+  # fronts MikroView.
   #
-  # Mikroview rate-limits failed logins per source address. Behind a
+  # MikroView rate-limits failed logins per source address. Behind a
   # proxy, every request carries the *proxy's* address, so without
   # trustedProxies all users share one bucket and one attacker's failed
-  # attempts lock everybody out. Setting this makes mikroview read the
+  # attempts lock everybody out. Setting this makes MikroView read the
   # real client address out of the forwarding header instead -- but only
   # for connections that actually came from a listed proxy, since a
   # header from anyone else is just text they chose.
@@ -50,7 +50,7 @@ store:
   maxMemory: 120MiB
   # Where a size set from Settings' memory control is kept. Once
   # somebody moves that slider, the figure stored here is the one that
-  # applies and maxMemory above is ignored -- mikroview says which it
+  # applies and maxMemory above is ignored -- MikroView says which it
   # took at startup. Delete the file to go back to the line above.
   settingsStorePath: /var/lib/mikroview/settings.json
 
@@ -75,7 +75,9 @@ store:
 
 # Optional: shows a country flag next to public IPs in the UI. Requires
 # your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
-# unset, no flags are shown; this is never required.
+# unset, no flags are shown; this is never required. The .mmdb file is
+# mounted in, so it must be readable by the container's user (uid 1000);
+# it is not a secret, so `chmod 644 GeoLite2-Country.mmdb` is enough.
 # geoip:
 #   dbPath: /etc/mikroview/GeoLite2-Country.mmdb
 
@@ -191,7 +193,7 @@ store:
 #         rules: []
 #         rulesMode: ""
 
-# New-device detection: raises a flag the first time mikroview ever sees
+# New-device detection: raises a flag the first time MikroView ever sees
 # a given LAN client MAC address -- deterministic, no threshold to tune.
 # storePath already defaults to /var/lib/mikroview/mac-registry.json
 # (see deploy/docker-compose.yml for the matching volume mount) -- only
@@ -200,6 +202,15 @@ store:
 # coverage caveat.
 # deviceMac:
 #   storePath: /var/lib/mikroview/mac-registry.json
+
+# The device registry's own enrolments (issue #1281): an enrolled
+# device's acceptedIp/enrolledAt, and the identity of any device declared
+# through the API rather than below under devices:, survive a restart
+# through this file. storePath already defaults to
+# /var/lib/mikroview/device-registry.json -- only uncomment this block to
+# move that path.
+# deviceRegistry:
+#   storePath: /var/lib/mikroview/device-registry.json
 
 # internal/engine's evaluation chassis (docs/decisions/evaluation-engine.md):
 # storePath persists per-definition, per-key baseline state, so a
@@ -229,7 +240,7 @@ store:
 #   decommissionStorePath: /var/lib/mikroview/decommission.json
 #   decommissionCleanWindow: 6h
 
-# Warm restart (issue #795): every few minutes mikroview writes a small
+# Warm restart (issue #795): every few minutes MikroView writes a small
 # JSON file holding the counters, rolling windows and device first/last
 # seen it has built up, and puts them back on the next boot -- so a
 # restart resumes from a few minutes ago instead of resetting the
@@ -251,6 +262,10 @@ store:
 # outside this data directory (never inside it, and never in this
 # file). Generate one with:
 #   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+# The key file has to be readable by the container's user (uid 1000),
+# the same rule as every other file you mount in -- if it is not,
+# MikroView refuses to start with "permission denied":
+#   sudo chown 1000:1000 mikroview-history.key && chmod 600 mikroview-history.key
 # Turning enabled back off deletes what was already retained. See
 # docs/configuration.md's "On-disk event history" section for what the
 # encryption does and doesn't protect against.
@@ -264,7 +279,10 @@ store:
 # RouterOS config backups over SFTP (issue #394, optional): a small
 # write-only SFTP drop box a router's own scheduled script pushes its
 # `/system backup save` and `/export` into. Off by default -- a second
-# listening port, opened only once you turn it on. Login is the device
+# listening port, opened only once you turn it on -- and turning it on
+# here is not enough on its own: also uncomment the matching port in
+# docker-compose.yml's `ports:`, or the router can never reach it
+# (#1220). Login is the device
 # name and that device's ingest token (no separate credential to
 # invent); a login can only write into its own folder and cannot list,
 # read, delete, rename or overwrite anything. Every pair is encrypted
@@ -299,6 +317,17 @@ store:
 #   sources:
 #     - spamhaus_drop
 #     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
+
+# The drop list (issue #1223/#1224/#1225, the design ratified on #461):
+# operator-authored ranges to block, typed in directly or raised from a
+# flag's drawer -- unrelated to the fetched blocklist feeds above.
+# storePath already defaults to /var/lib/mikroview/droplist.json; only
+# uncomment this block to move that path. Manage entries and fetch the
+# router setup commands from Settings > Engine room's drop list group,
+# or the /api/droplist routes directly -- see docs/configuration.md's
+# "Drop list" section.
+# droplist:
+#   storePath: /var/lib/mikroview/droplist.json
 
 # Optional (on by default): local IP attribution for the manual IP-lookup
 # popover -- labels an address as a Tor exit, commercial VPN,
@@ -360,7 +389,7 @@ store:
 # (type, key), editable with no restart, taking precedence over
 # ruleNames/hostNames for any key it has a label for. storePath already
 # defaults to /var/lib/mikroview/entities.json; only uncomment this
-# block to move that path. The first time mikroview boots against an
+# block to move that path. The first time MikroView boots against an
 # empty entities store, it imports any existing ruleNames/hostNames as
 # entities automatically -- see docs/configuration.md's "Entities"
 # section.
@@ -386,6 +415,21 @@ store:
 # docs/configuration.md's "Host presence register" section.
 # hosts:
 #   storePath: /var/lib/mikroview/hosts.json
+
+# Optional: the seen filter values register (#1226) -- the protocols and
+# interface names this instance has actually observed, so the live view's
+# Proto and Interface filters are pickers over a real list instead of
+# free-text boxes you guess into. Typing a value that is not in the list
+# still works, which is what lets you set a filter up before the traffic
+# appears. Rebuilt from the feed on every restart if unset, so the menus
+# just start empty and refill. A value is kept while it has been seen in
+# the last 90 days, at most 200 per field, least-recently-seen evicted
+# first -- fixed in MikroView, not settings. storePath already defaults
+# to /var/lib/mikroview/seen-values.json; only uncomment this block to
+# move that path. See docs/configuration.md's "Seen filter values"
+# section.
+# seen:
+#   storePath: /var/lib/mikroview/seen-values.json
 
 # Optional: the baseline line register (#1016) -- which source/
 # destination/port/protocol lines the feed has shown, and on how many of
@@ -426,6 +470,18 @@ store:
 # setup:
 #   storePath: /var/lib/mikroview/setup.json
 
+# Nothing reads this any more, and you can leave it alone.
+#
+# The "N new settings are available" notice (#1218) used to record which
+# version you had dismissed, so it would stop appearing. It now just has
+# a close button: closing it puts it away for this visit, nothing is
+# saved, and Settings > Upgrade still shows the list whenever you want
+# to come back to it. That left this file with nothing to keep, so the
+# setting below only still exists to be removed in a later version. See
+# docs/configuration.md's "Upgrade notice" section.
+# configDrift:
+#   storePath: /var/lib/mikroview/config-drift.json
+
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,
@@ -433,10 +489,10 @@ store:
 #
 # Uncomment this block to move that path, change sessionTTL, or set
 # secureCookie. secureCookie is the one people come looking for: leaving
-# it false while tls.enabled is true stops mikroview starting (CFG-0021),
+# it false while tls.enabled is true stops MikroView starting (CFG-0021),
 # because the session cookie would go out without the Secure flag.
 #
-# The first time mikroview loads it asks you to create the admin
+# The first time MikroView loads it asks you to create the admin
 # account. That is the only option -- see SECURITY.md and
 # docs/configuration.md's "Authentication" section.
 # auth:
@@ -458,11 +514,15 @@ store:
 #   recoveryKeysPath: /var/lib/mikroview/recovery.json
 #   recoveryPepperPath: /var/lib/mikroview/recovery-pepper
 
-# TLS is on by default and needs no configuration to work -- mikroview
+# TLS is on by default and needs no configuration to work -- MikroView
 # generates its own local CA + certificate on first start, already
 # persisted to /var/lib/mikroview/tls by default. Only uncomment this
 # block to move that path, or point certFile/keyFile at your own cert
-# instead of generating one. See SECURITY.md and docs/configuration.md's
+# instead of generating one. Both of those are files you mount in, so
+# both must be readable by the container's user (uid 1000):
+#   sudo chown 1000:1000 tls.crt tls.key
+#   chmod 644 tls.crt && chmod 600 tls.key
+# See SECURITY.md and docs/configuration.md's
 # "TLS" section, including the one documented reason to set
 # enabled: false.
 # tls:
@@ -496,7 +556,7 @@ store:
 #     user: ""
 
 # Optional: sign in with your own identity provider instead of (or
-# alongside) mikroview's local account. See docs/configuration.md's
+# alongside) MikroView's local account. See docs/configuration.md's
 # "Single sign-on (OIDC)" section -- publicBaseUrl is the one field
 # people get wrong, and it must match the redirect URI registered with
 # the provider exactly.
@@ -522,12 +582,13 @@ store:
 #
 # There is no `dsn` field, deliberately: a connection string carries a
 # password, so it is read from a file you control the permissions of.
-# The file must be readable by uid 65532 (the container's user):
-#   chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+# The file must be readable by uid 1000 (the container's user -- the
+# first account on most Linux hosts, so probably you already):
+#   sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
 # postgres:
 #   dsnFile: /run/secrets/mikroview-postgres-dsn
 
-# Devices are matched by the syslog source IP mikroview sees them from.
+# Devices are matched by the syslog source IP MikroView sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
 # labelled with their IP -- add them here once you know which is which.
 devices:

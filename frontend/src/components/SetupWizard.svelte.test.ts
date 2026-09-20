@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { tick } from 'svelte'
 
@@ -27,28 +27,84 @@ vi.hoisted(() => {
 // the operator can and cannot do to a half-finished setup.
 vi.mock('../lib/api', () => ({
   fetchSetupStatus: vi.fn(),
+  createDevice: vi.fn(),
+  mintEnrolment: vi.fn(),
+  rebindEnrolment: vi.fn(),
+  fetchRefusedSenders: vi.fn(),
   fetchSetupCommands: vi.fn(),
   fetchDevices: vi.fn(),
   markSetupStep: vi.fn(),
   createToken: vi.fn(),
   fetchRouterBackups: vi.fn(),
+  saveSetupAddress: vi.fn(),
+  saveSetupBackupTransport: vi.fn(),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
 }))
 
-import { createToken, fetchDevices, fetchRouterBackups, fetchSetupCommands, fetchSetupStatus, markSetupStep } from '../lib/api'
+// downloadFromUrl's own fetch-and-save path is unreliable in jsdom (see
+// RouterBackups.svelte.test.ts's identical guard) -- faked at the module
+// boundary so what is tested here is this component's own wiring: which
+// URL, and what the vault gate does to it (#1218 audit finding 16).
+vi.mock('../lib/export', () => ({
+  downloadFromUrl: vi.fn(),
+}))
+
+import {
+  createDevice,
+  createToken,
+  fetchDevices,
+  fetchRefusedSenders,
+  mintEnrolment,
+  rebindEnrolment,
+  fetchRouterBackups,
+  fetchSetupCommands,
+  fetchSetupStatus,
+  markSetupStep,
+  saveSetupAddress,
+  saveSetupBackupTransport,
+} from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
+import { viewportState } from '../lib/viewport.svelte'
 import { wizardState } from '../lib/wizard.svelte'
+import { ROUTER_STEPS, SETUP_STEPS } from '../lib/setupsteps'
+import { downloadFromUrl } from '../lib/export'
 import type { Device, SetupCommandsResponse, SetupStatus } from '../lib/types'
 import SetupWizard from './SetupWizard.svelte'
 
+// Which pane each step sits on in the first-run ledger (#1284). Named
+// rather than numbered, because the order is the record's to set and
+// has moved once already -- naming moved from last to first when it
+// started creating the router.
+const PANE = { ca: 1, name: 2, syslog: 3, rules: 4, push: 5, backup: 6, register: 7 } as const
+
+// The number each step's marks and witnesses are recorded under, which
+// is not its pane: the server witnesses by fixed number (step 2 is the
+// first syslog line, step 4 the first push), so those numbers stayed
+// where v0.5 left them when #1284 moved naming to the front.
+const RECORD = { ca: 1, syslog: 2, rules: 3, push: 4, name: 5, backup: 6 } as const
+// Vite's `?raw` import, the same device LiveTable.svelte.test.ts uses for
+// its own CSS-token assertions (#1216): jsdom does not resolve a scoped
+// custom property through getComputedStyle, so the ink itself is checked
+// against the source's own CSS rules rather than a rendered style.
+import componentSource from './SetupWizard.svelte?raw'
+
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
-    instance: { tlsEnabled: true, hosts: ['localhost'], syslogPort: ':6514', syslogEnabled: true },
+    instance: {
+      tlsEnabled: true,
+      hosts: ['localhost'],
+      syslogPort: ':6514',
+      syslogEnabled: true,
+      address: '',
+      addressCandidates: [],
+      backupTransport: 'sftp',
+    },
     sources: [],
     devices: [],
     pushKinds: ['filter-rule', 'arp'],
     marks: [],
+    witnesses: [],
     ...over,
   }
 }
@@ -97,10 +153,12 @@ function commandsFixture(over: Partial<SetupCommandsResponse> = {}): SetupComman
 function backupsFixture(over: Partial<import('../lib/types').RouterBackupsResponse> = {}) {
   return {
     enabled: false,
+    keyUnreadable: false,
     routers: [],
     totalGenerations: 0,
     totalRouters: 0,
     totalBytes: 0,
+    lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
     ...over,
   }
 }
@@ -111,6 +169,11 @@ beforeEach(async () => {
   vi.mocked(fetchDevices).mockResolvedValue([])
   vi.mocked(fetchSetupCommands).mockResolvedValue(commandsFixture())
   vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture())
+  vi.mocked(saveSetupAddress).mockResolvedValue(null)
+  vi.mocked(saveSetupBackupTransport).mockResolvedValue(null)
+  vi.mocked(fetchRefusedSenders).mockResolvedValue([])
+  vi.mocked(mintEnrolment).mockResolvedValue({ token: 'enr-token', expiresAt: '2026-09-19T14:17:00Z' })
+  vi.mocked(rebindEnrolment).mockResolvedValue(null)
   authState.state = 'authenticated'
   authState.role = 'admin'
   authState.username = 'tom'
@@ -125,6 +188,40 @@ beforeEach(async () => {
   wizardState.pickedVersion = ''
   wizardState.backups = null
   wizardState.lostRouterDevice = null
+  // #1183 moved these onto wizardState so a key outlives the component
+  // -- which means each test has to start without one, the way a fresh
+  // page load does.
+  wizardState.token = ''
+  wizardState.tokenDevice = ''
+  // The router ledger's own module-lifetime fields (#1284/#1281), same
+  // reasoning as the two above: each test starts as a fresh page load
+  // would, with no router in hand and no token minted.
+  wizardState.steps = SETUP_STEPS
+  wizardState.ledgerDevice = ''
+  wizardState.enrolment = null
+  wizardState.enrolmentMintedAt = ''
+  wizardState.enrolmentError = null
+  wizardState.refused = []
+  wizardState.finishTo = 'fall'
+  // address (#1213) is a module-lifetime field too, same reasoning as
+  // token/tokenDevice above. Defaulted to a host status()'s own
+  // tls.hosts fixture covers -- the same "already answered, matches the
+  // certificate" state refresh() would ordinarily have left it in --
+  // so existing tests that never mention the address keep exercising
+  // step 1 as done-or-waiting rather than newly reading blocked. Tests
+  // for the no-address state itself set it back to '' explicitly.
+  wizardState.address = 'localhost'
+  wizardState.addressSaveError = null
+  // The transport (#955) is module-lifetime too, and the deployment's
+  // answer rather than this browser's -- each test starts on the sftp
+  // default the same way a fresh install reads.
+  wizardState.backupTransport = 'sftp'
+  wizardState.backupTransportError = null
+  // The history key (#1218 audit finding 4) now survives a reload via
+  // sessionStorage -- cleared here so one test's mint or pasted key
+  // never leaks into the next, the same "start without one" rule the
+  // wizardState fields above already follow.
+  sessionStorage.clear()
 })
 
 describe('SetupWizard', () => {
@@ -159,11 +256,11 @@ describe('SetupWizard', () => {
     expect(screen.getByLabelText(/Run setup…/)).toBeTruthy()
   })
 
-  it('always shows six steps, whatever state they are in', () => {
+  it('always shows seven steps, whatever state they are in', () => {
     const { container } = render(SetupWizard)
     const rows = container.querySelectorAll('.steps .step-row')
-    // Six steps plus the read-back row.
-    expect(rows.length).toBe(7)
+    // Seven steps plus the read-back row (#1291 added Register).
+    expect(rows.length).toBe(8)
   })
 
   // Next runs the check where one exists. Waiting does not proceed: it
@@ -246,12 +343,62 @@ describe('SetupWizard', () => {
     expect(wizardState.pane).toBe(2)
   })
 
+  // #1132: a partial step says what arrived in the arrived line and
+  // what it is still short of in a second box beside it, in the warning
+  // colour rather than the reject red -- the shortfall is not a fault
+  // on mikroview's side, and it is not good news either.
+  it('puts a partial step’s shortfall in its own warning box, under the arrived line', () => {
+    wizardState.pane = PANE.push
+    wizardState.status = status({
+      devices: [
+        {
+          device: 'r1',
+          configured: true,
+          sourceIp: '192.0.2.1',
+          events: 10,
+          decodedActions: 10,
+          pushedKinds: { 'filter-rule': '2026-08-23T09:00:00Z' },
+        },
+      ],
+    })
+    const { container } = render(SetupWizard)
+
+    const boxes = [...container.querySelectorAll('.observation')]
+    expect(boxes.length).toBe(2)
+    expect(boxes[0].classList.contains('arrived')).toBe(true)
+    expect(boxes[0].textContent?.trim()).toBe('Arrived: filter-rule.')
+    expect(boxes[0].textContent).not.toContain('missing')
+    // The shortfall is the second box, and it is not green.
+    expect(boxes[1].classList.contains('shortfall')).toBe(true)
+    expect(boxes[1].classList.contains('arrived')).toBe(false)
+    expect(boxes[1].textContent?.trim()).toBe('Still missing: arp.')
+  })
+
+  it('shows one observation box, and no shortfall, once everything has arrived', () => {
+    wizardState.pane = PANE.push
+    wizardState.status = status({
+      devices: [
+        {
+          device: 'r1',
+          configured: true,
+          sourceIp: '192.0.2.1',
+          events: 10,
+          decodedActions: 10,
+          pushedKinds: { 'filter-rule': '2026-08-23T09:00:00Z', arp: '2026-08-23T09:00:00Z' },
+        },
+      ],
+    })
+    const { container } = render(SetupWizard)
+    expect(container.querySelectorAll('.observation').length).toBe(1)
+    expect(container.querySelector('.observation.shortfall')).toBeNull()
+  })
+
   // #442: a router declared under one address whose logs arrive from
   // another. Step 2 reads it as partial -- evidence arrived, composed
   // wrongly -- states both facts, and prints the remedy with the
   // operator's values. It never claims the two addresses are one box.
   it('surfaces the source-address split on step 2 with the printed remedy', async () => {
-    wizardState.pane = 2
+    wizardState.pane = PANE.syslog
     wizardState.status = status({
       sources: [{ source: '10.0.20.1', syslogFirstSeenAt: '2026-08-23T09:00:00Z' }],
     })
@@ -282,10 +429,16 @@ describe('SetupWizard', () => {
 
     const observation = container.querySelector('.observation')
     expect(observation?.textContent?.trim()).toBe(
-      "Connected — but from 10.0.20.1, an address you haven't declared, while 192.168.88.1, which you declared in config.yaml, has sent nothing.",
+      "Connected — but from 10.0.20.1, an address you haven't declared.",
     )
     // Partial reads in the arrived voice, never attention.
     expect(observation?.classList.contains('attention')).toBe(false)
+    // And what is silent is the shortfall beside it, not part of the
+    // green line (#1132).
+    const shortfall = container.querySelector('.observation.shortfall')
+    expect(shortfall?.textContent?.trim()).toBe(
+      '192.168.88.1, which you declared in config.yaml, has sent nothing.',
+    )
 
     const body = container.querySelector('.split')?.textContent?.replace(/\s+/g, ' ') ?? ''
     expect(body).toContain("MikroView can't tell whether these are the same router")
@@ -300,13 +453,13 @@ describe('SetupWizard', () => {
 
     // The step list carries the split as its receipt.
     const rows = container.querySelectorAll('.steps .step-row')
-    expect(rows[1].querySelector('.step-receipt')?.textContent).toBe(
+    expect(rows[PANE.syslog - 1].querySelector('.step-receipt')?.textContent).toBe(
       'syslog from 10.0.20.1 · declared 192.168.88.1 silent',
     )
   })
 
   it('shows no split body when the declared router is the one sending', () => {
-    wizardState.pane = 2
+    wizardState.pane = PANE.syslog
     wizardState.status = status({
       sources: [{ source: '192.168.88.1', syslogFirstSeenAt: '2026-08-23T09:00:00Z' }],
     })
@@ -330,13 +483,13 @@ describe('SetupWizard', () => {
   // Step 3 counts, and can only count upward. There is no waiting check
   // to force past, so Next is free and the hint is absent.
   it('leaves Next free on the counting step', async () => {
-    wizardState.pane = 3
+    wizardState.pane = PANE.rules
     const { container } = render(SetupWizard)
     expect(container.querySelector('.hint')).toBeFalsy()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(container.querySelector('.heavy')).toBeFalsy()
-    expect(wizardState.pane).toBe(4)
+    expect(wizardState.pane).toBe(PANE.push)
   })
 
   // Step 6 (#394) has a waiting check too, same as step 4's -- give it
@@ -365,13 +518,86 @@ describe('SetupWizard', () => {
 
   it('offers Finish on the last step, and reads the ledger back after it', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
-    wizardState.pane = 6
+    // Finish is on the ledger's last step, which since #1291 is
+    // Register rather than Back up the router.
+    wizardState.pane = PANE.register
     const { container } = render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
     await fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
 
     expect(container.querySelector('.headline')).toBeTruthy()
-    expect(container.querySelectorAll('.readback li').length).toBe(6)
+    expect(container.querySelectorAll('.readback li').length).toBe(7)
+    // #1166: the readback and the rail say the same thing the same way
+    // about a step that has seen nothing.
+    expect(container.textContent).not.toContain('nothing arrived')
+  })
+
+  // #1184: step 5 was the only step with no Copy button, and its sample
+  // named the router after the very address the step exists to replace,
+  // so pasting it changed nothing.
+  // Naming moved from last to first and now creates the router
+  // (#1284): the name is the only field, there is nothing to paste on a
+  // router here, and Next is the act.
+  it('asks for a name, and creates the router on Next', async () => {
+    wizardState.pane = PANE.name
+    vi.mocked(createDevice).mockResolvedValue({
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '',
+      configured: true,
+      firstSeen: '2026-09-19T14:00:00Z',
+      lastSeen: '2026-09-19T14:00:00Z',
+      eventCount: 0,
+      status: 'never_seen',
+    })
+    const { container } = render(SetupWizard)
+
+    // No command block: this is the one step body that never has one.
+    expect(container.querySelector('.body pre')).toBeNull()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'edge-1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => expect(createDevice).toHaveBeenCalledWith('edge-1'))
+    await waitFor(() => expect(wizardState.ledgerDevice).toBe('edge-1'))
+    await waitFor(() => expect(wizardState.pane).toBe(PANE.syslog))
+  })
+
+  // An empty field is the one thing that stops Next here: the step's
+  // whole job is the name, so there is nothing to go on without it.
+  it('does not create a router with no name, and says so', async () => {
+    wizardState.pane = PANE.name
+    render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    expect(createDevice).not.toHaveBeenCalled()
+    expect(wizardState.pane).toBe(PANE.name)
+    expect(screen.getByText('Give the router a name.')).toBeTruthy()
+  })
+
+  // #1166: the footer hint named "Next" beside a button labelled
+  // Finish. The hint and the button must never disagree about which
+  // one they mean.
+  //
+  // Since #1291 the ledger's last step is Register, which runs no
+  // check, so the hint is not drawn there at all -- there is nothing
+  // waiting to be checked to describe. What #1166 guards is the
+  // disagreement, so that is what is asserted: on the last step the
+  // button reads Finish and no hint contradicts it, and on a checked
+  // step that is not last the hint reads Next.
+  it('never lets the footer hint name a different button from the footer button', async () => {
+    const { container } = render(SetupWizard)
+
+    wizardState.pane = PANE.backup
+    await tick()
+    expect(container.querySelector('.hint')?.textContent).toBe('Next checks what has arrived')
+    expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy()
+
+    wizardState.pane = PANE.register
+    await tick()
+    expect(screen.getByRole('button', { name: 'Finish' })).toBeTruthy()
+    expect(container.querySelector('.hint')?.textContent ?? '').not.toContain('Next')
   })
 
   // #646: the wizard ends by taking the operator back to the fall,
@@ -379,7 +605,7 @@ describe('SetupWizard', () => {
   // wizard, the journey's own hand-off included.
   it('the finish leads back to the fall', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsArrived())
-    wizardState.pane = 6
+    wizardState.pane = PANE.register
     appState.view = 'engineroom'
     render(SetupWizard)
     await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
@@ -394,21 +620,241 @@ describe('SetupWizard', () => {
   // a decision that has been recorded goes on saying so.
   it('carries a recorded decision in the step list', () => {
     wizardState.status = status({
-      marks: [{ step: 2, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+      marks: [{ step: RECORD.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
     })
     const { container } = render(SetupWizard)
-    const row = container.querySelectorAll('.steps .step-row')[1]
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
     expect(row.className).toContain('skipped')
     expect(row.textContent).toContain('skipped by tom')
     // Its consequence, stated plainly -- never a reproach.
     expect(row.textContent).toContain('no logs arrive')
   })
 
+  // #1216: a skipped step reads as a decision, not a gap -- the owner's
+  // ruling gives it done's own solid disc-and-receipt treatment, just in
+  // --log's blue rather than --accept's green, with the dashed border as
+  // the only remaining cue that it isn't done. Forced-past moves off blue
+  // to --caution's yellow so the two non-done outcomes stay distinguishable.
+  // jsdom does not resolve scoped CSS custom properties through
+  // getComputedStyle, so this asserts the class structure that carries
+  // the ink rather than a computed colour; the CSS rules themselves are
+  // checked against the component source below.
+  it('marks a skipped step and its receipt with the skipped class, not the muted one', () => {
+    wizardState.status = status({
+      marks: [{ step: RECORD.syslog, outcome: 'skipped', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+    })
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
+    expect(row.className).toContain('skipped')
+    const receipt = row.querySelector('.step-receipt')
+    expect(receipt).toBeTruthy()
+    expect(receipt?.className).not.toContain('gap')
+    // The consequence sub-line is still there, and still its own class --
+    // the CSS keeps it muted even though its parent row is skipped.
+    const consequence = row.querySelector('.step-receipt.consequence')
+    expect(consequence).toBeTruthy()
+  })
+
+  it('marks a forced-past step with the forced class, distinct from skipped', () => {
+    wizardState.status = status({
+      marks: [{ step: RECORD.syslog, outcome: 'forced', actor: 'tom', at: '2026-08-23T09:00:00Z' }],
+    })
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
+    expect(row.className).toContain('forced')
+    expect(row.className).not.toContain('skipped')
+    expect(row.querySelector('.step-receipt')).toBeTruthy()
+  })
+
+  // #1221: evidence that lived only in memory does not survive a
+  // restart, but a step the server watched happen still reads done --
+  // from its own witness, not a fresh reading -- with a receipt worded
+  // past tense and dated rather than as a current observation.
+  it('reads a witnessed step as done, with a past-tense dated receipt', async () => {
+    // Mocked as well as set directly: the modal's own sign-in effect
+    // re-fetches status on mount, and a mismatched mock would clobber
+    // wizardState.status back to the default the moment that resolves.
+    const withWitness = status({
+      witnesses: [
+        { step: RECORD.syslog, receipt: 'syslog connected from 192.0.2.1', at: '2026-09-13T10:27:00Z' },
+      ],
+    })
+    vi.mocked(fetchSetupStatus).mockResolvedValue(withWitness)
+    wizardState.status = withWitness
+    const { container } = render(SetupWizard)
+    const row = container.querySelectorAll('.steps .step-row')[PANE.syslog - 1]
+    // Done's own disc, the same as live evidence gets -- the step
+    // genuinely happened, which is the whole complaint #1221 fixes.
+    expect(row.className).toContain('done')
+    expect(row.className).not.toContain('skipped')
+    expect(row.className).not.toContain('forced')
+    const receipt = row.querySelector('.step-receipt')
+    expect(receipt?.textContent).toContain('syslog connected from 192.0.2.1')
+    expect(receipt?.textContent).toContain('seen on')
+    // Opening the step itself must read the same way: the observation
+    // line is the receipt, never the live check's stale "waiting" text.
+    await fireEvent.click(row)
+    const observation = container.querySelector('.body .observation')
+    expect(observation?.textContent).toContain('seen on')
+    expect(observation?.className).not.toContain('waiting')
+  })
+
+  // #1216's ink itself, read off the component's own CSS: skipped takes
+  // --log (done's solid treatment, dashed border kept as the secondary
+  // cue), forced-past takes --caution, and skipped's gap/consequence
+  // sub-line stays muted rather than following the disc's blue.
+  it('colours skipped and forced-past with distinct inks in the component CSS', () => {
+    const skippedDisc = componentSource.match(/\.step-row\.skipped \.step-n\s*\{([^}]*)\}/)
+    expect(skippedDisc).toBeTruthy()
+    expect(skippedDisc![1]).toMatch(/border-color:\s*var\(--log\)/)
+    expect(skippedDisc![1]).toMatch(/color:\s*var\(--log\)/)
+    expect(skippedDisc![1]).toMatch(/border-style:\s*dashed/)
+
+    const forcedDisc = componentSource.match(/\.step-row\.forced \.step-n\s*\{([^}]*)\}/)
+    expect(forcedDisc).toBeTruthy()
+    expect(forcedDisc![1]).toMatch(/border-color:\s*var\(--caution\)/)
+    expect(forcedDisc![1]).toMatch(/color:\s*var\(--caution\)/)
+
+    const skippedReceipt = componentSource.match(/\.step-row\.skipped \.step-receipt\s*\{([^}]*)\}/)
+    expect(skippedReceipt).toBeTruthy()
+    expect(skippedReceipt![1]).toMatch(/color:\s*var\(--log\)/)
+
+    const forcedReceipt = componentSource.match(/\.step-row\.forced \.step-receipt\s*\{([^}]*)\}/)
+    expect(forcedReceipt).toBeTruthy()
+    expect(forcedReceipt![1]).toMatch(/color:\s*var\(--caution\)/)
+
+    // The gap/consequence sub-line under a skipped row must not inherit
+    // the disc's blue -- checked as its own, more specific rule.
+    const skippedMuted = componentSource.match(
+      /\.step-row\.skipped \.step-receipt\.gap,\s*\n\s*\.step-row\.skipped \.step-receipt\.consequence\s*\{([^}]*)\}/,
+    )
+    expect(skippedMuted).toBeTruthy()
+    expect(skippedMuted![1]).toMatch(/color:\s*var\(--fg-muted\)/)
+  })
+
   it('announces the step it moved to, not just that it moved', () => {
     const { container } = render(SetupWizard)
     const live = container.querySelector('[role="status"]')?.textContent ?? ''
-    expect(live).toContain('Step 1 of 6')
+    expect(live).toContain('Step 1 of 7')
     expect(live).toContain('Trust the certificate')
+  })
+})
+
+// #1213: the wizard header's own field, above the numbered steps -- what
+// address a router can reach mikroview on, editable at any time, with
+// every RouterOS command block written against it instead of the
+// browser's own host.
+describe('SetupWizard -- the address field (#1213)', () => {
+  it('editing it re-renders every command block, through a fresh POST /api/setup/commands', async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    expect(input.value).toBe('localhost')
+
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(wizardState.address).toBe('192.168.1.9:8443')
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.address).toBe('192.168.1.9:8443')
+    })
+  })
+
+  // #1218 audit finding 11: the field is bound per keystroke, and
+  // commandsKey (this file's own effect below) includes
+  // wizardState.address -- before refreshCommands debounced its actual
+  // request, every one of these fired its own POST
+  // /api/setup/commands. fetchSetupCommands is called once already by
+  // the initial mount (asserted above in the previous test's own first
+  // line); this one keeps typing going and checks the traffic that
+  // follows collapses to one more call, not one per character.
+  it('collapses a run of keystrokes into a single request, not one per character', async () => {
+    render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+    // Mount settles on its own (unrelated to the address field -- the
+    // status/token effects above can each fire their own initial
+    // request), so the baseline is however many calls that took, not an
+    // assumed 1 -- what this test actually checks is the *delta* a run
+    // of keystrokes adds.
+    const baseline = vi.mocked(fetchSetupCommands).mock.calls.length
+
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    for (const value of ['1', '19', '192', '192.', '192.1', '192.16', '192.168']) {
+      await fireEvent.input(input, { target: { value } })
+    }
+
+    await waitFor(() => {
+      const last = vi.mocked(fetchSetupCommands).mock.calls.at(-1)?.[0]
+      expect(last?.address).toBe('192.168')
+    })
+    // One more call for the whole run, not one per character.
+    expect(vi.mocked(fetchSetupCommands).mock.calls.length - baseline).toBe(1)
+  })
+
+  it('persists on blur, not on every keystroke', async () => {
+    render(SetupWizard)
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(saveSetupAddress).not.toHaveBeenCalled()
+
+    await fireEvent.blur(input)
+    expect(saveSetupAddress).toHaveBeenCalledWith('192.168.1.9:8443')
+  })
+
+  it('surfaces a save the server refused, beside the field', async () => {
+    vi.mocked(saveSetupAddress).mockResolvedValue('address must be a hostname or IP address, optionally with :port')
+    render(SetupWizard)
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+
+    await fireEvent.input(input, { target: { value: 'not a valid host' } })
+    await fireEvent.blur(input)
+
+    await waitFor(() => {
+      expect(screen.getByText('address must be a hostname or IP address, optionally with :port')).toBeTruthy()
+    })
+  })
+
+  // The no-command state (#1213, reusing #1217's commandStep.blocked
+  // mechanism with the "no-address" key): every block that embeds the
+  // address comes back blank server-side with nothing answered yet, and
+  // the wizard shows why rather than an empty box.
+  it('renders "no commands yet" on the certificate, Send logs and push steps when nothing has been answered', async () => {
+    wizardState.address = ''
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          caTrust: { commands: '', note: '', blocked: ['no-address'] },
+          syslog: { commands: '', note: '', blocked: ['no-address'] },
+          ruleTagging: { commands: 'RULE_TAGGING_COMMANDS', note: '' },
+          push: { commands: '', note: '', blocked: ['no-address'] },
+          schedule: { commands: '', note: '', blocked: ['no-address'] },
+          backup: { commands: '', note: '' },
+          backupSchedule: { commands: '', note: '' },
+        },
+      }),
+    )
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+
+    // Step 1.
+    expect(container.textContent).toContain('no commands yet')
+    expect(container.querySelector('pre')?.textContent).not.toBe('CA_TRUST_COMMANDS')
+
+    // Send logs -- the step list rows, in order, the same way the
+    // ledger tests elsewhere in this file navigate.
+    const rows = container.querySelectorAll('.steps .step-row')
+    await fireEvent.click(rows[PANE.syslog - 1])
+    await waitFor(() => expect(container.textContent).toContain('no commands yet'))
+    expect(container.textContent).not.toContain('SYSLOG_COMMANDS')
+
+    // Push router state, once a token exists.
+    wizardState.token = 'mvt-token'
+    wizardState.tokenDevice = 'edge-1'
+    await fireEvent.click(rows[PANE.push - 1])
+    await waitFor(() => expect(container.textContent).toContain('no commands yet'))
+    expect(container.querySelector('pre.script')).toBeNull()
   })
 })
 
@@ -502,6 +948,19 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     expect(container.textContent).not.toContain('runs RouterOS')
   })
 
+  // #1181: the four versions rendered identical command blocks and the
+  // step never said what the pick was for, so it read as a dead
+  // control. It says now: one dialect covers the table, and the pick is
+  // what gets the release checked against it.
+  it('says what picking a version is for, since it is not the command text', async () => {
+    wizardState.pane = PANE.ca
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.routeros-version')).toBeTruthy())
+    expect(container.textContent).toContain('One set of commands covers RouterOS 7.18 to 7.24.1')
+    expect(container.textContent).toContain('picking a version does not change them')
+  })
+
   it("renders a step's own note directly under that step's block", async () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
       commandsFixture({
@@ -520,11 +979,282 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
         },
       }),
     )
-    wizardState.pane = 3
+    wizardState.pane = PANE.rules
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('TAG'))
     expect(container.textContent).toContain('on this release, tag rules one at a time')
+  })
+
+  // #1174: the bulk command labels by action, so every drop rule logs
+  // as D|drop| -- the setup guide's per-rule slugs are the only way to
+  // tell two of them apart, and the step now says so instead of leaving
+  // the operator to find out from the log.
+  it('says the bulk command labels by action alone', async () => {
+    wizardState.pane = PANE.rules
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('RULE_TAGGING_COMMANDS'))
+    expect(container.textContent).toContain('the log cannot tell one from another')
+    expect(container.textContent).toContain('docs/routeros-setup.md')
+  })
+})
+
+// #1131: step 4 showed a token it never printed, and handed over two
+// boxes -- the script, then a `source="<paste the script above>"` line
+// the operator was expected to fill in from the first clipboard.
+describe('SetupWizard -- step 4, the token and one pastable block (#1131)', () => {
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  beforeEach(() => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+  })
+
+  it('shows the minted token in its own copy box', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
+    await waitFor(() => expect(container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
+    expect(screen.getByRole('button', { name: 'Copy token' })).toBeTruthy()
+    // #1166: the step's lead used to make the same two claims about the
+    // token as this note, in different words. The note carries them now
+    // and the lead only points at it.
+    expect(container.textContent).toContain('This token is shown once, and is already in the script below.')
+    expect(container.textContent).not.toContain('minted for one router')
+  })
+
+  it('hands over one block, not a script plus a line to paste it into', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('SCRIPT_ADD_WITH_THE_BODY_IN_IT'))
+    // Two boxes on the step, and both are things to copy on their own:
+    // the token, and the block. The bare script body is not one of them.
+    const pres = [...container.querySelectorAll('.body pre')].map((p) => p.textContent)
+    expect(pres).toEqual(['mvt-shown-once', 'SCRIPT_ADD_WITH_THE_BODY_IN_IT'])
+    expect(container.textContent).not.toContain('Then save it and run it once')
+  })
+
+  // #1146: the box was 300px tall for 800px of script, which sliced the
+  // last visible line in half, and its overlay scrollbars stayed hidden
+  // so nothing said the lines ran off to the right either. The height is
+  // a whole number of lines now; the class is what draws the bars, and
+  // is the half of that fix a DOM test can see.
+  // #1183: every visit to the push step used to reach for a key of its
+  // own, so four walks left four rows called "setup-edge-1" in
+  // Settings, each with a revoke control and nothing to tell them
+  // apart. The key belongs to the wizard session now, not to whichever
+  // component instance happened to be showing the step.
+  it('shows the session key again on a second visit rather than minting another', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+
+    const first = render(SetupWizard)
+    await waitFor(() => expect(createToken).toHaveBeenCalledTimes(1))
+    first.unmount()
+
+    const second = render(SetupWizard)
+    await waitFor(() => expect(second.container.querySelector('pre.token')?.textContent).toBe('mvt-shown-once'))
+    expect(createToken).toHaveBeenCalledTimes(1)
+  })
+
+  // The one way past the reuse rule is the operator asking for it --
+  // step 6's "mint a new one" for a router being replaced.
+  it('mints again when the operator asks for a new one', async () => {
+    wizardState.token = 'mvt-from-step-4'
+    wizardState.tokenDevice = 'edge-1'
+    wizardState.lostRouterDevice = 'edge-1'
+    wizardState.pane = PANE.backup
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    render(SetupWizard)
+
+    const again = await screen.findByRole('button', { name: 'mint a new one' })
+    await fireEvent.click(again)
+    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-edge-1', 'ingest', 'edge-1'))
+  })
+
+  it('gives the script box always-drawn scrollbars', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    expect(container.querySelector('pre.script')?.classList.contains('scrollbar')).toBe(true)
+  })
+})
+
+// #1219: the small box stays a summary; its own drawer handle opens the
+// full script into the column the step body already occupies. Covers
+// the handle's open/close round trip, that it returns to the same
+// step, and that a line long enough to have sliced under the old fixed
+// box height comes through whole -- the actual bug (a real backup
+// script, screenshotted) was a horizontal cut mid-word and a vertical
+// cut through a line's glyphs, neither of which a shorter fixture
+// would exercise.
+describe('SetupWizard -- the paste-block reader (#1219)', () => {
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  // One line, deliberately longer than the box or the reader column
+  // could ever show without wrapping -- round-tripping it verbatim
+  // through both is what proves neither one truncates or clips it,
+  // rather than merely looking right at a fixture's usual length.
+  const longLine =
+    '/system scheduler add name=mv-backup interval=1d start-time=03:00:00 ' +
+    'policy=read,write,test,sensitive on-event="/system script run mv-backup" ' +
+    'comment="built long on purpose, well past any box on this step, so a slice or a cut would show"'
+
+  beforeEach(() => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: longLine, note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+  })
+
+  afterEach(() => {
+    viewportState.isMobile = false
+  })
+
+  it('opens the reader from the handle, with the exact text unsliced', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    // The small box's own text is the full string too -- the 14-line
+    // cap is a CSS max-height, never a shorter copy of the script.
+    expect(container.querySelector('pre.script')?.textContent).toBe(longLine)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+
+    const reader = container.querySelector('.reader-pre')
+    expect(reader).toBeTruthy()
+    expect(reader?.textContent).toBe(longLine)
+    expect(container.querySelector('.modal.reading')).toBeTruthy()
+  })
+
+  it('closes on its own ✕ and returns to exactly the same step', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    expect(container.querySelector('.reader')).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Close and return to this step' }))
+
+    expect(container.querySelector('.reader')).toBeFalsy()
+    expect(container.querySelector('.modal.reading')).toBeFalsy()
+    expect(container.querySelector('.body')).toBeTruthy()
+    expect(wizardState.pane).toBe(PANE.push)
+    expect(wizardState.open).toBe(true)
+  })
+
+  // The WIP this built on already routes Esc to the reader rather than
+  // the wizard while one is open; this is that behaviour exercised
+  // through the handle that opens it.
+  it('closes on Esc without closing the wizard', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    expect(container.querySelector('.reader')).toBeTruthy()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await tick()
+
+    expect(container.querySelector('.reader')).toBeFalsy()
+    expect(wizardState.open).toBe(true)
+    expect(wizardState.pane).toBe(PANE.push)
+  })
+
+  it('clears on a step change, so a reader never shows over the wrong step', async () => {
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    expect(container.querySelector('.reader')).toBeTruthy()
+
+    wizardState.pane = PANE.ca
+    await tick()
+
+    expect(container.querySelector('.reader')).toBeFalsy()
+  })
+
+  // The modal is already near-full-screen on a phone (the sheet), so
+  // there is nothing left to grow into -- decision 4 on #1219 is that
+  // the handle does not appear there at all.
+  it('has no handle on a phone, where the modal is already near-full-screen', async () => {
+    viewportState.isMobile = true
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
+    expect(container.querySelector('.handle')).toBeFalsy()
+    // Uncapped inline instead: the same full text, no reader to open.
+    expect(container.querySelector('pre.script')?.textContent).toBe(longLine)
   })
 })
 
@@ -545,13 +1275,181 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
 
   it('reads the no-key state as the disabled-step voice, with no script and no mint form', async () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
-    expect(container.querySelector('.wzpre-dim')).toBeTruthy()
+    expect(container.querySelector('pre.script')).toBeNull()
     expect(container.querySelector('.mint')).toBeNull()
-    expect(screen.getByRole('link', { name: 'how to mount one' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'more on mounting a key' })).toBeTruthy()
+  })
+
+  // --- #1133: the step mints the key, in the UI ------------------------
+  // The old pane said the same sentence twice -- and said it wrongly,
+  // about "a key it does not hold" -- over an empty dimmed box. It now
+  // hands the operator a key and the steps to put it in place.
+
+  async function noKeyPane() {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: false }))
+    wizardState.pane = PANE.backup
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(false))
+    await tick()
+    return rendered
+  }
+
+  function keyField(container: HTMLElement): HTMLInputElement {
+    return container.querySelector('#history-key') as HTMLInputElement
+  }
+
+  it('offers a freshly generated key, in the shape the key file wants', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    expect(field).toBeTruthy()
+    // 32 bytes, base64 -- docs/configuration.md's `head -c 32
+    // /dev/urandom | base64`, which is what retention.LoadKey accepts.
+    expect(field.value).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+  })
+
+  it('rerolls to a different key, so the button is not decoration', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    const first = field.value
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await tick()
+    expect(keyField(container).value).not.toBe(first)
+    expect(keyField(container).value).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+  })
+
+  it('takes a key the operator types or pastes in instead', async () => {
+    const { container } = await noKeyPane()
+
+    const field = keyField(container)
+    await fireEvent.input(field, { target: { value: 'a-key-of-my-own-that-i-already-had' } })
+    await tick()
+    expect(keyField(container).value).toBe('a-key-of-my-own-that-i-already-had')
+  })
+
+  // Reproduces #1218 audit finding 4: SetupWizard's own script runs
+  // fresh on a page reload, same as unmounting and remounting does here
+  // -- and step 6 stays `blocked` (this fixture's backupsFixture never
+  // flips enabled) exactly the way it would if the operator had saved
+  // the key but not yet updated config.yaml and restarted.
+  it('shows the same key after a remount, not a fresh one that would tell the operator to overwrite it', async () => {
+    const first = await noKeyPane()
+    const firstKey = keyField(first.container).value
+    first.unmount()
+
+    const second = await noKeyPane()
+    expect(keyField(second.container).value).toBe(firstKey)
+  })
+
+  it('remembers a Reroll across a remount too -- the operator\'s latest choice, not the first mint', async () => {
+    const first = await noKeyPane()
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await tick()
+    const rerolled = keyField(first.container).value
+    first.unmount()
+
+    const second = await noKeyPane()
+    expect(keyField(second.container).value).toBe(rerolled)
+  })
+
+  // Reproduces the v0.6.0 fix-batch audit's Security stage finding.
+  // sessionStorage fixed the re-mint bug above, but nothing ever
+  // cleared it: the plaintext history key stayed readable for the life
+  // of the tab, long after the server had read the key file and the
+  // step stopped asking for one. A logout and a second login in the
+  // same tab rehydrated it into the new session -- a different
+  // operator's, potentially.
+  it('forgets the minted key once the step no longer asks for one', async () => {
+    const first = await noKeyPane()
+    expect(keyField(first.container).value).toBeTruthy()
+    first.unmount()
+
+    // The operator mounts the key file and restarts, so the server now
+    // reports history on and step 6 stops being blocked. Nothing needs
+    // the minted value again.
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    wizardState.pane = PANE.backup
+    const settled = render(SetupWizard)
+    await waitFor(() => expect(wizardState.backups?.enabled).toBe(true))
+    await tick()
+
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBeNull()
+    settled.unmount()
+  })
+
+  // The first attempt at the fix above cleared the key on any state that
+  // was not `blocked` -- but `blocked` is only knowable once the backups
+  // GET has answered, and that request runs only while the modal is
+  // open. On an ordinary reload with the wizard closed the ledger still
+  // loads, step 6 reads `waiting` because nothing has been fetched yet,
+  // and the key was wiped on a question that had never been asked. The
+  // next reload then minted a fresh one -- the very bug sessionStorage
+  // exists to prevent.
+  it('keeps the key when nothing has yet asked whether the file is mounted', async () => {
+    const first = await noKeyPane()
+    const minted = keyField(first.container).value
+    expect(minted).toBeTruthy()
+    first.unmount()
+
+    // A reload with the wizard closed: status arrives, backups does not.
+    wizardState.backups = null
+    wizardState.open = false
+    const closed = render(SetupWizard)
+    await tick()
+    await tick()
+
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBe(minted)
+    closed.unmount()
+  })
+
+  it('warns that this is the only showing, and says why mikroview cannot repeat it', async () => {
+    const { container } = await noKeyPane()
+
+    const caveat = (container.querySelector('.wzcaveat')?.textContent ?? '').replace(/\s+/g, ' ')
+    expect(caveat).toContain('Save this now')
+    expect(caveat).toContain('never receives this value')
+  })
+
+  it('prints the steps to put it in place, each one copyable', async () => {
+    const { container } = await noKeyPane()
+
+    const blocks = [...container.querySelectorAll('.body pre')].map((p) => p.textContent ?? '')
+    expect(blocks.some((b) => b.includes('cat > mikroview/keys/history.key'))).toBe(true)
+    // The app folder's two mount lines (#1209, #1243), not a mount of
+    // this one file: the key arrives by being put in the folder, and so
+    // does everything else the compose block has to carry.
+    expect(blocks.some((b) => b.includes('./mikroview:/etc/mikroview:ro'))).toBe(true)
+    expect(blocks.some((b) => b.includes('./mikroview/data:/var/lib/mikroview'))).toBe(true)
+    expect(blocks.some((b) => b.includes('docker compose up -d'))).toBe(true)
+    expect(container.querySelectorAll('.body button.copy').length).toBe(blocks.length)
+    // No block quotes the key: it goes in on standard input, which is
+    // what keeps it out of the operator's shell history too.
+    const key = keyField(container).value
+    expect(blocks.some((b) => b.includes(key))).toBe(false)
+  })
+
+  it('says the model once, correctly -- mikroview holds this key and seals more than backups with it', async () => {
+    const { container } = await noKeyPane()
+
+    const lead = container.querySelector('.lead')?.textContent ?? ''
+    expect(lead).toContain('under the key file you mount')
+    expect(lead).toContain('the state store')
+    expect(container.textContent).not.toContain('a key it does not hold')
+    // Once, not twice: the observation line underneath no longer repeats
+    // the lead's sentence back.
+    const observation = container.querySelector('.observation')?.textContent ?? ''
+    expect(observation).not.toContain('under the key file you mount')
+  })
+
+  it('leaves the RouterOS version picker out until there is a script to pick for', async () => {
+    const { container } = await noKeyPane()
+
+    expect(container.querySelector('.routeros-version')).toBeNull()
   })
 
   // With exactly one router known, the same auto-mint convenience step
@@ -583,13 +1481,173 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     // with the mocked fetchDevices' default (empty) list, racing the
     // assertions below.
     vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = [rb5009()]
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-rb5009', 'ingest', 'rb5009'))
     await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
     expect(container.textContent).toContain('scoped to that one router and to this drop box')
+  })
+
+  // #1220: the router timing out mid-upload read as a stalled transfer
+  // rather than an unreachable port -- the step names the port next to
+  // the script it hands over, reading it from the same GET /api/router-
+  // backups response the group in Settings already uses (portOf(resp.port)).
+  it('names the drop box port next to the script it hands over (#1220)', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true, port: ':47022' }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.textContent).toContain('reach this host on port 47022')
+  })
+
+  it('says nothing about a port when the server reports none', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.textContent).not.toContain('reach this host on port')
+  })
+
+  // --- #955: the HTTPS-only transport, offered in the step ------------
+  //
+  // The last line of the issue's done-when. The pair is the whole
+  // control: one choice, above the block it decides, and the answer
+  // lives on the server so it is the deployment's and not the browser's.
+
+  // step6WithScript is the ordinary "a token exists, the script prints"
+  // state these three share, with the rendered blocks following whatever
+  // transport is currently chosen -- exactly as the server renders them
+  // from whichever it has stored.
+  async function step6WithScript(port = ':47022') {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true, port }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockImplementation(async () => {
+      const https = wizardState.backupTransport === 'https'
+      return commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: https ? 'HTTPS_PUSH_SCRIPT' : 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: https ? 'HTTPS_PUSH_SCHEDULE' : 'BACKUP_SCHEDULE', note: '' },
+        },
+      })
+    })
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [rb5009()]
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(rendered.container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    return rendered
+  }
+
+  it('offers both ways of sending the backup, sitting on sftp until told otherwise', async () => {
+    await step6WithScript()
+
+    const sftp = screen.getByRole('button', { name: 'sftp' })
+    const https = screen.getByRole('button', { name: 'https' })
+    expect(sftp.getAttribute('aria-pressed')).toBe('true')
+    expect(https.getAttribute('aria-pressed')).toBe('false')
+    expect(saveSetupBackupTransport).not.toHaveBeenCalled()
+  })
+
+  it('switches the deployment to https, swapping the script and the port note with it', async () => {
+    const { container } = await step6WithScript()
+    expect(container.textContent).toContain('reach this host on port 47022')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'https' }))
+
+    // Stored server-side, not in this browser: the deployment's answer.
+    await waitFor(() => expect(saveSetupBackupTransport).toHaveBeenCalledWith('https'))
+    // The blocks swap, because the server re-renders from what it now
+    // holds -- nothing in the request says which.
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('HTTPS_PUSH_SCRIPT'))
+    expect(screen.getByRole('button', { name: 'https' }).getAttribute('aria-pressed')).toBe('true')
+    // No second port to open is the whole reason this transport exists.
+    expect(container.textContent).not.toContain('reach this host on port 47022')
+    expect(container.textContent).toContain('same HTTPS address the router already reaches')
+  })
+
+  // An HTTPS-only install is exactly the one whose drop box is off, so
+  // the pair has to be reachable from the no-script state too -- offering
+  // it only once SFTP works would put the alternative behind the
+  // precondition it exists to avoid.
+  it('still offers the pair when the drop box is not ready, which is where an HTTPS-only install starts', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: '', note: '', blocked: ['backups-off'] },
+          backupSchedule: { commands: '', note: '', blocked: ['backups-off'] },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.no-script')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'https' })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'https' }))
+    await waitFor(() => expect(saveSetupBackupTransport).toHaveBeenCalledWith('https'))
   })
 
   // With more than one router known, the picker stands in for "entry"
@@ -607,7 +1665,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     })
     const twoDevices = [rb5009(), { ...rb5009(), id: 'hap-ax2', name: 'hap-ax2' }]
     vi.mocked(fetchDevices).mockResolvedValue(twoDevices)
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = twoDevices
     const { container } = render(SetupWizard)
 
@@ -634,7 +1692,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
       value: 'mvt-token',
       createdAt: '2026-09-02T09:00:00Z',
     })
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = []
     const { container } = render(SetupWizard)
 
@@ -657,7 +1715,7 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
     const twoDevices = [rb5009(), { ...rb5009(), id: 'hap-ax2', name: 'hap-ax2' }]
     vi.mocked(fetchDevices).mockResolvedValue(twoDevices)
-    wizardState.pane = 6
+    wizardState.pane = PANE.backup
     wizardState.devices = twoDevices
     const { container } = render(SetupWizard)
 
@@ -671,35 +1729,492 @@ describe('SetupWizard -- step 6, back up the router (#394)', () => {
     expect(createToken).not.toHaveBeenCalled()
   })
 
+  // Shared by the lost-router tests below: one router, one generation,
+  // and whatever lock the vault passphrase gate (#1115) should read.
+  function lostRouterBackups(lock?: Partial<import('../lib/types').VaultLock>) {
+    return backupsFixture({
+      enabled: true,
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [
+            { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
+          ],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900, ...lock },
+    })
+  }
+
   it('reaches the lost-router shape only through wizardState.openLostRouter, never on its own', async () => {
-    vi.mocked(fetchRouterBackups).mockResolvedValue(
-      backupsFixture({
-        enabled: true,
-        routers: [
-          {
-            device: 'rb5009',
-            generations: [
-              { id: 'g0', backupArrivedAt: '2026-08-24T03:00:00Z', rscArrivedAt: '2026-08-24T03:00:05Z', backupBytes: 412000, rscBytes: 38000 },
-            ],
-            intervalKnown: false,
-            missed: 0,
-          },
-        ],
-      }),
-    )
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('ok')
     wizardState.openLostRouter('rb5009')
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.textContent).toContain('rb5009 is gone'))
-    expect(screen.getByRole('link', { name: /download the newest \.backup/ })).toHaveProperty(
-      'href',
-      expect.stringContaining('/api/router-backups/rb5009/g0/backup'),
-    )
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+    expect(downloadFromUrl).toHaveBeenCalledWith('/api/router-backups/rb5009/g0/backup', 'rb5009.backup')
     expect(screen.getByRole('button', { name: 'done — the replacement is pushing' })).toBeTruthy()
     // No skip on this footer -- there is nothing to skip past.
     expect(screen.queryByRole('button', { name: 'Skip this step' })).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'done — the replacement is pushing' }))
     expect(wizardState.lostRouterDevice).toBeNull()
+  })
+
+  // #1218 audit finding 16: the download used to be a plain <a href>,
+  // so it ignored #1115's vault passphrase gate entirely -- a locked
+  // vault meant the browser navigated the whole tab to whatever the
+  // server's 403 answered with, rather than reading it as gated the way
+  // RouterBackups.svelte's own downloads (the same endpoint) already do.
+  it('gates the download behind a locked vault, with no link to click', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups({ passphraseSet: true, locked: true }))
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    expect(screen.getByText(/locked — the vault passphrase opens downloads/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download the newest \.backup/ })).toBeNull()
+    expect(downloadFromUrl).not.toHaveBeenCalled()
+  })
+
+  it('names the other case too -- unlocked elsewhere, not here', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(
+      lostRouterBackups({ passphraseSet: true, locked: false, unlockedForYou: false }),
+    )
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    expect(screen.getByText(/unlocked by another of your sign-ins/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /download the newest \.backup/ })).toBeNull()
+  })
+
+  it('reports a failed download instead of doing nothing', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('failed')
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+
+    expect(await screen.findByText('The download failed. Try again.')).toBeTruthy()
+  })
+
+  it('re-reads the vault lock instead of the client’s own clock when a download 403s', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValueOnce(lostRouterBackups())
+    vi.mocked(downloadFromUrl).mockResolvedValue('forbidden')
+    wizardState.openLostRouter('rb5009')
+    render(SetupWizard)
+
+    await waitFor(() => expect(screen.getByText(/rb5009 is gone/)).toBeTruthy())
+    vi.mocked(fetchRouterBackups).mockResolvedValueOnce(lostRouterBackups({ passphraseSet: true, locked: true }))
+    await fireEvent.click(screen.getByRole('button', { name: /download the newest \.backup/ }))
+
+    expect(await screen.findByText(/locked — the vault passphrase opens downloads/)).toBeTruthy()
+  })
+})
+
+// #1217: a token and device already in hand, but the backup block still
+// came back blank -- the owner's actual instance, backups switched off
+// in config.yaml. The old rendering showed two empty boxes and two Copy
+// buttons that copied nothing, under prose promising a script that
+// wasn't there. This is the fix: the server names why, in keys; the
+// component says why, in words, and shows nothing to interact with.
+describe('SetupWizard -- step 6, no script yet (#1217)', () => {
+  function rb5009(): Device {
+    return {
+      id: 'rb5009',
+      name: 'rb5009',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  async function step6WithBlocked(blocked: string[]) {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: '', note: '', blocked },
+          backupSchedule: { commands: '', note: '', blocked },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [rb5009()]
+    const rendered = render(SetupWizard)
+    await waitFor(() => expect(createToken).toHaveBeenCalled())
+    await tick()
+    return rendered
+  }
+
+  it('renders one line per unmet precondition, in the config-first order, with no box and no Copy button', async () => {
+    const { container } = await step6WithBlocked(['no-token', 'no-device', 'backups-off', 'no-retention-key'])
+
+    expect(container.textContent).toContain('no script yet')
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual([
+      'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+      'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
+        'config.yaml and restart mikroview.',
+      'this router has no name yet. Name it in the step above; the script files each backup under that name.',
+      'no token has been minted for this router yet. The step above mints it.',
+    ])
+    // No script, no copy button, no empty input box for the operator to
+    // stare at -- the actual bug. Scoped to the step body: the header's
+    // own address field (#1213) is a text input too, but it is not this
+    // step's box and is present on every pane regardless.
+    expect(container.querySelector('pre.script')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Copy/ })).toBeNull()
+    expect(container.querySelectorAll('.body input').length).toBe(0)
+    // The prose promising a token and a script does not survive either.
+    expect(container.textContent).not.toContain('already in the script')
+    expect(container.textContent).not.toContain('runs once at the end')
+  })
+
+  it('names only the preconditions that are actually unmet', async () => {
+    const { container } = await step6WithBlocked(['backups-off'])
+
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual(['backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.'])
+  })
+
+  // #1264 finding 5: retention-key-unreadable must read as its own
+  // distinct fault, never folded into no-retention-key's "set one" line
+  // -- the whole point is that minting a fresh key over a broken one
+  // strands every backup already encrypted under the old one.
+  it('says the retention key could not be read, and warns against minting a new one, not "no retention key is mounted"', async () => {
+    const { container } = await step6WithBlocked(['retention-key-unreadable'])
+
+    const lines = [...container.querySelectorAll('.no-script li')].map((li) => li.textContent ?? '')
+    expect(lines).toEqual([
+      'the retention key at history.keyFile is set but could not be read (missing, unreadable, or too short) — ' +
+        'check the server logs and fix that file in place. Do not replace it with a new one: every backup ' +
+        'already stored under the old key would become unrecoverable.',
+    ])
+    expect(container.textContent).not.toContain('no retention key is mounted')
+  })
+
+  it('leaves an unblocked step unchanged -- the script, its Copy button and the token promise all still show', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      value: 'mvt-token',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([rb5009()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [rb5009()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    expect(container.querySelector('.no-script')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy script' })).toBeTruthy()
+    expect(container.querySelector('.lead')?.textContent ?? '').toContain('already in the script')
+  })
+})
+
+// #1284, with #1281: adding a router is the same modal, the same
+// ledger and the same step anatomy -- only the step set differs. What
+// these pin is that it really is the same component, and that the
+// enrolment step tells the truth about the token in the block it
+// prints.
+describe('SetupWizard -- the router ledger (#1284)', () => {
+  function edge1(over: Partial<Device> = {}): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '',
+      configured: true,
+      firstSeen: '2026-09-19T14:00:00Z',
+      lastSeen: '2026-09-19T14:00:00Z',
+      eventCount: 0,
+      status: 'never_seen',
+      ...over,
+    } as Device
+  }
+
+  function openRouterLedger(pane: number, device = '') {
+    wizardState.steps = ROUTER_STEPS
+    wizardState.finishTo = 'fleet'
+    wizardState.ledgerDevice = device
+    wizardState.tokenDevice = device
+    wizardState.pane = pane
+    wizardState.open = true
+  }
+
+  it('is the same six steps, opened at Name your router, with no certificate step in front', () => {
+    openRouterLedger(1)
+    const { container } = render(SetupWizard)
+
+    const titles = [...container.querySelectorAll('.steps .step-title')].map((t) => t.textContent)
+    expect(titles).toEqual([
+      'Name your router',
+      'Send logs',
+      'Tag firewall rules',
+      'Push router state',
+      'Back up the router',
+      'Register the router',
+      'Where setup stands',
+    ])
+    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 1 of 6')
+  })
+
+  // The same modal, not a second one: the ledger, the anatomy and the
+  // footer are the wizard's own.
+  it('is the wizard\'s own modal, ledger and footer -- not a dialog of its own', () => {
+    openRouterLedger(1)
+    const { container } = render(SetupWizard)
+
+    expect(container.querySelector('.modal.setup-wizard')).toBeTruthy()
+    expect(container.querySelector('nav.steps')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Skip this step' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeTruthy()
+  })
+
+  // #1291: opening Send logs no longer mints anything. Minting needs
+  // the router's own address -- the enrolment window binds to it, so
+  // the port opens for that address alone -- and the admin's password
+  // re-typed at that moment. Neither is something the wizard can supply
+  // for them, so the step asks and waits.
+  it('opens at Send logs for a router being re-enrolled, and asks before it mints', async () => {
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+    expect(mintEnrolment).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Mint the token' })).toBeTruthy()
+    expect(container.querySelector('.crumb')?.textContent?.trim()).toBe('Step 2 of 6')
+  })
+
+  // The two fields the operator fills, and the call they produce.
+  it('mints with the address and password the operator gave', async () => {
+    wizardState.devices = [edge1()]
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+
+    const address = container.querySelector('#setup-wizard-enrol-address') as HTMLInputElement
+    const password = container.querySelector('#setup-wizard-enrol-password') as HTMLInputElement
+    await fireEvent.input(address, { target: { value: '192.0.2.50' } })
+    await fireEvent.input(password, { target: { value: 'password123' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Mint the token' }))
+
+    await waitFor(() =>
+      expect(mintEnrolment).toHaveBeenCalledWith('edge-1', 'password123', '192.0.2.50'),
+    )
+  })
+
+  // The last line the block prints carries a token, so the step says
+  // how long it is good for and offers the one control that renews it.
+  it('states how long the token is good for, beside a Reroll that re-mints', async () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() }
+    wizardState.enrolmentMintedAt = new Date().toISOString()
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const line = container.querySelector('.token-life')?.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+    expect(line).toMatch(/^Token good until \d\d:\d\d \(15 minutes\) · Reroll$/)
+    expect(container.querySelector('pre.stale')).toBeNull()
+
+    // Reroll goes through the same endpoint, so it asks again rather
+    // than re-minting on the click. That is the feature working.
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll' }))
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+    expect(mintEnrolment).not.toHaveBeenCalled()
+  })
+
+  // An expired token cannot be pasted, so the block that carries it
+  // dims and the line says so rather than counting down past zero.
+  it('dims the block and says the token has lapsed once it has', () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: '2020-01-01T00:00:00Z' }
+    wizardState.enrolmentMintedAt = '2020-01-01T00:00:00Z'
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    expect(container.querySelector('.token-life')?.textContent).toContain('Token expired')
+    expect(screen.getByRole('button', { name: 'Reroll to mint another' })).toBeTruthy()
+    expect(container.querySelector('pre.stale')).toBeTruthy()
+  })
+
+  // 2026-09-18 audit, stage 6 finding 10: "Reroll to mint another" opens
+  // the same mint form a live token's Reroll does, and that form always
+  // offers "Keep the token I have" -- but there is no token left to
+  // keep, only the dead one the banner right above it is announcing.
+  // Offering to keep a token that cannot be pasted is worse than not
+  // offering the choice at all.
+  it('does not offer to keep an already-expired token', async () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: '2020-01-01T00:00:00Z' }
+    wizardState.enrolmentMintedAt = '2020-01-01T00:00:00Z'
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Reroll to mint another' }))
+    await waitFor(() => expect(container.querySelector('.mint-ask')).toBeTruthy())
+
+    expect(screen.queryByRole('button', { name: 'Keep the token I have' })).toBeNull()
+  })
+
+  // The refused box is #1132's shape reused, never a fifth flavour --
+  // and it never claims the address is this router.
+  it('warns about lines refused since this walk minted its token, without diagnosing whose they are', async () => {
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    wizardState.enrolmentMintedAt = '2026-09-19T14:02:00Z'
+    wizardState.refused = [
+      { ip: '192.168.88.1', firstSeen: '2026-09-19T14:03:00Z', lastSeen: '2026-09-19T14:04:00Z', lines: 12 },
+      // First seen before the mint: the fleet strip's business, not
+      // evidence about the block just pasted.
+      { ip: '10.0.0.9', firstSeen: '2026-09-18T09:00:00Z', lastSeen: '2026-09-18T09:00:00Z', lines: 3 },
+    ]
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const box = container.querySelector('.observation.shortfall.refused')
+    expect(box?.textContent).toContain(
+      'Lines from 192.168.88.1 arrived without the enrol line and were refused',
+    )
+    expect(box?.textContent).not.toContain('10.0.0.9')
+    // Warning colour, never the reject red: nothing is wrong on
+    // mikroview's side.
+    expect(box?.classList.contains('shortfall')).toBe(true)
+    expect(box?.classList.contains('attention')).toBe(false)
+  })
+
+  // #1291, ruling 23a: a Re-enrol walk whose router was refused at
+  // accept offers each refused address as a one-click rebind, right
+  // under the refused-senders box -- and the click only points the
+  // window, it never mints a second token.
+  //
+  // enrolledAt carries a +01:00 offset (the server's own zone) whose
+  // UTC instant (16:31) is still earlier than enrolmentMintedAt's
+  // Z-stamped 16:45 -- an old enrolment, on any honest clock. A
+  // string compare reads it as the new one instead (offset digits
+  // sort higher than "Z"), which reads the step as done and hides
+  // this whole box.
+  it('offers a one-click rebind onto a refused address during a re-enrol wait', async () => {
+    wizardState.devices = [edge1({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T17:31:00+01:00' })]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    wizardState.enrolmentMintedAt = '2026-09-19T16:45:00Z'
+    const refused = [{ ip: '192.168.88.2', firstSeen: '2026-09-19T16:46:00Z', lastSeen: '2026-09-19T16:47:00Z', lines: 5 }]
+    wizardState.refused = refused
+    // The component polls GET /api/devices/refused on mount too, so the
+    // mock has to agree with the state set above -- otherwise its
+    // resolution (an empty list, by default) clobbers it once the
+    // promise settles and the box this test is about disappears again.
+    vi.mocked(fetchRefusedSenders).mockResolvedValue(refused)
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const box = container.querySelector('.observation.shortfall.refused')
+    const note = box?.nextElementSibling as HTMLElement
+    expect(note?.classList.contains('note')).toBe(true)
+    const candidate = note?.querySelector('button.addr-candidate')
+    expect(candidate?.textContent).toBe('192.168.88.2')
+
+    await fireEvent.click(candidate as Element)
+    await waitFor(() => expect(rebindEnrolment).toHaveBeenCalledWith('edge-1', '192.168.88.2'))
+    expect(mintEnrolment).not.toHaveBeenCalled()
+  })
+
+  it('reads arrived once the enrol line lands, naming the address it came from', () => {
+    wizardState.devices = [edge1({ acceptedIp: '192.168.88.1', enrolledAt: '2026-09-19T14:04:00Z' })]
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    const observation = container.querySelector('.observation')
+    expect(observation?.textContent).toContain('Enrolled at 192.168.88.1')
+    expect(observation?.classList.contains('arrived')).toBe(true)
+    expect(container.querySelector('.observation.shortfall.refused')).toBeNull()
+  })
+
+  // A decision made here is recorded under the step's canonical number,
+  // because that is what the server stores.
+  it('records a forced-past decision under the step number the server keeps', async () => {
+    vi.mocked(markSetupStep).mockResolvedValue({
+      step: RECORD.syslog,
+      outcome: 'forced',
+      actor: 'tom',
+      at: '2026-09-19T14:05:00Z',
+    })
+    wizardState.devices = [edge1()]
+    wizardState.enrolment = { token: 'enr-token', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    openRouterLedger(2, 'edge-1')
+    const { container } = render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    // Send logs is step 2 of 5 on this ledger and is recorded as step 2
+    // regardless -- that is where the server keeps it.
+    expect(container.querySelector('.heavy .quote')?.textContent).toContain('setup · step 2 forced past')
+    expect(container.querySelector('.heavy .quote')?.textContent).toContain(
+      'router not enrolled; its logs are refused until it is',
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: /Go on anyway/ }))
+    await waitFor(() =>
+      expect(markSetupStep).toHaveBeenCalledWith(
+        RECORD.syslog,
+        'forced',
+        'router not enrolled; its logs are refused until it is',
+      ),
+    )
+  })
+
+  // The finish leads out to the fleet when the ledger was opened from
+  // it, and to the fall when it was opened from setup.
+  it('leads out to the fleet from a walk the fleet opened', async () => {
+    openRouterLedger(7)
+    render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fleet' }))
+    expect(appState.view).toBe('fleet')
+  })
+
+  it('still leads out to the fall from Run setup…', async () => {
+    wizardState.steps = SETUP_STEPS
+    wizardState.finishTo = 'fall'
+    wizardState.pane = 8
+    wizardState.open = true
+    render(SetupWizard)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Take me to the fall' }))
+    expect(appState.view).toBe('fall')
   })
 })

@@ -17,6 +17,45 @@ import type { Suggestion, SuggestionStatus, WatchlistEntry } from './types'
 // there is deliberately no create/update here -- a candidate only ever
 // moves between Off/On/Hide, never edited (see internal/suggest's own
 // package doc comment).
+// #1160: the same suggestion, several times over. internal/suggest
+// records one candidate per justification, so two drop rules covering
+// port 445 -- or the same rule pushed by two routers -- arrive as two
+// candidates that render as the same row, word for word ("port 445 →
+// :445 · suggested — from drop rule port 445", three times).
+//
+// Nothing is discarded server-side: this collapses the list at the point
+// it is read, keeping the first of each set (the earliest, since the API
+// returns them in first-seen order) so the row that stays is the one
+// whose id the operator's accept/set-aside has always acted on.
+//
+// The key is what the row is built from, not the rendered row: the
+// component resolves a zone name for the boundary, which this module
+// cannot see. `stale` is part of it because a stale candidate says so on
+// its chip -- two rows that read differently are not duplicates.
+export function suggestionIdentity(c: Suggestion): string {
+  return JSON.stringify([
+    c.kind,
+    c.name,
+    c.source?.mac ?? '',
+    c.source?.ip ?? '',
+    [...(c.ports ?? [])].sort((a, b) => a - b),
+    c.addressList ?? '',
+    c.stale === true,
+  ])
+}
+
+export function dedupeSuggestions(candidates: readonly Suggestion[]): Suggestion[] {
+  const seen = new Set<string>()
+  const kept: Suggestion[] = []
+  for (const c of candidates) {
+    const key = suggestionIdentity(c)
+    if (seen.has(key)) continue
+    seen.add(key)
+    kept.push(c)
+  }
+  return kept
+}
+
 class SuggestState {
   candidates = $state<Suggestion[]>([])
 
