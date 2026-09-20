@@ -214,21 +214,23 @@
   // anchor and eviction there moves nobody. A row is only reassigned
   // when keeping it would put two of the same stripe together (a
   // filter change), which restyles once, on the user's action.
-  let stripes = new Map<string, boolean>()
-  function assignStripes(keys: string[]): Map<string, boolean> {
-    const next = new Map<string, boolean>()
+  function assignStripes<K>(kept: Map<K, boolean>, keys: K[]): Map<K, boolean> {
+    const next = new Map<K, boolean>()
     let below: boolean | null = null
     for (let i = keys.length - 1; i >= 0; i--) {
-      const kept = stripes.get(keys[i])
-      const band = below === null ? (kept ?? false) : kept !== undefined && kept !== below ? kept : !below
+      const had = kept.get(keys[i])
+      const band: boolean = below === null ? (had ?? false) : had !== undefined && had !== below ? had : !below
       next.set(keys[i], band)
       below = band
     }
-    stripes = next
     return next
   }
-  const rowStripes = $derived(assignStripes(displayRendered.map((e) => e.id)))
-  const groupStripes = $derived(assignStripes(displayGroups.map((g) => g.key)))
+  // One memory per list: rows are keyed by event id, groups by group
+  // key, and each mode's derived only ever reads its own.
+  let rowStripeMemory = new Map<number, boolean>()
+  let groupStripeMemory = new Map<string, boolean>()
+  const rowStripes = $derived((rowStripeMemory = assignStripes(rowStripeMemory, displayRendered.map((e) => e.id))))
+  const groupStripes = $derived((groupStripeMemory = assignStripes(groupStripeMemory, displayGroups.map((g) => g.key))))
 
   // What the empty-body area shows when `rendered` has nothing in it --
   // one derived rather than the inline ternary chain this used to be,

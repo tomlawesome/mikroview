@@ -375,6 +375,30 @@ describe('a new row does not restripe the rows below it (#1308)', () => {
     expect(after.has('evict-0')).toBe(false)
     for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
   }, 30000)
+
+  it('keeps the flat stripes when events arrive during a round trip through group mode', () => {
+    // After an eviction the bottom row carries a stripe a fresh bottom-up
+    // pass would not give it, so this is where a lost memory shows.
+    appState.events = Array.from({ length: MAX_RENDERED_ROWS }, (_, i) => makeEvent(`toggle-${i}`))
+    const { container } = render(LiveTable)
+    flushSync()
+    appState.events = [...appState.events, makeEvent('toggle-evictor')]
+    flushSync()
+    const before = stripes(container)
+    expect(before.get('toggle-1')).toBe(true)
+
+    groupModeState.enabled = true
+    flushSync()
+    appState.events = [...appState.events, makeEvent('toggle-new-1'), makeEvent('toggle-new-2')]
+    flushSync()
+    groupModeState.enabled = false
+    flushSync()
+
+    // The group list bands from its own memory, so the flat rows come
+    // back as they were instead of re-alternating from the bottom.
+    const after = stripes(container)
+    for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
+  }, 30000)
 })
 
 describe('Group mode drawer consistency (issue #381)', () => {
