@@ -1731,6 +1731,20 @@ func main() {
 		proxyLog.Info(fmt.Sprintf("trusting %s from %d proxy range(s) for login rate limiting", header, len(trustedProxies)))
 	}
 
+	// ui.allow (issue #1287) -- config-file only, and refusing to start
+	// on a bad entry for the same reason trustedProxies does, only more
+	// so: an entry silently skipped here is either a lockout or a wall
+	// that is not there, and neither is visible from the screen.
+	uiLog := logging.New("ui")
+	uiAllow, err := config.ParseUIAllow(cfg.UI.Allow)
+	if err != nil {
+		uiLog.Error(fmt.Sprintf("ui.allow: %v", err))
+		os.Exit(1)
+	}
+	if len(uiAllow) > 0 {
+		uiLog.Info(fmt.Sprintf("web UI limited to %d address range(s) from ui.allow -- edit config.yaml and restart to change it, it is not settable from the UI", len(uiAllow)))
+	}
+
 	// Logged here and surfaced in the admin UI (see api.Server.
 	// ConfigProblems). The log line alone is not enough: it is seen once,
 	// by whoever ran `docker compose up`, and never again -- which is not
@@ -1818,6 +1832,7 @@ func main() {
 		SecureCookie:            cfg.Auth.SecureCookie,
 		TrustedProxies:          trustedProxies,
 		ClientIPHeader:          cfg.Listen.ClientIPHeader,
+		UIAllow:                 uiAllow,
 		Tokens:                  tokenStore,
 		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:             routerState,
@@ -1916,7 +1931,12 @@ func main() {
 		// they've supplied their own real certificate (cfg.TLS.CertFile
 		// set), not for the self-generated default every fresh install
 		// starts with.
-		Handler: securityHeaders(rootMux, cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
+		// RestrictToAllowList wraps the whole root mux, not just the API:
+		// ui.allow (#1287) has to be able to refuse the static UI too,
+		// because a refusal is a plain 403 rather than a login page, and
+		// /ca.crt -- one of the paths it exempts -- is registered on this
+		// mux below. With ui.allow unset it passes everything through.
+		Handler: securityHeaders(srv.RestrictToAllowList(rootMux), cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
 		// Bounds a slow client trickling headers/body in to tie up a
 		// connection indefinitely (the WS listener, syslog listeners, and
 		// hub already have their own backpressure/deadline handling --
