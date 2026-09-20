@@ -17,7 +17,7 @@
 // The data story is round 49's, which round 53 filters: 445/tcp
 // accepted from LAN to Servers, refused from IoT, and 3389/tcp seen
 // nowhere with one rule naming it.
-import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal, DESKTOP_VIEWPORT } from './live-browser.mjs'
+import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal, DESKTOP_VIEWPORT, clickSvgText } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -463,7 +463,7 @@ check((await page.locator(`${CARD} .lit-half`).count()) === 0, 'the ✕ puts the
 // unplanned callout, which is where the refused pair is already named.
 
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 15000 })
-await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
+await clickSvgText(page, page.locator(`${CARD} .uc-trace .uc-trace-t`))
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
 
 // B1 (round 56, #1050): the callout's own `trace ▸` now opens the list

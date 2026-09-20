@@ -292,6 +292,51 @@ function isUntrustedCertServiceWorkerError(text) {
   return /ServiceWorker/i.test(text) || /fetching the script/i.test(text)
 }
 
+/**
+ * isNavigationCancelledFetch filters the one message an engine other
+ * than Chromium prints when a navigation cuts off a fetch still in
+ * flight -- the app's own mount-time requests, cancelled by the reload
+ * session() does after resetting the instance, or by a scenario's own
+ * reload.
+ *
+ * Chromium drops a cancelled fetch silently. Firefox rejects it with a
+ * bare `AbortError: The operation was aborted. ` that reaches
+ * `pageerror` as an unhandled rejection, and WebKit logs `Fetch API
+ * cannot load <url> due to access control checks.` to the console. The
+ * harness reload confirmed both: the messages land within 200ms of
+ * page.reload() and name the requests App.svelte starts on mount.
+ * Nothing the app does can avoid them and no user sees a consequence,
+ * so they are filtered here, narrowly: the Firefox text exactly, and
+ * the WebKit one only for the app's own host, since a genuine
+ * cross-origin refusal is still worth reporting.
+ */
+function isNavigationCancelledFetch(text) {
+  if (text === 'AbortError: The operation was aborted. ') return true
+  // WebKit prints the URL with a space after the scheme ("http: /127...")
+  // so the host is matched rather than the whole address.
+  return (
+    text.startsWith('Fetch API cannot load ') &&
+    text.endsWith(' due to access control checks.') &&
+    text.includes(new URL(URL_BASE).host)
+  )
+}
+
+/**
+ * isScreenshotStyleRefusal filters the one message WebKit prints when
+ * Playwright takes a screenshot: to hide the text caret it appends a
+ * <style> element to the page, and mikroview's `default-src 'self'`
+ * policy refuses it with "Refused to apply a stylesheet because its
+ * hash, its nonce, or 'unsafe-inline' appears in neither the style-src
+ * directive nor the default-src directive of the Content Security
+ * Policy." The message arrived on exactly the page.screenshot() calls
+ * and on no other step. Chromium and Firefox hide the caret another
+ * way. Filtered on WebKit only, so an inline style the app itself
+ * injected would still be reported by the other two engines.
+ */
+function isScreenshotStyleRefusal(text) {
+  return BROWSER_NAME === 'webkit' && text.startsWith('Refused to apply a stylesheet because its hash, its nonce, or ')
+}
+
 /** session launches a browser and signs in, returning a live page. */
 /**
  * dismissSetupWizard closes the setup modal if a fresh instance
@@ -605,6 +650,7 @@ export async function session({
   unfoldFilter = true,
   keep = false,
   viewport = undefined,
+  mocksApi = false,
 } = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
@@ -623,10 +669,24 @@ export async function session({
   // the app's width rules are read once at module load (the stream's
   // starting column set is the worked example) -- a resize afterwards
   // would arrive too late to decide them.
-  const page = await browser.newPage({ ignoreHTTPSErrors: true, ...(viewport ? { viewport } : {}) })
+  // mocksApi, for a scenario that answers an /api route itself with
+  // page.route: once the app's service worker controls the page, an
+  // /api request is fetched by the worker, and only Chromium lets
+  // Playwright's routes see a worker's fetches -- under WebKit the mock
+  // never fires and the real server answers (live-setup-wizard-source-
+  // split saw the real router where it had mocked a split one). Keeping
+  // the worker out of that scenario's context is what makes the mock
+  // hold on every engine; the app runs the same without one.
+  const page = await browser.newPage({
+    ignoreHTTPSErrors: true,
+    ...(viewport ? { viewport } : {}),
+    ...(mocksApi ? { serviceWorkers: 'block' } : {}),
+  })
   const consoleErrors = []
   const record = (text) => {
     if (isUntrustedCertServiceWorkerError(text)) return
+    if (isNavigationCancelledFetch(text)) return
+    if (isScreenshotStyleRefusal(text)) return
     consoleErrors.push(text)
   }
   page.on('pageerror', (e) => record(String(e)))
@@ -892,6 +952,27 @@ export async function grantClipboard(page) {
       value: async () => last,
     })
   })
+}
+
+/**
+ * clickSvgText clicks a control drawn as SVG text -- the fall's quieter
+ * link, the topography's `trace ▸` token and `Run setup ▸`. Playwright's
+ * own click cannot land on one under WebKit: the box it computes for a
+ * <text> is not where the glyphs are, so every retry ends "outside of
+ * the viewport" and the scenario dies at the click. The page's own
+ * geometry is right, so the element is scrolled into view and hit at
+ * the centre of its getBoundingClientRect with a real mouse click.
+ * Still a hit-tested click: a control the engine itself cannot reach
+ * is still reported as one.
+ */
+export async function clickSvgText(page, locator) {
+  await locator.waitFor({ state: 'visible' })
+  const [x, y] = await locator.evaluate((el) => {
+    el.scrollIntoView({ block: 'center', inline: 'center' })
+    const r = el.getBoundingClientRect()
+    return [r.x + r.width / 2, r.y + r.height / 2]
+  })
+  await page.mouse.click(x, y)
 }
 
 export function done() {

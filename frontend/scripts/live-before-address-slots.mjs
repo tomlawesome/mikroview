@@ -24,7 +24,7 @@
 // what this leaves behind is what the next scenario would have set up
 // anyway.
 
-import { session, check, done, feedRaw } from './live-browser.mjs'
+import { session, check, done, feedRaw, clickSvgText } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -136,7 +136,7 @@ check(
 
 // --- the way in is real, not just named -------------------------------------
 
-await page.click(`${topo} .deg-go`)
+await clickSvgText(page, page.locator(`${topo} .deg-go`))
 await page.waitForSelector('.setup-wizard', { timeout: 5000 })
 check(true, 'the statement\'s "Run setup… ▸" opens the setup wizard')
 // Escape drives the same dismiss() the ✕ does. It may leave for the

@@ -30,7 +30,7 @@
 
 import { session, check, done, goTo } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session()
+const { page, consoleErrors } = await session({ mocksApi: true })
 
 const real = await page.request.get(`${process.env.MV_URL}/api/devices`).then((r) => r.json())
 const declared = real.devices.find((d) => d.configured)

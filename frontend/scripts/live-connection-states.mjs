@@ -23,7 +23,7 @@
 
 import { session, feedSyslog, check, responsive, goTo, done, waitForStreamRows } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session()
+const { page, consoleErrors } = await session({ mocksApi: true })
 feedSyslog(40, 'connection-states')
 await waitForStreamRows(page, 20)
 
@@ -146,6 +146,17 @@ check(true, 'the banner clears once the connection actually recovers')
 await page.waitForSelector(`${CONN}.conn-open`, { timeout: 15000 })
 check(true, 'the scene bar indicator clears with it')
 
+// The drawer folds away over a 180ms transition (IngestLossDrawer's
+// grid-template-rows), so the content is still on its way back when
+// the banner's selector detaches: read the position once it has
+// settled, not in the same beat. Firefox reached this line mid-fold.
+await page
+  .waitForFunction(
+    (want) => Math.abs(document.querySelector('#main-content').getBoundingClientRect().top - want) < 2,
+    mainTopConnected,
+    { timeout: 5000 },
+  )
+  .catch(() => {})
 const mainTopRecovered = await page.$eval('#main-content', (el) => el.getBoundingClientRect().top)
 check(
   Math.abs(mainTopRecovered - mainTopConnected) < 2,
