@@ -721,9 +721,10 @@ describe('FilterBar, the token bar (#1246)', () => {
   })
 
   it('commits a side to ONE composite token, however many of its parts are picked', async () => {
-    appState.events = [
-      evt({ id: 1, sourceIp: '185.220.101.34', srcIp: '185.220.101.34', srcCountry: 'DE' }),
-    ] as unknown as (typeof appState)['events']
+    // Through setInitialEvents, not a direct write to the buffer: the
+    // country options are kept in step as events arrive (#1304 E2), so
+    // a buffer swapped in behind the state's back has no options at all.
+    appState.setInitialEvents([evt({ id: 1, sourceIp: '185.220.101.34', srcIp: '185.220.101.34', srcCountry: 'DE' })])
     render(FilterBar)
     await focusBox()
     await pick('source')
