@@ -106,15 +106,7 @@ a `sourceIp` in config.yaml, its logs stop being accepted the moment you
 upgrade, and stay refused until you enrol it.** A router you declared
 with `sourceIp` needs nothing — it keeps working exactly as it did.
 
-MikroView tries to spare you the manual step once, automatically, at the
-first push after this upgrade: if a router's own pushed address table
-names an address that no other router also claims, that router is
-enrolled at it there and then, and it is logged (at Info) so you can see
-it happened. This only ever fires once per router, and only when the
-evidence is unambiguous — two routers pushing the same address are both
-left unenrolled rather than guessed at.
-
-For anything the automatic step does not settle, enrol it by hand:
+Enrol it by hand:
 
 1. Open the Entities screen and find the router beside your others (or
    press **+ add a router** first if it has never pushed anything at all

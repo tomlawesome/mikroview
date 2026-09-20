@@ -379,14 +379,10 @@ func (r *Registry) IsEnrolledAt(device, host string) bool {
 // addressHeldByAnotherDevice reports whether key is already some device
 // other than device's -- declared in config.yaml (byIP) or enrolled
 // earlier (byAcceptedIP) -- and, if so, which one and through which of
-// those two. Shared by TryEnrol and EnrolFromPushedAddresses (audit
-// finding 26c): both enforce the identical "an address belongs to one
-// router" rule, and used to do it via two independently maintained
-// copies of the same two lookups. The copies had already drifted --
-// TryEnrol refused and logged the collision into the refused-senders
-// list the wizard renders; EnrolFromPushedAddresses silently skipped the
-// device, leaving no trace anywhere that a colliding upgrade-time push
-// had even been seen. Must be called with r.mu held.
+// those two. Used by TryEnrol to enforce the "an address belongs to one
+// router" rule: a collision is refused and logged into the
+// refused-senders list the wizard renders, rather than skipped in
+// silence. Must be called with r.mu held.
 func (r *Registry) addressHeldByAnotherDevice(key, device string) (heldBy string, configured, ok bool) {
 	if held, taken := r.byIP[key]; taken && held.ID != device {
 		return held.ID, true, true
@@ -556,98 +552,3 @@ func (r *Registry) Refused() []Refused {
 	return out
 }
 
-// EnrolFromPushedAddresses is the "Upgrading to 0.6.0" one-shot nudge
-// (docs/upgrades.md): at the first boot after issue #1281 shipped, a
-// device with no AcceptedIP whose pushed /ip/address table is the sole
-// claimant of one of its own addresses is enrolled at it, exactly once,
-// persisted, and logged at Info -- the same "sole claimant" evidence
-// Resolve used to trust on every line, offered here as a one-time,
-// visible migration step instead of a standing security decision.
-// Naturally idempotent: it only ever looks at devices with no
-// AcceptedIP yet, so a device this already enrolled (by this call or by
-// a real token) is left alone on every later boot.
-//
-// Call once at startup, after the router-state store this reads
-// (addresses) has loaded whatever it persists (routerstate itself is
-// memory-only today, so in practice this only ever finds evidence from
-// pushes that arrive before this call -- which is none, at boot; the
-// nudge is offered again on the next call this process makes, if the
-// caller chooses to call it more than once, but main.go calls it only
-// at startup, matching the "once" the issue asks for as closely as a
-// process with no persisted router state can). Returns the ids enrolled
-// this call, for the boot log line.
-func (r *Registry) EnrolFromPushedAddresses(addresses AddressTables, now time.Time) []string {
-	if addresses == nil {
-		return nil
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// owners[address] = the one device whose pushed table carries it, or
-	// "" once a second device also claims it (so it is dropped as
-	// evidence, not attributed to the first one seen).
-	owners := make(map[string]string)
-	seenMultiple := make(map[string]bool)
-	for _, dev := range addresses.Devices() {
-		entries, _, ok := addresses.IPAddresses(dev)
-		if !ok {
-			continue
-		}
-		for _, e := range entries {
-			addr := addressOf(e.Address)
-			if addr == "" || seenMultiple[addr] {
-				continue
-			}
-			if existing, ok := owners[addr]; ok && existing != dev {
-				delete(owners, addr)
-				seenMultiple[addr] = true
-				continue
-			}
-			owners[addr] = dev
-		}
-	}
-
-	// Invert to deviceID -> its sole-claimed addresses, so a
-	// still-unenrolled device with several can be given a deterministic
-	// pick rather than whichever the map happened to iterate last.
-	byDevice := make(map[string][]string)
-	for addr, dev := range owners {
-		byDevice[dev] = append(byDevice[dev], addr)
-	}
-
-	var enrolled []string
-	for dev, addrs := range byDevice {
-		info, ok := r.byID[dev]
-		if !ok || info.AcceptedIP != "" {
-			continue
-		}
-		sort.Strings(addrs)
-		key := normalizeIP(addrs[0])
-		// Same rule as TryEnrol -- literally the same check, via
-		// addressHeldByAnotherDevice (audit finding 26c) -- never take an
-		// address another device already holds. And, since that finding,
-		// the same consequence too: the collision is refused and logged
-		// rather than skipped in silence, so a colliding upgrade-time push
-		// leaves the same trace in the wizard's warning box a colliding
-		// live enrolment does.
-		if heldBy, configured, taken := r.addressHeldByAnotherDevice(key, dev); taken {
-			r.refuseLocked(key)
-			deviceLog.Info("upgrade: refused enrolling " + dev + " at " + key + ": " + collisionReason(heldBy, configured))
-			continue
-		}
-		info.AcceptedIP = key
-		info.EnrolledAt = now
-		r.byAcceptedIP[key] = info
-		delete(r.refused, key)
-		enrolled = append(enrolled, dev)
-	}
-	if len(enrolled) > 0 {
-		sort.Strings(enrolled)
-		r.persistLocked()
-		for _, dev := range enrolled {
-			deviceLog.Info("upgrade: enrolled " + dev + " at " + r.byID[dev].AcceptedIP + " (sole claimant of its own pushed address)")
-		}
-	}
-	return enrolled
-}

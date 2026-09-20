@@ -1200,15 +1200,6 @@ func main() {
 	// see that interface's own doc comment for why syslog declares it
 	// rather than importing this package.
 	syslog.SetEnrolmentGate(devices)
-	// The "Upgrading to 0.6.0" one-shot nudge (docs/upgrades.md) is NOT
-	// run here: routerState is brand new at process start and persists
-	// nothing (see its own doc comment), so there is no pushed evidence
-	// to check yet -- a call here would always be a no-op. It runs
-	// instead from handleIngestRouterOS, the first time a device's own
-	// /ip/address table actually arrives after this restart (naturally
-	// idempotent: EnrolFromPushedAddresses only ever touches a device
-	// with no acceptedIp yet), which is the earliest point such evidence
-	// can exist.
 
 	// Everything the engine evaluates, registered from the one
 	// definitions document and kept in step with it (issues #405/#406/

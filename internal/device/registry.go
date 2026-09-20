@@ -26,7 +26,6 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/evict"
-	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -52,10 +51,8 @@ type Info struct {
 	EventCount uint64    `json:"eventCount"`
 	// AcceptedIP is issue #1281's enrolled address: empty until a valid
 	// enrolment token is redeemed at some source address (Registry.
-	// TryEnrol), or until the upgrade-time one-shot check
-	// (EnrolFromPushedAddresses) finds this device the sole claimant of
-	// one of its own pushed addresses. Distinct from SourceIP, which is
-	// either the operator's config.yaml declaration or the first address
+	// TryEnrol). Distinct from SourceIP, which is either the operator's
+	// config.yaml declaration or the first address
 	// attribution ever happened to see -- AcceptedIP is the one address
 	// this instance has actual evidence (a token, not merely a claim) is
 	// this router. Persisted (see persistLocked) so an enrolment
@@ -111,29 +108,6 @@ type NameLookup interface {
 	Device(id string) string
 }
 
-// AddressTables is the half of internal/routerstate.Store this package
-// needs: which addresses each device has pushed as its own, from its
-// /ip/address table. An interface for the same two reasons NameLookup
-// is one -- device does not import routerstate, and a test can supply
-// a table without a store.
-//
-// No longer consulted by Resolve (issue #1281's audit: a router's own
-// claim about its address, made over syslog, is not evidence strong
-// enough to attribute identity -- see Resolve's doc comment). The one
-// remaining caller is EnrolFromPushedAddresses, the once-at-startup
-// upgrade step that offers a still-unenrolled device the same "sole
-// claimant" evidence as a one-time, logged, operator-visible nudge
-// rather than a standing security decision. The pushed tables
-// themselves are untouched and keep serving the display-only table
-// endpoints (GET /api/routeros/{device}/addresses).
-type AddressTables interface {
-	// Devices returns every device that has pushed anything.
-	Devices() []string
-	// IPAddresses returns device's pushed /ip/address table; ok is
-	// false when that device has never pushed one.
-	IPAddresses(device string) (entries []ingest.IPAddressEntry, updatedAt time.Time, ok bool)
-}
-
 // Registry is every device mikroview knows about, plus the syslog
 // sources it has not been able to attribute to one, and per-device
 // liveness/volume for the /api/devices endpoint.
@@ -157,8 +131,7 @@ type Registry struct {
 	// its device: attribution step (b), issue #1281's replacement for
 	// the pushed-address-table claim this package used to trust. An
 	// address lands here only through TryEnrol (a token minted by an
-	// admin, redeemed by a line actually carrying it) or
-	// EnrolFromPushedAddresses' one-shot upgrade nudge -- never merely
+	// admin, redeemed by a line actually carrying it) -- never merely
 	// because a router's own pushed table says so.
 	byAcceptedIP map[string]*Info
 	// byID holds every device by id, declared, push-named and
@@ -479,8 +452,7 @@ func (r *Registry) ensureLocked(deviceID string, now time.Time) (info *Info, cre
 //   - (a) config.yaml's devices[].sourceIp -- the operator said so.
 //   - (b) Info.AcceptedIP -- a device the operator issued an enrolment
 //     token for, redeemed by a "mikroview-enrol <token>" line actually
-//     arriving from this address (Registry.TryEnrol), or by the
-//     once-at-startup upgrade nudge (EnrolFromPushedAddresses).
+//     arriving from this address (Registry.TryEnrol).
 //   - otherwise the source is unattributed. It is remembered as a
 //     Source, not minted as a device named after its own IP, and the
 //     address itself is returned so the lines are stored and shown
@@ -548,18 +520,6 @@ func (r *Registry) seenLocked(info *Info, key string, now time.Time) {
 	}
 	info.LastSeen = now
 	info.EventCount++
-}
-
-// addressOf reduces one /ip/address row to the address itself:
-// RouterOS writes them as "a.b.c.d/nn", and it is the host address a
-// router's syslog arrives from, not the prefix. Anything that parses as
-// neither is returned normalised and simply fails to match, the same
-// tolerant-of-one-bad-record convention routerstate's own readers use.
-func addressOf(s string) string {
-	if p, err := netip.ParsePrefix(s); err == nil {
-		return p.Addr().String()
-	}
-	return normalizeIP(s)
 }
 
 // pruneLocked evicts the least-recently-seen unattributed sources once

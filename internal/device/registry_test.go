@@ -6,41 +6,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/ingest"
 )
 
-// pushedAddresses is an AddressTables standing in for
-// internal/routerstate.Store: device must not import it (see
-// AddressTables' comment), and the registry reads the same two methods
-// whatever produced the rows. Keyed by device, valued by the addresses
-// that device pushed, written the way RouterOS writes them ("a.b.c.d/nn").
+// pushedAddresses stands in for a device's pushed /ip/address table, in
+// the shape RouterOS writes it: keyed by device, valued by the addresses
+// that device pushed ("a.b.c.d/nn"). Used only to prove Resolve does not
+// consult it (see TestResolveIgnoresThePushedAddressTable) -- the
+// pushed-address-table claim stopped being attribution evidence in
+// issue #1281's audit.
 type pushedAddresses map[string][]string
-
-func (p pushedAddresses) Devices() []string {
-	out := make([]string, 0, len(p))
-	for dev := range p {
-		out = append(out, dev)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func (p pushedAddresses) IPAddresses(device string) ([]ingest.IPAddressEntry, time.Time, bool) {
-	rows, ok := p[device]
-	if !ok {
-		return nil, time.Time{}, false
-	}
-	entries := make([]ingest.IPAddressEntry, 0, len(rows))
-	for _, addr := range rows {
-		entries = append(entries, ingest.IPAddressEntry{Address: addr})
-	}
-	return entries, time.Time{}, true
-}
 
 func TestResolveConfiguredDevice(t *testing.T) {
 	r := NewRegistry([]config.Device{
@@ -125,8 +103,8 @@ func TestResolveAttributesByAcceptedIP(t *testing.T) {
 // TestResolveIgnoresThePushedAddressTable is issue #1281's audit,
 // pinned directly: before this issue, an address exactly one device's
 // pushed /ip/address table named was attributed to that device with no
-// token at all (AddressTables, computeClaimLocked). That evidence is no
-// longer trusted for attribution -- a router asserting its own address
+// token at all. That evidence is no longer trusted for attribution --
+// a router asserting its own address
 // in a payload an ingest token merely let it push is not proof of
 // identity -- so the same setup that used to attribute now leaves the
 // address unattributed.
@@ -135,10 +113,8 @@ func TestResolveIgnoresThePushedAddressTable(t *testing.T) {
 	now := time.Now()
 	r.Ensure("hap-ax3", now)
 
-	// A pushed table naming this exact address, deliberately never
-	// handed to EnrolFromPushedAddresses (the one place this evidence
-	// still matters -- the once-at-startup upgrade nudge). Resolve
-	// itself must not consult it at all.
+	// A pushed table naming this exact address. Resolve itself must not
+	// consult it at all.
 	_ = pushedAddresses{"hap-ax3": {"10.10.0.1/24"}}
 
 	if id := r.Resolve("10.10.0.1", now); id != "10.10.0.1" {
