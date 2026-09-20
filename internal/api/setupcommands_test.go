@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/retention"
@@ -682,5 +683,23 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("syslogPort %q: status = %d, want 200", port, resp.StatusCode)
 		}
+	}
+}
+
+// TestValidSetupDeviceLengthMatchesTokenStore is #1304's Q9: this
+// validator's device-name length bound used to be a second constant
+// (maxSetupDeviceLen) kept equal to internal/auth's own
+// maxDeviceIDLen only by a comment saying so. It is auth.MaxDeviceIDLen
+// itself now, so this test pins the boundary against that shared
+// constant directly -- it would catch either one changing without the
+// other the moment they next needed to differ.
+func TestValidSetupDeviceLengthMatchesTokenStore(t *testing.T) {
+	atLimit := strings.Repeat("a", auth.MaxDeviceIDLen)
+	if !validSetupDevice(atLimit) {
+		t.Errorf("a device name of exactly auth.MaxDeviceIDLen (%d) characters was refused", auth.MaxDeviceIDLen)
+	}
+	overLimit := atLimit + "a"
+	if validSetupDevice(overLimit) {
+		t.Errorf("a device name one character over auth.MaxDeviceIDLen (%d) was accepted", auth.MaxDeviceIDLen)
 	}
 }
