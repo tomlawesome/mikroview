@@ -50,6 +50,22 @@ const (
 // interleaved in the order they occur. An identical pair (bar the date
 // header) returns an empty slice.
 func Diff(from, to string) []DiffLine {
+	// Cheap, allocation-free line counts first (#1280): diffSides used
+	// to build a full []diffSide for both sides before maxDiffLines was
+	// ever consulted, so two exports near the 16 MiB vault cap, crafted
+	// as millions of short lines, allocated hundreds of MB per side
+	// just to discover the pair was too big to diff at all. If either
+	// raw side is already past the cap on its own, there is no need to
+	// build either side in full: go straight to the same wholesale
+	// answer, assembled by walking the text once per side. This trades
+	// a rare case -- a pair this large that also happens to share a
+	// long common prefix or suffix -- for never paying that allocation
+	// unconditionally; a router export legitimately near the cap is not
+	// expected to collapse to a small diff anyway.
+	if diffLineCount(from) > maxDiffLines || diffLineCount(to) > maxDiffLines {
+		return wholesaleText(from, to)
+	}
+
 	a := diffSides(from)
 	b := diffSides(to)
 
@@ -94,17 +110,79 @@ type diffSide struct {
 // artefact of the file ending properly, not a line either export
 // "has".
 func diffSides(text string) []diffSide {
-	raw := strings.Split(text, "\n")
-	if n := len(raw); n > 0 && raw[n-1] == "" {
-		raw = raw[:n-1]
+	out := make([]diffSide, 0, diffLineCount(text))
+	forEachLine(text, func(line int, t string) {
+		out = append(out, diffSide{line: line, text: t})
+	})
+	return out
+}
+
+// forEachLine walks text's lines in the same order and with the same
+// rules diffSides applies -- \r trimmed, the date header skipped, a
+// trailing newline's empty last line not counted -- without ever
+// holding more than one line at a time. It is what lets a caller that
+// only needs a count or a single pass over the text (diffLineCount,
+// wholesaleText) avoid diffSides' per-line []diffSide allocation
+// entirely.
+func forEachLine(text string, f func(line int, text string)) {
+	if strings.HasSuffix(text, "\n") {
+		text = text[:len(text)-1]
 	}
-	out := make([]diffSide, 0, len(raw))
-	for i, l := range raw {
-		if isDateHeader(l) {
-			continue
+	if text == "" {
+		return
+	}
+	line := 0
+	for {
+		line++
+		l := text
+		i := strings.IndexByte(text, '\n')
+		if i >= 0 {
+			l = text[:i]
 		}
-		out = append(out, diffSide{line: i + 1, text: strings.TrimRight(l, "\r")})
+		if !isDateHeader(l) {
+			f(line, strings.TrimRight(l, "\r"))
+		}
+		if i < 0 {
+			return
+		}
+		text = text[i+1:]
 	}
+}
+
+// diffLineCount is the count forEachLine would call f for, computed by
+// scanning for newlines rather than walking line by line -- the cheap
+// check Diff needs before deciding whether a side is worth building at
+// all. It over-counts by the number of date header lines (at most one
+// in practice), the same slack diffSides' own capacity estimate always
+// had; that cannot matter against a 50000-line cap.
+func diffLineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	n := strings.Count(text, "\n") + 1
+	if strings.HasSuffix(text, "\n") {
+		n--
+	}
+	return n
+}
+
+// wholesaleText is wholesale's early-exit twin (#1280): once Diff has
+// already decided from diffLineCount alone that a side is past
+// maxDiffLines, it answers directly from the raw text so that
+// diffSides' allocation, the common-prefix/suffix trim and Myers never
+// run. It applies forEachLine's identical line rules to each side in
+// turn, so for any pair where trimming would not have removed
+// anything -- the case a pair this far past the cap realistically is
+// -- the result is byte-for-byte what wholesale(diffSides(from),
+// diffSides(to)) returns today.
+func wholesaleText(from, to string) []DiffLine {
+	out := make([]DiffLine, 0, diffLineCount(from)+diffLineCount(to))
+	forEachLine(from, func(line int, text string) {
+		out = append(out, DiffLine{Op: DiffRemoved, Line: line, Text: text})
+	})
+	forEachLine(to, func(line int, text string) {
+		out = append(out, DiffLine{Op: DiffAdded, Line: line, Text: text})
+	})
 	return out
 }
 
