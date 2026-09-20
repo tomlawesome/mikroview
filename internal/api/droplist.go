@@ -227,7 +227,7 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entry, err := s.Droplist.Add(auditActor(r), req.CIDR, req.Reason, req.FlagID)
+	entry, ownRangesKnown, err := s.Droplist.Add(auditActor(r), req.CIDR, req.Reason, req.FlagID)
 	if err != nil {
 		switch {
 		case errors.Is(err, droplist.ErrExists):
@@ -253,7 +253,12 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := droplistCreateResponse{droplistEntryResponse: toDroplistEntryResponse(entry)}
-	if !s.Droplist.OwnRangesKnown() {
+	// ownRangesKnown came back from the same Add call that just validated
+	// this entry (#1304, S1) -- not a fresh s.Droplist.OwnRangesKnown()
+	// call here, which raced: the router's own ranges could become known
+	// in the gap between Add returning and that second read, making an
+	// entry that was genuinely added unchecked report as checked.
+	if !ownRangesKnown {
 		resp.Warning = ownRangesUnknownWarning
 	}
 	writeJSON(w, http.StatusCreated, resp)
