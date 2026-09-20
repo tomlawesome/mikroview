@@ -217,6 +217,15 @@ func (s *StateStore) DeleteDefinition(definitionID string) {
 // called with s.mu already held -- see flags.Store.persistLocked's own
 // doc comment for the "lock covers the encode, not the backend call"
 // contract this mirrors.
+//
+// Kept on the swallow-and-log path rather than converted to an
+// error-returning tryPersistLocked (v0.6.0 audit finding R6): every
+// BaselineState this store holds is engine run state -- a Baseline's own
+// resumable EMA value/variance/sample-count, per docs/decisions/
+// evaluation-engine.md -- not something an operator set, so there is no
+// caller here that needs to be told a save failed rather than just warm
+// up a little less than it could have (see engineStateFlushInterval's
+// own doc comment on how little a lost interval costs).
 func (s *StateStore) persistLocked() {
 	if s.wb == nil {
 		return

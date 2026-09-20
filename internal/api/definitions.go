@@ -1647,6 +1647,13 @@ func writeDefinitionError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, engine.ErrDefinitionImmutable):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, engine.ErrPersistFailed):
+		// A failed write (any tryPersistLocked branch in
+		// engine.DefinitionsStore), whose text can carry the backend's
+		// own path or detail and has no business leaving this process --
+		// see ErrPersistFailed's own doc comment (v0.6.0 audit finding
+		// R6).
+		http.Error(w, "the change could not be saved, so nothing was changed", http.StatusInternalServerError)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}
