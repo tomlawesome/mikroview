@@ -8,22 +8,30 @@ import (
 	"time"
 )
 
-// Linking is a one-way, destructive conversion. The account becomes
-// SSO-only in the same operation, because a dual-mode account -- local
-// password still works, SSO also works -- keeps the weaker local attack
-// surface alive on an account that is supposed to have moved past it.
+// Linking is a one-way, destructive conversion for every role but
+// admin. The account becomes SSO-only in the same operation, because a
+// dual-mode account -- local password still works, SSO also works --
+// keeps the weaker local attack surface alive on an account that is
+// supposed to have moved past it.
+//
+// (Updated for #1252's ruling: this used to link the admin, which now
+// keeps its password. The rule it tests is unchanged for everybody
+// else, so the account under test is an ordinary user.)
 //
 // The invariant lives inside LinkOIDCIdentity rather than at the API
 // call site, so these test the store directly.
-func TestLinkingDestroysTheLocalPassword(t *testing.T) {
+func TestLinkingDestroysANonAdminsLocalPassword(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
 
-	u, err := s.Register("alice", "password123", time.Now())
-	if err != nil {
+	if _, err := s.Register("alice", "password123", time.Now()); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, err := s.Authenticate("alice", "password123", time.Now()); err != nil {
+	u, err := s.CreateUser("bob", "password456", RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := s.Authenticate("bob", "password456", time.Now()); err != nil {
 		t.Fatalf("the password should work before linking: %v", err)
 	}
 
@@ -31,15 +39,55 @@ func TestLinkingDestroysTheLocalPassword(t *testing.T) {
 		t.Fatalf("LinkOIDCIdentity: %v", err)
 	}
 
-	if _, err := s.Authenticate("alice", "password123", time.Now()); err == nil {
+	if _, err := s.Authenticate("bob", "password456", time.Now()); err == nil {
 		t.Error("the old password still works after linking -- the account is dual-mode")
 	}
-	linked, _ := s.ByUsername("alice")
+	linked, _ := s.ByUsername("bob")
 	if linked.LocalPassword() {
 		t.Error("the linked account still reports a local password")
 	}
 	if linked.OIDCIssuer != "https://idp.example" || linked.OIDCSubject != "subject-1" {
 		t.Errorf("identity not attached: %+v", linked)
+	}
+}
+
+// The admin is the exception, and the reason #1252 exists (owner,
+// 2026-09-18: the admin must always be able to sign in, even with the
+// identity provider down). mikroview never authenticates to the
+// provider on its own behalf, so a provider that cannot answer means
+// nobody gets in -- unless the one account that can fix it kept a
+// password. SSO is added to that account, not swapped for it.
+func TestLinkingKeepsTheAdminsLocalPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	admin, err := s.Register("alice", "password123", time.Now())
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if admin.Role != RoleAdmin {
+		t.Fatalf("Role = %q, want admin -- this test is not set up as it thinks", admin.Role)
+	}
+
+	if err := s.LinkOIDCIdentity(admin.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
+		t.Fatalf("LinkOIDCIdentity: %v", err)
+	}
+
+	// The password itself, not just the flag: a link that left
+	// HasLocalPassword true over an unmatchable hash would report a way
+	// in that does not exist.
+	if _, err := s.Authenticate("alice", "password123", time.Now()); err != nil {
+		t.Errorf("the admin's password stopped working after linking: %v", err)
+	}
+	linked, _ := s.ByUsername("alice")
+	if !linked.LocalPassword() {
+		t.Error("the linked admin reports no local password")
+	}
+	if linked.OIDCIssuer != "https://idp.example" || linked.OIDCSubject != "subject-1" {
+		t.Errorf("identity not attached: %+v", linked)
+	}
+	if !s.HasLocalAdmin() {
+		t.Error("the deployment lost its way in that does not need the provider")
 	}
 }
 
@@ -51,7 +99,10 @@ func TestLinkingDestroysTheLocalPassword(t *testing.T) {
 func TestLinkingLeavesARealUnmatchableHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
-	u, _ := s.Register("alice", "password123", time.Now())
+	// An ordinary user: the admin keeps its real hash now (#1252), so
+	// the replacement only happens here.
+	s.Register("alice", "password123", time.Now())
+	u, _ := s.CreateUser("bob", "password456", RoleUser, time.Now())
 
 	before, _ := s.Get(u.ID)
 	if err := s.LinkOIDCIdentity(u.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
@@ -71,7 +122,10 @@ func TestLinkingLeavesARealUnmatchableHash(t *testing.T) {
 }
 
 // Every session issued before the link has to die: the account's
-// credentials just changed fundamentally.
+// credentials just changed fundamentally. True of the admin too, whose
+// password survives the link (#1252) -- a second way into the account
+// was still just attached, and completeOIDCLink hands the browser that
+// did it a fresh session.
 func TestLinkingInvalidatesEarlierSessions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -115,6 +169,32 @@ func TestLinkingRefusesAnIdentityHeldByAnotherAccount(t *testing.T) {
 	}
 }
 
+// Only reachable since #1252: before it, a linked account had no local
+// password and the link route refuses those, so nothing could ask for a
+// second link. The admin keeps its password now, so it can -- and a
+// second identity must not be accepted quietly, because the first would
+// stay in the index and go on signing in as this account.
+func TestLinkingRefusesASecondIdentityForTheSameAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	admin, _ := s.Register("alice", "password123", time.Now())
+
+	if err := s.LinkOIDCIdentity(admin.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
+		t.Fatalf("first link: %v", err)
+	}
+	if err := s.LinkOIDCIdentity(admin.ID, "https://idp.example", "subject-2", time.Now()); err != ErrOIDCAlreadyLinked {
+		t.Fatalf("second link = %v, want ErrOIDCAlreadyLinked", err)
+	}
+
+	linked, _ := s.ByUsername("alice")
+	if linked.OIDCSubject != "subject-1" {
+		t.Errorf("OIDCSubject = %q, want the first identity untouched", linked.OIDCSubject)
+	}
+	if u, ok := s.ByOIDCIdentity("https://idp.example", "subject-2"); ok {
+		t.Errorf("the refused identity signs in as %q anyway", u.Username)
+	}
+}
+
 func TestLinkingIsIdempotentForTheSameAccount(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -128,24 +208,30 @@ func TestLinkingIsIdempotentForTheSameAccount(t *testing.T) {
 	}
 }
 
-// After linking, the account falls under -recover-admin-account's
-// refusal: mikroview holds no credential for it, so recovery is the
-// identity provider's job. Consistent with the CLI's behaviour, and
-// worth pinning so a future change to LocalPassword() can't silently
-// re-open local recovery for a linked account.
-func TestALinkedAccountIsNotLocallyRecoverable(t *testing.T) {
+// After linking, a non-admin account holds no credential mikroview can
+// reset, so recovery is the identity provider's job. Consistent with
+// the CLI's behaviour, and worth pinning so a future change to
+// LocalPassword() can't silently re-open local recovery for an account
+// that has none.
+//
+// (Updated for #1252: this used to link the admin and assert the same
+// of it. The admin now keeps its password, so its recovery story is
+// -recover-admin-account as usual -- see
+// TestLinkingKeepsTheAdminsLocalPassword.)
+func TestALinkedNonAdminIsNotLocallyRecoverable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
-	u, _ := s.Register("alice", "password123", time.Now())
+	s.Register("alice", "password123", time.Now())
+	u, _ := s.CreateUser("bob", "password456", RoleUser, time.Now())
 	if err := s.LinkOIDCIdentity(u.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
 		t.Fatalf("LinkOIDCIdentity: %v", err)
 	}
 
-	admin := s.Admin()
-	if admin == nil {
-		t.Fatal("no admin")
+	linked, ok := s.ByUsername("bob")
+	if !ok {
+		t.Fatal("the account vanished")
 	}
-	if admin.LocalPassword() {
-		t.Error("a linked admin still reports as locally recoverable")
+	if linked.LocalPassword() {
+		t.Error("a linked account still reports as locally recoverable")
 	}
 }

@@ -126,9 +126,9 @@ func main() {
 		for _, m := range missing {
 			fmt.Fprintf(os.Stderr, "  %s\n", m)
 		}
-		fmt.Fprintf(os.Stderr, "A renamed or removed menu means mikroview is telling operators to run something that no longer exists.\n")
+		fmt.Fprintf(os.Stderr, "A renamed or removed menu means MikroView is telling operators to run something that no longer exists.\n")
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "routerosreference: all %d paths mikroview uses are documented (checked %d published paths)\n", len(ref.Menus), len(documented))
+	fmt.Fprintf(os.Stderr, "routerosreference: all %d paths MikroView uses are documented (checked %d published paths)\n", len(ref.Menus), len(documented))
 }

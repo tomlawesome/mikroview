@@ -67,12 +67,21 @@ type tuneLoggingRule struct {
 	OutInterfaceList string `json:"outInterfaceList"`
 	Boundary         string `json:"boundary"`
 	CrossesDark      bool   `json:"crossesDark"`
-	Log              bool   `json:"log"`
-	LogPrefix        string `json:"logPrefix"`
-	Packets          int    `json:"packets"`
-	Bytes            int    `json:"bytes"`
-	CountersKnown    bool   `json:"countersKnown"`
-	Line             int    `json:"line"`
+	// EveryPacket is #1230's per-rule warning: this rule's
+	// connection-state names established or related, so logging it
+	// writes a line per packet rather than per connection. The page says
+	// so beside the rule and leaves it unticked by default, even when it
+	// crosses a dark boundary -- the flood the wizard's bulk block caused
+	// is reachable one rule at a time from here otherwise, and a rule
+	// with no interface scoping crosses every dark boundary, so the
+	// default selection would have ticked it.
+	EveryPacket   bool   `json:"everyPacket"`
+	Log           bool   `json:"log"`
+	LogPrefix     string `json:"logPrefix"`
+	Packets       int    `json:"packets"`
+	Bytes         int    `json:"bytes"`
+	CountersKnown bool   `json:"countersKnown"`
+	Line          int    `json:"line"`
 }
 
 type tuneLoggingAnalyseRequest struct {
@@ -219,8 +228,8 @@ func (s *Server) handleTuneLoggingRender(w http.ResponseWriter, r *http.Request)
 }
 
 // writeTuneLoggingRejection answers a *export.SecretFieldError with the
-// contract's 400 {"rejected":{"reason":...}} shape; any other error
-// (Parse itself never returns one today) falls back to a plain 400.
+// contract's 400 {"rejected":{"reason":...}} shape; any other error --
+// including a *export.ControlCharError -- falls back to a plain 400.
 func writeTuneLoggingRejection(w http.ResponseWriter, err error) {
 	var secretErr *export.SecretFieldError
 	if errors.As(err, &secretErr) {
@@ -323,6 +332,7 @@ func buildTuneLoggingRules(s *Server, device string, ex *export.Export, darkBoun
 			OutInterfaceList: rule.OutInterfaceList,
 			Boundary:         boundary,
 			CrossesDark:      crosses,
+			EveryPacket:      rule.LogsEveryPacket(),
 			Log:              rule.Log,
 			LogPrefix:        rule.LogPrefix,
 			Packets:          packets,

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,7 +319,7 @@ func TestHandleFlagsVerdictUndoLeavesAlreadyClearedFlagCleared(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.21", "d", time.Now())
 	id := s.Flags.List()[0].ID
-	if _, ok := s.Flags.SetVerdict(id, flags.VerdictChecked, "someone", time.Now()); !ok {
+	if _, ok := s.Flags.SetVerdict(id, flags.VerdictChecked, "someone", "", time.Now()); !ok {
 		t.Fatal("setup: expected the first, clearing verdict to succeed")
 	}
 
@@ -366,7 +367,7 @@ func TestHandleFlagsClearAll(t *testing.T) {
 	s.Flags.Add(flags.TypePortScan, "203.0.113.1", "d1", time.Now())
 	s.Flags.Add(flags.TypeActivitySpike, "203.0.113.2", "d2", time.Now())
 	preClearedID := s.Flags.List()[0].ID
-	s.Flags.SetVerdict(preClearedID, flags.VerdictChecked, "someone", time.Now())
+	s.Flags.SetVerdict(preClearedID, flags.VerdictChecked, "someone", "", time.Now())
 
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
@@ -711,6 +712,189 @@ func TestHandleFlagsVerdictIsAuditLogged(t *testing.T) {
 	}
 }
 
+// -- #1232: the operator's note ---------------------------------------
+
+// TestHandleFlagsVerdictCarriesTheNote is the write-first shape the
+// owner asked for: the note is typed in the drawer and sent with the
+// verdict clicked afterwards, in one request, so there is no window in
+// which the judgement is recorded and the reason for it is not.
+func TestHandleFlagsVerdictCarriesTheNote(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.50", "20 distinct ports in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	const note = "every source already on the upstream block list. Left it alone."
+	body, err := json.Marshal(map[string]string{"verdict": "checked", "note": note})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/flags/"+id+"/verdict", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var f flags.Flag
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Note != note {
+		t.Errorf("response Note = %q, want the note the verdict was sent with", f.Note)
+	}
+	if got := s.Flags.List()[0]; got.Note != note {
+		t.Errorf("store Note = %q, want %q", got.Note, note)
+	}
+}
+
+// TestHandleFlagNoteEditsAJudgedFlag covers the edit path the drawer
+// uses on blur once a verdict has been given, including the empty edit
+// that takes the words back.
+func TestHandleFlagNoteEditsAJudgedFlag(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.51", "20 distinct ports in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: "first go"}).Body.Close()
+
+	resp := putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "second go, better words"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var f flags.Flag
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Note != "second go, better words" {
+		t.Errorf("response Note = %q, want the edited text", f.Note)
+	}
+
+	empty := putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: ""})
+	empty.Body.Close()
+	if empty.StatusCode != http.StatusOK {
+		t.Errorf("an empty edit is how the words are taken back, got %d", empty.StatusCode)
+	}
+	if got := s.Flags.List()[0]; got.Note != "" {
+		t.Errorf("store Note = %q, want it emptied", got.Note)
+	}
+}
+
+// TestHandleFlagNoteRefusals: 404 for a flag that does not exist, 409
+// for one that exists but carries no verdict. A note with no verdict has
+// nothing to be the reason for and nothing to be discarded with, so it
+// is refused rather than stored where nothing would read it back.
+func TestHandleFlagNoteRefusals(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.52", "20 distinct ports in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+
+	unjudged := putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "no verdict yet"})
+	unjudged.Body.Close()
+	if unjudged.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 for a flag with no verdict", unjudged.StatusCode)
+	}
+	if got := s.Flags.List()[0]; got.Note != "" {
+		t.Errorf("a refused edit must store nothing, got Note = %q", got.Note)
+	}
+
+	unknown := putJSON(t, client, ts.URL+"/api/flags/nonexistent/note", noteRequest{Note: "anything"})
+	unknown.Body.Close()
+	if unknown.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an unknown flag", unknown.StatusCode)
+	}
+}
+
+// TestFlagNoteAuditRecordsTheEventNeverTheText is #1232's ratified §3:
+// the flag is the note's one home, so the audit log says a verdict
+// carried a note and that a note was edited, and never quotes either.
+// That is what lets "undoing the verdict loses the note" mean exactly
+// one thing -- no audit entry has to be deleted or left pointing at
+// prose that has gone.
+func TestFlagNoteAuditRecordsTheEventNeverTheText(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.53", "20 distinct ports in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+
+	const secret = "the operator's own words"
+	postJSON(t, client, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: secret}).Body.Close()
+	putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: secret + ", reworded"}).Body.Close()
+
+	var verdictDetail string
+	var sawEdit bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Target != id {
+			continue
+		}
+		if strings.Contains(e.Detail, secret) {
+			t.Errorf("audit entry %q quotes the note text: %q", e.Action, e.Detail)
+		}
+		switch e.Action {
+		case "flag.verdict":
+			verdictDetail = e.Detail
+		case "flag.note_edit":
+			sawEdit = true
+			if e.Actor != "tom" {
+				t.Errorf("flag.note_edit actor = %q, want tom", e.Actor)
+			}
+		}
+	}
+	if verdictDetail != "checked, with note" {
+		t.Errorf("flag.verdict detail = %q, want it to say a note came with it", verdictDetail)
+	}
+	if !sawEdit {
+		t.Errorf("expected a flag.note_edit entry for %s, got: %+v", id, s.Audit.Query(audit.Query{}).Entries)
+	}
+}
+
+// TestHandleFlagNoteRefusesViewer: the note is part of the record a
+// returning flag reads back, so writing one is a user-tier change to
+// what mikroview is showing -- the same #653 line the verdict itself
+// sits on (TestHandleFlagsWritesRefuseViewer).
+func TestHandleFlagNoteRefusesViewer(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.54", "20 distinct ports in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: "admin's own"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+
+	resp := putJSON(t, viewerClient, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "viewer's edit"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a viewer", resp.StatusCode)
+	}
+	if got := s.Flags.List()[0]; got.Note != "admin's own" {
+		t.Errorf("a refused viewer edit must change nothing, got Note = %q", got.Note)
+	}
+}
+
 // --- #640's expectations ledger --------------------------------------
 //
 // The ledger is the record that an expectation is earning its place, so
@@ -723,7 +907,7 @@ func TestHandleExpectationsListServesTheLedger(t *testing.T) {
 	size := 20
 	s.Flags.AddEmission(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", nil, flags.Evidence{}, "", false, &size, time.Now())
 	flagID := s.Flags.List()[0].ID
-	if _, ok := s.Flags.SetVerdict(flagID, flags.VerdictExpected, "someone", time.Now()); !ok {
+	if _, ok := s.Flags.SetVerdict(flagID, flags.VerdictExpected, "someone", "", time.Now()); !ok {
 		t.Fatal("expected the flag to be known to SetVerdict")
 	}
 	// A firing inside the tolerance, so the row has an absorbed count to
@@ -775,7 +959,7 @@ func TestHandleExpectationsListServesTheLedger(t *testing.T) {
 func TestHandleExpectationsListKeepsASizelessExpectationSizeless(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypeGlobalSpike, "all", "spike", time.Now())
-	if _, ok := s.Flags.SetVerdict(s.Flags.List()[0].ID, flags.VerdictExpected, "someone", time.Now()); !ok {
+	if _, ok := s.Flags.SetVerdict(s.Flags.List()[0].ID, flags.VerdictExpected, "someone", "", time.Now()); !ok {
 		t.Fatal("expected the flag to be known to SetVerdict")
 	}
 

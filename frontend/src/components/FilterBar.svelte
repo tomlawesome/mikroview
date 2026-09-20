@@ -25,8 +25,37 @@
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { buildFilterChips, type FilterChip } from '../lib/filterChips'
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
-  import { columnState } from '../lib/columns.svelte'
+  import { geoipState } from '../lib/geoip.svelte'
+  import { seenValuesState } from '../lib/seenValues.svelte'
+  import {
+    acceptsTypedValue,
+    backspaceAction,
+    fieldItems,
+    lastTokenKey,
+    tokenPatch,
+    typedValueHint,
+    valueItems,
+    type TokenField,
+    type TokenMenuItem,
+    type TokenSources,
+  } from '../lib/tokenBar'
+  import type { Filters } from '../lib/types'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
+  import ColumnToggles from './ColumnToggles.svelte'
+  import { onMount } from 'svelte'
+
+  // #1198: country flags go blank with no GeoIP database configured, and
+  // a blank was previously indistinguishable from "no public traffic
+  // yet". Loaded once here so both country selects below can show the
+  // explainer row the moment it's known to be off.
+  onMount(() => {
+    geoipState.ensureLoaded().catch(() => {})
+    // #1226: the values this instance has actually seen, so Proto and
+    // Interface below are pickers rather than boxes an operator guesses
+    // into. Best-effort -- a failed fetch leaves both suggesting nothing
+    // and still accepting anything typed, which is what they did before.
+    seenValuesState.ensureLoaded().catch(() => {})
+  })
 
   // Saved filters have a drawn home now (round 37: "saved filters are
   // the box's business"), so FilterPresetsMenu is mounted inside the box
@@ -44,43 +73,6 @@
   }
 
   const actions = ACTION_FILTER_OPTIONS
-
-  // #710: the chooser's own naming, distinct from COLUMNS' table-header
-  // labels (lib/columns.svelte). A flat list read "Device column",
-  // "Address column", "Address column" -- the same visible text twice,
-  // once for source's address and once for destination's, with nothing
-  // beside it to tell them apart. These three lists say the bare column
-  // name in the strip's own mono voice, and the source/destination
-  // facts (address, port, MAC) sit under a small heading naming which
-  // side they belong to instead of repeating "source"/"destination" on
-  // every row. Order here is the chooser's own -- COLUMNS interleaves
-  // source's and destination's facts around chain/proto for a table-
-  // layout reason (see its own comment) that has nothing to do with how
-  // this menu groups them.
-  interface ColumnChoice {
-    key: string
-    text: string
-    ariaLabel: string
-  }
-  const PLAIN_COLUMNS: ColumnChoice[] = [
-    { key: 'device', text: 'device', ariaLabel: 'Device column' },
-    { key: 'action', text: 'action', ariaLabel: 'Action column' },
-    { key: 'chain', text: 'chain', ariaLabel: 'Chain column' },
-    { key: 'source', text: 'source', ariaLabel: 'Source column' },
-    { key: 'destination', text: 'destination', ariaLabel: 'Destination column' },
-    { key: 'proto', text: 'proto', ariaLabel: 'Proto column' },
-    { key: 'iface', text: 'interface', ariaLabel: 'Interfaces column' },
-    { key: 'nat', text: 'NAT', ariaLabel: 'NAT column' },
-  ]
-  const SOURCE_COLUMNS: ColumnChoice[] = [
-    { key: 'srcAddr', text: 'address', ariaLabel: 'Source address column' },
-    { key: 'srcPort', text: 'src port', ariaLabel: 'Source port column' },
-    { key: 'mac', text: 'MAC', ariaLabel: 'Source MAC column' },
-  ]
-  const DEST_COLUMNS: ColumnChoice[] = [
-    { key: 'dstAddr', text: 'address', ariaLabel: 'Destination address column' },
-    { key: 'port', text: 'port', ariaLabel: 'Destination port column' },
-  ]
 
   // Below the breakpoint, the ~9 fields below move into a slide-up
   // drawer behind a trigger (issue #85) rather than staying always-
@@ -101,18 +93,6 @@
   // must be independently togglable.
   let expanded = $state(false)
 
-  // #710 round-30 fidelity: the column chooser's own disclosure. Round
-  // 30 draws filters, the column chooser, clear and fold on one strip
-  // (stream-bar-out.png) -- the build instead gave `.columns-field` a
-  // `flex-basis: 100%` that forced it, and everything after it, onto a
-  // row of its own. Fifteen columns minus the two pinned ones is too
-  // many checkboxes to add to that same one-line strip honestly, so
-  // this follows the strip's own "fold ▸" idiom one level deeper: a
-  // quiet toggle takes the checkboxes' place in the row, and they open
-  // in a panel that floats over the strip rather than pushing it onto a
-  // second line.
-  let columnsOpen = $state(false)
-
   // DOM refs for the outside-click close below: a click only counts as
   // "away from the box" once it lands outside both the trigger
   // (`.fbox`) and the strip it opens (`.bar.thin`), so picking a value
@@ -123,22 +103,13 @@
   // markup), so it -- not the box div, which has no tabstop -- is where
   // keyboard focus goes back to on close.
   let hintEl: HTMLInputElement | undefined = $state()
-  // Same "outside click closes it" shape as fboxEl/barEl above, one
-  // level down: a click inside the open columns panel picks a checkbox
-  // rather than dismissing it.
-  let columnsMenuEl: HTMLDivElement | undefined = $state()
-  let columnsTriggerEl: HTMLButtonElement | undefined = $state()
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
-    // Closes its own popover first, same as any nested disclosure --
-    // Escape while choosing columns closes the column panel, not the
-    // whole filter strip underneath it.
-    if (columnsOpen) {
-      columnsOpen = false
-      columnsTriggerEl?.focus()
-      return
-    }
+    // #1246: one Escape closes whatever the box has opened -- the token
+    // menu and the strip together, rather than making an operator press
+    // it twice to get back to a plain box.
+    if (menuOpen) closeMenu({ suppress: true })
     if (drawerOpen) drawerOpen = false
     if (expanded) {
       expanded = false
@@ -167,10 +138,16 @@
   // the tree, so it still names the strip regardless of what that click
   // going on to unmount.
   function onWindowClick(e: MouseEvent) {
-    if (viewportState.isMobile || !expanded) return
     const path = e.composedPath()
-    if (columnsOpen && columnsMenuEl && !path.includes(columnsMenuEl)) columnsOpen = false
-    if ((fboxEl && path.includes(fboxEl)) || (barEl && path.includes(barEl))) return
+    if (viewportState.isMobile || (!expanded && !menuOpen)) return
+    const inBox = fboxEl && path.includes(fboxEl)
+    const inBar = barEl && path.includes(barEl)
+    // #1246: the token menu lives inside the box and hangs over the strip
+    // below it, so anything outside the box closes it -- reaching for the
+    // strip's named fields is not using the menu, and leaving it open over
+    // them would cover the field being reached for.
+    if (!inBox && menuOpen) closeMenu()
+    if (inBox || inBar) return
     expanded = false
   }
 
@@ -178,7 +155,15 @@
   // #697/#700): the same appState.filters, read as chips, always on
   // screen rather than only while a filter existed -- see the comment on
   // FILTERS_TRIGGER_ENABLED below for what that replaced.
-  const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
+  //
+  // Minus the rule chip since #1246: the rule search is the free text in
+  // this same box, so round 57 draws it once, as the text, never also as
+  // a token beside it -- `rule:iot ✕ | iot` said the same thing twice and
+  // offered a remover for something Backspace already edits. The drawer
+  // and the strip still show the Rule field itself.
+  const filterChips = $derived(
+    buildFilterChips(appState.filters, appState.devices).filter((c) => c.key !== 'rule'),
+  )
 
   // Removes one chip's own term(s), leaving the rest of the filter
   // untouched -- the mockup's own per-chip ⌫ ("drop this term"), not one
@@ -219,6 +204,174 @@
         appState.setFilter('rule', '')
         break
     }
+  }
+
+  // ---------------------------------------------------------------
+  // #1246 (round 57): the box's third face, the token bar.
+  //
+  // Face one is the named-field strip below, face two the chip summary
+  // above; this is the third -- a field menu on focus, then that field's
+  // own values, committing to the very same appState.filters both other
+  // faces read. Nothing below holds a filter of its own: pendingField
+  // and pendingValue are the half-made token between picking a field and
+  // choosing its value, and they are gone the moment it commits. Which
+  // list belongs to which field, and what a pick means, live in
+  // lib/tokenBar.ts.
+  let menuOpen = $state(false)
+  let pendingField = $state<TokenField | null>(null)
+  let pendingValue = $state('')
+  // Which item the keyboard is on; -1 is "the caret is still in the box"
+  // -- ArrowDown enters the list on the first item (round 57's scene 03).
+  let menuIndex = $state(-1)
+  // Escape closes the menu with the caret still in the box, so the focus
+  // handler must not re-open it under the operator's hands. Cleared by
+  // the next click in the box, or by focus arriving afresh.
+  let menuSuppressed = false
+
+  const tokenSources = $derived<TokenSources>({
+    devices: appState.devices,
+    chains: appState.chainOptions,
+    // Verdict 1 on round 57 ("it should grow a real list of what it has
+    // seen over time, and be persisted"): these two are #1226's
+    // persisted register, never a scrape of what happens to be on screen.
+    protos: seenValuesState.proto,
+    interfaces: seenValuesState.interfaces,
+    srcCountries: appState.srcCountryOptions,
+    dstCountries: appState.dstCountryOptions,
+  })
+
+  const menuItems = $derived(pendingField ? valueItems(pendingField, tokenSources) : fieldItems(tokenSources))
+  // The line under a value menu for the fields that also take typing
+  // (port, and either side's address); '' for the ones that only take a
+  // pick, which renders nothing.
+  const menuTypedHint = $derived(pendingField ? typedValueHint(pendingField) : '')
+
+  // The one input serves both jobs: the free-text rule search, and the
+  // value of whichever field is pending. Which one it is showing is
+  // pendingField, and nothing else -- so plain typing with no pending
+  // field always lands in free text, and is never swallowed by the menu.
+  const boxValue = $derived(pendingField ? pendingValue : appState.filters.rule)
+
+  function openMenu() {
+    menuSuppressed = false
+    menuOpen = true
+    menuIndex = -1
+  }
+
+  function closeMenu({ suppress = false } = {}) {
+    menuOpen = false
+    pendingField = null
+    pendingValue = ''
+    menuIndex = -1
+    menuSuppressed = suppress
+  }
+
+  function onBoxFocus() {
+    if (menuOpen || menuSuppressed) return
+    openMenu()
+  }
+
+  // Focus leaving the box closes the menu, the same as a click away
+  // does (onWindowClick above): round 57 opens it on focus, so it goes
+  // with the focus. Without this, tabbing out -- or anything else that
+  // blurs the input with no click -- left the menu hanging over the
+  // first columns of the table underneath, covering rows nobody was
+  // filtering (found by live-token-copy, whose row hover it blocked).
+  // relatedTarget is where focus went: the menu's own items are
+  // buttons, so a pointer pick lands inside the box and is left alone.
+  function onBoxFocusOut(e: FocusEvent) {
+    if (!menuOpen) return
+    const to = e.relatedTarget
+    if (to instanceof Node && fboxEl?.contains(to)) return
+    closeMenu()
+  }
+
+  function pickField(field: TokenField) {
+    pendingField = field
+    pendingValue = ''
+    menuIndex = -1
+    menuOpen = true
+    hintEl?.focus()
+  }
+
+  // Writes the token through setFilter, one field at a time, exactly as
+  // the strip and EventRow's click-to-filter do -- the chip the box then
+  // draws is buildFilterChips' own, not a second rendering of the same
+  // term. Closes suppressed: the click that committed took focus off the
+  // input, and putting it back must not re-open the field menu.
+  function commitToken(field: TokenField, value: string) {
+    for (const [key, v] of Object.entries(tokenPatch(field, value)) as [keyof Filters, never][]) {
+      appState.setFilter(key, v)
+    }
+    closeMenu({ suppress: true })
+    hintEl?.focus()
+  }
+
+  function chooseMenuItem(item: TokenMenuItem) {
+    if (pendingField) commitToken(pendingField, item.value)
+    else pickField(item.value as TokenField)
+  }
+
+  // Enter on a field that takes typing. A side's typed text is its
+  // address sub-field, so it joins the same composite token any scope or
+  // country already picked is in.
+  function commitTypedValue() {
+    const text = pendingValue.trim()
+    if (!pendingField || !text) return
+    commitToken(pendingField, pendingField === 'port' ? text : `query:${text}`)
+  }
+
+  function removeLastToken() {
+    const key = lastTokenKey(filterChips)
+    const chip = filterChips.find((c) => c.key === key)
+    if (chip) clearChip(chip)
+  }
+
+  function onBoxKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!menuOpen) openMenu()
+      menuIndex = Math.min(menuIndex + 1, menuItems.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      // Back past the first item is back to the box itself, not a wrap
+      // to the end -- the caret has somewhere to be here.
+      menuIndex = Math.max(menuIndex - 1, -1)
+      return
+    }
+    if (e.key === 'Backspace') {
+      // Verdict 3 on round 57 ("character you just typed"): one key, one
+      // meaning, in whichever box holds the caret.
+      const action = backspaceAction(pendingField, boxValue)
+      if (action === 'character') return
+      e.preventDefault()
+      if (action === 'cancel-pending') {
+        pendingField = null
+        menuIndex = -1
+        menuOpen = true
+        return
+      }
+      removeLastToken()
+      return
+    }
+    if (e.key !== 'Enter') return
+    if (menuOpen && menuIndex >= 0 && menuIndex < menuItems.length) {
+      e.preventDefault()
+      chooseMenuItem(menuItems[menuIndex])
+      return
+    }
+    if (pendingField && acceptsTypedValue(pendingField) && pendingValue.trim() !== '') {
+      e.preventDefault()
+      commitTypedValue()
+      return
+    }
+    // The button this replaces opened natively on Enter or Space; Space
+    // must stay a literal space while typing a term, but Enter carries no
+    // other meaning here (there is no form to submit), so it keeps the
+    // keyboard's way into the strip.
+    expanded = true
   }
 
   // The stream's SPAN control (#703). It sets the same display window
@@ -290,12 +443,18 @@
       class:empty={filterChips.length === 0}
       class:open={expanded}
       bind:this={fboxEl}
+      onfocusout={onBoxFocusOut}
       onclick={() => {
         expanded = true
+        // #1246: a click in the box is also the pointer's way into the
+        // field menu -- focus alone opens it, but a click arriving at an
+        // already-focused box fires no focus event of its own.
+        menuSuppressed = false
+        if (!menuOpen) openMenu()
         hintEl?.focus()
       }}
     >
-      {#if filterChips.length > 0}
+      {#if filterChips.length > 0 || pendingField}
         <span class="fchips">
           {#each filterChips as chip (chip.key)}
             <span class="chip"
@@ -316,6 +475,13 @@
               </button></span
             >
           {/each}
+          <!-- #1246: the half-made token -- a field picked, its value not
+               chosen yet. Quiet and caret-tipped rather than a fourth
+               committed chip, so the box never claims a filter that is
+               not yet active (round 57, scene 03). -->
+          {#if pendingField}
+            <span class="chip pending">{pendingField}:<span class="tm-caret" aria-hidden="true"></span></span>
+          {/if}
         </span>
       {/if}
       <!-- #734: the always-visible free-text term. It reads/writes the
@@ -345,14 +511,18 @@
         aria-expanded={expanded}
         aria-controls="filterbar-strip"
         bind:this={hintEl}
-        bind:value={appState.filters.rule}
-        onkeydown={(e) => {
-          // The button this replaces opened natively on Enter or Space;
-          // Space must stay a literal space while typing a term, but
-          // Enter carries no other meaning here (there is no form to
-          // submit), so it keeps the keyboard's way into the strip.
-          if (e.key === 'Enter') expanded = true
+        value={boxValue}
+        oninput={(e) => {
+          // #1246: no longer a plain bind, because this one input is both
+          // the free-text rule search and the value box of a pending
+          // token. Which it is writing to is pendingField and nothing
+          // else -- see boxValue above.
+          const next = e.currentTarget.value
+          if (pendingField) pendingValue = next
+          else appState.filters.rule = next
         }}
+        onfocus={onBoxFocus}
+        onkeydown={onBoxKeydown}
       />
       <!-- Round 37's `saved ▾`, at the box's own right end (its
            `margin-left: auto` puts it there). Inside the box, not
@@ -360,6 +530,45 @@
            contained so reaching for one does not also unfold the strip
            this box discloses -- see the component. -->
       <FilterPresetsMenu />
+
+      <!-- #1246 (round 57): the field menu, and then the picked field's
+           own value menu, in FilterPresetsMenu's floating dress (elevated
+           panel, hairline border, radius, the same shadow) rather than a
+           second kind of popup -- anchored to the box's left edge instead
+           of the trigger's right. Each item stops its own click: picking
+           a value is not "click inside the box", which would re-open the
+           menu over the token just committed. -->
+      {#if menuOpen}
+        <div
+          class="token-menu"
+          class:tm-values={pendingField !== null}
+          role="listbox"
+          aria-label={pendingField ? `Pick a value for ${pendingField}` : 'Choose a field to filter on'}
+        >
+          {#if pendingField}
+            <div class="tm-crumb">‹ {pendingField}</div>
+          {/if}
+          {#each menuItems as item, i (item.value)}
+            <button
+              type="button"
+              class="tm-item"
+              class:focused={i === menuIndex}
+              role="option"
+              aria-selected={i === menuIndex}
+              onclick={(e) => {
+                e.stopPropagation()
+                chooseMenuItem(item)
+              }}
+            >
+              <span class="tm-name">{item.label}</span>
+              {#if item.hint}<span class="tm-hint">{item.hint}</span>{/if}
+            </button>
+          {/each}
+          {#if menuTypedHint}
+            <p class="tm-typed">{menuTypedHint}</p>
+          {/if}
+        </div>
+      {/if}
     </div>
     <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
       {#each SPANS as span (span.key)}
@@ -426,7 +635,11 @@
          prose the mobile drawer still shows (#683, round 29: "no
          placeholder prose inside the fields") -- the fb-label above
          already names the field there, so the empty state is just the
-         hairline with nothing on it. -->
+         hairline with nothing on it. #1191 is the one ratified
+         exception: the two address queries show their "name, IP or
+         CIDR" hint on desktop as well as on phones, because that field
+         was read as a bare underline with nothing to say what it
+         takes. -->
     <div class="fb-field">
       <span class="fb-label">Device</span>
       <select bind:value={appState.filters.device} aria-label="Device">
@@ -462,10 +675,16 @@
       </select>
     </div>
 
+    <!-- #1226: a datalist combo, not a <select>. The list is what this
+         instance has actually seen (seenValues.svelte.ts); typing a
+         value that is not in it still works, which is what lets a filter
+         be set up before the traffic it is waiting for arrives. Same
+         idiom as the watchers station's scope boxes. -->
     <div class="fb-field">
       <span class="fb-label">Proto</span>
       <input
         type="text"
+        list="fb-seen-protos"
         placeholder={viewportState.isMobile ? 'Protocol (tcp, udp, icmp…)' : ''}
         bind:value={appState.filters.protocol}
         aria-label="Protocol"
@@ -481,26 +700,48 @@
          "source ⇄ destination (scope + country)" -- the free-text query
          stays too (#683: "do not delete working features"), just folded
          into the same compact group rather than dropped. -->
+    <!-- #1191: each of the three controls carries its own caption, in the
+         same .fb-label small-caps the strip already uses for SOURCE and
+         DESTINATION above them. They were three unlabelled controls in a
+         row -- the aria-labels said scope/name-IP-or-CIDR/country all
+         along, so this only makes visible what a screen reader was
+         already told. -->
     <div class="fb-field">
       <span class="fb-label">Source</span>
       <div class="addr-group">
-        <select bind:value={appState.filters.srcScope} aria-label="Source scope" title="Restrict by whether the source is on your LAN">
-          <option value="">{viewportState.isMobile ? 'Any source' : '—'}</option>
-          <option value="internal">Internal</option>
-          <option value="external">External</option>
-        </select>
-        <input
-          type="text"
-          placeholder={viewportState.isMobile ? 'Source — name, IP or CIDR' : ''}
-          bind:value={appState.filters.srcQuery}
-          aria-label="Source — name, IP or CIDR"
-        />
-        <select bind:value={appState.filters.srcCountry} aria-label="Source country">
-          <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
-          {#each appState.srcCountryOptions as opt (opt.value)}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
+        <div class="fb-field">
+          <span class="fb-label">Scope</span>
+          <select bind:value={appState.filters.srcScope} aria-label="Source scope" title="Restrict by whether the source is on your LAN">
+            <option value="">{viewportState.isMobile ? 'Any source' : '—'}</option>
+            <option value="internal">Internal</option>
+            <option value="external">External</option>
+          </select>
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Name, IP or CIDR</span>
+          <input
+            type="text"
+            placeholder={viewportState.isMobile ? 'Source — name, IP or CIDR' : 'name, IP or CIDR'}
+            bind:value={appState.filters.srcQuery}
+            aria-label="Source — name, IP or CIDR"
+          />
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Country</span>
+          <select bind:value={appState.filters.srcCountry} aria-label="Source country">
+            <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
+            <!-- #1198: with no GeoIP database, every event's country is
+                 unresolved and this list would otherwise just stay
+                 empty -- indistinguishable from "no public traffic
+                 yet". disabled: it exists to explain, not to be picked. -->
+            {#if geoipState.enabled === false}
+              <option value="__no_geoip__" disabled>no GeoIP database — see docs ▸</option>
+            {/if}
+            {#each appState.srcCountryOptions as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
     </div>
 
@@ -516,23 +757,36 @@
     <div class="fb-field">
       <span class="fb-label">Destination</span>
       <div class="addr-group">
-        <select bind:value={appState.filters.dstScope} aria-label="Destination scope" title="Restrict by whether the destination is on your LAN">
-          <option value="">{viewportState.isMobile ? 'Any destination' : '—'}</option>
-          <option value="internal">Internal</option>
-          <option value="external">External</option>
-        </select>
-        <input
-          type="text"
-          placeholder={viewportState.isMobile ? 'Destination — name, IP or CIDR' : ''}
-          bind:value={appState.filters.dstQuery}
-          aria-label="Destination — name, IP or CIDR"
-        />
-        <select bind:value={appState.filters.dstCountry} aria-label="Destination country">
-          <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
-          {#each appState.dstCountryOptions as opt (opt.value)}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
+        <div class="fb-field">
+          <span class="fb-label">Scope</span>
+          <select bind:value={appState.filters.dstScope} aria-label="Destination scope" title="Restrict by whether the destination is on your LAN">
+            <option value="">{viewportState.isMobile ? 'Any destination' : '—'}</option>
+            <option value="internal">Internal</option>
+            <option value="external">External</option>
+          </select>
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Name, IP or CIDR</span>
+          <input
+            type="text"
+            placeholder={viewportState.isMobile ? 'Destination — name, IP or CIDR' : 'name, IP or CIDR'}
+            bind:value={appState.filters.dstQuery}
+            aria-label="Destination — name, IP or CIDR"
+          />
+        </div>
+        <div class="fb-field">
+          <span class="fb-label">Country</span>
+          <select bind:value={appState.filters.dstCountry} aria-label="Destination country">
+            <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
+            <!-- #1198: see the matching comment on the source select above. -->
+            {#if geoipState.enabled === false}
+              <option value="__no_geoip__" disabled>no GeoIP database — see docs ▸</option>
+            {/if}
+            {#each appState.dstCountryOptions as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
     </div>
 
@@ -550,10 +804,14 @@
       />
     </div>
 
+    <!-- One list for both directions, because there is one filter: it
+         matches an event whose in *or* out interface is the value
+         picked. Typing an unseen name works here too. -->
     <div class="fb-field">
       <span class="fb-label">Interface</span>
       <input
         type="text"
+        list="fb-seen-interfaces"
         placeholder={viewportState.isMobile ? 'Interface' : ''}
         bind:value={appState.filters.interface}
         aria-label="Interface"
@@ -587,82 +845,17 @@
       </div>
     </div>
 
-    <!-- #729: the stream's column chooser. Lives here, with the rest of
-         the filter fold-out's controls -- not a new bar, not a button
-         beside the search box. A reader's own preference, not a fix for
-         the table's width: the owner likes the sideways scroll and it
-         stays (see this issue's last comment), so the shipped default
-         is every column on, and this only ever narrows from there. Time
-         and Rule are pinned -- no checkbox for either, since neither is
-         ever offered as a toggle. -->
-    {#snippet columnCheckbox(col: ColumnChoice)}
-      <!-- aria-label carries the disambiguated name ("Source address
-           column", not "Address column") on the input directly, which
-           wins over the wrapping <label>'s own text for the accessible
-           name -- so the visible word stays bare while a screen reader
-           still hears which side it belongs to. -->
-      <label class="col-toggle">
-        <input
-          type="checkbox"
-          checked={columnState.isColumnVisible(col.key)}
-          onchange={() => columnState.toggleColumn(col.key)}
-          aria-label={col.ariaLabel}
-        />
-        {col.text}
-      </label>
-    {/snippet}
-
-    {#snippet columnCheckboxes()}
-      {#each PLAIN_COLUMNS as col (col.key)}
-        {@render columnCheckbox(col)}
-      {/each}
-      <span class="col-group-heading">source</span>
-      {#each SOURCE_COLUMNS as col (col.key)}
-        {@render columnCheckbox(col)}
-      {/each}
-      <span class="col-group-heading">destination</span>
-      {#each DEST_COLUMNS as col (col.key)}
-        {@render columnCheckbox(col)}
-      {/each}
-    {/snippet}
-
     {#if viewportState.isMobile}
       <!-- The mobile drawer is already a vertical stack with room to
-           spare (#85's 44px-row convention below), so it keeps the
-           always-open list -- the one-strip problem this fixes is a
-           desktop-thin-bar problem only. -->
+           spare (#85's 44px-row convention below), so it keeps its own
+           always-open list -- unchanged by #1197's ruling, which only
+           moved the desktop trigger (now Whisper.svelte's own "columns
+           ▸", see that file's comment). -->
       <div class="fb-field columns-field">
         <span class="fb-label">Columns</span>
         <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
-          {@render columnCheckboxes()}
+          <ColumnToggles touch />
         </div>
-      </div>
-    {:else}
-      <!-- Desktop: folded behind a toggle, "fold ▸"'s own idiom one
-           level deeper (see columnsOpen's doc comment). The panel floats
-           over the strip instead of joining its flow, so opening it
-           never pushes clear/fold (or anything else) onto another
-           line. -->
-      <div class="columns-menu" bind:this={columnsMenuEl}>
-        <button
-          type="button"
-          class="tf-columns"
-          class:on={columnsOpen}
-          bind:this={columnsTriggerEl}
-          onclick={(e) => {
-            e.stopPropagation()
-            columnsOpen = !columnsOpen
-          }}
-          aria-haspopup="true"
-          aria-expanded={columnsOpen}
-          aria-label="Choose which columns the stream shows"
-          title="Choose which columns the stream shows">columns ▸</button
-        >
-        {#if columnsOpen}
-          <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
-            {@render columnCheckboxes()}
-          </div>
-        {/if}
       </div>
     {/if}
 
@@ -695,7 +888,9 @@
         class="tf-fold"
         onclick={() => {
           expanded = false
-          columnsOpen = false
+          // #1246: fold means put it away -- the focus this hands back to
+          // the box must not pop the token menu open in the strip's place.
+          closeMenu({ suppress: true })
           hintEl?.focus()
         }}
         aria-label="Fold filters back into the box"
@@ -704,6 +899,22 @@
     {/if}
   </div>
 {/if}
+
+<!-- #1226: one datalist per field for the whole strip, at the top level
+     rather than beside each input, so they survive the strip folding and
+     are not rebuilt every time it opens. A <datalist> whose input is not
+     on screen is inert, and an empty one simply offers nothing -- which
+     is what a fresh instance, or a failed fetch, correctly shows. -->
+<datalist id="fb-seen-protos">
+  {#each seenValuesState.proto as p (p)}
+    <option value={p}></option>
+  {/each}
+</datalist>
+<datalist id="fb-seen-interfaces">
+  {#each seenValuesState.interfaces as iface (iface)}
+    <option value={iface}></option>
+  {/each}
+</datalist>
 
 <style>
   /* Deck.svelte mounts the stream's own card-body as `<Whisper />
@@ -748,6 +959,8 @@
     font: 12px var(--font-mono);
     color: var(--fg-muted);
     cursor: pointer;
+    /* #1246: the token menu hangs off the box's own left edge. */
+    position: relative;
   }
 
   .fbox:hover {
@@ -794,6 +1007,135 @@
 
   .chip-x:hover {
     color: var(--alarm);
+  }
+
+  /* #1246: the pending token and its caret -- the committed chip's own
+     markup, quieter, with no value and no ⌫ because there is nothing to
+     remove yet. */
+  .chip.pending {
+    color: var(--fg-muted);
+  }
+
+  .tm-caret {
+    display: inline-block;
+    width: 1px;
+    height: 12px;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: -2px;
+    animation: tm-blink 1s step-end infinite;
+  }
+
+  @keyframes tm-blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  /* #1246 (round 57): the field and value menus. FilterPresetsMenu's own
+     floating-panel dress -- same elevated background, hairline border,
+     radius, shadow and z-index -- so the box's two popups read as one
+     kind of thing; anchored left, where the box's own content starts,
+     and wide enough to carry a field name plus its one-line hint. */
+  .token-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    width: 360px;
+    max-width: 92vw;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 0;
+    z-index: 40;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    cursor: default;
+    animation: tm-in 0.16s ease-out;
+  }
+
+  /* A value is one short word; only the field menu carries hints wide
+     enough to need the full panel. */
+  .token-menu.tm-values {
+    width: 220px;
+  }
+
+  @keyframes tm-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .token-menu {
+      animation: none;
+    }
+
+    .tm-caret {
+      animation: none;
+    }
+  }
+
+  /* Which field's values these are -- the way back, said once at the top
+     rather than repeated on every row. */
+  .tm-crumb {
+    padding: 4px 14px 6px;
+    font: 500 9px var(--font-mono);
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+  }
+
+  .tm-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    padding: 7px 14px;
+    cursor: pointer;
+  }
+
+  .tm-item:hover,
+  .tm-item.focused {
+    background: var(--bg-hover);
+  }
+
+  .tm-name {
+    font: 12px var(--font-mono);
+    color: var(--fg-muted);
+  }
+
+  .tm-item:hover .tm-name,
+  .tm-item.focused .tm-name {
+    color: var(--fg);
+  }
+
+  .tm-hint {
+    font: 10.5px var(--font-sans);
+    color: var(--fg-dim);
+  }
+
+  .tm-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  /* Where the keyboard is, distinct from where the pointer is hovering. */
+  .tm-item.focused {
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  /* The fields that take typing as well as a pick (port, either side's
+     address) say so at the foot of their own menu. */
+  .tm-typed {
+    margin: 0;
+    padding: 6px 14px 2px;
+    font: 10.5px var(--font-sans);
+    color: var(--fg-dim);
   }
 
   /* The empty box still says what it is (#697) -- round 29's box only
@@ -942,6 +1284,17 @@
     bottom: 0;
     z-index: 31;
     flex-direction: column;
+    /* Round 57's "noticed, unverified", checked against this file's own
+       rules and confirmed (#1246): the drawer's content is far taller
+       than 80vh on any phone -- every input and select in here is
+       min-height 44px and full width (issue #85's touch target), which is
+       ~44px a row for nine fields, three rows each for the two address
+       groups, and a wrapped column list of thirteen more. With `.bar`'s
+       flex-wrap: wrap left on, a column that tall does not scroll: it
+       opens a second column beside the first and overflow-y has nothing
+       to do. nowrap is what makes max-height + overflow-y below mean
+       what they say. */
+    flex-wrap: nowrap;
     max-height: 80vh;
     overflow-y: auto;
     border-radius: 16px 16px 0 0;
@@ -966,19 +1319,6 @@
     align-items: flex-end;
     animation: unfurl 0.35s ease-out;
     transform-origin: right center;
-    /* #710: neither .card nor .card-body (the shared ancestor of this
-       bar and LiveTable's .table-wrap) is itself a stacking context, so
-       .col-panel's z-index and .table-wrap's sticky header cells' own
-       (.header-cell, z-index 2-4) climb straight past both and are
-       compared as if they were siblings at the document root -- caught
-       live as the header painting straight through the open column
-       panel despite .col-panel's z-index of 40 nominally outranking it.
-       .bar was an unpositioned sibling of .table-wrap and so took no
-       part in that comparison at all; position + a z-index clear of
-       LiveTable's own (2-4) puts it in the race and gives it the
-       header's own weapon back. */
-    position: relative;
-    z-index: 10;
   }
 
   @keyframes unfurl {
@@ -1007,6 +1347,21 @@
     letter-spacing: 0.14em;
     color: var(--fg-dim);
     text-transform: uppercase;
+  }
+
+  /* #1191: the strip used the left 1050px of a 1920px bar and left
+     `fold ▸` marooned alone at the far edge, because every field sat at
+     its natural width and the whole of the slack went to .tf-fold's own
+     margin-left:auto. The fields share that slack out between
+     themselves instead -- the controls inside keep the fixed widths the
+     `.thin input`/`.thin select` rules give them, so this widens the
+     gaps between groups and never the inputs. With no free space left
+     to claim, fold's auto margin resolves to nothing and it sits beside
+     `columns ▸`, which is where round 30 draws the pair. Direct
+     children only: the captioned sub-fields inside an .addr-group must
+     go on hugging their own control. */
+  .bar.thin > .fb-field {
+    flex-grow: 1;
   }
 
   /* Visible on the thin bar only -- the mobile drawer already names each
@@ -1335,10 +1690,14 @@
     margin-left: 0;
   }
 
-  /* #729: the column chooser, mobile drawer only -- the desktop thin bar
-     uses .columns-menu/.tf-columns below instead. Same fb-field/fb-label
+  /* #729: the column chooser, mobile drawer only now -- the desktop
+     trigger and its popover moved to Whisper.svelte's own hand under
+     #1197's ruling (see that file's comment). Same fb-field/fb-label
      shape every other control in the drawer already uses -- a row of
-     checkboxes, not a new kind of control. */
+     checkboxes, not a new kind of control. The checkboxes themselves
+     (.col-toggle/.col-group-heading) are ColumnToggles.svelte's own
+     styles now, `touch` for the drawer's 44px rows (issue #85) --
+     only this container and its flex layout stay here. */
   .columns-field {
     flex-basis: 100%;
   }
@@ -1347,113 +1706,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px 14px;
-  }
-
-  /* #710 round-30 fidelity: the desktop toggle. Sits in the strip's
-     normal flow, same as any other .fb-field, so it rides ahead of
-     clear/fold's own margin-left:auto exactly where the always-open
-     checkbox row used to sit -- the fix is folding the checkboxes away,
-     not moving where they live. */
-  .columns-menu {
-    position: relative;
-    align-self: center;
-  }
-
-  .tf-columns {
-    background: none;
-    border: none;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    color: var(--fg-dim);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .tf-columns:hover,
-  .tf-columns.on {
-    color: var(--accent);
-  }
-
-  .tf-columns:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  /* Floats over the strip (the account menu's dress, same as
-     FilterPresetsMenu's .fpmenu) instead of joining its flex flow, so
-     opening it never pushes clear/fold or anything after it onto
-     another line -- the one-strip fix holds whether the panel is open
-     or closed. */
-  .col-panel {
-    position: absolute;
-    top: calc(100% + 6px);
-    /* Right-anchored, not left: the trigger sits near the strip's own
-       right end (clear/fold ride just after it), so a panel opening
-       rightward from there would run past the viewport edge -- caught
-       on a live instance opening exactly that way (#710). Opening
-       leftward keeps it over the strip that's already on screen. */
-    right: 0;
-    z-index: 40;
-    width: 320px;
-    max-width: 80vw;
-    padding: 10px 14px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-    cursor: default;
-  }
-
-  .col-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font: 12px var(--font-mono);
-    color: var(--fg-muted);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .col-toggle:hover {
-    color: var(--fg);
-  }
-
-  .col-toggle input[type='checkbox'] {
-    cursor: pointer;
-  }
-
-  .col-toggle input[type='checkbox']:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  /* #710: the small heading naming which side "address"/"src port"/
-     "MAC" belongs to. flex-basis: 100% starts a new line the same way
-     the old, now-retired .columns-field did for the whole chooser --
-     here it is scoped to one heading inside the panel/drawer list
-     instead of the whole strip. */
-  .col-group-heading {
-    flex-basis: 100%;
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-    font: 500 9px var(--font-mono);
-    letter-spacing: 0.1em;
-    color: var(--fg-dim);
-  }
-
-  /* The drawer's own 44px touch-target convention (issue #85) -- applies
-     to the whole label, not just the checkbox glyph, so the tap target is
-     the full "checkbox + column name" row rather than the ~16px box. */
-  .drawer .col-toggle {
-    min-height: 44px;
-    font: 14px var(--font-sans);
-    color: var(--fg);
-  }
-
-  .drawer .col-group-heading {
-    font-size: 11px;
-    padding-top: 10px;
   }
 
   .duration {

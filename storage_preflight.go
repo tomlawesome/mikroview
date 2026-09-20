@@ -134,7 +134,7 @@ func unwrapPathErr(err error) error {
 // reconciles the two.
 //
 // The ids are read at runtime rather than hardcoded to the image's
-// 65532, because --user, a rebuilt image or rootless uid remapping all
+// 1000, because --user, a rebuilt image or rootless uid remapping all
 // change them, and advice that is confidently wrong about which id to
 // chown to is worse than none.
 func storeFailureAdvice(e *storeUnusable) []string {
@@ -148,7 +148,7 @@ func storeFailureAdvice(e *storeUnusable) []string {
 
 	lines = append(lines,
 		"",
-		fmt.Sprintf("Fix it by giving mikroview ownership: sudo chown -R %d:%d %s", uid, gid, e.Dir),
+		fmt.Sprintf("Fix it by giving MikroView ownership: sudo chown -R %d:%d %s", uid, gid, e.Dir),
 		"In a container, run that against the host directory bind-mounted there, not",
 		"the path inside the container. The shipped deploy/docker-compose.yml avoids",
 		"this entirely by mounting the mikroview-data volume at "+config.DefaultDataDir+".",
@@ -171,10 +171,10 @@ func storeFailureAdvice(e *storeUnusable) []string {
 // this would eventually be wrong in one of them.
 //
 // The ids are read at runtime rather than hardcoded to the image's
-// 65532, because --user, a rebuilt image or rootless uid remapping all
+// 1000, because --user, a rebuilt image or rootless uid remapping all
 // change them.
 func ownershipFacts(dir string) []string {
-	lines := []string{fmt.Sprintf("Mikroview is running as uid %d, gid %d.", os.Getuid(), os.Getgid())}
+	lines := []string{fmt.Sprintf("MikroView is running as uid %d, gid %d.", os.Getuid(), os.Getgid())}
 	fi, err := os.Stat(dir)
 	if err != nil {
 		return append(lines, fmt.Sprintf("%s could not be read at all: %v", dir, unwrapPathErr(err)))

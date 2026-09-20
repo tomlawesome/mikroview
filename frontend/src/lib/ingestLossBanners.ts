@@ -28,7 +28,13 @@ export type IngestLossSeverity = 'critical' | 'warn' | 'caution' | 'info'
 
 const SEVERITY_ORDER: readonly IngestLossSeverity[] = ['critical', 'warn', 'caution', 'info']
 
-export type IngestLossBannerId = 'dropped' | 'rejectedConfigured' | 'rejectedUndeclared' | 'oversized' | 'wsDropped'
+export type IngestLossBannerId =
+  | 'dropped'
+  | 'rejectedConfigured'
+  | 'rejectedUndeclared'
+  | 'oversized'
+  | 'outrun'
+  | 'wsDropped'
 
 export interface IngestLossBanner {
   id: IngestLossBannerId
@@ -142,12 +148,26 @@ export function wsDroppedActive(episode: WsDroppedEpisode, now: number): boolean
   return episode.lastAt !== null && now - episode.lastAt <= WS_DROPPED_WINDOW_MS
 }
 
+// The same episode rule under a name that does not say wsDropped. The
+// engine's `outrun` total (#1109) is a server-side lifetime counter that
+// arrives with no `active` of its own -- the stats shape is three plain
+// numbers -- so it needs exactly this treatment, and writing the rule out
+// a second time would be the duplication #1015 removed.
+export type LossEpisode = WsDroppedEpisode
+export const EMPTY_LOSS_EPISODE = EMPTY_WS_DROPPED_EPISODE
+export const noteLossEpisode = noteWsDropped
+export const lossEpisodeActive = wsDroppedActive
+
 // The inputs selectIngestLossRows needs: the server's own freshness
 // block (absent when stats haven't loaded yet, or a test fixture
 // predates it -- every row reads as inactive rather than throwing) plus
 // the client-computed wsDropped activity above.
 export interface IngestLossRowInputs {
   loss?: SyslogIngestLoss
+  // #1109: how many events left the buffer before checking reached them,
+  // in the current episode, and whether that is still happening. Computed
+  // client-side from the lifetime total -- see LossEpisode above.
+  outrun: { recent: number; active: boolean }
   wsDropped: { recent: number; active: boolean }
 }
 
@@ -195,14 +215,47 @@ export function selectIngestLossRows(input: IngestLossRowInputs): IngestLossBann
   }
 
   if (loss?.oversized.active) {
-    const from = loss.oversized.host ? ` received from ${loss.oversized.host}` : ' received'
-    const verb = loss.oversized.recent === 1 ? 'was' : 'were'
+    // #1203: the count is runs (over-long stretches with no delimiter)
+    // when the server has one, never a read count called "messages" --
+    // a single stalled sender can discard tens of thousands of reads
+    // that are still just a handful of runs. Falls back to the honest
+    // read-level unit only against a server that predates Runs.
+    const usingRuns = loss.oversized.runs > 0
+    const count = usingRuns ? loss.oversized.runs : loss.oversized.recent
+    const unit = usingRuns ? noun(count, 'over-long run') : noun(count, 'discarded read')
+    const verb = count === 1 ? 'was' : 'were'
+    const host = loss.oversized.host
+    const from = host ? ` from ${host}` : ''
+    // Only ever call a sender foreign when it isn't a declared device
+    // (#1203) -- a declared router gets named as one, with its likely
+    // fix, instead of being accused of being an intruder.
+    const cause = !host
+      ? ''
+      : loss.oversized.declared
+        ? ' — likely a declared router missing remote-log-format=syslog'
+        : ' — no declared device at that address'
     rows.push({
       id: 'oversized',
       severity: 'caution',
-      label: 'Non-RouterOS sender',
+      label: 'Oversized messages',
       details: 'engineroom/ingest',
-      detail: `${loss.oversized.recent.toLocaleString()} oversized ${noun(loss.oversized.recent, 'message')}${from} ${verb} truncated`,
+      detail: `${count.toLocaleString()} ${unit} ${verb} truncated${from}${cause}`,
+    })
+  }
+
+  if (input.outrun.active && input.outrun.recent > 0) {
+    // The only detection gap left once checking reads from the event
+    // buffer rather than a queue of its own (#1109): events that left the
+    // buffer before it got to them. Not critical, because nothing was
+    // lost from the log itself -- they were stored, broadcast and are
+    // still readable; what they never got was a check. Falling behind is
+    // deliberately not a row at all: late is not lost.
+    rows.push({
+      id: 'outrun',
+      severity: 'warn',
+      details: 'engineroom/ingest',
+      label: 'More events arrived than the memory window holds before checking caught up',
+      detail: `${input.outrun.recent.toLocaleString()} never checked. Raise the memory setting or find the flood's source.`,
     })
   }
 

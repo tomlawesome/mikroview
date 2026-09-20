@@ -33,14 +33,14 @@ Usage (against an already-running instance):
   export MV_URL=https://192.0.2.30:19893
   export MV_USER=... MV_PASS=...              # never echoed by this script
   export MV_SYSLOG_HOST=127.0.0.1             # host part of the syslog TLS target
-  export MV_SYSLOG_PORT=16956
+  export MV_SYSLOG_TLS_PORT=16957             # what live-env.sh up actually exports
   scripts/seed-demo.py push        # rule/NAT/address tables (needs ingest tokens)
   scripts/seed-demo.py entities    # named hosts/rules/ports
   scripts/seed-demo.py accounts    # a user-tier and a viewer-tier account
   scripts/seed-demo.py watchlist   # 6 entries: 4 healthy, 1 held, 1 broken ring
   scripts/seed-demo.py all         # the four above, in order
   scripts/seed-demo.py feed        # runs forever: the syslog traffic generator
-  scripts/seed-demo.py mutate      # a cleared flag+note, a rename, a definition edit
+  scripts/seed-demo.py mutate      # a checked-verdict flag, a rename, a definition edit
                                     # (run this once the feed has produced real flags)
 
 `feed` is the long-running piece -- start it (nohup, in the background)
@@ -1240,21 +1240,61 @@ def lines_for_round40(router, elapsed, tick):
     return out
 
 
+class FeedConnectionRefused(RuntimeError):
+    """Raised by cmd_feed when every router with traffic to send has had
+    its connection refused for FEED_REFUSED_TICK_LIMIT consecutive ticks.
+    #1272: a feeder pointed at a syslog port nobody is listening on used
+    to print "connection refused" to stderr forever and keep running --
+    indistinguishable, from the outside, from one that was working. A
+    release capture taken against it produced empty screenshots that
+    looked like real ones. This is the loud failure that replaces that
+    silence."""
+
+
+FEED_REFUSED_TICK_LIMIT = 3
+
+
+def _tick_all_refused(router_results):
+    """router_results: one bool per router that had traffic to send this
+    tick, True if that send raised ConnectionRefusedError. True only when
+    there was at least one attempt and every single one was refused --
+    an empty tick (nothing due to send) says nothing about the port."""
+    results = list(router_results)
+    return bool(results) and all(results)
+
+
 def cmd_feed(args):
     print(f"seed-demo feed: {len(HOSTS)} stable-identity hosts across {len(ROUTERS)} routers "
           f"-> {args.syslog_host}:{args.syslog_port}", file=sys.stderr)
     start = time.time()
     tick = 0
+    consecutive_refused_ticks = 0
     while True:
         elapsed = time.time() - start
+        refusals = []
         for router, cfg in ROUTERS.items():
             lines = lines_for_router(router, elapsed, tick)
             if not lines:
                 continue
             try:
                 send_tls(args.syslog_host, args.syslog_port, cfg["src"], lines)
-            except Exception as e:  # a demo feeder never dies
+                refusals.append(False)
+            except ConnectionRefusedError as e:
+                refusals.append(True)
+                print(f"{router}: connection refused ({e})", file=sys.stderr)
+            except Exception as e:  # a demo feeder never dies on anything else
+                refusals.append(False)
                 print(f"{router}: {e}", file=sys.stderr)
+        if _tick_all_refused(refusals):
+            consecutive_refused_ticks += 1
+        else:
+            consecutive_refused_ticks = 0
+        if consecutive_refused_ticks >= FEED_REFUSED_TICK_LIMIT:
+            raise FeedConnectionRefused(
+                f"every router's connection to {args.syslog_host}:{args.syslog_port} was "
+                f"refused for {consecutive_refused_ticks} ticks in a row -- nothing is "
+                "listening there. Check --syslog-port / MV_SYSLOG_TLS_PORT against what "
+                "`scripts/live-env.sh up` actually exported.")
         tick += 1
         if args.once:
             break
@@ -1308,15 +1348,35 @@ class API:
         return r
 
 
-def ingest_push(base_url, token, kind, records, page=1, pages=1):
+class _SourceBoundAdapter(requests.adapters.HTTPAdapter):
+    """An adapter whose connections leave from one local address, the
+    HTTP-side twin of send_tls's `source_address`: since #1281 a push is
+    accepted only from the address the device is enrolled at, so each
+    demo router's tables must arrive from its own loopback address, not
+    whichever one the OS picks."""
+
+    def __init__(self, src_ip, **kw):
+        self._src_ip = src_ip
+        super().__init__(**kw)
+
+    def init_poolmanager(self, *args, **kw):
+        kw["source_address"] = (self._src_ip, 0)
+        return super().init_poolmanager(*args, **kw)
+
+
+def ingest_push(base_url, token, kind, records, page=1, pages=1, src_ip=None):
     # A demo seeder, pointed at a local instance serving the self-signed
     # certificate it generated at startup. There is no certificate here
     # worth checking and nothing this script does is deployed.
+    s = requests.Session()
+    if src_ip:
+        s.mount("https://", _SourceBoundAdapter(src_ip))
+        s.mount("http://", _SourceBoundAdapter(src_ip))
     # nosemgrep: python.requests.security.disabled-cert-validation.disabled-cert-validation
-    r = requests.post(f"{base_url.rstrip('/')}/api/ingest/routeros",
-                       headers={"Authorization": f"Bearer {token}"},
-                       json={"kind": kind, "page": page, "pages": pages, "records": records},
-                       verify=False)
+    r = s.post(f"{base_url.rstrip('/')}/api/ingest/routeros",
+               headers={"Authorization": f"Bearer {token}"},
+               json={"kind": kind, "page": page, "pages": pages, "records": records},
+               verify=False)
     if r.status_code != 200:
         raise RuntimeError(f"ingest {kind}: {r.status_code} {r.text[:300]}")
     return r.json()
@@ -1327,22 +1387,23 @@ def cmd_push(args):
     for router in FILTER_RULES:
         tok = api.post("/api/tokens", json={"name": f"{router}-ingest-seed", "kind": "ingest",
                                              "device": router}).json()["value"]
+        src = ROUTERS[router]["src"]
         filt = [{k: v for k, v in r.items() if k != "fires"} for r in FILTER_RULES[router]]
-        ack = ingest_push(args.url, tok, "filter-rule", filt)
+        ack = ingest_push(args.url, tok, "filter-rule", filt, src_ip=src)
         print(f"{router}: pushed {ack['records']} filter rules")
-        ack = ingest_push(args.url, tok, "nat-rule", NAT_RULES[router])
+        ack = ingest_push(args.url, tok, "nat-rule", NAT_RULES[router], src_ip=src)
         print(f"{router}: pushed {ack['records']} NAT rules")
-        ack = ingest_push(args.url, tok, "ip-address", IP_ADDRESSES[router])
+        ack = ingest_push(args.url, tok, "ip-address", IP_ADDRESSES[router], src_ip=src)
         print(f"{router}: pushed {ack['records']} address table entries")
         # The tunnel tables, where the router has any (#870: rb5009 only).
         # There is no read-back endpoint for either kind yet -- the city's
         # bridges slice (#866) is what will grow one -- so a successful
         # ack is all this can prove today.
         if router in WIREGUARD_INTERFACES:
-            ack = ingest_push(args.url, tok, "wireguard-interface", WIREGUARD_INTERFACES[router])
+            ack = ingest_push(args.url, tok, "wireguard-interface", WIREGUARD_INTERFACES[router], src_ip=src)
             print(f"{router}: pushed {ack['records']} wireguard interfaces")
         if router in WIREGUARD_PEERS:
-            ack = ingest_push(args.url, tok, "wireguard-peer", WIREGUARD_PEERS[router])
+            ack = ingest_push(args.url, tok, "wireguard-peer", WIREGUARD_PEERS[router], src_ip=src)
             print(f"{router}: pushed {ack['records']} wireguard peers")
 
 
@@ -1443,13 +1504,15 @@ def cmd_watchlist(args):
 def cmd_mutate(args):
     api = API(args.url, args.user, args.password)
 
-    # 1) A cleared flag with a note.
+    # 1) A judged flag: "checked" -- looked suspicious, checked, fine
+    # this time (#640). The plain clear and the note-carrying clear are
+    # both retired; POST /api/flags/{id}/verdict takes only a verdict,
+    # no note field.
     flags = api.get("/api/flags").json()["flags"]
     target = next((f for f in flags if not f.get("cleared")), None)
     if target:
-        api.post(f"/api/flags/{target['id']}/clear",
-                  json={"note": "reviewed -- expected traffic for this host, clearing with context"})
-        print(f"cleared flag {target['id']} ({target['type']}) with a note")
+        api.post(f"/api/flags/{target['id']}/verdict", json={"verdict": "checked"})
+        print(f"gave flag {target['id']} ({target['type']}) a 'checked' verdict")
     else:
         print("no active flag found to clear yet -- run this again once `feed` has produced one",
               file=sys.stderr)
@@ -1480,13 +1543,23 @@ def cmd_all(args):
     cmd_watchlist(args)
 
 
+def _default_syslog_port():
+    """--syslog-port's default. #1272: `scripts/live-env.sh up` exports
+    MV_SYSLOG_TLS_PORT -- there is no plaintext MV_SYSLOG_PORT any more,
+    deliberately (see its own comment) -- so that is the variable this
+    reads. The literal fallback only matters when neither this nor
+    --syslog-port is given, i.e. run standalone against a hand-built
+    listener."""
+    return int(os.environ.get("MV_SYSLOG_TLS_PORT", "16957"))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default=os.environ.get("MV_URL", "https://127.0.0.1:19893"))
     p.add_argument("--user", default=os.environ.get("MV_USER"))
     p.add_argument("--password", default=os.environ.get("MV_PASS"))
     p.add_argument("--syslog-host", default=os.environ.get("MV_SYSLOG_HOST", "127.0.0.1"))
-    p.add_argument("--syslog-port", type=int, default=int(os.environ.get("MV_SYSLOG_PORT", "16956")))
+    p.add_argument("--syslog-port", type=int, default=_default_syslog_port())
     p.add_argument("--once", action="store_true", help="feed: send one tick per router and exit")
     sub = p.add_subparsers(dest="cmd", required=True)
     for name, fn in [("push", cmd_push), ("entities", cmd_entities), ("accounts", cmd_accounts),
@@ -1497,7 +1570,11 @@ def main():
     args = p.parse_args()
     if args.cmd != "feed" and (not args.user or not args.password):
         p.error("MV_USER/MV_PASS (or --user/--password) are required for this command")
-    args.func(args)
+    try:
+        args.func(args)
+    except FeedConnectionRefused as e:
+        print(f"seed-demo feed: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

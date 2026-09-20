@@ -49,11 +49,20 @@ await goTo(page, 'Settings')
 
 // --- The page is the groups, with keys and people mounted in place ------
 
-// #394 (round 44) added the router-backups group straight after disk --
-// memory, disk, router backups is the order EngineRoom.svelte's own
-// comment states, and this list is a copy of the DOM order, not an
-// independent decision, so it has to keep up with what the page mounts.
-const GROUP_ORDER = ['ingest', 'keys', 'detection', 'memory', 'disk', 'router backups', 'account', 'people']
+// #394 (round 44) added the router-backups group straight after disk,
+// and #1225 the drop list straight after that -- memory, disk, router
+// backups, drop list is the order EngineRoom.svelte's own comment
+// states, and this list is a copy of the DOM order, not an independent
+// decision, so it has to keep up with what the page mounts.
+const GROUP_ORDER = ['ingest', 'new settings', 'keys', 'detection', 'memory', 'disk', 'router backups', 'drop list', 'account', 'people']
+// Router backups and the drop list mount only once their own GET has
+// answered (EngineRoom.svelte's `{#if routerBackups}` and its twin), so
+// straight after arrival the page can honestly hold eight groups for a
+// beat. Reading the order then compared a half-loaded page: WebKit on a
+// loaded shard lost that race once (2026-09-20) where Chromium never had.
+await page
+  .waitForFunction((want) => document.querySelectorAll('.stsection h3').length >= want, GROUP_ORDER.length, { timeout: 10000 })
+  .catch(() => {})
 const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(groupNames) === JSON.stringify(GROUP_ORDER),
@@ -71,11 +80,21 @@ check(
 // The shelf holds the whole deck, whatever order an earlier scenario
 // left it in, and exactly one card wears the sign-in mark.
 const shelfNames = await page.$$eval('.stshelf .stcard .nm', (els) => els.map((e) => e.textContent.trim()))
-// Seven, not five: #647 (#634 round 23) put Entities and Settings on the
-// deck as its last two cards, and #653 widened both to the user tier
-// (deckCards.ts:34-52 -- `canEdit` carries them, so an admin sees seven).
-// This scenario drives the shelf as an admin, so seven is the whole deck.
-const DECK_CARDS = ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']
+// Eight, not five: #647 (#634 round 23) put Entities and Settings on the
+// deck as its last two cards, #653 widened both to the user tier
+// (deckCards.ts's `canEdit` carries them), and #1134 added Log every
+// rule behind the same gate. This scenario drives the shelf as an
+// admin, so eight is the whole deck.
+const DECK_CARDS = [
+  'The fall',
+  'Topography',
+  'Metrics',
+  'Stream',
+  'The docket',
+  'Entities',
+  'Settings',
+  'Log every rule',
+]
 check(
   shelfNames.length === DECK_CARDS.length && DECK_CARDS.every((n) => shelfNames.includes(n)),
   `the shelf holds all ${DECK_CARDS.length} deck cards -- got ${JSON.stringify(shelfNames)}`,

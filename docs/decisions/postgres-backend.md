@@ -4,9 +4,9 @@ Date: 2026-08-07. Resolves the "Open questions for the implementation
 pass" section of issue #131 before any code was written.
 
 Recap of the motivation, because it constrains every answer below: the
-point is **separation between the mikroview host and its persisted
+point is **separation between the MikroView host and its persisted
 state**, so that compromising the host doesn't hand over the accounts
-file. It is not query power, not reporting, not scale. mikroview's
+file. It is not query power, not reporting, not scale. MikroView's
 persisted stores are small — hundreds of records, not millions.
 
 ## 1. Schema: one blob table, not six relational ones
@@ -38,7 +38,7 @@ and a JSON→Postgres migration is byte-identical rather than
 merely-equivalent. An operator can still read it in `psql`, which was
 the only real argument for `jsonb`.
 
-**What this gives up**, stated plainly: no SQL querying of mikroview
+**What this gives up**, stated plainly: no SQL querying of MikroView
 state, and every write rewrites a whole document. Both are acceptable at
 these data sizes; neither is on the path of the motivation above.
 
@@ -110,7 +110,7 @@ precisely so this arrival forces the question. See §7.
 JSON → Postgres, automatically, on the first boot with Postgres
 configured. No reverse migration.
 
-The JSON files are **not** deleted, and mikroview says so in the log.
+The JSON files are **not** deleted, and MikroView says so in the log.
 Reverting is therefore "remove the Postgres config and restart", which
 comes back up on the last file state — stale, but present and readable.
 Deleting the files would make the decision irreversible on the strength
@@ -142,7 +142,7 @@ additional service in the compose file, following this project's
 existing comprehensive, commented-out-if-optional convention"). That is
 now explicitly rejected.
 
-A compose file that brings up Postgres next to mikroview puts the
+A compose file that brings up Postgres next to MikroView puts the
 database on the same host, and a same-host database delivers **none** of
 the separation this feature exists for. The connection credential sits
 in the same compose file, on the same disk, inside the same blast

@@ -64,7 +64,7 @@ func (n *PushoverNotifier) Send(batch []flags.Flag) error {
 	form := url.Values{
 		"token":   {n.cfg.Token},
 		"user":    {n.cfg.User},
-		"title":   {fmt.Sprintf("mikroview: %d new flag%s", len(batch), plural(len(batch)))},
+		"title":   {fmt.Sprintf("MikroView: %d new flag%s", len(batch), plural(len(batch)))},
 		"message": {n.message(batch)},
 	}
 

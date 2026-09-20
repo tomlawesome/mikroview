@@ -33,7 +33,7 @@ import (
 // Why this is a mikroview command rather than a documented `cp -a`:
 //
 //   - Ownership. The destination has to end up owned by the uid
-//     mikroview runs as (65532 in the shipped image), and that is the
+//     mikroview runs as (1000 in the shipped image), and that is the
 //     step operators get wrong -- a root-owned copy looks fine until the
 //     next start refuses with #536's preflight. Copying from inside the
 //     mikroview container means every file is created *by* that uid, so
@@ -62,8 +62,8 @@ import (
 // It is a fixed path rather than the operator's choice because Docker
 // seeds a fresh named volume from whatever the image has at the mount
 // point, ownership included: a volume mounted at a path the image never
-// created arrives owned by root, and mikroview at uid 65532 cannot write
-// to it. The Dockerfile creates this one owned by 65532 so that a brand
+// created arrives owned by root, and mikroview at uid 1000 cannot write
+// to it. The Dockerfile creates this one owned by 1000 so that a brand
 // new volume is writable the moment it appears, which is what makes the
 // bind-mount-to-volume direction work at all.
 //
@@ -157,15 +157,15 @@ var excludedFromMigration = map[string]string{
 		"have both, and it would spread the secret rather than move it. The history itself is carried " +
 		"(see migratedStores' event_history) and stays readable, because the key does not move.",
 	"TLS.CertFile": "an operator-supplied certificate, mounted read-only from wherever they keep it " +
-		"(deploy/docker-compose.yml mounts such files under /etc/mikroview). mikroview never writes it, " +
-		"so it is not part of the data directory and does not move with it. The TLS store mikroview " +
+		"(deploy/docker-compose.yml mounts such files under /etc/mikroview). MikroView never writes it, " +
+		"so it is not part of the data directory and does not move with it. The TLS store MikroView " +
 		"does generate -- tls.storePath -- is carried.",
 	"TLS.KeyFile": "the private key paired with TLS.CertFile, and the same reasoning: supplied and " +
 		"mounted by the operator, not written by mikroview.",
 	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not state the operator owns: " +
 		"the feed re-fetches it within a day of the move and reports \"no vendor data yet\" until it " +
 		"does, so nothing an operator believes they moved is lost by leaving four megabytes of " +
-		"somebody else's registry behind. It is also data mikroview has no permission to redistribute " +
+		"somebody else's registry behind. It is also data MikroView has no permission to redistribute " +
 		"(see internal/oui.SourceURL), which is a second reason not to copy it around.",
 	"Postgres.DSNFile": "a mounted secret carrying a database password. It is deliberately not in the " +
 		"data directory (storage.go's readDSNFile explains why it is a file at all), and copying a " +
@@ -351,7 +351,7 @@ func planMigration(cfg config.Config, dest string, force bool) (*migrationPlan, 
 // reason checkPathUsable gives: ownership, ACLs, read-only mounts and uid
 // remapping all change the answer and only an attempt accounts for all of
 // them. This is the check that catches the common failure -- a
-// root-owned host directory bind-mounted in, which mikroview at uid 65532
+// root-owned host directory bind-mounted in, which mikroview at uid 1000
 // cannot write a thing to.
 func prepareDest(dest string, force bool) error {
 	// #nosec G703 -- operator-supplied CLI path; see the note on firstNonFlag in backup_cli.go.
@@ -394,7 +394,7 @@ func scanTree(root string) (int, int64, error) {
 			return nil
 		}
 		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is a %s, not a regular file. mikroview will not guess how that "+
+			return fmt.Errorf("%s is a %s, not a regular file. MikroView will not guess how that "+
 				"should be reproduced on the destination -- remove it, or move this directory by hand",
 				path, describeMode(d.Type()))
 		}
@@ -640,7 +640,7 @@ func migrationFailureAdvice(e *storeUnusable) []string {
 	}, ownershipFacts(e.Dir)...)
 	return append(lines,
 		"",
-		fmt.Sprintf("Fix it by giving mikroview ownership: sudo chown -R %d:%d %s", uid, gid, e.Dir),
+		fmt.Sprintf("Fix it by giving MikroView ownership: sudo chown -R %d:%d %s", uid, gid, e.Dir),
 		"In a container, run that against the host directory bind-mounted there, not",
 		"the path inside the container. A named Docker volume needs none of this: Docker",
 		"seeds an empty volume from the image and it ends up owned by the container user.",

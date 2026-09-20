@@ -81,3 +81,89 @@ describe('MetricsRegister flag-type labels', () => {
     expect(container.querySelector('.f-name')).toBeNull()
   })
 })
+
+// #1155: the ×N annotations beside the ticks are 9px type on rows 8px
+// apart, so a run of busy minutes printed them on top of each other.
+describe('MetricsRegister episode-count annotations', () => {
+  // The annotation's own line height -- MetricsRegister's TICK_N_GAP,
+  // named here rather than imported so the test pins the claim (they do
+  // not overlap) instead of re-running the component's arithmetic.
+  const LINE_H = 11
+
+  it('spreads the ×N figures of a run of busy minutes so none overlaps its neighbour', () => {
+    const hour = buildHour(
+      [0, 1, 2, 3].map((m) => ({ time: minute(m), byAction: { accept: 400 } })),
+      [
+        { time: minute(0), byType: { activity_spike: 6 } },
+        { time: minute(1), byType: { activity_spike: 5 } },
+        { time: minute(2), byType: { activity_spike: 4 } },
+        { time: minute(3), byType: { activity_spike: 3 } },
+      ],
+    )
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
+    const labels = Array.from(container.querySelectorAll('.tick-n'))
+    // Every minute still prints its own figure: spreading them, not
+    // dropping the ones that would not fit.
+    expect(labels.map((l) => l.textContent)).toEqual(['×3', '×4', '×5', '×6'])
+    const ys = labels.map((l) => Number(l.getAttribute('y')))
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(LINE_H)
+    }
+  })
+
+  it('leaves a lone ×N on its own tick rather than nudging it', () => {
+    const hour = buildHour(
+      [0, 1].map((m) => ({ time: minute(m), byAction: { accept: 400 } })),
+      [{ time: minute(0), byType: { activity_spike: 4 } }],
+    )
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
+    const label = container.querySelector('.tick-n')
+    const tick = container.querySelector('.tick')
+    expect(label?.textContent).toBe('×4')
+    // The text sits on the tick's baseline offset (+3), nowhere else --
+    // within the half-pixel by which snapFill (text) and snapLine (the
+    // tick) differ from each other.
+    expect(Math.abs(Number(label?.getAttribute('y')) - (Number(tick?.getAttribute('y1')) + 3))).toBeLessThanOrEqual(0.5)
+  })
+
+  // #1218 audit finding 9: TICK_N_GAP (11px) asks more room per label than
+  // ROW_H (8px) gives per row, so a *long* busy run -- not the short
+  // four-minute one above -- pushed the ladder's last figure well past
+  // the row-based height a plain n*ROW_H canvas provides. Previously
+  // nothing grew the paper to hold it, so the labels ran off the bottom
+  // margin instead. BOTTOM is MetricsRegister's own bottom-margin
+  // constant, pinned here the same way LINE_H above pins TICK_N_GAP.
+  const BOTTOM = 26
+
+  it('grows the paper to keep every ×N figure on it, through a long busy run', () => {
+    const minutes = Array.from({ length: 40 }, (_, m) => m)
+    const hour = buildHour(
+      minutes.map((m) => ({ time: minute(m), byAction: { accept: 400 } })),
+      minutes.map((m) => ({ time: minute(m), byType: { activity_spike: 2 + (m % 5) } })),
+    )
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
+    const svgHeight = Number(container.querySelector('svg')?.getAttribute('height'))
+    const labels = Array.from(container.querySelectorAll('.tick-n'))
+    // Every minute still gets its figure, and none of them overlaps its
+    // neighbour -- growing the paper is not a licence to reopen #1155's
+    // smudge, only to stop it running off the edge.
+    expect(labels.length).toBe(40)
+    const ys = labels.map((l) => Number(l.getAttribute('y')))
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(LINE_H)
+    }
+    for (const y of ys) {
+      expect(y).toBeLessThanOrEqual(svgHeight - BOTTOM + 3)
+      expect(y).toBeGreaterThan(0)
+    }
+    // The paper actually grew past what a plain 40-row canvas would be --
+    // this is the defect itself, not an implementation detail: a fixed
+    // canvas is exactly what let the labels run off it before. HEADER
+    // mirrors the component's own Math.max(118, ...) -- see its comment
+    // above FLAG_LABEL_DROP for why the flag-label sweep can ask for
+    // more than the 118px floor.
+    const HEADER = Math.max(118, Math.ceil(34 + FLAG_LABEL_DROP + 8))
+    const rowBasedHeight = HEADER + 40 * 8 + BOTTOM
+    expect(svgHeight).toBeGreaterThan(rowBasedHeight)
+  })
+})

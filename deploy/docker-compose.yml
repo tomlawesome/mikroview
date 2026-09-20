@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     ports:
       # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port,
-      # already unprivileged so no remap is needed). Mikroview's only
+      # already unprivileged so no remap is needed). MikroView's only
       # syslog listener -- comment this out (and set
       # MIKROVIEW_LISTEN_SYSLOG_TLS= below) only if you want no syslog
       # ingest at all.
@@ -21,6 +21,13 @@ services:
       # "" below) if you'd rather handle the redirect at your own
       # reverse proxy.
       - "80:8081"
+      # RouterOS config backups over SFTP (issue #394, optional) -- a
+      # second listening port, only needed once you turn `backup:
+      # enabled: true` on in config.yaml (see config.example.yaml's
+      # commented `backup:` block and docs/configuration.md's "Router
+      # backups" section). Uncomment this alongside that; it must match
+      # `backup.listen`'s port (":47022" by default).
+      # - "47022:47022/tcp"
     # Container hardening. The image is already distroless + non-root
     # (see Dockerfile), so these are defense-in-depth rather than the
     # primary control -- but they're free, and they cap what a
@@ -31,13 +38,18 @@ services:
       # anyway -- this makes that structural instead of incidental.
       - no-new-privileges:true
     cap_drop:
-      # mikroview binds only unprivileged ports (6514/8080/8081 -- see
+      # MikroView binds only unprivileged ports (6514/8080/8081 -- see
       # the mappings above, which is exactly why they aren't 443/80
       # inside the container), so it needs no Linux capabilities at all.
       - ALL
-    # The root filesystem is read-only; every path mikroview actually
-    # writes to is a mount. /var/lib/mikroview is the named volume
-    # below, and the distroless image has no shell or package manager
+    # Caps the number of tasks (processes/threads) the container can hold,
+    # a cheap backstop against a fork bomb or runaway goroutine spawn.
+    # Not a memory or CPU limit -- those depend on the host this runs on,
+    # so they're left to the operator rather than guessed here.
+    pids_limit: 128
+    # The root filesystem is read-only; every path MikroView actually
+    # writes to is a mount. /var/lib/mikroview is the mikroview/data
+    # bind mount below, and the distroless image has no shell or package manager
     # that would need to write anywhere else. Note it does NOT need a
     # /tmp tmpfs: every persisted store writes its temp file alongside
     # the real one inside /var/lib/mikroview (see the atomic
@@ -51,30 +63,33 @@ services:
       start_period: 10s
       retries: 3
     volumes:
-      - ./config.yaml:/etc/mikroview/config.yaml:ro
-      # Optional -- see docs/configuration.md's GeoIP section. Requires
-      # your own MaxMind GeoLite2 database; uncomment both this and the
-      # env var below once you have one.
-      # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the new-device MAC
-      # registry/the engine's persisted baseline state/the TLS cert
-      # across container recreation, not just restarts -- see README.md's
-      # "Persistent data" section for what this is and the bind-mount
-      # alternative below.
-      - mikroview-data:/var/lib/mikroview
-      # Alternative to the named volume above: a bind mount, if you want
-      # to browse/back up the files directly from the host. Comment out
-      # the line above and uncomment this one instead (not both) -- see
-      # README.md's "Persistent data" section for the permissions step
-      # this needs first.
-      # Switching between this and the named volume later, either
-      # direction, is a supported move -- run `mikroview -migrate-data`
-      # rather than hand-copying files. See docs/configuration.md's
-      # "Moving the data directory" section.
-      # - ./data:/var/lib/mikroview
+      # One app folder on the host, two mounts: read-only for what you
+      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
+      # Sample config: deploy/config.example.yaml -- copy it to
+      # mikroview/config.yaml (see docs/install.md's "Persistent data"
+      # section for the permissions step data/ needs first).
+      - ./mikroview:/etc/mikroview:ro
+      - ./mikroview/data:/var/lib/mikroview
+      # Mounting each file separately instead -- config.yaml,
+      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or the
+      # mikroview-data named volume -- is the old way and still works: a
+      # path set in config.yaml or the environment always wins over the
+      # folder default. See docs/configuration.md.
     environment:
-      - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
+      # Not needed: with the app folder mounted above, MikroView finds
+      # ./mikroview/config.yaml on its own and works fine without it too
+      # (defaults alone are a working deployment) -- see
+      # docs/configuration.md's "optional" note and
+      # docs/decisions/app-folder.md. Naming it here explicitly, like
+      # this, would make that file mandatory instead: a first run
+      # against an empty app folder would fail to start rather than
+      # come up on defaults. Set it only if your config lives somewhere
+      # other than mikroview/config.yaml.
+      # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
+      # file into mikroview/ is the old way and still works -- see
+      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
@@ -87,11 +102,16 @@ services:
       # - MIKROVIEW_AUDIT_STORE_PATH=/var/lib/mikroview/audit.json
       # - MIKROVIEW_SETUP_STORE_PATH=/var/lib/mikroview/setup.json
       # TLS is on by default and needs no configuration to work -- these
-      # are only for customizing it.
+      # are only for customizing it. Your own cert and key are files you
+      # mount in, so both must be readable by the container's user (uid
+      # 1000) or MikroView refuses to start with "permission denied":
+      #   sudo chown 1000:1000 tls.crt tls.key
+      #   chmod 644 tls.crt && chmod 600 tls.key
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
       # - MIKROVIEW_TLS_HOSTS=192.168.1.50,mikroview.local
-      # - MIKROVIEW_TLS_CERT_FILE=/etc/mikroview/tls.crt
-      # - MIKROVIEW_TLS_KEY_FILE=/etc/mikroview/tls.key
+      # Naming MIKROVIEW_TLS_CERT_FILE/MIKROVIEW_TLS_KEY_FILE explicitly
+      # instead of dropping certs/tls.crt + certs/tls.key into mikroview/
+      # is the old way and still works -- see docs/configuration.md.
       # Read docs/configuration.md's "TLS" section before using this --
       # only safe if this port is unreachable except from your own
       # isolated-network reverse proxy.
@@ -100,7 +120,7 @@ services:
       # needed if you've removed the "80:8081" port mapping too (e.g.
       # your reverse proxy handles the HTTP->HTTPS redirect itself).
       # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
-      # Disables syslog ingest entirely -- mikroview's only syslog
+      # Disables syslog ingest entirely -- MikroView's only syslog
       # listener is RouterOS remote-protocol=tls, so only set this if
       # you don't want firewall events at all. Remove the "6514:6514/tcp"
       # port mapping above too if you do.
@@ -108,31 +128,33 @@ services:
 
     # No Postgres service here, deliberately -- not even commented out.
     #
-    # mikroview can keep its accounts, flags and settings in Postgres
+    # MikroView can keep its accounts, flags and settings in Postgres
     # instead of JSON files (docs/configuration.md, "Postgres"). The only
     # reason to do that is to get your data OFF this host, so that
-    # compromising the machine running mikroview doesn't hand over the
+    # compromising the machine running MikroView doesn't hand over the
     # accounts store too.
     #
-    # A Postgres container sitting next to mikroview in this file would
+    # A Postgres container sitting next to MikroView in this file would
     # defeat that entirely: same host, same disk, and the connection
     # password right here in the same compose file the attacker already
     # has. That is strictly worse than the JSON files -- identical
     # exposure, more moving parts -- so shipping one as a convenient
     # default would make the documentation a lie.
     #
-    # To use Postgres, point mikroview at a server on a DIFFERENT machine
+    # To use Postgres, point MikroView at a server on a DIFFERENT machine
     # over a restricted network path:
     #
     #   1. Put the connection string in a file (never in this compose
     #      file, and never in config.yaml -- it carries a password):
     #        postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full
-    #   2. Make it readable by the container's user -- mikroview runs as
-    #      uid 65532, which is not you, so a plain `chmod 600` leaves it
-    #      unreadable inside the container and mikroview refuses to
+    #   2. Make it readable by the container's user -- MikroView runs as
+    #      uid 1000, the first account on most Linux hosts, so a file
+    #      you own is usually readable as it stands. If the file belongs
+    #      to some other account, a plain `chmod 600` leaves it
+    #      unreadable inside the container and MikroView refuses to
     #      start with "permission denied". Keep the tight mode and give
     #      it to that user:
-    #        chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+    #        sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
     #   3. Mount it read-only and point config.yaml's postgres.dsnFile at
     #      it, or set MIKROVIEW_POSTGRES_DSN_FILE:
     #        - ./postgres-dsn:/run/secrets/mikroview-postgres-dsn:ro
@@ -146,7 +168,7 @@ services:
     #
     # Existing JSON files are migrated automatically on the first boot
     # with Postgres configured. From that moment the deployment is a
-    # Postgres deployment: mikroview records the fact, and removing
+    # Postgres deployment: MikroView records the fact, and removing
     # dsnFile later will NOT bring it back on the JSON files -- it
     # refuses to start instead.
     #
@@ -164,5 +186,9 @@ services:
     # If you are unsure, stay on the JSON files. Going the other way
     # later is easy; coming back is not possible.
 
-volumes:
-  mikroview-data:
+# Only needed if you use the named volume instead of mikroview/data --
+# swap the data line above for `mikroview-data:/var/lib/mikroview` and
+# uncomment both lines here. `mikroview -migrate-data` moves between the
+# two later (docs/configuration.md, "Moving the data directory").
+# volumes:
+#   mikroview-data:

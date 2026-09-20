@@ -78,9 +78,9 @@
   import { isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { dossierState } from '../lib/dossier.svelte'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
-  import { watchlistState } from '../lib/watchlist.svelte'
+  import { isWatchBroken, watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
-  import { tuneLoggingNavState } from '../lib/tuneLoggingNav.svelte'
+  import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr, type ParsedCidr } from '../lib/addressMatch'
@@ -103,7 +103,7 @@
     zoomPercent,
     type Placed,
   } from '../lib/topography/cluster'
-  import { layoutGround, plateHalfWidth } from '../lib/city/layout'
+  import { CIDR_FALLBACK, layoutGround, plateHalfWidth } from '../lib/city/layout'
   import { cityInputFrom, ghostCityZones } from '../lib/city/input'
   import { hostMarksFrom } from '../lib/city/presence'
   import {
@@ -1477,7 +1477,7 @@
   // interface where it did not.
   function laneName(i: string): string {
     if (i === zonesState.wanInterface) return 'the internet'
-    if (i === '') return 'any lane'
+    if (i === '') return 'any zone'
     return zones.find((z) => z.id === i)?.name ?? i
   }
 
@@ -1491,6 +1491,13 @@
     if (st === 'quiet') {
       const d = coverageState.byKey.get(e.key)
       return `${pairName(e.from, e.to)}: intentionally quiet — ${d?.reason ?? ''}`
+    }
+    // st === 'dark' here means quietKeys has no entry for this edge --
+    // which is also what a failed declarations read looks like before
+    // any successful load (#1237). "dark" is a claim MikroView has no
+    // evidence for in that case, so say the read failed instead.
+    if (coverageState.unreadable) {
+      return `${pairName(e.from, e.to)}: coverage declarations unreadable · checks again in five seconds`
     }
     return `${pairName(e.from, e.to)}: dark — no rule on this boundary-direction logs`
   }
@@ -1540,6 +1547,13 @@
     if (cardBackCoverage === undefined) return `${back} · no pushed rule names it`
     if (cardBackCoverage === 'logged') return `${back} · logged`
     if (cardBackCoverage === 'quiet') return `${back} · quiet on purpose`
+    // cardBackCoverage === 'dark' here is the same claim coverageLabel
+    // and the card's own dark line make about the primary direction
+    // (#1237): not evidence-backed while the last declarations read
+    // failed, so say that instead of "dark" for the reverse direction too.
+    if (coverageState.unreadable) {
+      return `${back} · coverage declarations unreadable · checks again in five seconds`
+    }
     return `${back} · dark — nothing logs it`
   })
 
@@ -1990,6 +2004,17 @@
   // reason form makes it taller.
   let offCard = $state<{ key: string } | null>(null)
   let offCardPinned = $state(false)
+  // #1227: which rib's badge to highlight on hover/focus, tracked by
+  // key rather than left to CSS. Before #1180 the badge text lived
+  // inside .edge-g itself, so a plain `.edge-g:hover .edge-badge` rule
+  // did this with no JS at all; #1180 moved the badge markup into the
+  // sibling `.detail` group to fix the tab order, which orphaned that
+  // rule (the two are siblings now, and every rib's `.edge-g` paints
+  // before every rib's `.detail` -- a sibling combinator would light up
+  // every badge at once on any hover, not just the one you're over).
+  // Set from the rib's own pointer/focus handlers below and read by the
+  // matching badge's `class:hover-t` in the label pass.
+  let hoveredRibKey = $state<string | null>(null)
   let offCardEl = $state<HTMLDivElement>()
   let offCardPlace = $state<Placement | null>(null)
   let offCardTick = $state(0)
@@ -2238,16 +2263,16 @@
     if (ok) closeBoundary()
   }
 
-  // Tune logging's other way in (#435 decision 2): a dark connection in
+  // Log every rule's other way in (#435 decision 2): a dark connection in
   // this same card is the thing prompting it. primaryDevice stands in
   // for "which router" -- the map has no per-edge device attribution
   // (policyState aggregates every device's pushed table), the same
   // approximation waistSub above already makes for the rule count.
   // This is the card's `rules ▸`: the rules for this very boundary,
   // which is where the round-49 mockup's `rules #31 ▸` leads.
-  function openTuneLoggingFromDark() {
+  function openLogEveryRuleFromDark() {
     if (!boundaryCard || !primaryDevice) return
-    tuneLoggingNavState.request(primaryDevice.id, boundaryCard.key)
+    logEveryRuleNavState.request(primaryDevice.id, boundaryCard.key)
     appState.view = 'tune-logging'
     closeBoundary()
   }
@@ -3125,9 +3150,16 @@
   // through watchlistState.
   const ghostWatchers = $derived(ghostLanes.filter((g) => g.watch !== null).length)
   const ghostWatchersBroken = $derived(ghostLanes.filter((g) => g.watch !== null && g.state === 'broken').length)
-  const watcherTotal = $derived(watchlistState.entries.length + ghostWatchers)
+  // #1156: the dial counts what the scene bar's eye counts. The healthy
+  // arc is watchlistState.heldCount itself -- enabled and not ring-broken
+  // -- rather than a number this file works out for itself, which is how
+  // the two came to disagree: the dial used entries.length, so a watch
+  // the operator had switched off still counted as a watcher and the
+  // dial read 6 where the eye read 5 on the same session. A paused watch
+  // is not watching, so it is on neither surface now.
+  const watcherHealthy = $derived(watchlistState.heldCount + (ghostWatchers - ghostWatchersBroken))
   const watcherBroken = $derived(watchlistState.brokenCount + ghostWatchersBroken)
-  const watcherHealthy = $derived(watcherTotal - watcherBroken)
+  const watcherTotal = $derived(watcherHealthy + watcherBroken)
 
   const DIAL_R = 20
   const DIAL_CIRC = 2 * Math.PI * DIAL_R
@@ -3361,8 +3393,12 @@
     ariaLabel: string
   }
 
+  // #1156: the one predicate lib/watchlist.svelte.ts's brokenCount/
+  // heldCount now use too, so this panel and the dial's arc (watcherBroken,
+  // derived from watchlistState.brokenCount below) can never disagree
+  // about which watches are broken again.
   function watchIsBroken(e: WatchlistEntry): boolean {
-    return e.enabled && (watchlistState.coverage[e.id] === 'no-logging' || !!e.ring?.broken)
+    return isWatchBroken(e, watchlistState.coverage)
   }
 
   function watchBoundary(e: WatchlistEntry): string {
@@ -4865,12 +4901,21 @@
       {#if portOn}
         <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
       {/if}
-    {:else if portOn}
+    {:else if portFilterState.active}
+      <!-- Collapsed the instant a port is chosen, not once its answer
+           lands (#1178): the pill states what is selected straight away,
+           and the tail joins it when the server has answered. The tail
+           is held back rather than drawn from an unsettled answer --
+           `nothing seen · 0 doors` while a request is still in flight
+           would be a claim about the network made out of a pending
+           fetch, the same reason refresh() does not mark a failed one
+           settled. -->
       <button
         class="pill p on"
         aria-pressed="true"
         title="filtered to {portFilterState.label} — click to change, ✕ to clear"
-        onclick={openPortPicker}>⌕ <b>{portFilterState.label}</b> <em>· {portFilterState.summary}</em></button
+        onclick={openPortPicker}
+        >⌕ <b>{portFilterState.label}</b>{#if portOn}&nbsp;<em>· {portFilterState.summary}</em>{/if}</button
       >
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
@@ -4923,7 +4968,7 @@
       viewBox={mapViewBox}
       preserveAspectRatio="xMidYMid meet"
       role="img"
-      aria-label="The network map: internet above, the router at the waist, observed lanes below{undrawnNote}"
+      aria-label="The network map: internet above, the router at the waist, observed zones below{undrawnNote}"
       class="pannable"
       onpointerdown={onMapPointerDown}
       onpointermove={onMapPointerMove}
@@ -5101,10 +5146,22 @@
                   descendRib(d.r.from, d.r.to)
                 }
               }}
-              onpointerenter={nb ? () => openOffCard(d.r.key) : undefined}
-              onpointerleave={nb ? releaseOffCard : undefined}
-              onfocus={nb ? () => openOffCard(d.r.key) : undefined}
-              onblur={nb ? releaseOffCard : undefined}
+              onpointerenter={() => {
+                hoveredRibKey = d.r.key
+                if (nb) openOffCard(d.r.key)
+              }}
+              onpointerleave={() => {
+                if (hoveredRibKey === d.r.key) hoveredRibKey = null
+                if (nb) releaseOffCard()
+              }}
+              onfocus={() => {
+                hoveredRibKey = d.r.key
+                if (nb) openOffCard(d.r.key)
+              }}
+              onblur={() => {
+                if (hoveredRibKey === d.r.key) hoveredRibKey = null
+                if (nb) releaseOffCard()
+              }}
             >
               <title>{realityLabel(d.r)}</title>
               <path class="edge-hit" d={whole ? edgePath(d.line) : halfPath(d.line)} />
@@ -5223,9 +5280,9 @@
         {/each}
 
         <!-- Every label this lens draws, now that every line above it is
-             down. The click/keydown here duplicate the line's own (the
-             plate is a real, sizeable target and deserves to be one) --
-             see this file's own report on what that costs the tab order. -->
+             down. The click here duplicates the line's own (the plate is
+             a real, sizeable target and deserves to be one); the tab
+             order is the line's alone (#1180). -->
         {#each drawnReality.drawn as d, di (d.r.key)}
           <!-- The escalated pair keeps its slot in trafficBadges so
                every later index still lines up, but the slot carries no
@@ -5235,11 +5292,17 @@
                direction skips its empty label the same way. -->
           {#if d !== worstUnplanned && !silentDir(d.r.key) && !filterOn}
             {@const badge = trafficBadges[di]}
+            <!-- A mouse target only (#1180). The plate is a real,
+                 sizeable thing to click and stays one, but its rib
+                 underneath carries the same action under the same
+                 label and is already in the tab order: two of each
+                 meant a keyboard walk of the map stopped at every
+                 boundary twice, and a screen reader heard it twice. -->
             <g
               class="detail"
               role="button"
-              tabindex="0"
-              aria-label="{realityLabel(d.r)} — open this rib's reach"
+              tabindex="-1"
+              aria-hidden="true"
               onclick={(e) => {
                 e.stopPropagation()
                 descendRib(d.r.from, d.r.to)
@@ -5254,7 +5317,14 @@
             >
               <title>{realityLabel(d.r)}</title>
               <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-              <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
+              <text
+                class="edge-badge"
+                class:alarm-t={d.r.verdict === 'unplanned'}
+                class:hover-t={hoveredRibKey === d.r.key}
+                x={badge.x}
+                y={badge.y}
+                text-anchor="middle"
+              >
                 {realityBadge(d.r)}
               </text>
             </g>
@@ -5513,24 +5583,30 @@
           <text x="-110" y="12" class="n-sub">{waistSub}</text>
           {#if degradedStatement}
             <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>
-            <text x="-110" y="50" class="deg-t"
-              ><tspan
-                class="deg-go"
-                role="button"
-                tabindex="0"
-                aria-label="Run setup — it adds the /ip address table"
-                onclick={(e) => {
+            <!-- The control is the whole line, not the accent words inside
+                 it: WebKit hit-tests SVG text at the <text> element and never
+                 at a tspan, so pointer events restored on the tspan alone
+                 left Safari with nothing to click (the v0.6.0 WebKit gate).
+                 The accent and the underline still mark the words that say
+                 what happens. -->
+            <text
+              x="-110"
+              y="50"
+              class="deg-t deg-line"
+              role="button"
+              tabindex="0"
+              aria-label="Run setup — it adds the /ip address table"
+              onclick={(e) => {
+                e.stopPropagation()
+                wizardState.launch()
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
                   e.stopPropagation()
                   wizardState.launch()
-                }}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    wizardState.launch()
-                  }
-                }}>Run setup… ▸</tspan
-              > adds it</text
+                }
+              }}><tspan class="deg-go">Run setup ▸</tspan> adds the address table</text
             >
           {/if}
         </g>
@@ -5693,6 +5769,16 @@
               <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally" class:filter-tally={!!tally}
                 >{tally ?? hostTally(row)}</text
               >
+            {:else if !filterOn}
+              <!-- #1165: a zone the router named but whose addresses
+                   resolved to nothing left this band blank, which reads
+                   as a card that failed to draw. It says the fact
+                   instead, in the tally's own slot. Under a filter it
+                   stays silent: #1056 ruled that a lane with no known
+                   host says nothing rather than `0 of 0`, and "no hosts
+                   seen yet" would be answering a question about the
+                   port that this lane cannot answer either. -->
+              <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally">no hosts seen yet</text>
             {/if}
             <!-- Round 49: the card says `name · subnet` and stops.
                  LOGGED / DARK / COVERED are gone from it -- the ribs
@@ -5708,7 +5794,10 @@
                  this line, and the two facts are both the card's own
                  sub-text, so they stack. -->
             {#if !policyState.anyPushed}
-              <text x={-cardHalf + cardPad} y={row.dots.length > 0 ? 96 : 74} class="n-sub no-table">no rule table pushed</text>
+              <!-- Always under the tally line now that an empty lane
+                   prints one of its own (#1165), rather than moving up
+                   into the slot that line occupies. -->
+              <text x={-cardHalf + cardPad} y="96" class="n-sub no-table">no rule table pushed</text>
             {/if}
             <!-- Round 30's zone card carries name, subnet, hosts and the
                  coverage badge, and stops there (the-whole.html:1002-1008).
@@ -5979,7 +6068,7 @@
         <g transform="translate(700 500)">
           <rect class="isl ghost" x="-108" y="0" width="216" height="106" rx="12" />
           <text x="0" y="40" text-anchor="middle" class="n-sub">nothing has arrived yet — waiting for data, not broken</text>
-          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; mikroview never draws a guess</text>
+          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; MikroView never draws a guess</text>
         </g>
       {/if}
 
@@ -6140,7 +6229,7 @@
               stroke={LANE_INKS[fc.d.ink % LANE_INKS.length]}
             />
             <text class="n-name" x={-fc.gr + 12} y={-fc.gh / 2 + 18}>{fc.d.name}</text>
-            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? 'from boundaries'}</text>
+            <text class="n-cidr" x={-fc.gr + 12} y={-fc.gh / 2 + 32}>{fc.d.cidr ?? CIDR_FALLBACK}</text>
             <!-- Round 49: `name · subnet`, and the zones stop's own
                  host count. The DARK word that used to trail the count
                  is gone with every other coverage caption -- the
@@ -6219,7 +6308,7 @@
       <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" bind:this={membraneSvgEl}>
         <circle cx={MX} cy={MY} r={MR} class="membrane" />
         <text x={MX} y="502" text-anchor="middle" class="n-sub">
-          the membrane — lane-mates inside talk freely; every crossing needs a rule, per direction
+          the membrane — zone-mates inside talk freely; every crossing needs a rule, per direction
         </text>
 
         <!-- Nothing is written on a strand (round 49; DESIGN.md "The
@@ -6572,7 +6661,7 @@
         {#if composedCommand}
           <pre class="cmd">{composedCommand}</pre>
           <p class="cmdnote">
-            <b>Paste it in RouterOS yourself — mikroview never touches the router.</b>
+            <b>Paste it in RouterOS yourself — MikroView never touches the router.</b>
             {#if composeMode === 'allow'}
               {composePlaceBefore ? `Placed before ${composePlaceBefore}, logged` : 'Logged'} and named, so the map
               learns it: on the next rule push this strand turns green and the unplanned stamp retires itself.
@@ -6828,7 +6917,16 @@
         <div class="s">{cardDeclaration.declaredBy} · {new Date(cardDeclaration.declaredAt).toLocaleString()}</div>
         <div class="s">{cardBackLine}</div>
       {:else}
-        <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        {#if coverageState.unreadable}
+          <!-- The last read of the declarations store failed, so "dark"
+               is not a claim MikroView has evidence for (#1237) -- this
+               boundary might be declared quiet on purpose and MikroView
+               just cannot see it. Say that instead, and re-check on the
+               same cadence every other coverage read uses. -->
+          <div class="s dk"><i class="sw dk"></i>coverage declarations unreadable · checks again in five seconds</div>
+        {:else}
+          <div class="s dk"><i class="sw dk"></i>dark — nothing logs this boundary</div>
+        {/if}
         <div class="s">{cardRuleLine}</div>
         <div class="s dk"><i class="sw dk"></i>{cardBackLine}</div>
         <div class="s">nothing drawn across it is a fact; nothing is known</div>
@@ -6871,11 +6969,11 @@
         {:else if isAdmin && !cardPinned}
           <button onclick={pinBoundary}>declare quiet on purpose ▸</button>
         {/if}
-        <!-- Tune logging (#435): the other remedy for a dark pair --
+        <!-- Log every rule (#435): the other remedy for a dark pair --
              switch logging on for what actually crosses it, rather than
              declaring the silence a choice. -->
         {#if isAdmin}
-          <button disabled={!primaryDevice} onclick={openTuneLoggingFromDark}>rules ▸</button>
+          <button disabled={!primaryDevice} onclick={openLogEveryRuleFromDark}>rules ▸</button>
         {/if}
         <button class="dim" onclick={openStreamFromCard}>stream ▸</button>
       </div>
@@ -7216,6 +7314,18 @@
     z-index: 2;
     display: flex;
     gap: 8px;
+    /* The row stops short of the altitude slider (#1136). Both are
+       absolute on the same bottom line, and the slider is centred on
+       the stage and about 274px wide (CLIENTS + track + STREET), so
+       half of that plus a gutter is what this row may not have. Open,
+       the picker had grown clean across it: the chip bar reached the
+       same width at every viewport, so at 1100 it covered the slider
+       and at 1920 the off-baseline tally printed over CLIENTS.
+       Wrapping rather than clipping keeps that tally readable when the
+       bar takes the whole line -- the row is bottom-anchored, so a
+       second line grows upward, over the map and not off it. */
+    flex-wrap: wrap;
+    max-width: calc(50% - 190px);
   }
 
   /* The off-baseline mark (round-49/index.html:76-77's `.nmk`): the
@@ -8393,7 +8503,13 @@
     font-size: 9.5px;
   }
 
-  .edge-g:hover .edge-badge {
+  /* #1227: the rib's own hover/focus highlights its badge -- restored
+     via `hoveredRibKey` (set from .edge-g's pointer/focus handlers)
+     rather than the plain `.edge-g:hover .edge-badge` this replaces,
+     which went dead when #1180 moved the badge out of .edge-g into the
+     sibling .detail group for the tab-order fix. `-t` matches this
+     file's other text-colour modifiers (.alarm-t, .ghost-t). */
+  .edge-badge.hover-t {
     fill: var(--accent);
   }
 
@@ -8644,17 +8760,21 @@
     font-family: var(--font-mono);
   }
 
-  /* The way in, in the accent -- the one ability the statement carries.
-     The waist card is `.passive` so policy edges beneath it stay
-     clickable; this restores pointer events for the link alone. */
-  .deg-go {
-    fill: var(--accent);
+  /* The way in -- the one ability the statement carries. The waist
+     card is `.passive` so policy edges beneath it stay clickable; this
+     restores pointer events for the one line that is a control, on the
+     <text> itself since WebKit never hit-tests a tspan. */
+  .deg-line {
     pointer-events: auto;
     cursor: pointer;
   }
 
-  .deg-go:hover,
-  .deg-go:focus-visible {
+  .deg-go {
+    fill: var(--accent);
+  }
+
+  .deg-line:hover .deg-go,
+  .deg-line:focus-visible .deg-go {
     text-decoration: underline;
   }
 
@@ -9463,6 +9583,11 @@
     border-color: color-mix(in srgb, var(--accent) 55%, transparent);
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     max-width: min(60vw, 640px);
+    /* A flex item will not shrink past its content by default, which
+       would push the tally beside it out of the row the moment the
+       chip strip is long (#1136). Shrinking is what the strip's own
+       `overflow-x: auto` is there for. */
+    min-width: 0;
   }
 
   .pill.p.edit .ports,

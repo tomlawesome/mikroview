@@ -200,24 +200,32 @@
     {#if event.natIp}
       <div class="row">
         <span class="k">NAT</span>
-        {#if natFilterKey}
+        <!-- #1151: the value and its lookup trigger ride in one .v-group,
+             the way every other row with a button beside its value
+             already does. Loose, they were three children under the
+             row's `justify-content: space-between`, which pushed the
+             value into the middle of the row while every other row's
+             value sat on the right edge. -->
+        <span class="v-group">
+          {#if natFilterKey}
+            <button
+              class="v accent link"
+              onclick={() => {
+                if (natFilterKey) filterAndClose(natFilterKey, event.natIp ?? '')
+              }}
+            >→ {formatAddr(event.natIp, event.natPort)}</button>
+          {:else}
+            <span class="v accent">→ {formatAddr(event.natIp, event.natPort)}</span>
+          {/if}
           <button
-            class="v accent link"
-            onclick={() => {
-              if (natFilterKey) filterAndClose(natFilterKey, event.natIp ?? '')
-            }}
-          >→ {formatAddr(event.natIp, event.natPort)}</button>
-        {:else}
-          <span class="v accent">→ {formatAddr(event.natIp, event.natPort)}</span>
-        {/if}
-        <button
-          class="natlookup"
-          onclick={openNatLookup}
-          aria-expanded={routerLookupState.sheetOpen}
-          aria-label={event.ruleLabel
-            ? `Look up the NAT rule logged as ${event.ruleLabel}`
-            : 'Narrow down which NAT rule did this'}
-        >i</button>
+            class="natlookup"
+            onclick={openNatLookup}
+            aria-expanded={routerLookupState.sheetOpen}
+            aria-label={event.ruleLabel
+              ? `Look up the NAT rule logged as ${event.ruleLabel}`
+              : 'Narrow down which NAT rule did this'}
+          >i</button>
+        </span>
       </div>
       {#if routerLookupState.sheetOpen}
         <div class="natsection">

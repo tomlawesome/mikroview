@@ -43,13 +43,17 @@ store: {settingsStorePath: $dir/settings.json}
 entities: {storePath: $dir/entities.json}
 coverage: {storePath: $dir/coverage.json}
 hosts: {storePath: $dir/hosts.json}
+seen: {storePath: $dir/seen-values.json}
 baseline: {storePath: $dir/baseline.json}
 audit: {storePath: $dir/audit.json}
 setup: {storePath: $dir/setup.json}
+configDrift: {storePath: $dir/config-drift.json}
+droplist: {storePath: $dir/droplist.json}
 watchlist:
   matchLogPath: $dir/matchlog.jsonl
   suggestionsStorePath: $dir/suggestions.json
 deviceMac: {storePath: $dir/mac-registry.json}
+deviceRegistry: {storePath: $dir/device-registry.json}
 engine:
   storePath: $dir/engine-state.json
   definitionsStorePath: $dir/definitions.json

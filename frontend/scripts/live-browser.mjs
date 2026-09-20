@@ -13,6 +13,8 @@
 
 import { chromium, firefox, webkit } from 'playwright'
 import { execFileSync } from 'child_process'
+import http from 'node:http'
+import https from 'node:https'
 import { setGlobalDispatcher, Agent } from 'undici'
 import { fileURLToPath } from 'url'
 import path from 'path'
@@ -22,6 +24,11 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
 const PASS = process.env.MV_PASS
+
+// Exported for #1291: minting an enrolment token asks the admin to
+// re-enter their password at that moment, so a scenario driving the
+// real ledger has to type it into the wizard as an operator would.
+export const adminPassword = PASS
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
@@ -285,6 +292,65 @@ function isUntrustedCertServiceWorkerError(text) {
   return /ServiceWorker/i.test(text) || /fetching the script/i.test(text)
 }
 
+/**
+ * isNavigationCancelledFetch filters the one message an engine other
+ * than Chromium prints when a navigation cuts off a fetch still in
+ * flight -- the app's own mount-time requests, cancelled by the reload
+ * session() does after resetting the instance, or by a scenario's own
+ * reload.
+ *
+ * Chromium drops a cancelled fetch silently. Firefox rejects it with a
+ * bare `AbortError: The operation was aborted. ` that reaches
+ * `pageerror` as an unhandled rejection, and WebKit logs `Fetch API
+ * cannot load <url> due to access control checks.` to the console. The
+ * harness reload confirmed both: the messages land within 200ms of
+ * page.reload() and name the requests App.svelte starts on mount.
+ * Nothing the app does can avoid them and no user sees a consequence,
+ * so they are filtered here, narrowly: the Firefox text exactly, and
+ * the WebKit one only for the app's own host, since a genuine
+ * cross-origin refusal is still worth reporting.
+ */
+function isNavigationCancelledFetch(text) {
+  if (text === 'AbortError: The operation was aborted. ') return true
+  // WebKit prints the URL with a space after the scheme ("http: /127...")
+  // so the host is matched rather than the whole address.
+  return (
+    text.startsWith('Fetch API cannot load ') &&
+    text.endsWith(' due to access control checks.') &&
+    text.includes(new URL(URL_BASE).host)
+  )
+}
+
+/**
+ * isScreenshotStyleRefusal filters the one message WebKit prints when
+ * Playwright takes a screenshot: to hide the text caret it appends a
+ * <style> element to the page, and mikroview's `default-src 'self'`
+ * policy refuses it with "Refused to apply a stylesheet because its
+ * hash, its nonce, or 'unsafe-inline' appears in neither the style-src
+ * directive nor the default-src directive of the Content Security
+ * Policy." The message arrived on exactly the page.screenshot() calls
+ * and on no other step. Chromium and Firefox hide the caret another
+ * way. Filtered on WebKit only, so an inline style the app itself
+ * injected would still be reported by the other two engines.
+ */
+function isScreenshotStyleRefusal(text) {
+  return BROWSER_NAME === 'webkit' && text.startsWith('Refused to apply a stylesheet because its hash, its nonce, or ')
+}
+
+/**
+ * isResizeObserverLoopNotice filters "ResizeObserver loop completed with
+ * undelivered notifications." The browser prints it when a resize
+ * callback itself changes a size it is observing, so the remaining
+ * notifications are held to the next frame -- the spec says to report
+ * it, not to throw, and nothing is lost. WebKit surfaces it as a page
+ * error where the other two do not; it arrived in the first WebKit run
+ * on two layout-heavy scenarios (live-fall-composition,
+ * live-topography-layout) and on no functional step.
+ */
+function isResizeObserverLoopNotice(text) {
+  return text.includes('ResizeObserver loop completed with undelivered notifications')
+}
+
 /** session launches a browser and signs in, returning a live page. */
 /**
  * dismissSetupWizard closes the setup modal if a fresh instance
@@ -359,6 +425,9 @@ const SCENES = {
   // (deckCards.ts's `fleet` key) -- the same standalone page the
   // phone-width bottom bar has always reached, now also on the roll rail.
   Fleet: { rail: 'Fleet', card: 'fleet' },
+  // #1134: Log every rule joined the deck for the edit tier, so it is
+  // reached the same way every other page is.
+  'Log every rule': { rail: 'Log every rule', card: 'log-every-rule' },
 }
 
 /**
@@ -420,6 +489,17 @@ export async function unfoldStreamFilter(page) {
   // one part of the box that never stops that propagation -- the
   // "genuine control" FilterBar.svelte's own comment names it as.
   await box.locator('input.fbtype').click()
+  // #1246: that click also opens the token bar's field menu, which hangs
+  // over the strip and the first rows of the table until focus leaves
+  // the box or something outside it is clicked -- exactly as it does for
+  // an operator. A scenario that unfolds the strip wants the strip, not
+  // the menu, so hand focus on to the strip's own rule field: a click
+  // inside the bar keeps the strip open (FilterBar's onWindowClick) and
+  // closes the menu (its onBoxFocusOut). Without this, the next click on
+  // a row hits a menu item instead (live-stream-table, 2026-09-16).
+  const rule = page.locator('input.rule')
+  await rule.waitFor({ state: 'visible', timeout: 15000 })
+  await rule.click()
 }
 
 /**
@@ -537,11 +617,12 @@ export async function goTo(page, label, { unfold = true } = {}) {
  * enough traffic to out-rank somebody else's leftovers. Pipelines 819 and
  * 820 were both that failure.
  *
- * A 404 is not a failure. The route exists only where the process was
- * started with MV_TEST_HOOKS=1, which live-env.sh does and a shipped
- * image does not, so the container flavour of this harness runs the same
- * scenarios against an instance that simply cannot be reset. That is a
- * weaker guarantee, not a broken run.
+ * The route exists only where the process was started with
+ * MV_TEST_HOOKS=1 -- live-env.sh and live-container.sh both do. A 404 is
+ * not a weaker guarantee to carry on under: it means the target is not a
+ * test instance, and these scenarios sign in with fixed harness
+ * credentials and some of them create accounts, mint tokens and push
+ * data, so this refuses rather than risk doing that to a real mikroview.
  *
  * Returns whether a reset happened, so the caller knows to reload.
  */
@@ -550,14 +631,41 @@ async function resetInstance(page) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   })
-  if (res.status() === 404) return false
+  if (res.status() === 404) {
+    throw new Error(
+      'POST /api/test/reset answered 404 -- this is not a test instance (it was not started with MV_TEST_HOOKS=1). ' +
+        'The live scenarios create accounts and tokens and push data; refusing to run them against it.',
+    )
+  }
   if (res.status() !== 200) {
     throw new Error(`POST /api/test/reset answered ${res.status()} -- the instance was not reset, so this run would be judging residue`)
   }
   return true
 }
 
-export async function session({ dismissSetup = true, landing = 'stream', unfoldFilter = true, keep = false } = {}) {
+/**
+ * A desktop window, wider than every width-dependent rule the app has:
+ * the docket's 1300px narrow breakpoint (lib/viewport.svelte.ts) and the
+ * stream table's starting-columns one (lib/columns.svelte.ts), which
+ * #1117 moved from 1500 to 1600 -- and it is a max-width query, so 1600
+ * itself is the narrow side now. 1920x1080 is the common desktop the
+ * fifteen columns were re-measured against, and sits clear of both.
+ *
+ * Playwright's own default is 1280x720, which is below both, so a
+ * scenario about a *desktop* surface has to say so rather than inherit a
+ * width that now means "narrow". Pass it to session() as `viewport`; a
+ * scenario testing the narrow side sets its own instead.
+ */
+export const DESKTOP_VIEWPORT = { width: 1920, height: 1080 }
+
+export async function session({
+  dismissSetup = true,
+  landing = 'stream',
+  unfoldFilter = true,
+  keep = false,
+  viewport = undefined,
+  mocksApi = false,
+} = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -571,10 +679,29 @@ export async function session({ dismissSetup = true, landing = 'stream', unfoldF
   // whether a *router* should trust it is a different question, and one
   // live-routeros.sh's `trust` step covers properly against real
   // RouterOS rather than by waving it through.
-  const page = await browser.newPage({ ignoreHTTPSErrors: true })
+  // The viewport is set on the page rather than after it, because two of
+  // the app's width rules are read once at module load (the stream's
+  // starting column set is the worked example) -- a resize afterwards
+  // would arrive too late to decide them.
+  // mocksApi, for a scenario that answers an /api route itself with
+  // page.route: once the app's service worker controls the page, an
+  // /api request is fetched by the worker, and only Chromium lets
+  // Playwright's routes see a worker's fetches -- under WebKit the mock
+  // never fires and the real server answers (live-setup-wizard-source-
+  // split saw the real router where it had mocked a split one). Keeping
+  // the worker out of that scenario's context is what makes the mock
+  // hold on every engine; the app runs the same without one.
+  const page = await browser.newPage({
+    ignoreHTTPSErrors: true,
+    ...(viewport ? { viewport } : {}),
+    ...(mocksApi ? { serviceWorkers: 'block' } : {}),
+  })
   const consoleErrors = []
   const record = (text) => {
     if (isUntrustedCertServiceWorkerError(text)) return
+    if (isNavigationCancelledFetch(text)) return
+    if (isScreenshotStyleRefusal(text)) return
+    if (isResizeObserverLoopNotice(text)) return
     consoleErrors.push(text)
   }
   page.on('pageerror', (e) => record(String(e)))
@@ -710,6 +837,164 @@ export async function responsive(page, forMs = 2000) {
     await page.waitForTimeout(200)
   }
   return true
+}
+
+/**
+ * enrolDevice declares a router by name, mints its one-time token and
+ * redeems it from `addr` over syslog -- the same sequence the ledger
+ * walks an operator through (#1281), driven directly because most
+ * scenarios need a router in place rather than a wizard to drive.
+ *
+ * Shared because since #1281 every scenario that pushes needs it: a
+ * push is refused unless it arrives from the device's own declared or
+ * enrolled address (internal/api/ingest.go, IsEnrolledAt), and only the
+ * harness's own `live-router` is declared at 127.0.0.1.
+ *
+ * `request` is a Playwright APIRequestContext (page.request) or anything
+ * with the same fetch(url, {method, headers, data}) shape: the caller
+ * already has one carrying the admin session.
+ */
+export async function enrolDevice(request, base, id, addr, { timeoutMs = 15000 } = {}) {
+  const call = async (method, path, data) => {
+    const res = await request.fetch(`${base}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      data,
+    })
+    return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
+  }
+
+  const created = await call('POST', '/api/devices', { name: id })
+  if (created.status !== 201) {
+    check(false, `${id} is declared by name (got ${created.status})`)
+    return false
+  }
+  // #1291: minting re-proves the admin's identity at that moment, and
+  // binds the enrolment window to the one address the token may be
+  // redeemed from -- which here is the address this helper is about to
+  // feed the enrol line from.
+  const mint = await call('POST', `/api/devices/${encodeURIComponent(id)}/enrolment`, {
+    password: PASS,
+    expectedAddress: addr,
+  })
+  if (!mint.body?.token) {
+    check(false, `an enrolment token is minted for ${id} (got ${mint.status})`)
+    return false
+  }
+
+  feedRawFrom(addr, `<14>Jan  1 00:00:00 ${id} mikroview-enrol ${mint.body.token}`)
+
+  const deadline = Date.now() + timeoutMs
+  let enrolled = false
+  while (Date.now() < deadline && !enrolled) {
+    const { body } = await call('GET', '/api/devices')
+    enrolled = (body?.devices ?? []).some((d) => d.id === id && d.acceptedIp === addr)
+    if (!enrolled) await new Promise((r) => setTimeout(r, 500))
+  }
+  check(enrolled, `${id} enrols at ${addr} over syslog before anything is pushed to it`)
+  return enrolled
+}
+
+/**
+ * pushFrom sends an ingest push with the request's own local address
+ * bound to `localAddress`. Since #1281 the ingest handler answers 403
+ * for a push from anywhere but the device's enrolled address, and
+ * fetch() cannot choose one -- it leaves the address to the kernel's
+ * routing. Node's own http/https client is what exposes localAddress.
+ *
+ * Resolves to the status code.
+ */
+export function pushFrom(base, localAddress, token, payload) {
+  const url = new URL(`${base}/api/ingest/routeros`)
+  const mod = url.protocol === 'https:' ? https : http
+  const body = JSON.stringify(payload)
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        localAddress,
+        rejectUnauthorized: false,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode)
+      },
+    )
+    req.on('error', reject)
+    req.end(body)
+  })
+}
+
+/**
+ * grantClipboard makes `navigator.clipboard.readText()` answer in a
+ * scenario, so a copy control is checked by what it put on the clipboard
+ * and not only by its toast.
+ *
+ * Chromium grants the permission for real, so the read is the browser's
+ * own clipboard. Firefox refuses `clipboard-read` as a permission name
+ * outright, and WebKit gates readText on a user gesture the harness
+ * cannot supply, so on those two the page's writeText is wrapped to keep
+ * the last text handed to it and readText answers from that. That still
+ * proves what the app handed to the clipboard API -- the thing every
+ * caller is checking. The real write still runs, and a rejection still
+ * reaches the app, so an engine refusing the write is not hidden.
+ */
+export async function grantClipboard(page) {
+  if (BROWSER_NAME === 'chromium') {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+    return
+  }
+  await page.evaluate(() => {
+    const real = navigator.clipboard.writeText.bind(navigator.clipboard)
+    let last = ''
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      configurable: true,
+      value: (text) => {
+        last = String(text)
+        return real(text)
+      },
+    })
+    Object.defineProperty(navigator.clipboard, 'readText', {
+      configurable: true,
+      value: async () => last,
+    })
+  })
+}
+
+/**
+ * clickSvgText clicks a control drawn as SVG text -- the fall's quieter
+ * link, the topography's `trace ▸` token and `Run setup ▸`. Playwright's
+ * own click cannot land on one under WebKit: the box it computes for a
+ * <text> is not where the glyphs are, so every retry ends "outside of
+ * the viewport" and the scenario dies at the click. The page's own
+ * geometry is right, so the element is scrolled into view and hit at
+ * the centre of its getBoundingClientRect with a real mouse click.
+ * Still a hit-tested click: a control the engine itself cannot reach
+ * is still reported as one.
+ *
+ * The same click serves a host dot. Its throbbing ring (`.h-halo`,
+ * `.h-nb`) animates stroke-width inside the clickable <g>, and Firefox
+ * alone counts stroke in an SVG element's box, so while the ring throbs
+ * Playwright never sees the dot hold still and its own click times out
+ * ("element is not stable", 30 s). Whether the ring is drawn by click
+ * time depends on the feed, which is why it failed one run in three.
+ */
+export async function clickSvgText(page, locator) {
+  await locator.waitFor({ state: 'visible' })
+  const [x, y] = await locator.evaluate((el) => {
+    el.scrollIntoView({ block: 'center', inline: 'center' })
+    const r = el.getBoundingClientRect()
+    return [r.x + r.width / 2, r.y + r.height / 2]
+  })
+  await page.mouse.click(x, y)
 }
 
 export function done() {

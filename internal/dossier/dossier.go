@@ -446,8 +446,8 @@ var sourceNotes = map[string]string{
 	"router-dns-static":     "a static DNS entry pushed by the router, which outranks anything named here",
 	"router-dhcp-lease":     "the hostname on the router's own DHCP lease",
 	"router-wireguard-peer": "the comment on the router's WireGuard peer",
-	"entity":                "a label you saved in mikroview",
-	"config":                "an alias in mikroview's config file",
+	"entity":                "a label you saved in MikroView",
+	"config":                "an alias in MikroView's config file",
 	"none":                  "nothing has named this address",
 }
 

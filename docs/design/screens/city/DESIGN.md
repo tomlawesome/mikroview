@@ -184,7 +184,7 @@ too.
 
 Filtered, a rib the port crossed keeps its verdict colour at full width
 — both halves, because a crossing is one packet through the router —
-and every other rib is one thin grey line. A lane card keeps the hosts
+and every other rib is one thin grey line. A zone card keeps the hosts
 seen on the port lit and its count line reads `2 of 12 hosts on
 445/tcp`; a card with nothing on the port recedes whole.
 
@@ -202,8 +202,8 @@ brings its own faint grey guide — policy, never a verdict ink.
 logged traffic on 3389/tcp in the window · one rule names it — #23 wan →
 any drop, the door on the WAN side`. The door is still drawn.
 
-**By event.** A trace is the one hop the router knows: the lane it came
-in on, the rule that decided, the NAT if any, the lane it left on. It
+**By event.** A trace is the one hop the router knows: the zone it came
+in on, the rule that decided, the NAT if any, the zone it left on. It
 opens from the map's unplanned callout (`trace ▸`) and from a stream
 row's own ⌖ beside the interfaces. The two lit halves take the verdict's
 colour at full width and everything else goes grey. A refused line ends
@@ -227,7 +227,7 @@ else.
 **Clicking anything on the map, at any stop, opens its reach** — a
 building, a host dot, a district, a road (round 49). A reach answers
 "where does this thing connect to", and the subject is whatever was
-clicked: a **host**, a **zone** (the district, or the 2D lane plate), or
+clicked: a **host**, a **zone** (the district, or the 2D zone plate), or
 a **rib** — the line between two zones, drawn as a road between
 districts in the city (ratified 2026-09-08, #1016). A zone's own side is
 its boundary interface, so traffic that came and went through it counts
@@ -259,7 +259,7 @@ came from.
 
 Hosts come and go by what the syslog feed shows, and they are drawn at
 every stop, including the top-level map — as buildings in the city and
-as a row of dots inside each lane card in 2D (ten dots then `+N`, every
+as a row of dots inside each zone card in 2D (ten dots then `+N`, every
 dot clickable to its reach).
 
 A host is `live`, `quiet`, `intended` or `dismissed`. **Quiet is 24
@@ -284,7 +284,10 @@ number alone), what the rule does, both directions, and
 declare form — reason (required), `both directions ☑`, `Declare`, and
 who. Quiet card: the reason quoted, who and when, `undeclare ▸`. Host
 card: presence, last and first seen, events, `mark quiet on purpose ▸ ·
-dismiss ▸`. Line card in the reach: the port / proto / accepted /
+dismiss ▸ · dossier ▸ · stream ▸` (the last two added by #410). A host
+the register has not recorded yet says `not in the host register yet ·
+nothing to mark` instead of the two write actions, which would have no
+key to hang on. Line card in the reach: the port / proto / accepted /
 dropped table, the totals, `:22 refused by #17 default drop`, and on a
 refused strand the composer's `draft the rule ▸`. Off-baseline card:
 the lines, first seen, count, and `expected ▸`. Drop card (#1002): the

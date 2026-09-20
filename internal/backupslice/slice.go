@@ -18,7 +18,6 @@
 package backupslice
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -484,7 +483,7 @@ func (r *Receiver) acceptSlice(device, transferID string, index int, chunk []byt
 	}
 	// Header check on slice 0 of a backup: refuse before the operator
 	// uploads the rest of a ~460KB file the vault would reject anyway.
-	if index == 0 && tr.kind == backupvault.KindBackup && !looksLikeRouterOSBackup(chunk) {
+	if index == 0 && tr.kind == backupvault.KindBackup && !backupvault.LooksLikeBackup(chunk) {
 		log.Warn(fmt.Sprintf("refused a transfer from %s: the first bytes are not a RouterOS backup header -- dropping the transfer", device))
 		r.dropLocked(transferID)
 		return nil, ErrNotABackup
@@ -608,22 +607,4 @@ func (r *Receiver) InFlight() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.transfers)
-}
-
-// looksLikeRouterOSBackup deliberately mirrors
-// internal/backupvault/vault.go's classifyBackup magic-byte check (that
-// function is unexported, so it can't be called from here) -- refusing
-// slice 0 of a bad upload here saves the other ~14 POSTs of a 461KB
-// backup the vault would reject anyway (#955's measurement note).
-// Unifying it with classifyBackup is tracked on #1127.
-func looksLikeRouterOSBackup(data []byte) bool {
-	plainMagic := []byte{0x88, 0xac, 0xa1, 0xb1}
-	encryptedMagic := []byte{0xef, 0xa8, 0x91} // 4th byte varies: rc4 vs aes-sha256
-	if len(data) >= len(plainMagic) && bytes.Equal(data[:len(plainMagic)], plainMagic) {
-		return true
-	}
-	if len(data) >= len(encryptedMagic) && bytes.Equal(data[:len(encryptedMagic)], encryptedMagic) {
-		return true
-	}
-	return false
 }

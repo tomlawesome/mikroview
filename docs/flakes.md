@@ -6,6 +6,16 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-city-reach: Escape does not restore the exact pan position
+
+- 2026-09-16 · 83b35730 (feature/m16-upgrade-guard-and-401, !1054) · pipeline 1168, `gate:scenarios 1/4` · `Escape restores the exact pan position (13.4 -> 19.3)` -- the mini-map viewport read 19.3 after the 900 ms settle instead of the 13.4 it started at; every other check in the scenario passed. The branch is backend-only (persist schema, a 401 header, `-backup`); the same scenario passed three times in a row locally at ebbce549, which contains that branch.
+
+- 2026-09-18 · f036645d (fix/v060-audit, !1069) · pipeline 1253, `gate:scenarios 1/4` · `Escape restores the exact pan position (14.3 -> 20.8)` -- same check, same shape as the 2026-09-16 sighting: the viewport read 20.8 after the settle instead of the 14.3 it started at, every other check in the scenario passed. The commit changes two unrelated scenario scripts (live-fleet-setup-standing, live-setup-wizard) and nothing that pans the map; shard 1 passed on the parent commit in pipeline 1252.
+
+## live-topography-trace-list: a keyboard re-trace lands on no row
+
+- 2026-09-14 · 4a4655b2 (feature/wizard-upgrade-safety) · pipeline 1101, `gate:scenarios 4/4` · `the list stays open across a keyboard re-trace` and `the second row is now the traced one (-1)` -- `onIndex` came back `-1`, so the re-trace selected nothing rather than the wrong thing. The branch touches no topography code at all; `dev` passed the same scenario at e4296ef3 (pipeline 1100) an hour earlier, and the same branch passed it at bef16483 (pipeline 1102) with only banner-text and wizard changes in between.
+
 ## live-topography-port-trace: waitForSelector(.note-t) times out (10 s) after other scenarios
 
 - 2026-09-09 · 274276e8 (feature/m11-rounds-2, local) · 15-scenario batch (live-city-*, live-watchlist-*, live-topography-edges, this one, ...), scenario 11/15 · `page.waitForSelector: Timeout 10000ms exceeded` waiting for `[data-card="topography"] .note-t` at `live-topography-port-trace.mjs:276`; every check up to it passed. Ran clean against a fresh instance with no baseline feed and no preceding scenarios, same commit.
@@ -15,6 +25,14 @@ testing-and-ci skill (owner, 2026-09-08).
 
 - 2026-09-08 · 3fb82271 (!1002) · pipeline 763, gate:scenarios 3/4 · `page.waitForFunction: Timeout 10000ms exceeded` at `live-browser.mjs:385` from `live-rule-regex.mjs:32`; the other 20 scenarios in the shard passed. Same family as #1011 (goTo never settles under runner load).
 - 2026-09-08 · 237d4d84 (!1003) · pipeline 770, gate:scenarios 3/4 · `exited 1 without printing a result`; pipeline 773 on the same branch (one merge later, City.svelte only) passed it. 770's gate stage overlapped 773's on the same runner host.
+
+## live-rule-regex: "a fresh pattern after a refusal evaluates normally" fails on a loaded runner
+
+Separate from the `goTo` heading above -- the same scenario, but a real
+assertion rather than an infrastructure timeout, so it is recorded on its
+own rather than swelling that entry's count.
+
+- 2026-09-13 · 91315101 (!1043) · pipeline 1043, gate:scenarios 3/4 · `FAIL a fresh pattern after a refusal evaluates normally`. The check types a cheap pattern after a refusal and asserts, after a fixed `waitForTimeout(1200)`, that the toggle no longer reads "refused". The scenario's own comment at `live-rule-regex.mjs:88-90` says why it has to guess a duration: "evaluating and idle are DOM-indistinguishable, so this negative assertion still needs a real pause rather than a wait it cannot express". Under runner load the worker's debounce outruns the 1200 ms. Ran three times against fresh instances at this exact commit and passed every time; the branch cannot reach it either, its diff being flag verdict/note plumbing with `ruleMatcher.ts` and `ruleMatcher.worker.ts` untouched.
 
 ## live-flags-watchlist: the reconnaissance row never appears (5 s)
 
@@ -40,10 +58,12 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 3/4 · `live-metrics-views` (and `live-rule-regex`, counted above)
 - 2026-09-08 · 237d4d84 · pipeline 770, gate:scenarios 4/4 · `live-topography-furniture`
 - 2026-09-10 · 5265a1f8 (!1012) · pipeline 881, gate:scenarios 4/4 · `live-watchlist-manage` exited 1 without printing a result; pipelines 879-882 shared the runner
+- 2026-09-12 · 43a3f55c (!1036, local workstation) · shard 3/4 rerun · `live-log-every-rule` (`page.goto` 30 s on networkidle), `live-routeros-ingest` (15 s waiting for `#main-content` to be visible, which the log shows already visible) and `live-memory-slider` (`g.mcut` never marked on a proposed shrink) all died before or without a verdict, while a peer agent's vitest ran in another worktree and load average sat near 80. Pipeline 1005's gate:scenarios 3/4 passed all three on this exact commit; the two it did fail are the ones !1036 fixes. The skill's rule holds — a browser-phase failure on a shared host is not evidence until it is reproduced alone.
 
 ## live-watchlist-manage: the fenced button never reads "learn again"
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
+- 2026-09-11 · c3bcb56f (dev, after !1031) · pipeline 996, gate:scenarios 4/4 · `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs:208`: Playwright reported the button "outside of the viewport" then "detached from the DOM" on every retry, so the drawer replaced the button's node under the click. Pipeline 997 ran the same commit as !1032's MR pipeline and passed. Same button as the sighting above, one check earlier. Job retried (11971).
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
@@ -57,6 +77,52 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
 
+## test:go: flushForTest and a backupvault race time out on a loaded runner
+
+- 2026-09-16 · 65fadaab (feature/1247-upgrade-fixtures-postgres, !1063) · pipeline 1180, test:go job 14963 · `internal/flags` ×4 (`TestSizedExpectationPersistenceRoundTrip`, `TestPermittedRecordSurvivesReload`, `TestClearedCountSurvivesReload`, `TestSetVerdictPersistsAndSurvivesReload`: `flushForTest: context deadline exceeded`) and `internal/backupvault` `TestUnlockRacingRemovePassphraseDoesNotRevive` (`returned <nil>, want ErrNoPassphrase`); `internal/api` took 214 s. Pipeline 1179's gate:image build was running alongside. Retry 14983 on the same commit passed.
+
+## live-log-every-rule: goTo("Log every rule") times out (10 s) on the runner
+
+- 2026-09-16 · 51dc2834 (chore/deps-2026-09-16, !1062) · pipeline 1179, gate:scenarios 3/4, job 14955 · `timed out waiting for card "log-every-rule"` with the card present in the deck at offset 3600. **Not a flake:** the retry (job 14984) failed identically and the fault reproduced locally under Playwright 1.63 alone — a `scrollend` from an interrupted roll ended the new roll early. Fixed in #1248 (Deck: scrollend only ends a roll once the deck has arrived). Kept here so the symptom is findable.
+
+## TestRunMigrateDataEndToEnd: refuses a destination it just emptied
+
+- 2026-09-14 · b0cf5bb1 (feature/wizard-upgrade-safety, local, `go test ./...`) · full-suite run · failed once; 23 reruns at the same commit (`go test . -count=3` and `-run TestRunMigrateDataEndToEnd -count=20`) all passed. Two agents were running the suite on this workstation at the same time.
+  **What the symptom is not:** the reported line, `new-data is not empty (6 entr(y/ies))`, is the test's own second `runMigrateData` call being refused, which is exactly what it asserts — it is expected output, not the failure. The real failing assertion was not captured, so this entry records a sighting and nothing more. The test writes under `t.TempDir()`, so a path collision with the peer run is not the explanation either. Capture the full `--- FAIL` block next time before concluding anything.
+
 ## live-account-menu: the foot has no uptime segment
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
+
+## live-watchlist-manage: the drawer's "fence now" button never becomes stable
+
+- 2026-09-19 · 53b935f4 (fix/v060-audit, local `make live-check`) · 102 scenarios, this one the only failure · `waiting for locator('.wt-drawer').getByRole('button', { name: /fence now/ })` → "waiting for element to be visible, enabled and stable" three times, then the 30 s timeout. Run alone at the same commit on a fresh instance: PASS. The suite's previous run at the parent commit passed this scenario; the three other failures in that run were a real ordering fault (routers left behind by earlier scenarios) and are fixed, so this one is on its own. First sighting.
+
+- 2026-09-20 · dd84ce3b (fix/v060-audit, !1069) · pipeline 1305, gate:scenarios 4/4 (job 17145) · same `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs`: "element is not stable", then "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed docs and two Go error strings, no frontend file. Retried as job 17159. With the 2026-09-11 sighting above (same button, same TimeoutError, filed under the "learn again" heading before this one existed) this is the third: #1301.
+
+- 2026-09-20 · f3d79bce (fix/v060-audit, !1069) · pipeline 1309, gate:scenarios 4/4 (job 17233) · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed a shell script and a CI comment, no frontend file. Fourth sighting, on #1301. Retried as a job retry.
+
+- 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", then "detached from the DOM" on every retry, 30s. First sighting under Firefox, so the engine is not the cause. Fifth sighting, on #1301.
+- 2026-09-20 · dd0607a5 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · one shard of four · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", "outside of the viewport", then "detached from the DOM" on every retry, 30s; the other 106 scenarios passed. The commit changed docs/flakes.md only. Sixth sighting, on #1301.
+
+- 2026-09-20 · 6341af40 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable" on every retry, 30s. The commits since the sixth sighting touch LiveTable, the changelog, two screenshots and one other scenario script. Seventh sighting, on #1301.
+
+## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
+
+- 2026-09-19 · df4ba9af (fix/v060-audit, local `python3 -m unittest scripts.seed_demo_test`) · full-file run, this the only failure · `AssertionError: 2 != 1` on `len(cam_beacon_lines)`. `lines_for_round40`'s DNS-beacon block (`scripts/seed-demo.py` ~1169) fires deterministically off `elapsed // CAM_BEACON_SECONDS`, but an earlier, unrelated block in the same function can independently emit a second line matching the test's own filter (cam-porch's mac plus `r40-iot-srv-dns`): it calls `random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])` for a random `iot`-zone host, so whenever that random pick lands on cam-porch and `r40-iot-srv-dns` together, the count goes to 2. **Root cause confirmed, not just suspected:** the test seeds nothing and reads the shared `random` module, which Python seeds from OS entropy fresh in every process -- `CamBeaconTests` run completely alone (`python3 -m unittest scripts.seed_demo_test.CamBeaconTests`, nothing else in the process) still failed 2 of 20 runs, so this has nothing to do with test order or other tests' random draws; it is a roughly 1-in-10 chance on any given process regardless of what else runs. (An earlier note here blamed #1272's new tests shifting shared state -- ruled out by this isolation run; kept as a correction rather than deleted per this file's own header about superseded reasoning.)
+
+## security:trivy-fs: the vulnerability database will not download
+
+- 2026-09-20 · f57448b7 (fix/v060-audit) · pipeline 1298, `security:trivy-fs` (job 17011) · `FATAL run error: init error: DB error: failed to download vulnerability DB ... Get "https://mirror.gcr.io/v2/": dial tcp: lookup mirror.gcr.io on 192.168.254.1:53: server misbehaving`. DNS on the runner failed to resolve the mirror; the scan never started. Retried as job 17017 on the same commit and it passed in 41s, so nothing in the tree changed the outcome. Worth knowing if it recurs: the job depends on an external registry being reachable at run time, so a third sighting should probably be an issue about caching the database rather than about the scanner.
+
+## live-topography-port-trace: the picker offers no port chips on first read
+
+- 2026-09-20 · 72965118 (fix/v060-audit, !1069) · pipeline 1307, gate:scenarios 4/4 (job 17183) · `FAIL the picker offers a port the window carried ()` and `the picker offers a port only a rule names`, both with an empty chip list, every check before them passed. The script waits for the `.pill.p.edit` bar (`live-topography-port-trace.mjs:337`) and reads its `.ports .chip` children in the same beat, so the chips can still be a render behind the bar. The commit changed docs/flakes.md only. Pipeline 1309 on a later head is the re-run. First sighting under this heading; the `.note-t` timeout above is the same scenario at a different check.
+
+## live-city-river: wg0's bridge chip is not there on first read
+
+- 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.
+
+## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
+
+- 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.

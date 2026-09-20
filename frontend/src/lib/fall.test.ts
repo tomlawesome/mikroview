@@ -17,7 +17,7 @@ vi.mock('./api', () => ({
 }))
 
 import { fetchDevices, fetchRouterNat, fetchRouterRules, fetchWatchlistEntries } from './api'
-import { boundariesFromRules, boundaryKeyOf, brokenWatchesByKey, fallState } from './fall.svelte'
+import { boundariesFromRules, boundaryKeyOf, boundaryMatcher, brokenWatchesByKey, fallState, logPrefixSlug } from './fall.svelte'
 import type { WatchlistEntry } from './types'
 
 function rule(over: Partial<RouterFilterRule> = {}): RouterFilterRule {
@@ -148,13 +148,14 @@ describe('boundariesFromRules', () => {
 
   // Amendment (a), Fable's 2026-08-29 review: a pushed rule's own
   // srcAddressList is real evidence of an operator-named group, and
-  // replaces the interface name on that side of the label.
+  // replaces the interface name on that side of the label. #1196 adds
+  // the "(list)" -- see the address-list test below for why.
   it('names the source side from srcAddressList when a pushed rule carries one', () => {
     const bands = boundariesFromRules(
       [rule({ inInterface: 'ether1', outInterface: 'bridge9', srcAddressList: 'lan', log: true })],
       true,
     )
-    expect(bands[0].label).toBe('lan → bridge9')
+    expect(bands[0].label).toBe('lan (list) → bridge9')
     expect(bands[0].srcAddressList).toBe('lan')
     // The raw interface is kept alongside, not discarded.
     expect(bands[0].inInterface).toBe('ether1')
@@ -207,6 +208,120 @@ describe('boundariesFromRules', () => {
       true,
     )
     expect(bands.map((b) => b.label)).toEqual(['a-wan · input', 'z-wan · input'])
+  })
+})
+
+// #1196's ruling, one test per rule. Before it, a pushed rule that did
+// not name both interfaces exactly as the log line prints them keyed as
+// `forward||` while its own traffic keyed as `forward|bridge|ether1`, so
+// the rule's lane read zero and the traffic sat in "not in a pushed
+// table" -- which is most rules on a real router.
+describe('boundaryMatcher (#1196)', () => {
+  function bands(rs: RouterFilterRule[]) {
+    return boundariesFromRules(rs, true)
+  }
+
+  it('gives an interfaced event to a rule that names no interface at all', () => {
+    const b = bands([rule({ chain: 'forward', srcAddressList: 'servers', log: true })])
+    const key = boundaryMatcher(b).keyFor({ chain: 'forward', inInterface: 'bridge', outInterface: 'ether1' })
+    expect(key).toBe(boundaryKeyOf('forward', '', ''))
+  })
+
+  it('gives the event to the most specific fit when several boundaries match', () => {
+    const b = bands([
+      rule({ chain: 'forward', log: true }), // catch-all: fits anything in forward
+      rule({ chain: 'forward', inInterface: 'bridge', log: true }), // fits, one interface named
+      rule({ chain: 'forward', inInterface: 'bridge', outInterface: 'ether1', log: true }), // fits, both named
+    ])
+    const key = boundaryMatcher(b).keyFor({ chain: 'forward', inInterface: 'bridge', outInterface: 'ether1' })
+    expect(key).toBe(boundaryKeyOf('forward', 'bridge', 'ether1'))
+  })
+
+  it('uses the rule a unique log-prefix slug names, over the interfaces it would otherwise match on', () => {
+    const b = bands([
+      rule({ chain: 'forward', inInterface: 'bridge', outInterface: 'ether1', log: true }),
+      // The slug'd rule names no interface, so the interface match above
+      // would win on specificity -- the slug is the rule identifying
+      // itself, and outranks it.
+      rule({ chain: 'forward', inInterface: 'wg-personal', logPrefix: 'A|wg-out|', log: true }),
+    ])
+    const key = boundaryMatcher(b).keyFor({
+      chain: 'forward',
+      inInterface: 'bridge',
+      outInterface: 'ether1',
+      ruleLabel: 'wg-out',
+    })
+    expect(key).toBe(boundaryKeyOf('forward', 'wg-personal', ''))
+  })
+
+  it('ignores a slug more than one pushed rule wears, since it names no single boundary', () => {
+    // The bulk tune-logging prefix is action-only ("A|accept|",
+    // internal/routeros/commands.go), so every accept rule carries it.
+    const b = bands([
+      rule({ chain: 'forward', inInterface: 'ether5', logPrefix: 'A|accept|', log: true }),
+      rule({ chain: 'forward', inInterface: 'bridge', logPrefix: 'A|accept|', log: true }),
+    ])
+    const key = boundaryMatcher(b).keyFor({ chain: 'forward', inInterface: 'bridge', ruleLabel: 'accept' })
+    expect(key).toBe(boundaryKeyOf('forward', 'bridge', ''))
+  })
+
+  it('leaves an event unmatched only when no pushed rule shares its chain', () => {
+    const m = boundaryMatcher(bands([rule({ chain: 'forward', log: true })]))
+    expect(m.keyFor({ chain: 'forward', inInterface: 'anything', outInterface: 'anything' })).not.toBe('')
+    expect(m.keyFor({ chain: 'input', inInterface: 'ether1' })).toBe('')
+  })
+
+  it('reports whether a pushed rule shares an unmatched event\'s chain, for the lane to say why', () => {
+    // The two reasons traffic can be unmatched: a chain nothing was
+    // pushed for, or a chain whose rules all name other interfaces.
+    const m = boundaryMatcher(bands([rule({ chain: 'forward', inInterface: 'ether5', log: true })]))
+    expect(m.keyFor({ chain: 'forward', inInterface: 'bridge' })).toBe('')
+    expect(m.chainIsPushed('forward')).toBe(true)
+    expect(m.chainIsPushed('srcnat')).toBe(false)
+  })
+
+  it('places an event the same way on every pass when two equally specific boundaries fit', () => {
+    const rs = [
+      rule({ chain: 'forward', inInterface: 'bridge', log: true }),
+      rule({ chain: 'forward', outInterface: 'ether1', log: true }),
+    ]
+    const e = { chain: 'forward', inInterface: 'bridge', outInterface: 'ether1' }
+    const first = boundaryMatcher(bands(rs)).keyFor(e)
+    expect(first).not.toBe('')
+    expect(boundaryMatcher(bands([...rs].reverse())).keyFor(e)).toBe(first)
+  })
+})
+
+describe('logPrefixSlug (#1196)', () => {
+  it('reads the slug out of mikroview\'s own log-prefix convention', () => {
+    expect(logPrefixSlug('A|lan-wan|')).toBe('lan-wan')
+    expect(logPrefixSlug('N|masq|')).toBe('masq')
+  })
+
+  it('reads no slug from a prefix that is not the convention', () => {
+    expect(logPrefixSlug('')).toBe('')
+    expect(logPrefixSlug(undefined)).toBe('')
+    expect(logPrefixSlug('firewall: ')).toBe('')
+    expect(logPrefixSlug('Z|lan-wan|')).toBe('') // not an action code
+    expect(logPrefixSlug('A|lan-wan')).toBe('') // no terminator
+  })
+})
+
+// #1196 item 3: an address list is a list of hosts. Printed bare in the
+// in-interface's place, a list named after a machine ("host-docker-01")
+// made the lane read as that one machine.
+describe('a boundary scoped by address list reads as a list (#1196)', () => {
+  it('says "(list)" beside the list name, with an out-interface', () => {
+    const bands = boundariesFromRules([rule({ srcAddressList: 'servers', outInterface: 'wan', log: true })], true)
+    expect(bands[0].label).toBe('servers (list) → wan')
+  })
+
+  it('says "(list)" on a chain-only boundary too', () => {
+    const bands = boundariesFromRules(
+      [rule({ chain: 'input', srcAddressList: 'host-docker-01', log: true })],
+      true,
+    )
+    expect(bands[0].label).toBe('host-docker-01 (list) · input')
   })
 })
 

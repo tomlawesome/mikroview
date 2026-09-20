@@ -4,7 +4,7 @@
 // boundary-direction logs -> logged; nothing logs but an admin declared
 // it intentionally quiet -> quiet; neither -> dark.
 //
-// It lived in three copies -- tuneLogging.ts's darkBoundaryKeys,
+// It lived in three copies -- logEveryRule.ts's darkBoundaryKeys,
 // Topography.svelte's coverageOf and zoneCaption -- and cityInputFrom
 // carried a fourth that read the policy edges alone and never the
 // declarations, so a boundary declared quiet still came out dark on the

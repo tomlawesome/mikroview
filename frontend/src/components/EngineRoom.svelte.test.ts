@@ -16,7 +16,7 @@
 // (#657), so a `user` or `viewer` session gets neither group at all, not
 // a read-only rendering of one.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
@@ -61,6 +61,7 @@ vi.mock('../lib/api', () => ({
   ]),
   createUser: vi.fn(),
   deleteUser: vi.fn(),
+  resetUserPassword: vi.fn(),
   fetchTokens: vi.fn(async () => [
     { id: 't1', name: 'rb5009-ingest', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-01T00:00:00Z', lastUsedAt: '2026-08-24T14:02:00Z' },
   ]),
@@ -99,6 +100,14 @@ vi.mock('../lib/api', () => ({
     totalBytes: 0,
   })),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
+  fetchDroplist: vi.fn(async () => ({
+    listName: 'mikroview-drops',
+    entries: [],
+    key: { present: false },
+    ownRangesKnown: false,
+    setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+  })),
+  fetchConfigUpgrade: vi.fn(async () => ({ version: 'v1.2.3', settings: [] })),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -117,11 +126,22 @@ import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
 import { persistenceState } from '../lib/persistence.svelte'
-import { fetchHistorySettings as fetchHistorySettingsReal } from '../lib/api'
+import { watchlistState } from '../lib/watchlist.svelte'
+import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
+import { wizardState } from '../lib/wizard.svelte'
+import {
+  fetchHistorySettings as fetchHistorySettingsReal,
+  fetchRouterBackups as fetchRouterBackupsReal,
+  fetchDroplist as fetchDroplistReal,
+  fetchConfigUpgrade as fetchConfigUpgradeReal,
+} from '../lib/api'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
+const fetchRouterBackups = vi.mocked(fetchRouterBackupsReal)
+const fetchDroplist = vi.mocked(fetchDroplistReal)
+const fetchConfigUpgrade = vi.mocked(fetchConfigUpgradeReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -150,6 +170,8 @@ beforeEach(() => {
   appState.stats = stats()
   appState.devices = []
   flagsState.list = []
+  watchlistState.entries = []
+  watchlistState.coverage = {}
   detectorSettingsState.list = []
   usersState.list = []
   tokensState.list = []
@@ -162,6 +184,10 @@ beforeEach(() => {
   // as detectorSettingsState.list/flagsState.list above.
   persistenceState.info = null
   deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
+  // wizardState is a module-level singleton, not a fixture scoped to one
+  // test, so the address the drop-list test below sets on it would
+  // otherwise leak into whatever test renders EngineRoom next.
+  wizardState.address = ''
 })
 
 describe('The settings shelf (#633)', () => {
@@ -175,34 +201,69 @@ describe('The settings shelf (#633)', () => {
       expect(screen.getByText(name)).toBeTruthy()
     }
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings', 'Log every rule']) {
       expect(within(shelf).getByText(card)).toBeTruthy()
     }
     // #735: the "seven cards, in the order you keep them" caption is
     // gone -- its purpose (the owner: "obvious") was redundant with the
-    // cards' own drag handle and position aria-label. Seven cards for
-    // an admin is now checked by counting them directly.
-    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    // cards' own drag handle and position aria-label. The count is
+    // checked directly instead -- eight since #1134 put Log every rule
+    // on the deck.
+    expect(within(shelf).getAllByRole('button')).toHaveLength(8)
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
 
   // #657: Entities carries `edit: true` (#653's widening to the user
   // tier), and this page is itself gated to the same tier -- so a
-  // `user` who reaches Settings at all sees the same seven cards an
+  // `user` who reaches Settings at all sees the same eight cards an
   // admin does. Named for the role it actually renders, unlike the
   // pre-#657 version of this test, which called that tier "viewer"
   // when only `user` and `admin` can ever reach this page.
-  it("a user's shelf carries all seven cards, same as an admin's", async () => {
+  it("a user's shelf carries all eight cards, same as an admin's", async () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(EngineRoom)
     await settle()
 
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
-    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
+    expect(within(shelf).getAllByRole('button')).toHaveLength(8)
     expect(within(shelf).getByText('Entities')).toBeTruthy()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
+    expect(within(shelf).getByText('Log every rule')).toBeTruthy()
+  })
+
+  it('the docket card reads the same watcher count the scene bar does, and leaves the flag count to it (#1156)', async () => {
+    // The operator had the bar's eye saying 5 while the card beside it
+    // said 6, and "67" flags printed twice on one screen. The card used
+    // entries.length -- every watch, including the ring-broken and the
+    // switched-off -- where the bar reads heldCount.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [
+      { id: 'f1', type: 'port_scan', cleared: false, provisional: false },
+      { id: 'f2', type: 'port_scan', cleared: false, provisional: false },
+    ] as never
+    watchlistState.entries = [
+      { id: 'w1', enabled: true },
+      { id: 'w2', enabled: true },
+      { id: 'w3', enabled: true },
+      { id: 'w4', enabled: true },
+      // broken: enabled, but no pushed rule can produce a matching event
+      { id: 'w5', enabled: true },
+      // switched off: never counted by either marker
+      { id: 'w6', enabled: false },
+    ] as never
+    watchlistState.coverage = { w5: 'no-logging' }
+    render(EngineRoom)
+    await settle()
+
+    const docket = screen.getByRole('button', { name: /The docket, position/ })
+    expect(within(docket).getByText('◉ 4')).toBeTruthy()
+    expect(within(docket).getByText('○1')).toBeTruthy()
+    expect(docket.textContent).not.toContain('⚑')
+    // and the bar's own reading is the one the card now matches
+    expect(watchlistState.heldCount).toBe(4)
   })
 
   it('reordering a card moves the landing with it', async () => {
@@ -295,8 +356,33 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByText(/this is you/)).toBeTruthy()
     expect(screen.getByText('console-only')).toBeTruthy()
     expect(screen.getByText('kai')).toBeTruthy()
+    // #1171: every tier's row says what that account may do. kai is the
+    // user tier, which used to be the only one with no pill at all.
+    expect(screen.getByText('admin')).toBeTruthy()
+    expect(screen.getByText('can change things')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '+ let someone in' })).toBeTruthy()
+  })
+
+  // #1194: the wizard can leave two keys with the same name, both
+  // "never spoke — yet", and each with its own revoke -- the mint time
+  // is what tells the operator which of the two is the older one.
+  it('says when each key was minted, so two of the same name can be told apart', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.now = Date.parse('2026-08-24T14:10:00Z')
+    const { fetchTokens } = await import('../lib/api')
+    vi.mocked(fetchTokens).mockResolvedValueOnce([
+      { id: 't8', name: 'setup-172.23.0.1', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-24T11:10:00Z' },
+      { id: 't9', name: 'setup-172.23.0.1', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-24T14:05:00Z' },
+    ])
+    render(EngineRoom)
+    await settle()
+    expect(screen.getByText('minted 3h ago')).toBeTruthy()
+    expect(screen.getByText('minted 5m ago')).toBeTruthy()
+    // Both still say nothing has used them -- the mint time is the only
+    // thing separating the two rows.
+    expect(screen.getAllByText(/never spoke — yet/)).toHaveLength(2)
   })
 
   it('minting a key shows the once-only reveal, and done lets the form close', async () => {
@@ -322,7 +408,7 @@ describe('The settings shelf (#633)', () => {
 
     expect(createToken).toHaveBeenCalledWith('nas-read', 'api', undefined)
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
-    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // A read-only key gets no RouterOS lines.
     expect(screen.queryByText(/copy for RouterOS/)).toBeNull()
 
@@ -437,6 +523,56 @@ describe('The settings shelf (#633)', () => {
     expect(deleteUser).toHaveBeenCalledWith('u2')
   })
 
+  // #1251. The verb kills somebody's password outright, so it arms
+  // before it acts like remove and revoke beside it, and what it mints
+  // is shown exactly once.
+  it('reset password arms before it acts, then shows the code once', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { resetUserPassword } = await import('../lib/api')
+    vi.mocked(resetUserPassword).mockResolvedValue({
+      username: 'kai',
+      code: 'ABCD-EFGH-JKLM-NPQR',
+      expiresAt: '2026-09-19T00:00:00Z',
+    })
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'reset password' }))
+    await settle()
+    expect(resetUserPassword).not.toHaveBeenCalled()
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'confirm — their password stops working now' }),
+    )
+    await settle()
+
+    expect(resetUserPassword).toHaveBeenCalledWith('u2')
+    expect(screen.getByTestId('reset-code').textContent).toBe('ABCD-EFGH-JKLM-NPQR')
+
+    // Closing it is the end of the code: nothing holds it afterwards.
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await settle()
+    expect(screen.queryByTestId('reset-code')).toBeNull()
+  })
+
+  // An SSO account's password belongs to its provider and the server
+  // refuses (409), so the verb is absent rather than offered and denied.
+  it('offers no reset for an SSO account', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: false, sso: true },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByRole('button', { name: 'reset password' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+  })
+
   it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -512,7 +648,7 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.getByText('mv1_4c21secret9b0d')).toBeTruthy()
-    expect(screen.getByText(/shown once — mikroview keeps only its fingerprint/)).toBeTruthy()
+    expect(screen.getByText(/shown once — MikroView keeps only its fingerprint/)).toBeTruthy()
     // The revealed token does not also render as an ordinary row.
     expect(screen.queryAllByText('nas-read')).toHaveLength(1)
   })
@@ -640,6 +776,45 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
   })
 
+  it('router backups stacks its rows until there is a strip to draw beside them (#1153)', async () => {
+    // The left column holds the generation strips; with none drawn the
+    // rows used to sit alone in column two, starting 600px in with the
+    // whole left half blank. No diagram means the group stacks, the
+    // same answer `dnokey`/`dfail` already give the disk group.
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    // The mocked default: backups off, no router has pushed a pair.
+    expect(document.getElementById('bakg')?.classList.contains('dnodiagram')).toBe(true)
+    cleanup()
+
+    fetchRouterBackups.mockResolvedValueOnce({
+      enabled: true,
+      keyUnreadable: false,
+      port: ':2222',
+      routers: [
+        {
+          device: 'rb5009',
+          generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }],
+          intervalKnown: false,
+          missed: 0,
+        },
+      ],
+      totalGenerations: 1,
+      totalRouters: 1,
+      totalBytes: 1024,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(document.getElementById('bakg')?.classList.contains('dnodiagram')).toBe(false)
+  })
+
   it('the disk group sits directly after memory, with its statements (#910)', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -699,5 +874,499 @@ describe('The settings shelf (#633)', () => {
 
     expect(signOutEverywhere).toHaveBeenCalled()
     expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
+  })
+
+  // #1142: the door labels were clipped mid-word ("6514 · TLS · listenir")
+  // because they start at x=396 and ran past a 520-wide viewBox. jsdom does
+  // not lay text out, so the check is arithmetic: a monospace glyph at the
+  // labels' font size is ~0.6em wide, so the label must fit in what is left
+  // of the viewBox.
+  it('the ingest diagram is wide enough for its two door labels', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    const svg = document.querySelector<SVGSVGElement>('#engineroom-ingest .stpath')!
+    const boxWidth = Number(svg.getAttribute('viewBox')!.split(' ')[2])
+    const labels = [...svg.querySelectorAll<SVGTextElement>('text.sp-k, text.sp-n')].filter(
+      (t) => Number(t.getAttribute('x')) > 300,
+    )
+    expect(labels.length).toBe(2)
+    for (const label of labels) {
+      const fontSize = label.classList.contains('sp-k') ? 10 : 9.5
+      const width = (label.textContent ?? '').trim().length * fontSize * 0.6
+      expect(Number(label.getAttribute('x')) + width).toBeLessThanOrEqual(boxWidth)
+    }
+  })
+
+  // #1205: an upgraded install's router can be missing
+  // remote-log-format=syslog with nothing on screen to say so. The
+  // setup-drift line only appears once the server has flagged a
+  // sustained run from a *declared* device (internal/syslog's
+  // oversizedIsSetupDrift) -- it must name that router and point at the
+  // docs, and it must stay silent for every other shape of the same
+  // counters.
+  it('names the router and links the docs once the server flags a setup-drift run', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.stats = stats({
+      syslog: {
+        inUse: 1,
+        capacity: 256,
+        reservedForConfigured: 8,
+        rejected: 0,
+        rejectedConfigured: 0,
+        dropped: 0,
+        oversized: 42,
+        rejectedConfiguredHosts: [],
+        oversizedHost: '192.168.254.1',
+        loss: {
+          dropped: { recent: 0, lastAt: null, active: false },
+          rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+          rejected: { recent: 0, lastAt: null, active: false },
+          oversized: {
+            recent: 42,
+            lastAt: new Date().toISOString(),
+            active: true,
+            host: '192.168.254.1',
+            declared: true,
+            runs: 6,
+            setupDrift: true,
+          },
+        },
+      },
+    })
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('router setup out of date')).toBeTruthy()
+    expect(screen.getByText(/192\.168\.254\.1 is likely missing/)).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'RouterOS setup' })
+    expect(link.getAttribute('href')).toBe(
+      'https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md',
+    )
+  })
+
+  it('says nothing about setup drift for an ordinary oversized run', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.stats = stats({
+      syslog: {
+        inUse: 1,
+        capacity: 256,
+        reservedForConfigured: 0,
+        rejected: 0,
+        rejectedConfigured: 0,
+        dropped: 0,
+        oversized: 3,
+        rejectedConfiguredHosts: [],
+        oversizedHost: '203.0.113.9',
+        loss: {
+          dropped: { recent: 0, lastAt: null, active: false },
+          rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+          rejected: { recent: 0, lastAt: null, active: false },
+          oversized: {
+            recent: 3,
+            lastAt: new Date().toISOString(),
+            active: true,
+            host: '203.0.113.9',
+            declared: false,
+            runs: 3,
+            setupDrift: false,
+          },
+        },
+      },
+    })
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('router setup out of date')).toBeNull()
+  })
+
+  // #1198: the ingest card's own no-GeoIP line -- same fact, same
+  // wording as the country filter's disabled row (FilterBar.svelte.test.ts),
+  // so a reader who has seen one recognises the other. Set directly
+  // rather than mocking fetchHealthz, same reasoning as that file's own
+  // geoip describe block: ensureLoaded()'s fetch is a same-value no-op
+  // once anything in this module has mounted before.
+  describe('the no-GeoIP row (#1198)', () => {
+    afterEach(() => {
+      geoipState.enabled = null
+    })
+
+    it('says no GeoIP database once the server reports none configured', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      geoipState.enabled = false
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.getByText('geoip')).toBeTruthy()
+      const link = screen.getByRole('link', { name: 'see docs ▸' })
+      expect(link.getAttribute('href')).toBe(GEOIP_DOCS_URL)
+    })
+
+    it('says nothing once a database is configured', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      geoipState.enabled = true
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.queryByText('geoip')).toBeNull()
+    })
+  })
+
+  // #1234: a router whose mikroview logging block was pasted more than
+  // once floods every downstream count without anything downstream
+  // being able to tell -- this row names the source, the apparent copy
+  // count and the fix, mirroring the setup-drift row's own
+  // active-vs-not shape just above.
+  describe('the duplicate logging rules row (#1234)', () => {
+    function syslogWithLoss(duplicate?: { host: string; copyCount: number }) {
+      return stats({
+        syslog: {
+          inUse: 1,
+          capacity: 256,
+          reservedForConfigured: 0,
+          rejected: 0,
+          rejectedConfigured: 0,
+          dropped: 0,
+          oversized: 0,
+          rejectedConfiguredHosts: [],
+          oversizedHost: '',
+          loss: {
+            dropped: { recent: 0, lastAt: null, active: false },
+            rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
+            rejected: { recent: 0, lastAt: null, active: false },
+            oversized: { recent: 0, lastAt: null, active: false, declared: false, runs: 0 },
+            ...(duplicate
+              ? {
+                  duplicate: {
+                    recent: 12,
+                    lastAt: new Date().toISOString(),
+                    active: true,
+                    host: duplicate.host,
+                    declared: true,
+                    runs: 0,
+                    copyCount: duplicate.copyCount,
+                  },
+                }
+              : {}),
+          },
+        },
+      })
+    }
+
+    it('names the source, the copy count and the cleanup command while a duplicate is active', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = syslogWithLoss({ host: '203.0.113.9', copyCount: 2 })
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.getByText('duplicate logging rules')).toBeTruthy()
+      expect(screen.getByText(/203\.0\.113\.9 appears to be sending every line twice over/)).toBeTruthy()
+      expect(screen.getByText('/system logging remove [find action=mikroview]')).toBeTruthy()
+    })
+
+    it('says nothing while no duplicate is active', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = syslogWithLoss()
+      render(EngineRoom)
+      await settle()
+
+      expect(screen.queryByText('duplicate logging rules')).toBeNull()
+    })
+  })
+
+  // #1109: checking reads events straight out of the buffer by cursor, so
+  // the ingest group has to say which of two very different things is
+  // true -- running late on a backlog it will work through, or events
+  // that left the buffer before it ever reached them. Read off the whole
+  // row rather than one span, because the copy is the row.
+  describe('checking (#1109)', () => {
+    function ingestRow(label: string): string | null {
+      const section = document.querySelector('#engineroom-ingest')!
+      for (const row of section.querySelectorAll('.orow')) {
+        const first = row.querySelector('span')
+        if (first?.textContent?.trim() === label) {
+          return (row.textContent ?? '').replace(/\s+/g, ' ').trim()
+        }
+      }
+      return null
+    }
+
+    it('says checking is caught up when the cursor is on the newest event', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 0, behindSeconds: 0, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBe('Checking: caught up')
+    })
+
+    it('says how far behind and how late it is while it catches up', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 4200, behindSeconds: 3.4, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBe('Checking: 4,200 events behind (3 s)')
+    })
+
+    it('says "event" for one, not "events"', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 1, behindSeconds: 0.2, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBe('Checking: 1 event behind (0 s)')
+    })
+
+    it('shows the outrun count only once something really went unchecked', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats({ engine: { behind: 0, behindSeconds: 0, outrun: 0 } })
+      render(EngineRoom)
+      await settle()
+      expect(ingestRow('Outrun:')).toBeNull()
+
+      cleanup()
+      appState.stats = stats({ engine: { behind: 12, behindSeconds: 1, outrun: 12000 } })
+      render(EngineRoom)
+      await settle()
+      expect(ingestRow('Outrun:')).toBe('Outrun: 12,000')
+    })
+
+    it('says nothing at all against a server that reports no engine', async () => {
+      authState.state = 'authenticated'
+      authState.role = 'admin'
+      appState.stats = stats()
+      render(EngineRoom)
+      await settle()
+
+      expect(ingestRow('Checking:')).toBeNull()
+      expect(ingestRow('Outrun:')).toBeNull()
+    })
+  })
+})
+
+// #1218 audit finding 15: EngineRoom's three newest groups -- new
+// settings (#1218), router backups (#394 round 44) and drop list
+// (#1225/#461), landed in that order across three separate recent
+// commits -- shipped with no EngineRoom-level test at all (router
+// backups had one narrow #1153 regression test, the other two none).
+// Each delegates to a child component with its own full internal test
+// file (ConfigUpgrade.svelte.test.ts, RouterBackups.svelte.test.ts,
+// Droplist.svelte.test.ts), so what belongs here is the integration
+// layer those don't cover: the group is mounted under its own heading,
+// in the right position, admin-gated, wired to the right props, and
+// answers the same dfail "the server did not answer" shape the older
+// groups already do.
+describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
+  it('mounts "new settings" right after ingest, before keys, admin-only', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const group = document.getElementById('engineroom-new-settings')
+    expect(group).toBeTruthy()
+    expect(group?.querySelector('h3')?.textContent).toBe('new settings')
+    // ConfigUpgrade really is the thing mounted here, not an empty
+    // shell: its own "nothing missing" reading, off the mocked default.
+    expect(within(group as HTMLElement).getByText(/Nothing new/)).toBeTruthy()
+
+    // Document order: ingest's own group, then this one, then keys --
+    // "straight after ingest" per the component's own comment.
+    const headings = Array.from(document.querySelectorAll('.stsection h3')).map((h) => h.textContent)
+    const ingestIndex = headings.indexOf('ingest')
+    const newSettingsIndex = headings.indexOf('new settings')
+    const keysIndex = headings.indexOf('keys')
+    expect(ingestIndex).toBeLessThan(newSettingsIndex)
+    expect(newSettingsIndex).toBeLessThan(keysIndex)
+  })
+
+  it('"new settings" actually renders what the server sends, not just its own empty state', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchConfigUpgrade.mockResolvedValueOnce({
+      version: 'v1.3.0',
+      settings: [{ key: 'geoip', block: '# geoip:\n#   dbPath: /etc/mikroview/GeoLite2-Country.mmdb' }],
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const group = document.getElementById('engineroom-new-settings') as HTMLElement
+    expect(within(group).getByText(/dbPath: \/etc\/mikroview\/GeoLite2-Country\.mmdb/)).toBeTruthy()
+  })
+
+  it('a viewer sees no "new settings" group at all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('engineroom-new-settings')).toBeNull()
+    expect(screen.queryByText('new settings')).toBeNull()
+  })
+
+  it('mounts "router backups" right after disk, with the router the server reports', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchRouterBackups.mockResolvedValueOnce({
+      enabled: true,
+      keyUnreadable: false,
+      port: ':2222',
+      routers: [{ device: 'rb5009', generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 }],
+      totalGenerations: 1,
+      totalRouters: 1,
+      totalBytes: 1024,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const disk = document.getElementById('diskg')
+    const backups = document.getElementById('bakg')
+    expect(backups).toBeTruthy()
+    expect(backups?.querySelector('h3')?.textContent).toBe('router backups')
+    expect(disk?.nextElementSibling?.id).toBe('bakg')
+    // RouterBackups really is the thing mounted here, wired to the
+    // fetched resp -- not an empty shell.
+    expect(within(backups as HTMLElement).getByText('rb5009')).toBeTruthy()
+  })
+
+  it('"router backups" answers unknown, with a working ask again, when the server does not', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchRouterBackups.mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const backups = document.getElementById('bakg')
+    expect(backups?.classList.contains('dfail')).toBe(true)
+    expect(within(backups as HTMLElement).getByText(/unknown — the server did not answer/)).toBeTruthy()
+
+    fetchRouterBackups.mockResolvedValueOnce({
+      enabled: false,
+      keyUnreadable: false,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+    })
+    await fireEvent.click(within(backups as HTMLElement).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+
+    expect(document.getElementById('bakg')?.classList.contains('dfail')).toBe(false)
+  })
+
+  it('a viewer sees no "router backups" group at all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('bakg')).toBeNull()
+    expect(screen.queryByText('router backups')).toBeNull()
+  })
+
+  it('mounts "drop list" right after router backups, with the entry the server reports', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [{ cidr: '203.0.113.0/24', addedBy: 'tom', addedAt: '2026-09-14T00:00:00Z', reason: 'ssh brute force' }],
+      key: { present: false },
+      ownRangesKnown: true,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const backups = document.getElementById('bakg')
+    const droplist = document.getElementById('engineroom-droplist')
+    expect(droplist).toBeTruthy()
+    expect(droplist?.querySelector('h3')?.textContent).toBe('drop list')
+    expect(backups?.nextElementSibling?.id).toBe('engineroom-droplist')
+    // Droplist really is the thing mounted here, wired to the fetched
+    // resp -- not an empty shell.
+    expect(within(droplist as HTMLElement).getByText('203.0.113.0/24')).toBeTruthy()
+  })
+
+  // #1260: refreshDroplist used to read GET /api/droplist with
+  // window.location.host, this browser tab's own address, rather than
+  // wizardState.address (#1213 -- the operator's own saved answer to
+  // "what address can your router reach mikroview on?"). The four
+  // printed setup commands (scheduler, drop rule, and the two emergency
+  // blocks) the server bakes into that response are only right when
+  // this call uses the same stored address Droplist.svelte's mintKey
+  // already reads (see its own #1260 test).
+  it('polls the drop list against the operator saved address, not this tab\'s own host', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    wizardState.address = 'operator-saved.example:8443'
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [],
+      key: { present: false },
+      ownRangesKnown: false,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(fetchDroplist).toHaveBeenCalledWith('operator-saved.example:8443')
+  })
+
+  it('"drop list" answers unknown, with a working ask again, when the server does not', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchDroplist.mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const droplist = document.getElementById('engineroom-droplist')
+    expect(droplist?.classList.contains('dfail')).toBe(true)
+    expect(within(droplist as HTMLElement).getByText(/unknown — the server did not answer/)).toBeTruthy()
+
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [],
+      key: { present: false },
+      ownRangesKnown: false,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    await fireEvent.click(within(droplist as HTMLElement).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+
+    expect(document.getElementById('engineroom-droplist')?.classList.contains('dfail')).toBe(false)
+  })
+
+  it('a viewer sees no "drop list" group at all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('engineroom-droplist')).toBeNull()
+    expect(screen.queryByText('drop list')).toBeNull()
   })
 })

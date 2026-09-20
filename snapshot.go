@@ -93,17 +93,17 @@ func (p engineSnapshotPart) Import(raw json.RawMessage, taken, now time.Time) er
 // root, the mode says yes and the write still fails.
 func usableSnapshotDir(log *slog.Logger, dir string) string {
 	if dir == "" {
-		log.Warn("no snapshot directory resolved, so no warm-restart snapshots will be written -- mikroview runs normally and starts cold after the next restart")
+		log.Warn("no snapshot directory resolved, so no warm-restart snapshots will be written -- MikroView runs normally and starts cold after the next restart")
 		return ""
 	}
 	// #nosec G703 -- the snapshot directory from this deployment's own config, not from a request.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Warn(fmt.Sprintf("snapshot directory %s cannot be created (%v) -- mikroview runs normally, but nothing is written and the next restart starts cold", dir, err))
+		log.Warn(fmt.Sprintf("snapshot directory %s cannot be created (%v) -- MikroView runs normally, but nothing is written and the next restart starts cold", dir, err))
 		return ""
 	}
 	probe, err := os.CreateTemp(dir, ".writable-*")
 	if err != nil {
-		log.Warn(fmt.Sprintf("snapshot directory %s is not writable (%v) -- mikroview runs normally, but nothing is written and the next restart starts cold", dir, err))
+		log.Warn(fmt.Sprintf("snapshot directory %s is not writable (%v) -- MikroView runs normally, but nothing is written and the next restart starts cold", dir, err))
 		return ""
 	}
 	name := probe.Name()
@@ -111,6 +111,33 @@ func usableSnapshotDir(log *slog.Logger, dir string) string {
 	// #nosec G703 -- removes the probe file CreateTemp just made in that same directory.
 	os.Remove(name)
 	return dir
+}
+
+// snapshotKeyState logs which of the three states history.keyFile is in
+// and reports whether a restore may proceed -- mirroring the switch
+// openStorage already runs for the state store's own startup line
+// (storage.go), so the two lines describing the same key never
+// disagree (#1211).
+//
+// Before this, the caller only checked "is there a key", which is nil
+// in both "no history.keyFile configured" and "history.keyFile is set
+// but unusable" -- so an operator with an unreadable key file saw the
+// storage line correctly warn that it couldn't be used, then the very
+// next line claim no key was configured at all. Naming the cause when
+// it's known (permission denied, too short, ...) follows the pattern
+// the router-backup vault's own key-load line already gets right
+// (openRouterBackupVault, backups.go).
+func snapshotKeyState(log *slog.Logger, keyPresent bool, keyErr error) (usable bool) {
+	switch {
+	case keyErr != nil:
+		log.Warn(fmt.Sprintf("warm-restart snapshots are off: history.keyFile is set but could not be used (%v) -- counters, detector windows and device first-seen dates all start cold after every restart", keyErr))
+		return false
+	case !keyPresent:
+		log.Info("warm-restart snapshots are off: no history.keyFile configured -- counters, detector windows and device first-seen dates all start cold after every restart")
+		return false
+	default:
+		return true
+	}
 }
 
 // restoreSnapshot puts back the newest usable snapshot in dir and says

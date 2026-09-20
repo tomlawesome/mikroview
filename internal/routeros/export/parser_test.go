@@ -4,6 +4,7 @@ package export
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -311,5 +312,148 @@ func TestQuoteRoundTripsThroughUnquote(t *testing.T) {
 		if got := unquote(Quote(s)); got != s {
 			t.Errorf("unquote(Quote(%q)) = %q, want %q", s, got, s)
 		}
+	}
+}
+
+// TestQuoteEscapesDollar covers the security fix for #(export.Quote /
+// commands.quote drift): a rule comment or log-prefix out of an
+// uploaded /export is attacker-controlled (whoever can write a rule on
+// the router), and the result is pasted straight into a RouterOS
+// terminal by an admin. RouterOS expands `$[cmd]` and `$name` inside
+// any double-quoted string it parses, not only inside a script's own
+// source="..." body, so a comment of `blocked $[/user add name=x]`
+// must not reach the terminal with its `$` unescaped -- otherwise
+// pasting the generated `[find comment="..."]` command runs the
+// attacker's command instead of merely matching on it.
+func TestQuoteEscapesDollar(t *testing.T) {
+	s := `blocked $[/user add name=x] and $name too`
+	got := Quote(s)
+	if !strings.Contains(got, `\$[`) {
+		t.Errorf("Quote(%q) = %q, want an escaped `\\$[`", s, got)
+	}
+	if !strings.Contains(got, `\$name`) {
+		t.Errorf("Quote(%q) = %q, want an escaped `\\$name`", s, got)
+	}
+	if strings.Contains(strings.ReplaceAll(got, `\$`, ``), `$`) {
+		t.Errorf("Quote(%q) = %q, still contains an unescaped `$`", s, got)
+	}
+}
+
+// TestParseReadsConnectionStateAndFlagsEveryPacketRules is #1230's
+// per-rule half: the Log every rule page has to be able to say which
+// rules log per packet rather than per connection, so the parser keeps
+// connection-state and Rule answers for itself.
+//
+// The three-value spelling is the one that matters -- RouterOS 7's own
+// default firewall writes established,related,untracked, and an exact
+// comparison against established,related is what missed it in the bulk
+// wizard block.
+func TestParseReadsConnectionStateAndFlagsEveryPacketRules(t *testing.T) {
+	text := `# 2026/09/01 10:00:00 by RouterOS 7.24.1
+/ip firewall filter
+add action=accept chain=input comment="defconf" connection-state=established,related,untracked
+add action=accept chain=forward comment="v6 style" connection-state=established,related
+add action=drop chain=input comment="invalid" connection-state=invalid
+add action=accept chain=forward comment="new only" connection-state=new
+add action=accept chain=forward comment="no state at all"
+`
+	ex, err := Parse(text)
+	if err != nil {
+		t.Fatalf("Parse = error %v, want success", err)
+	}
+	if len(ex.FilterRules) != 5 {
+		t.Fatalf("parsed %d rules, want 5", len(ex.FilterRules))
+	}
+
+	for _, tc := range []struct {
+		index int
+		state string
+		every bool
+	}{
+		{0, "established,related,untracked", true},
+		{1, "established,related", true},
+		{2, "invalid", false},
+		{3, "new", false},
+		{4, "", false},
+	} {
+		r := ex.FilterRules[tc.index]
+		if r.ConnectionState != tc.state {
+			t.Errorf("rule %d ConnectionState = %q, want %q", tc.index, r.ConnectionState, tc.state)
+		}
+		if got := r.LogsEveryPacket(); got != tc.every {
+			t.Errorf("rule %d (%s) LogsEveryPacket = %v, want %v", tc.index, r.Comment, got, tc.every)
+		}
+	}
+}
+
+// TestConnectionStateIsNotComparedExactly guards the specific mistake
+// #1230 was: reading the whole value and testing it against
+// "established,related". Order and extra members vary between RouterOS
+// versions and between hand-written rules, and every one of these logs
+// per packet.
+func TestConnectionStateIsNotComparedExactly(t *testing.T) {
+	for _, state := range []string{
+		"established,related",
+		"established,related,untracked",
+		"untracked,established,related",
+		"related",
+		"established",
+		"ESTABLISHED,RELATED",
+	} {
+		if !(Rule{ConnectionState: state}).LogsEveryPacket() {
+			t.Errorf("connection-state=%q was not read as every-packet", state)
+		}
+	}
+	for _, state := range []string{"", "new", "invalid", "new,untracked"} {
+		if (Rule{ConnectionState: state}).LogsEveryPacket() {
+			t.Errorf("connection-state=%q was read as every-packet, want not", state)
+		}
+	}
+}
+
+// TestParseRejectsControlCharsInAttributeValues covers the fix for a
+// control character (CR, NUL, or a Unicode line/paragraph separator)
+// riding an attribute value out of an uploaded /export: Quote escapes
+// only \, " and $, so such a byte would reach a rendered command an
+// admin pastes into a RouterOS terminal unescaped -- a mid-value CR
+// could act as Enter. Each case is refused the same way a secret-shaped
+// key is: a *ControlCharError naming the offending key and line.
+func TestParseRejectsControlCharsInAttributeValues(t *testing.T) {
+	cases := []struct {
+		name, text, wantKey string
+	}{
+		{
+			name:    "carriage return mid-comment",
+			text:    "/ip firewall filter\nadd action=accept chain=forward comment=\"foo\rbar\"\n",
+			wantKey: "comment",
+		},
+		{
+			name:    "NUL byte",
+			text:    "/ip firewall filter\nadd action=accept chain=forward comment=\"foo\x00bar\"\n",
+			wantKey: "comment",
+		},
+		{
+			name:    "U+2028 line separator",
+			text:    "/ip firewall filter\nadd action=accept chain=forward log-prefix=\"foo bar\"\n",
+			wantKey: "log-prefix",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(tc.text)
+			if err == nil {
+				t.Fatalf("Parse succeeded with a control character present, want a *ControlCharError")
+			}
+			ctrlErr, ok := err.(*ControlCharError)
+			if !ok {
+				t.Fatalf("error = %v (%T), want a *ControlCharError", err, err)
+			}
+			if ctrlErr.Key != tc.wantKey {
+				t.Errorf("ControlCharError.Key = %q, want %q", ctrlErr.Key, tc.wantKey)
+			}
+			if ctrlErr.Line != 2 {
+				t.Errorf("ControlCharError.Line = %d, want 2", ctrlErr.Line)
+			}
+		})
 	}
 }

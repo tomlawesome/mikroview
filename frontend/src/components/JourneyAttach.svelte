@@ -16,6 +16,7 @@
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
+  import Fullfall from './Fullfall.svelte'
 
   let copied = $state(false)
 
@@ -50,17 +51,23 @@
 </script>
 
 <div class="attach-screen" data-void>
+  <!-- The same rain as the door (#1214): the operator walked in under
+       it one beat ago, and this screen going flat read as the app
+       switching the weather off. The `attach` mask carves a taller
+       centre than the door's -- this stack carries the command card --
+       so the rain still never crosses what the operator is reading. -->
+  <Fullfall mask="attach" />
   <div class="stack">
     <div class="wm-box"><span class="wm">MIKRO<em>VIEW</em></span></div>
     <p class="account">Signed in as <b>{authState.username}</b> — the account you just made.</p>
-    <p class="lead">Two lines on the router, and mikroview starts hearing it:</p>
+    <p class="lead">Two lines on the router, and MikroView starts hearing it:</p>
     {#if commands}
       <pre class="code">{commands}</pre>
       <button type="button" class="copy" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
     {:else}
       <p class="waiting">Fetching this instance's own address…</p>
     {/if}
-    <p class="note">That is the whole of setup, for now — paste and move on. Mikroview never connects to the router.</p>
+    <p class="note">That is the whole of setup, for now — paste and move on. MikroView never connects to the router.</p>
     <button type="button" class="continue" onclick={() => journeyState.fromAttach()}>Continue</button>
   </div>
 </div>
@@ -69,14 +76,18 @@
   .attach-screen {
     flex: 1;
     min-height: 100%;
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 20px;
     background: var(--bg);
+    overflow: hidden;
   }
 
   .stack {
+    position: relative;
+    z-index: 2;
     width: 100%;
     max-width: 420px;
     display: flex;

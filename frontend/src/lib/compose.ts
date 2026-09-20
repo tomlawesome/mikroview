@@ -40,19 +40,82 @@ function slug(s: string): string {
   )
 }
 
-export function composeCommand(c: ComposeInput): string {
+// The log-prefix in MikroView's own convention (docs/routeros-setup.md,
+// "how MikroView reads your rules"): <A|D>|<label>|, the whole thing at
+// most 15 characters, because internal/routeros/prefix.go reads the
+// action off the first letter and the label up to the closing bar, and
+// a prefix in any other shape lands every hit as "unknown" -- the
+// anonymity a named block exists to retire. The label is the host and
+// the port; the comment carries the full names.
+const PREFIX_MAX = 15
+function logPrefix(action: 'accept' | 'drop', hostName: string, port: number): string {
+  const code = action === 'accept' ? 'A' : 'D'
+  const room = PREFIX_MAX - 3 - String(port).length - 1
+  return `${code}|${slug(hostName).slice(0, room).replace(/-+$/, '')}-${port}|`
+}
+
+// Mirrors internal/routeros/commands.go's QuoteScriptString exactly: a
+// RouterOS double-quoted string still expands `$name`/`$[cmd]` wherever
+// one appears, so hostName/targetName/placeBefore -- all read from the
+// network (a DHCP lease name a LAN device picks for itself, or a synced
+// policy comment) -- get escaped the same way before landing inside
+// comment="..." or place-before=[find comment="..."].
+function quoteRouterOS(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')
+}
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/
+const IPV4_CIDR = /^\/(3[0-2]|[12]?\d)$/
+const IPV6 =
+  /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/
+const IPV6_CIDR = /^\/(12[0-8]|1[01]\d|[1-9]?\d)$/
+
+// Everything placed in src-address=/dst-address= comes straight off the
+// wire (a syslog line anyone reaching that port can send), unquoted and
+// unquotable in RouterOS's own syntax -- so instead of escaping it, this
+// rejects anything that is not a plain IPv4/IPv6 address or CIDR before
+// it ever reaches the printed line.
+function isRouterOsAddress(s: string): boolean {
+  const slash = s.indexOf('/')
+  const addr = slash === -1 ? s : s.slice(0, slash)
+  const suffix = slash === -1 ? '' : s.slice(slash)
+  if (IPV4.test(addr)) return suffix === '' || IPV4_CIDR.test(suffix)
+  if (IPV6.test(addr)) return suffix === '' || IPV6_CIDR.test(suffix)
+  return false
+}
+
+// protocol= is bare too, and the value is the flow event's own
+// protocol field -- same wire origin as the addresses. RouterOS takes
+// a name (tcp, udp, ipv6-icmp, ipsec-esp) or a number.
+const PROTOCOL = /^([a-z][a-z0-9-]{0,15}|\d{1,3})$/
+
+// Line breaks, control characters and Unicode's own line/paragraph
+// separators have no business in anything pasted into a terminal: a
+// quoted string does not survive a newline, and the ingest-side
+// screen (validateFieldText) is a different program's promise.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+
+// The pasteable RouterOS line, or null when any value fails validation
+// -- never a line with an unchecked value in it. Every interpolation
+// below is either validated here (addresses, protocol, port), slugged
+// (log-prefix), constant (chain, action) or quoted (comments).
+export function composeCommand(c: ComposeInput): string | null {
+  if (!isRouterOsAddress(c.hostIp) || !isRouterOsAddress(c.target)) return null
+  if (!PROTOCOL.test(c.proto)) return null
+  if (!Number.isInteger(c.port) || c.port < 0 || c.port > 65535) return null
+  if (CONTROL.test(c.hostName) || CONTROL.test(c.targetName) || CONTROL.test(c.placeBefore ?? '')) return null
   const src = c.direction === 'out' ? c.hostIp : c.target
   const dst = c.direction === 'out' ? c.target : c.hostIp
   const action = c.mode === 'allow' ? 'accept' : 'drop'
-  const name = `${slug(c.hostName)}-${slug(c.targetName)}-${c.port}`
+  const prefix = logPrefix(action, c.hostName, c.port)
   const comment =
     c.mode === 'allow'
       ? `${c.hostName} → ${c.targetName} :${c.port}`
       : `named block: ${c.hostName} → ${c.targetName} :${c.port}`
   const lines = [
     `/ip firewall filter add chain=forward src-address=${src} dst-address=${dst} \\`,
-    `    protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${name}" \\`,
-    `    comment="${comment}"${c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${c.placeBefore}"]` : ''}`,
+    `    protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${prefix}" \\`,
+    `    comment="${quoteRouterOS(comment)}"${c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${quoteRouterOS(c.placeBefore)}"]` : ''}`,
   ]
   return lines.join('\n')
 }

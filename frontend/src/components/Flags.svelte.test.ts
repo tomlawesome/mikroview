@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
@@ -12,6 +12,7 @@ vi.mock('../lib/api', () => ({
   clearAllFlags: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
+  updateFlagNote: vi.fn(),
   fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
   // Kept mocked so a test can assert the shelf never reaches for the
   // definitions catalogue any more (#768): its warming signal rides on
@@ -24,12 +25,17 @@ vi.mock('../lib/api', () => ({
   fetchExpectations: vi.fn(async () => []),
 }))
 
-import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
+import { deleteFlagVerdict, fetchDefinitions, fetchExpectations, fetchFlagEpisode, setFlagVerdict, updateFlagNote } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
 import { topologyNavState } from '../lib/topologyNav.svelte'
+import { droplistNavState } from '../lib/droplistNav.svelte'
+import { countryFlag } from '../lib/format'
 import type { Flag } from '../lib/types'
+// Read as text for the CSS claims below, the same way
+// LiveTable.svelte.test.ts proves its sticky head's supporting rules.
+import flagsSource from './Flags.svelte?raw'
 
 // jsdom has no window.matchMedia -- polyfilled before the dynamic import
 // below (a static import would already have run this file's top-level
@@ -49,6 +55,11 @@ if (!window.matchMedia) {
 }
 
 const { default: Flags } = await import('./Flags.svelte')
+// #1150: the docket's own narrow breakpoint, driven directly rather than
+// through matchMedia -- the polyfill above is a fixed `matches: false`,
+// and this is the width behaviour being tested. Imported after it, like
+// Flags itself: ViewportState calls matchMedia at module-load time.
+const { viewportState } = await import('../lib/viewport.svelte')
 
 function testFlag(overrides: Partial<Flag> = {}): Flag {
   return {
@@ -538,6 +549,60 @@ describe('"where" links into the topography, not the stream (#678)', () => {
   })
 })
 
+// #1199: the country flag beside "where" and the IP lookup inside the
+// drawer, both already living on the Stream row/sheet -- e51193b2 (#1200)
+// did the row/sheet side, this is the flags table's own surface.
+describe('the country flag and IP lookup on a flag row (#1199)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'flags'
+  })
+
+  it('shows the country flag beside "where" when the flag carries a code', () => {
+    flagsState.list = [testFlag({ target: '198.51.100.77', country: 'DE' })]
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.frow td.k .geo')?.textContent).toBe(countryFlag('DE'))
+  })
+
+  it('renders no flag at all when the flag carries no country code', () => {
+    flagsState.list = [testFlag({ target: '198.51.100.77' })]
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.frow td.k .geo')).toBeNull()
+  })
+
+  it('carries the IP lookup button in the drawer for a public address', async () => {
+    flagsState.list = [testFlag({ target: '198.51.100.77' })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.getByTitle('Investigate 198.51.100.77')).toBeTruthy()
+  })
+
+  it('carries no IP lookup button in the drawer for a target with no public address', () => {
+    // rule_spike's target is a rule label, not an IP -- extractSourceIp
+    // returns null, so there is nothing for IpInvestigateButton to key
+    // off (same gate as EventDetailSheet.svelte's isPublicIp check).
+    flagsState.list = [testFlag({ type: 'rule_spike', target: 'drop-bad-actors' })]
+    render(Flags)
+    flushSync()
+
+    const drawerButton = screen.queryByRole('button', { name: /the drawer for this flag/ })
+    if (drawerButton) fireEvent.click(drawerButton)
+    flushSync()
+
+    expect(document.querySelector('[title^="Investigate "]')).toBeNull()
+  })
+})
+
 // Round 26/29's honest empty state, drawn as `.caempty`: zero open is a
 // fact with a history, not a blank.
 describe('the empty state (round 26/29)', () => {
@@ -791,7 +856,7 @@ describe('the learning shelf (#642)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'checked')
+    expect(setFlagVerdict).toHaveBeenCalledWith('p1', 'checked', '')
     expect(within(shelf).getByText('checked', { selector: '.stamp' })).toBeTruthy()
     expect(within(shelf).getByRole('button', { name: 'undo' })).toBeTruthy()
     // The row stays -- pinned in place, dimmed -- rather than vanishing
@@ -937,7 +1002,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'resolved')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'resolved', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.querySelector('.stamp.resolved')?.textContent).toBe('resolved')
     expect(row.classList.contains('fdone')).toBe(true)
@@ -979,7 +1044,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.classList.contains('struck')).toBe(true)
     expect(row.classList.contains('fdone')).toBe(true)
@@ -1010,7 +1075,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.querySelector('.stamp.expected')?.textContent).toBe('expected')
     expect(row.classList.contains('fdone')).toBe(true)
@@ -1028,7 +1093,7 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     await Promise.resolve()
     flushSync()
 
-    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'investigate')
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'investigate', '')
     const row = document.querySelector('tr.frow') as HTMLElement
     expect(row.classList.contains('investigating')).toBe(true)
     // Investigate never sets `cleared`, so the row is not dimmed away.
@@ -1075,6 +1140,155 @@ describe('CALL IT: the four verdicts on the row (#780, #640)', () => {
     flushSync()
 
     expect(document.querySelector('.returned')).toBeNull()
+  })
+})
+
+// #1232 (round 59): the note band across the bottom of the drawer.
+// Write first, judge second -- the box is there while you look at the
+// flag, and what is in it goes with the verdict you then click.
+describe('the drawer’s note (#1232, round 59)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'tom'
+  })
+
+  async function openDrawer(f: Flag) {
+    flagsState.list = [f]
+    render(Flags)
+    flushSync()
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+    return document.querySelector('tr.drawer') as HTMLElement
+  }
+
+  it('what you type in the box travels with the verdict you click next', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ id: 's1', cleared: true, verdict: 'checked', note: 'all on the block list already' }) as never,
+    )
+    const drawer = await openDrawer(testFlag({ id: 's1' }))
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    expect(box).toBeTruthy()
+    expect(drawer.querySelector('.note .nhint')?.textContent).toContain('goes if the verdict is undone')
+
+    await fireEvent.input(box, { target: { value: 'all on the block list already' } })
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'checked', 'all on the block list already')
+  })
+
+  // #1218 audit finding 8: the draft used to be deleted synchronously
+  // before the verdict call was even awaited, win or lose. judgeAndClear
+  // reverts the flag's own note on a failed call, so noteText(f) had
+  // nothing left to fall back to but the pre-verdict note -- what the
+  // operator typed was gone, with no way to recover it for a retry.
+  it('keeps what was typed in the box when the verdict call fails', async () => {
+    vi.mocked(setFlagVerdict).mockRejectedValue(new Error('network unreachable'))
+    const drawer = await openDrawer(testFlag({ id: 's1' }))
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    await fireEvent.input(box, { target: { value: 'still checking this one' } })
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /checked/ }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    // The drawer collapses on the click regardless of outcome -- reopen
+    // it to read back what the box now holds.
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+    const reopened = document.querySelector('tr.drawer') as HTMLElement
+    expect((reopened.querySelector('#note-s1') as HTMLTextAreaElement).value).toBe('still checking this one')
+  })
+
+  it('editing the note on an already-judged flag saves it on blur', async () => {
+    vi.mocked(updateFlagNote).mockResolvedValue(testFlag({ id: 's1', note: 'reworded' }) as never)
+    const drawer = await openDrawer(
+      testFlag({
+        id: 's1',
+        verdict: 'investigate',
+        verdictBy: 'tom',
+        verdictAt: '2026-01-01T00:01:00Z',
+        note: 'first go',
+      }),
+    )
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    expect(box.value).toBe('first go')
+
+    await fireEvent.input(box, { target: { value: 'reworded' } })
+    await fireEvent.blur(box)
+    await Promise.resolve()
+    flushSync()
+
+    expect(updateFlagNote).toHaveBeenCalledWith('s1', 'reworded')
+  })
+
+  it('an unchanged box saves nothing on blur', async () => {
+    const drawer = await openDrawer(
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z', note: 'first go' }),
+    )
+
+    await fireEvent.blur(drawer.querySelector('#note-s1') as HTMLTextAreaElement)
+    await Promise.resolve()
+    flushSync()
+
+    expect(updateFlagNote).not.toHaveBeenCalled()
+  })
+
+  it('a returning flag reads back what was written last time, in full, above the box', async () => {
+    const drawer = await openDrawer(
+      testFlag({
+        id: 's1',
+        priorVerdict: 'checked',
+        priorVerdictAt: '2026-09-02T09:00:00Z',
+        priorNote: 'Checked the upstream block list — every source already on it. Left it alone.',
+      }),
+    )
+
+    const label = drawer.querySelector('.prior .plab')?.textContent?.replace(/\s+/g, ' ').trim()
+    expect(label).toContain('you wrote last time · checked')
+    // formatDayMonth follows the runtime's locale ("2 Sep" here, "Sep 2"
+    // on the CI runner), so assert the parts the way format.test.ts does.
+    expect(label).toContain('2')
+    expect(label).toContain('Sep')
+    expect(drawer.querySelector('.prior p')?.textContent).toBe(
+      'Checked the upstream block list — every source already on it. Left it alone.',
+    )
+    // The read-back introduces the empty box rather than replacing it:
+    // this firing gets its own note.
+    expect((drawer.querySelector('#note-s1') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('a viewer reads a note but cannot write one', async () => {
+    authState.role = 'viewer'
+    const drawer = await openDrawer(
+      testFlag({ id: 's1', verdict: 'investigate', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z', note: 'tom’s own' }),
+    )
+
+    const box = drawer.querySelector('#note-s1') as HTMLTextAreaElement
+    expect(box.value).toBe('tom’s own')
+    expect(box.readOnly).toBe(true)
+    expect(drawer.querySelector('.note .nhint')).toBeNull()
+  })
+
+  it('an unjudged flag a viewer opens offers no box at all', async () => {
+    authState.role = 'viewer'
+    const drawer = await openDrawer(testFlag({ id: 's1' }))
+
+    expect(drawer.querySelector('.note')).toBeNull()
   })
 })
 
@@ -1282,8 +1496,9 @@ describe('a pinned row across the watch-for-this detour (#961)', () => {
 
 // #988 (round 47): campaigns, the scored number, flags by type -- the
 // three ratified additions, each pinned by what it renders rather than
-// how it is styled.
-describe('campaigns, the scored number and the by-type strip (#988, round 47)', () => {
+// how it is styled. The middle one moved in #1231 (round 58): the
+// number left the row and became a coloured rating in the drawer.
+describe('campaigns, the confidence rating and the by-type strip (#988 round 47, #1231 round 58)', () => {
   const now = Date.parse('2026-01-01T13:55:00Z')
 
   beforeEach(() => {
@@ -1389,22 +1604,53 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
     expect(document.querySelector('tr.crule')?.textContent).toContain('Showing the one that matches the filters.')
   })
 
-  it('shows the scored number beside the type only where a detector scored the flag, and says where it came from in the drawer', async () => {
+  it('keeps the row to its type alone, and rates the confidence in the drawer under the sparkline (#1231)', async () => {
     render(Flags)
     flushSync()
 
-    const confs = Array.from(document.querySelectorAll('tr.frow .fmark .conf')).map((el) => el.textContent)
-    expect(confs).toEqual(['72'])
-    const scored = document.querySelector('tr.frow:has(.conf)') as HTMLElement
-    expect(scored.querySelector('td.k')?.textContent?.trim()).toBe('10.0.20.14')
+    // #1231: nothing numeric beside the type any more -- the row that
+    // carries a scored flag reads exactly as the rows that do not. #988
+    // put the figure here and #1167 put the word "scored" in front of
+    // it; it still read as an event count.
+    expect(document.querySelector('tr.frow .fmark .conf')).toBeNull()
+    const marks = Array.from(document.querySelectorAll('tr.frow:not(.camp) .fmark'))
+      .map((el) => el.textContent?.replace(/\s+/g, ' ').trim())
+      .sort()
+    expect(marks).toEqual(['▲ Activity spike', '✱ Outbound anomaly'])
 
+    const scored = Array.from(document.querySelectorAll('tr.frow')).find(
+      (r) => r.querySelector('td.k')?.textContent?.trim() === '10.0.20.14' && !r.classList.contains('camp'),
+    ) as HTMLElement
     await fireEvent.click(scored)
     flushSync()
+
     const drawer = document.querySelector('tr.drawer') as HTMLElement
-    expect(drawer.querySelector('.story .scored')?.textContent?.replace(/\s+/g, ' ')).toContain(
-      "Scored 72. How far this sits from 10.0.20.14's usual, and how much history backs that. The detector's number, not a verdict.",
+    const block = drawer.querySelector('.side .conf') as HTMLElement
+    expect(block.classList.contains('c-high')).toBe(true)
+    expect(block.getAttribute('aria-label')).toBe('confidence 72 of 100, high')
+    expect(block.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      // The number and the word sit against each other in the markup --
+      // the gap between them is the word's own margin, per the drawing.
+      "confidence 72high how far this sits from 10.0.20.14's usual × how much history backs that. The detector's number, not a verdict.",
     )
-    expect(drawer.querySelector('.side .span')?.textContent?.replace(/\s+/g, ' ')).toContain('· scored 72')
+    expect(block.querySelector('.cbar span')?.getAttribute('style')).toContain('width: 72%')
+    // The rating says the number once: the episode's caption lost the
+    // "· scored 72" tail it carried alongside it.
+    expect(drawer.querySelector('.side .span')?.textContent).not.toContain('scored')
+    expect(drawer.querySelector('.story .scored')).toBeNull()
+  })
+
+  it('an unscored flag gets no rating block at all — no dash, no word (#1231)', async () => {
+    render(Flags)
+    flushSync()
+
+    const unscored = Array.from(document.querySelectorAll('tr.frow')).find(
+      (r) => r.querySelector('td.k')?.textContent?.trim() === '10.0.30.2',
+    ) as HTMLElement
+    await fireEvent.click(unscored)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer .side .conf')).toBeNull()
   })
 
   it('the strip counts open flags by type, and a click filters the table to that type; again clears it', async () => {
@@ -1436,5 +1682,170 @@ describe('campaigns, the scored number and the by-type strip (#988, round 47)', 
     render(Flags)
     flushSync()
     expect(document.querySelector('.bytype')).toBeNull()
+  })
+})
+
+// #1150: at 1100 the docket's verdict buttons and the row's chevron went
+// off-screen -- a flag could be read there but not judged. Below 1300px
+// the trio moves into the row's own drawer; nothing about it changes
+// above that width.
+describe('the docket below 1300px (#1150)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'tom'
+    viewportState.isNarrow = false
+  })
+
+  afterEach(() => {
+    viewportState.isNarrow = false
+  })
+
+  async function openDrawer() {
+    await fireEvent.click(document.querySelector('.openc') as HTMLElement)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('leaves the trio in the row at desktop width', async () => {
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    expect((document.querySelector('td.vc') as HTMLElement).querySelector('.vrow')).toBeTruthy()
+
+    await openDrawer()
+    expect((document.querySelector('.dwr-acts') as HTMLElement).querySelector('.vrow')).toBeNull()
+  })
+
+  it('moves the trio into the row drawer below 1300px, once, with the same three buttons', async () => {
+    viewportState.isNarrow = true
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+
+    // Gone from the crowded cell -- but the chevron that reaches the
+    // drawer is still there, so the verdict is still reachable.
+    expect((document.querySelector('td.vc') as HTMLElement).querySelector('.vrow')).toBeNull()
+    expect(document.querySelector('.openc')).toBeTruthy()
+
+    await openDrawer()
+    const acts = document.querySelector('.dwr-acts') as HTMLElement
+    expect(acts.querySelector('.vrow')).toBeTruthy()
+    expect(within(acts).getByRole('button', { name: /expected/ })).toBeTruthy()
+    expect(within(acts).getByRole('button', { name: /checked/ })).toBeTruthy()
+    expect(within(acts).getByRole('button', { name: /investigate/ })).toBeTruthy()
+    // One set of chips on the page, never two worded differently.
+    expect(document.querySelectorAll('.vrow').length).toBe(1)
+  })
+
+  it('still records the verdict from the drawer', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ id: 's1', cleared: true, verdict: 'expected', verdictBy: 'tom', verdictAt: '2026-01-01T00:01:00Z' }) as never,
+    )
+    viewportState.isNarrow = true
+    flagsState.list = [testFlag({ id: 's1' })]
+    render(Flags)
+    flushSync()
+    await openDrawer()
+
+    const acts = document.querySelector('.dwr-acts') as HTMLElement
+    await fireEvent.click(within(acts).getByRole('button', { name: /expected/ }))
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('s1', 'expected', '')
+  })
+
+  it('floors the COUNT and AGE heads so their words survive, and wraps the by-type chips instead of cutting them', () => {
+    const floor = flagsSource.match(/\.ftable thead th\.num,\n\s*\.ftable thead th\.age,[^}]*\{([^}]*)\}/)
+    expect(floor).toBeTruthy()
+    expect(floor![1]).toMatch(/min-width:/)
+    // Not truncation: a head that cannot be read cannot be sorted by.
+    expect(floor![1]).not.toMatch(/text-overflow/)
+
+    const cells = flagsSource.match(/\n\s*\.btcells\s*\{([^}]*)\}/)
+    expect(cells).toBeTruthy()
+    expect(cells![1]).toMatch(/flex-wrap:\s*wrap/)
+    const chip = flagsSource.match(/\n\s*\.btc\s*\{([^}]*)\}/)
+    // grow, no shrink, a floor wide enough for the longest type word.
+    expect(chip![1]).toMatch(/flex:\s*1 0 \d+px/)
+  })
+})
+
+// "block…" (#1225, #461): the drawer's own handoff into Settings' drop
+// list group. Admin-only, unlike every other drawer action here, and
+// gated the same way canWatchSource already is -- only a flag whose
+// target resolves to a single source IP names an address worth
+// dropping.
+describe('block… into the drop list (#1225, #461)', () => {
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(document.querySelector('tr.frow') as HTMLElement)
+    flushSync()
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    appState.view = 'flags'
+    droplistNavState.pendingDraft = null
+  })
+
+  it('offers it to an admin for a flag with a source ip', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 's1', type: 'distributed_brute_force', target: '203.0.113.5' })]
+    await openDrawer()
+
+    expect(screen.getByRole('button', { name: 'block…' })).toBeTruthy()
+  })
+
+  it('hides it from a non-admin', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    flagsState.list = [testFlag({ id: 's1', target: '203.0.113.5' })]
+    await openDrawer()
+
+    expect(screen.queryByRole('button', { name: 'block…' })).toBeNull()
+  })
+
+  it('hides it where the target names no single source ip', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 's1', type: 'rule_spike', target: 'ssh-guard' })]
+    await openDrawer()
+
+    expect(screen.queryByRole('button', { name: 'block…' })).toBeNull()
+  })
+
+  it('records the draft, built from the flag, and switches to the drop list', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 's1', type: 'distributed_brute_force', target: '203.0.113.5' })]
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'block…' }))
+    flushSync()
+
+    expect(droplistNavState.pendingDraft).toEqual({
+      cidr: '203.0.113.5',
+      reason: 'distributed brute-force from 203.0.113.5',
+      flagID: 's1',
+    })
+    expect(appState.view).toBe('engineroom')
   })
 })

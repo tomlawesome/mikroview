@@ -10,7 +10,8 @@
 //   disabled), proved end to end with a real second account rather than
 //   a mocked authState.role. Since #647 (round 23) Entities and Settings
 //   are cards too, and #657 gates both on canEdit rather than on either
-//   one's API: an admin's rail carries seven names, a viewer's six, with
+//   one's API; #1134 then added Log every rule on the same gate. So an
+//   admin's rail carries eight names, a viewer's six, with
 //   the standalone Fleet card standing in for the two they do not get.
 //   (Not an API gate -- #653 widened GET /api/entities to the user tier.
 //   The rule is whether the page's purpose is making a change.)
@@ -42,8 +43,19 @@ feedSyslog(120, 'roll-rail')
 const names = await page.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(names) ===
-    JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']),
-  `an admin's roll rail carries the seven cards in deck order -- got ${JSON.stringify(names)}`,
+    JSON.stringify([
+      'The fall',
+      'Topography',
+      'Metrics',
+      'Stream',
+      'The docket',
+      'Entities',
+      'Settings',
+      // #1134 gave Log every rule a card of its own, pushed last in
+      // deckCards.ts, so the rail carries eight now.
+      'Log every rule',
+    ]),
+  `an admin's roll rail carries the eight cards in deck order -- got ${JSON.stringify(names)}`,
 )
 
 // Absent, never disabled -- a disabled name would satisfy a presence
@@ -146,10 +158,12 @@ await skipBrowser.close()
 
 // --- A viewer's docket carries no watchlist tab ---------------------------
 // The deck is not the same for every role any more. #647 put Entities
-// and Settings on it as its last two cards -- seven for an admin, as the
-// first check in this scenario proves -- and #657 then ruled both out of
-// a viewer's navigation entirely, giving a viewer the standalone Fleet
-// card in their place (deckCards.ts:45-50). So a viewer's six are the
+// and Settings on it, and #1134 added Log every rule last -- eight for
+// an admin, as the first check in this scenario proves -- and #657 then
+// ruled Entities and Settings out of a viewer's navigation entirely,
+// giving a viewer the standalone Fleet card in their place
+// (deckCards.ts:45-63; the same edit gate keeps Log every rule off a
+// viewer's rail too). So a viewer's six are the
 // five shared cards plus Fleet, not plus Settings: this expected Settings
 // until the gate reached it, a pre-#657 premise the same age as #783's.
 // Within the docket, watchlist and audit stay tier-gated -- absent for a

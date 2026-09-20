@@ -73,10 +73,9 @@ export const FLAG_TYPE_ORDER: readonly FlagType[] = [
   'known_bad_ip',
 ] as const
 
-// Same labels Flags.svelte and Exclusions.svelte carry -- duplicated
-// rather than shared, which is the convention already established in
-// this codebase for these two tables (see those files' own notes). This
-// copy replaces the one that lived in the removed FlagsChart.svelte.
+// The one flag-type label table: Flags.svelte, AuditLog.svelte and
+// Topography.svelte all read it. This copy replaces the one that lived
+// in the removed FlagsChart.svelte.
 export const FLAG_TYPE_LABELS: Record<FlagType, string> = {
   port_scan: 'Port scan',
   activity_spike: 'Activity spike',
@@ -224,6 +223,28 @@ export function minuteIndexOf(axis: string[], iso: string | null): number {
   const want = minuteKey(iso)
   if (want === null) return -1
   return axis.findIndex((t) => minuteKey(t) === want)
+}
+
+/**
+ * True where a minute ended before this process began counting (#1169).
+ *
+ * Those minutes are on the axis with every count at zero, which reads as
+ * "nothing happened" when what it means is "nobody was watching" -- the
+ * same distinction Top port and Top talker already draw by printing an
+ * em dash for a minute they cannot answer for.
+ *
+ * Strictly earlier minutes only: the minute `liveSince` falls inside
+ * holds real, if partial, counts, and a figure that undercounts is still
+ * a figure. Unknown `liveSince` (an older server, a fixture) means no
+ * minute is claimed to predate anything -- the same "never guess a
+ * provenance" rule lib/provenance.ts states for its own sentence.
+ */
+export function beforeCounting(minuteIso: string, liveSince: string | null | undefined): boolean {
+  if (!liveSince) return false
+  const start = minuteKey(liveSince)
+  const minute = minuteKey(minuteIso)
+  if (start === null || minute === null) return false
+  return minute < start
 }
 
 export function buildHour(traffic: TimeBucket[], flags: FlagTimeBucket[], tops: HourTopBucket[] = []): MetricsHour {

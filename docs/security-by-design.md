@@ -1,6 +1,6 @@
 # Security by design
 
-**Policy for mikroview, threadbeam and birdcage.**
+**Policy for MikroView, threadbeam and birdcage.**
 
 Every new feature is **researched before it is designed** — not designed
 and then reviewed. A security review at the end can only find flaws in

@@ -10,12 +10,14 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 )
@@ -32,6 +34,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// output, not for a client that wants to keep counting locally.
 		"uptimeSeconds": int64(time.Since(s.StartTime).Seconds()),
 		"version":       s.Version,
+		// geoip (#1198): whether a country database is open, so the
+		// country filter select and the Settings > ingest card can tell
+		// "no database configured" apart from "no public traffic yet"
+		// instead of both just showing no flags.
+		"geoip": s.GeoIP,
 	})
 }
 
@@ -101,6 +108,27 @@ type deviceView struct {
 	// out-rank; "entity" is a stored rename; "none" means the raw id is
 	// what shows.
 	NameSource string `json:"nameSource"`
+	// Setup is #1241's router-side drift answer: whether what this
+	// router last reported of the wizard's logging setup is what the
+	// current wizard would leave on it -- "current", "behind" (with the
+	// script version it reported and the current one), or "never
+	// reported" for a router still running a script pasted before the
+	// page existed. Read from internal/setup, which holds the reported
+	// half, against internal/routeros, which holds what the wizard would
+	// write.
+	//
+	// Omitted only on a Server built without a setup store: "never
+	// reported" is itself an answer, never an absence, so a client must
+	// not read a missing field as one.
+	Setup *setup.RouterSetup `json:"setup,omitempty"`
+	// Enrolment is issue #1281's pending-token state for this device --
+	// AcceptedIP/EnrolledAt above (on the embedded Info) are the
+	// finished state; this is what is in flight. Always present, never
+	// nil: {pending: false} is itself the answer when nothing is
+	// pending, the same "absence is not an omission" convention Setup
+	// above breaks from only because a nil Setup store is a real
+	// possibility this field's source (device.Registry) never is.
+	Enrolment device.Enrolment `json:"enrolment"`
 }
 
 // multihomedCandidatesByDevice indexes Registry.MultihomedCandidates by
@@ -109,19 +137,100 @@ type deviceView struct {
 func multihomedCandidatesByDevice(reg *device.Registry) map[string][]string {
 	out := map[string][]string{}
 	for _, c := range reg.MultihomedCandidates() {
-		arriving := make([]string, 0, len(c.Discovered))
-		for _, d := range c.Discovered {
-			arriving = append(arriving, d.SourceIP)
+		arriving := make([]string, 0, len(c.Unattributed))
+		for _, src := range c.Unattributed {
+			arriving = append(arriving, src.Address)
 		}
 		out[c.DeclaredID] = arriving
 	}
 	return out
 }
 
+// unattributedView is one syslog source address no router has claimed
+// (#1170): not declared under devices: in config.yaml, and not carried
+// by exactly one router's pushed /ip/address table. It is deliberately
+// not a device and is not in the devices array -- the whole point of
+// the issue is that mikroview stopped inventing a router named after an
+// address that merely sent it a line. Its lines are kept and are stored
+// under that address, which is what Lines counts.
+type unattributedView struct {
+	Address   string    `json:"address"`
+	Lines     uint64    `json:"lines"`
+	FirstSeen time.Time `json:"firstSeen"`
+	LastSeen  time.Time `json:"lastSeen"`
+	// Explanation is set only when the registry can say why it could
+	// not attribute rather than only that it could not: two or more
+	// routers have pushed this same address, so their own tables
+	// disagree. Named here, server-side, because the names are the
+	// registry's to resolve -- the client would otherwise have to
+	// re-derive a device display name it does not own.
+	Explanation string `json:"explanation,omitempty"`
+}
+
+// unattributedViews renders the registry's unclaimed sources for the
+// API, naming any conflicting claimants with the same display names the
+// devices array uses.
+func unattributedViews(sources []device.Source, infos []device.Info) []unattributedView {
+	names := make(map[string]string, len(infos))
+	for _, info := range infos {
+		names[info.ID] = info.Name
+	}
+	out := make([]unattributedView, 0, len(sources))
+	for _, src := range sources {
+		v := unattributedView{
+			Address:   src.Address,
+			Lines:     src.Lines,
+			FirstSeen: src.FirstSeen,
+			LastSeen:  src.LastSeen,
+		}
+		if len(src.Claimants) > 1 {
+			claimed := make([]string, 0, len(src.Claimants))
+			for _, id := range src.Claimants {
+				if name, ok := names[id]; ok && name != "" {
+					claimed = append(claimed, name)
+					continue
+				}
+				claimed = append(claimed, id)
+			}
+			// Plain register, owner's own wording (v0.6.0 pre-release
+			// audit): the previous sentence said "have both pushed",
+			// which reads fine for two claimants but is wrong the
+			// moment a third router shares the same management or VRRP
+			// address -- joinAnd already lists any count correctly, the
+			// grammar around it just assumed there would only ever be
+			// two.
+			v.Explanation = joinAnd(claimed) + " are all using the same address, so MikroView can't tell what data came from where."
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// joinAnd writes a list the way a sentence does: "a and b", "a, b and
+// c". Same shape as the frontend's own prose() helper, kept here
+// because this sentence is written server-side.
+func joinAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	}
+}
+
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	infos := s.Devices.List()
 	multihomed := multihomedCandidatesByDevice(s.Devices)
+	// What the current wizard would leave on a router for this instance
+	// -- derived once for the whole list, since it depends on the
+	// instance's own address and syslog port, not on any device.
+	var wantLogging routeros.LoggingSetup
+	if s.Setup != nil {
+		wantLogging = routeros.WizardLogging(s.Setup.Address(), s.SetupInstance.SyslogPort, defaultDialect())
+	}
 	views := make([]deviceView, 0, len(infos))
 	for _, info := range infos {
 		v := deviceView{
@@ -133,6 +242,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			// rather than re-deriving the name here, so the two can
 			// never disagree.
 			NameSource: s.Naming.DeviceProvenance(info.ID).Source,
+			Enrolment:  s.Devices.PendingEnrolment(info.ID),
+		}
+		if s.Setup != nil {
+			reported := s.Setup.RouterSetup(info.ID, wantLogging)
+			v.Setup = &reported
 		}
 		if version, ok := s.effectiveRouterOSVersion(info); ok {
 			v.RouterOSVersion = version
@@ -142,13 +256,21 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"devices": views,
+		// #1170: listed separately from the devices, because they are
+		// not devices. An operator sees the address, how many lines it
+		// has sent, and -- where two routers claim it -- which two.
+		"unattributed": unattributedViews(s.Devices.Unattributed(), infos),
+	})
 }
 
 // effectiveRouterOSVersion is the version to show for a device: an
-// actual push always wins, and the /ca.crt?ros= hint for its source
-// address (#436 step 3, internal/routerstate.Store.VersionHint) fills in
-// only when nothing has pushed yet. Shared by handleDevices and
+// actual push always wins, and the /ca.crt?ros= hint for its address
+// (#436 step 3, internal/routerstate.Store.VersionHint) fills in only
+// when nothing has pushed yet -- tried against SourceIP first and then
+// AcceptedIP (issue #1281), since a token-enrolled device carries its
+// only known address on the latter. Shared by handleDevices and
 // handleSetupCommands so the two surfaces cannot disagree about which
 // router is on which version.
 func (s *Server) effectiveRouterOSVersion(info device.Info) (version string, ok bool) {
@@ -158,8 +280,15 @@ func (s *Server) effectiveRouterOSVersion(info device.Info) (version string, ok 
 	if v, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
 		return v, true
 	}
-	if v, _, ok := s.RouterState.VersionHint(info.SourceIP); ok {
-		return v, true
+	if info.SourceIP != "" {
+		if v, _, ok := s.RouterState.VersionHint(info.SourceIP); ok {
+			return v, true
+		}
+	}
+	if info.AcceptedIP != "" {
+		if v, _, ok := s.RouterState.VersionHint(info.AcceptedIP); ok {
+			return v, true
+		}
 	}
 	return "", false
 }
@@ -295,15 +424,22 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// means visible to nobody. See internal/syslog.ListenerStats.
 		"syslog": syslog.Stats(),
 	}
-	// What detection never saw (#1107). Same reasoning as the syslog
-	// counters above: the condition was previously visible only in a
-	// rate-limited log line, which means visible to nobody. Under a
-	// burst the engine sheds what it cannot evaluate while every event
-	// is still stored and broadcast, so the symptom is flags that were
-	// never raised -- silence, which reads as "nothing is wrong". How an
-	// operator should be told is #1109; this is only the number.
+	// How checking is keeping up, and what it never saw (#1109). Same
+	// reasoning as the syslog counters above: the condition was
+	// previously visible only in a rate-limited log line, which means
+	// visible to nobody. Three numbers rather than one because two of
+	// them are different facts: behind/behindSeconds say checking is
+	// running late on a backlog it will work through, and only outrun is
+	// a coverage gap -- events the store evicted before the engine
+	// reached them, so flags that will never be raised. Silence reads as
+	// "nothing is wrong", so the UI has to be able to tell the two apart.
 	if s.Evaluation != nil {
-		body["engine"] = map[string]any{"droppedFromEvaluation": s.Evaluation.Dropped()}
+		behind, behindSeconds, outrun := s.Evaluation.Lag()
+		body["engine"] = map[string]any{
+			"behind":        behind,
+			"behindSeconds": behindSeconds,
+			"outrun":        outrun,
+		}
 	}
 	// When the snapshot these counters came from was taken (#795), and
 	// only then. Absent on a cold start rather than null: the key's
@@ -450,6 +586,20 @@ func parseScope(v string) store.Scope {
 	default:
 		return store.ScopeAny
 	}
+}
+
+// writeUnauthorized answers a 401 with the WWW-Authenticate header RFC 9110
+// §15.5.2 requires on every 401. Without it, RouterOS's /tool fetch refuses
+// to parse the response at all ("ERROR parsing http: 401 should contain
+// www-authenticate header") instead of surfacing the refusal -- so this
+// covers session-cookie paths too, not just bearer-token ingest, even
+// though only the ingest paths are ever fetched by RouterOS itself.
+// "Bearer" is the scheme regardless of which credential actually failed;
+// unlike "Basic" it never triggers a browser login prompt, so it's safe on
+// session-gated routes.
+func writeUnauthorized(w http.ResponseWriter, msg string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="mikroview"`)
+	http.Error(w, msg, http.StatusUnauthorized)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

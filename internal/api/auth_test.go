@@ -296,6 +296,31 @@ func TestRegisterCreatesAdminAndStartsASession(t *testing.T) {
 	}
 }
 
+// #1252: a local account's username may not be an email address, so
+// that a local name and an identity provider's preferred_username can
+// never be the same string and nothing has to compare them. The 400 and
+// the message matter as much as the refusal -- somebody typing the name
+// they use everywhere needs telling what to type instead.
+func TestRegisterRefusesAnEmailShapedUsername(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := &http.Client{Jar: mustCookieJar(t)}
+
+	resp := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom@example.com", Password: "password123"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "email address") {
+		t.Errorf("refusal = %q, want it to name the rule", strings.TrimSpace(string(body)))
+	}
+	if s.Auth.Count() != 0 {
+		t.Error("the refused registration created an account anyway")
+	}
+}
+
 func TestRegisterClosesAfterFirstUser(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -434,6 +459,13 @@ func TestLogoutAllRejectsAnonymousCaller(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected an anonymous caller to be refused, got %d", resp.StatusCode)
+	}
+	// #1118: RouterOS's /tool fetch refuses to parse any 401 that omits
+	// WWW-Authenticate (RFC 9110 §15.5.2) -- so this session-gated route
+	// needs the header too, not just the bearer-token ingest paths
+	// RouterOS actually calls.
+	if got := resp.Header.Get("WWW-Authenticate"); got != `Bearer realm="mikroview"` {
+		t.Errorf(`expected WWW-Authenticate: Bearer realm="mikroview", got %q`, got)
 	}
 }
 

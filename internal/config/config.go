@@ -11,6 +11,7 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/netip"
@@ -27,9 +28,9 @@ import (
 // DefaultDataDir is where every optional persistence path defaults to
 // living, out of the box -- flags, detector settings, accounts, and the
 // self-generated TLS certificate. The Dockerfile creates this directory
-// owned by the nonroot user, so all of it is writable (and persists
-// across simple process restarts) with zero configuration; surviving a
-// full container *recreation* additionally needs a volume mounted over
+// owned by the runtime user (uid 1000), so all of it is writable (and
+// persists across simple process restarts) with zero configuration;
+// surviving a full container *recreation* additionally needs a volume over
 // this same path, documented in deploy/docker-compose.yml rather than
 // forced -- an operator who doesn't want any of this persisted can
 // still point any of these at "" to opt back out per field.
@@ -405,6 +406,25 @@ type Hosts struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Seen configures internal/seen's register of values the feed has
+// actually shown for the two filter fields with no option list anywhere
+// else -- protocol and interface (issue #1226). StorePath left empty is
+// a fully supported, deliberate choice, same optional-persistence
+// contract as Hosts.StorePath above: the register still works, the
+// menus just rebuild from the feed after a restart, so a protocol or
+// interface that has been quiet since the last restart is missing from
+// them until it is seen again. Typing a value that is not in the list
+// has always worked, so an unpersisted register costs discoverability,
+// not reach.
+//
+// There is deliberately no retention setting here. How long a value is
+// kept (90 days) and how many are kept per field (200) are constants in
+// internal/seen -- see MaxAge and MaxValues, and #1226 for why they are
+// not a knob.
+type Seen struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Baseline configures internal/baseline's line register (issue #1016,
 // round 49): which source/destination/port/protocol lines the feed has
 // shown, on which of the last few days, so the map can draw a line that
@@ -484,6 +504,20 @@ type Audit struct {
 // contract as Audit.StorePath: the wizard still works, the decisions
 // just don't survive a restart.
 type Setup struct {
+	StorePath string `yaml:"storePath"`
+}
+
+// ConfigDrift configures where the "N new settings are available"
+// notice's dismissal is remembered (#1218) -- which version an operator
+// has already dealt with the notice for, so it does not resurface for
+// that version again but does for the next one that actually adds
+// something new. Nothing else about the notice is persisted here: the
+// settings list itself is computed live from the running config and
+// this build's own example config on every read. StorePath left empty
+// is a fully supported, deliberate choice, same optional-persistence
+// contract as Setup.StorePath: the notice still works, a dismissal just
+// does not survive a restart.
+type ConfigDrift struct {
 	StorePath string `yaml:"storePath"`
 }
 
@@ -781,6 +815,17 @@ type DeviceMAC struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// DeviceRegistry configures internal/device's Registry (issue #1281):
+// its persisted acceptedIp/enrolledAt and the identity of any device
+// the registry itself created (Create or a pushing ingest token) rather
+// than a devices: declaration below, which is rebuilt from this file on
+// every boot regardless. Optional persistence, same contract as
+// DeviceMAC.StorePath above: left empty, enrolment still works, it just
+// starts over -- unenrolled -- on every restart.
+type DeviceRegistry struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Engine configures internal/engine's evaluation chassis
 // (docs/decisions/evaluation-engine.md): its persisted per-definition,
 // per-key baseline state (#399/#400: engine.StateStore), what a Baseline
@@ -834,6 +879,18 @@ type Blocklist struct {
 	// fatal error, same degrade-not-crash contract as every other
 	// optional integration in this codebase.
 	Sources []string `yaml:"sources"`
+}
+
+// Droplist configures internal/droplist's persisted store of
+// operator-authored enforcement entries (issue #1223, stage 1 of the
+// design ratified on #461) -- unrelated to Blocklist above, which is
+// the fetched threat-intel feeds. StorePath left empty is a fully
+// supported, deliberate choice, same optional-persistence contract as
+// Audit.StorePath: entries still work, they just don't survive a
+// restart. This stage has no API or UI reading this store yet; the
+// feature's endpoints and Settings group arrive in #1224/#1225.
+type Droplist struct {
+	StorePath string `yaml:"storePath"`
 }
 
 // NetClass configures internal/netclass's local IP attribution: labelling
@@ -1087,33 +1144,37 @@ type Backup struct {
 }
 
 type Config struct {
-	Listen     Listen     `yaml:"listen"`
-	Store      Store      `yaml:"store"`
-	Log        Log        `yaml:"log"`
-	GeoIP      GeoIP      `yaml:"geoip"`
-	Reputation Reputation `yaml:"reputation"`
-	Flags      Flags      `yaml:"flags"`
-	Auth       Auth       `yaml:"auth"`
-	Entities   Entities   `yaml:"entities"`
-	Coverage   Coverage   `yaml:"coverage"`
-	Hosts      Hosts      `yaml:"hosts"`
-	Baseline   Baseline   `yaml:"baseline"`
-	Audit      Audit      `yaml:"audit"`
-	Setup      Setup      `yaml:"setup"`
-	Watchlist  Watchlist  `yaml:"watchlist"`
-	Notify     Notify     `yaml:"notify"`
-	TLS        TLS        `yaml:"tls"`
-	OIDC       OIDC       `yaml:"oidc"`
-	Postgres   Postgres   `yaml:"postgres"`
-	Devices    []Device   `yaml:"devices"`
-	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
-	Blocklist  Blocklist  `yaml:"blocklist"`
-	NetClass   NetClass   `yaml:"netClass"`
-	OUI        OUI        `yaml:"oui"`
-	Engine     Engine     `yaml:"engine"`
-	Snapshot   Snapshot   `yaml:"snapshot"`
-	History    History    `yaml:"history"`
-	Backup     Backup     `yaml:"backup"`
+	Listen         Listen         `yaml:"listen"`
+	Store          Store          `yaml:"store"`
+	Log            Log            `yaml:"log"`
+	GeoIP          GeoIP          `yaml:"geoip"`
+	Reputation     Reputation     `yaml:"reputation"`
+	Flags          Flags          `yaml:"flags"`
+	Auth           Auth           `yaml:"auth"`
+	Entities       Entities       `yaml:"entities"`
+	Coverage       Coverage       `yaml:"coverage"`
+	Hosts          Hosts          `yaml:"hosts"`
+	Seen           Seen           `yaml:"seen"`
+	Baseline       Baseline       `yaml:"baseline"`
+	Audit          Audit          `yaml:"audit"`
+	Setup          Setup          `yaml:"setup"`
+	ConfigDrift    ConfigDrift    `yaml:"configDrift"`
+	Watchlist      Watchlist      `yaml:"watchlist"`
+	Notify         Notify         `yaml:"notify"`
+	TLS            TLS            `yaml:"tls"`
+	OIDC           OIDC           `yaml:"oidc"`
+	Postgres       Postgres       `yaml:"postgres"`
+	Devices        []Device       `yaml:"devices"`
+	DeviceMAC      DeviceMAC      `yaml:"deviceMac"`
+	DeviceRegistry DeviceRegistry `yaml:"deviceRegistry"`
+	Blocklist      Blocklist      `yaml:"blocklist"`
+	Droplist       Droplist       `yaml:"droplist"`
+	NetClass       NetClass       `yaml:"netClass"`
+	OUI            OUI            `yaml:"oui"`
+	Engine         Engine         `yaml:"engine"`
+	Snapshot       Snapshot       `yaml:"snapshot"`
+	History        History        `yaml:"history"`
+	Backup         Backup         `yaml:"backup"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -1246,6 +1307,9 @@ func defaults() Config {
 		Hosts: Hosts{
 			StorePath: DefaultDataDir + "/hosts.json",
 		},
+		Seen: Seen{
+			StorePath: DefaultDataDir + "/seen-values.json",
+		},
 		Baseline: Baseline{
 			StorePath: DefaultDataDir + "/baseline.json",
 			// Taken from internal/baseline rather than restated, so the
@@ -1261,6 +1325,9 @@ func defaults() Config {
 		Setup: Setup{
 			StorePath: DefaultDataDir + "/setup.json",
 		},
+		ConfigDrift: ConfigDrift{
+			StorePath: DefaultDataDir + "/config-drift.json",
+		},
 		Watchlist: Watchlist{
 			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
 			MatchLogCapacity:     200_000,
@@ -1273,6 +1340,9 @@ func defaults() Config {
 		},
 		DeviceMAC: DeviceMAC{
 			StorePath: DefaultDataDir + "/mac-registry.json",
+		},
+		DeviceRegistry: DeviceRegistry{
+			StorePath: DefaultDataDir + "/device-registry.json",
 		},
 		Engine: Engine{
 			StorePath:            DefaultDataDir + "/engine-state.json",
@@ -1293,6 +1363,9 @@ func defaults() Config {
 			// DROP on 2024-04-10 and the endpoint now serves no ranges
 			// at all.
 			Sources: []string{"spamhaus_drop"},
+		},
+		Droplist: Droplist{
+			StorePath: DefaultDataDir + "/droplist.json",
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here
@@ -1352,16 +1425,44 @@ func Load(configPath string, args []string) (Config, error) {
 func load(configPath string, args []string) (Config, Result, error) {
 	cfg := defaults()
 
+	// With nothing naming a config file, the app folder's own
+	// config.yaml is it (#1243), so a bare `docker run` with the folder
+	// mounted needs no MIKROVIEW_CONFIG. Missing is not an error there:
+	// defaults alone are a working deployment, and the folder is
+	// optional by design. A path somebody actually named and got wrong
+	// still fails, as it always has -- that one is a mistake, not a
+	// choice.
+	var folder []AppFolderLookup
+	if configPath == "" {
+		configPath = DefaultConfigPath()
+		found := appFolderFileExists(configPath)
+		folder = append(folder, AppFolderLookup{Key: "config file", Path: configPath, Found: found})
+		if !found {
+			configPath = ""
+		}
+	}
+
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
-			return Config{}, Result{}, fmt.Errorf("loading config file %s: %w", configPath, err)
+			return Config{}, Result{ConfigPath: configPath, AppFolder: folder}, fmt.Errorf("loading config file %s: %w", configPath, err)
 		}
 	}
 
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
-		return Config{}, Result{}, err
+		return Config{}, Result{ConfigPath: configPath, AppFolder: folder}, err
+	}
+
+	// The folder fills in only what none of the sources above set, so a
+	// value in config or the environment always wins and every install
+	// that already names its paths is untouched (#1209's answer 4).
+	// Before Validate, so a path the folder supplied is checked like any
+	// other.
+	lookups, err := applyAppFolder(&cfg)
+	folder = append(folder, lookups...)
+	if err != nil {
+		return Config{}, Result{ConfigPath: configPath, AppFolder: folder}, err
 	}
 
 	// Devices get their identity filled in before validation, so
@@ -1373,6 +1474,8 @@ func load(configPath string, args []string) (Config, Result, error) {
 	// a flag can fix a bad yaml value, so checking earlier would reject
 	// configurations that are actually fine.
 	result := cfg.Validate()
+	result.ConfigPath = configPath
+	result.AppFolder = folder
 	if err := result.Err(); err != nil {
 		// The result goes back even on failure. Returning Result{} here
 		// discarded every Problem the caller needed -- the code, the
@@ -1406,7 +1509,17 @@ func loadYAML(path string, cfg *Config) error {
 	}
 	defer f.Close()
 	dec := yaml.NewDecoder(f)
-	return dec.Decode(cfg)
+	// KnownFields(true) (#1207): without it, a key the struct no longer
+	// has -- carried over from an old release, or simply mistyped -- is
+	// dropped with no comment at all. An operator who believes
+	// listen.syslogUdp is still doing something has no way to learn
+	// otherwise short of reading this source. Refusing to start is the
+	// honest failure; see explainYAMLError for what the message says.
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		return explainYAMLError(path, err)
+	}
+	return nil
 }
 
 func applyEnv(cfg *Config) {
@@ -1673,6 +1786,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_HOSTS_STORE_PATH"); v != "" {
 		cfg.Hosts.StorePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_SEEN_STORE_PATH"); v != "" {
+		cfg.Seen.StorePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_BASELINE_STORE_PATH"); v != "" {
 		cfg.Baseline.StorePath = v
 	}
@@ -1807,6 +1923,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
 	}
+	if v := os.Getenv("MIKROVIEW_DROPLIST_STORE_PATH"); v != "" {
+		cfg.Droplist.StorePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.OUI.Enabled = b
@@ -1881,10 +2000,6 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-// parseIntList parses a comma-separated list of integers (e.g. a port
-// list from an env var). Any single malformed entry invalidates the
-// whole value -- like every other env var here, a bad value is ignored
-// in favor of whatever was already set, rather than partially applied.
 // parseStringList parses a comma-separated list of plain strings (e.g.
 // notify.smtp.to's recipient addresses from an env var). Unlike
 // parseIntList, there's no format to validate here -- any entry is a
@@ -1901,6 +2016,10 @@ func parseStringList(v string) []string {
 	return out
 }
 
+// parseIntList parses a comma-separated list of integers (e.g. a port
+// list from an env var). Any single malformed entry invalidates the
+// whole value -- like every other env var here, a bad value is ignored
+// in favor of whatever was already set, rather than partially applied.
 func parseIntList(v string) ([]int, bool) {
 	parts := strings.Split(v, ",")
 	out := make([]int, 0, len(parts))
@@ -1914,6 +2033,37 @@ func parseIntList(v string) ([]int, bool) {
 	return out, true
 }
 
+// OtherCommands is the block `mikroview -h` prints under the flags.
+//
+// main.go dispatches each of these on os.Args[1] before the flag
+// package ever sees the command line, so `-h` listed the six flags
+// below and nothing else -- an operator reading the binary's own help
+// had no way to learn that -backup, -restore or -recover-admin-account
+// exist (#1176). They are named here instead, and
+// TestUsageNamesEveryDispatchedSubcommand keeps this list and that
+// dispatch in step; docs/configuration.md's "CLI flags" section carries
+// the same list in prose.
+const OtherCommands = `
+other commands -- each does its one job and exits, rather than starting
+the server. Run one with -h for its own flags; docs/configuration.md
+explains when to reach for them.
+  -version                  print the build's commit stamp and exit
+  -healthcheck              check this deployment; the container's HEALTHCHECK runs it
+  -validate-config          check a config the way startup would, without starting
+  -recover-admin-account    set a new password for the admin account
+  -generate-recovery-keys   mint the recovery keys those commands ask for
+  -transfer-admin <user>    move admin to another account
+  -backup                   write every store to one encrypted file
+  -restore                  read a backup back onto disk
+  -migrate-data             move the data directory between a bind mount and a volume
+`
+
+// HelpRequested reports whether a Load error is `-h`/`--help` rather
+// than a fault. The FlagSet has already printed the usage by then, so
+// the caller exits cleanly instead of reporting a broken configuration
+// under the help it just gave (#1176).
+func HelpRequested(err error) bool { return errors.Is(err, flag.ErrHelp) }
+
 func applyFlags(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("mikroview", flag.ContinueOnError)
 	syslogTLS := fs.String("syslog-tls", cfg.Listen.SyslogTLS, "syslog TLS listen address, RouterOS remote-protocol=tls (started whenever non-empty, independently of tls.enabled; empty disables it)")
@@ -1923,6 +2073,15 @@ func applyFlags(cfg *Config, args []string) error {
 	maxMemory := cfg.Store.MaxMemory
 	fs.Var(&maxMemory, "max-memory", "memory budget for the event ring buffer, e.g. 120MiB (see docs/configuration.md)")
 	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
+
+	// The flag package's own usage, with OtherCommands after it: the
+	// standalone modes never reach this FlagSet, so nothing else can
+	// put them in front of an operator running `mikroview --help`.
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "Usage of mikroview:")
+		fs.PrintDefaults()
+		fmt.Fprint(fs.Output(), OtherCommands)
+	}
 
 	if err := fs.Parse(args); err != nil {
 		return err

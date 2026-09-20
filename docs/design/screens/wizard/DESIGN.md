@@ -45,6 +45,14 @@ dated, sourced) · counting (green, growing) · quiet (plain, "nothing
 to wait for"). The step list at the left carries each step's receipt
 sub-line for the wizard's life.
 
+A **partial** step does not add a fifth flavour (owner ruling, #1132).
+It keeps the arrived (or counting) line, saying only what did arrive,
+and puts what it is still short of — "Still missing: …" — in its own
+box directly underneath, in the warning colour (`--warn`, orange;
+never `--reject`, which is `attention`'s alone: a shortfall is not a
+fault on mikroview's side). Where a partial reading has no arrival to
+word, the warning box stands alone.
+
 Modal geometry (round-1 verdict "use more of the screen"): 940px wide
 (94% cap), 224px step list, roomy type. Header: step x of 5 · title ·
 ✕. Footer: Back · Skip this step · Next (primary), with the hint
@@ -126,6 +134,96 @@ instant.
   that is the done-when's "visibly recorded" clause.
 - Wizard truthfulness fixes #371/#374 are check-logic this design
   inherits; they land before or with it.
+- Step 6 with no key mounted **mints the key** (owner ruling, #1133),
+  superseding round 45's drawing of a dim placeholder and a
+  "how to mount one" link: a pre-filled, editable field with a reroll,
+  a copy control, the warning that nothing can reprint it, and the
+  steps to put it in place. The key is generated in the browser
+  (`crypto.getRandomValues`) and never sent to the server —
+  `history.keyFile` stays not editable from the app (#853). The lead
+  says the model once and correctly: mikroview encrypts backups, the
+  event history and the state store under the key file you mount.
+
+## The router ledger (#1284, with #1281)
+
+Ratified as text, 2026-09-19 (owner: "as long as it's the same style
+as the first run wizard"). Adding a router is the same modal, the same
+ledger, the same anatomy — only the step set differs. Nothing below
+adds a flavour, a colour or a control the wizard does not already
+have.
+
+**Steps.** The router ledger is the wizard's router-side steps, in
+this order:
+
+| # | Step | Check character |
+|---|---|---|
+| 1 | Name your router | acts (creates the router record on Next; the name is the only field) — quiet, nothing to wait for |
+| 2 | Send logs | asks (the router's own address, and the operator's password) then acts (mints the enrolment token when they say so, its own audit line) then waiting → arrived (the enrol line came in: "Enrolled at 192.168.88.1 · 14:02") |
+| 3 | Tag firewall rules | counting, as today |
+| 4 | Push router state | as today; a push counts only from the enrolled address |
+| 5 | Back up the router | as today |
+| 6 | Register the router | acts (records the operator's confirmation) — quiet, nothing to wait for |
+
+First-run setup is **Trust the certificate**, then these six, so it
+reads as seven steps: the ledger is embedded, not copied. Naming moves
+from last to first because the enrolment token belongs to a named
+router; the old "nothing to name" row is retired.
+
+Step 2 no longer mints on entry (#1291). Minting needs two things only
+the operator has -- the router's own address, which the enrolment window
+binds to so the syslog port opens for that address alone, and their
+password, re-typed at that moment because minting is what opens the
+port. Reroll goes through the same act and so asks again every time.
+
+Step 6 records intent and grants the router nothing: it never sets the
+accepted address. Its logs are accepted because its token arrived from
+its address, which does not change here. The two are independent, and
+the pair is how the fleet tells a finished setup from one someone walked
+away from part way.
+
+**Send logs, in detail.** The command block is the remote-logging
+block as today with one more line at the end,
+`/log info "mikroview-enrol <token>"`. Under the block, one plain
+line: "Token good until 14:17 (15 minutes) · **Reroll**" — the reroll
+is step 6's control reused, with the same quiet confirmation. When the
+token has expired the block dims and the line reads "Token expired ·
+Reroll to mint another"; Next on an expired or unarrived token is the
+ordinary heavy warning (forced past = "router not enrolled; its logs
+are refused until it is"). The lead sentence says the model once: the
+address the last line arrives from becomes the only address mikroview
+accepts this router's logs from.
+
+While waiting, if lines arrive from an address that is not enrolled,
+the partial-step warning box (#1132 shape, `--warn`) appears under the
+observation line: "Lines from 192.168.88.1 arrived without the enrol
+line and were refused — if that is this router, paste the whole
+block, last line included." It clears when the enrol line arrives.
+
+**Where it opens.**
+
+- **Entities' routers row** is where an admin meets both: it is the
+  surface an admin's deck draws for the fleet view (#647/#785 — the
+  standalone Fleet card is the viewer tier's), so the admin actions
+  live there rather than on Fleet, which an admin never sees. The
+  "+ add a router" berth opens the ledger at step 1; each router card
+  gains **Re-enrol…**, opening the ledger at step 2 for that router
+  with a fresh token; the observation line reads "Enrolled at
+  192.168.88.1 · waiting for the new line"; arrival replaces the
+  address.
+- **Refused senders**: a card per address beside the routers, in the
+  unattributed card's quiet vocabulary and present only when non-empty:
+  head "refused · 192.168.88.1 ◌ REFUSED", then what it means, then
+  lines · first seen · last seen, then "Refused senders — logs from an
+  address that is not enrolled are dropped." The only pointers are
+  Re-enrol… on a router card and the berth; there is no accept
+  control, by ruling (an address is accepted only by a router
+  presenting a token). GET /api/devices/refused is admin-only, so
+  nothing below admin asks for it.
+- **Run setup…** is unchanged: the first-run ledger with the
+  certificate step in front.
+
+**Finish** reads the ledger back exactly as today, and leads out to
+the fleet when opened from it, to the fall when opened from setup.
 
 ## Superseded (considered and closed)
 

@@ -108,7 +108,7 @@ func (n *WebhookNotifier) Send(batch []flags.Flag) error {
 	}
 
 	payload := webhookPayload{
-		Title: fmt.Sprintf("mikroview: %d new flag%s", len(batch), plural(len(batch))),
+		Title: fmt.Sprintf("MikroView: %d new flag%s", len(batch), plural(len(batch))),
 		Count: len(batch),
 		Flags: batch,
 	}

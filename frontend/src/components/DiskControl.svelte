@@ -435,7 +435,13 @@
         <span class="dim">mounted at start</span>
       {:else}
         none mounted — nothing is kept on disk without one ·
-        <a class="olink" href={HOW_TO_MOUNT_URL} target="_blank" rel="noopener noreferrer">how to mount one</a>
+        <a
+          class="olink ext"
+          href={HOW_TO_MOUNT_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Opens the setup guide on github.com, in a new tab"
+        >how to mount one</a>
       {/if}
     </span>
   </div>

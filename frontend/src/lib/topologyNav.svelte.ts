@@ -32,6 +32,12 @@ class TopologyNavState {
   pendingFlagId = $state<string | null>(null)
   pendingWatchId = $state<string | null>(null)
 
+  // #1201's own version of the handoff above, for a stream row's ⚑ when
+  // its source carries more than one open flag: pendingFlagId only
+  // names one flag, and there is no honest single choice among several.
+  // The row hands the flags tab the source address to filter by instead.
+  pendingFlagsFilter = $state<string | null>(null)
+
   // #1069's own version of the same handoff: the decommission ghost's
   // card carries a `watchlist ▸` door (DecommissionCard.svelte) promising
   // the watch that outlives it, and the watchlist tab is the only place
@@ -89,6 +95,10 @@ class TopologyNavState {
 
   requestFlag(id: string) {
     this.pendingFlagId = id
+  }
+
+  requestFlagsFilter(address: string) {
+    this.pendingFlagsFilter = address
   }
 
   requestWatch(id: string) {

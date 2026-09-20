@@ -53,6 +53,7 @@
   const rows = $derived(
     selectIngestLossRows({
       loss: appState.stats?.syslog?.loss,
+      outrun: { recent: appState.outrunEpisode.recent, active: appState.outrunActive },
       wsDropped: { recent: appState.wsDroppedEpisode.recent, active: appState.wsDroppedActive },
     }),
   )

@@ -9,8 +9,8 @@
 // that could drift apart. The deck-facing surface says "Entities", never
 // "fleet" (round 23's verdict) -- this module is the "internal
 // code/state" the record allows to keep the name.
-import { prose } from './setupsteps'
-import type { ClientEvent, Device } from './types'
+import { prose, TITLES } from './setupsteps'
+import type { ClientEvent, Device, UnattributedSource } from './types'
 
 export const RECENT_WINDOW_MS = 5 * 60 * 1000
 
@@ -77,8 +77,10 @@ export function ratePerSecond(events: readonly ClientEvent[], deviceId: string, 
 // multihomedEcho (#442) is the one sentence a configured-silent card
 // carries when the server has paired it with undeclared addresses that
 // are streaming -- the fleet already shows the pair, so this only points
-// an operator who never reopens the wizard back at step 2, where the
+// an operator who never reopens the wizard back at Send logs, where the
 // router console is open and the command is printed with their values.
+// Named, not numbered: it read "step 2" until #1284 moved Send logs to
+// third and the sentence started pointing at the wrong step.
 // Null for every other card: the notice clears itself once the declared
 // device sends its first log, and nothing else here diagnoses another
 // device's silence.
@@ -88,6 +90,46 @@ export function multihomedEcho(d: Device): string | null {
   const declared = d.sourceIp || d.id
   return (
     `Declared as ${declared}, nothing arrived. If ${prose(arriving, 'or')} below is the same router ` +
-    `on another of its addresses, Run setup… step 2 shows the one-line fix.`
+    `on another of its addresses, Run setup… ▸ ${TITLES.syslog} shows the one-line fix.`
   )
 }
+
+// setupEcho (#1241) is the one line a router card carries about its own
+// setup: the router reports what the wizard left on it, and mikroview
+// compares that against what the current wizard would leave. Behind
+// names the remedy, because the remedy is the same one every time --
+// paste the certificate step again, which updates what is already there
+// in place. Named rather than numbered, for the reason above.
+// Never reported is the router still running a script pasted before it
+// said anything at all.
+//
+// Deliberately this line and no more: the fuller upgrade notice is
+// #1240's, and a card is not the place to explain an upgrade.
+export function setupEcho(d: Device): string | null {
+  switch (d.setup?.standing) {
+    case 'behind':
+      return `setup behind · paste ${TITLES.ca} again`
+    case 'never reported':
+      return 'setup never reported'
+    default:
+      return null
+  }
+}
+
+// unattributedLabel (#1170) names a syslog source the registry could not
+// attribute to any router: no configured devices[].sourceIp matches it,
+// and no router has enrolled from it (#1281). It reads as
+// what it is -- an address that arrived -- and never as a router, which
+// is the whole point of the server having stopped inventing a device row
+// for one. Same one-line-and-no-more rule as setupEcho above.
+export function unattributedLabel(s: UnattributedSource): string {
+  return `unattributed · ${s.address} — syslog from an address no router has claimed`
+}
+
+// The remedy: name the source in config.yaml, or enrol the router from
+// it. Kept beside the label so the card that states the fact and the
+// line that fixes it never drift apart. Since #1281 the listener
+// refuses an unknown address before it gets this far, so the card is
+// rare; the advice still has to be the current one.
+export const UNATTRIBUTED_FIX =
+  "Declare it under devices: in config.yaml, or enrol the router from this address (+ add a router, then Re-enrol…) — a NAT'd relay can't enrol, so config is the answer there."

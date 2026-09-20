@@ -63,6 +63,11 @@ const FormatVersion = 1
 // any real deployment". This still bounds an outcome, not a threat: a
 // hostile envelope claiming more routers than this refuses cleanly
 // rather than growing the cap to match whatever it claims.
+//
+// #958 confirms this stays as-is: the cap bounds what a hostile envelope
+// may claim, not what a real restore uses, and records the tar-of-members
+// container streamed out of the JSON envelope as the successor if a real
+// fleet-scale deployment ever needs it.
 const (
 	baseMaxDecompressed = 256 << 20
 	// maxVaultRoutersHeadroom is deliberately generous for a self-hosted

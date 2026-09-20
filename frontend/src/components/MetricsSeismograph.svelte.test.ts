@@ -76,6 +76,74 @@ describe('MetricsSeismograph', () => {
     expect(a.querySelector('svg')?.getAttribute('height')).toBe(b.querySelector('svg')?.getAttribute('height'))
   })
 
+  // #1192: the record's gutter is this view's axis and its legend --
+  // name, now-value and declared scale per series -- which is why it
+  // carries no numbered axis and no colour key. The drum had been
+  // drawing the gutter empty.
+  it('prints each series name, its now-value and its declared scale in the gutter', () => {
+    const hour = buildHour(
+      [
+        { time: minute(0), byAction: { accept: 400, drop: 9 } },
+        { time: minute(1), byAction: { accept: 90, drop: 8, reject: 2 } },
+      ],
+      [],
+    )
+    const { container } = render(MetricsSeismograph, { hour, cursor: -1, onselect: () => {} })
+    const names = [...container.querySelectorAll('.g-name')].map((e) => e.textContent)
+    expect(names).toEqual(['TRAFFIC', 'REFUSED'])
+    const now = [...container.querySelectorAll('.g-now')].map((e) => e.textContent)
+    expect(now).toEqual(['100/min', '10/min'])
+    // One shared ceiling, declared on both rows: refused is a subset of
+    // the minute's total, so the inner half is drawn against the total's
+    // scale (the hour peaked at 409) and never one of its own.
+    const scales = [...container.querySelectorAll('.g-scale')].map((e) => e.textContent)
+    expect(scales).toEqual(['scale 409/min', 'scale 409/min'])
+  })
+
+  // #1192, second half: minutes that ended before this process started
+  // counting are blank paper, not the stub stroke MIN_HALF gives a
+  // genuine zero -- the same distinction the table's em dashes draw
+  // (#1169) -- and the note says why the paper is empty there.
+  it('leaves the minutes before counting began blank, with the note anchored at the first counted one', () => {
+    const hour = buildHour(
+      [
+        { time: minute(0), byAction: {} },
+        { time: minute(1), byAction: {} },
+        { time: minute(2), byAction: { accept: 400 } },
+        { time: minute(3), byAction: { accept: 410 } },
+      ],
+      [],
+    )
+    const { container } = render(MetricsSeismograph, {
+      hour,
+      cursor: -1,
+      onselect: () => {},
+      liveSince: minute(2),
+    })
+    expect(container.querySelectorAll('.stroke.outer').length).toBe(2)
+    expect(container.querySelector('.note')?.textContent).toBe(
+      `counting since ${formatHM(minute(2))} — nothing before`,
+    )
+  })
+
+  it('draws every minute and no note when the whole hour was counted', () => {
+    const hour = buildHour(
+      [
+        { time: minute(0), byAction: {} },
+        { time: minute(1), byAction: { accept: 400 } },
+      ],
+      [],
+    )
+    const { container } = render(MetricsSeismograph, {
+      hour,
+      cursor: -1,
+      onselect: () => {},
+      liveSince: minute(0),
+    })
+    expect(container.querySelectorAll('.stroke.outer').length).toBe(2)
+    expect(container.querySelector('.note')).toBeNull()
+  })
+
   it('draws the cursor only once a minute is selected', () => {
     const hour = buildHour(
       [

@@ -33,8 +33,13 @@
   // and not lock icons on every control. Pages stay undisabled and say
   // nothing further; the sentence is here.
   //
-  // Only the viewer tier gets it: "user" can edit, so read-only would be
-  // a lie, and the drawing gives that tier no variant of its own.
+  // Only the viewer tier gets the "· read-only" tail: "user" can edit,
+  // so read-only would be a lie. The tier itself is named for every tier
+  // though (#1171) -- the chip used to read "tom (admin)" and "anna
+  // (viewer) · read-only" but a bare "kai" for the user tier, which left
+  // the one tier in the middle the only one whose account said nothing
+  // about itself. The tail stays the viewer's alone; only the caveat is
+  // theirs, not the naming.
   const isViewer = $derived(authState.role === 'viewer')
 
   function toggle() {
@@ -81,7 +86,7 @@
     aria-expanded={open}
     title="Account and operate pages"
   >
-    {authState.username}{#if isAdmin}&nbsp;(admin){:else if isViewer}&nbsp;(viewer) · read-only{/if}
+    {authState.username}{#if isAdmin}&nbsp;(admin){:else if isViewer}&nbsp;(viewer) · read-only{:else if authState.role === 'user'}&nbsp;(user){/if}
   </button>
 
   {#if open}
@@ -101,7 +106,11 @@
           Change password
         </button>
       {/if}
-      {#if authState.ssoAvailable && authState.hasLocalPassword}
+      <!-- Offered while there is something to connect: a password to
+           convert, and no identity attached yet. The admin keeps its
+           password after connecting (#1252), so that alone no longer
+           answers it. -->
+      {#if authState.ssoAvailable && authState.hasLocalPassword && !authState.ssoConnected}
         <button class="row" role="menuitem" onclick={() => ((authState.showSSOLink = true), (open = false))}>
           Use single sign-on
         </button>
@@ -158,6 +167,21 @@
     flex-direction: column;
     z-index: 40;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    /* #1144: the menu hangs below the scene bar inside #app, which is
+       `height: 100vh; overflow: hidden` -- so on a short window a menu
+       taller than the space left under the bar was simply cut off, with
+       no way to reach its last rows. Cap it at what the viewport leaves
+       (bar plus the 6px gap, and a margin at the foot) and scroll
+       inside instead of growing past the edge. */
+    max-height: calc(100vh - 56px);
+    overflow-y: auto;
+  }
+
+  /* A capped flex column squashes its children rather than scrolling,
+     unless they are told not to give ground -- the rules would vanish
+     first, being 1px tall. */
+  .menu > * {
+    flex: none;
   }
 
   .row {

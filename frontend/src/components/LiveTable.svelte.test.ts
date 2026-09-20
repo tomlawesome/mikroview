@@ -9,7 +9,9 @@ import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
+import { countryFlag } from '../lib/format'
 import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 // Vite's `?raw` import, the same device Topography.svelte.test.ts uses
 // for its own CSS-token assertions -- not a Node fs read, so this stays
@@ -20,6 +22,10 @@ import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 // matter what the rule actually said. Reading the source text is the
 // only way to prove the sticky head's supporting CSS, not just assume it.
 import componentSource from './LiveTable.svelte?raw'
+// The row's own half of the same claims -- EventRow has no test file of
+// its own, and its cells share this table's one grid, so the two are
+// read together here (#1150).
+import eventRowSource from './EventRow.svelte?raw'
 
 // jsdom (unlike a real browser) has no window.matchMedia -- LiveTable
 // pulls in lib/viewport.svelte.ts, whose ViewportState singleton calls
@@ -108,7 +114,8 @@ beforeEach(() => {
   // foot band's mount-time rule-table fetch from firing in jsdom, and
   // both the band and that fetch are gone.
   // columnState is a module-level singleton, shared with
-  // columns.svelte.test.ts and FilterBar.svelte.test.ts -- reset to the
+  // columns.svelte.test.ts, ColumnToggles.svelte.test.ts,
+  // FilterBar.svelte.test.ts and Whisper.svelte.test.ts -- reset to the
   // shipped default (#729: all fifteen visible) so a toggle from one test
   // can't leak into the next, the same hygiene groupModeState/flagsState
   // above already get.
@@ -319,6 +326,79 @@ describe('LiveTable row-render cost scales with row count, not worse (#728)', ()
     const costRatio = largeCost / smallCost
     expect(costRatio).toBeLessThan(rowRatio * 3) // fails past 24x -- linear is ~8x, quadratic ~64x
   }, 30000) // generous for the same shared-runner reason as the #232 test above; not the property under test
+})
+
+describe('a new row does not restripe the rows below it (#1308)', () => {
+  // WebKit re-resolves style for every cell of every row whose stripe
+  // class changes. Banding from the top (i % 2) flipped all 800 rows on
+  // every arrival, which Safari paid at ~100 ms a row-set: 450 events
+  // into an 800-row stream took 45-85 s against 4 s in Chromium. So a
+  // row keeps the stripe it was given, and a newcomer takes the opposite
+  // of the row beneath it.
+  function stripes(container: Element): Map<string, boolean> {
+    const out = new Map<string, boolean>()
+    for (const row of container.querySelectorAll('.row')) {
+      out.set(row.getAttribute('title') ?? '', row.classList.contains('banded'))
+    }
+    return out
+  }
+
+  it('keeps every existing stripe when an event arrives at the top, and still alternates', () => {
+    appState.events = Array.from({ length: 5 }, (_, i) => makeEvent(`stripe-${i}`))
+    const { container } = render(LiveTable)
+    flushSync()
+    const before = stripes(container)
+    expect(before.size).toBe(5)
+
+    appState.events = [...appState.events, makeEvent('stripe-5')]
+    flushSync()
+    const after = stripes(container)
+    expect(after.size).toBe(6)
+
+    for (const [title, banded] of before) expect(after.get(title), title).toBe(banded)
+
+    // Top to bottom is newest first, so stripe-5 sits above stripe-4.
+    const rows = [...container.querySelectorAll('.row')].map((r) => r.classList.contains('banded'))
+    for (let i = 1; i < rows.length; i++) expect(rows[i], `row ${i}`).toBe(!rows[i - 1])
+  })
+
+  it('keeps every stripe when the oldest row is evicted past MAX_RENDERED_ROWS', () => {
+    appState.events = Array.from({ length: MAX_RENDERED_ROWS }, (_, i) => makeEvent(`evict-${i}`))
+    const { container } = render(LiveTable)
+    flushSync()
+    const before = stripes(container)
+
+    appState.events = [...appState.events, makeEvent('evict-new')]
+    flushSync()
+    const after = stripes(container)
+
+    expect(after.has('evict-0')).toBe(false)
+    for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
+  }, 30000)
+
+  it('keeps the flat stripes when events arrive during a round trip through group mode', () => {
+    // After an eviction the bottom row carries a stripe a fresh bottom-up
+    // pass would not give it, so this is where a lost memory shows.
+    appState.events = Array.from({ length: MAX_RENDERED_ROWS }, (_, i) => makeEvent(`toggle-${i}`))
+    const { container } = render(LiveTable)
+    flushSync()
+    appState.events = [...appState.events, makeEvent('toggle-evictor')]
+    flushSync()
+    const before = stripes(container)
+    expect(before.get('toggle-1')).toBe(true)
+
+    groupModeState.enabled = true
+    flushSync()
+    appState.events = [...appState.events, makeEvent('toggle-new-1'), makeEvent('toggle-new-2')]
+    flushSync()
+    groupModeState.enabled = false
+    flushSync()
+
+    // The group list bands from its own memory, so the flat rows come
+    // back as they were instead of re-alternating from the bottom.
+    const after = stripes(container)
+    for (const [title, banded] of after) if (before.has(title)) expect(before.get(title), title).toBe(banded)
+  }, 30000)
 })
 
 describe('Group mode drawer consistency (issue #381)', () => {
@@ -727,10 +807,11 @@ describe('LiveTable squared columns (#644)', () => {
     const ipCells = container.querySelectorAll('.cell.ip')
 
     // Unnamed source: the address IS the name column's content (marked
-    // bare so it renders dim), the country code rides beside it, and the
-    // address column repeats nothing.
+    // bare so it renders dim), the country flag (#1200 restored this as
+    // an emoji, not the bare "DE" #644 had regressed it to) rides beside
+    // it, and the address column repeats nothing.
     expect(nameCells[0]?.textContent).toContain('185.220.101.34')
-    expect(nameCells[0]?.textContent).toContain('DE')
+    expect(nameCells[0]?.querySelector('.geo')?.textContent).toBe(countryFlag('DE'))
     expect(nameCells[0]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(true)
     expect(ipCells[0]?.textContent?.trim()).toBe('—')
 
@@ -852,15 +933,15 @@ describe('LiveTable squared columns (#644)', () => {
     expect(container.querySelector('.cell.action .badge-natted')).toBeTruthy()
   })
 
-  // #644's own text: "Per-cell ⓘ buttons are removed entirely." That is
-  // IpInvestigateButton (titled "Investigate {ip}") and
-  // PortInvestigateButton (titled "What is port {port}?") specifically --
-  // not RouterRuleButton, which keeps its rule-cell lookup trigger
-  // untouched (see EventRow.svelte's own comment on natFilterKey). A
-  // public source IP and a port with a commonPorts entry (443) are
-  // exactly the two conditions that used to grow one of the retired
-  // buttons.
-  it('carries no per-cell ⓘ investigate button for the source IP or the port', () => {
+  // #644's own text: "Per-cell ⓘ buttons are removed entirely." That
+  // covered both IpInvestigateButton (titled "Investigate {ip}") and
+  // PortInvestigateButton (titled "What is port {port}?") -- not
+  // RouterRuleButton, which keeps its rule-cell lookup trigger untouched
+  // (see EventRow.svelte's own comment on natFilterKey). The owner's
+  // #1200 ruling (2026-09-13) put IpInvestigateButton back on the row;
+  // PortInvestigateButton was never part of that ruling and stays
+  // retired, so a port with a commonPorts entry (443) still gets no ⓘ.
+  it('carries no per-cell ⓘ investigate button for the port', () => {
     const e = makeEvent('no-investigate-row', {
       srcIp: '203.0.113.50',
       dstIp: '198.51.100.9',
@@ -870,8 +951,57 @@ describe('LiveTable squared columns (#644)', () => {
     flushSync()
 
     const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title') ?? '')
-    expect(titles.some((t) => t.startsWith('Investigate '))).toBe(false)
     expect(titles.some((t) => /^What is port \d+\?$/.test(t))).toBe(false)
+  })
+
+  // #1200 (owner ruling, 2026-09-13): the IP lookup button goes back on
+  // the row beside each public address, restoring what #644 dropped --
+  // shown or not on exactly the same isPublicIp() condition
+  // EventDetailSheet's own copy already uses, gated per address rather
+  // than per row (a private source beside a public destination shows
+  // only the one button).
+  it('shows the IP lookup button next to a public address and not beside a private one', () => {
+    const e = makeEvent('investigate-row', {
+      srcIp: '203.0.113.50',
+      dstIp: '10.0.40.5',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title') ?? '')
+    expect(titles).toContain('Investigate 203.0.113.50')
+    expect(titles).not.toContain('Investigate 10.0.40.5')
+  })
+
+  // #1200: the flag rides beside the address token whichever one is
+  // showing -- a resolved hostname included, not only a bare address
+  // (the bug #644 introduced: EventRow.svelte's condition used to read
+  // `!event.srcHostName && event.srcCountry`).
+  it('shows the country flag beside a resolved hostname, not only beside a bare address', () => {
+    const e = makeEvent('flag-with-hostname-row', {
+      srcIp: '185.220.101.34',
+      srcHostName: 'known-relay',
+      srcCountry: 'DE',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const nameCell = container.querySelector('.cell.addr')
+    expect(nameCell?.textContent).toContain('known-relay')
+    expect(nameCell?.querySelector('.geo')?.textContent).toBe(countryFlag('DE'))
+  })
+
+  // #1198: an unresolved country is exactly the "GeoIP is off" or
+  // "no match" case that owns its own honest explanation elsewhere (the
+  // country filter's disabled row, the ingest settings line) -- a bare
+  // row has no country to guess at, so it renders nothing rather than a
+  // placeholder.
+  it('renders no flag at all when the event carries no country code', () => {
+    const e = makeEvent('no-country-row', { srcIp: '10.0.10.2' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.addr .geo')).toBeNull()
   })
 })
 
@@ -961,6 +1091,39 @@ describe('LiveTable restored columns (#717)', () => {
     const { container: container2 } = render(LiveTable, { props: { events: [noMac] } })
     flushSync()
     expect(container2.querySelector('.cell.mac')?.textContent?.trim()).toBe('—')
+  })
+
+  // #1149: a fixed-width column ellipses what it cannot fit, and the
+  // header and the two plain-text columns had nothing to hover when it
+  // did -- "SRC…" over a 17-character MAC with no way to read either.
+  it('titles every header with its own label, and the ip/MAC cells with their value', () => {
+    const e = makeEvent('title-row', {
+      srcIp: '192.168.100.201',
+      srcHostName: 'workshop-nas',
+      srcMac: 'AA:BB:CC:DD:EE:FF',
+      dstIp: '203.0.113.199',
+      dstHostName: 'updates',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    for (const header of container.querySelectorAll('.header-cell')) {
+      expect(header.getAttribute('title')).toBe(header.textContent?.trim())
+    }
+
+    const ipCells = [...container.querySelectorAll('.cell.ip')]
+    expect(ipCells.map((c) => c.getAttribute('title'))).toEqual(['192.168.100.201', '203.0.113.199'])
+    expect(container.querySelector('.cell.mac')?.getAttribute('title')).toBe('AA:BB:CC:DD:EE:FF')
+  })
+
+  // Nothing to enlarge, so nothing to promise: a tooltip reading "—" is
+  // one more thing to hover for no answer.
+  it('leaves the ip and MAC cells untitled where they hold only an em dash', () => {
+    const { container } = render(LiveTable, { props: { events: [makeEvent('untitled-row', {})] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.ip')?.hasAttribute('title')).toBe(false)
+    expect(container.querySelector('.cell.mac')?.hasAttribute('title')).toBe(false)
   })
 
   it('shows both interfaces joined by an arrow, and an em dash when neither is set', () => {
@@ -1059,6 +1222,154 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
     flushSync()
 
     expect(container.querySelector('[title="cleared-flag-row"]')?.classList.contains('flagged')).toBe(false)
+  })
+
+  // #1117 (reopened twice: !1029, !1051). The release screenshot at
+  // 1600x900 showed a flagged row's time as "0:28:02.838" -- the leading
+  // "2" gone, the mark sitting where the digit should be. jsdom applies
+  // no stylesheet here (see this file's own note on componentSource/
+  // eventRowSource, top of file), so textContent on the time cell would
+  // read the full, un-clipped string either way and prove nothing --
+  // the bug was always visual, never a string the DOM ever held. What
+  // *is* provable without a browser: .time used to share one flex line
+  // (`gap: 6px`, `justify-content: flex-end`) between the timestamp and
+  // the mark, so a flagged row's mark competed with the digits for
+  // whatever width the column had, and a right-anchored line spills its
+  // overflow off the *left* -- the significant digits -- with no
+  // ellipsis, since text-overflow only ever truncates the inline end.
+  // Widening the column twice (both prior MRs) never fixed that: the
+  // mark still rode in the same line. It now draws in a fixed
+  // padding-right gutter of .time's own, taken out of that flex line
+  // entirely (position: absolute) -- structurally unable to cost the
+  // timestamp any width, flagged or not.
+  it("reserves the mark its own gutter instead of sharing the timestamp's flex line (#1117)", () => {
+    const timeRule = eventRowSource.match(/\n\s*\.time\s*\{([^}]*)\}/)
+    expect(timeRule).toBeTruthy()
+    expect(timeRule![1]).toMatch(/padding-right:\s*\d/)
+
+    const rmkRule = eventRowSource.match(/\n\s*\.rmk\s*\{([^}]*)\}/)
+    expect(rmkRule).toBeTruthy()
+    expect(rmkRule![1]).toMatch(/position:\s*absolute/)
+
+    // Still true, and still worth pinning at the DOM level (#685/#691's
+    // own test above already covers this): the mark is a sibling that
+    // follows the timestamp, not a character inside it.
+    const flaggedSourceEvent = makeEvent('gutter-row', { srcIp: '203.0.113.9' })
+    flagsState.list = [activeFlag('203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [flaggedSourceEvent] } })
+    flushSync()
+
+    const timeBtn = container.querySelector('[title="gutter-row"] .time-btn')
+    expect(timeBtn?.textContent).not.toMatch(/⚑/)
+  })
+})
+
+// #1201 (owner ask, 2026-09-12): the ⚑ was inert -- clicking it did
+// nothing, and its title only said a flag existed. It is now a real
+// button (native, not the file's usual role="button" span, so it is
+// keyboard-reachable for free) that opens the flag it points at, reusing
+// #724's own dial-to-docket handoff (topologyNavState.pendingFlagId) for
+// the one-flag case and a new sibling slot (pendingFlagsFilter) when
+// there is more than one honest choice.
+describe('The ⚑ mark opens the flag it points at (#1201)', () => {
+  function openFlag(id: string, target: string, firstSeen = '2026-01-01T00:00:00Z'): Flag {
+    return { id, type: 'port_scan', target, detail: '', count: 1, firstSeen, lastSeen: firstSeen, cleared: false }
+  }
+
+  beforeEach(() => {
+    appState.view = 'live'
+    topologyNavState.pendingFlagId = null
+    topologyNavState.pendingFlagsFilter = null
+  })
+
+  it('is a real button, reachable by keyboard, with the single-flag title', () => {
+    flagsState.list = [openFlag('f1', '203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    const mark = container.querySelector('.rmk')
+    expect(mark?.tagName).toBe('BUTTON')
+    expect(mark?.getAttribute('title')).toBe("open this source's flag ▸")
+  })
+
+  it('sets pendingFlagId and switches to the flags tab when the source has exactly one open flag', async () => {
+    flagsState.list = [openFlag('f1', '203.0.113.9')]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    await fireEvent.click(container.querySelector('.rmk') as HTMLElement)
+    flushSync()
+
+    expect(topologyNavState.pendingFlagId).toBe('f1')
+    expect(topologyNavState.pendingFlagsFilter).toBeNull()
+    expect(appState.view).toBe('flags')
+  })
+
+  it('sets the source address filter, not a single flag, when the source has several open flags', async () => {
+    flagsState.list = [
+      openFlag('older', '203.0.113.9', '2026-01-01T00:00:00Z'),
+      openFlag('newest', '203.0.113.9', '2026-01-01T01:00:00Z'),
+    ]
+    const { container } = render(LiveTable, { props: { events: [makeEvent('e1', { srcIp: '203.0.113.9' })] } })
+    flushSync()
+
+    const mark = container.querySelector('.rmk')
+    expect(mark?.getAttribute('title')).toBe('2 open flags for this source ▸')
+
+    await fireEvent.click(mark as HTMLElement)
+    flushSync()
+
+    expect(topologyNavState.pendingFlagId).toBeNull()
+    expect(topologyNavState.pendingFlagsFilter).toBe('203.0.113.9')
+    expect(appState.view).toBe('flags')
+  })
+})
+
+// #1269: EventRow used to decide its own ⚑ mark's target(s) by filtering
+// the whole of flagsState.list against event.srcIp, independently, on
+// every flagged row it drew -- undoing the one-pass join
+// (lib/grouping.ts's flagsBySource) LiveTable already builds once to
+// decide *whether* a row is flagged at all. A screenful of rows sharing
+// a handful of flagged sources cost rows x flags instead of one pass.
+describe("EventRow reuses LiveTable's flag join instead of rescanning (#1269)", () => {
+  function activeFlag(target: string): Flag {
+    return {
+      id: 'f1',
+      type: 'port_scan',
+      target,
+      detail: '',
+      count: 1,
+      firstSeen: '2026-01-01T00:00:00Z',
+      lastSeen: '2026-01-01T00:00:00Z',
+      cleared: false,
+    }
+  }
+
+  it('never filters flagsState.list itself, however many flagged rows are drawn', async () => {
+    const originalFilter = Array.prototype.filter
+    let filterCallsOnFlagsList = 0
+    const spy = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (
+      this: unknown[],
+      ...args: Parameters<typeof originalFilter>
+    ) {
+      if (this === flagsState.list) filterCallsOnFlagsList++
+      return originalFilter.apply(this, args)
+    })
+
+    try {
+      flagsState.list = [activeFlag('203.0.113.9')]
+      const events = Array.from({ length: 20 }, (_, i) => makeEvent(`flag-row-${i}`, { srcIp: '203.0.113.9' }))
+
+      const { container } = render(LiveTable, { props: { events } })
+      flushSync()
+
+      // Sanity: the rows actually rendered flagged, so there was
+      // something to scan for in the first place.
+      expect(container.querySelectorAll('.row.flagged').length).toBe(20)
+      expect(filterCallsOnFlagsList).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 
@@ -1397,5 +1708,63 @@ describe('LiveTable column chooser rendering (#729)', () => {
     expect(container.querySelectorAll('.header-cell').length).toBe(COLUMNS.length)
     const row = container.querySelector('.row') as HTMLElement
     expect(row.querySelectorAll(':scope > .cell').length).toBe(COLUMNS.length)
+  })
+})
+
+// #1150 piece 1: below ~1500px the right-hand columns fell off the edge
+// with nothing saying they were there -- a 1762px table in a 1308px box
+// at 1366 stopped after Destination, and the pinned Rule column went
+// with it. The scroll box says so always, and Rule stays in view.
+describe('the stream says it scrolls sideways, and keeps Rule in view (#1150)', () => {
+  it('draws the horizontal scrollbar always, not only while the table overflows', () => {
+    const rule = componentSource.match(/\.grid-body\s*\{([^}]*)\}/)
+    expect(rule).toBeTruthy()
+    expect(rule![1]).toMatch(/overflow-x:\s*scroll/)
+
+    const { container } = render(LiveTable, { props: { events: [] } })
+    flushSync()
+    // app.css's own thin bar dress rides on the same element, as the
+    // wizard's script boxes do (#1146).
+    const body = container.querySelector('.body') as HTMLElement
+    expect(body.classList.contains('grid-body')).toBe(true)
+    expect(body.classList.contains('scrollbar')).toBe(true)
+  })
+
+  it('pins the Rule header to the right edge the way Time is pinned to the left', () => {
+    const { container } = render(LiveTable, { props: { events: [makeEvent('pinned-rule', { ruleLabel: 'lan-wan' })] } })
+    flushSync()
+
+    const headers = Array.from(container.querySelectorAll('.header-cell'))
+    const time = headers.find((el) => el.textContent?.trim() === 'Time') as HTMLElement
+    const ruleHead = headers.find((el) => el.textContent?.trim() === 'Rule') as HTMLElement
+    expect(time.classList.contains('sticky-col')).toBe(true)
+    expect(ruleHead.classList.contains('sticky-col-right')).toBe(true)
+    // One end each: neither pinned header borrows the other's edge.
+    expect(time.classList.contains('sticky-col-right')).toBe(false)
+    expect(ruleHead.classList.contains('sticky-col')).toBe(false)
+
+    const right = componentSource.match(/\.sticky-col-right\s*\{([^}]*)\}/)
+    expect(right).toBeTruthy()
+    expect(right![1]).toMatch(/position:\s*sticky/)
+    expect(right![1]).toMatch(/right:\s*0/)
+  })
+
+  // The header can only stay aligned with a cell that is pinned too --
+  // EventRow has no test file of its own, and this is the half of the
+  // claim that lives there (the same pairing .time/.sticky-col already
+  // has).
+  it('pins the rule cell itself, opaque, so scrolled columns do not show through it', () => {
+    const cell = eventRowSource.match(/\.cell\.rule\s*\{([^}]*)\}/)
+    expect(cell).toBeTruthy()
+    expect(cell![1]).toMatch(/position:\s*sticky/)
+    expect(cell![1]).toMatch(/right:\s*0/)
+    expect(cell![1]).toMatch(/background:\s*var\(--bg-elevated\)/)
+
+    // Each row wash needs its own opaque repaint at .row.banded .cell's
+    // specificity, exactly as the time cell has -- otherwise the wash
+    // rule wins and the pinned cell goes translucent again.
+    for (const selector of [/\.row\.banded \.rule\s*\{/, /\.row\.flagged \.rule\s*\{/, /\.row:hover \.rule\s*\{/]) {
+      expect(eventRowSource).toMatch(selector)
+    }
   })
 })

@@ -74,10 +74,11 @@ func TestDefinitionsCoverageRefusesNoLoggingWhenARouterNeverPushed(t *testing.T)
 	defer ts.Close()
 
 	// Both routers are feeding events. newTestServer's registry has
-	// "core" configured at 192.168.1.1; "edge" is discovered from its
-	// own source address, which is what an unregistered router looks
-	// like.
+	// "core" configured at 192.168.1.1; "edge" is undeclared and known
+	// only because it pushed, which is what an unregistered router
+	// looks like (#1170).
 	now := time.Now()
+	pushingRouter(t, s, "edge", "192.168.1.2/24")
 	s.Devices.Resolve("192.168.1.1", now)
 	s.Devices.Resolve("192.168.1.2", now)
 
@@ -96,8 +97,8 @@ func TestDefinitionsCoverageRefusesNoLoggingWhenARouterNeverPushed(t *testing.T)
 	if body.CoverageEvidence.Complete {
 		t.Error("coverageEvidence.Complete = true, want false: a device feeding events pushed no filter table")
 	}
-	if len(body.CoverageEvidence.MissingDevices) != 1 || body.CoverageEvidence.MissingDevices[0] != "192.168.1.2" {
-		t.Errorf("coverageEvidence.MissingDevices = %v, want [192.168.1.2] -- the gap must be surfaced, not only implied by the downgraded answer", body.CoverageEvidence.MissingDevices)
+	if len(body.CoverageEvidence.MissingDevices) != 1 || body.CoverageEvidence.MissingDevices[0] != "edge" {
+		t.Errorf("coverageEvidence.MissingDevices = %v, want [edge] -- the gap must be surfaced, not only implied by the downgraded answer", body.CoverageEvidence.MissingDevices)
 	}
 }
 
@@ -139,6 +140,7 @@ func TestDefinitionsCoverageOutOfScopeAlsoNeedsCompleteEvidence(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
+	pushingRouter(t, s, "edge", "192.168.1.2/24")
 	s.Devices.Resolve("192.168.1.1", now)
 	s.Devices.Resolve("192.168.1.2", now)
 	pushFilterRules(t, s, "core", []ingest.FilterRule{
@@ -166,6 +168,7 @@ func TestDefinitionsCoverageOKSurvivesIncompleteEvidence(t *testing.T) {
 	defer ts.Close()
 
 	now := time.Now()
+	pushingRouter(t, s, "edge", "192.168.1.2/24")
 	s.Devices.Resolve("192.168.1.1", now)
 	s.Devices.Resolve("192.168.1.2", now)
 	pushFilterRules(t, s, "core", []ingest.FilterRule{

@@ -15,14 +15,32 @@ import { describe, expect, it } from 'vitest'
 import { deckCards, LANDING_BY_CARD } from './deckCards'
 
 describe('deckCards', () => {
-  it('carries seven cards for an admin, Entities and Settings last', () => {
+  it('carries eight cards for an admin, Entities, Settings and Log every rule last', () => {
     const keys = deckCards(true).map((c) => c.key)
-    expect(keys).toEqual(['fall', 'topography', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
+    expect(keys).toEqual([
+      'fall',
+      'topography',
+      'metrics',
+      'live',
+      'docket',
+      'entities',
+      'engineroom',
+      'log-every-rule',
+    ])
   })
 
-  it('carries the same seven cards for a user -- #653 widened Entities to that tier', () => {
+  it('carries the same eight cards for a user -- #653 widened Entities to that tier', () => {
     const keys = deckCards(false, true).map((c) => c.key)
-    expect(keys).toEqual(['fall', 'topography', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
+    expect(keys).toEqual([
+      'fall',
+      'topography',
+      'metrics',
+      'live',
+      'docket',
+      'entities',
+      'engineroom',
+      'log-every-rule',
+    ])
   })
 
   it('carries six cards for a viewer -- Fleet stands in for Entities and Settings, neither of which appears at all', () => {
@@ -70,6 +88,15 @@ describe('deckCards', () => {
       const seen = cards.flatMap((c) => c.views)
       expect(new Set(seen).size).toBe(seen.length)
     }
+  })
+
+  it('gives Log every rule the edit tier alone, under its renamed label (#1134)', () => {
+    // The page was "Tune logging", and rendered outside the deck with no
+    // navigation on it at all. The view key is still the endpoints'.
+    const card = deckCards(false, true).find((c) => c.key === 'log-every-rule')
+    expect(card?.name).toBe('Log every rule')
+    expect(card?.views).toEqual(['tune-logging'])
+    expect(deckCards(false, false).some((c) => c.key === 'log-every-rule')).toBe(false)
   })
 
   it('names the settings card "Settings"', () => {

@@ -55,8 +55,10 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 // navigate to, rather than issuing a redirect itself.
 //
 // POST, not GET, and that is the security-relevant part. Linking is
-// destructive -- it removes the account's local password permanently
-// (see auth.Store.LinkOIDCIdentity). A GET that starts the flow could
+// destructive for every role but admin -- it removes the account's
+// local password permanently (see auth.Store.LinkOIDCIdentity), and
+// even for the admin it attaches a permanent second way in. A GET that
+// starts the flow could
 // be triggered cross-site: an attacker embeds it, the victim's browser
 // follows it, their identity provider silently re-authenticates them,
 // and the callback completes a link the victim never asked for,
@@ -65,7 +67,16 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 //
 // The target account is taken from the session and sealed into the flow
 // state, never from the request body -- the browser does not get to say
-// which account a link applies to.
+// which account a link applies to. The request carries no parameters at
+// all, so there is nothing for a caller to get wrong.
+//
+// This is also the first-run route (#1252). On a fresh deployment with
+// OIDC configured, AuthSetup.svelte creates the local admin and then
+// POSTs here with the session that creation issued; the identity that
+// comes back from the provider is linked to that admin. Session
+// continuity is the whole proof -- the person who made the account is
+// the person the browser carried to the provider and back -- and
+// nothing compares an email address to reach it.
 func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC == nil {
 		http.NotFound(w, r)
@@ -73,7 +84,7 @@ func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
 	}
 	caller := userFromContext(r)
 	if caller == nil {
-		http.Error(w, "sign in first", http.StatusUnauthorized)
+		writeUnauthorized(w, "sign in first")
 		return
 	}
 	// Already SSO-only: there is no local password left to convert, and
@@ -83,7 +94,14 @@ func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this account already signs in through your identity provider", http.StatusConflict)
 		return
 	}
-
+	// Already connected, and keeping a password because it is the admin
+	// (#1252). Linking again could only mean pointing the account at a
+	// second identity, which auth.Store.LinkOIDCIdentity refuses -- said
+	// here too so the answer comes before the provider round trip.
+	if caller.OIDCSubject != "" {
+		http.Error(w, "this account is already connected to your identity provider", http.StatusConflict)
+		return
+	}
 	fs, err := oidc.NewFlowState(time.Now())
 	if err != nil {
 		http.Error(w, "failed to start SSO linking", http.StatusInternalServerError)
@@ -126,7 +144,18 @@ func (s *Server) completeOIDCLink(w http.ResponseWriter, r *http.Request, fs oid
 		redirectWithSSOError(w, r, "link_failed")
 		return
 	}
-	s.Audit.Record(caller.Username, "account.link_sso", caller.Username, "issuer="+identity.Issuer)
+	// Recorded on the completed link rather than on the request that
+	// started it: a link that never came back from the provider changed
+	// nothing and should leave no trace. What it cost the account is
+	// recorded too, because that differs by role now (#1252) -- the
+	// admin keeps its password, everybody else loses it.
+	detail := "issuer=" + identity.Issuer
+	if caller.Role == auth.RoleAdmin {
+		detail += "; local password kept (admin)"
+	} else {
+		detail += "; local password removed"
+	}
+	s.Audit.Record(caller.Username, "account.link_sso", caller.Username, detail)
 
 	// LinkOIDCIdentity sets PasswordChangedAt, which invalidates every
 	// session issued before it -- including the one that just made this

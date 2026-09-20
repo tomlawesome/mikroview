@@ -50,7 +50,7 @@ func render(step, dialect, address, syslogPort string) (string, error) {
 		if address == "" || syslogPort == "" {
 			return "", fmt.Errorf("-address and -syslog-port are required for -step=syslog")
 		}
-		return routeros.SyslogCommands(address, syslogPort, dialect), nil
+		return routeros.SyslogCommands(address, syslogPort, dialect, ""), nil
 	case "ruletagging":
 		return routeros.RuleTaggingCommands(dialect), nil
 	case "all":
@@ -59,7 +59,7 @@ func render(step, dialect, address, syslogPort string) (string, error) {
 		}
 		return strings.Join([]string{
 			routeros.CaTrustCommands(address, dialect),
-			routeros.SyslogCommands(address, syslogPort, dialect),
+			routeros.SyslogCommands(address, syslogPort, dialect, ""),
 			routeros.RuleTaggingCommands(dialect),
 		}, "\n\n"), nil
 	default:
@@ -69,7 +69,7 @@ func render(step, dialect, address, syslogPort string) (string, error) {
 
 func main() {
 	dialect := flag.String("dialect", defaultDialect(), "dialect to render (defaults to the table's own default dialect)")
-	address := flag.String("address", "", "mikroview address (host[:port]) the CA-trust and syslog commands should point at")
+	address := flag.String("address", "", "MikroView address (host[:port]) the CA-trust and syslog commands should point at")
 	syslogPort := flag.String("syslog-port", "", "syslog listen address (e.g. \":6514\") or bare port for the syslog step")
 	step := flag.String("step", "all", "catrust, syslog, ruletagging, or all")
 	flag.Parse()

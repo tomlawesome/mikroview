@@ -112,7 +112,7 @@ export function downloadEventsCsv(events: FirewallEvent[]): void {
 }
 
 // downloadText (#435) is the same blob-a-link-click idiom above, pulled
-// out generic: Tune logging's annotated export is plain text, not a
+// out generic: Log every rule's annotated export is plain text, not a
 // table of events, and is the second caller of the pattern rather than
 // a reason to bend eventsToCsv/downloadEventsCsv around a second shape.
 export function downloadText(filename: string, text: string): void {
@@ -125,4 +125,45 @@ export function downloadText(filename: string, text: string): void {
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+// downloadFromUrl (#1115) is the same blob-a-link-click idiom above, run
+// off a fetch instead of text the caller already had in hand -- so an
+// authenticated download (a router backup behind the vault passphrase)
+// can be read before it is saved. A plain `<a href>` can't do that: the
+// browser navigates and shows whatever the server sent, including a
+// refusal. Returns 'forbidden' on a 403 without saving anything -- an
+// unlock that went idle between the link being drawn and the click is
+// what this exists to catch, not a network failure -- 'failed' for
+// anything else that didn't come back ok, and 'ok' once the browser has
+// been handed the file to save.
+export async function downloadFromUrl(url: string, filename: string): Promise<'ok' | 'forbidden' | 'failed'> {
+  let res: Response
+  try {
+    res = await fetch(url)
+  } catch {
+    return 'failed'
+  }
+  if (res.status === 403) return 'forbidden'
+  if (!res.ok) return 'failed'
+  // res.blob() keeps reading the body after the headers already came
+  // back ok, so a connection dropped mid-transfer rejects here rather
+  // than at the fetch above -- caught the same way, rather than left to
+  // reject this function's own promise, which every caller here treats
+  // as a status to show, never an exception to catch.
+  let blob: Blob
+  try {
+    blob = await res.blob()
+  } catch {
+    return 'failed'
+  }
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(objectUrl)
+  return 'ok'
 }

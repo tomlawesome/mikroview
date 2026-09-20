@@ -8,14 +8,35 @@
 // turns those numbers, and the generation list beside them, into the
 // sentence the drawing writes.
 
-import type { RouterBackupRouter } from './types'
+import type { RouterBackupGeneration, RouterBackupRouter, VaultLock } from './types'
 import { formatDayMonth, formatDurationShort, formatHM } from './format'
+
+/** vaultGated is round 44's download gate, in one place: a passphrase
+ * is set and this session does not hold the unlock -- whether nobody
+ * has it open (locked) or another of the admin's own sign-ins does.
+ *
+ * A lock that is not there yet is not gated. The wizard reads the lock
+ * off a backups response it may not have received, and "not loaded"
+ * must not read as "gated": that would send the tab to whatever the
+ * server answers a locked vault with, including a 403 page. */
+export function vaultGated(lock: VaultLock | null | undefined): boolean {
+  if (!lock) return false
+  return lock.passphraseSet && !lock.unlockedForYou
+}
 
 /** MAX_GENERATIONS mirrors backupvault.MaxGenerations -- ten kept per
  * router, oldest dropped first (owner decision, #394). Not imported
  * (the frontend has no access to the Go constant); round 44's own
  * receipt line ("10 of 10 kept") is what pins the two together. */
 export const MAX_GENERATIONS = 10
+
+/** MAX_KEEP_COMMENT mirrors backupvault.MaxCommentRunes -- a kept
+ * backup's comment is 1 to 120 characters, counted in runes on both
+ * sides so the limit means the same thing in any alphabet (#1126). The
+ * form refuses early rather than making the server say no to something
+ * it could have said first, the way the passphrase field already
+ * does. */
+export const MAX_KEEP_COMMENT = 120
 
 /**
  * cadencePhrase names how often a router pushes, from the interval the
@@ -105,4 +126,29 @@ export function oldestArrival(router: RouterBackupRouter): string | null {
  * entry. */
 export function newestGeneration(router: RouterBackupRouter) {
   return router.generations.length > 0 ? router.generations[router.generations.length - 1] : null
+}
+
+/** readableGenerations is every generation of a router that has a `.rsc`
+ * half to read -- the cycling ten and the kept pool together, oldest
+ * first. "Previous" has to mean the one before in time, not the one
+ * before in whichever of the two lists the row happens to be drawn
+ * from: keeping a backup moves it between lists without moving it in
+ * the router's own history (#895). */
+export function readableGenerations(router: RouterBackupRouter): RouterBackupGeneration[] {
+  return [...router.generations, ...(router.protected ?? [])]
+    .filter((g) => !!g.rscArrivedAt)
+    .sort((a, b) => (a.rscArrivedAt ?? '').localeCompare(b.rscArrivedAt ?? ''))
+}
+
+/** previousGeneration is the readable generation immediately before the
+ * one named, or null when it is the oldest mikroview still holds --
+ * which is what makes "compare with previous" absent on that row rather
+ * than offered and then refused. */
+export function previousGeneration(
+  router: RouterBackupRouter,
+  generationID: string,
+): RouterBackupGeneration | null {
+  const all = readableGenerations(router)
+  const at = all.findIndex((g) => g.id === generationID)
+  return at > 0 ? all[at - 1] : null
 }

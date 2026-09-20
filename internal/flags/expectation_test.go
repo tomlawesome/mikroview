@@ -78,7 +78,7 @@ func TestExpectationAbsorbsFiringWithinTolerance(t *testing.T) {
 
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(30), now)
 	id := flagID(TypePortScan, "203.0.113.9")
-	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", now); !ok {
+	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", "", now); !ok {
 		t.Fatal("expected an expected verdict on the raised flag to succeed")
 	}
 
@@ -121,7 +121,7 @@ func TestExpectationRaisesAboveToleranceCarryingBothSizes(t *testing.T) {
 	now := time.Now()
 
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(30), now)
-	if _, ok := s.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", now); !ok {
+	if _, ok := s.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", "", now); !ok {
 		t.Fatal("expected an expected verdict on the raised flag to succeed")
 	}
 
@@ -177,12 +177,12 @@ func TestExpectedAgainRaisesTheRecordedSize(t *testing.T) {
 	id := flagID(TypePortScan, "203.0.113.9")
 
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(30), now)
-	s.SetVerdict(id, VerdictExpected, "operator", now)
+	s.SetVerdict(id, VerdictExpected, "operator", "", now)
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(40), now.Add(time.Minute)) // absorbed
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(120), now.Add(2*time.Minute))
 	mustFlag(t, s, TypePortScan, "203.0.113.9") // it came back
 
-	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", now.Add(3*time.Minute)); !ok {
+	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", "", now.Add(3*time.Minute)); !ok {
 		t.Fatal("expected a second expected verdict to succeed")
 	}
 	ex, _ := s.Expectation(TypePortScan, "203.0.113.9")
@@ -219,11 +219,11 @@ func TestExpectedAgainNeverLowersOrNarrowsAnExpectation(t *testing.T) {
 		}
 		id := flagID(TypePortScan, "198.51.100.7")
 		raiseSized(s, TypePortScan, "198.51.100.7", intPtr(100), now)
-		s.SetVerdict(id, VerdictExpected, "operator", now)
+		s.SetVerdict(id, VerdictExpected, "operator", "", now)
 		// A firing of 5 is absorbed, so it never reaches a flag; drive
 		// the lowering attempt through the flag that is still there.
 		raiseSized(s, TypePortScan, "198.51.100.7", intPtr(5), now.Add(time.Minute))
-		s.SetVerdict(id, VerdictExpected, "operator", now.Add(time.Minute))
+		s.SetVerdict(id, VerdictExpected, "operator", "", now.Add(time.Minute))
 
 		ex, _ := s.Expectation(TypePortScan, "198.51.100.7")
 		if ex.Size == nil || *ex.Size != 100 {
@@ -239,7 +239,7 @@ func TestExpectedAgainNeverLowersOrNarrowsAnExpectation(t *testing.T) {
 		// A detector that declares no size: the firing carries nil.
 		raiseSized(s, TypeDeviceSilence, "router-1", nil, now)
 		id := flagID(TypeDeviceSilence, "router-1")
-		s.SetVerdict(id, VerdictExpected, "operator", now)
+		s.SetVerdict(id, VerdictExpected, "operator", "", now)
 
 		ex, _ := s.Expectation(TypeDeviceSilence, "router-1")
 		if ex.Size != nil {
@@ -306,7 +306,7 @@ func TestSizedExpectationPersistenceRoundTrip(t *testing.T) {
 	}
 	closeForTest(t, s1)
 	raiseSized(s1, TypePortScan, "203.0.113.9", intPtr(30), since)
-	s1.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", since)
+	s1.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", "", since)
 	raiseSized(s1, TypePortScan, "203.0.113.9", intPtr(40), since.Add(time.Minute)) // absorbed
 	// A size-less expectation alongside it, so the round trip proves the
 	// two shapes coexist in one document.
@@ -388,7 +388,7 @@ func TestExpectationReturnsACopy(t *testing.T) {
 	}
 	now := time.Now()
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(30), now)
-	s.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", now)
+	s.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", "", now)
 
 	ex, _ := s.Expectation(TypePortScan, "203.0.113.9")
 	*ex.Size = 9999

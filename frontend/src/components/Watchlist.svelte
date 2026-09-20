@@ -33,7 +33,7 @@
   import { onMount, tick } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
-  import { suggestState } from '../lib/suggest.svelte'
+  import { dedupeSuggestions, suggestState } from '../lib/suggest.svelte'
   import { matchesState } from '../lib/matches.svelte'
   import { zonesState } from '../lib/zones.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
@@ -443,13 +443,13 @@
     if (!e.enabled) {
       return {
         headline: 'Paused.',
-        body: `This watch is turned off, so mikroview is not recording anything for ${sourceLabel(e)} right now.`,
+        body: `This watch is turned off, so MikroView is not recording anything for ${sourceLabel(e)} right now.`,
       }
     }
     if (watchlistState.coverage[e.id] === 'no-logging') {
       return {
         headline: 'The ring is broken.',
-        body: 'No firewall rule mikroview can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
+        body: 'No firewall rule MikroView can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
       }
     }
     if (e.invert && e.observing) {
@@ -468,7 +468,7 @@
       const since = e.ring.since ? ` since ${formatRelative(e.ring.since, appState.now)}` : ''
       return {
         headline: 'The ring is broken.',
-        body: `Nothing has matched inside this watch's window${since}. Nights mikroview could not watch are not counted against it.`,
+        body: `Nothing has matched inside this watch's window${since}. Nights MikroView could not watch are not counted against it.`,
       }
     }
     if (e.invert) {
@@ -977,8 +977,16 @@
   // which derive from watchlistState.entries alone -- leave this body
   // alone by construction, as the drawing requires. A suggested row
   // sorts and filters with nothing: it is not a watch.
-  const openSuggestions = $derived(suggestState.candidates.filter((c) => c.status === 'off'))
-  const asideSuggestions = $derived(suggestState.candidates.filter((c) => c.status === 'hide'))
+  // #1160: deduped per list (see dedupeSuggestions). Two candidates with
+  // the same status that would draw the same row are one row here; the
+  // two lists are deduped separately, so setting one aside never hides
+  // an open candidate that happens to read like it.
+  const openSuggestions = $derived(
+    dedupeSuggestions(suggestState.candidates.filter((c) => c.status === 'off')),
+  )
+  const asideSuggestions = $derived(
+    dedupeSuggestions(suggestState.candidates.filter((c) => c.status === 'hide')),
+  )
   // Shown rows: the open ones, and the set-aside ones after `show them`.
   const suggestionRows = $derived(showAside ? [...openSuggestions, ...asideSuggestions] : openSuggestions)
 
@@ -986,18 +994,30 @@
   // visible candidates came from, in first-seen order. Falls back to a
   // shorter heading when nothing names a router, rather than printing
   // "from what  pushed".
+  //
+  // #1170: this heading names what GET /api/devices lists, and nothing
+  // else. It used to print c.routerDevice straight off the candidates,
+  // which named five routers while Entities drew one -- a candidate can
+  // carry an id the registry has never had, and a bare syslog source is
+  // no longer a router anywhere. So the ids set the order, the registry
+  // sets the names, and an id it does not list is dropped.
   const routerNames = $derived.by((): string[] => {
+    const byId = new Map(appState.devices.map((d) => [d.id, d.name || d.id]))
     const seen: string[] = []
+    const names: string[] = []
     for (const c of suggestState.candidates) {
-      if (c.routerDevice && !seen.includes(c.routerDevice)) seen.push(c.routerDevice)
+      if (!c.routerDevice || seen.includes(c.routerDevice)) continue
+      seen.push(c.routerDevice)
+      const name = byId.get(c.routerDevice)
+      if (name) names.push(name)
     }
-    return seen
+    return names
   })
 
   const suggestHeading = $derived(
     routerNames.length > 0
-      ? `mikroview suggests · from what ${formatList(routerNames)} pushed`
-      : 'mikroview suggests',
+      ? `MikroView suggests · from what ${formatList(routerNames)} pushed`
+      : 'MikroView suggests',
   )
 
   function formatList(names: string[]): string {
@@ -1742,7 +1762,10 @@
         <tbody id="sugg">
           <tr class="sdiv">
             <td colspan="6">
-              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0} · <b>{openSuggestions.length}</b>{/if}</span>
+              <!-- #1157: `{' · '}` rather than a literal space before the
+                   "·" -- inside the block Svelte trims the leading
+                   whitespace, and the heading read "…PUSHED· 15". -->
+              <span class="sdl">{suggestHeading}{#if openSuggestions.length > 0}{' · '}<b>{openSuggestions.length}</b>{/if}</span>
               <span class="sdr">
                 {#if asideSuggestions.length > 0}
                   <button

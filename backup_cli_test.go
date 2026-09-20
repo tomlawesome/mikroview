@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // TestRestoreOverwritesACorruptStoreDocument is issue #378's other
@@ -126,6 +129,129 @@ func TestRestoreWithoutForceRefusesToOverwriteAnExistingCorruptFile(t *testing.T
 	}
 }
 
+// TestBackupRestoreCarriesSchemaSoNoMigrationReruns is #1244's Done-when:
+// a deployment already migrated to this build's current schema must come
+// back out of a restore stamped at that same schema, not as an
+// unstamped (schema 0) fresh install -- schema.json was never on
+// backedUpStores' list, so a restore into an empty data directory used
+// to read as schema 0 and hand upgradeDataDirSchema a data directory
+// that looks like it has never been migrated.
+//
+// This pins both halves: the restored schema document matches what was
+// backed up, and the next start's upgrade check does not rewrite it --
+// there is nothing pending, because there is nothing to redo.
+func TestBackupRestoreCarriesSchemaSoNoMigrationReruns(t *testing.T) {
+	ctx := context.Background()
+	srcDir := t.TempDir()
+	authPath := filepath.Join(srcDir, "users.json")
+	if err := os.WriteFile(authPath, []byte(`{"users":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An ordinary, already-migrated deployment: stamped at this build's
+	// current schema before any backup is taken.
+	if _, err := persist.MigrateFileSchema(ctx, srcDir, version); err != nil {
+		t.Fatalf("MigrateFileSchema (seeding the source data directory): %v", err)
+	}
+	wantSchema, wantVersion, err := persist.ReadFileSchema(srcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantSchema == 0 {
+		t.Fatal("test setup: the source data directory did not actually get stamped")
+	}
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	backupPath := filepath.Join(srcDir, "mikroview.backup")
+	if code := runBackup([]string{backupPath, "--force"}); code != 0 {
+		t.Fatalf("runBackup = %d, want 0", code)
+	}
+
+	// Restore into a fresh directory -- a disaster recovery onto a new
+	// host, or the same host with its data directory gone.
+	dstDir := t.TempDir()
+	newAuthPath := filepath.Join(dstDir, "users.json")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", newAuthPath)
+
+	if code := runRestore([]string{backupPath}); code != 0 {
+		t.Fatalf("runRestore = %d, want 0", code)
+	}
+
+	gotSchema, gotVersion, err := persist.ReadFileSchema(dstDir)
+	if err != nil {
+		t.Fatalf("ReadFileSchema after restore: %v", err)
+	}
+	if gotSchema != wantSchema || gotVersion != wantVersion {
+		t.Fatalf("restored schema = %d written by %q, want %d written by %q -- "+
+			"a restore of already-migrated stores must not read as a fresh, unstamped install",
+			gotSchema, gotVersion, wantSchema, wantVersion)
+	}
+
+	before, err := os.ReadFile(filepath.Join(dstDir, persist.SchemaDocumentName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upgradeDataDirSchema(cfg); err != nil {
+		t.Fatalf("upgradeDataDirSchema after restore: %v", err)
+	}
+
+	after, err := os.ReadFile(filepath.Join(dstDir, persist.SchemaDocumentName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("the next start's upgrade check rewrote schema.json after a restore that was already "+
+			"at the current schema -- it should have found nothing pending:\nbefore: %s\nafter:  %s", before, after)
+	}
+}
+
+// TestRestoreRefusesASchemaDocumentNewerThanThisBuildKnows is the
+// downgrade guard applied to a restore rather than a boot (#1244):
+// restoring a bundle stamped by a newer build must be the same refusal
+// as opening one, with nothing written, not a silent adoption of a
+// schema number this build does not know how to interpret.
+func TestRestoreRefusesASchemaDocumentNewerThanThisBuildKnows(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	tooNew, err := json.Marshal(struct {
+		Schema  int64  `json:"schema"`
+		Version string `json:"version"`
+	}{Schema: persist.CurrentSchema() + 1, Version: "v42.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	if err := writeBackup(backupPath, true, map[string][]byte{
+		"auth":          []byte(`{"users":[]}`),
+		schemaStoreName: tooNew,
+	}); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code == 0 {
+		t.Fatal("runRestore with a schema document newer than this build knows succeeded, want a refusal")
+	}
+	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		t.Error("runRestore wrote the auth store despite refusing on the schema document -- nothing should have changed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, persist.SchemaDocumentName)); !os.IsNotExist(err) {
+		t.Error("runRestore wrote schema.json despite refusing")
+	}
+}
+
 // TestWriteVaultBundleRefusesPathTraversal pins gosec G703's finding on
 // pipeline 458: writeVaultBundle used to filepath.Join(dir, rel) with rel
 // taken straight from the restore envelope, so a hostile envelope entry
@@ -202,5 +328,115 @@ func TestVaultBundleRoundTrip(t *testing.T) {
 	}
 	if got := bundle.Files[rel]; string(got) != string(want) {
 		t.Errorf("readVaultBundle()[%q] = %q, want %q", rel, got, want)
+	}
+}
+
+// TestRestoreWritesEveryFileAtomically guards what a unit test cannot
+// otherwise see: a torn file needs the process to die between the open
+// and the last byte, which no test can stage. os.WriteFile truncates
+// the destination first and writes in place, so a crash there leaves a
+// short file where a router backup used to be -- discovered at the one
+// moment it is needed. persist.WriteFileAtomic writes a temp file,
+// fsyncs and renames, so the destination is either the old bytes or
+// the new ones and never half of either. Every other publish in this
+// file already goes that way; writeVaultBundle was the one that did
+// not (found by the v0.6.0 audit's Safety stage, #1257).
+func TestRestoreWritesEveryFileAtomically(t *testing.T) {
+	src, err := os.ReadFile("backup_cli.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(src), "\n") {
+		if strings.Contains(line, "os.WriteFile(") {
+			t.Errorf("backup_cli.go:%d writes in place: %s\n\twant persist.WriteFileAtomic, so a crash mid-write cannot leave a short file",
+				i+1, strings.TrimSpace(line))
+		}
+	}
+}
+
+// TestRestoreRollsBackEveryStoreWhenOneWriteFails is the v0.6.0 audit's
+// Robustness stage, owner ruling 11a (#1257): runRestore writes each
+// store one after another, and a failure partway through used to leave
+// whatever had already been written in place with nothing put back --
+// its own comment used to call this "not transactional across stores".
+// The operator's data directory must instead come out of a failed
+// restore either fully restored or exactly as it was found.
+//
+// Two stores (auth, entities) start out holding known bytes, one
+// (coverage) starts out absent, and the fourth (hosts) is made
+// unwritable by putting a directory where its file should be -- so its
+// own read-back (recordPriorState, then the loop's version check) fails
+// before any bytes for it are touched. Because runRestore ranges over a
+// map, which store gets processed before the failing one is random, so
+// the assertions below must hold no matter how many of the other three
+// had already been written by the time the failure was hit -- run with
+// -count=20 once to check that (note in the issue).
+func TestRestoreRollsBackEveryStoreWhenOneWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+	entitiesPath := filepath.Join(dir, "entities.json")
+	coveragePath := filepath.Join(dir, "coverage.json")
+	hostsPath := filepath.Join(dir, "hosts.json")
+
+	authOriginal := []byte(`{"users":[{"marker":"original-auth"}]}`)
+	entitiesOriginal := []byte(`{"entities":[{"marker":"original-entities"}]}`)
+	if err := os.WriteFile(authPath, authOriginal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entitiesPath, entitiesOriginal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// coveragePath is deliberately never created: it must still not
+	// exist after a rolled-back restore.
+
+	// hostsPath is a directory where its file should be, so reading it
+	// back (both recordPriorState's plain os.ReadFile and the loop's own
+	// version check, which falls back to Load) fails -- making this
+	// store's write fail without needing a read-only filesystem, which
+	// root (as CI may run as) ignores.
+	if err := os.Mkdir(hostsPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+	t.Setenv("MIKROVIEW_ENTITIES_STORE_PATH", entitiesPath)
+	t.Setenv("MIKROVIEW_COVERAGE_STORE_PATH", coveragePath)
+	t.Setenv("MIKROVIEW_HOSTS_STORE_PATH", hostsPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"auth":     []byte(`{"users":[{"marker":"new-auth"}]}`),
+		"entities": []byte(`{"entities":[{"marker":"new-entities"}]}`),
+		"coverage": []byte(`{"marker":"new-coverage"}`),
+		"hosts":    []byte(`{"marker":"new-hosts"}`),
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 1 {
+		t.Fatalf("runRestore(--force) = %d, want 1 (the hosts store cannot be written)", code)
+	}
+
+	gotAuth, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotAuth) != string(authOriginal) {
+		t.Errorf("auth store after the failed restore = %q, want its original %q (rolled back)", gotAuth, authOriginal)
+	}
+
+	gotEntities, err := os.ReadFile(entitiesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotEntities) != string(entitiesOriginal) {
+		t.Errorf("entities store after the failed restore = %q, want its original %q (rolled back)", gotEntities, entitiesOriginal)
+	}
+
+	if _, err := os.Stat(coveragePath); !os.IsNotExist(err) {
+		t.Errorf("coverage store after the failed restore: stat = %v, want it to still not exist", err)
 	}
 }

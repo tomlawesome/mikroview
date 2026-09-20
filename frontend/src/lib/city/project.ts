@@ -182,6 +182,28 @@ export function wallFace(c: Cam, u: number, v: number, R: number, h: number, sid
   return 'M' + ax + ' ' + R2(ay) + 'L' + bx + ' ' + R2(by) + 'L' + bx + ' ' + R2(by - rise) + 'L' + ax + ' ' + R2(ay - rise) + 'Z'
 }
 
+/** Half the width a borough ring's label takes, in scene units: the
+ * estimate #982 already placed drop labels against. */
+export const ringHalfW = (label: string): number => (label.length * 6.2 + 12) / 2
+
+/**
+ * A ring label's x, kept inside the stage (#1139: "172.23.0.1 BOROUGH ·
+ * 5 DISTRICTS" read "172.23.0.1 BOR" at every width, because the label
+ * is centred 60 left of its hull's right edge and a hull can end past
+ * the stage). Scene coordinates are geomCam's; the view transform
+ * translates them by `ox` and scales them -- text and all -- by `k`, so
+ * the clamp is done in stage pixels and handed back in scene units. A
+ * label too wide for the stage is centred on it rather than pinned to
+ * one edge, so what is lost is lost evenly at both ends.
+ */
+export function clampRingX(x: number, label: string, ox: number, k: number, w = STAGE_W, pad = 6): number {
+  const half = ringHalfW(label) * k
+  const lo = pad + half
+  const hi = w - pad - half
+  const sx = ox + x * k
+  return ((hi < lo ? w / 2 : Math.min(Math.max(sx, lo), hi)) - ox) / (k || 1)
+}
+
 /** A wall's own drop-mark callout must never print over a borough
  * label (#982): each callout is checked against every ring label at its
  * own line, and pushed onto its own line clear of it -- above if that
@@ -191,7 +213,7 @@ export function clearDropLabels(dropLabels: { x: number; y: number; text: string
   for (const dl of dropLabels) {
     const dlHalfW = (dl.text.length * 5.4 + 12) / 2
     for (const r of rings) {
-      const rHalfW = (r.label.length * 6.2 + 12) / 2
+      const rHalfW = ringHalfW(r.label)
       if (Math.abs(dl.x - r.x) >= dlHalfW + rHalfW) continue
       if (Math.abs(dl.y - r.y) >= lineH) continue
       const above = dl.y - lineH

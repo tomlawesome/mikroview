@@ -7,7 +7,7 @@
   import { formatTime } from '../lib/format'
   import { columnState } from '../lib/columns.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
-  import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
+  import { flagsBySource, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import type { ClientEvent, FirewallEvent } from '../lib/types'
@@ -204,6 +204,34 @@
   const displayRendered = $derived([...rendered].reverse())
   const displayGroups = $derived([...groups].reverse())
 
+  // Which rows carry the #644 band. Not `i % 2` from the top: with the
+  // newest row first, that flips the stripe on every row below each
+  // arrival, and WebKit re-resolves style for every cell of every row
+  // whose class changed -- 450 events into an 800-row stream took
+  // 45-85 s in Safari against 4 s in Chromium (#1308). So a row keeps
+  // the stripe it was given, and a newcomer takes the opposite of the
+  // row beneath it; the walk is oldest-first so the bottom is the
+  // anchor and eviction there moves nobody. A row is only reassigned
+  // when keeping it would put two of the same stripe together (a
+  // filter change), which restyles once, on the user's action.
+  function assignStripes<K>(kept: Map<K, boolean>, keys: K[]): Map<K, boolean> {
+    const next = new Map<K, boolean>()
+    let below: boolean | null = null
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const had = kept.get(keys[i])
+      const band: boolean = below === null ? (had ?? false) : had !== undefined && had !== below ? had : !below
+      next.set(keys[i], band)
+      below = band
+    }
+    return next
+  }
+  // One memory per list: rows are keyed by event id, groups by group
+  // key, and each mode's derived only ever reads its own.
+  let rowStripeMemory = new Map<number, boolean>()
+  let groupStripeMemory = new Map<string, boolean>()
+  const rowStripes = $derived((rowStripeMemory = assignStripes(rowStripeMemory, displayRendered.map((e) => e.id))))
+  const groupStripes = $derived((groupStripeMemory = assignStripes(groupStripeMemory, displayGroups.map((g) => g.key))))
+
   // What the empty-body area shows when `rendered` has nothing in it --
   // one derived rather than the inline ternary chain this used to be,
   // because #549 adds a fourth case (still loading) ahead of the three
@@ -253,7 +281,7 @@
     if (appState.devices.length === 0) {
       const base =
         authState.role === 'admin'
-          ? 'No devices have sent anything yet — your account menu ▸ Run setup… to point a RouterOS device at mikroview.'
+          ? 'No devices have sent anything yet — your account menu ▸ Run setup… to point a RouterOS device at MikroView.'
           : 'No devices have sent anything yet. Ask an administrator to run setup.'
       // #487's "the record is the feature": where a setup step was
       // skipped or forced past, this silence has a recorded cause, and
@@ -267,10 +295,14 @@
     return { kind: 'text', text: 'Waiting for events…' }
   })
 
-  // Sources carrying an active flag, for the row marker. Recomputed from
-  // the flag list rather than per row, so this is one pass rather than
-  // one lookup per rendered row.
-  const flagged = $derived(flaggedSources(flagsState.list))
+  // The open flag(s) each source carries, for the row marker -- what
+  // EventRow's ⚑ needs to know whether a row is flagged at all, which
+  // flag to open, and whether to say "N open flags" (#1269). Recomputed
+  // from the flag list rather than per row, so this is one pass rather
+  // than a filter of the whole flag list per rendered row -- EventRow
+  // used to do exactly that, independently, for every flagged row it
+  // drew (see flagsBySource's own comment in lib/grouping.ts).
+  const flagsBySourceMap = $derived(flagsBySource(flagsState.list))
 
   // The stream's foot band is gone (owner, round 36: "oh that thing, I
   // don't want that at all", closing #717's earlier "I hate it, remove
@@ -392,20 +424,26 @@
       {/if}
     </div>
   {:else}
-    <div class="body scrollbar" bind:this={bodyEl}>
+    <div class="body grid-body scrollbar" bind:this={bodyEl}>
       <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
         <!-- #729: the reader's chosen subset, not the fixed fifteen --
              columnState.visibleColumns already carries Time and Rule
              (pinned, always in it) plus whatever else the chooser in
              FilterBar left on. EventRow's own cells are gated on the same
              columnState.isColumnVisible(key) calls, column by column, so
-             the two can never disagree about which columns are showing. -->
+             the two can never disagree about which columns are showing.
+             #1149: every header carries its own label as a title -- a
+             narrow or dragged-in column ellipses its text ("SRC…"), and
+             without this there was nothing to hover to find out what it
+             said. -->
         {#each columnState.visibleColumns as col, i (col.key)}
           <div
             class="header-cell"
             class:sticky-col={col.key === 'time'}
+            class:sticky-col-right={col.key === 'rule'}
             bind:this={headerEls[i]}
             bind:clientHeight={headerHeight}
+            title={col.label}
           >
             <span class="label-text">{col.label}</span>
           </div>
@@ -429,19 +467,20 @@
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize {col.label} column"
+              title="drag to resize"
             ></span>
           {/each}
         </div>
 
         {#if groupModeState.enabled}
-          {#each displayGroups as group, gi (group.key)}
+          {#each displayGroups as group (group.key)}
             <EventRow
               event={group.head}
               deviceName={deviceName(group.head.deviceId)}
               count={group.count}
-              flagged={flagged.has(group.head.srcIp ?? '')}
+              sourceFlags={flagsBySourceMap.get(group.head.srcIp ?? '') ?? []}
               dimmed={isDimmed(group.head)}
-              banded={gi % 2 === 1}
+              banded={groupStripes.get(group.key) ?? false}
               expandable={group.count > 1}
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
@@ -462,7 +501,7 @@
                 <EventRow
                   event={member}
                   deviceName={deviceName(member.deviceId)}
-                  flagged={flagged.has(member.srcIp ?? '')}
+                  sourceFlags={flagsBySourceMap.get(member.srcIp ?? '') ?? []}
                   dimmed={isDimmed(member)}
                   member
                   onOpen={() => (selectedEvent = member)}
@@ -483,13 +522,13 @@
             {/if}
           {/each}
         {:else}
-          {#each displayRendered as event, i (event.id)}
+          {#each displayRendered as event (event.id)}
             <EventRow
               {event}
               deviceName={deviceName(event.deviceId)}
-              flagged={flagged.has(event.srcIp ?? '')}
+              sourceFlags={flagsBySourceMap.get(event.srcIp ?? '') ?? []}
               dimmed={isDimmed(event)}
-              banded={i % 2 === 1}
+              banded={rowStripes.get(event.id) ?? false}
               onOpen={() => (selectedEvent = event)}
             />
           {/each}
@@ -554,6 +593,21 @@
     -webkit-overflow-scrolling: touch;
   }
 
+  /* #1150: below ~1500px the right-hand columns fell off the edge with
+     no affordance saying they were there -- a 1762px table in a 1308px
+     box at 1366 simply stopped after Destination. The bar is drawn
+     always, not on demand: `overflow-x: auto` hides it exactly when the
+     table has nothing left to say sideways and, on a platform with
+     overlay scrollbars, hides it while it does. Same answer the
+     wizard's script boxes took (SetupWizard.svelte's `pre.script`,
+     #1146) with app.css's own thin `scrollbar` dress, which the markup
+     already carries. Desktop grid only: the mobile card list has
+     nothing to scroll sideways, so a permanent bar there would be a
+     mark with no meaning. */
+  .grid-body {
+    overflow-x: scroll;
+  }
+
   .grid {
     display: grid;
     align-content: start;
@@ -586,27 +640,36 @@
     text-overflow: ellipsis;
   }
 
-  /* Round 36's column boundary, ported from the drawing's own
-     `table.stream th::after`: nothing at rest, and under the hand a
-     hairline on the header's edge with the cursor saying what it does.
-     Drawn from the header cell rather than only from the drag handle so
-     hovering anywhere in a column shows that column's edge -- the
-     boundary should be findable without first landing on the six pixels
-     it occupies.
+  /* #1197: nothing at rest, drawn from the header cell rather than only
+     from the drag handle so hovering anywhere in a column reveals that
+     column's boundary -- it should be findable without first landing on
+     the ten pixels the handle itself occupies. Round 36's version drew
+     only a 1px hairline here, which the bug report's own repro found:
+     "hover the boundary and a hairline appears, but nobody finds it."
+     This is a short bar instead -- wide and tall enough to read as a
+     handle rather than a stray pixel -- in the header's own dim ink
+     (var(--fg-dim), the label's own color) rather than the hairline
+     token, which is closer to invisible than a first-time reader needs.
+     The handle itself (.resizer below) still carries the actual
+     drag/click target and its own title; this is purely the
+     discoverability cue.
 
-     Inset to `right: 0` rather than the drawing's `-3px`: these header
-     cells are opaque (they sit over scrolling rows), so a line
-     overhanging into the next cell would be painted over by it. */
+     Inset to `right: 1px` rather than flush: these header cells are
+     opaque (they sit over scrolling rows), so the mark has to clear the
+     cell's own edge to read as sitting on the boundary rather than
+     against it. */
   .header-cell::after {
     content: '';
     position: absolute;
-    right: 0;
-    top: 5px;
-    bottom: 5px;
-    width: 6px;
+    right: 1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 16px;
+    border-radius: 2px;
     cursor: col-resize;
-    border-right: 1px solid transparent;
-    transition: border-color 0.15s;
+    background: transparent;
+    transition: background-color 0.15s;
   }
 
   .header-cell:last-child::after {
@@ -616,7 +679,7 @@
   }
 
   .header-cell:hover::after {
-    border-right-color: var(--hair-2);
+    background: var(--fg-dim);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -631,6 +694,14 @@
   .sticky-col {
     position: sticky;
     left: 0;
+    z-index: 3;
+  }
+
+  /* The same, at the other end: #1150 pins Rule to the right edge (see
+     EventRow's .cell.rule), so its header has to travel with it. */
+  .sticky-col-right {
+    position: sticky;
+    right: 0;
     z-index: 3;
   }
 

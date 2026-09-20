@@ -31,11 +31,26 @@ const URL_BASE = process.env.MV_URL
 // the raw socket *after* it connects, not about a pre-existing snapshot.
 const { page } = await session()
 
+// The raw socket lives on its own page, not the app's: the app page
+// reloads itself the moment its polling meets a 401 (#1083), which would
+// take the socket and its counters with it before the server's own
+// close could be observed. A same-origin page that runs no app code --
+// the health endpoint -- carries the same session cookie and nothing
+// that reacts to the session ending, which is exactly the stolen-cookie
+// shape described above. Playwright refuses a second newPage() on
+// session()'s context, so the cookie is copied into a fresh one; the
+// server sees the identical session either way.
+const cookies = await page.context().cookies()
+const rawContext = await page.context().browser().newContext({ ignoreHTTPSErrors: true })
+await rawContext.addCookies(cookies)
+const raw = await rawContext.newPage()
+await raw.goto(`${URL_BASE}/api/healthz`, { waitUntil: 'load' })
+
 // A raw WebSocket, deliberately not liveSocket -- see the file doc
 // comment above. Counts events as they arrive and records how/when it
 // closes, all inside the page so it experiences exactly what a real
 // browser socket would.
-await page.evaluate(() => {
+await raw.evaluate(() => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const ws = new WebSocket(`${proto}://${location.host}/api/ws`)
   window.__rawWs = ws
@@ -58,22 +73,17 @@ await page.evaluate(() => {
   }
 })
 
-await page.waitForFunction(() => window.__rawWs.readyState === WebSocket.OPEN, null, { timeout: 5000 })
+await raw.waitForFunction(() => window.__rawWs.readyState === WebSocket.OPEN, null, { timeout: 5000 })
 
 feedSyslog(20, 'ws-revocation-rule')
-await page.waitForFunction(() => window.__rawWsEvents > 0, null, { timeout: 10000 })
-const beforeLogout = await page.evaluate(() => window.__rawWsEvents)
+await raw.waitForFunction(() => window.__rawWsEvents > 0, null, { timeout: 10000 })
+const beforeLogout = await raw.evaluate(() => window.__rawWsEvents)
 check(beforeLogout > 0, `the raw socket received ${beforeLogout} events before logout`)
 
-// Log out from "another tab" -- a separate browser context carrying the
-// exact same session cookie the raw socket above is using (session()'s
-// page owns a context that Playwright refuses a second page.newPage()
-// on directly, so the cookie is copied across rather than sharing the
-// context object itself; the server sees the identical session either
-// way, which is what matters here). Its own liveSocket.disconnect() and
-// the account chip's Sign out row are exercised too, since that is the
-// interface an operator actually uses (mirroring live-change-password.mjs).
-const cookies = await page.context().cookies()
+// Log out from "another tab" -- a third context on the same cookie. Its
+// own liveSocket.disconnect() and the account chip's Sign out row are
+// exercised too, since that is the interface an operator actually uses
+// (mirroring live-change-password.mjs).
 const otherContext = await page.context().browser().newContext({ ignoreHTTPSErrors: true })
 await otherContext.addCookies(cookies)
 const other = await otherContext.newPage()
@@ -87,8 +97,8 @@ await otherContext.close()
 
 // The bound is one wsPingInterval (30s in production) plus the write --
 // see the file doc comment for why this isn't shrunk for the check.
-await page.waitForFunction(() => window.__rawWsClosed === true, null, { timeout: 40000 }).catch(() => {})
-const closed = await page.evaluate(() => ({
+await raw.waitForFunction(() => window.__rawWsClosed === true, null, { timeout: 40000 }).catch(() => {})
+const closed = await raw.evaluate(() => ({
   closed: window.__rawWsClosed,
   wasClean: window.__rawWsCloseWasClean,
   readyState: window.__rawWs.readyState,
@@ -98,14 +108,15 @@ check(closed.wasClean === true, 'the socket closed with a clean WebSocket close 
 
 // Feeding more events after the close must not move the counter -- the
 // socket is gone, not merely quiet.
-const afterClose = await page.evaluate(() => window.__rawWsEvents)
+const afterClose = await raw.evaluate(() => window.__rawWsEvents)
 feedSyslog(20, 'ws-revocation-rule')
-await page.waitForTimeout(1000)
-const stillAfterClose = await page.evaluate(() => window.__rawWsEvents)
+await raw.waitForTimeout(1000)
+const stillAfterClose = await raw.evaluate(() => window.__rawWsEvents)
 check(stillAfterClose === afterClose, 'no further events reach the socket once it is closed')
+await rawContext.close()
 
 // The original tab's own polling should have noticed the 401 by now too,
-// landing back on the login screen rather than a zombie live view.
+// reloading itself onto the login screen rather than a zombie live view.
 let landedOnLogin = true
 try {
   await page.waitForSelector('input[autocomplete="username"]', { timeout: 15000 })

@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -185,6 +186,48 @@ func TestTuneLoggingAnalyseWildcardBoundaryMatching(t *testing.T) {
 	}
 }
 
+// TestTuneLoggingAnalyseFlagsEveryPacketRules is #1230 on the per-rule
+// path. The wizard's bulk block was the reported flood, but this page
+// can reach the same state one rule at a time -- and worse, by default:
+// RouterOS 7's own established,related,untracked accept rule names no
+// interface, an unscoped rule crosses every dark boundary (see
+// crossesDarkBoundary), so the page would have arrived with that rule
+// already ticked. everyPacket is what the page uses to warn and to
+// leave it alone.
+func TestTuneLoggingAnalyseFlagsEveryPacketRules(t *testing.T) {
+	s, _ := newTestServer(t)
+	setDeviceFirstSeen(s, 48*time.Hour)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	text := "# 2026/09/01 10:00:00 by RouterOS 7.24.1\n" +
+		"/ip firewall filter\n" +
+		`add action=accept chain=forward comment="defconf est/rel" connection-state=established,related,untracked` + "\n" +
+		`add action=accept chain=forward comment="new only" connection-state=new in-interface=bridge1 out-interface=ether1` + "\n"
+
+	body, _ := json.Marshal(tuneLoggingAnalyseRequest{
+		Device: "core", Export: text, DarkBoundaries: []string{"bridge1|ether1"},
+	})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/analyse", body)
+	defer resp.Body.Close()
+	var out tuneLoggingAnalyseResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Rules) != 2 {
+		t.Fatalf("Rules has %d entries, want 2", len(out.Rules))
+	}
+	if !out.Rules[0].EveryPacket {
+		t.Errorf("the established,related,untracked accept rule was not flagged as every-packet: %+v", out.Rules[0])
+	}
+	if !out.Rules[0].CrossesDark {
+		t.Error("the established,related,untracked rule stopped crossing a dark boundary; everyPacket is a warning, not a reclassification")
+	}
+	if out.Rules[1].EveryPacket {
+		t.Errorf("a connection-state=new rule was flagged as every-packet: %+v", out.Rules[1])
+	}
+}
+
 // TestTuneLoggingAnalyseRejectsSecrets covers #435's parser-level
 // safety gate end to end: an export that is not actually
 // hide-sensitive output is refused with 400, and the reason names the
@@ -286,6 +329,72 @@ func TestTuneLoggingRenderProducesAnnotatedAndCommands(t *testing.T) {
 	}
 }
 
+// TestTuneLoggingRenderEscapesDollarInComment is the render-endpoint
+// half of the export.Quote security fix: a rule comment out of an
+// uploaded /export is attacker-controlled (whoever can write a rule on
+// the router), and POST /api/tune-logging/render's Commands are pasted
+// straight into a RouterOS terminal by an admin. RouterOS expands
+// `$[cmd]` inside any double-quoted string it parses, so a comment
+// containing one must come back with its `$` escaped, never as a raw
+// `$[` that would run as a command the moment it's pasted.
+func TestTuneLoggingRenderEscapesDollarInComment(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	text := "# 2026/09/01 10:00:00 by RouterOS 7.24.1\n" +
+		"/ip firewall filter\n" +
+		`add action=accept chain=forward comment="blocked $[/user add name=x]" in-interface=bridge1 out-interface=ether1` + "\n"
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: text, Selected: []int{0}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out tuneLoggingRenderResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Commands, `\$[`) {
+		t.Errorf("Commands = %q, want the comment's `$[` escaped as `\\$[`", out.Commands)
+	}
+	if strings.Contains(strings.ReplaceAll(out.Commands, `\$`, ``), `$[`) {
+		t.Errorf("Commands = %q, contains an unescaped `$[` an admin could paste straight into a RouterOS terminal", out.Commands)
+	}
+}
+
+// TestTuneLoggingRenderRejectsControlCharInComment covers the other
+// half of the same class of bug Quote's dollar fix addressed: Quote
+// escapes only \, " and $, so a raw control character riding a rule
+// comment out of an uploaded /export -- here a literal carriage return
+// mid-value -- would otherwise reach Commands unescaped, and a CR in a
+// block an admin pastes into a RouterOS terminal can act as Enter.
+// export.Parse now refuses the upload outright (a *ControlCharError),
+// so the render endpoint must answer 400 with no raw 0x0D anywhere in
+// the response body.
+func TestTuneLoggingRenderRejectsControlCharInComment(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asUser(s.mux()))
+	defer ts.Close()
+
+	text := "# 2026/09/01 10:00:00 by RouterOS 7.24.1\n" +
+		"/ip firewall filter\n" +
+		"add action=accept chain=forward comment=\"blocked\rEOF\" in-interface=bridge1 out-interface=ether1\n"
+	body, _ := json.Marshal(tuneLoggingRenderRequest{Device: "core", Export: text, Selected: []int{0}})
+	resp := postTuneLogging(t, ts.URL, "/api/tune-logging/render", body)
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (comment carries a raw carriage return)", resp.StatusCode)
+	}
+	if bytes.ContainsRune(respBody, '\r') {
+		t.Errorf("response body %q carries a raw 0x0D, want the control character rejected before it reaches rendered command text", respBody)
+	}
+}
+
 // TestTuneLoggingRenderMatcherFallsBackToNumbers covers the "or else
 // numbers=" half of the matcher choice: two rules sharing a comment
 // cannot be addressed by it uniquely.
@@ -313,17 +422,11 @@ func TestTuneLoggingRenderMatcherFallsBackToNumbers(t *testing.T) {
 	}
 }
 
-// TestTuneLoggingRenderLoggingOnlyEnforcementBites is the load-bearing
-// negative test for #435's central invariant: it substitutes the
-// package-level renderExport hook with a version that corrupts a
-// non-logging attribute in the rendered text (chain=forward ->
-// chain=input, wherever it first appears), and asserts the mechanical
-// check catches it -- 500, the fixed error body, and nothing else. If
-// this test is deleted or renderExport reverted to always trust
-// itself, a rendering bug that touched more than logging would ship
-// silently.
-// The old check compared a handful of attributes; this proves the
-// enforcement also catches an attribute it never read being dropped.
+// TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute drops a
+// non-logging attribute from the rendered text (in-interface=bridge1)
+// and asserts the check catches it. The old check compared a handful of
+// attributes; this proves the enforcement also catches an attribute it
+// never read being dropped.
 func TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asUser(s.mux()))
@@ -345,6 +448,15 @@ func TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute(t *testing.T)
 	}
 }
 
+// TestTuneLoggingRenderLoggingOnlyEnforcementBites is the load-bearing
+// negative test for #435's central invariant: it substitutes the
+// package-level renderExport hook with a version that corrupts a
+// non-logging attribute in the rendered text (chain=forward ->
+// chain=input, wherever it first appears), and asserts the mechanical
+// check catches it -- 500, the fixed error body, and nothing else. If
+// this test is deleted or renderExport reverted to always trust
+// itself, a rendering bug that touched more than logging would ship
+// silently.
 func TestTuneLoggingRenderLoggingOnlyEnforcementBites(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asUser(s.mux()))

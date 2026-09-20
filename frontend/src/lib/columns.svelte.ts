@@ -37,20 +37,24 @@ export interface ColumnDef {
 // the table's width.
 export const PINNED_COLUMNS: ReadonlySet<string> = new Set(['time', 'rule'])
 
+// #1149: each half of a repeated pair says which side it is. Both address
+// columns read "Address" and the port pair read "Src port"/"Port", so the
+// only thing telling a reader which was which was where it sat --
+// EventDetailSheet.svelte has said "Src port"/"Dst port" all along.
 export const COLUMNS: ColumnDef[] = [
   { key: 'time', label: 'Time' },
   { key: 'device', label: 'Device' },
   { key: 'action', label: 'Action' },
   { key: 'chain', label: 'Chain' },
   { key: 'source', label: 'Source' },
-  { key: 'srcAddr', label: 'Address' },
+  { key: 'srcAddr', label: 'Src address' },
   { key: 'srcPort', label: 'Src port' },
   { key: 'mac', label: 'MAC' },
   { key: 'destination', label: 'Destination' },
-  { key: 'dstAddr', label: 'Address' },
+  { key: 'dstAddr', label: 'Dst address' },
   { key: 'proto', label: 'Proto' },
   { key: 'iface', label: 'Interfaces' },
-  { key: 'port', label: 'Port' },
+  { key: 'port', label: 'Dst port' },
   { key: 'nat', label: 'NAT' },
   { key: 'rule', label: 'Rule' },
 ]
@@ -122,7 +126,74 @@ type Width = number | null
 //             bounded like an IPv4 address plus ":" plus up to 5
 //             digits, click-to-filter when the chain says which side
 //             it is (mirrors EventRow's natFilterKey), otherwise plain
-const DEFAULT_WIDTHS: Width[] = [124, 150, 80, 90, 160, 104, 60, 150, 160, 104, 60, 170, 60, 150, null]
+// #1149: MAC 150 -> 168 and the two address columns 104 -> 132. Both were
+// measured under their content: a 17-character MAC needs ~163px at the
+// row's 14px mono, and a 13-character bare IPv4 ~129px, so every one of
+// them was cut short. (#685 sized the address columns for the
+// ten-character IP in the round-29 data; the addresses on a real LAN run
+// to fifteen.)
+//
+// #1117: two more were cut short, re-measured the same way (14px mono,
+// ~8.5px/char, the row's 20px cell padding):
+//   time    124 fit the bare 12-char timestamp ("21:57:34.252") but not
+//           the flag marker beside it on a flagged row -- the sticky
+//           cell is a flex row with no reserved gutter for the marker,
+//           so it crowded the digits off the left edge instead of the
+//           column growing. +36 for the marker's own gap/margin/glyph.
+//           Reopened: widening this alone did not fix it (the marker
+//           still shared the same flex line, so it still competed for
+//           whatever width was there -- see EventRow.svelte's .time/
+//           .rmk comments). The mark now draws in a reserved
+//           padding-right gutter instead, entirely out of that line,
+//           so this column carries only the bare timestamp again --
+//           140 (104 content + 10px left padding + 26px right gutter),
+//           down from 160.
+//   nat     `formatAddr`'s "ip:port" shape was bounded "like an IPv4
+//           address plus ':' plus up to 5 digits" from the day this
+//           column was restored (#717, this file's own comment above),
+//           but never actually sized to that bound -- 150 was closer to
+//           the address columns' own number than to its own comment's
+//           math. 21 content chars plus the "→ " prefix is what this
+//           bug's "NAT ... clipped" report was.
+//
+// #1197: five more, same measure, plus EventRow's own button widths --
+// 17px + 4px gap for a copy/edit button, 15px + 4px for an
+// investigate/trace button -- since the bug's own repro named these
+// among the columns reading "…" at the default widths:
+//   source/destination  the name/address cell (EventRow's `.cell.addr`,
+//           not `.cell.ip`): up to 18 chars for a bare geo IP + country,
+//           plus up to two of copy/investigate riding beside it --
+//           160 was measured for an 11-char name plus copy+edit only,
+//           never the geo/country case this bug's "name" columns
+//           showing "…" turned out to be.
+//   srcAddr/dstAddr  `.cell.ip`, no buttons -- 132 covered the 13-char
+//           measurement #1149 quoted but not the fifteen-char real-LAN
+//           case that comment already flagged as the actual ceiling.
+//   iface   two RouterOS names plus the trace-on-map trigger -- 170 fit
+//           the short defaults (ether1, bridge1) this was measured
+//           against, not the longer custom VLAN/bridge names this bug's
+//           "interface" columns showing "…" turned out to be. Still
+//           fixed and ellipsis-truncated by design (see COLUMNS' own
+//           comment) -- this is headroom, not a new ceiling.
+// #1197's "ratified nine" (the original #644 set: time, action, source,
+// srcAddr, destination, dstAddr, proto, port, rule) sums to ~1240px
+// including Rule's 140px flex floor -- comfortably inside a common
+// desktop content width even before any of the six #717 restored. The
+// other five keep their own #717/#1149 measurements.
+//
+// STORAGE_KEY bumps to v7 (below): a v6 reader's saved widths were
+// measured against the old, too-narrow numbers, and keeping them would
+// silently carry the squashed defaults forward as if they were a chosen
+// preference.
+//
+// v8 (#1117, reopened): only `time` changes here (160 -> 140, see the
+// comment above) -- the marker no longer needs flex width of its own,
+// so the column goes back to being sized for the bare timestamp. Bumped
+// anyway, same convention every prior shape/measurement change has
+// followed: a stored v7 array carrying the too-wide 160 is
+// indistinguishable in storage from a reader who genuinely dragged it
+// there.
+const DEFAULT_WIDTHS: Width[] = [140, 150, 80, 90, 220, 150, 60, 168, 220, 150, 60, 210, 60, 220, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
@@ -141,7 +212,9 @@ const MIN_WIDTH = 56
 // (copy, edit, the pushed-table lookup trigger) beside its text -- the
 // generic 96px floor left it pinched at the edge of usability, so it
 // gets a taller floor of its own.
-const FLEX_MIN_WIDTH = 140
+// Exported so a test can check Rule's real floor against the viewport
+// math directly (#1117) rather than duplicating the number.
+export const FLEX_MIN_WIDTH = 140
 // v5 (#685): the column measure changed shape, not just its numbers --
 // source/destination/address went from flexible to fixed and rule is
 // now the sole flexible column -- so a v4 array (three equal flex
@@ -153,7 +226,15 @@ const FLEX_MIN_WIDTH = 140
 // shape change here has followed -- a stored width array and the
 // column set it was measured against should always be nameably the
 // same version, not just accidentally the same length.
-const STORAGE_KEY = 'mikroview-column-widths-v6'
+// v7 (#1197): the shape is unchanged (still fifteen entries), so
+// loadInitial's length guard alone would accept a v6 array and keep
+// whatever a reader had -- including the squashed defaults nobody
+// dragged away from, since a column sitting at its (old, too-narrow)
+// default is indistinguishable in storage from one a reader chose. The
+// key still bumps, same as v5's shape-only change did, so every
+// installed v6 array -- chosen or default -- falls back to these wider
+// numbers instead.
+const STORAGE_KEY = 'mikroview-column-widths-v8'
 
 function loadInitial(): Width[] {
   try {
@@ -184,6 +265,55 @@ type Visibility = Record<string, boolean>
 // touched the chooser sees.
 const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
 
+// #1150: at 1366 the fifteen columns measure 1762px into a 1308px box,
+// so the right-hand end of the table -- Rule included -- fell off the
+// edge. Below the breakpoint MAC and Interfaces start hidden instead,
+// which is the ruling's set; it names "the two MAC columns", but this
+// table has only ever had one (COLUMNS above), and Src MAC is a detail-
+// sheet row rather than a column.
+//
+// Nothing here is silent: the `columns ▸` picker reads isColumnVisible
+// for every checkbox, so these draw unticked, and ticking one back on
+// goes through toggleColumn/persistVisibility like any other choice the
+// picker makes -- one mechanism, not a second one for narrow screens.
+// Above the breakpoint nothing changes at all.
+//
+// #1117 (reopened): 1500 was measured against the pre-#1149/#1197
+// defaults; every one of those grew since (this file's own comments
+// above), and 1500 was never re-derived against the new numbers. At
+// 1600 -- the width the reopened bug's own release screenshot used --
+// the fifteen-column default plus Rule's 140px floor plus Deck.svelte's
+// own chrome (its 30px roll-rail, its card-body's 14px+14px inset) ran
+// to well over 1600px even with MAC and Interfaces already hidden,
+// which is exactly why DST ADDRESS and RULE were still cut at the
+// "fixed" widths: this breakpoint, not the widths, was the part that
+// didn't reach 1600px. Raised to cover it, and NAT joins the hidden set
+// -- the same "restored, not essential to a fast read" reasoning #1150
+// already used for MAC and Interfaces (NAT is still one tap away in the
+// row's detail sheet). columns.svelte.test.ts pins the resulting sum.
+const NARROW_BREAKPOINT = 1600
+const NARROW_DEFAULT_HIDDEN: readonly string[] = ['mac', 'iface', 'nat']
+
+// Read once, at module load, and deliberately not tracked: this is where
+// a reader *starts*, not a live layout rule. A column disappearing
+// mid-session because the window was dragged narrower is exactly the
+// silent change the ruling rules out -- and it would fight the reader's
+// own saved choice every time they resized. matchMedia is absent under
+// jsdom, where "wide" is the right answer: the all-fifteen default is
+// what #729 shipped.
+function startsNarrow(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(`(max-width: ${NARROW_BREAKPOINT}px)`).matches
+    : false
+}
+
+// What a reader who has never touched the picker starts with.
+function startingVisibility(): Visibility {
+  const next: Visibility = { ...DEFAULT_VISIBLE }
+  if (startsNarrow()) for (const key of NARROW_DEFAULT_HIDDEN) next[key] = false
+  return next
+}
+
 // Same reader-preference mechanism the widths above already use (a plain
 // localStorage entry, versioned key bumped whenever the shape it was
 // measured against changes) -- not a second mechanism invented for this
@@ -194,6 +324,7 @@ const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key
 const VISIBILITY_STORAGE_KEY = 'mikroview-column-visibility-v1'
 
 function loadInitialVisibility(): Visibility {
+  const starting = startingVisibility()
   try {
     const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY)
     if (raw) {
@@ -206,9 +337,10 @@ function loadInitialVisibility(): Visibility {
           // hidden, or hand-edited storage, either of which would otherwise
           // drop Time or Rule off the table with no way back short of
           // clearing storage. A key missing from an older saved value (one
-          // written before a new column existed) defaults to visible too,
-          // matching "every column defaults to visible".
-          next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? true)
+          // written before a new column existed) falls back to the
+          // starting default for this width, so a column added later
+          // starts where a fresh reader's would.
+          next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? starting[col.key])
         }
         return next
       }
@@ -216,7 +348,7 @@ function loadInitialVisibility(): Visibility {
   } catch {
     // ignore malformed/unavailable storage, fall through to defaults
   }
-  return { ...DEFAULT_VISIBLE }
+  return starting
 }
 
 // Column widths and visibility for the live table. Widths are
