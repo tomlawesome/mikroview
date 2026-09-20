@@ -72,7 +72,7 @@ var removedOrRenamedKeys = map[string]removedKey{
 		Why:     "the store it configured was deleted (#873) -- detector settings now live under engine.definitionsStorePath. Remove this key.",
 	},
 	"configDrift": {
-		Version: "Unreleased",
+		Version: "v0.6.1",
 		Why: "configDrift.storePath, its only key, backed the config-upgrade notice's per-version " +
 			"dismissal (#1218), removed in favor of a plain close button (#1277); nothing reads or writes " +
 			"it any more. Remove this section.",
