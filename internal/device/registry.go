@@ -363,11 +363,13 @@ type persistedDevice struct {
 	RegisteredAt time.Time `json:"registeredAt,omitzero"`
 }
 
-// tryPersistLocked is persistLocked's error-returning half, for TryEnrol:
-// an enrolment that cannot be saved must not read as enrolled in memory,
-// so that call needs to know the write failed rather than have it
-// swallowed. Keeps the same version/conflict handling as persistLocked
-// always has. Must be called with r.mu held.
+// tryPersistLocked is persistLocked's error-returning half, for the
+// writes an operator asked for (TryEnrol, Create, Register, Delete):
+// a change that cannot be saved must not read as made in memory, so
+// those calls need to know the write failed rather than have it
+// swallowed, put the old state back, and tell the operator (#1303).
+// Keeps the same version/conflict handling as persistLocked always
+// has. Must be called with r.mu held.
 func (r *Registry) tryPersistLocked() error {
 	if r.backend == nil {
 		return nil
@@ -408,11 +410,12 @@ func (r *Registry) tryPersistLocked() error {
 }
 
 // persistLocked writes every non-config.yaml device to disk, if
-// persistence is configured. Write failures are swallowed rather than
-// surfaced to the caller -- the in-memory state (which every read goes
-// through) stays correct either way, same contract as every other
-// store's persistLocked in this codebase (e.g. internal/droplist).
-// Must be called with r.mu held.
+// persistence is configured, logging a failed write instead of
+// returning it. Only bookkeeping nobody asked for uses it now (Ensure's
+// first-push creation): there is no operator to tell, and the in-memory
+// state every read goes through stays correct either way. Anything an
+// operator requested goes through tryPersistLocked and rolls back on
+// failure (#1303). Must be called with r.mu held.
 func (r *Registry) persistLocked() {
 	if err := r.tryPersistLocked(); err != nil {
 		deviceLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
@@ -437,6 +440,9 @@ func (r *Registry) Ensure(deviceID string, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, created := r.ensureLocked(deviceID, now); created {
+		// Bookkeeping from a push, not an operator's request: nobody is
+		// waiting on an answer, and the next push recreates the entry
+		// if this write is lost, so log-and-continue is right here.
 		r.persistLocked()
 	}
 }
@@ -862,6 +868,14 @@ func normalizeIP(s string) string {
 	return s
 }
 
+// ErrPersistFailed is returned by Create, Register and Delete when the
+// change could not be written to the registry's backend. The in-memory
+// state has been put back to what it was, so nothing happened: the
+// operator sees the failure and can retry once the backend is back
+// (#1303). The underlying error is wrapped for the log; callers report
+// only that the save failed.
+var ErrPersistFailed = errors.New("device: saving the device registry failed, so nothing was changed")
+
 // ErrDeviceExists is returned by Create for an id already in the
 // registry, config.yaml-declared or otherwise.
 var ErrDeviceExists = errors.New("device: a device with that id already exists")
@@ -895,8 +909,20 @@ func (r *Registry) Create(id, name string, now time.Time) (Info, error) {
 	}
 	info := &Info{ID: id, Name: name}
 	r.byID[id] = info
-	r.persistLocked()
+	if err := r.tryPersistLocked(); err != nil {
+		delete(r.byID, id)
+		return Info{}, r.persistFailed(err)
+	}
 	return *info, nil
+}
+
+// persistFailed logs the real write error and returns ErrPersistFailed
+// for the caller, wrapping err so errors.Is still finds either. Callers
+// have already put the in-memory state back by the time they reach
+// this.
+func (r *Registry) persistFailed(err error) error {
+	deviceLog.Error(fmt.Sprintf("%v -- the change was not applied", err))
+	return fmt.Errorf("%w: %w", ErrPersistFailed, err)
 }
 
 // Register records the operator's confirmation of a router on the
@@ -927,11 +953,15 @@ func (r *Registry) Register(id, name string, now time.Time) (Info, error) {
 	if info.Configured {
 		return Info{}, ErrDeviceConfigured
 	}
+	prevName, prevRegisteredAt := info.Name, info.RegisteredAt
 	if name != "" {
 		info.Name = name
 	}
 	info.RegisteredAt = now
-	r.persistLocked()
+	if err := r.tryPersistLocked(); err != nil {
+		info.Name, info.RegisteredAt = prevName, prevRegisteredAt
+		return Info{}, r.persistFailed(err)
+	}
 	return *info, nil
 }
 
@@ -954,9 +984,23 @@ func (r *Registry) Delete(id string) error {
 	if info.AcceptedIP != "" {
 		delete(r.byAcceptedIP, normalizeIP(info.AcceptedIP))
 	}
+	pending, hadPending := r.pendingByDevice[id]
 	r.burnPendingLocked(id)
 	delete(r.byID, id)
-	r.persistLocked()
+	if err := r.tryPersistLocked(); err != nil {
+		// Put everything back exactly as it was: the device, its
+		// accepted address, and the pending token (which the persisted
+		// file never held, but the operator's browser still does).
+		r.byID[id] = info
+		if info.AcceptedIP != "" {
+			r.byAcceptedIP[normalizeIP(info.AcceptedIP)] = info
+		}
+		if hadPending {
+			r.pendingByDevice[id] = pending
+			r.pendingByHash[pending.hash] = id
+		}
+		return r.persistFailed(err)
+	}
 	return nil
 }
 

@@ -176,4 +176,3 @@ func TestResetFailedSaveLeavesCandidatesInPlace(t *testing.T) {
 		t.Errorf("Reset wiped candidates despite the failed save: %+v", afterList)
 	}
 }
-
