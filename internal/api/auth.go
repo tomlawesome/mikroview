@@ -993,6 +993,15 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// account it belongs to for exactly this. An unrelated deletion
 	// leaves another admin's unlock where it is (#1124).
 	s.lockVaultForUser(user.ID)
+	// #1283's own ruling: preferences are cleared when the user is
+	// deleted, not left behind for an id nothing will ever sign in as
+	// again. Logged rather than failing the request for the same reason
+	// the token revocation below is: the account deletion already
+	// committed, so this request still succeeds, but a write that didn't
+	// durably land is said out loud instead of reported as done (R6).
+	if err := s.Prefs.Delete(user.ID); err != nil {
+		authLog.Error(fmt.Sprintf("deleting preferences for deleted user %s: %v", user.ID, err))
+	}
 	revokedTokens := 0
 	if s.Tokens != nil {
 		var err error

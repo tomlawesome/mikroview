@@ -29,6 +29,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -62,6 +63,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	ru, _ := rules.Open("")
 	cs, _ := coverage.Open("")
 	ds, _ := droplist.Open("")
+	ps, _ := prefs.Open("")
 	hr, _ := hosts.Open("")
 	sv, _ := seen.Open("")
 	as, _ := audit.Open("")
@@ -84,6 +86,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Rules:         ru,
 		Coverage:      cs,
 		Droplist:      ds,
+		Prefs:         ps,
 		Hosts:         hr,
 		SeenValues:    sv,
 		Audit:         as,
