@@ -116,10 +116,15 @@ func TestNudgeNeverBlocksHoweverOftenItIsRung(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Nudge blocked with no engine running, want a non-blocking doorbell")
 	}
-	// Nothing was evaluated, and nothing was lost either -- every one of
-	// them is still in the store waiting for a cursor to reach it.
-	if behind, _, outrun := e.Lag(); behind != 1000 || outrun != 0 {
-		t.Fatalf("Lag() = (behind %d, outrun %d), want (1000, 0)", behind, outrun)
+	// The property worth guaranteeing here is exactly the one this test
+	// is named for: Nudge never blocked, however many times it was rung
+	// with nothing answering. It is not true that nothing was lost --
+	// the store's own capacity is 100, so it evicted 900 of these 1000
+	// events from its ring long before any engine could have reached
+	// them; TestOutrunCountsWhatTheRingWrappedPast is what actually
+	// exercises that loss being counted.
+	if _, oldestHeld, newestHeld := st.Since(0, 0); newestHeld-oldestHeld+1 != 100 {
+		t.Fatalf("store held %d event(s) after 1000 inserts into a 100-capacity ring, want exactly the 100 it can hold", newestHeld-oldestHeld+1)
 	}
 }
 
@@ -225,7 +230,7 @@ func TestOutrunCountsWhatTheRingWrappedPast(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		st.Insert(evt("198.51.100.1")) // IDs 21..30 survive
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if got := d.calls.Load(); got != 10 {
 		t.Fatalf("definition saw %d events, want the 10 the ring still held", got)
@@ -259,13 +264,46 @@ func TestForgetStartsLevelAfterADeliberateReset(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		st.Insert(evt("198.51.100.1")) // IDs 11, 12
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if behind, _, outrun := e.Lag(); outrun != 0 || behind != 0 {
 		t.Fatalf("Lag() = (behind %d, outrun %d) after Forget, want (0, 0)", behind, outrun)
 	}
 	if got := d.calls.Load(); got != 2 {
 		t.Fatalf("definition saw %d events, want the 2 stored after the reset", got)
+	}
+}
+
+// TestForgetRendezvousesWithARunningEngine exercises the branch
+// runOnEvaluationGoroutine takes when Run is actively driving evaluation
+// (e.running == true): Forget must hand its work to Run's tasks channel
+// and wait for it there, rather than running inline -- the branch
+// TestForgetStartsLevelAfterADeliberateReset never reaches, since it
+// never starts Run at all. Forget's own doc comment says this rendezvous
+// is what stops a Reset from racing a batch in flight and writing an
+// older cursor back over the reset one, so the case worth proving is
+// Run genuinely busy in catchUp when Forget is called, not merely alive.
+func TestForgetRendezvousesWithARunningEngine(t *testing.T) {
+	e, st := newEngineOnStore(t, 4096)
+	d := &fakeDef{id: "slow", kind: "declarative", delay: 2 * time.Millisecond}
+	e.Register(d)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	defer func() {
+		cancel()
+		<-e.Done()
+	}()
+	waitForRunning(t, e)
+
+	storeAndNudge(e, st, 200)
+	waitFor(t, "evaluation to be underway", func() bool { return d.calls.Load() > 0 })
+
+	st.Reset()
+	e.Forget()
+
+	if behind, _, outrun := e.Lag(); behind != 0 || outrun != 0 {
+		t.Fatalf("Lag() = (behind %d, outrun %d) after Forget on a running engine, want (0, 0)", behind, outrun)
 	}
 }
 
@@ -286,7 +324,7 @@ func TestOutrunCountsAStoreReset(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		st.Insert(evt("198.51.100.1")) // IDs 11, 12
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if _, _, outrun := e.Lag(); outrun != 7 {
 		t.Fatalf("outrun = %d after a Reset over 7 unevaluated events, want 7", outrun)
@@ -311,7 +349,7 @@ func TestOutrunCountsAShrinkingResize(t *testing.T) {
 	if kept, evicted := st.Resize(10); kept != 10 || evicted != 50 {
 		t.Fatalf("Resize(10) kept %d evicted %d, want 10 and 50", kept, evicted)
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 
 	if _, _, outrun := e.Lag(); outrun != 47 {
 		t.Fatalf("outrun = %d after shrinking past 47 unevaluated events, want 47", outrun)
@@ -325,7 +363,7 @@ func TestOutrunCountsAShrinkingResize(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		st.Insert(evt("198.51.100.1"))
 	}
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 	if _, _, outrun := e.Lag(); outrun != 47 {
 		t.Fatalf("outrun = %d after growing the ring, want it unchanged at 47", outrun)
 	}
@@ -357,10 +395,100 @@ func TestLagReportsHowFarBehindAndHowLate(t *testing.T) {
 		t.Fatalf("behindSeconds = %v, want roughly the 4s age of the oldest unevaluated event", seconds)
 	}
 
-	e.evaluateBatch(time.Time{})
+	e.evaluateBatch(context.Background(), time.Time{})
 	behind, seconds, _ = e.Lag()
 	if behind != 0 || seconds != 0 {
 		t.Fatalf("Lag() = (behind %d, %v s) once caught up, want (0, 0)", behind, seconds)
+	}
+}
+
+// TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns -- outrun
+// used to be counted lazily, inside evaluateBatch, so an engine that had
+// never run a batch (the state Lag() can be called in at any time, e.g.
+// from /api/stats before Run's goroutine has read anything) reported
+// everything between its cursor and the store's newest event as "behind"
+// -- recoverable -- even the part the ring had already evicted for good.
+// Lag() must draw the same line evaluateBatch draws: events at or after
+// the oldest survivor are behind, everything older than that, back to the
+// cursor, is outrun.
+func TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns(t *testing.T) {
+	e, st := newEngineOnStore(t, 10)
+
+	for i := 0; i < 30; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 21..30 survive, cursor is still 0
+	}
+
+	behind, _, outrun := e.Lag()
+	if outrun != 20 {
+		t.Fatalf("outrun = %d before any batch ran, want the 20 events evicted past the cursor", outrun)
+	}
+	if behind != 10 {
+		t.Fatalf("behind = %d before any batch ran, want the 10 events the store still holds", behind)
+	}
+}
+
+// TestLagNeverDoubleCountsAConcurrentGap pins the race Lag()'s own doc
+// comment promises against: evaluateBatch's gap branch used to add to
+// e.outrun and store e.cursor as two separate, unlocked writes, with
+// nothing to stop a concurrent Lag() call from loading a cursor that
+// hadn't moved yet paired with an outrun that already had -- adding the
+// same one-time loss to both instead of counting it once.
+//
+// The real race window between those two writes is a handful of
+// instructions wide, so a plain concurrent-stress version of this test
+// would pass on an unfixed engine essentially every run -- proving
+// nothing, for the same reason this package's own
+// TestMemoryCorpusReplayReportsTruncatedWhenCursorIsEvicted rejected
+// timing races (#501, #744). afterOutrunIncrementForTest (engine.go)
+// forces the window open deterministically instead: it fires from
+// inside evaluateBatch's locked update, between the outrun increment and
+// the cursor store, and blocks there until this test releases it, so
+// Lag() is given every chance to run while the pair is (or, on the fixed
+// engine, would be) only half-updated.
+func TestLagNeverDoubleCountsAConcurrentGap(t *testing.T) {
+	const capacity = 10
+	e, st := newEngineOnStore(t, capacity)
+
+	for i := 0; i < 50; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 41..50 survive, cursor is still 0
+	}
+	const wantOutrun = 40 // the true one-time loss: IDs 1..40, evicted before the cursor ever reached them
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	e.afterOutrunIncrementForTest = func() {
+		close(entered)
+		<-release
+	}
+
+	batchDone := make(chan struct{})
+	go func() {
+		defer close(batchDone)
+		e.evaluateBatch(context.Background(), time.Time{})
+	}()
+	<-entered // evaluateBatch is mid-update, parked in the hook
+
+	lagDone := make(chan struct{})
+	var outrun uint64
+	go func() {
+		defer close(lagDone)
+		_, _, outrun = e.Lag()
+	}()
+
+	// No signal exists for "a goroutine is now blocked trying to take
+	// e.mu" -- that is precisely the fixed engine's behaviour under
+	// test, not something it can announce -- so this is a deliberate
+	// sleep, not a poll, giving Lag() time to reach the lock before the
+	// hook (and therefore evaluateBatch's own update) is allowed to
+	// finish.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	<-batchDone
+	<-lagDone
+
+	if outrun != wantOutrun {
+		t.Fatalf("Lag() outrun = %d for a concurrent evaluateBatch update, want %d -- the true one-time loss counted once, not the same gap added twice", outrun, wantOutrun)
 	}
 }
 
@@ -425,10 +553,18 @@ func TestRunStopsWithinDrainTimeoutUnderSustainedBacklog(t *testing.T) {
 	const drainBound = 100 * time.Millisecond
 	withDrainTimeout(t, drainBound)
 	e, st := newEngineOnStore(t, 4096)
-	// A definition too slow (5ms/event) to drain a 4096-deep backlog
-	// (~20s unbounded) within a 100ms bound -- proves drain() actually
-	// stops instead of evaluating everything the store holds no matter
-	// how long that takes, including part-way through a batch.
+	// A definition too slow (5ms/event) to catch up on a 4096-deep
+	// backlog (~20s unbounded) within a 100ms bound -- proves ctx
+	// cancellation reaches Run's select, and drain's own bound, promptly
+	// even while Run is genuinely deep in catchUp, not only once it
+	// finishes the whole backlog on its own.
+	//
+	// storeAndNudge, not a bare Insert loop, is what gets Run there in
+	// the first place: a nudge is what main.go's ingest goroutine sends
+	// after every store.Insert (see storeAndNudge), and it is what
+	// actually routes Run into catchUp rather than leaving it idle on
+	// its select until ctx.Done() and straight into drain(), which
+	// proves nothing about catchUp at all.
 	d := &fakeDef{id: "slow", kind: "declarative", delay: 5 * time.Millisecond}
 	e.Register(d)
 
@@ -436,9 +572,7 @@ func TestRunStopsWithinDrainTimeoutUnderSustainedBacklog(t *testing.T) {
 	go e.Run(ctx)
 	waitForRunning(t, e)
 	const n = 4096
-	for i := 0; i < n; i++ {
-		st.Insert(evt("198.51.100.1"))
-	}
+	storeAndNudge(e, st, n)
 	cancel()
 
 	start := time.Now()

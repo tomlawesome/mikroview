@@ -29,7 +29,7 @@ func testKey(t *testing.T) *retention.Key {
 
 func openVault(t *testing.T, key *retention.Key) *Vault {
 	t.Helper()
-	v, err := Open(t.TempDir(), key)
+	v, err := Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -75,7 +75,16 @@ func (d *fakeDisk) set(free int64) {
 // openVaultOnDisk opens a vault whose free-space measurement is disk's.
 func openVaultOnDisk(t *testing.T, dir string, key *retention.Key, disk *fakeDisk) *Vault {
 	t.Helper()
-	v, err := Open(dir, key)
+	return openVaultOnDiskWithCandidates(t, dir, key, disk, nil)
+}
+
+// openVaultOnDiskWithCandidates is openVaultOnDisk plus the recovery
+// candidates a lost index's rebuild is given to try (#1294) -- broken
+// out only for the tests that care, so the other 29-odd call sites stay
+// untouched.
+func openVaultOnDiskWithCandidates(t *testing.T, dir string, key *retention.Key, disk *fakeDisk, candidates []string) *Vault {
+	t.Helper()
+	v, err := Open(dir, key, candidates)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -308,7 +317,7 @@ func TestStatsCountsGenerationsRoutersAndBytes(t *testing.T) {
 func TestReopenLoadsPersistedMeta(t *testing.T) {
 	dir := t.TempDir()
 	key := testKey(t)
-	v1, err := Open(dir, key)
+	v1, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +325,7 @@ func TestReopenLoadsPersistedMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v2, err := Open(dir, key)
+	v2, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -356,7 +365,7 @@ func listNames(t *testing.T, dir string) []string {
 func TestStoreLeavesNoTempLitterAndArtifactsExist(t *testing.T) {
 	dir := t.TempDir()
 	key := testKey(t)
-	v, err := Open(dir, key)
+	v, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +409,7 @@ func TestStoreLeavesNoTempLitterAndArtifactsExist(t *testing.T) {
 func TestLeftoverCrashTempFileNotTreatedAsGeneration(t *testing.T) {
 	dir := t.TempDir()
 	key := testKey(t)
-	v, err := Open(dir, key)
+	v, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +445,7 @@ func TestLeftoverCrashTempFileNotTreatedAsGeneration(t *testing.T) {
 	}
 	assertTwoRealGenerations(v)
 
-	v2, err := Open(dir, key)
+	v2, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -472,7 +481,7 @@ func TestFailedWriteLeavesTheIndexUnchanged(t *testing.T) {
 	}
 	dir := t.TempDir()
 	key := testKey(t)
-	v, err := Open(dir, key)
+	v, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +526,7 @@ func TestFailedWriteLeavesTheIndexUnchanged(t *testing.T) {
 	}
 	assertEveryGenerationHasItsFile(v, 2)
 
-	v2, err := Open(dir, key)
+	v2, err := Open(dir, key, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -770,7 +779,7 @@ func TestStatfsBytesReadsTheRealFilesystem(t *testing.T) {
 // queue behind it if it ran under v.mu (#1125). It is taken before the
 // lock and handed to the store path.
 func TestFreeSpaceIsMeasuredWithoutHoldingTheIndexLock(t *testing.T) {
-	v, err := Open(t.TempDir(), testKey(t))
+	v, err := Open(t.TempDir(), testKey(t), nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -881,11 +890,17 @@ func TestIndexWriteFailureLeavesNoOrphanFile(t *testing.T) {
 	}
 }
 
-// TestOpenRemovesFilesTheIndexDoesNotReference: a process killed
-// between writing a generation's file and committing the index leaves a
-// file nothing refers to. Nothing else ever reaches into these
-// directories, so the reopen cleans them out (#1125).
-func TestOpenRemovesFilesTheIndexDoesNotReference(t *testing.T) {
+// TestOpenAdoptsWellFormedOrphansInsteadOfDeletingThem covers #1294's
+// narrowing of the sweep: a process killed between writing a
+// generation's file and committing the index leaves a file nothing
+// refers to, and it used to be deleted outright on the same terms as
+// genuine junk -- which could just as well be an undamaged backup a
+// crash never got to record. A name the sweep can recognise as one of
+// this package's own is adopted into the cycling set instead, both for
+// a router the index already knows (kept under its real name) and for
+// a whole router directory nothing refers to (kept under the directory
+// hash, same placement rebuildFromDisk gives a fully lost index).
+func TestOpenAdoptsWellFormedOrphansInsteadOfDeletingThem(t *testing.T) {
 	dir := t.TempDir()
 	key := testKey(t)
 	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
@@ -898,7 +913,8 @@ func TestOpenRemovesFilesTheIndexDoesNotReference(t *testing.T) {
 	if err := os.WriteFile(orphan, []byte("written, never indexed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	strayDir := filepath.Join(dir, dirNameFor("a router the index has forgotten"))
+	strayHash := dirNameFor("a router the index has forgotten")
+	strayDir := filepath.Join(dir, strayHash)
 	if err := os.MkdirAll(strayDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -909,15 +925,40 @@ func TestOpenRemovesFilesTheIndexDoesNotReference(t *testing.T) {
 
 	v2 := openVaultOnDisk(t, dir, key, disk)
 	for _, path := range []string{orphan, stray} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("%s survived the reopen, want it removed as unreferenced: %v", path, err)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s did not survive the reopen, want it adopted rather than deleted: %v", path, err)
 		}
 	}
-	if ids := generationIDs(v2, "rb5009"); len(ids) != 1 || ids[0] != kept {
-		t.Fatalf("the reopened vault holds %v, want only %s", ids, kept)
+	if ids := generationIDs(v2, "rb5009"); len(ids) != 2 || !contains(ids, kept) || !contains(ids, "20260101T000000.000000000Z-000042") {
+		t.Fatalf("rb5009's generations after the reopen = %v, want %s (already known) plus the adopted orphan", ids, kept)
 	}
-	if _, err := os.Stat(filepath.Join(routerDir, v2.fileName(kept, KindBackup))); err != nil {
-		t.Errorf("the kept generation's own file was removed: %v", err)
+	strayPlaceholder := recoveredDeviceUnknown + strayHash
+	if ids := generationIDs(v2, strayPlaceholder); len(ids) != 1 || ids[0] != "20260101T000000.000000000Z-000043" {
+		t.Fatalf("the stray directory's generations = %v, want the adopted orphan kept under its placeholder", ids)
+	}
+}
+
+// TestOpenRemovesGenuineJunkNotShapedLikeOneOfOurs: the sweep only
+// spares names it can read as a crash temp file or a well-formed
+// `<id>.<kind>.enc`. Anything else -- a stray editor droppings, a typo
+// -- is still deleted, exactly as before #1294 narrowed what else the
+// sweep may touch.
+func TestOpenRemovesGenuineJunkNotShapedLikeOneOfOurs(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, dir, key, disk)
+	mustStore(t, v, "rb5009", 10, time.Now())
+	routerDir := v.routerDir("rb5009")
+
+	junk := filepath.Join(routerDir, "notes.txt")
+	if err := os.WriteFile(junk, []byte("not one of ours"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	openVaultOnDisk(t, dir, key, disk)
+	if _, err := os.Stat(junk); !os.IsNotExist(err) {
+		t.Errorf("%s survived the reopen, want genuine junk removed: %v", junk, err)
 	}
 }
 
@@ -973,5 +1014,323 @@ func TestOpenDropsIndexEntriesWhoseFileIsMissing(t *testing.T) {
 	v3 := openVaultOnDisk(t, dir, key, disk)
 	if got := generationIDs(v3, "rb5009"); len(got) != 1 || got[0] != kept {
 		t.Fatalf("the second reopen lists %v, want the repaired index to have been kept", got)
+	}
+}
+
+// TestOpenRebuildsFromDiskMatchingACandidateName is #1294's Defect A
+// end to end, for the common case: the vault keys and seals by the
+// SFTP login name, and that name lives in the ingest token store, which
+// an index loss does not touch. A directory whose hash matches
+// dirNameFor(name) for a candidate the caller supplies recovers keyed
+// by its real name straight away -- decryptable and downloadable now,
+// no placeholder, no waiting for a push.
+func TestOpenRebuildsFromDiskMatchingACandidateName(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v1 := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	for i := 0; i < 3; i++ {
+		mustStore(t, v1, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	preLoss := generationIDs(v1, "rb5009")
+	if len(preLoss) != 3 {
+		t.Fatalf("got %d generations before the loss, want 3", len(preLoss))
+	}
+
+	// The Defect A sequence: meta.enc gone, service restarted with
+	// nothing else changed -- but this time the caller can offer
+	// "rb5009" as a candidate, exactly as backups.go's
+	// recoveryCandidates would from the still-intact token store.
+	if err := os.Remove(filepath.Join(dir, metaFileName)); err != nil {
+		t.Fatal(err)
+	}
+	v2 := openVaultOnDiskWithCandidates(t, dir, key, disk, []string{"unrelated-router", "rb5009"})
+
+	if v2.RecoveredNameUnknown("rb5009") {
+		t.Fatal(`RecoveredNameUnknown("rb5009") = true, want a matched candidate recovered under its real name`)
+	}
+	recovered := v2.ProtectedGenerations("rb5009")
+	if len(recovered) != 3 {
+		t.Fatalf(`got %d generations under "rb5009", want the 3 that predated the loss`, len(recovered))
+	}
+	for _, g := range recovered {
+		if !contains(preLoss, g.ID) {
+			t.Errorf("recovered generation %s was not one of the pre-loss generations %v", g.ID, preLoss)
+		}
+		if g.Comment == "" || g.ProtectedBy == "" || g.ProtectedAt.IsZero() {
+			t.Errorf("recovered generation %s is missing its protection metadata: %+v", g.ID, g)
+		}
+	}
+
+	// Matched means readable now, not just listed: a download of a
+	// recovered generation must actually decrypt, the same round trip
+	// any other backup gets.
+	original := plainBackup(10)
+	got, err := v2.Open("rb5009", preLoss[0], KindBackup)
+	if err != nil {
+		t.Fatalf("Open a matched-recovery generation: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("round-tripped bytes differ for a matched-recovery generation")
+	}
+}
+
+// TestOpenRebuildsFromDiskWithNoMatchingCandidate covers the other half:
+// no candidate explains the directory (a revoked token, or recovery
+// running before the caller had any candidates at all). The generations
+// are still recovered, protected, under a recoveredDeviceUnknown
+// placeholder -- but sealed under a name this rebuild does not have, so
+// Open refuses them with ErrRecoveredNameUnknown rather than attempting
+// a decrypt that cannot succeed. The router's own next push, under its
+// real name, re-associates the placeholder and makes them readable.
+func TestOpenRebuildsFromDiskWithNoMatchingCandidate(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v1 := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	for i := 0; i < 3; i++ {
+		mustStore(t, v1, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	preLoss := generationIDs(v1, "rb5009")
+	if len(preLoss) != 3 {
+		t.Fatalf("got %d generations before the loss, want 3", len(preLoss))
+	}
+
+	if err := os.Remove(filepath.Join(dir, metaFileName)); err != nil {
+		t.Fatal(err)
+	}
+	v2 := openVaultOnDiskWithCandidates(t, dir, key, disk, []string{"some-other-router"})
+
+	placeholder := recoveredDeviceUnknown + dirNameFor("rb5009")
+	if !v2.RecoveredNameUnknown(placeholder) {
+		t.Fatal("RecoveredNameUnknown(placeholder) = false, want true for a directory no candidate explained")
+	}
+	recovered := v2.ProtectedGenerations(placeholder)
+	if len(recovered) != 3 {
+		t.Fatalf("got %d recovered generations under the placeholder, want the 3 that predated the loss", len(recovered))
+	}
+
+	// Refused with the specific error, not a decrypt failure and not a
+	// 404 from the wrong directory.
+	if _, err := v2.Open(placeholder, preLoss[0], KindBackup); !errors.Is(err, ErrRecoveredNameUnknown) {
+		t.Fatalf("Open on an unmatched recovery = %v, want ErrRecoveredNameUnknown", err)
+	}
+
+	// A few ordinary pushes under the router's real name: the
+	// placeholder re-associates with it rather than a second, empty
+	// entry starting up beside it, and downloads work from that point.
+	for i := 0; i < 2; i++ {
+		mustStore(t, v2, "rb5009", 20+i, base.Add(time.Duration(10+i)*time.Hour))
+	}
+	if v2.RecoveredNameUnknown("rb5009") {
+		t.Fatal(`RecoveredNameUnknown("rb5009") = true after re-association, want false`)
+	}
+	if got := len(v2.ProtectedGenerations("rb5009")); got != 3 {
+		t.Fatalf("after re-association, ProtectedGenerations(rb5009) = %d, want the 3 recovered generations", got)
+	}
+	if got := len(v2.Generations("rb5009")); got != 2 {
+		t.Fatalf("after re-association, Generations(rb5009) = %d, want the 2 new pushes", got)
+	}
+	if _, err := v2.Open("rb5009", preLoss[0], KindBackup); err != nil {
+		t.Fatalf("Open after re-association: %v, want the pre-loss generation readable now", err)
+	}
+
+	// A further reopen: the rebuild and the re-association were both
+	// persisted, not just held in memory, and the pre-loss files are
+	// still on disk.
+	v3 := openVaultOnDisk(t, dir, key, disk)
+	if got := len(v3.ProtectedGenerations("rb5009")); got != 3 {
+		t.Fatalf("after a second reopen, ProtectedGenerations(rb5009) = %d, want the 3 recovered generations kept", got)
+	}
+	routerDir := v3.routerDir("rb5009")
+	for _, id := range preLoss {
+		if _, err := os.Stat(filepath.Join(routerDir, v3.fileName(id, KindBackup))); err != nil {
+			t.Errorf("pre-loss generation %s's file is gone after the missing-index recovery: %v", id, err)
+		}
+	}
+}
+
+// TestRecoveredRouterSurvivesAFurtherReopenBeforeItPushesAgain is the
+// review catch on the first pass at #1294: a rebuilt index keyed a
+// recovered router by its directory hash, but every directory helper
+// still hashed the *key* unconditionally, so a hash-keyed entry
+// resolved to dirNameFor(hash) -- a directory that does not exist. That
+// was invisible as long as the very next thing to happen was the
+// router's own push (which re-keys the entry back to its real name
+// before anything else looks at the directory). It is not invisible
+// across a second restart with no push in between -- an operator
+// restarting the service more than once while recovering, which is a
+// completely ordinary thing to do -- where reconcile would run again
+// against the wrong directory, find both halves of every recovered
+// generation "missing", and drop them; the commit message's claim that
+// losing the index costs the notes and never the backups was false
+// across two restarts. Still covers the no-matching-candidate case:
+// that is the one still keyed by a placeholder, so it is the one this
+// bug could reach.
+func TestRecoveredRouterSurvivesAFurtherReopenBeforeItPushesAgain(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v1 := openVaultOnDisk(t, dir, key, disk)
+	base := time.Now()
+	for i := 0; i < 3; i++ {
+		mustStore(t, v1, "rb5009", 10+i, base.Add(time.Duration(i)*time.Hour))
+	}
+	preLoss := generationIDs(v1, "rb5009")
+	if len(preLoss) != 3 {
+		t.Fatalf("got %d generations before the loss, want 3", len(preLoss))
+	}
+
+	if err := os.Remove(filepath.Join(dir, metaFileName)); err != nil {
+		t.Fatal(err)
+	}
+	v2 := openVaultOnDisk(t, dir, key, disk)
+	placeholder := recoveredDeviceUnknown + dirNameFor("rb5009")
+	if got := len(v2.ProtectedGenerations(placeholder)); got != 3 {
+		t.Fatalf("got %d recovered generations after the first reopen, want 3", got)
+	}
+
+	// No push in between: the router has not spoken up yet, so the
+	// entry is still keyed by the placeholder when this second reopen's
+	// reconcile runs against it.
+	v3 := openVaultOnDisk(t, dir, key, disk)
+	recovered := v3.ProtectedGenerations(placeholder)
+	if len(recovered) != 3 {
+		t.Fatalf("got %d recovered generations after a second reopen with no push in between, want the 3 still kept -- "+
+			"reconcile must not mistake its own recovered directory for one whose files are gone", len(recovered))
+	}
+	routerDir := v3.routerDir(placeholder)
+	for _, id := range preLoss {
+		if _, err := os.Stat(filepath.Join(routerDir, v3.fileName(id, KindBackup))); err != nil {
+			t.Errorf("pre-loss generation %s's file is gone after a second reopen with no push in between: %v", id, err)
+		}
+	}
+}
+
+// TestReconcileDemotesRatherThanDropsAHalfPresentProtectedGeneration is
+// #1294's Defect B: presentOnDisk used to drop a generation's whole
+// entry when either of its files went missing, applied to the
+// protected pool on the same terms as the cycling set, and
+// removeUnreferencedFiles then deleted the surviving, undamaged
+// sibling -- for a protected generation, the very thing an admin asked
+// to keep. Losing one file now demotes the entry to the half that
+// survives; it is never dropped, and the surviving file is never swept.
+func TestReconcileDemotesRatherThanDropsAHalfPresentProtectedGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		removeKind string
+		survivor   string
+	}{
+		{"backup file lost, export survives", KindBackup, KindRsc},
+		{"export file lost, backup survives", KindRsc, KindBackup},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			key := testKey(t)
+			disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+			v := openVaultOnDisk(t, dir, key, disk)
+			now := time.Now()
+			if err := v.Store("rb5009", KindBackup, plainBackup(10), now); err != nil {
+				t.Fatal(err)
+			}
+			if err := v.Store("rb5009", KindRsc, []byte("export text"), now.Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			id := generationIDs(v, "rb5009")[0]
+			if err := v.Protect("rb5009", id, "before the office move", "tom", now.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+
+			routerDir := v.routerDir("rb5009")
+			if err := os.Remove(filepath.Join(routerDir, v.fileName(id, tc.removeKind))); err != nil {
+				t.Fatal(err)
+			}
+
+			v2 := openVaultOnDisk(t, dir, key, disk)
+			protected := v2.ProtectedGenerations("rb5009")
+			if len(protected) != 1 || protected[0].ID != id {
+				t.Fatalf("protected pool after repair = %v, want the same generation %s kept, demoted rather than dropped", protected, id)
+			}
+			g := protected[0]
+			lostHas, survivorHas := g.HasRsc(), g.HasBackup()
+			if tc.removeKind == KindBackup {
+				lostHas, survivorHas = g.HasBackup(), g.HasRsc()
+			}
+			if lostHas {
+				t.Errorf("the lost half (%s) still reports as present: %+v", tc.removeKind, g)
+			}
+			if !survivorHas {
+				t.Errorf("the surviving half (%s) reports as absent: %+v", tc.survivor, g)
+			}
+			if _, err := os.Stat(filepath.Join(routerDir, v2.fileName(id, tc.survivor))); err != nil {
+				t.Errorf("the surviving %s file was removed by reconcile, want it kept: %v", tc.survivor, err)
+			}
+		})
+	}
+}
+
+// TestReconcileLeavesAGenerationWhoseExportNeverArrivedAlone is the
+// regression guard for the rule presentOnDisk and repairIndexAgainstDisk
+// already state in their own comments: a generation whose `.rsc` never
+// came is complete as it stands, and repair must not read that as a
+// lost half.
+func TestReconcileLeavesAGenerationWhoseExportNeverArrivedAlone(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	disk := &fakeDisk{free: testDiskRoomy, total: testDiskTotal}
+	v := openVaultOnDisk(t, dir, key, disk)
+	now := time.Now()
+	if err := v.Store("rb5009", KindBackup, plainBackup(10), now); err != nil {
+		t.Fatal(err)
+	}
+	id := generationIDs(v, "rb5009")[0]
+	if err := v.Protect("rb5009", id, "before the 7.16 upgrade", "tom", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := openVaultOnDisk(t, dir, key, disk)
+	protected := v2.ProtectedGenerations("rb5009")
+	if len(protected) != 1 || protected[0].ID != id {
+		t.Fatalf("protected pool after repair = %v, want the untouched generation %s", protected, id)
+	}
+	if !protected[0].HasBackup() || protected[0].HasRsc() {
+		t.Errorf("a generation whose export never arrived changed shape across repair: %+v", protected[0])
+	}
+	routerDir := v.routerDir("rb5009")
+	if _, err := os.Stat(filepath.Join(routerDir, v2.fileName(id, KindBackup))); err != nil {
+		t.Errorf("backup file missing after repair: %v", err)
+	}
+}
+
+// TestUnreadableIndexErrorNamesWhatDeletingCosts covers the other half
+// of #1294's plan: meta.enc present but unreadable must still refuse to
+// start -- consistent with storage_preflight.go's rule that a file
+// present but not trusted is a hard stop -- but the refusal must say
+// what removing the file costs, so an operator is not left to
+// rediscover the hard way that it is not the backups themselves.
+func TestUnreadableIndexErrorNamesWhatDeletingCosts(t *testing.T) {
+	dir := t.TempDir()
+	key := testKey(t)
+	v := openVaultOnDisk(t, dir, key, &fakeDisk{free: testDiskRoomy, total: testDiskTotal})
+	if err := v.Store("rb5009", KindBackup, plainBackup(10), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	metaPath := filepath.Join(dir, metaFileName)
+	if err := os.WriteFile(metaPath, []byte("not a sealed document"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Open(dir, key, nil)
+	if err == nil {
+		t.Fatal("Open with a corrupted index succeeded, want the refusal")
+	}
+	msg := err.Error()
+	for _, want := range []string{"protection", "anchor", "backup files themselves", "recovers"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not mention %q", msg, want)
+		}
 	}
 }

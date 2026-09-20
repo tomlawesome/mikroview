@@ -70,43 +70,7 @@
     topTalker,
   } from '../lib/whisperStats'
   import type { TimeBucket } from '../lib/types'
-
-  // #710/#1197: the columns ▸ picker's own naming, distinct from COLUMNS'
-  // table-header labels (lib/columns.svelte) -- a flat list read "Device
-  // column", "Address column", "Address column" with nothing beside the
-  // repeats to tell them apart. These three lists say the bare column
-  // name in the picker's own mono voice, and the source/destination facts
-  // (address, port, MAC) sit under a small heading naming which side they
-  // belong to instead of repeating "source"/"destination" on every row.
-  // Order here is the picker's own -- COLUMNS interleaves source's and
-  // destination's facts around chain/proto for a table-layout reason (see
-  // its own comment) that has nothing to do with how this groups them.
-  // Ported from FilterBar.svelte, whose own copy still serves the mobile
-  // drawer's always-open list -- see that file's own comment.
-  interface ColumnChoice {
-    key: string
-    text: string
-    ariaLabel: string
-  }
-  const PLAIN_COLUMNS: ColumnChoice[] = [
-    { key: 'device', text: 'device', ariaLabel: 'Device column' },
-    { key: 'action', text: 'action', ariaLabel: 'Action column' },
-    { key: 'chain', text: 'chain', ariaLabel: 'Chain column' },
-    { key: 'source', text: 'source', ariaLabel: 'Source column' },
-    { key: 'destination', text: 'destination', ariaLabel: 'Destination column' },
-    { key: 'proto', text: 'proto', ariaLabel: 'Proto column' },
-    { key: 'iface', text: 'interface', ariaLabel: 'Interfaces column' },
-    { key: 'nat', text: 'NAT', ariaLabel: 'NAT column' },
-  ]
-  const SOURCE_COLUMNS: ColumnChoice[] = [
-    { key: 'srcAddr', text: 'address', ariaLabel: 'Source address column' },
-    { key: 'srcPort', text: 'src port', ariaLabel: 'Source port column' },
-    { key: 'mac', text: 'MAC', ariaLabel: 'Source MAC column' },
-  ]
-  const DEST_COLUMNS: ColumnChoice[] = [
-    { key: 'dstAddr', text: 'address', ariaLabel: 'Destination address column' },
-    { key: 'port', text: 'port', ariaLabel: 'Destination port column' },
-  ]
+  import ColumnToggles from './ColumnToggles.svelte'
 
   // The desktop columns ▸ trigger and its popover (#1197, moved here from
   // FilterBar.svelte's own always-visible strip -- see the top-of-file
@@ -442,41 +406,6 @@
 
 <svelte:window onclick={onColumnsWindowClick} onkeydown={onColumnsWindowKeydown} />
 
-<!-- The columns ▸ picker's own snippets (#1197, moved from FilterBar.svelte
-     along with the trigger and panel -- see the top-of-file comment).
-     Time and Rule are pinned -- no checkbox for either, since neither is
-     ever offered as a toggle. -->
-{#snippet columnCheckbox(col: ColumnChoice)}
-  <!-- aria-label carries the disambiguated name ("Source address
-       column", not "Address column") on the input directly, which wins
-       over the wrapping <label>'s own text for the accessible name -- so
-       the visible word stays bare while a screen reader still hears
-       which side it belongs to. -->
-  <label class="col-toggle">
-    <input
-      type="checkbox"
-      checked={columnState.isColumnVisible(col.key)}
-      onchange={() => columnState.toggleColumn(col.key)}
-      aria-label={col.ariaLabel}
-    />
-    {col.text}
-  </label>
-{/snippet}
-
-{#snippet columnCheckboxes()}
-  {#each PLAIN_COLUMNS as col (col.key)}
-    {@render columnCheckbox(col)}
-  {/each}
-  <span class="col-group-heading">source</span>
-  {#each SOURCE_COLUMNS as col (col.key)}
-    {@render columnCheckbox(col)}
-  {/each}
-  <span class="col-group-heading">destination</span>
-  {#each DEST_COLUMNS as col (col.key)}
-    {@render columnCheckbox(col)}
-  {/each}
-{/snippet}
-
 <div
   class="whisper"
   aria-label="The last {WHISPER_WINDOW_MINUTES} minutes, whispered — click the curve to seek, drag to fence a time range"
@@ -629,10 +558,12 @@
        fold, where an operator who never opens the filters never learned
        the table had hidden columns at all. Same popover panel, same
        persistence, same columnsOpen/columnsMenuEl/columnsTriggerEl state
-       and columnCheckboxes snippet FilterBar used to own -- only the
-       trigger's home moved, and FilterBar's own copy is gone: one door
-       to this panel, not two. Desktop only -- the mobile drawer keeps
-       its own always-open list (FilterBar.svelte, unchanged). -->
+       -- only the trigger's home moved (#1197), and FilterBar's own copy
+       of the trigger/panel is gone: one door to this panel, not two.
+       Desktop only -- the mobile drawer keeps its own always-open list
+       (FilterBar.svelte). The checkbox list itself is ColumnToggles.svelte
+       now, shared with that drawer rather than duplicated (#1218 audit
+       finding 13). -->
   {#if !viewportState.isMobile}
     <div class="columns-menu" bind:this={columnsMenuEl}>
       <button
@@ -651,7 +582,7 @@
       >
       {#if columnsOpen}
         <div class="col-toggles col-panel" role="group" aria-label="Choose which columns the stream shows">
-          {@render columnCheckboxes()}
+          <ColumnToggles />
           <!-- One click undoes a bad drag. Disabled once every width
                already matches DEFAULT_WIDTHS -- nothing to reset, same
                idiom csv ↓'s own disabled state uses for "nothing to
@@ -881,28 +812,9 @@
     gap: 4px 14px;
   }
 
-  .col-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font: 12px var(--font-mono);
-    color: var(--fg-muted);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .col-toggle:hover {
-    color: var(--fg);
-  }
-
-  .col-toggle input[type='checkbox'] {
-    cursor: pointer;
-  }
-
-  .col-toggle input[type='checkbox']:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
+  /* .col-toggle/.col-group-heading are ColumnToggles.svelte's own
+     styles now (#1218 audit finding 13) -- this container's flex
+     layout is all that stays here. */
 
   /* One click undoes a bad drag, set off from the checkboxes above it by
      the same hairline .col-group-heading already uses, so it doesn't
@@ -933,19 +845,6 @@
   .col-reset:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-  }
-
-  /* The small heading naming which side "address"/"src port"/"MAC"
-     belongs to. flex-basis: 100% starts a new line, scoped to one
-     heading inside the panel rather than the whole row. */
-  .col-group-heading {
-    flex-basis: 100%;
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-    font: 500 9px var(--font-mono);
-    letter-spacing: 0.1em;
-    color: var(--fg-dim);
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

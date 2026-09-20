@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -74,7 +75,7 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	key, keyErr := retention.LoadKey(cfg.History.KeyFile)
 	switch {
 	case keyErr == retention.ErrNoKey:
-		log.Info("no history.keyFile configured -- every JSON-file-backed store except accounts, tokens and recovery keys (flags, entities, watchlist, definitions and the rest), and the warm-restart snapshots, are memory-only and are lost on every restart; there is no unencrypted mode to fall back to for those (#853). Accounts, tokens and recovery keys keep persisting in plain JSON because they hold only one-way hashes (#853 rule 6)")
+		log.Info(fmt.Sprintf("no history.keyFile configured -- every JSON-file-backed store except %s (flags, entities, watchlist, definitions and the rest), and the warm-restart snapshots, are memory-only and are lost on every restart; there is no unencrypted mode to fall back to for those (#853). Those named keep persisting in plain JSON: accounts, tokens and recovery keys because they hold only one-way hashes (#853 rule 6), the drop list because losing it on a restart made the next scheduled fetch push an empty feed that wiped the router's own list (v0.6.0 pre-release audit)", plaintextWithoutKeyList()))
 	case keyErr != nil:
 		s.keyErr = keyErr
 		log.Warn(fmt.Sprintf("history.keyFile is set but could not be used (%v) -- the state store and warm-restart snapshots run exactly as if no key were configured (memory-only)", keyErr), "keyFile", cfg.History.KeyFile, "err", keyErr)
@@ -153,18 +154,68 @@ func readDSNFile(path string) (string, error) {
 	return dsn, nil
 }
 
-// hashedStores lists the JSON-file stores exempt from "no key, no
-// storage" (see backendFor): they hold only one-way hashes -- argon2id
-// password hashes (auth), hashed API/ingest tokens (tokens) and hashed
-// recovery keys (recovery_keys) -- so nothing in them can be decrypted
-// even if the plain file leaked. Owner decision, #853 rule 6,
-// 2026-09-05: keep persisting these without a key, exactly as before
-// this issue's change, accepting that the plain file still discloses
-// usernames and roles.
-var hashedStores = map[string]bool{
+// plaintextWithoutKeyStores lists the JSON-file stores exempt from "no
+// key, no storage" (see backendFor). Two different reasons land a store
+// here:
+//
+//   - auth, tokens and recovery_keys hold only one-way hashes -- argon2id
+//     password hashes, hashed API/ingest tokens, hashed recovery keys --
+//     so nothing in them can be decrypted even if the plain file leaked.
+//     Owner decision, #853 rule 6, 2026-09-05: keep persisting these
+//     without a key, exactly as before that issue's change, accepting
+//     that the plain file still discloses usernames and roles.
+//   - droplist holds plaintext CIDRs and operator-typed reasons, not a
+//     hash of anything, but it is not a secret either: it is the input
+//     to #1224's own .rsc feed, so a memory-only store on a default
+//     install (no history.keyFile configured, the common case) lost
+//     every entry on restart -- and the next scheduled fetch, being a
+//     full sync (see internal/droplist.Script's doc comment), pushed an
+//     empty list that wiped whatever the router still had. Owner
+//     ruling, v0.6.0 pre-release audit: persist it by default. See
+//     handleDroplistPull's own guard for the belt-and-suspenders half of
+//     that ruling -- refusing to serve an empty feed from a store that
+//     still isn't persisted, e.g. because an operator set
+//     droplist.storePath explicitly to "".
+var plaintextWithoutKeyStores = map[string]bool{
 	"auth":          true,
 	"tokens":        true,
 	"recovery_keys": true,
+	"droplist":      true,
+}
+
+// plaintextStoreNames is what each of those is called in the no-key log
+// line below -- the one place an operator is told what does and does
+// not reach the disk unprotected. Kept next to the map, and asserted
+// against it, because the line had already gone stale once: droplist
+// was added to the exemption and the sentence still named only
+// accounts, tokens and recovery keys, so an operator reading it was
+// told their drop list was memory-only when it was being written in
+// the clear (v0.6.0 pre-release audit, Security stage).
+var plaintextStoreNames = map[string]string{
+	"auth":          "accounts",
+	"tokens":        "tokens",
+	"recovery_keys": "recovery keys",
+	"droplist":      "the drop list",
+}
+
+// plaintextWithoutKeyList names the exempt stores for the log line, in
+// a fixed order so the message does not shuffle between boots. Built
+// from the map rather than written out, so it cannot fall behind it.
+func plaintextWithoutKeyList() string {
+	keys := make([]string, 0, len(plaintextWithoutKeyStores))
+	for k := range plaintextWithoutKeyStores {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	names := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if n, ok := plaintextStoreNames[k]; ok {
+			names = append(names, n)
+		} else {
+			names = append(names, k)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // backendFor returns where the named store should persist, and adopts
@@ -176,10 +227,10 @@ var hashedStores = map[string]bool{
 //
 // #853: on the JSON-file path, whether name gets a working backend at all
 // now also depends on s.key -- "every file the file backend writes" is
-// the rule the issue settled on, with one exception decided afterwards
-// (rule 6, 2026-09-05): hashedStores above keep persisting in the clear
-// with no key, because a one-way hash gains nothing from encryption.
-// Every other store returns (nil, nil) with no key, the same
+// the rule the issue settled on, with the exceptions in
+// plaintextWithoutKeyStores above (see its own doc comment for why each
+// one is there) keeping persisting in the clear with no key. Every other
+// store returns (nil, nil) with no key, the same
 // "persistence not configured" signal already used for memory-only
 // stores (an empty filePath does the same today).
 //
@@ -193,8 +244,8 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 			return nil, nil // this store's persistence is switched off
 		}
 		if s.key == nil {
-			if hashedStores[name] {
-				return persist.NewFileBackend(filePath), nil // #853 rule 6: one-way hashes, no key needed
+			if plaintextWithoutKeyStores[name] {
+				return persist.NewFileBackend(filePath), nil // see plaintextWithoutKeyStores's doc comment
 			}
 			return nil, nil // #853: no key, no storage -- this store is memory-only
 		}

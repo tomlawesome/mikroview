@@ -209,6 +209,102 @@ func isConfiguredSource(host string) bool {
 	return m != nil && (*m)[host]
 }
 
+// EnrolmentGate is issue #1281's admission check, at both the
+// connection and the line level: whether a syslog source address may
+// even open a TCP connection, whether it is allowed onto the ingest
+// pipeline once connected, and whether an as-yet-unrecognised line
+// enrols a pending device at that address. Declared here (rather than
+// the implementation's own
+// package) so this package -- syslog -- need not import the device
+// registry or the API to call it, the same reason OnConnection above is
+// a package-level hook rather than a constructor parameter:
+// device.Registry satisfies this interface structurally, with no import
+// in either direction beyond main.go wiring the two together.
+type EnrolmentGate interface {
+	// Allowed reports whether host is already some device's sourceIp or
+	// acceptedIp -- the fast path, checked before touching line at all.
+	Allowed(host string) bool
+	// TryEnrol inspects one line for the enrolment marker; if it names a
+	// device's current, unexpired, unused pending token, that device is
+	// enrolled at host (the token burned) and TryEnrol reports true.
+	// Any other line reports false and changes nothing.
+	TryEnrol(host string, line []byte) bool
+	// EnrolLine reports whether line carries the enrolment marker at
+	// all, valid token or not. Lets gateAllows hand a marker from an
+	// already-allowed address to TryEnrol, so a collision (a token
+	// minted for an address another device already holds) is refused
+	// and counted rather than read as that device's ordinary traffic.
+	EnrolLine(line []byte) bool
+	// Refuse records that a line from host was neither already allowed
+	// nor a valid enrolment line, for the refused-senders list.
+	Refuse(host string, line []byte)
+	// AcceptsConnectionFrom reports whether host is the address some
+	// unexpired pending enrolment token was minted for -- while true,
+	// the accept loop lets that one address through even though it is
+	// not yet Allowed, since the enrol line proving the token has to be
+	// able to arrive from the address it is enrolling. Every other
+	// unknown address stays refused. Checked once per accepted
+	// connection, before the TLS handshake and before the per-line gate
+	// ever sees a byte.
+	AcceptsConnectionFrom(host string) bool
+	// RefuseConnection records that host's TCP connection was refused at
+	// accept time -- before TLS, before any line -- because host is
+	// neither Allowed nor is any token pending. Counted the same way as
+	// Refuse, into the same refused-senders list.
+	RefuseConnection(host string)
+}
+
+// enrolmentGate holds the installed EnrolmentGate, nil by default --
+// same "unconfigured means inert" convention as OnConnection/
+// configuredSources above, so the many tests that never call
+// SetEnrolmentGate see every line allowed through unconditionally, the
+// behaviour this package always had before #1281.
+var enrolmentGate atomic.Pointer[EnrolmentGate]
+
+// SetEnrolmentGate installs the gate. Call once at startup; nil clears
+// it back to "everything allowed", which is also what a test's
+// t.Cleanup should restore.
+func SetEnrolmentGate(g EnrolmentGate) {
+	enrolmentGate.Store(&g)
+}
+
+// gateAllows applies the installed EnrolmentGate (if any) to one
+// resolved line from host, in the order issue #1281 specifies: already
+// allowed, else a valid enrolment line, else refused. A nil gate allows
+// everything, unconditionally -- see enrolmentGate's own doc comment.
+//
+// The enrolment line itself is never forwarded as an event either way:
+// it is a synthetic marker (`/log info "mikroview-enrol <token>"`), not
+// real router traffic, so a successful TryEnrol reports false here too
+// -- "lines from this address pass from then on" means the lines after
+// it, which is exactly what host being Allowed from this call onward
+// (device.Registry.TryEnrol sets AcceptedIP before returning) already
+// gives every later line on this connection.
+func gateAllows(host string, line []byte) bool {
+	p := enrolmentGate.Load()
+	if p == nil || *p == nil {
+		return true
+	}
+	g := *p
+	if g.Allowed(host) {
+		// A marker from an address some router already holds is still
+		// a redemption attempt. Without this branch TryEnrol never saw
+		// it, so a token minted for that address was silently swallowed
+		// as the holder's traffic and stayed pending with nothing under
+		// refused senders to say why; TryEnrol refuses and counts it.
+		if g.EnrolLine(line) {
+			g.TryEnrol(host, line)
+			return false
+		}
+		return true
+	}
+	if g.TryEnrol(host, line) {
+		return false
+	}
+	g.Refuse(host, line)
+	return false
+}
+
 // reservedSlots is how many of maxTCPConnections only declared devices
 // may occupy. Zero when nothing is declared -- see SetConfiguredSources.
 func reservedSlots() int {
@@ -684,6 +780,7 @@ var (
 	perSourceRejectGate  = logging.NewLimiter(ingestDropLogInterval)
 	unreservedRejectGate = logging.NewLimiter(ingestDropLogInterval)
 	globalRejectGate     = logging.NewLimiter(ingestDropLogInterval)
+	enrolmentRejectGate  = logging.NewLimiter(ingestDropLogInterval)
 )
 
 // tcpIdleTimeoutNS closes a connection that has gone this long without a
@@ -760,6 +857,35 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		tempDelay = 0
 
 		host := remoteHost(conn)
+
+		// Issue #1281's connection gate, checked before anything else
+		// about this connection -- including the per-source cap below
+		// and, critically, the TLS handshake, which ServeTLS's
+		// tls.Listener never performs eagerly in Accept (see
+		// tls_listener.go's own comment): it happens lazily on this
+		// conn's first Read/Write, inside handleTCPConn, which this
+		// loop never reaches for a refused connection. An address that
+		// is not already Allowed only gets this far while it is the one
+		// address a pending enrolment token was minted for --
+		// AcceptsConnectionFrom -- because the enrol line that redeems
+		// that token has to be able to arrive from the very address it
+		// is enrolling. Since #1291 that is one address rather than
+		// every unknown address at once: a pending token elsewhere on
+		// the fleet no longer opens the port to anybody. Once every
+		// pending token is burned or has expired, the port closes back
+		// up to unknown addresses entirely.
+		if p := enrolmentGate.Load(); p != nil && *p != nil {
+			g := *p
+			if !g.Allowed(host) && !g.AcceptsConnectionFrom(host) {
+				g.RefuseConnection(host)
+				if total, ok := enrolmentRejectGate.Allow(); ok {
+					tcpLog.Warn(fmt.Sprintf("connection from an address that is neither a declared/enrolled router nor the address a pending enrolment token was minted for -- rejecting %s (%d such rejections since start or last clear)", host, total))
+				}
+				conn.Close()
+				continue
+			}
+		}
+
 		configured := isConfiguredSource(host)
 
 		// An undeclared source may only take slots outside the portion
@@ -877,7 +1003,20 @@ func rfc3164HeaderLen(data []byte) int {
 	}
 	i := 0
 	if data[0] == '<' {
-		end := bytes.IndexByte(data, '>')
+		// A legal PRI is at most "<191>": '<' plus up to 3 digits plus
+		// '>', 5 bytes wide. Bound the search for '>' to that window
+		// instead of scanning the rest of data -- otherwise a run of
+		// '<' bytes with no '>' anywhere (and no newline, so nothing
+		// else trims the buffer first) makes every such offset scan
+		// everything after it, turning one read into O(n^2) work. A
+		// '>' beyond this window was already rejected below (end > 4),
+		// so bounding the scan can't change which inputs are accepted.
+		const maxPRIWidth = 5
+		limit := len(data)
+		if limit > maxPRIWidth {
+			limit = maxPRIWidth
+		}
+		end := bytes.IndexByte(data[:limit], '>')
 		if end <= 0 || end > 4 {
 			return -1
 		}
@@ -1282,6 +1421,14 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	emit := func(data []byte) {
 		data = bytes.TrimRight(data, "\r")
 		if len(data) == 0 {
+			return
+		}
+		// Issue #1281: a source address that is not already some
+		// device's sourceIp/acceptedIp gets no further than this check
+		// unless the line itself carries a valid enrolment token -- see
+		// EnrolmentGate. The connection is left open either way (the
+		// existing per-source caps bound it); only the line is dropped.
+		if !gateAllows(host, data) {
 			return
 		}
 		noteDuplicateLine(host, data)

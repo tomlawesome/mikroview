@@ -121,6 +121,14 @@ type deviceView struct {
 	// reported" is itself an answer, never an absence, so a client must
 	// not read a missing field as one.
 	Setup *setup.RouterSetup `json:"setup,omitempty"`
+	// Enrolment is issue #1281's pending-token state for this device --
+	// AcceptedIP/EnrolledAt above (on the embedded Info) are the
+	// finished state; this is what is in flight. Always present, never
+	// nil: {pending: false} is itself the answer when nothing is
+	// pending, the same "absence is not an omission" convention Setup
+	// above breaks from only because a nil Setup store is a real
+	// possibility this field's source (device.Registry) never is.
+	Enrolment device.Enrolment `json:"enrolment"`
 }
 
 // multihomedCandidatesByDevice indexes Registry.MultihomedCandidates by
@@ -184,7 +192,14 @@ func unattributedViews(sources []device.Source, infos []device.Info) []unattribu
 				}
 				claimed = append(claimed, id)
 			}
-			v.Explanation = joinAnd(claimed) + " have both pushed this address as their own, so nothing here can tell which of them sent these lines."
+			// Plain register, owner's own wording (v0.6.0 pre-release
+			// audit): the previous sentence said "have both pushed",
+			// which reads fine for two claimants but is wrong the
+			// moment a third router shares the same management or VRRP
+			// address -- joinAnd already lists any count correctly, the
+			// grammar around it just assumed there would only ever be
+			// two.
+			v.Explanation = joinAnd(claimed) + " are all using the same address, so MikroView can't tell what data came from where."
 		}
 		out = append(out, v)
 	}
@@ -227,6 +242,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			// rather than re-deriving the name here, so the two can
 			// never disagree.
 			NameSource: s.Naming.DeviceProvenance(info.ID).Source,
+			Enrolment:  s.Devices.PendingEnrolment(info.ID),
 		}
 		if s.Setup != nil {
 			reported := s.Setup.RouterSetup(info.ID, wantLogging)
@@ -250,9 +266,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 // effectiveRouterOSVersion is the version to show for a device: an
-// actual push always wins, and the /ca.crt?ros= hint for its source
-// address (#436 step 3, internal/routerstate.Store.VersionHint) fills in
-// only when nothing has pushed yet. Shared by handleDevices and
+// actual push always wins, and the /ca.crt?ros= hint for its address
+// (#436 step 3, internal/routerstate.Store.VersionHint) fills in only
+// when nothing has pushed yet -- tried against SourceIP first and then
+// AcceptedIP (issue #1281), since a token-enrolled device carries its
+// only known address on the latter. Shared by handleDevices and
 // handleSetupCommands so the two surfaces cannot disagree about which
 // router is on which version.
 func (s *Server) effectiveRouterOSVersion(info device.Info) (version string, ok bool) {
@@ -262,8 +280,15 @@ func (s *Server) effectiveRouterOSVersion(info device.Info) (version string, ok 
 	if v, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
 		return v, true
 	}
-	if v, _, ok := s.RouterState.VersionHint(info.SourceIP); ok {
-		return v, true
+	if info.SourceIP != "" {
+		if v, _, ok := s.RouterState.VersionHint(info.SourceIP); ok {
+			return v, true
+		}
+	}
+	if info.AcceptedIP != "" {
+		if v, _, ok := s.RouterState.VersionHint(info.AcceptedIP); ok {
+			return v, true
+		}
 	}
 	return "", false
 }

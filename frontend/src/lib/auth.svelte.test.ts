@@ -13,6 +13,7 @@ vi.mock('./api', () => ({
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
+  fetchPersistence: vi.fn(),
 }))
 
 import {
@@ -22,12 +23,21 @@ import {
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
+  fetchPersistence,
 } from './api'
-import { authState } from './auth.svelte'
+import { authState, pageReload } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
-import { emptyFilters, type Device, type Flag, type Stats, type WatchlistEntry } from './types'
+import { wizardState } from './wizard.svelte'
+import { logEveryRuleWorkState } from './logEveryRuleWork.svelte'
+import { tokensState } from './tokens.svelte'
+import { usersState } from './users.svelte'
+import { auditState } from './audit.svelte'
+import { persistenceState } from './persistence.svelte'
+import { configProblemsState } from './configProblems.svelte'
+import { configUpgradeState } from './configUpgrade.svelte'
+import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -53,6 +63,9 @@ beforeEach(() => {
   authState.signedInSince = ''
   authState.mustChangePassword = false
   window.history.replaceState(null, '', '/')
+  // jsdom cannot navigate; the reload tests below assert on this spy.
+  sessionStorage.clear()
+  vi.spyOn(pageReload, 'now').mockImplementation(() => {})
 })
 
 describe('AuthState.check', () => {
@@ -220,13 +233,63 @@ describe('AuthState.signOutEverywhere', () => {
   })
 })
 
+describe('AuthState reloads the page so nothing survives the account (#1083, 2a)', () => {
+  it('logout reloads once the server has ended the session', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue(null)
+
+    await authState.logout()
+
+    expect(pageReload.now).toHaveBeenCalledTimes(1)
+  })
+
+  it('logout does not reload when the server call failed -- a reload would sign the cookie back in', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue('network down')
+
+    await authState.logout()
+
+    expect(pageReload.now).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+  })
+
+  it('a 401 bounce reloads', () => {
+    authState.state = 'authenticated'
+    authState.handleUnauthorized()
+    expect(pageReload.now).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 401 while already signed out does not reload (no loop)', () => {
+    authState.state = 'unauthenticated'
+    authState.handleUnauthorized()
+    expect(pageReload.now).not.toHaveBeenCalled()
+  })
+
+  it('the way-out beat survives the reload via sessionStorage, once', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue(null)
+    await authState.logout()
+    // The old page's login screen mounts before the reload lands and
+    // takes the in-memory flag only -- the storage key must outlive it.
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(sessionStorage.getItem('mikroview.justSignedOut')).toBe('1')
+
+    // The fresh page: in-memory flag gone, storage still set, read once.
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(authState.consumeJustSignedOut()).toBe(false)
+  })
+})
+
 describe('AuthState.consumeJustSignedOut', () => {
-  it('reads and clears the flag logout() sets', async () => {
+  it('reads and clears the flag logout() sets, once per page', async () => {
     vi.mocked(logout).mockResolvedValue(null)
     await authState.logout()
 
+    // This page: the in-memory flag.
     expect(authState.consumeJustSignedOut()).toBe(true)
     expect(authState.justSignedOut).toBe(false)
+    // The reloaded page: the storage key, then nothing.
+    expect(authState.consumeJustSignedOut()).toBe(true)
     expect(authState.consumeJustSignedOut()).toBe(false)
   })
 
@@ -307,6 +370,38 @@ function fixtureWatchlistEntry(): WatchlistEntry {
   return { id: 'w1', name: 'watch w1', enabled: true, createdAt: '2026-01-01T00:00:00Z' }
 }
 
+function fixtureApiToken(): ApiToken {
+  return {
+    id: 't1',
+    name: 'router-a',
+    kind: 'ingest',
+    device: 'core',
+    createdAt: '2026-01-01T00:00:00Z',
+    value: 'ingest-token-live-value-the-next-admin-must-not-see',
+  }
+}
+
+function fixtureUser(): UserSummary {
+  return {
+    id: 'u1',
+    username: 'carol',
+    role: 'user',
+    createdAt: '2026-01-01T00:00:00Z',
+    hasLocalPassword: true,
+    sso: false,
+  }
+}
+
+function fixtureAuditEntry(): AuditEntry {
+  return {
+    id: 1,
+    timestamp: '2026-01-01T00:00:00Z',
+    actor: 'tom',
+    action: 'user.create',
+    target: 'carol',
+  }
+}
+
 describe('AuthState.logout clears the previous session state (#1083)', () => {
   beforeEach(() => {
     vi.mocked(logout).mockResolvedValue(null)
@@ -363,12 +458,195 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     expect(flagsState.pinnedIds).toEqual([])
   })
 
+  // The Security stage of the v0.6.0 pre-release audit: wizardState was
+  // never added to #1083's batch, though it is a module-level singleton
+  // exactly like the three above. It carries more than a view position
+  // -- `token` is a router ingest token, minted for the previous
+  // operator and handed straight to whoever signs in next on this tab.
+  it('resets wizardState, which carries a router ingest token', async () => {
+    wizardState.open = true
+    wizardState.pane = 4
+    wizardState.token = 'ingest-token-the-next-operator-must-not-be-handed'
+    wizardState.tokenDevice = 'core'
+    wizardState.devices = [fixtureDevice()]
+    wizardState.address = '10.0.0.9'
+    wizardState.backups = {
+      enabled: true,
+      routers: [],
+      totalGenerations: 0,
+      totalRouters: 0,
+      totalBytes: 0,
+      lock: { state: 'open' },
+    } as unknown as RouterBackupsResponse
+
+    await authState.logout()
+
+    expect(wizardState.token).toBe('')
+    expect(wizardState.tokenDevice).toBe('')
+    expect(wizardState.backups).toBeNull()
+    expect(wizardState.devices).toEqual([])
+    expect(wizardState.address).toBe('')
+    expect(wizardState.open).toBe(false)
+    expect(wizardState.pane).toBe(1)
+  })
+
+  // The ingest token is the sharp one. This release moved it from
+  // component-local state, which died with the component at logout, to
+  // the wizardState singleton so a step revisit kept it -- so the next
+  // admin to sign in on this tab was shown, and could copy, a live
+  // token minted for someone else, with the mint gate skipped because
+  // a token was already "held".
+  it('clears the wizard ingest token, so the next admin is not handed it', async () => {
+    wizardState.token = 'ingest-token-minted-for-the-previous-admin'
+    wizardState.tokenDevice = 'core'
+
+    await authState.logout()
+
+    expect(wizardState.token).toBe('')
+    expect(wizardState.tokenDevice).toBe('')
+  })
+
+  // A pasted `/export hide-sensitive` is the operator's whole firewall
+  // configuration. Module-lifetime by design, so it survives a deck
+  // scroll -- and, until now, a logout.
+  it('clears a pasted router export from Log every rule', async () => {
+    logEveryRuleWorkState.exportText = '/ip firewall filter add chain=forward comment="the previous operator rules"'
+    logEveryRuleWorkState.exportDevice = 'core'
+
+    await authState.logout()
+
+    expect(logEveryRuleWorkState.exportText).toBe('')
+  })
+
+  // The history key decrypts this instance's stored events, flags,
+  // definitions, watchlist and entities. The wizard clears it once its
+  // step is past asking, but that only runs while the wizard is open.
+  it('clears the minted history key, which the wizard alone would not', async () => {
+    sessionStorage.setItem('mikroview-wizard-history-key', 'a-key-that-decrypts-the-stored-history')
+
+    await authState.logout()
+
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBeNull()
+  })
+
   it('resets watchlistState to its initial values', async () => {
     await authState.logout()
 
     expect(watchlistState.entries).toEqual([])
     expect(watchlistState.coverage).toEqual({})
     expect(watchlistState.loaded).toBe(false)
+  })
+
+  // Security stage, same batch as wizardState/logEveryRuleWorkState
+  // above: tokensState.justCreated is a raw, live API/ingest bearer
+  // token -- EngineRoom's copy-once banner keeps rendering it after
+  // logout, handing it to whoever signs in next on this tab.
+  it('resets tokensState, so a raw bearer token is not handed to the next session', async () => {
+    tokensState.list = [fixtureApiToken()]
+    tokensState.justCreated = fixtureApiToken()
+
+    await authState.logout()
+
+    expect(tokensState.list).toEqual([])
+    expect(tokensState.justCreated).toBeNull()
+  })
+
+  // usersState.list is the admin account list, rendered by EngineRoom
+  // with no role guard of its own -- a non-admin signing in next on
+  // this tab must not still see it.
+  it('resets usersState, the admin-only account list', async () => {
+    usersState.list = [fixtureUser()]
+
+    await authState.logout()
+
+    expect(usersState.list).toEqual([])
+  })
+
+  // auditState.loaded never reset on its own, so AuditLog.svelte kept
+  // rendering the previous account's action log for whoever signed in
+  // next.
+  it('resets auditState, the admin-only action log', async () => {
+    auditState.list = [fixtureAuditEntry()]
+    auditState.hasMore = true
+    auditState.loaded = true
+    auditState.error = 'stale error from the previous session'
+
+    await authState.logout()
+
+    expect(auditState.list).toEqual([])
+    expect(auditState.hasMore).toBe(false)
+    expect(auditState.loaded).toBe(false)
+    expect(auditState.error).toBeNull()
+  })
+
+  // persistenceState.loaded is private and never reset on its own, so
+  // ensureLoaded() never fetched again once an admin had opened
+  // DiskControl -- a non-admin signing in next on the same tab kept
+  // seeing this admin-only info for the rest of the tab's life. loaded
+  // is private, so this proves the guard cleared by calling
+  // ensureLoaded() again and checking it actually fetches rather than
+  // short-circuiting.
+  it('resets persistenceState and re-fetches on the next ensureLoaded()', async () => {
+    vi.mocked(fetchPersistence).mockResolvedValue({ backend: 'file', dir: '/data' })
+    await persistenceState.ensureLoaded()
+    expect(persistenceState.info).toEqual({ backend: 'file', dir: '/data' })
+    expect(fetchPersistence).toHaveBeenCalledTimes(1)
+
+    await authState.logout()
+
+    expect(persistenceState.info).toBeNull()
+
+    vi.mocked(fetchPersistence).mockResolvedValue({ backend: 'memory' })
+    await persistenceState.ensureLoaded()
+    expect(fetchPersistence).toHaveBeenCalledTimes(2)
+    expect(persistenceState.info).toEqual({ backend: 'memory' })
+  })
+
+  // configProblemsState.loaded is private and never reset on its own,
+  // so ConfigProblemBanner -- which has no role check of its own --
+  // kept showing the previous admin's config diagnostics. Same
+  // "prove the guard cleared" shape as persistenceState above, but
+  // through the raw fetch() this store calls directly rather than
+  // through lib/api.ts.
+  it('resets configProblemsState and re-fetches on the next ensureLoaded()', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ problems: [{ code: 'clamped', key: 'x', message: 'y' }] }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await configProblemsState.ensureLoaded()
+    configProblemsState.dismissed = true
+    expect(configProblemsState.problems).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await authState.logout()
+
+    expect(configProblemsState.problems).toEqual([])
+    expect(configProblemsState.dismissed).toBe(false)
+
+    await configProblemsState.ensureLoaded()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    vi.unstubAllGlobals()
+  })
+
+  // Quality stage of the same audit, a round later: configUpgradeState
+  // is the sixth admin-only singleton of this shape and the one still
+  // missing from the list above. It holds which settings the previous
+  // admin's config.yaml does not set, and `loaded` true would let the
+  // panel show that list before its own refresh answered.
+  it('resets configUpgradeState', async () => {
+    configUpgradeState.settings = [{ key: 'flags.new_detector', description: 'd', defaultValue: '1', versionAdded: 'v0.6.0' } as never]
+    configUpgradeState.version = 'v0.6.0'
+    configUpgradeState.loaded = true
+    configUpgradeState.error = 'stale'
+
+    await authState.logout()
+
+    expect(configUpgradeState.settings).toEqual([])
+    expect(configUpgradeState.version).toBe('')
+    expect(configUpgradeState.loaded).toBe(false)
+    expect(configUpgradeState.error).toBeNull()
   })
 })
 
@@ -381,6 +659,8 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     flagsState.loaded = true
     watchlistState.entries = [fixtureWatchlistEntry()]
     watchlistState.loaded = true
+    tokensState.list = [fixtureApiToken()]
+    tokensState.justCreated = fixtureApiToken()
 
     authState.handleUnauthorized()
 
@@ -390,6 +670,8 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     expect(flagsState.loaded).toBe(false)
     expect(watchlistState.entries).toEqual([])
     expect(watchlistState.loaded).toBe(false)
+    expect(tokensState.list).toEqual([])
+    expect(tokensState.justCreated).toBeNull()
   })
 
   it('leaves every store untouched when the session was not authenticated', () => {
@@ -397,12 +679,14 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     appState.devices = [fixtureDevice()]
     flagsState.list = [fixtureFlag()]
     watchlistState.entries = [fixtureWatchlistEntry()]
+    tokensState.list = [fixtureApiToken()]
 
     authState.handleUnauthorized()
 
     expect(appState.devices).toEqual([fixtureDevice()])
     expect(flagsState.list).toEqual([fixtureFlag()])
     expect(watchlistState.entries).toEqual([fixtureWatchlistEntry()])
+    expect(tokensState.list).toEqual([fixtureApiToken()])
   })
 })
 

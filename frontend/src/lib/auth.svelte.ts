@@ -11,7 +11,34 @@ import {
 import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
 import { watchlistState } from "./watchlist.svelte";
+import { wizardState } from "./wizard.svelte";
+import { logEveryRuleWorkState } from "./logEveryRuleWork.svelte";
+import { forgetHistoryKeyForSession } from "./history";
+import { tokensState } from "./tokens.svelte";
+import { usersState } from "./users.svelte";
+import { auditState } from "./audit.svelte";
+import { persistenceState } from "./persistence.svelte";
+import { configProblemsState } from "./configProblems.svelte";
+import { configUpgradeState } from "./configUpgrade.svelte";
 import type { AuthSession } from "./types";
+
+// 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
+// bounce the page is reloaded, so nothing held in any module-level
+// singleton -- reset or not -- can reach the next account on this tab.
+// clearSessionState() still runs first: it keeps the tests honest about
+// what each store holds, and covers the one path that must not reload
+// (a failed logout, see AuthState.logout). Indirected through an object
+// so tests can stub it: jsdom cannot navigate.
+export const pageReload = {
+  now(): void {
+    location.reload();
+  },
+};
+
+// The way-out beat flag has to outlive the reload, so it rides in
+// sessionStorage (tab-scoped, like the wizard's history key) and is
+// consumed exactly once by consumeJustSignedOut().
+const JUST_SIGNED_OUT_KEY = "mikroview.justSignedOut";
 
 // #1083: signing out (or being bounced by a 401) must not leave this
 // account's events, filters, devices, stats or watchlist visible to the
@@ -32,6 +59,33 @@ function clearSessionState() {
   flagsState.loaded = false;
   flagsState.baselinesWarming = undefined;
   flagsState.clearPins();
+  // wizardState, logEveryRuleWorkState and the wizard's minted history
+  // key were all missed when #1083 first went round (v0.6.0 pre-release
+  // audit, Security stage). Each is module-lifetime and each carries
+  // something the next person to sign in on this tab should not be
+  // handed: an ingest bearer token still live for a router, the
+  // previous operator's pasted firewall export, and the key that
+  // decrypts this instance's stored history.
+  wizardState.reset();
+  logEveryRuleWorkState.reset();
+  forgetHistoryKeyForSession();
+  // Same audit, same batch, still missed: tokensState, usersState,
+  // auditState, persistenceState and configProblemsState are all
+  // admin-only, module-lifetime singletons too. Between them they carry
+  // a live API/ingest bearer token, the admin account list, the
+  // admin-action log, this deployment's backend/disk info and its
+  // config diagnostics -- none of it meant for whoever signs in next on
+  // this tab.
+  tokensState.reset();
+  usersState.reset();
+  auditState.reset();
+  persistenceState.reset();
+  configProblemsState.reset();
+  // And configUpgradeState, found a round later still: the same shape
+  // as auditState, and the last GET-only admin route (see the
+  // accessAdmin rows of internal/api/authz_matrix_test.go) whose
+  // answer lived in a module-level store rather than a component.
+  configUpgradeState.reset();
 }
 
 // 'loading' only lasts for the initial check() call on app boot; after
@@ -165,8 +219,17 @@ class AuthState {
   // calls this once at mount to decide whether to play the door's way-
   // out beat before its ordinary entrance.
   consumeJustSignedOut(): boolean {
-    const was = this.justSignedOut;
-    this.justSignedOut = false;
+    // Two readers, one each: the old page's login screen mounts in the
+    // instant between logout() flipping the state and the reload landing,
+    // and it must take only the in-memory flag -- if it also stripped the
+    // storage key, the reloaded page (memory flag gone, only storage
+    // left) would find nothing and skip the way-out beat.
+    if (this.justSignedOut) {
+      this.justSignedOut = false;
+      return true;
+    }
+    const was = sessionStorage.getItem(JUST_SIGNED_OUT_KEY) === "1";
+    sessionStorage.removeItem(JUST_SIGNED_OUT_KEY);
     return was;
   }
 
@@ -244,7 +307,10 @@ class AuthState {
   // pressed Sign out must not be left looking signed in because the
   // request failed. The error is returned so the caller can say the
   // server-side session may still be live, which is the part that
-  // actually matters to them.
+  // actually matters to them -- and that is also why the reload only
+  // happens on success: with the cookie still valid, a reload would
+  // check() straight back into the account the user just tried to
+  // leave.
   async logout(): Promise<string | null> {
     const err = await logout();
     this.state = "unauthenticated";
@@ -253,7 +319,10 @@ class AuthState {
     this.mustChangePassword = false;
     this.justSignedOut = true;
     clearSessionState();
-    return err;
+    if (err) return err;
+    sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
+    pageReload.now();
+    return null;
   }
 
   // signOutEverywhere is #677's sessions row action. Unlike logout()
@@ -268,8 +337,9 @@ class AuthState {
   }
 
   // Called by any fetch wrapper that gets a 401 mid-session (an expired
-  // or reset-invalidated session) -- bounces straight to the login view
-  // without a full page reload.
+  // or reset-invalidated session). The state guard is what stops a
+  // burst of 401s from several in-flight polls reloading more than
+  // once.
   handleUnauthorized() {
     if (this.state === "authenticated" || this.state === "must-change-password") {
       this.state = "unauthenticated";
@@ -277,6 +347,7 @@ class AuthState {
       this.role = "";
       this.mustChangePassword = false;
       clearSessionState();
+      pageReload.now();
     }
   }
 }

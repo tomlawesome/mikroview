@@ -9,7 +9,9 @@ import {
   previousGeneration,
   readableGenerations,
   receiptLine,
+  vaultGated,
 } from './backups'
+import type { VaultLock } from './types'
 import { formatDayMonth, formatDurationShort, formatHM } from './format'
 import type { RouterBackupRouter } from './types'
 
@@ -29,6 +31,30 @@ function router(over: Partial<RouterBackupRouter> = {}): RouterBackupRouter {
 function gen(id: string, backupArrivedAt?: string, rscArrivedAt?: string) {
   return { id, backupArrivedAt, rscArrivedAt }
 }
+
+describe('vaultGated', () => {
+  const lock = (over: Partial<VaultLock> = {}): VaultLock =>
+    ({ passphraseSet: false, locked: false, unlockedForYou: false, ...over }) as VaultLock
+
+  it('gates when a passphrase is set and this session does not hold the unlock', () => {
+    expect(vaultGated(lock({ passphraseSet: true, locked: true }))).toBe(true)
+    // Another of the admin's own sign-ins holds it: still not this one.
+    expect(vaultGated(lock({ passphraseSet: true, locked: false }))).toBe(true)
+  })
+
+  it('does not gate when this session holds the unlock, or when there is no passphrase', () => {
+    expect(vaultGated(lock({ passphraseSet: true, unlockedForYou: true }))).toBe(false)
+    expect(vaultGated(lock())).toBe(false)
+  })
+
+  // The wizard reads the lock off a response it may not have yet. Not
+  // loaded must not read as gated, or the tab is sent to whatever the
+  // server answers a locked vault with.
+  it('does not gate a lock that is not there yet', () => {
+    expect(vaultGated(null)).toBe(false)
+    expect(vaultGated(undefined)).toBe(false)
+  })
+})
 
 describe('cadencePhrase', () => {
   it('says a daily push as "nightly at" its own clock time', () => {

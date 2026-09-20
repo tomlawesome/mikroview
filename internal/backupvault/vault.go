@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +74,13 @@ const (
 	KindRsc    = "rsc"
 )
 
+// auditActorSystem is ProtectedBy for a generation this package
+// protected itself -- a rebuilt index's recovered generations
+// (rebuildFromDisk, #1294) -- rather than an admin acting through
+// Protect. Matches internal/api's own "system" audit actor for the same
+// idea: an entry with nobody's hand behind it.
+const auditActorSystem = "system"
+
 var (
 	// ErrDisabled reports that no retention key is configured. Per #394's
 	// "no key, no backups" rule this is the drop box being closed, not a
@@ -91,6 +99,14 @@ var (
 	// ErrNotFound is returned by Open/Download for a router or
 	// generation this vault does not hold.
 	ErrNotFound = errors.New("backupvault: no such router or generation")
+	// ErrRecoveredNameUnknown is returned by Open/Download for a
+	// generation that is really there -- rebuildFromDisk recovered it
+	// -- but was sealed under a device name the rebuild could not
+	// match to this directory (#1294). It stays refused, not attempted
+	// and failed, until either the original device pushes again or a
+	// deleted device's ingest token is recreated under the same name:
+	// sealing binds the name string, not the token.
+	ErrRecoveredNameUnknown = errors.New("backupvault: this router's name could not be recovered -- its backups are held protected but unreadable until the original name pushes again")
 )
 
 // HeaderLabel is what Store found in a `.backup`'s first bytes.
@@ -217,7 +233,34 @@ type routerMeta struct {
 	// It is never the one cycled out while the mode lasts, and it is
 	// cleared when the mode ends. Persisted so a restart keeps it.
 	Anchor string `json:"anchor,omitempty"`
+	// Dir is the one stated place this router's map key is not its
+	// device name (#1294): set when rebuildFromDisk cannot resolve a
+	// recovered directory to any candidate device name, and when
+	// removeUnreferencedFiles adopts an orphan found in a directory
+	// nothing names -- both key the entry by a not-a-device-name
+	// placeholder instead, because the real name is genuinely unknown,
+	// not merely unresolved this time. Cleared (and the entry re-keyed
+	// to the real name) the moment a push supplies it. While set, Dir
+	// names the physical directory this entry's files actually live in
+	// -- dirNameFor(the placeholder key) would otherwise hash the
+	// placeholder itself, landing on a directory that only
+	// coincidentally exists, if at all. Empty means the ordinary case:
+	// the map key is the device name, and dirNameFor(key) is the
+	// directory. dirFor is the only place that reads this field, so
+	// every caller that needs this router's directory -- reconcile,
+	// Store, Protect, download, the lock path -- agrees on the answer.
+	Dir string `json:"dir,omitempty"`
 }
+
+// recoveredDeviceUnknown prefixes the map key rebuildFromDisk and
+// removeUnreferencedFiles use for a router whose real name could not be
+// resolved, with dirNameFor's own hash output kept as the suffix so the
+// placeholder is still unique per directory. Deliberately not just the
+// bare hash: Routers() returns map keys directly, and the API surface
+// built on that should not have to guess whether one is a 32-hex device
+// name or a directory hash standing in for a name nobody has supplied
+// yet (#1294).
+const recoveredDeviceUnknown = "recovered, name unknown: "
 
 // vaultMeta is the whole persisted document, sealed under the retention
 // key as a single blob (metaFileName) beside the per-generation files it
@@ -286,7 +329,16 @@ type Vault struct {
 // empty), but Store and Open both return ErrDisabled. This mirrors
 // #853's "no key, no storage" rule: the drop box exists as a concept
 // (so Settings can say so) but holds nothing and accepts nothing.
-func Open(dir string, key *retention.Key) (*Vault, error) {
+//
+// candidates is every device name worth trying a lost index's rebuild
+// against (#1294) -- the caller's union of live ingest-token Device
+// fields and device-registry ids (backups.go's recoveryCandidates).
+// Recovery is a one-shot match over a small set at start-up, not an
+// ongoing lookup, which is why this is a plain slice rather than a
+// resolver callback: it keeps this package from importing internal/auth
+// or internal/device to get one, and the caller already has the answer
+// in hand from stores an index loss never touches.
+func Open(dir string, key *retention.Key, candidates []string) (*Vault, error) {
 	v := &Vault{dir: dir, key: key, log: logging.New("backupvault"), meta: vaultMeta{Routers: map[string]*routerMeta{}}}
 	if key == nil {
 		return v, nil
@@ -300,22 +352,157 @@ func Open(dir string, key *retention.Key) (*Vault, error) {
 	sealed, err := os.ReadFile(filepath.Join(dir, metaFileName))
 	if err != nil {
 		if os.IsNotExist(err) {
+			// A fresh vault has no per-router directories to find, so
+			// this state only ever means one thing when it does find
+			// some: the index was lost (#1294, Defect A). Rebuilding
+			// from disk is what stops the sequence that used to follow
+			// -- an operator deletes an unreadable meta.enc to get the
+			// service started, a clean empty index takes new pushes,
+			// and the *next* ordinary restart's reconcile sweeps every
+			// file the small index does not name, protected and anchor
+			// included.
+			if err := v.rebuildFromDisk(candidates); err != nil {
+				return nil, err
+			}
 			return v, nil
 		}
 		return nil, fmt.Errorf("backupvault: reading %s: %w", metaFileName, err)
 	}
 	plain, err := key.OpenDocument(sealInfoPrefix+"meta", sealed)
 	if err != nil {
-		return nil, fmt.Errorf("backupvault: opening the vault index: %w", err)
+		return nil, errUnreadableIndex(err)
 	}
 	if err := json.Unmarshal(plain, &v.meta); err != nil {
-		return nil, fmt.Errorf("backupvault: parsing the vault index: %w", err)
+		return nil, errUnreadableIndex(err)
 	}
 	if v.meta.Routers == nil {
 		v.meta.Routers = map[string]*routerMeta{}
 	}
 	v.reconcile()
 	return v, nil
+}
+
+// errUnreadableIndex wraps meta.enc's open/parse failure with what
+// removing the file to unblock the service will and will not cost
+// (#1294). The index is refused rather than rebuilt around, unlike an
+// absent one -- storage_preflight.go's rule that a file present but not
+// trusted is a hard stop, never a guess -- but the old refusal named no
+// way out, which is what drove the deletion that used to be
+// catastrophic (Defect A). It no longer is: the very next start with no
+// index at all recovers every generation on disk as protected.
+func errUnreadableIndex(reason error) error {
+	return fmt.Errorf("backupvault: the vault index (%s) will not open: %w -- "+
+		"removing it to unblock the service loses the protection notes (which generations are kept and why), "+
+		"their protected-since record, and the low-space anchor; it never loses the backup files themselves, "+
+		"which the vault recovers -- as newly protected -- the next time it starts and finds no index at all",
+		metaFileName, reason)
+}
+
+// rebuildFromDisk reconstructs the index from whatever per-generation
+// files are already on disk, for the one situation an absent meta.enc
+// can mean (#1294): the index was lost. Every recovered generation goes
+// into the protected pool with a fixed system comment, never the
+// cycling set -- protection status cannot be recovered from a file
+// alone, and the two ways to be wrong here are not symmetric: wrongly
+// cycling a kept backup destroys it forever, wrongly keeping a cycling
+// one costs disk space and one click to release.
+//
+// candidates -- the caller's live ingest-token Device fields and
+// device-registry ids, neither of which an index loss touches -- lets
+// most directories recover under their real name immediately: this
+// package keys and seals by that same name, so a directory whose hash
+// matches dirNameFor(name) for some candidate is exactly as usable from
+// this moment as any router that never lost its index. A directory no
+// candidate explains -- a revoked token, or recovery running before the
+// caller had any candidates to offer -- recovers under a
+// recoveredDeviceUnknown placeholder instead: still protected, but its
+// files were sealed under a name this rebuild cannot supply, so they
+// stay refused (ErrRecoveredNameUnknown) until the real name reaches
+// the vault again, in a push storeLocked re-keys the entry to.
+func (v *Vault) rebuildFromDisk(candidates []string) error {
+	nameForHash := make(map[string]string, len(candidates))
+	for _, name := range candidates {
+		nameForHash[dirNameFor(name)] = name
+	}
+	entries, err := os.ReadDir(v.dir)
+	if err != nil {
+		return fmt.Errorf("backupvault: reading %s to rebuild the vault index: %w", v.dir, err)
+	}
+	var matched, unmatched int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirHash := entry.Name()
+		dir := filepath.Join(v.dir, dirHash)
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			v.log.Warn(fmt.Sprintf("could not read %s to rebuild the vault index: %v", dir, err))
+			continue
+		}
+		var ids []string
+		seen := map[string]bool{}
+		for _, f := range files {
+			id, _, ok := parseGenerationFileName(f.Name())
+			if !ok || seen[id] {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		recoveredAt := time.Now()
+		gens := make([]*generationMeta, 0, len(ids))
+		for _, id := range ids {
+			gen, ok := recoveredGeneration(dir, id)
+			if !ok {
+				// A well-shaped `<id>.<kind>.enc` whose id this package
+				// never minted: not one of ours to recover, but worth
+				// saying so rather than leaving it silent forever --
+				// removeUnreferencedFiles will not touch it either,
+				// since a healthy index is not yet in play to sweep
+				// against.
+				v.log.Warn(fmt.Sprintf("%s: %s has an id this package never minted -- left alone, neither recovered nor removed", dir, id))
+				continue
+			}
+			gen.Comment = fmt.Sprintf("recovered after index loss, %s", recoveredAt.Format("2006-01-02"))
+			gen.ProtectedAt = recoveredAt
+			gen.ProtectedBy = auditActorSystem
+			gens = append(gens, gen)
+		}
+		if len(gens) == 0 {
+			continue
+		}
+		sort.Slice(gens, func(i, j int) bool { return gens[i].ID < gens[j].ID })
+		if name, ok := nameForHash[dirHash]; ok {
+			v.meta.Routers[name] = &routerMeta{Protected: gens}
+			matched++
+			continue
+		}
+		v.meta.Routers[recoveredDeviceUnknown+dirHash] = &routerMeta{Protected: gens, Dir: dirHash}
+		unmatched++
+	}
+	if matched == 0 && unmatched == 0 {
+		return nil
+	}
+	msg := fmt.Sprintf("the vault index (%s) was missing at start-up: rebuilt it from backup files on disk for %d router(s), "+
+		"recovering every generation found as protected -- comments, protection notes and the low-space anchor from before the loss are gone, but no backup file is",
+		metaFileName, matched+unmatched)
+	switch {
+	case unmatched == 0:
+		msg += "; every one matched a known device name and is readable now"
+	case matched == 0:
+		msg += fmt.Sprintf("; none matched any of the %d device name(s) tried, so all %d are held under a placeholder, unreadable until the original name pushes again "+
+			"(recreating a deleted device's ingest token under its original name works too -- sealing binds the name, not the token)",
+			len(candidates), unmatched)
+	default:
+		msg += fmt.Sprintf("; %d matched a known device name and are readable now, %d did not and are held under a placeholder, unreadable until the original name pushes again",
+			matched, unmatched)
+	}
+	v.log.Warn(msg)
+	return v.persistMetaLocked()
 }
 
 // reconcile puts the index and the directories back into agreement at
@@ -347,7 +534,7 @@ func (v *Vault) reconcile() {
 func (v *Vault) repairIndexAgainstDisk() bool {
 	var changed bool
 	for device, rm := range v.meta.Routers {
-		dir := v.routerDir(device)
+		dir := v.dirFor(device, rm)
 		var lostGeneration, lostProtected bool
 		// Both lists, on the same terms: a kept generation whose file
 		// has gone is still an entry the vault would list, offer and
@@ -377,32 +564,57 @@ func (v *Vault) repairIndexAgainstDisk() bool {
 	return changed
 }
 
-// presentOnDisk drops the generations in gens whose files are not on
-// disk, and reports whether it dropped any. Only the halves the index
-// claims arrived are looked for: a generation whose `.rsc` never came
-// is complete as it stands. what names the list for the log line, since
-// losing a kept generation is worth reading differently from losing one
-// the vault was going to cycle out anyway.
+// presentOnDisk demotes an entry in gens to whichever half of its pair
+// is still on disk, and reports whether it changed anything. Only the
+// halves the index claims arrived are looked for: a generation whose
+// `.rsc` never came is complete as it stands, exactly the state a
+// demoted entry converges to. An entry is dropped outright only once
+// both halves are gone -- demoting rather than dropping is what stops
+// repair from taking the surviving half of a damaged generation, the
+// very thing a protected generation's promise depends on (#1294, Defect
+// B). what names the list for the log line, since losing part of a kept
+// generation is worth reading differently from losing part of one the
+// vault was going to cycle out anyway.
 func (v *Vault) presentOnDisk(device, dir string, gens []*generationMeta, what string) ([]*generationMeta, bool) {
 	var changed bool
 	kept := gens[:0]
 	for _, g := range gens {
-		missing := ""
-		for kind, arrived := range map[string]time.Time{KindBackup: g.BackupArrivedAt, KindRsc: g.RscArrivedAt} {
-			if arrived.IsZero() {
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(dir, v.fileName(g.ID, kind))); err != nil {
-				missing = kind
+		var lostBackup, lostRsc bool
+		if !g.BackupArrivedAt.IsZero() {
+			if _, err := os.Stat(filepath.Join(dir, v.fileName(g.ID, KindBackup))); err != nil {
+				lostBackup = true
 			}
 		}
-		if missing == "" {
+		if !g.RscArrivedAt.IsZero() {
+			if _, err := os.Stat(filepath.Join(dir, v.fileName(g.ID, KindRsc))); err != nil {
+				lostRsc = true
+			}
+		}
+		if !lostBackup && !lostRsc {
 			kept = append(kept, g)
 			continue
 		}
 		changed = true
-		v.log.Warn(fmt.Sprintf("repaired the vault index: dropped %s's %s %s, whose %s file is not on disk",
-			device, what, g.ID, missing))
+		if lostBackup {
+			g.BackupArrivedAt, g.BackupSize, g.Header = time.Time{}, 0, ""
+		}
+		if lostRsc {
+			g.RscArrivedAt, g.RscSize = time.Time{}, 0
+		}
+		if g.BackupArrivedAt.IsZero() && g.RscArrivedAt.IsZero() {
+			v.log.Warn(fmt.Sprintf("repaired the vault index: dropped %s's %s %s, whose backup and export files are both gone",
+				device, what, g.ID))
+			continue
+		}
+		kept = append(kept, g)
+		switch {
+		case lostBackup:
+			v.log.Warn(fmt.Sprintf("repaired the vault index: %s's %s %s lost its backup file -- keeping the export file that survived",
+				device, what, g.ID))
+		case lostRsc:
+			v.log.Warn(fmt.Sprintf("repaired the vault index: %s's %s %s lost its export file -- keeping the backup file that survived",
+				device, what, g.ID))
+		}
 	}
 	return kept, changed
 }
@@ -416,12 +628,62 @@ func generationsHave(gens []*generationMeta, id string) bool {
 	return false
 }
 
+// openGeneration finds the generation a `.rsc` arrival should complete:
+// the one most recently started by a `.backup` that has no `.rsc` yet.
+// Searched across both the cycling set and the protected pool, not just
+// the cycling set's last entry -- Protect does not wait for a
+// generation's `.rsc` to arrive before moving it out of rm.Generations,
+// so an admin who protects a generation the moment its `.backup` lands
+// moves the very generation an in-flight `.rsc` is about to complete
+// (#1262). Without checking both pools, that `.rsc` finds nothing to
+// attach to and starts a second, permanently bare generation instead.
+//
+// Generation IDs are minted by nextGenerationID in arrival order and
+// are lexicographically sortable (its timestamp-prefixed form), so the
+// greatest id among open generations is the most recently opened one --
+// the same generation the old last-of-rm.Generations check picked, when
+// it was still there to pick.
+func openGeneration(rm *routerMeta) *generationMeta {
+	var open *generationMeta
+	consider := func(g *generationMeta) {
+		if g.BackupArrivedAt.IsZero() || !g.RscArrivedAt.IsZero() {
+			return
+		}
+		if open == nil || g.ID > open.ID {
+			open = g
+		}
+	}
+	for _, g := range rm.Generations {
+		consider(g)
+	}
+	for _, g := range rm.Protected {
+		consider(g)
+	}
+	return open
+}
+
 // removeUnreferencedFiles is reconcile's other half: every file under a
 // router directory that no generation in the (already repaired) index
-// refers to, including half-written temp files from a crashed
-// persist.WriteFileAtomic.
+// refers to. Only two things this package cannot name are deleted: a
+// crash temp file left by a killed persist.WriteFileAtomic, and a name
+// that is neither that nor a well-formed `<id>.<kind>.enc`. A well-formed
+// file the index simply does not reference is adopted into the cycling
+// set instead, unprotected -- with a healthy index the likely cause is
+// a crash between writing the file and committing the index entry for
+// it, and if it really was meant to go, ordinary retention cycles it
+// out again harmlessly (#1294; before this, such a file -- possibly a
+// real, undamaged backup -- was deleted outright on the same terms as
+// genuine junk).
 func (v *Vault) removeUnreferencedFiles() {
 	referenced := make(map[string]map[string]bool, len(v.meta.Routers))
+	// deviceForDir lets an adopted file rejoin the router that already
+	// owns its directory -- rm.Dir when the entry is keyed by a
+	// recoveredDeviceUnknown placeholder rather than its device name,
+	// dirNameFor(device) otherwise, the same rule dirFor applies
+	// (#1294). A directory with no entry at all belongs to a router the
+	// vault holds nothing named for, and is recovered fresh below under
+	// its own new placeholder.
+	deviceForDir := make(map[string]string, len(v.meta.Routers))
 	for device, rm := range v.meta.Routers {
 		names := make(map[string]bool, 2*(len(rm.Generations)+len(rm.Protected)))
 		// The protected pool counts as referenced exactly like the
@@ -431,39 +693,90 @@ func (v *Vault) removeUnreferencedFiles() {
 			names[v.fileName(g.ID, KindBackup)] = true
 			names[v.fileName(g.ID, KindRsc)] = true
 		}
-		referenced[dirNameFor(device)] = names
+		dirName := rm.Dir
+		if dirName == "" {
+			dirName = dirNameFor(device)
+		}
+		referenced[dirName] = names
+		deviceForDir[dirName] = device
 	}
 	entries, err := os.ReadDir(v.dir)
 	if err != nil {
 		v.log.Warn(fmt.Sprintf("could not read %s to check for unreferenced files: %v", v.dir, err))
 		return
 	}
+	var adopted bool
 	for _, entry := range entries {
 		// Only the per-router directories: metaFileName and
 		// lockFileName are files, and sit beside them.
 		if !entry.IsDir() {
 			continue
 		}
-		dir := filepath.Join(v.dir, entry.Name())
+		dirName := entry.Name()
+		dir := filepath.Join(v.dir, dirName)
 		// A directory with no entry in the index at all belongs to a
-		// router the vault no longer holds anything for: all of it is
-		// unreferenced.
-		names := referenced[entry.Name()]
+		// router the vault no longer holds anything for: everything in
+		// it is unreferenced.
+		names := referenced[dirName]
 		files, err := os.ReadDir(dir)
 		if err != nil {
 			v.log.Warn(fmt.Sprintf("could not read %s to check for unreferenced files: %v", dir, err))
 			continue
 		}
+		handled := map[string]bool{}
 		for _, f := range files {
 			if f.IsDir() || names[f.Name()] {
 				continue
 			}
 			path := filepath.Join(dir, f.Name())
-			if err := os.Remove(path); err != nil {
-				v.log.Warn(fmt.Sprintf("could not remove the unreferenced file %s: %v", path, err))
+			if isCrashTempFile(f.Name()) {
+				if err := os.Remove(path); err != nil {
+					v.log.Warn(fmt.Sprintf("could not remove the crash-temp file %s: %v", path, err))
+					continue
+				}
+				v.log.Info(fmt.Sprintf("removed the crash-temp file %s", path))
 				continue
 			}
-			v.log.Info(fmt.Sprintf("removed %s: no generation in the vault index refers to it", path))
+			id, _, ok := parseGenerationFileName(f.Name())
+			if !ok {
+				if err := os.Remove(path); err != nil {
+					v.log.Warn(fmt.Sprintf("could not remove the unreferenced file %s: %v", path, err))
+					continue
+				}
+				v.log.Info(fmt.Sprintf("removed %s: not a name this package writes", path))
+				continue
+			}
+			if handled[id] {
+				// Its sibling half already adopted this id.
+				continue
+			}
+			handled[id] = true
+			gen, ok := recoveredGeneration(dir, id)
+			if !ok {
+				// A well-shaped `<id>.<kind>.enc` whose id this package
+				// never minted: not adoptable, but worth saying rather
+				// than leaving it silently unnoticed forever (#1294).
+				v.log.Warn(fmt.Sprintf("%s has an id this package never minted -- left alone, neither adopted nor removed", path))
+				continue
+			}
+			device, known := deviceForDir[dirName]
+			if !known {
+				device = recoveredDeviceUnknown + dirName
+			}
+			rm := v.meta.Routers[device]
+			if rm == nil {
+				rm = &routerMeta{Dir: dirName}
+				v.meta.Routers[device] = rm
+			}
+			rm.Generations = insertGeneration(rm.Generations, gen)
+			adopted = true
+			v.log.Warn(fmt.Sprintf("adopted %s's generation %s into the cycling set, unprotected: "+
+				"the vault index did not reference it, but it looks like one of ours", device, id))
+		}
+	}
+	if adopted {
+		if err := v.persistMetaLocked(); err != nil {
+			v.log.Error(fmt.Sprintf("could not commit the vault index after adopting unreferenced files: %v", err))
 		}
 	}
 }
@@ -471,6 +784,25 @@ func (v *Vault) removeUnreferencedFiles() {
 // Enabled reports whether a retention key is configured -- whether the
 // drop box a login reaches is open at all.
 func (v *Vault) Enabled() bool { return v != nil && v.key != nil }
+
+// RecoveredNameUnknown reports whether device -- a key Routers() or
+// ProtectedGenerations() returned, not necessarily a real device name
+// -- is a router recovered from disk whose name a lost index's rebuild
+// could not resolve (#1294). Its generations are genuinely held and
+// protected, but Open/download refuses every one of them with
+// ErrRecoveredNameUnknown until the original name pushes again; the API
+// surface built on this package should read the key as "recovered, name
+// unknown" and not offer a download that can only fail, rather than
+// asking this method first and hoping nobody forgets to.
+func (v *Vault) RecoveredNameUnknown(device string) bool {
+	if v == nil {
+		return false
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	rm := v.meta.Routers[device]
+	return rm != nil && rm.Dir != ""
+}
 
 // dirNameFor is the on-disk directory a device's files live under: a
 // fixed-length hash of the device name, never the name itself. Device
@@ -484,12 +816,121 @@ func dirNameFor(device string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func (v *Vault) routerDir(device string) string {
+// dirFor is the directory device's files live in, given the routerMeta
+// already fetched for it (rm may be nil, for a device the vault holds
+// nothing for yet). Ordinarily that is dirNameFor(device); an entry
+// recovered under a recoveredDeviceUnknown placeholder key records its
+// real, physical directory in rm.Dir instead, since dirNameFor(the
+// placeholder) would hash the placeholder itself into a directory that
+// only coincidentally exists, if at all (#1294). Pure and lock-free, so
+// a caller that already read rm under v.mu can keep using the result
+// after releasing the lock -- see storedSlots/resealSlot and Vault.
+// Open's download path -- without a second, racing read of the map
+// routerDir would otherwise need.
+func (v *Vault) dirFor(device string, rm *routerMeta) string {
+	if rm != nil && rm.Dir != "" {
+		return filepath.Join(v.dir, rm.Dir)
+	}
 	return filepath.Join(v.dir, dirNameFor(device))
+}
+
+// routerDir is dirFor with its own fresh read of device's routerMeta,
+// for the callers that already hold v.mu (or run single-threaded, as
+// reconcile does at start-up) and so can read the map safely. A caller
+// that will use the directory after releasing the lock must call
+// dirFor directly with the rm it already fetched, not this.
+func (v *Vault) routerDir(device string) string {
+	return v.dirFor(device, v.meta.Routers[device])
 }
 
 func (v *Vault) fileName(generationID, kind string) string {
 	return generationID + "." + kind + ".enc"
+}
+
+// isCrashTempFile reports whether name is the shape
+// persist.WriteFileAtomic (internal/persist/file.go:90) leaves behind
+// when a process dies between the temp write and the rename: the
+// destination's own name plus ".tmp-" and a random suffix. This is the
+// one pattern removeUnreferencedFiles may delete without first checking
+// whether it names a generation (#1294) -- nothing else in this package
+// ever writes a name shaped like this.
+func isCrashTempFile(name string) bool {
+	return strings.Contains(name, ".tmp-")
+}
+
+// parseGenerationFileName is fileName's inverse: it recovers the id and
+// kind a per-generation file's on-disk name encodes, or reports
+// ok=false for anything this package would not have written itself --
+// including a crash temp file, which isCrashTempFile names instead.
+// Shared by rebuildFromDisk (a whole lost index) and
+// removeUnreferencedFiles (one orphan file a healthy index does not
+// name), per #1294.
+func parseGenerationFileName(name string) (id, kind string, ok bool) {
+	const suffix = ".enc"
+	if !strings.HasSuffix(name, suffix) || isCrashTempFile(name) {
+		return "", "", false
+	}
+	base := strings.TrimSuffix(name, suffix)
+	dot := strings.LastIndex(base, ".")
+	if dot <= 0 {
+		return "", "", false
+	}
+	id, kind = base[:dot], base[dot+1:]
+	if kind != KindBackup && kind != KindRsc {
+		return "", "", false
+	}
+	return id, kind, true
+}
+
+// arrivalFromGenerationID recovers a generation's arrival time from its
+// own id, which nextGenerationID mints as a timestamp prefix plus a
+// disambiguating sequence number (the format has no hyphens of its own,
+// so the last one is always the separator).
+func arrivalFromGenerationID(id string) (time.Time, bool) {
+	sep := strings.LastIndex(id, "-")
+	if sep < 0 {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("20060102T150405.000000000Z", id[:sep])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// recoveredGeneration builds a generationMeta for id from whichever of
+// its two files exist in dir right now, or reports ok=false if neither
+// does. Header is left empty either way: it is display-only, and
+// reading it back would mean decrypting a file this package would
+// otherwise never open again (#1294).
+func recoveredGeneration(dir, id string) (*generationMeta, bool) {
+	gen := &generationMeta{ID: id}
+	var found bool
+	for _, kind := range []string{KindBackup, KindRsc} {
+		info, err := os.Stat(filepath.Join(dir, id+"."+kind+".enc"))
+		if err != nil {
+			continue
+		}
+		found = true
+		arrived, ok := arrivalFromGenerationID(id)
+		if !ok {
+			// Not one of ours after all -- id doesn't parse as a
+			// timestamp this package minted.
+			continue
+		}
+		switch kind {
+		case KindBackup:
+			gen.BackupArrivedAt, gen.BackupSize = arrived, info.Size()
+		case KindRsc:
+			gen.RscArrivedAt, gen.RscSize = arrived, info.Size()
+		}
+	}
+	if !found || (gen.BackupArrivedAt.IsZero() && gen.RscArrivedAt.IsZero()) {
+		// Either no file was there, or the one(s) found had an id this
+		// package never minted -- nothing usable to recover.
+		return nil, false
+	}
+	return gen, true
 }
 
 // nextGenerationID mints an id for a new generation, ordered by arrival
@@ -507,9 +948,11 @@ func (v *Vault) nextGenerationID(now time.Time) string {
 // A `.backup` always starts a new generation: the wizard's script always
 // sends it first (backup save, export, then two fetches), so treating it
 // as "a new run has started" is exactly what it means. A `.rsc` attaches
-// to the most recently opened generation that has no `.rsc` yet, or
-// starts a bare one of its own if none is open -- the case where mikroview
-// restarted between the two fetches of one run.
+// to the most recently opened generation that has no `.rsc` yet -- the
+// cycling set or the protected pool, wherever it now lives (#1262: it
+// can be protected before its `.rsc` arrives) -- see openGeneration --
+// or starts a bare one of its own if none is open, the case where
+// mikroview restarted between the two fetches of one run.
 //
 // Store never refuses an arrival because the disk is filling up (owner
 // ruling, #1125): when free space falls below lowSpaceFloor the vault
@@ -594,6 +1037,23 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	dirty := change != nil
 
 	rm := v.meta.Routers[device]
+	// reassociatedFrom is the recoveredDeviceUnknown placeholder key
+	// this push re-keys to device's real name, once the write below
+	// succeeds -- see rebuildFromDisk and removeUnreferencedFiles
+	// (#1294): either can recover a router whose name candidates at the
+	// time did not explain, keyed by a placeholder over the directory
+	// hash it was found under, until the router's own next push carries
+	// the name back. Re-keying it here rather than starting a second,
+	// empty routerMeta under device's real name keeps that entry's
+	// protected pool reachable under the name every other caller
+	// (Protect, Generations, the API) already uses.
+	var reassociatedFrom string
+	if rm == nil {
+		placeholder := recoveredDeviceUnknown + dirNameFor(device)
+		if recovered, ok := v.meta.Routers[placeholder]; ok {
+			rm, reassociatedFrom = recovered, placeholder
+		}
+	}
 	if rm == nil {
 		rm = &routerMeta{}
 	}
@@ -607,8 +1067,8 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	case KindBackup:
 		newGen = &generationMeta{ID: v.nextGenerationID(now), BackupArrivedAt: now, BackupSize: int64(len(data)), Header: header}
 	case KindRsc:
-		if n := len(rm.Generations); n > 0 && rm.Generations[n-1].RscArrivedAt.IsZero() {
-			attach = rm.Generations[n-1]
+		if g := openGeneration(rm); g != nil {
+			attach = g
 		} else {
 			newGen = &generationMeta{ID: v.nextGenerationID(now)}
 		}
@@ -639,7 +1099,7 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 	if err != nil {
 		return fail(fmt.Errorf("backupvault: sealing %s: %w", kind, err))
 	}
-	dir := v.routerDir(device)
+	dir := v.dirFor(device, rm)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fail(fmt.Errorf("backupvault: creating %s: %w", dir, err))
 	}
@@ -700,6 +1160,14 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 		attach.RscSize = int64(len(data))
 	}
 	v.meta.Routers[device] = rm
+	if reassociatedFrom != "" {
+		delete(v.meta.Routers, reassociatedFrom)
+		// The entry is keyed by device's real name from here on, so
+		// dirNameFor(device) is its directory again -- which is the
+		// same physical directory rm.Dir already named, since that
+		// hash was dirNameFor(device) all along.
+		rm.Dir = ""
+	}
 
 	// A router that first appears while the mode is on has no anchor
 	// from before the trouble, so its first kept generation becomes
@@ -735,13 +1203,26 @@ func (v *Vault) storeLocked(device, kind string, header HeaderLabel, data []byte
 			attach.RscSize = 0
 		}
 		rm.Anchor = prevAnchor
-		if !hadRouter && len(rm.Generations) == 0 {
+		switch {
+		case reassociatedFrom != "":
+			// rm existed before this push, just under the
+			// recoveredDeviceUnknown placeholder key it was recovered
+			// under -- put it back exactly where it was, Dir included,
+			// rather than losing its protected pool under a key
+			// nothing else looks it up by.
+			delete(v.meta.Routers, device)
+			rm.Dir = strings.TrimPrefix(reassociatedFrom, recoveredDeviceUnknown)
+			v.meta.Routers[reassociatedFrom] = rm
+		case !hadRouter && len(rm.Generations) == 0:
 			delete(v.meta.Routers, device)
 		}
 		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
 			v.log.Error(fmt.Sprintf("could not remove %s after the vault index failed to commit: %v", path, rerr))
 		}
 		return change, err
+	}
+	if reassociatedFrom != "" {
+		v.log.Warn(fmt.Sprintf("%s pushed again: re-associated its recovered backups, held protected under a placeholder since a lost index could not resolve the name, with its real name -- they are readable now", device))
 	}
 	return change, nil
 }
@@ -1015,19 +1496,37 @@ func (v *Vault) Open(device, generationID, kind string) ([]byte, error) {
 	}
 	v.mu.Lock()
 	rm := v.meta.Routers[device]
-	var found bool
+	var found, nameUnknown bool
+	var dir string
 	if rm != nil {
 		// Both lists: a protected generation is downloaded through the
 		// same route as any other (#1126), and being kept has never
 		// meant being unreadable.
 		found = generationsHave(rm.Generations, generationID) || generationsHave(rm.Protected, generationID)
+		nameUnknown = rm.Dir != ""
+		// Computed here, under the lock, and used after it is released:
+		// dirFor is pure and takes no further lock of its own, but
+		// v.meta.Routers itself is not safe to read again once
+		// unlocked (#1294).
+		dir = v.dirFor(device, rm)
 	}
 	v.mu.Unlock()
 	if !found {
 		return nil, ErrNotFound
 	}
+	if nameUnknown {
+		// The file is really there -- found says so -- but it was
+		// sealed under a device name this router's rebuilt entry does
+		// not have (rebuildFromDisk, #1294). Refusing here is the
+		// honest answer reconcile's own doc comment insists on
+		// elsewhere: attempting the read would either 404 on the wrong
+		// directory (the bug this refusal replaces) or fail
+		// decryption in a way indistinguishable from corruption, when
+		// the real story is simply "not readable yet".
+		return nil, ErrRecoveredNameUnknown
+	}
 
-	path := filepath.Join(v.routerDir(device), v.fileName(generationID, kind))
+	path := filepath.Join(dir, v.fileName(generationID, kind))
 	sealed, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -56,7 +56,6 @@ set -euo pipefail
 MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT${MV_SHARD_INDEX:+-shard$MV_SHARD_INDEX}}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
 HTTP_PORT="${MV_HTTP_PORT:-$MV_SLOT_HTTP_PORT}"
-SYSLOG_PORT="${MV_SYSLOG_PORT:-$MV_SLOT_SYSLOG_PORT}"
 SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$MV_SLOT_SYSLOG_TLS_PORT}"
 MV_USER="live-admin"
 MV_PASS="live-password-123"
@@ -344,7 +343,7 @@ up() {
     if mv_port_in_use "$port"; then
       echo "live-env: port $port is still in use after teardown." >&2
       echo "live-env: another live check is probably running from a different checkout." >&2
-      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
+      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
       exit 1
     fi
   done

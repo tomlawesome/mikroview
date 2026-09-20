@@ -114,7 +114,8 @@ beforeEach(() => {
   // foot band's mount-time rule-table fetch from firing in jsdom, and
   // both the band and that fetch are gone.
   // columnState is a module-level singleton, shared with
-  // columns.svelte.test.ts and FilterBar.svelte.test.ts -- reset to the
+  // columns.svelte.test.ts, ColumnToggles.svelte.test.ts,
+  // FilterBar.svelte.test.ts and Whisper.svelte.test.ts -- reset to the
   // shipped default (#729: all fifteen visible) so a toggle from one test
   // can't leak into the next, the same hygiene groupModeState/flagsState
   // above already get.
@@ -1248,6 +1249,54 @@ describe('The ⚑ mark opens the flag it points at (#1201)', () => {
     expect(topologyNavState.pendingFlagId).toBeNull()
     expect(topologyNavState.pendingFlagsFilter).toBe('203.0.113.9')
     expect(appState.view).toBe('flags')
+  })
+})
+
+// #1269: EventRow used to decide its own ⚑ mark's target(s) by filtering
+// the whole of flagsState.list against event.srcIp, independently, on
+// every flagged row it drew -- undoing the one-pass join
+// (lib/grouping.ts's flagsBySource) LiveTable already builds once to
+// decide *whether* a row is flagged at all. A screenful of rows sharing
+// a handful of flagged sources cost rows x flags instead of one pass.
+describe("EventRow reuses LiveTable's flag join instead of rescanning (#1269)", () => {
+  function activeFlag(target: string): Flag {
+    return {
+      id: 'f1',
+      type: 'port_scan',
+      target,
+      detail: '',
+      count: 1,
+      firstSeen: '2026-01-01T00:00:00Z',
+      lastSeen: '2026-01-01T00:00:00Z',
+      cleared: false,
+    }
+  }
+
+  it('never filters flagsState.list itself, however many flagged rows are drawn', async () => {
+    const originalFilter = Array.prototype.filter
+    let filterCallsOnFlagsList = 0
+    const spy = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (
+      this: unknown[],
+      ...args: Parameters<typeof originalFilter>
+    ) {
+      if (this === flagsState.list) filterCallsOnFlagsList++
+      return originalFilter.apply(this, args)
+    })
+
+    try {
+      flagsState.list = [activeFlag('203.0.113.9')]
+      const events = Array.from({ length: 20 }, (_, i) => makeEvent(`flag-row-${i}`, { srcIp: '203.0.113.9' }))
+
+      const { container } = render(LiveTable, { props: { events } })
+      flushSync()
+
+      // Sanity: the rows actually rendered flagged, so there was
+      // something to scan for in the first place.
+      expect(container.querySelectorAll('.row.flagged').length).toBe(20)
+      expect(filterCallsOnFlagsList).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

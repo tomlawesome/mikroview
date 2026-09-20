@@ -4,6 +4,7 @@ package export
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -129,5 +130,39 @@ func TestDiffFallsBackWholesaleOnTooManyEdits(t *testing.T) {
 	}
 	if got[0].Op != DiffRemoved || got[n].Op != DiffAdded {
 		t.Errorf("fallback = %s then %s, want every removal then every addition", got[0].Op, got[n].Op)
+	}
+}
+
+// TestDiffDoesNotBuildTheMyersTraceItWillThrowAway (#1269): the same
+// too-many-edits pair as above still falls back to wholesale (that
+// answer is not changing), but getting there should not cost building
+// the Myers backtracking trace first. Before the fix, myers snapshotted
+// every one of the 2001 rounds up to maxDiffEdits regardless -- roughly
+// d² ints, about 39 MiB for this input -- and only then discovered no
+// solution existed within budget and discarded all of it. Deciding the
+// distance first, with no snapshot, keeps this call's own allocation to
+// a small multiple of n+m rather than a small multiple of maxDiffEdits².
+func TestDiffDoesNotBuildTheMyersTraceItWillThrowAway(t *testing.T) {
+	var from, to strings.Builder
+	n := maxDiffEdits + 200
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&from, "old line %d\n", i)
+		fmt.Fprintf(&to, "new line %d\n", i)
+	}
+	fromStr, toStr := from.String(), to.String()
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := Diff(fromStr, toStr)
+	runtime.ReadMemStats(&after)
+
+	if len(got) != 2*n {
+		t.Fatalf("diff has %d lines, want %d (every line of each side)", len(got), 2*n)
+	}
+
+	const budget = 8 * 1024 * 1024 // generous: the trace this replaces alone ran to roughly 39 MiB
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > budget {
+		t.Errorf("Diff allocated %d bytes falling back to wholesale, want under %d -- looks like the "+
+			"abandoned Myers trace is being built again", allocated, budget)
 	}
 }

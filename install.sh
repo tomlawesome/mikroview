@@ -51,11 +51,25 @@ fi
 
 # Two named volumes: the data store, and the app folder #1243 taught the
 # binary to read config, GeoIP and a certificate pair from -- see
-# docs/install.md for putting a file there (docker cp or a bind-mount
-# swap) once you want one.
+# docs/install.md for putting a file there once you want one. Not with
+# docker cp: the same folder is mounted :ro below, and Docker refuses a
+# copy into it with "mounted volume is marked read-only". A helper
+# container writing to the volume, or a bind-mount swap, is the way.
+#
+# Hardening (#1286): the same flags deploy/docker-compose.yml's hardening
+# block applies, kept in sync by scripts/check-release-surfaces.sh so the
+# two can't drift apart again. The app folder is mounted read-only, as
+# Compose has always mounted it and as internal/config/appfolder.go
+# describes it ("a folder an operator mounts read-only... nothing else
+# writes to it"): config, the GeoIP database, the history key and the
+# certificate are put there by the operator, never by mikroview. No memory or CPU cap here on purpose --
+# both depend on the host this runs on, a wrong one is a silent outage on
+# a small box, and Compose (where an operator already sets the rest of
+# their deployment) is the right place to choose one.
 set -- run -d --name "$name" --restart unless-stopped \
+  --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
   -p "${syslog_port}:6514" -p "${https_port}:8080" \
-  -v "${data_vol}:/var/lib/mikroview" -v "${etc_vol}:/etc/mikroview" \
+  -v "${data_vol}:/var/lib/mikroview" -v "${etc_vol}:/etc/mikroview:ro" \
   "$image"
 echo "docker $*"
 
@@ -94,4 +108,5 @@ addr="$(hostname -I 2>/dev/null | awk '{print $1}')"
 port_suffix=""
 [ "$https_port" = "443" ] || port_suffix=":${https_port}"
 echo "install.sh: open https://${addr}${port_suffix} and create the admin account -- the setup wizard then writes the router commands for you."
+echo "install.sh: both ports are open to every network this host is on, and until that first account exists anyone who reaches the page can create it -- do it now, and firewall ${https_port} and ${syslog_port} to the router and your own machines."
 echo "install.sh: data lives in the ${data_vol} and ${etc_vol} named volumes."

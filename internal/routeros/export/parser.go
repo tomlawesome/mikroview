@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/routeros"
 )
 
 // filterSectionPath is /ip firewall filter, normalized to its
@@ -42,6 +44,32 @@ type SecretFieldError struct {
 
 func (e *SecretFieldError) Error() string {
 	return fmt.Sprintf("export: line %d sets %q, which /export hide-sensitive is documented to omit -- re-export with hide-sensitive", e.Line, e.Key)
+}
+
+// ControlCharError reports that Parse found a control character inside
+// an attribute value -- a rule comment or log-prefix parsed from an
+// uploaded /export lands verbatim in a rendered RouterOS command an
+// admin pastes into a terminal (POST /api/tune-logging/render), and
+// Quote escapes only `"`, `\` and `$`. A raw control byte would reach
+// that pasted text unescaped; a carriage return mid-value in
+// particular can act as Enter the moment it is pasted. Key and Line
+// (the source's 1-based line number) name where.
+type ControlCharError struct {
+	Key  string
+	Line int
+}
+
+func (e *ControlCharError) Error() string {
+	return fmt.Sprintf("export: line %d has a control character in %q's value", e.Line, e.Key)
+}
+
+// isControlRune reports whether r is a control character no attribute
+// value may carry: the C0 set (0x00-0x1F) and DEL (0x7F), C1 (0x80-0x9F,
+// e.g. NEL) -- a terminal can act on all of these the same way it acts
+// on CR/LF -- and the Unicode line and paragraph separators U+2028 and
+// U+2029, which split a line without being either.
+func isControlRune(r rune) bool {
+	return (r >= 0x00 && r <= 0x1F) || r == 0x7F || (r >= 0x80 && r <= 0x9F) || r == 0x2028 || r == 0x2029
 }
 
 // versionPattern reads the RouterOS version out of the export's header
@@ -89,6 +117,9 @@ func Parse(text string) (*Export, error) {
 		}
 
 		if err := scanForSecrets(toks, i+1); err != nil {
+			return nil, err
+		}
+		if err := scanForControlChars(toks, i+1); err != nil {
 			return nil, err
 		}
 
@@ -170,6 +201,27 @@ func scanForSecrets(toks []string, line int) error {
 			continue
 		}
 		return &SecretFieldError{Key: key, Line: line}
+	}
+	return nil
+}
+
+// scanForControlChars checks every key=value token's value -- quoted or
+// bare, unquoted the same way parseRule reads it -- for a control
+// character (isControlRune), refusing the whole parse on the first hit.
+// This is the one place every attribute value passes through in
+// Parse's main loop, so it covers every section's add lines, not only
+// /ip firewall filter's.
+func scanForControlChars(toks []string, line int) error {
+	for _, t := range toks {
+		key, raw, ok := strings.Cut(t, "=")
+		if !ok {
+			continue
+		}
+		for _, r := range unquote(raw) {
+			if isControlRune(r) {
+				return &ControlCharError{Key: key, Line: line}
+			}
+		}
 	}
 	return nil
 }
@@ -268,23 +320,15 @@ func unquote(raw string) string {
 }
 
 // Quote renders s the way RouterOS quotes a value: wrapped in double
-// quotes, with '"' and '\' backslash-escaped. Exported so a caller
-// building a matching `[find comment=...]` selector (POST
-// /api/tune-logging/render's per-rule commands) quotes a comment value
-// the same way this package does, rather than a second, possibly
-// diverging implementation.
+// quotes, escaped by routeros.QuoteScriptString -- '"', '\' and '$',
+// the last because RouterOS expands `$name` and `$[cmd]` inside any
+// double-quoted string, and a rule's comment comes out of an uploaded
+// /export written by whoever can edit rules on the router, then lands
+// in commands an admin pastes (POST /api/tune-logging/render). Exported
+// so that caller quotes a value the same way this package does, rather
+// than a second, possibly diverging implementation.
 func Quote(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '"' || c == '\\' {
-			b.WriteByte('\\')
-		}
-		b.WriteByte(c)
-	}
-	b.WriteByte('"')
-	return b.String()
+	return `"` + routeros.QuoteScriptString(s) + `"`
 }
 
 func joinLines(lines []string) string {

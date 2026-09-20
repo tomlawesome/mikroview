@@ -654,11 +654,22 @@ func (s *Store) TransferAdmin(toUsername string, now time.Time) (from, to *User,
 		return nil, nil, ErrTransferToSelf
 	}
 
+	prevCurrentRole, prevCurrentRoleChangedAt := current.Role, current.RoleChangedAt
+	prevTargetRole, prevTargetRoleChangedAt := target.Role, target.RoleChangedAt
+
 	current.Role = RoleUser
 	current.RoleChangedAt = now
 	target.Role = RoleAdmin
 	target.RoleChangedAt = now
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// Put both roles back rather than leave this call's caller
+		// believing the transfer happened: an admin transfer that only
+		// exists in memory is a deployment that silently regains its old
+		// admin -- or loses the only one -- on the next restart.
+		current.Role, current.RoleChangedAt = prevCurrentRole, prevCurrentRoleChangedAt
+		target.Role, target.RoleChangedAt = prevTargetRole, prevTargetRoleChangedAt
+		return nil, nil, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	fromCopy, toCopy := *current, *target
 	return &fromCopy, &toCopy, nil
@@ -1023,9 +1034,18 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 // one, so the old password is already dead.
 //
 // A code is spent on the login that uses it (single use, per the
-// owner's ruling on #1245 question 21). MustChangePassword is *not*
-// cleared here -- only setting a new password does that -- so the
-// session this login goes on to create is still the restricted one.
+// owner's ruling on #1245 question 21, restated 2026-09-18 after the
+// v0.6.0 pre-release audit had briefly amended it). The audit's
+// reasoning was that losing the session before completing the forced
+// change locks the account out; the owner's answer is that it does not
+// -- the admin issues another code, and that round trip is the price.
+// A code left live until the password is actually set is replayable
+// for its full 24 hours by anyone who saw it, and whoever finishes
+// first takes the account.
+//
+// MustChangePassword is *not* cleared here -- only setting a new
+// password does that -- so the session this login goes on to create is
+// still the restricted one.
 func (s *Store) Authenticate(username, password string, now time.Time) (*User, error) {
 	s.reloadIfStale()
 
@@ -1071,8 +1091,22 @@ func (s *Store) Authenticate(username, password string, now time.Time) (*User, e
 		if !u.resetCodeLive(now) {
 			return nil, ErrInvalidCredentials
 		}
+		// Spending the code is the write that matters here: a spend
+		// that only lands in memory is undone by a restart, and the
+		// code is live again for whoever saw it. Refuse the login
+		// rather than honour a spend nothing recorded (R6). A missed
+		// LastLogin on an ordinary password login costs nothing, so
+		// that path keeps the log-and-carry-on write below.
+		prevHash, prevExpires, prevLogin := u.ResetCodeHash, u.ResetCodeExpiresAt, u.LastLogin
 		u.ResetCodeHash = ""
 		u.ResetCodeExpiresAt = time.Time{}
+		u.LastLogin = now
+		if err := s.tryPersistLocked(); err != nil {
+			u.ResetCodeHash, u.ResetCodeExpiresAt, u.LastLogin = prevHash, prevExpires, prevLogin
+			return nil, fmt.Errorf("saving the spent reset code: %w", err)
+		}
+		cp := *u
+		return &cp, nil
 	}
 	u.LastLogin = now
 	s.persistLocked()
@@ -1131,6 +1165,13 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	if !ok {
 		return ErrUserNotFound
 	}
+	prevHash := u.PasswordHash
+	prevPasswordChangedAt := u.PasswordChangedAt
+	prevHasLocalPassword := u.HasLocalPassword
+	prevResetHash := u.ResetCodeHash
+	prevResetExpiresAt := u.ResetCodeExpiresAt
+	prevMustChange := u.MustChangePassword
+
 	u.PasswordHash = hash
 	u.PasswordChangedAt = now
 	// An account that has a password has a local password, by
@@ -1147,7 +1188,20 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	u.ResetCodeHash = ""
 	u.ResetCodeExpiresAt = time.Time{}
 	u.MustChangePassword = false
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A password change that only exists in memory must not be
+		// reported as done: the caller (the change-password route, or
+		// the recovery CLI) would tell its operator the old credential
+		// is dead, and a restart before the next good write would prove
+		// that wrong.
+		u.PasswordHash = prevHash
+		u.PasswordChangedAt = prevPasswordChangedAt
+		u.HasLocalPassword = prevHasLocalPassword
+		u.ResetCodeHash = prevResetHash
+		u.ResetCodeExpiresAt = prevResetExpiresAt
+		u.MustChangePassword = prevMustChange
+		return fmt.Errorf("saving accounts: %w", err)
+	}
 	return nil
 }
 
@@ -1173,9 +1227,15 @@ func (s *Store) List() []User {
 	return out
 }
 
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for the
+// handful of callers (IssueResetCode, TransferAdmin, SetPassword) that
+// change a credential or a role and so must not let the caller believe a
+// write happened when it didn't -- see each one's own restore-on-error
+// comment. Every other caller keeps using persistLocked below, which
+// keeps today's swallow-and-log behaviour.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	list := make([]*User, 0, len(s.byID))
 	for _, u := range s.byID {
@@ -1185,17 +1245,12 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(storeFile{Users: list}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding accounts for persistence failed: %v -- "+
-			"this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding accounts for persistence failed: %w", err)
 	}
 
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing accounts to %s failed: %v -- "+
-			"this change exists only in memory and will be lost on restart",
-			s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing accounts to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		// Another process wrote while this change was pending -- almost
@@ -1207,4 +1262,15 @@ func (s *Store) persistLocked() {
 			"was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
 	s.version = version
+	return nil
+}
+
+// persistLocked is the swallow-and-log default every ordinary write
+// uses: the in-memory state (which every read goes through) stays
+// correct either way, so a transient disk issue degrades to "won't
+// survive a restart right now" rather than failing the caller outright.
+func (s *Store) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		persistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }

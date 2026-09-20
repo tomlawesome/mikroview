@@ -33,6 +33,7 @@ import { appState } from '../lib/state.svelte'
 import { policyState } from '../lib/policy.svelte'
 import { coverageState } from '../lib/coverage.svelte'
 import { logEveryRuleNavState } from '../lib/logEveryRuleNav.svelte'
+import { logEveryRuleWorkState } from '../lib/logEveryRuleWork.svelte'
 import type { Device, TuneLoggingAnalyseResponse, TuneLoggingRenderResponse } from '../lib/types'
 import LogEveryRule from './LogEveryRule.svelte'
 
@@ -171,6 +172,11 @@ beforeEach(() => {
   policyState.anyPushed = false
   coverageState.declarations = []
   logEveryRuleNavState.pending = null
+  // logEveryRuleWorkState is module-lifetime (that is the point of
+  // #1134's fix below), so it outlives any one test's render() the same
+  // way it outlives a component unmount -- reset explicitly, or a test
+  // that types an export leaks it into the next one.
+  logEveryRuleWorkState.reset()
 })
 
 describe('LogEveryRule ephemerality', () => {
@@ -188,6 +194,40 @@ describe('LogEveryRule ephemerality', () => {
       'Scheduled backups are a different thing: those are kept, with their secrets removed as they arrive, ' +
         'and you can annotate one from here too.',
     )
+  })
+})
+
+describe('arriving from another router', () => {
+  // #1134 made the operator's work outlive the component, so scrolling
+  // away and back no longer throws away a paste. The same lifetime is a
+  // hazard across routers: a nav request names a device, but the export
+  // and everything analysed from it belong to whichever router was
+  // being looked at before. Left alone, the drop zone shows router A's
+  // export under router B's name, and Render pairs B with A's text.
+  it('clears the held export when the request names a different router', async () => {
+    logEveryRuleWorkState.device = 'r1'
+    logEveryRuleWorkState.exportText = '/ip firewall filter\nadd chain=forward action=drop'
+    logEveryRuleWorkState.exportName = 'r1-export.rsc'
+
+    logEveryRuleNavState.request('r2', 'r2:eth1>eth2')
+    render(LogEveryRule)
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('r2'))
+    expect(logEveryRuleWorkState.exportText).toBe('')
+    expect(logEveryRuleWorkState.exportName).toBe('')
+  })
+
+  // The other half: a second look at the same router is work in
+  // progress, not a new subject, so it must survive.
+  it('keeps the held export when the request names the same router', async () => {
+    logEveryRuleWorkState.device = 'r1'
+    logEveryRuleWorkState.exportText = '/ip firewall filter\nadd chain=forward action=drop'
+
+    logEveryRuleNavState.request('r1', 'r1:eth3>eth4')
+    render(LogEveryRule)
+
+    await waitFor(() => expect(logEveryRuleNavState.pending).toBeNull())
+    expect(logEveryRuleWorkState.exportText).toContain('action=drop')
   })
 })
 
@@ -478,5 +518,335 @@ describe('LogEveryRule device pick', () => {
     await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
     const select = container.querySelector('#ler-device') as HTMLSelectElement
     expect(select.value).toBe('edge-2')
+  })
+
+  // The nav-request guard above covers arriving from the topography.
+  // The picker is the other way the router changes, and the commoner
+  // one: two routers in the fleet, the operator does one and turns to
+  // the next. The picker binds straight to the module-lifetime work
+  // state, so nothing the nav path does is on this route. Left alone,
+  // the drop zone keeps the first router's export under the second
+  // router's name, Render sends the second router's name with the
+  // first router's text -- the server renders from the text alone --
+  // and the file downloads as `edge-2-logging.rsc` while every `set`
+  // line in it was computed against edge-1's rules. Pasting that into
+  // edge-2 applies one router's decisions to another's firewall.
+  it('clears the held export when the operator picks a different router by hand', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    expect(logEveryRuleWorkState.device).toBe('edge-1')
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.exportText).toBe('')
+    expect(logEveryRuleWorkState.exportName).toBe('')
+    expect(zoneOf(container).classList.contains('filled')).toBe(false)
+  })
+
+  // The other half, so the guard cannot be satisfied by throwing every
+  // paste away: picking the router the export is already for is the
+  // operator confirming, not changing their mind.
+  it('keeps the held export when the operator picks the router it came from', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-1' } })
+
+    await waitFor(() => expect(logEveryRuleNavState.pending).toBeNull())
+    expect(logEveryRuleWorkState.exportText).toContain('chain=forward')
+    expect(zoneOf(container).classList.contains('filled')).toBe(true)
+  })
+
+  // The error lines are part of what is on screen about the old
+  // router. Clearing the export but leaving one up puts router A's
+  // failure under router B's name, which is the same wrong-router
+  // fault one line further down the card.
+  it('clears a failed analyse\'s error when the operator switches router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue('edge-1 has not been observed for long enough yet')
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(container.querySelector('.load-error')).toBeTruthy())
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(container.querySelector('.load-error')).toBeNull()
+  })
+
+  // Clearing on the switch is not enough on its own. A request already
+  // in flight resolves afterwards, and it was asked about the router
+  // the operator has just left -- so its answer has to be dropped where
+  // it lands, not only cleared where it started. A render is the worse
+  // of the two: its result is a file that gets pasted into a router.
+  it('drops an analyse that resolves after the operator switched router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+
+    // edge-1's answer arrives now, after the switch.
+    settle(analyseResponse())
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+    expect(container.querySelectorAll('.rule-row').length).toBe(0)
+  })
+
+  it('drops a failed analyse that resolves after the operator switched router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+
+    settle('edge-1 has not been observed for long enough yet')
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(container.querySelector('.load-error')).toBeNull()
+  })
+
+  // The highlight the topography hands over, guarded because clearing
+  // it on a router change killed it outright: the clearing effect runs
+  // once on mount, after the effect that sets it, so arriving from the
+  // coverage lens lit nothing at all. Nothing caught that -- no test
+  // looked for the highlight after a nav handoff.
+  it('highlights the pair the topography handed over', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(container.querySelectorAll('.rule-row').length).toBeGreaterThan(0))
+    expect(container.querySelectorAll('.rule-row.highlight').length).toBe(1)
+  })
+
+  // Comparing the router name where the answer lands is not enough. Go
+  // to another router and come back while a request is in flight and
+  // the name matches again, so the stale answer passes for a fresh one
+  // -- and lands *after* the fresh one, because it has been in flight
+  // longer. A render is the one that hurts: the operator downloads a
+  // file built from the older answer.
+  it('drops a request left in flight across a round trip back to the same router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settleFirst: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleFirst = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    await clickAnalyse()
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    await fireEvent.change(select, { target: { value: 'edge-1' } })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-1'))
+
+    // A second, current analyse for edge-1 answers first.
+    const fresh = analyseResponse()
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(fresh)
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(logEveryRuleWorkState.result).toEqual(fresh))
+
+    // The one from before the round trip arrives now, with a different
+    // answer. The router name matches, so only the token can tell.
+    settleFirst({ ...fresh, rules: [] })
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-1'))
+    expect(logEveryRuleWorkState.result).toEqual(fresh)
+  })
+
+  // The deck destroys and rebuilds this card whenever it scrolls more
+  // than one card away (lib/deckMount.ts), which is ordinary
+  // navigation. A request in flight outlives that, so the guard against
+  // a stale answer has to outlive it too -- it lives on the work state
+  // for the same reason the work does. Held in the component, it died
+  // with the instance that made the request, and the answer then wrote
+  // one router's rules into a freshly mounted card showing another's.
+  it('drops a request left in flight across an unmount, remount and nav to another router', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    logEveryRuleNavState.request('edge-1', 'bridge|ether1')
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const first = render(LogEveryRule)
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-1'))
+    await typeExport(first.container)
+    await clickAnalyse()
+
+    // Scrolled away. The request is still on its way.
+    first.unmount()
+
+    // While it is gone, the coverage lens hands over a different router.
+    logEveryRuleNavState.request('edge-2', 'guest|bridge')
+    render(LogEveryRule)
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+
+    // edge-1's answer arrives now, in an instance that no longer exists.
+    settle(analyseResponse())
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+  })
+
+  // Same fault, reached without touching the router at all: replace the
+  // pasted export while an analyse is still running and the old text's
+  // answer lands under the new text. The drop zone shows one export and
+  // the rule list below it describes another.
+  it('drops an analyse still running when a new export is pasted', async () => {
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+
+    // A second export replaces the first, same router.
+    await typeExport(container, EXPORT_TEXT.replace('lan to wan', 'something else'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+
+    // The first export's analysis arrives now.
+    settle(analyseResponse())
+    await waitFor(() => expect(logEveryRuleWorkState.exportText).toContain('something else'))
+    expect(logEveryRuleWorkState.result).toBeNull()
+    expect(container.querySelectorAll('.rule-row').length).toBe(0)
+  })
+
+  // The button has to settle too. A retired request returns early, so
+  // anything cleared after that check never runs -- which left Analyse
+  // stuck reading "Analysing…" and disabled for a request that had been
+  // abandoned, with no way back except scrolling the card away and
+  // returning. Whether it is busy is derived from the token now, so
+  // retiring one settles the label in the same move.
+  it('frees the Analyse button when a new export retires the request in flight', async () => {
+    let settle: (v: TuneLoggingAnalyseResponse | string) => void = () => {}
+    vi.mocked(fetchTuneLoggingAnalyse).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Analysing…' })).toBeTruthy())
+
+    await typeExport(container, EXPORT_TEXT.replace('lan to wan', 'something else'))
+    settle(analyseResponse())
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Analyse' })).toBeTruthy())
+    expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // A dropped connection used to reject rather than answer with an
+  // error string (api.ts's send() now converts it). Uncaught, that
+  // skipped the line freeing the button and left it reading
+  // "Analysing…" for a request that had already ended; the catch still
+  // covers anything the call can throw.
+  it('frees the Analyse button and says so when the call throws', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockRejectedValue(new Error('Failed to fetch'))
+    const { container } = render(LogEveryRule)
+    await typeExport(container)
+    await clickAnalyse()
+
+    await waitFor(() => expect(container.querySelector('.load-error')?.textContent).toContain('Failed to fetch'))
+    expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // An export can arrive before any router is picked -- the picker
+  // starts on its own disabled placeholder, and paste is listened for
+  // on the window. That text belongs to no router yet, so the first
+  // pick adopts it rather than throwing it away.
+  it('keeps an export pasted before any router was picked', async () => {
+    appState.devices = [device({ id: 'edge-1' }), device({ id: 'edge-2', name: 'edge-2' })]
+    const { container } = render(LogEveryRule)
+    await waitFor(() => expect(container.querySelector('#ler-device')).toBeTruthy())
+    await typeExport(container)
+    expect(logEveryRuleWorkState.device).toBe('')
+
+    const select = container.querySelector('#ler-device') as HTMLSelectElement
+    await fireEvent.change(select, { target: { value: 'edge-2' } })
+
+    await waitFor(() => expect(logEveryRuleWorkState.device).toBe('edge-2'))
+    expect(logEveryRuleWorkState.exportText).toContain('chain=forward')
+    expect(zoneOf(container).classList.contains('filled')).toBe(true)
+  })
+})
+
+// Deck.svelte unmounts a card's scene once it scrolls more than one
+// card from the active one (lib/deckMount.ts) -- ordinary navigation,
+// not the operator leaving the page. Before this fix that destroyed
+// whatever had been pasted, and any rendered-but-undownloaded result,
+// the moment the deck scrolled back: losing typed or pasted work is
+// never acceptable.
+describe('LogEveryRule survives the deck unmounting and remounting the card (#1134 follow-up)', () => {
+  it('keeps the pasted export across an unmount', async () => {
+    const first = render(LogEveryRule)
+    await typeExport(first.container)
+    expect(zoneOf(first.container).classList.contains('filled')).toBe(true)
+    first.unmount()
+
+    const second = render(LogEveryRule)
+    expect(second.container.querySelector('.drop-picked')?.textContent).toBe('pasted export')
+    expect(zoneOf(second.container).classList.contains('filled')).toBe(true)
+  })
+
+  it('keeps a rendered-but-not-yet-downloaded result across an unmount', async () => {
+    vi.mocked(fetchTuneLoggingAnalyse).mockResolvedValue(analyseResponse())
+    vi.mocked(fetchTuneLoggingRender).mockResolvedValue(renderResponse())
+    const first = render(LogEveryRule)
+    await typeExport(first.container)
+    await clickAnalyse()
+    await waitFor(() => expect(first.container.querySelectorAll('.rule-row').length).toBe(1))
+    await fireEvent.click(screen.getByRole('button', { name: /^Render/ }))
+    await waitFor(() => expect(first.container.querySelector('.render-result')).toBeTruthy())
+    first.unmount()
+
+    const second = render(LogEveryRule)
+    await waitFor(() => expect(second.container.querySelector('.render-result')).toBeTruthy())
+    expect(second.container.querySelector('.render-result pre')?.textContent).toBe(renderResponse().commands)
   })
 })

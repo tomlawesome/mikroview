@@ -81,3 +81,44 @@ func TestBearerTokenRouteListMatchesReadOnlyRoutes(t *testing.T) {
 			len(missing), strings.Join(missing, ", "))
 	}
 }
+
+// TestDroplistFieldCommentMatchesReality covers a v0.6.0 audit finding
+// (#1260) against server.go's own Server.Droplist field: its doc
+// comment read "Nothing in this package reads or writes it yet -- no
+// route exists until #1224", unchanged since before #1224 shipped the
+// droplist routes registered a few hundred lines below it in this same
+// file. A comment that tells the next reader a route does not exist,
+// sitting above a field seven routes actually use, sends them looking
+// for work that is already done.
+func TestDroplistFieldCommentMatchesReality(t *testing.T) {
+	source, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("reading server.go: %v", err)
+	}
+	if bytes.Contains(source, []byte("no route exists")) {
+		t.Error("server.go's Droplist field comment still claims no route exists until #1224, but /api/droplist is registered in this same file")
+	}
+	if !bytes.Contains(source, []byte(`"/api/droplist"`)) {
+		t.Fatal("found no /api/droplist route registration in server.go -- this test is not looking where it thinks it is")
+	}
+}
+
+// TestRequireAuthCommentNamesOnlyTheOneExemptLogoutRoute covers a
+// v0.6.0 audit finding (#1267) against requireAuth's own doc comment:
+// it claimed "the two logout-shaped routes" stay reachable during the
+// reset-code gate (#1251), but resetCodeSessionOpenPaths in
+// authz_matrix_test.go -- and TestResetCodeSessionReachesNothingButThe
+// ChangePasswordRoute, which walks the whole matrix against it -- show
+// only one of the two logout-shaped routes, /api/auth/logout, is
+// actually exempt. /api/auth/logout-all needs a session it is not free
+// to trust yet, so it 403s like everything else. Comment only; the
+// behaviour this pins was already correct and already tested.
+func TestRequireAuthCommentNamesOnlyTheOneExemptLogoutRoute(t *testing.T) {
+	source, err := os.ReadFile("auth.go")
+	if err != nil {
+		t.Fatalf("reading auth.go: %v", err)
+	}
+	if bytes.Contains(source, []byte("the two logout-shaped routes")) {
+		t.Error("requireAuth's doc comment still claims two logout-shaped routes stay reachable during the reset-code gate, but only /api/auth/logout does -- /api/auth/logout-all requires a session")
+	}
+}

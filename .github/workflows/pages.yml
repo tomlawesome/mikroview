@@ -16,7 +16,7 @@ on:
     paths:
       - 'site/**'
       - 'docs/screenshots/fall-dark.png'
-      - 'docs/screenshots/topography-dark.png'
+      - 'docs/screenshots/topography-map-dark.png'
       - 'docs/screenshots/stream-dark.png'
       - 'brand/logo-mark.svg'
       - '.github/workflows/pages.yml'

@@ -16,6 +16,138 @@ A "released version" is any `v*` tag: `v0.1.0` onwards. An install that
 predates the first release is treated as the oldest state MikroView
 knows how to read, and upgrades the same way.
 
+## Upgrading to 0.6.0: chown your bind mount first
+
+0.6.0 changes the container's user from uid/gid `65532` to `1000`
+(#1210) — 1000 is the first account on most Linux hosts, so a file you
+mount in is now readable as it stands, where `65532` needed a `chown`
+first. This is the one step the single-step promise above does not
+cover by itself: a data directory or a secret file (the Postgres DSN,
+`history.keyFile`, a TLS key) written by the old image is owned by
+`65532`, and the new container cannot write to it until you hand it
+over.
+
+Stop MikroView, then hand it over:
+
+```sh
+# bind mount
+sudo chown -R 1000:1000 /path/on/host/data
+```
+
+```sh
+# named volume
+docker run --rm -v mikroview-data:/data alpine:3.22 chown -R 1000:1000 /data
+```
+
+Mounted secret files want the same treatment — `sudo chown 1000:1000
+postgres-dsn` and so on — unless you already own them as uid 1000. Skip
+this and MikroView's own startup check refuses to start rather than
+silently losing data (see [docs/install.md](install.md#persistent-data)'s
+"Persistent data" section for what that refusal looks like); chown the
+directory it names and restart.
+
+## Upgrading to 0.6.0: the compose file mounts one app folder, not a named volume
+
+If you run `deploy/docker-compose.yml` as shipped (or copied it), 0.6.0
+changes what it mounts. Before, your config was one file
+(`./config.yaml:/etc/mikroview/config.yaml:ro`) and your data lived in a
+Docker-managed named volume (`mikroview-data`). Now it mounts one app
+folder, `./mikroview` — read-only for config, and `./mikroview/data`
+underneath it read-write for data — and the file no longer declares the
+`mikroview-data` volume at all.
+
+**What you'll see if you just pull and run `docker compose up -d`:**
+Docker creates an empty, root-owned `./mikroview` because nothing is
+there yet. Your old named volume is untouched, but nothing in the new
+file mounts it any more. A missing `config.yaml` is not itself fatal —
+defaults cover it — but `./mikroview/data` is root-owned along with the
+rest of that new folder, so it is not writable by the container's uid
+1000, and the startup check refuses to start rather than silently
+discard your writes: it exits at boot instead of starting on your old
+data.
+
+**What to do first, before `docker compose up -d`:**
+
+1. Create the folder and put your config where the container now looks
+   for it: `mkdir mikroview && cp config.yaml mikroview/config.yaml`.
+2. Bring your data across, either way:
+   - **Move it into the new bind mount** (matches the shipped file): use
+     `mikroview -migrate-data` to copy the named volume's contents into
+     `./mikroview/data` — the full command and the ownership it needs
+     first are in
+     [docs/configuration.md](configuration.md#moving-the-data-directory)'s
+     "Moving the data directory" section — then do the chown above.
+   - **Keep the named volume**: uncomment the `volumes:` block at the
+     end of `deploy/docker-compose.yml` and swap the data line above it
+     back to `mikroview-data:/var/lib/mikroview`, exactly as the comment
+     there says. Nothing else about your setup changes — you're only
+     re-pointing the compose file — but the volume itself still holds
+     files owned by `65532`, so you still need the chown above, in its
+     named-volume form: `docker run --rm -v mikroview-data:/data
+     alpine:3.22 chown -R 1000:1000 /data`.
+3. Run `docker compose up -d`.
+
+This only affects the shipped compose file. If you mount config and data
+separately yourself — the old way, still supported, see
+docs/configuration.md — nothing here changes for you.
+
+## Upgrading to 0.6.0: routers must be enrolled
+
+0.6.0 stops trusting a router's own pushed configuration to say which
+address its syslog comes from (#1281). From this version on, a syslog
+source is accepted only once it is the address you declared under
+`devices:` in config.yaml (`sourceIp`), or once it has redeemed a
+one-time enrolment token you mint for it from the Entities screen. Until
+then, its lines are refused and shown under "Refused senders" rather
+than counted at all.
+
+**Plainly: if a router was only ever sending logs, and you never gave it
+a `sourceIp` in config.yaml, its logs stop being accepted the moment you
+upgrade, and stay refused until you enrol it.** A router you declared
+with `sourceIp` needs nothing — it keeps working exactly as it did.
+
+Enrol it by hand:
+
+1. Open the Entities screen and find the router beside your others (or
+   press **+ add a router** first if it has never pushed anything at all
+   — routers that only send logs, never a push, have no entry to enrol
+   until you add one by name).
+2. Press **Re-enrol…** to open the setup ledger at **Send logs**.
+3. Give the router's own address, and your password. MikroView opens
+   the syslog port for that one address while the token is pending, and
+   asks who you are because minting the token is what opens it — holding
+   an admin session is not enough on its own.
+4. Paste the one extra line the step shows — it is appended to the
+   syslog action commands you already have on the router — and let the
+   router run it once.
+5. The router's next log line carrying that token is what enrols it;
+   everything after that is accepted normally.
+6. Finish the ledger's last step, **Register the router**, to record that
+   this is a router you meant to add.
+
+If you gave the wrong address, the router is turned away and its real
+address is listed under the step's refused senders. Press it to point
+the enrolment window at it — the token you already pasted stays as it
+is, so there is nothing to paste into the router again.
+
+Until you do this, that router's traffic is refused, not silently
+dropped: it is listed under "Refused senders" beside your routers on the
+Entities screen so you can see exactly which addresses are waiting on
+you. The syslog port itself now refuses the connection outright from an
+address it does not recognise, except for the one address an enrolment
+token is currently pending for — that window is what lets the router's
+own enrol line reach the port in the first place.
+
+### Routers you enrolled before this release
+
+Registering (step 6 above) is new in this release. A router that was
+already enrolled when you upgraded is treated as registered, dated when
+it enrolled: its operator did everything the ledger asked of them at the
+time, and reopening the ledger on it would be asking for work that did
+not exist yet. A router that never enrolled is not swept along with it —
+there is no evidence anyone confirmed it, so it still has the Register
+step to walk.
+
 ## What happens at start
 
 1. MikroView reads the schema version its data was last written by.

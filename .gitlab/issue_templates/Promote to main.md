@@ -19,7 +19,7 @@
 - [ ] `VERSION` bumped and `CHANGELOG.md` has a `## [<version>] - <date>` heading for it
 - [ ] `README.md` Features and Quickstart describe what this version actually does (read them against the changelog)
 - [ ] `site/index.html` copy and links describe the current product (it is the GitHub Pages site; it only redeploys when `site/` or the screenshots change)
-- [ ] `docs/screenshots/*.png` recaptured from a seeded demo of this version if `frontend/src` changed since the last tag (`scripts/check-release-surfaces.sh` refuses stale ones)
+- [ ] `docs/screenshots/*.png` recaptured from a seeded demo of this version if the components they depict changed (`scripts/check-release-surfaces.sh`'s `screenshot_sources()` map says which files each screenshot is checked against; it refuses stale ones)
 - [ ] `SECURITY.md` and the README's "Contributions" reporting and contact channels are live
 - [ ] `make release-surfaces` passes locally (same check `policy:release-surfaces` runs on the preview -> main merge request)
 - [ ] the previous release's review record in `docs/reviews/` lists its deferred security findings with fix commits -- no `pending-disclosure` marker left (`make release-surfaces` checks this)

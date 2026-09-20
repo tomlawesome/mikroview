@@ -12,9 +12,7 @@ export interface ConfigUpgradeSetting {
 }
 
 export interface ConfigUpgradeResponse {
-  /** This build's own version string -- echoed back unchanged on dismiss. */
+  /** This build's own version string. */
   version: string
   settings: ConfigUpgradeSetting[]
-  /** True once an admin has dismissed the notice for `version` specifically. */
-  dismissed: boolean
 }

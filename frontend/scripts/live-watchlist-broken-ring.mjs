@@ -90,8 +90,15 @@ async function coverageFor(id) {
 const strays = ((await api('GET', '/api/definitions')).body?.definitions ?? []).filter((d) => d.intent === 'expectation')
 check(strays.length === 0, `the instance starts with no watches from earlier scenarios -- found ${strays.length}`)
 
-const device = (await api('GET', '/api/devices')).body?.devices?.[0]?.id
-check(!!device, `the instance reports a device (${device})`)
+// The harness's own declared router, named rather than taken as
+// "whatever sorts first": since #1281 a push is refused unless it comes
+// from the device's declared or enrolled address (IsEnrolledAt), and
+// live-router is the one this harness declares (at 127.0.0.1, which is
+// where these pushes come from). Reading devices[0] meant a scenario
+// that ran earlier and left a router behind silently retargeted this
+// one at a device nothing here can push as.
+const device = ((await api('GET', '/api/devices')).body?.devices ?? []).find((d) => d.id === 'live-router')?.id
+check(!!device, `the harness's own router is in the registry (${device})`)
 
 const tokenRes = await api('POST', '/api/tokens', { name: 'broken-ring', kind: 'ingest', device })
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)

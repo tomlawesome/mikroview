@@ -107,6 +107,43 @@ func TestNormaliseResetCodeAcceptsWhatAPersonTypes(t *testing.T) {
 	}
 }
 
+// TestResetCodeStaysUnspentWhenTheSpendCannotBeSaved is the R6 rule at
+// the other end of the reset: a spend that only lands in memory is
+// undone by a restart, and the code is live again for whoever saw it.
+// The login is refused instead, and the code still works once the
+// store can write again.
+func TestResetCodeStaysUnspentWhenTheSpendCannotBeSaved(t *testing.T) {
+	backend := &saveBudgetBackend{left: 3} // register, create user, issue code
+	s, err := OpenWithBackend(backend)
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("admin", "admin-password-placeholder", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("bilbo", resetTestOldPassword, RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	_, code, err := s.IssueResetCode(u.ID, now)
+	if err != nil {
+		t.Fatalf("IssueResetCode: %v", err)
+	}
+
+	if _, err := s.Authenticate("bilbo", code, now); err == nil {
+		t.Fatal("Authenticate with a reset code the store cannot record as spent = nil error, want one")
+	}
+
+	backend.left = 1
+	if _, err := s.Authenticate("bilbo", code, now); err != nil {
+		t.Fatalf("expected the code to still be live once the store can write again, got %v", err)
+	}
+	if _, err := s.Authenticate("bilbo", code, now); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("expected the code to be spent after a recorded login, got %v", err)
+	}
+}
+
 // TestIssueResetCodeKillsTheOldPasswordAndLetsTheCodeIn is the positive
 // path: the code works in the password box, the old password does not,
 // and the account comes back flagged for a forced change.
@@ -142,6 +179,43 @@ func TestIssueResetCodeKillsTheOldPasswordAndLetsTheCodeIn(t *testing.T) {
 	}
 	if !got.MustChangePassword {
 		t.Error("expected the account redeeming the code to still be flagged for a forced change")
+	}
+}
+
+// TestIssueResetCodeLeavesTheOldPasswordWorkingWhenPersistFails is the
+// v0.6.0 audit's R6 fix: a reset that cannot be saved must not kill the
+// old password or mint a live code in memory either, or a restart before
+// the next good write would silently un-reset the account while the
+// admin has already read a code out that no longer does anything.
+func TestIssueResetCodeLeavesTheOldPasswordWorkingWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("admin", "admin-password-placeholder", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("bilbo", resetTestOldPassword, RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := s.IssueResetCode(u.ID, time.Now()); err == nil {
+		t.Fatal("IssueResetCode against a backend that cannot save = nil error, want one")
+	}
+
+	if _, err := s.Authenticate("bilbo", resetTestOldPassword, time.Now()); err != nil {
+		t.Errorf("expected the old password to still work after a failed persist, got %v", err)
+	}
+	got, ok := s.Get(u.ID)
+	if !ok {
+		t.Fatal("expected the account to still be there")
+	}
+	if got.MustChangePassword {
+		t.Error("expected MustChangePassword to stay false after a failed persist")
+	}
+	if got.ResetCodeHash != "" {
+		t.Error("expected no reset code to be live after a failed persist")
 	}
 }
 
@@ -279,6 +353,36 @@ func TestSecondResetCodeStillWorksAfterTheFirstIsKilled(t *testing.T) {
 	}
 	if _, err := s.Authenticate("bilbo", second, now); err != nil {
 		t.Errorf("expected the newest code to work: %v", err)
+	}
+}
+
+// TestResetCodeIsSpentByTheLoginThatRedeemsIt is the owner's ruling
+// (2026-09-18), restoring #1245 question 21 after the v0.6.0
+// pre-release audit had amended it. A code that stays live until the
+// password is actually set is replayable for its whole 24 hours by
+// anyone who saw it -- over a shoulder, on a screen share -- and
+// whoever completes the change first takes the account and revokes the
+// other session. Losing the first session instead costs an admin
+// round trip for a new code, which is not a lockout: an admin can
+// always issue another, and the sole admin recovers through the
+// console, never through this mechanism.
+func TestResetCodeIsSpentByTheLoginThatRedeemsIt(t *testing.T) {
+	s, id := newResetTestStore(t)
+	now := time.Now()
+
+	_, code, err := s.IssueResetCode(id, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Authenticate("bilbo", code, now); err != nil {
+		t.Fatalf("expected the first login with the code to succeed: %v", err)
+	}
+
+	// Spent, whether or not the forced change was completed: a second
+	// holder of the same code cannot follow the first one in.
+	if _, err := s.Authenticate("bilbo", code, now); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("expected the code to be spent by the login that redeemed it, got %v -- it is replayable by anyone who saw it", err)
 	}
 }
 

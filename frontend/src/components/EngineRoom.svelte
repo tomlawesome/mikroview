@@ -171,10 +171,22 @@
   // block since there is no settings object to render a control from.
   let routerBackupsUnanswered = $state(false)
 
+  // When the request behind the data in hand was issued -- not when it
+  // came back. RouterBackups holds its own optimistic writes until a
+  // refresh that started *after* the write returns, which is the only
+  // thing that proves the answer includes it; a poll already in flight
+  // when the write landed resolves afterwards with data from before it.
+  // Comparing the two rows instead cannot work: a row carries a
+  // missed-backup count and a timing estimate that move on their own,
+  // so it may never equal what was written.
+  let routerBackupsFetchedAt = $state(0)
+
   function refreshRouterBackups() {
+    const startedAt = Date.now()
     fetchRouterBackups()
       .then((r) => {
         routerBackups = r
+        routerBackupsFetchedAt = startedAt
         routerBackupsUnanswered = false
       })
       .catch(() => {
@@ -197,7 +209,13 @@
   let droplistUnanswered = $state(false)
 
   function refreshDroplist(): Promise<void> {
-    return fetchDroplist(window.location.host)
+    // wizardState.address (#1213) is the operator's own saved answer to
+    // "what address can your router reach mikroview on?", not this
+    // tab's own window.location.host -- the setup card's four printed
+    // router commands come straight from this response, so they must
+    // be baked against the same address Droplist.svelte's own mintKey
+    // reads (#1260) and copyRouterLines above reads for the push script.
+    return fetchDroplist(wizardState.address)
       .then((r) => {
         droplist = r
         droplistUnanswered = false
@@ -1376,7 +1394,7 @@
             class:dnodiagram={!routerBackups.enabled || routerBackups.routers.length === 0}
           >
             <h3>router backups</h3>
-            <RouterBackups resp={routerBackups} onopenlost={openLostRouter} />
+            <RouterBackups resp={routerBackups} fetchedAt={routerBackupsFetchedAt} onopenlost={openLostRouter} />
           </div>
         {:else if routerBackupsUnanswered}
           <!-- The disk group's own `dfail` idiom: one row, no control,

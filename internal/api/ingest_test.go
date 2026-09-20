@@ -14,15 +14,29 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/hub"
 )
 
-// ingestTestServer registers an admin and issues one ingest token scoped
-// to device, returning the raw token and the running server -- the setup
-// every test in this file needs.
+// ingestTestServerClientIP is the address every request this file's
+// http.DefaultClient sends arrives from, as s.ClientIP(r) reads it --
+// httptest.NewServer binds 127.0.0.1 explicitly. Issue #1281's ingest
+// enrolment check compares this against the pushing device's own
+// sourceIp/acceptedIp, so ingestTestServer enrols device here to keep
+// every existing "a valid push succeeds" test meaning what it always
+// did; TestIngestRouteRefusesAPushFromAnUnenrolledAddress below covers
+// the refusal this check exists to make.
+const ingestTestServerClientIP = "127.0.0.1"
+
+// ingestTestServer registers an admin, issues one ingest token scoped to
+// device, and enrols device at ingestTestServerClientIP (#1281 -- a push
+// must come from the token's own device's enrolled address), returning
+// the raw token and the running server.
 func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, string) {
 	t.Helper()
 	s := newAuthTestServer(t)
+	enrolIngestTestDevice(t, s, device)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
@@ -40,6 +54,38 @@ func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, s
 	return ts, s, raw
 }
 
+// enrolIngestTestDevice declares device (if it does not already exist,
+// e.g. as newTestServer's own "core") and redeems a fresh enrolment
+// token for it at ingestTestServerClientIP, the same mint/hash/redeem
+// path a real "mikroview-enrol <token>" syslog line takes.
+func enrolIngestTestDevice(t *testing.T, s *Server, device string) {
+	t.Helper()
+	enrolIngestTestDeviceAt(t, s, device, ingestTestServerClientIP)
+}
+
+// enrolIngestTestDeviceAt is the same at a chosen address, for the one
+// test that needs two routers at once: an address belongs to one router,
+// so a second device cannot be enrolled at the first's (registry's own
+// TestEnrolRefusesAnAddressAnotherDeviceAlreadyHolds). Pair it with
+// postIngestFrom, which makes the push appear to come from there.
+func enrolIngestTestDeviceAt(t *testing.T, s *Server, device, addr string) {
+	t.Helper()
+	now := time.Now()
+	if _, err := s.Devices.Create(device, device, now); err != nil {
+		// Already exists (e.g. newTestServer's config-declared "core") --
+		// enrolling it again at the same address is harmless.
+		_ = err
+	}
+	token, _, err := s.Devices.MintEnrolment(device, addr, now)
+	if err != nil {
+		t.Fatalf("MintEnrolment(%q): %v", device, err)
+	}
+	line := []byte("mikroview-enrol " + token)
+	if !s.Devices.TryEnrol(addr, line) {
+		t.Fatalf("TryEnrol: failed to enrol %q at %q", device, addr)
+	}
+}
+
 func postIngest(t *testing.T, ts *httptest.Server, token, body string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/ingest/routeros", bytes.NewReader([]byte(body)))
@@ -49,6 +95,25 @@ func postIngest(t *testing.T, ts *httptest.Server, token, body string) *http.Res
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// postIngestFrom pushes as though the request came from `from`, via the
+// trusted-proxy path the server already has (clientip.go): httptest
+// always dials from 127.0.0.1, so it is the only way to have two
+// routers at two addresses in one test.
+func postIngestFrom(t *testing.T, ts *httptest.Server, token, from, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/ingest/routeros", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Forwarded-For", from)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +138,48 @@ func TestIngestRouteAcceptsAValidPushFromAnIngestToken(t *testing.T) {
 	}
 	if ack.Kind != "arp" || ack.Page != 1 || ack.Pages != 1 || ack.Records != 1 {
 		t.Errorf("ack = %+v, unexpected", ack)
+	}
+}
+
+// TestIngestRouteRefusesAPushFromAnUnenrolledAddress is issue #1281's
+// core ingest-side rule: an ingest token names a device, never an
+// address, so a push must also arrive from that device's own enrolled
+// address (sourceIp or acceptedIp) -- a valid token alone is not
+// enough. Built directly rather than via ingestTestServer, which always
+// enrols its device at the address this file's client actually connects
+// from; this device is declared but deliberately never enrolled
+// anywhere, so IsEnrolledAt is false for every address, including the
+// one the request genuinely arrives from.
+func TestIngestRouteRefusesAPushFromAnUnenrolledAddress(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Devices = device.NewRegistry(nil)
+	if _, err := s.Devices.Create("router-1", "router-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	admin, _ := s.Auth.ByUsername("admin")
+	raw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", admin, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	resp := postIngest(t, ts, raw, validARPPayload)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 -- a valid token from an unenrolled address must be refused", resp.StatusCode)
+	}
+
+	result := s.Audit.Query(audit.Query{})
+	if len(result.Entries) == 0 {
+		t.Fatal("no audit entry was recorded for the refused push")
+	}
+	last := result.Entries[len(result.Entries)-1]
+	if last.Action != "ingest.routeros.refused" || !strings.Contains(last.Detail, "not") {
+		t.Errorf("audit entry = %+v, want ingest.routeros.refused naming the address as not enrolled", last)
 	}
 }
 
@@ -214,6 +321,15 @@ func TestIngestRouteRateLimitsPerToken(t *testing.T) {
 	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
 	admin, _ := s.Auth.ByUsername("admin")
 
+	// Two routers, two addresses -- an address belongs to one router.
+	// The pushes below name their own via the trusted-proxy header.
+	proxies, err := config.ParseTrustedProxies([]string{ingestTestServerClientIP + "/32"})
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+	s.TrustedProxies = proxies
+	enrolIngestTestDeviceAt(t, s, "router-a", "192.0.2.10")
+	enrolIngestTestDeviceAt(t, s, "router-b", "192.0.2.11")
 	rawA, _, err := s.Tokens.Create("router-a", auth.TokenKindIngest, "router-a", admin, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
@@ -224,20 +340,20 @@ func TestIngestRouteRateLimitsPerToken(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		resp := postIngest(t, ts, rawA, validARPPayload)
+		resp := postIngestFrom(t, ts, rawA, "192.0.2.10", validARPPayload)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("request %d for router-a: got %d, want 200", i, resp.StatusCode)
 		}
 	}
-	resp := postIngest(t, ts, rawA, validARPPayload)
+	resp := postIngestFrom(t, ts, rawA, "192.0.2.10", validARPPayload)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("router-a's 3rd request: got %d, want 429", resp.StatusCode)
 	}
 
 	// router-b's own budget must be untouched by router-a's exhaustion.
-	respB := postIngest(t, ts, rawB, validARPPayload)
+	respB := postIngestFrom(t, ts, rawB, "192.0.2.11", validARPPayload)
 	defer respB.Body.Close()
 	if respB.StatusCode != http.StatusOK {
 		t.Errorf("router-b's request after router-a was rate-limited: got %d, want 200 -- the limiter must be keyed per-token", respB.StatusCode)

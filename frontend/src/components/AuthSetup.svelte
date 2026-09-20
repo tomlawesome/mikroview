@@ -71,7 +71,22 @@
     journeyState.begin()
 
     if (authState.ssoAvailable) {
-      const result = await startSSOLink()
+      // The account already exists by this point (register() above
+      // succeeded), so a thrown exception here -- api.ts's send() turns
+      // a dropped connection into an error string, but a body that is
+      // not JSON still throws -- must not propagate: it
+      // would skip both the redirect and the `created = true` below,
+      // leaving AuthScreen's handleSubmit forever mid-`await` and its
+      // submit button stuck on "Please wait…" with no way to retry
+      // register() against an account that is already made. Treated the
+      // same as startSSOLink() answering with an error string: the
+      // confirmation screen below, with a working way in.
+      let result: { url: string } | string
+      try {
+        result = await startSSOLink()
+      } catch (err) {
+        result = err instanceof Error ? err.message : String(err)
+      }
       if (typeof result !== 'string') {
         // A real top-level navigation, not a fetch: the provider has to
         // see the browser to show its own sign-in page. The journey

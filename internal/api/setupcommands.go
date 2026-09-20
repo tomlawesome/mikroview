@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/setup"
@@ -28,8 +29,20 @@ type setupCommandsRequest struct {
 	// for -- the SFTP username and the destination file stem
 	// (routeros.BackupScript). The push script above needs no such
 	// field: PushBlock's payload carries no destination filename, only
-	// the token.
+	// the token. It also names the device step 2's enrolment line is
+	// rendered for -- see EnrolToken.
 	Device string `json:"device"`
+	// EnrolToken is issue #1281's raw enrolment token, echoed back by
+	// the caller exactly the way Token above is: minted once by
+	// POST /api/devices/{id}/enrolment, held client-side, and handed
+	// back here on every render so the "Send logs" step can keep
+	// showing it until it is redeemed or expires. Never looked up from
+	// storage -- the registry keeps only a hash (see
+	// device.Registry.MintEnrolment) -- so this is verified against that
+	// hash (VerifyPendingToken) rather than trusted outright: a stale or
+	// unrelated value the caller echoes back is silently dropped rather
+	// than rendered into a command.
+	EnrolToken string `json:"enrolToken"`
 }
 
 // routerosTable is the dialect table itself, so the wizard can quote its
@@ -221,7 +234,19 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	caTrustCommands, syslogCommands := "", ""
 	if !noAddress {
 		caTrustCommands = routeros.CaTrustCommands(req.Address, dialect)
-		syslogCommands = routeros.SyslogCommands(req.Address, syslogPort, dialect)
+		// The enrolment line only renders once the caller's echoed
+		// EnrolToken actually matches the chosen device's current,
+		// unexpired pending token (#1281) -- never merely because a
+		// value was sent. A device with no pending token, an expired
+		// one, or a caller that omitted Device/EnrolToken all render
+		// this block exactly as it was before #1281.
+		enrolToken := ""
+		if req.Device != "" && req.EnrolToken != "" && s.Devices != nil {
+			if s.Devices.VerifyPendingToken(req.Device, req.EnrolToken, time.Now()) {
+				enrolToken = req.EnrolToken
+			}
+		}
+		syslogCommands = routeros.SyslogCommands(req.Address, syslogPort, dialect, enrolToken)
 	}
 
 	// A push script only means something with an address to embed, a
@@ -278,7 +303,19 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		if s.SetupInstance.BackupPort == "" {
 			backupBlockedKeys = append(backupBlockedKeys, "backups-off")
 		}
-		if !s.Vault.Enabled() {
+		// #1264 finding 5: Vault.Enabled() alone cannot tell "no key
+		// configured" from "a key is configured but could not be read"
+		// apart -- both leave the vault's key nil. Presenting the
+		// broken-key case as "no-retention-key" tells the operator to
+		// mint a new one, and minting overwrites the file every backup
+		// already sitting in the vault is encrypted under -- so the two
+		// get distinct keys here, checked in this order because a
+		// broken key is also, incidentally, one Vault.Enabled() reports
+		// as false.
+		switch {
+		case s.SetupInstance.BackupKeyUnreadable:
+			backupBlockedKeys = append(backupBlockedKeys, "retention-key-unreadable")
+		case !s.Vault.Enabled():
 			backupBlockedKeys = append(backupBlockedKeys, "no-retention-key")
 		}
 		if req.Device == "" {
@@ -349,12 +386,37 @@ func validateSetupCommandsRequest(req setupCommandsRequest) error {
 		return errors.New("syslogPort must be empty or a number from 1 to 65535")
 	}
 	if !validSetupToken(req.Token) {
-		return errors.New("token must be printable ASCII with no quotes, backslashes or whitespace, up to 256 characters")
+		return errors.New("token must be letters, digits, '_' or '-', up to 256 characters")
 	}
 	if !validSetupDevice(req.Device) {
 		return errors.New("device must be 1 to 64 characters from letters, digits, '.', '_' and '-'")
 	}
+	if !validEnrolToken(req.EnrolToken) {
+		return errors.New("enrolToken must be empty or exactly 20 lowercase letters/digits")
+	}
 	return nil
+}
+
+// validEnrolToken restricts EnrolToken to device.Registry's own
+// enrolment-token alphabet and length (issue #1281) -- it is about to
+// be embedded bare inside a RouterOS command (routeros.SyslogCommands),
+// same #1095 reasoning as every other field validated here. Empty is
+// fine: EnrolToken is optional, and handleSetupCommands already treats
+// "" as "render step 2 with no enrolment line."
+func validEnrolToken(token string) bool {
+	if token == "" {
+		return true
+	}
+	if len(token) != 20 {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // maxSetupDeviceLen mirrors internal/auth/token.go's maxDeviceIDLen --
@@ -401,13 +463,15 @@ func validSetupDevice(device string) bool {
 // commands (#1095).
 const maxSetupTokenLen = 256
 
-// validSetupToken restricts Token to printable ASCII with no quote,
-// backslash, dollar or whitespace -- the charset both places Token
-// reaches in internal/routeros/commands.go need to stay well-formed:
-// BackupScript's password=\"...\" wrapper, and PushBlock's bare Bearer
-// header value. Dollar because RouterOS expands $name inside a
-// double-quoted string, so "$x" is not the literal token either. Tokens
-// internal/auth issues are hex, so nothing legitimate is refused.
+// validSetupToken restricts Token to [A-Za-z0-9_-] -- the alphabet
+// internal/auth actually mints tokens in, so nothing legitimate is
+// refused. Narrower than "printable ASCII, no quote/backslash/dollar/
+// whitespace" on purpose: Token also lands bare inside PushBlock and
+// loggingPushBlock's http-header-field=("Content-Type: ...,
+// Authorization: Bearer <token>") in internal/routeros/commands.go, and
+// RouterOS splits that value on commas into separate headers regardless
+// of quoting -- a comma in Token would add a header, which quoting
+// cannot prevent, so the alphabet itself is the gate.
 func validSetupToken(token string) bool {
 	if token == "" {
 		return true
@@ -417,7 +481,10 @@ func validSetupToken(token string) bool {
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if c <= ' ' || c >= 0x7f || c == '"' || c == '\\' || c == '$' {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_' || c == '-':
+		default:
 			return false
 		}
 	}

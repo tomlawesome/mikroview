@@ -182,9 +182,9 @@ func testOneFixture(t *testing.T, root, version, tarPath string) {
 	// 2. The admin and viewer accounts exist and their passwords verify.
 	// #853 rule 6 only exempts accounts/tokens/recovery-keys from going
 	// *memory-only* when no history.keyFile is configured at all
-	// (storage.backendFor's hashedStores branch); once a key exists,
-	// every file-backed store -- these included -- is encrypted under
-	// it, hashes or not.
+	// (storage.backendFor's plaintextWithoutKeyStores branch); once a
+	// key exists, every file-backed store -- these included -- is
+	// encrypted under it, hashes or not.
 	authStore, err := auth.OpenWithBackend(backendFor("users.json", manifest.HistoryKeyEncrypted))
 	if err != nil {
 		t.Fatalf("opening the accounts store: %v", err)

@@ -157,6 +157,30 @@ describe('AuthSetup', () => {
     expect(location.href).toBe('')
   })
 
+  // #1218 audit finding 7: startSSOLink() can throw outright (a dropped
+  // connection, same as any other fetch), not just answer with an error
+  // string -- and unlike that answered-string case above, an uncaught
+  // throw here used to skip both the redirect and `created = true`,
+  // leaving AuthScreen's handleSubmit stuck mid-await and its submit
+  // button on "Please wait…" forever. The account already exists by
+  // then (register() above succeeded), so there is no form to retry
+  // against -- the operator needs the confirmation screen's working
+  // Continue button, the same as any other hand-off failure.
+  it('still confirms the account, with a working way in, when the hand-off to SSO throws outright', async () => {
+    vi.mocked(register).mockResolvedValue(null)
+    vi.mocked(startSSOLink).mockRejectedValue(new Error('network unreachable'))
+    authState.ssoAvailable = true
+
+    render(AuthSetup)
+    await createTheAdmin()
+
+    expect(await screen.findByText(/admin account created/i)).toBeTruthy()
+    expect(location.href).toBe('')
+
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
+  })
+
   it('never starts the journey when registration fails', async () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 

@@ -3,9 +3,11 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +21,7 @@ import (
 // are both about.
 func vaultWithTwoExports(t *testing.T) *backupvault.Vault {
 	t.Helper()
-	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t))
+	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +170,96 @@ func TestRouterBackupDiffNeedsBothGenerations(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func textStatus(t *testing.T, client *http.Client, ts *httptest.Server, generation string) int {
+	t.Helper()
+	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/" + generation + "/text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+func diffStatus(t *testing.T, client *http.Client, ts *httptest.Server, from, to string) int {
+	t.Helper()
+	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/diff?from=" + from + "&to=" + to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestTextAndDiffRefuseALockedVault covers #1262: handleRouterBackupText
+// and handleRouterBackupDiff carry the same vault passphrase gate
+// handleRouterBackupDownload has always had (#956), but nothing
+// exercised it against either of these two newer routes -- so a gate
+// that silently stopped applying here (a refactor that missed one call
+// site, say) would have shipped unnoticed.
+func TestTextAndDiffRefuseALockedVault(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Vault = vaultWithTwoExports(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	admin := setUpAdmin(t, ts)
+	ids := generationIDs(t, s.Vault)
+
+	if got := textStatus(t, admin, ts, ids[0]); got != http.StatusOK {
+		t.Fatalf("text before any passphrase = %d, want 200", got)
+	}
+	if got := diffStatus(t, admin, ts, ids[0], ids[1]); got != http.StatusOK {
+		t.Fatalf("diff before any passphrase = %d, want 200", got)
+	}
+
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/router-backups/lock", nil).Body.Close()
+	if !s.Vault.Locked() {
+		t.Fatal("the vault is not locked after POST /api/router-backups/lock")
+	}
+
+	if got := textStatus(t, admin, ts, ids[0]); got != http.StatusForbidden {
+		t.Errorf("text while locked = %d, want 403", got)
+	}
+	if got := diffStatus(t, admin, ts, ids[0], ids[1]); got != http.StatusForbidden {
+		t.Errorf("diff while locked = %d, want 403", got)
+	}
+
+	unlock := postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: testVaultPassphrase})
+	unlock.Body.Close()
+	if unlock.StatusCode != http.StatusOK {
+		t.Fatalf("unlock = %d, want 200", unlock.StatusCode)
+	}
+	if got := textStatus(t, admin, ts, ids[0]); got != http.StatusOK {
+		t.Errorf("text after unlocking = %d, want 200", got)
+	}
+	if got := diffStatus(t, admin, ts, ids[0], ids[1]); got != http.StatusOK {
+		t.Errorf("diff after unlocking = %d, want 200", got)
+	}
+}
+
+// TestVaultUnlockRefusalIsOneGateNotTwoCopies covers the other half of
+// #1262: the "another session holds the vault unlock" refusal --
+// word-for-word identical between handleRouterBackupDownload
+// (routerbackups.go) and readBackupText (this file) except for the verb
+// at the end -- was hand-copied rather than shared, so a future wording
+// fix applied to one had nothing to stop it silently missing the other.
+// Both routes must produce that refusal through one function, which
+// means the literal text appears in the package's source exactly once.
+func TestVaultUnlockRefusalIsOneGateNotTwoCopies(t *testing.T) {
+	const refusal = "another session holds the vault unlock"
+	var total int
+	for _, file := range []string{"routerbackups.go", "routerbackuptext.go", "routerbackupslock.go"} {
+		source, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("reading %s: %v", file, err)
+		}
+		total += bytes.Count(source, []byte(refusal))
+	}
+	if total != 1 {
+		t.Errorf("%q appears %d times across routerbackups.go, routerbackuptext.go and routerbackupslock.go, want exactly 1 (one shared gate, not a hand-copied second one)", refusal, total)
 	}
 }
 

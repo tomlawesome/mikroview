@@ -183,3 +183,61 @@ func TestBackendForKeepsTheHashedStoresWithoutAKey(t *testing.T) {
 		t.Errorf("flags: backendFor returned %T with no key, want nil -- flags is not a hashed store", backend)
 	}
 }
+
+// TestBackendForPersistsDroplistWithoutAKey is the v0.6.0 pre-release
+// audit's finding: on a default install (no history.keyFile configured,
+// the common case), the droplist store fell through the same "no key, no
+// storage" rule as any other store and stayed memory-only -- so every
+// entry an operator added was gone on the next restart, and the very
+// next scheduled fetch of the .rsc feed (a full sync -- see
+// droplist.Script's doc comment) pushed an empty list that wiped
+// whatever the router still had. Owner ruling: persist droplist by
+// default, the same plaintext-without-a-key exception #853 rule 6
+// already carved out for auth/tokens/recovery_keys, since an
+// operator-authored blocklist is not a secret the way a password is.
+func TestBackendForPersistsDroplistWithoutAKey(t *testing.T) {
+	dir := t.TempDir()
+	s := &storage{}
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "droplist.json")
+	backend, err := s.backendFor(ctx, "droplist", path)
+	if err != nil {
+		t.Fatalf("backendFor: %v", err)
+	}
+	if backend == nil {
+		t.Fatal("backendFor returned nil with no key -- droplist should keep persisting on a default install")
+	}
+	if _, ok := backend.(*persist.FileBackend); !ok {
+		t.Errorf("backendFor returned %T, want a plain *persist.FileBackend", backend)
+	}
+}
+
+// TestEveryPlaintextStoreIsNamedForTheOperator covers the v0.6.0
+// pre-release audit's Security stage. The no-key log line is the one
+// place an operator is told which stores reach the disk without
+// encryption, and it had gone stale: droplist was added to
+// plaintextWithoutKeyStores and the sentence still named only accounts,
+// tokens and recovery keys. An operator reading it concluded their drop
+// list was memory-only while it was being written in the clear.
+//
+// Adding a store to the exemption without naming it here now fails
+// rather than quietly shipping an incomplete notice.
+func TestEveryPlaintextStoreIsNamedForTheOperator(t *testing.T) {
+	for store := range plaintextWithoutKeyStores {
+		name, ok := plaintextStoreNames[store]
+		if !ok {
+			t.Errorf("store %q is exempt from encryption but has no name for the log line -- the operator would never be told it reaches the disk in the clear", store)
+			continue
+		}
+		if !strings.Contains(plaintextWithoutKeyList(), name) {
+			t.Errorf("store %q is named %q but that does not appear in the list the log line prints: %s", store, name, plaintextWithoutKeyList())
+		}
+	}
+
+	for store := range plaintextStoreNames {
+		if !plaintextWithoutKeyStores[store] {
+			t.Errorf("plaintextStoreNames still names %q, which is no longer exempt -- the log line would claim it is written in the clear when it is not", store)
+		}
+	}
+}

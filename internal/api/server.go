@@ -253,8 +253,9 @@ type Server struct {
 	// (that half is wired directly into the engine, not here). Always
 	// non-nil (internal/droplist.Open("") returns a usable, empty,
 	// unpersisted store), same always-usable convention as Audit above.
-	// Nothing in this package reads or writes it yet -- no route exists
-	// until #1224.
+	// #1224 wired it up: GET/POST /api/droplist, DELETE
+	// /api/droplist/{cidr...}, the key routes and the RouterOS feed
+	// below all read and write through this store.
 	Droplist *droplist.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
@@ -524,6 +525,18 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
 		{http.MethodGet, "/api/devices/macs", s.handleDeviceMACs},
+		// Issue #1281: declaring, enrolling and deleting a syslog-only
+		// device, and the addresses the listener gate has refused a line
+		// from. Admin-only writes beside the viewer-tier read above --
+		// see devices.go's own doc comments for why each is gated where
+		// it is.
+		{http.MethodPost, "/api/devices", s.handleDeviceCreate},
+		{http.MethodDelete, "/api/devices/{id}", s.handleDeviceDelete},
+		{http.MethodPost, "/api/devices/{id}/registration", s.handleDeviceRegister},
+		{http.MethodPost, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentCreate},
+		{http.MethodPost, "/api/devices/{id}/enrolment/address", s.handleDeviceEnrolmentRebind},
+		{http.MethodDelete, "/api/devices/{id}/enrolment", s.handleDeviceEnrolmentDelete},
+		{http.MethodGet, "/api/devices/refused", s.handleDevicesRefused},
 		{http.MethodGet, "/api/rules", s.handleRules},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push

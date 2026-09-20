@@ -41,6 +41,11 @@ cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$HTTP_PORT", httpRedirect: "", syslogTls: "127.0.0.1:$SYSLOG_PORT"}
 tls: {enabled: true, storePath: $DIR/tls}
 $(mv_store_block "$DIR" true)
+# Since #1281 the syslog listener refuses an unknown address at accept,
+# before the per-source cap this script is testing is ever reached -- so
+# the burst below needs to come from a declared device, not just any
+# loopback connection.
+devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]
 EOF
 
 # The embedded frontend only needs to exist for the build; rebuild it
@@ -103,10 +108,15 @@ else
   fail=1
 fi
 
-if grep -q "such rejections since start" "$DIR/server.log"; then
+# Matched together on the per-source-limit line specifically, not just
+# anywhere in the log: the enrolment gate's own rejection warning (#1281)
+# also ends "such rejections since start or last clear", so grepping for
+# that phrase alone passes even when the per-source cap below was never
+# reached at all.
+if grep "per-source connection limit" "$DIR/server.log" | grep -q "such rejections since start"; then
   say ok "the written line carries the running count"
 else
-  say FAIL "no running count in the rejection line"
+  say FAIL "no running count in the per-source rejection line"
   fail=1
 fi
 

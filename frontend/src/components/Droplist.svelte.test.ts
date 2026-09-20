@@ -19,6 +19,7 @@ vi.mock('../lib/api', () => ({
 
 import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
 import { droplistNavState } from '../lib/droplistNav.svelte'
+import { wizardState } from '../lib/wizard.svelte'
 import Droplist from './Droplist.svelte'
 import type { DroplistResponse } from '../lib/types'
 
@@ -142,6 +143,31 @@ describe('the pull key', () => {
     expect(onrefresh).toHaveBeenCalled()
   })
 
+  it('replace key needs the same two-step confirm as revoke', async () => {
+    vi.mocked(mintDroplistKey).mockResolvedValue({ key: 'k', createdAt: '2026-09-13T00:00:00Z', scheduler: '/system scheduler add' })
+    const onrefresh = vi.fn(async () => {})
+    render(Droplist, {
+      props: { resp: resp({ key: { present: true, createdAt: '2026-09-13T00:00:00Z', createdBy: 'tom' } }), onrefresh },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'replace key' }))
+    expect(mintDroplistKey).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByRole('button', { name: /confirm/ }))
+    expect(mintDroplistKey).toHaveBeenCalled()
+    expect(onrefresh).toHaveBeenCalled()
+  })
+
+  it('arming replace key then clicking elsewhere disarms it', async () => {
+    render(Droplist, {
+      props: { resp: resp({ key: { present: true, createdAt: '2026-09-13T00:00:00Z', createdBy: 'tom' } }), onrefresh: vi.fn() },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'replace key' }))
+    expect(screen.getByRole('button', { name: /confirm/ })).toBeTruthy()
+    await fireEvent.click(window)
+    expect(screen.getByRole('button', { name: 'replace key' })).toBeTruthy()
+    expect(mintDroplistKey).not.toHaveBeenCalled()
+  })
+
   it('minting reveals the key and the filled-in scheduler once', async () => {
     vi.mocked(mintDroplistKey).mockResolvedValue({
       key: 'the-fresh-key',
@@ -159,6 +185,25 @@ describe('the pull key', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'done' }))
     expect(screen.queryByText('the-fresh-key')).toBeNull()
+  })
+
+  // #1260: the mint call used to build the router's pull command from
+  // this browser tab's own window.location.host rather than
+  // wizardState.address (#1213 -- the operator's own saved answer to
+  // "what address can your router reach mikroview on?"), so a router
+  // ended up pointed at whatever host the admin happened to be browsing
+  // from rather than the address they actually saved.
+  it('mints the key against the operator saved address, not this tab\'s own host', async () => {
+    wizardState.address = 'operator-saved.example:8443'
+    vi.mocked(mintDroplistKey).mockResolvedValue({
+      key: 'the-fresh-key',
+      createdAt: '2026-09-14T00:00:00Z',
+      scheduler: '/system scheduler add name=mikroview-drop-pull ... the-fresh-key ...',
+    })
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn(async () => {}) } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'mint key' }))
+    expect(mintDroplistKey).toHaveBeenCalledWith('operator-saved.example:8443')
   })
 })
 

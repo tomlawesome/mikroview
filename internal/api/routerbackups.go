@@ -52,10 +52,19 @@ type routerBackupRouter struct {
 }
 
 type routerBackupsResponse struct {
-	// Enabled reports whether a retention key is configured at all --
-	// #394's "no key, no backups": with this false the drop box refuses
-	// every login and Routers is always empty.
-	Enabled          bool                 `json:"enabled"`
+	// Enabled reports whether a retention key is open and usable -- #394's
+	// "no key, no backups": with this false the drop box refuses every
+	// login and Routers is always empty. False covers two different
+	// situations -- see KeyUnreadable, which says which one.
+	Enabled bool `json:"enabled"`
+	// KeyUnreadable is #1264 finding 5: true when history.keyFile names a
+	// file that exists but could not be read (unreadable, truncated,
+	// wrong), as opposed to Enabled being false because no key was
+	// configured at all. The frontend must never render the two the same
+	// way -- a broken key told to "mint a new one" strands every backup
+	// already encrypted under the old one, since minting overwrites the
+	// file rather than repairing it.
+	KeyUnreadable    bool                 `json:"keyUnreadable"`
 	Routers          []routerBackupRouter `json:"routers"`
 	TotalGenerations int                  `json:"totalGenerations"`
 	TotalRouters     int                  `json:"totalRouters"`
@@ -134,10 +143,11 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 	}
 
 	resp := routerBackupsResponse{
-		Enabled:  s.Vault.Enabled(),
-		Routers:  []routerBackupRouter{},
-		Port:     s.SetupInstance.BackupPort,
-		LowSpace: s.Vault.LowSpace(),
+		Enabled:       s.Vault.Enabled(),
+		KeyUnreadable: s.SetupInstance.BackupKeyUnreadable,
+		Routers:       []routerBackupRouter{},
+		Port:          s.SetupInstance.BackupPort,
+		LowSpace:      s.Vault.LowSpace(),
 	}
 	resp.Lock = s.vaultLockStatus(r, time.Now())
 	if !s.Vault.Enabled() {
@@ -179,16 +189,10 @@ func (s *Server) handleRouterBackupDownload(w http.ResponseWriter, r *http.Reque
 	// The passphrase gate sits ahead of the read (#956): with a
 	// passphrase set, only the session that unlocked may download, and
 	// an unlock that has gone idle or lost its session is dropped here
-	// rather than merely refused.
-	if !s.vaultUnlockedFor(r, time.Now()) {
-		// The list reports `locked: false` while another admin's session
-		// holds the unlock, so "the vault is locked" would contradict what
-		// the caller just saw (#1124): say whose unlock it is not.
-		msg := "the vault is locked -- unlock it with the vault passphrase first"
-		if s.vaultUnlock.holder() != "" {
-			msg = "another session holds the vault unlock -- unlock it in this session to download"
-		}
-		http.Error(w, msg, http.StatusForbidden)
+	// rather than merely refused. Shared with routerbackuptext.go's
+	// readBackupText (#1262) -- see requireVaultUnlocked's own doc
+	// comment for why this used to be two hand-copied blocks.
+	if !s.requireVaultUnlocked(w, r, "download") {
 		return
 	}
 

@@ -2,14 +2,14 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  flagsBySource,
   drawerEvents,
-  flaggedSources,
   groupEvents,
   groupKeyOf,
   hiddenInDrawer,
   maxDrawerEvents,
 } from './grouping'
-import type { FirewallEvent } from './types'
+import type { FirewallEvent, Flag } from './types'
 
 let nextId = 1
 function ev(over: Partial<FirewallEvent> = {}): FirewallEvent {
@@ -116,17 +116,31 @@ describe('the drawer', () => {
   })
 })
 
+function flag(over: Partial<Flag> = {}): Flag {
+  return {
+    id: `f${nextId++}`,
+    type: 'port_scan',
+    target: '1.2.3.4',
+    detail: '',
+    count: 1,
+    firstSeen: '2026-08-13T10:00:00Z',
+    lastSeen: '2026-08-13T10:00:00Z',
+    cleared: false,
+    ...over,
+  } as Flag
+}
+
 describe('the flag marker', () => {
-  it('marks sources with an active flag', () => {
-    const set = flaggedSources([
-      { target: '1.2.3.4', cleared: false },
-      { target: '9.9.9.9', cleared: true },
+  it('marks sources with an active flag, and not cleared ones', () => {
+    const bySource = flagsBySource([
+      flag({ target: '1.2.3.4', cleared: false }),
+      flag({ target: '9.9.9.9', cleared: true }),
     ])
-    expect(set.has('1.2.3.4')).toBe(true)
-    expect(set.has('9.9.9.9')).toBe(false)
+    expect(bySource.has('1.2.3.4')).toBe(true)
+    expect(bySource.has('9.9.9.9')).toBe(false)
   })
 
   it('understands a target carrying a port suffix', () => {
-    expect(flaggedSources([{ target: '1.2.3.4 -> port 22', cleared: false }]).has('1.2.3.4')).toBe(true)
+    expect(flagsBySource([flag({ target: '1.2.3.4 -> port 22' })]).has('1.2.3.4')).toBe(true)
   })
 })

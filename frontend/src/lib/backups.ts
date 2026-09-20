@@ -8,8 +8,21 @@
 // turns those numbers, and the generation list beside them, into the
 // sentence the drawing writes.
 
-import type { RouterBackupGeneration, RouterBackupRouter } from './types'
+import type { RouterBackupGeneration, RouterBackupRouter, VaultLock } from './types'
 import { formatDayMonth, formatDurationShort, formatHM } from './format'
+
+/** vaultGated is round 44's download gate, in one place: a passphrase
+ * is set and this session does not hold the unlock -- whether nobody
+ * has it open (locked) or another of the admin's own sign-ins does.
+ *
+ * A lock that is not there yet is not gated. The wizard reads the lock
+ * off a backups response it may not have received, and "not loaded"
+ * must not read as "gated": that would send the tab to whatever the
+ * server answers a locked vault with, including a 403 page. */
+export function vaultGated(lock: VaultLock | null | undefined): boolean {
+  if (!lock) return false
+  return lock.passphraseSet && !lock.unlockedForYou
+}
 
 /** MAX_GENERATIONS mirrors backupvault.MaxGenerations -- ten kept per
  * router, oldest dropped first (owner decision, #394). Not imported

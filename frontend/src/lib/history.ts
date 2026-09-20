@@ -478,3 +478,65 @@ export function newHistoryKey(): string {
   for (const b of bytes) binary += String.fromCharCode(b)
   return btoa(binary)
 }
+
+// The wizard's step 6 re-mints on every component init -- which used to
+// mean every page reload, not just a fresh visit -- with the exact same
+// "write this to keys/history.key" instructions each time. An operator
+// who had already saved the first key, then reloaded before config.yaml
+// picked it up and restarted (still `blocked`, so the step still
+// shows), was handed a brand new key and told to overwrite the file
+// that held the one they'd saved -- silently making every backup and
+// event kept under the old key unreadable.
+//
+// sessionStorage is exactly the scope the step's own caveat already
+// promises ("generated in this tab... never sent anywhere"): gone the
+// moment the tab closes, unlike localStorage, but -- unlike plain
+// component state -- still there after a reload of that same tab.
+const SESSION_KEY_STORAGE_KEY = 'mikroview-wizard-history-key'
+
+/** Returns the key this tab already minted for step 6, if any, instead
+ * of a fresh one -- a reload must show what a previous mint here showed,
+ * not quietly offer to overwrite it. Falls back to minting (and saving)
+ * a new one on the first visit, or if storage is unavailable (private
+ * browsing, disabled storage) -- the same fresh-key behaviour the step
+ * always had before this fix, just no longer sessionStorage's problem
+ * to solve. */
+export function loadOrMintHistoryKey(): string {
+  try {
+    const existing = sessionStorage.getItem(SESSION_KEY_STORAGE_KEY)
+    if (existing) return existing
+  } catch {
+    // Fall through to a fresh mint below.
+  }
+  const fresh = newHistoryKey()
+  saveHistoryKeyForSession(fresh)
+  return fresh
+}
+
+/** Persists whatever the field currently holds -- a fresh Reroll, or an
+ * operator's own pasted key -- so the next reload in this tab shows that
+ * value rather than reverting to an earlier mint. Best-effort: a storage
+ * failure here just means the field falls back to component state alone,
+ * not a thrown error the wizard has to handle. */
+export function saveHistoryKeyForSession(key: string): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY_STORAGE_KEY, key)
+  } catch {
+    // Best-effort, see above.
+  }
+}
+
+/** Drops this tab's stored key once nothing needs it again -- the step
+ * has left `blocked`, so the server has already read the mounted file
+ * and a later reload cannot want the old value back (v0.6.0
+ * pre-release audit, Security stage). Nothing cleared it before, so the
+ * key stayed readable for the life of the tab: a logout and a second
+ * login rehydrated it into the new session, possibly a different
+ * operator's. Best-effort, for saveHistoryKeyForSession's reasons. */
+export function forgetHistoryKeyForSession(): void {
+  try {
+    sessionStorage.removeItem(SESSION_KEY_STORAGE_KEY)
+  } catch {
+    // Best-effort, see above.
+  }
+}

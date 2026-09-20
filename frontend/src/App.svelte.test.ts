@@ -118,7 +118,7 @@ if (typeof IntersectionObserver === 'undefined') {
 }
 
 const { default: App } = await import('./App.svelte')
-const { authState } = await import('./lib/auth.svelte')
+const { authState, pageReload } = await import('./lib/auth.svelte')
 const { watchlistState } = await import('./lib/watchlist.svelte')
 const { appState } = await import('./lib/state.svelte')
 const { fetchWatchlistEntries, fetchStats, fetchFlags, ApiError } = await import('./lib/api')
@@ -205,6 +205,8 @@ describe('App mount effect: background poll failure surfaces refreshError (#1089
   })
 
   it('routes a 401 to the login bounce instead of refreshError', async () => {
+    // The bounce reloads the page (#1083); jsdom cannot, so stub it.
+    const reload = vi.spyOn(pageReload, 'now').mockImplementation(() => {})
     vi.useFakeTimers()
     render(App)
     await vi.advanceTimersByTimeAsync(0)
@@ -216,5 +218,6 @@ describe('App mount effect: background poll failure surfaces refreshError (#1089
 
     expect(appState.refreshError).toBeNull()
     expect(authState.state).toBe('unauthenticated')
+    expect(reload).toHaveBeenCalledTimes(1)
   })
 })

@@ -5,12 +5,10 @@ package droplist
 import (
 	"errors"
 	"net/netip"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/ingest"
-	"github.com/tomlawesome/mikroview/internal/routerstate"
+	"github.com/tomlawesome/mikroview/internal/device"
 )
 
 func TestValidateRejectsUnparseableInput(t *testing.T) {
@@ -96,29 +94,34 @@ func TestValidateAcceptsOrdinaryPublicRange(t *testing.T) {
 }
 
 func TestValidateRejectsRoutersOwnRange(t *testing.T) {
-	// Build own from a real routerstate.Store with a pushed page, as the
-	// issue asks: this is the actual producer this check runs against in
-	// production (Add gets own from OwnRanges, which routerstate.Store
-	// implements), not a hand-written fixture that could drift from it.
-	rs := routerstate.New()
-	p, err := ingest.DecodePayload(strings.NewReader(
-		`{"kind":"ip-address","page":1,"pages":1,"records":[` +
-			`{"address":"203.0.114.1/24","network":"203.0.114.0","interface":"ether1","comment":"wan"}]}`,
-	))
+	// Build own from a real device.Registry with a redeemed enrolment,
+	// the actual producer this check runs against in production since
+	// issue #1281's audit (Add gets own from OwnRanges, which
+	// device.Registry implements) -- not a hand-written fixture that
+	// could drift from it. Before #1281 this built own from a
+	// routerstate.Store's pushed /ip/address table instead; that
+	// evidence source was removed because a router's own claim about its
+	// address is not something to protect a range on.
+	r := device.NewRegistry(nil)
+	now := time.Now()
+	if _, err := r.Create("router-1", "router-1", now); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	token, _, err := r.MintEnrolment("router-1", "203.0.114.1", now)
 	if err != nil {
-		t.Fatalf("DecodePayload: %v", err)
+		t.Fatalf("MintEnrolment: %v", err)
 	}
-	if err := rs.Apply("router-1", p, time.Now()); err != nil {
-		t.Fatalf("Apply: %v", err)
+	if !r.TryEnrol("203.0.114.1", []byte("mikroview-enrol "+token)) {
+		t.Fatal("TryEnrol failed to redeem the freshly minted token")
 	}
 
-	own := rs.OwnPrefixes()
+	own := r.OwnPrefixes()
 	if len(own) != 1 {
-		t.Fatalf("OwnPrefixes() = %v, want exactly one pushed range", own)
+		t.Fatalf("OwnPrefixes() = %v, want exactly the one enrolled address", own)
 	}
 
-	if _, err := Validate("203.0.114.128/25", own); !errors.Is(err, ErrRouterOwn) {
-		t.Errorf("Validate(overlapping router's own range) error = %v, want ErrRouterOwn", err)
+	if _, err := Validate("203.0.114.0/24", own); !errors.Is(err, ErrRouterOwn) {
+		t.Errorf("Validate(a /24 overlapping the router's own address) error = %v, want ErrRouterOwn", err)
 	}
 	// A disjoint public range must not be caught by the same check.
 	if _, err := Validate("203.0.115.0/24", own); err != nil {

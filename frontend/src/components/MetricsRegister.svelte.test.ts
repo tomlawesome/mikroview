@@ -125,4 +125,45 @@ describe('MetricsRegister episode-count annotations', () => {
     // tick) differ from each other.
     expect(Math.abs(Number(label?.getAttribute('y')) - (Number(tick?.getAttribute('y1')) + 3))).toBeLessThanOrEqual(0.5)
   })
+
+  // #1218 audit finding 9: TICK_N_GAP (11px) asks more room per label than
+  // ROW_H (8px) gives per row, so a *long* busy run -- not the short
+  // four-minute one above -- pushed the ladder's last figure well past
+  // the row-based height a plain n*ROW_H canvas provides. Previously
+  // nothing grew the paper to hold it, so the labels ran off the bottom
+  // margin instead. BOTTOM is MetricsRegister's own bottom-margin
+  // constant, pinned here the same way LINE_H above pins TICK_N_GAP.
+  const BOTTOM = 26
+
+  it('grows the paper to keep every ×N figure on it, through a long busy run', () => {
+    const minutes = Array.from({ length: 40 }, (_, m) => m)
+    const hour = buildHour(
+      minutes.map((m) => ({ time: minute(m), byAction: { accept: 400 } })),
+      minutes.map((m) => ({ time: minute(m), byType: { activity_spike: 2 + (m % 5) } })),
+    )
+    const { container } = render(MetricsRegister, { hour, cursor: -1, onselect: () => {} })
+    const svgHeight = Number(container.querySelector('svg')?.getAttribute('height'))
+    const labels = Array.from(container.querySelectorAll('.tick-n'))
+    // Every minute still gets its figure, and none of them overlaps its
+    // neighbour -- growing the paper is not a licence to reopen #1155's
+    // smudge, only to stop it running off the edge.
+    expect(labels.length).toBe(40)
+    const ys = labels.map((l) => Number(l.getAttribute('y')))
+    for (let i = 1; i < ys.length; i++) {
+      expect(ys[i] - ys[i - 1]).toBeGreaterThanOrEqual(LINE_H)
+    }
+    for (const y of ys) {
+      expect(y).toBeLessThanOrEqual(svgHeight - BOTTOM + 3)
+      expect(y).toBeGreaterThan(0)
+    }
+    // The paper actually grew past what a plain 40-row canvas would be --
+    // this is the defect itself, not an implementation detail: a fixed
+    // canvas is exactly what let the labels run off it before. HEADER
+    // mirrors the component's own Math.max(118, ...) -- see its comment
+    // above FLAG_LABEL_DROP for why the flag-label sweep can ask for
+    // more than the 118px floor.
+    const HEADER = Math.max(118, Math.ceil(34 + FLAG_LABEL_DROP + 8))
+    const rowBasedHeight = HEADER + 40 * 8 + BOTTOM
+    expect(svgHeight).toBeGreaterThan(rowBasedHeight)
+  })
 })

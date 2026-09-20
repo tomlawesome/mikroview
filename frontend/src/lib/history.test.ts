@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
   DAY_TICKS,
   addDays,
@@ -12,6 +12,7 @@ import {
   dayX,
   daysAtX,
   heldRow,
+  loadOrMintHistoryKey,
   memoryHint,
   mibOf,
   newHistoryKey,
@@ -20,6 +21,7 @@ import {
   proposeDays,
   proposeOff,
   restartRow,
+  saveHistoryKeyForSession,
   stateRow,
   stepDays,
 } from './history'
@@ -338,5 +340,34 @@ describe('newHistoryKey', () => {
   it('is a fresh key every time, so Reroll is not decoration', () => {
     const keys = new Set(Array.from({ length: 50 }, () => newHistoryKey()))
     expect(keys.size).toBe(50)
+  })
+})
+
+// #1218 audit finding 4: a bare newHistoryKey() on every wizard init
+// meant a reload while step 6 was still `blocked` (key written, but
+// config.yaml not yet updated and restarted) handed back a *different*
+// key with the same "write this to keys/history.key" instructions --
+// silently offering to overwrite the file the operator had already
+// saved, which would make everything kept under the old key unreadable.
+describe('loadOrMintHistoryKey', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+  })
+
+  it('mints and saves a key on the first call', () => {
+    const key = loadOrMintHistoryKey()
+    expect(key).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+    expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBe(key)
+  })
+
+  it('returns the same key this tab already minted, not a fresh one', () => {
+    const first = loadOrMintHistoryKey()
+    const second = loadOrMintHistoryKey()
+    expect(second).toBe(first)
+  })
+
+  it('picks up a key saveHistoryKeyForSession already stored -- what a Reroll or a pasted key leaves behind', () => {
+    saveHistoryKeyForSession('an-operators-own-key')
+    expect(loadOrMintHistoryKey()).toBe('an-operators-own-key')
   })
 })
