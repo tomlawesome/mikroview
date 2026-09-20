@@ -221,7 +221,17 @@ func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	wiped := s.Definitions.ResetExpectations()
+	wiped, err := s.Definitions.ResetExpectations()
+	if err != nil {
+		// Refused rather than reporting the watchlist cleared: the store
+		// rolled its own wipe back on a failed save (R6) and still holds
+		// every entry it held before this request, so proceeding to
+		// reset the suggestion tracker on top of that would desync the
+		// two exactly the way this handler's own doc comment warns
+		// against.
+		http.Error(w, "resetting the watchlist failed, so nothing was changed", http.StatusInternalServerError)
+		return
+	}
 	s.Suggest.Reset()
 	s.Suggest.Sync(suggest.Generate(s.RouterState))
 

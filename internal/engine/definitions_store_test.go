@@ -599,3 +599,126 @@ func TestSetEnabledAndScopeRefusesAnUnavailableDefinition(t *testing.T) {
 		t.Errorf("SetEnabledAndScope on an unavailable definition = %v, want ErrDefinitionImmutable", err)
 	}
 }
+
+// --- R6: a write that cannot be saved must not take effect in memory --
+//
+// s.wb.MarkDirty cannot itself fail (see tryPersistLocked's own doc
+// comment): the write-behind writer coalesces and retries against the
+// backend on its own goroutine. The only failure tryPersistLocked can
+// report is the encode that has to happen before MarkDirty is ever
+// called, so each test below poisons the document with an entry that
+// cannot be marshalled (a job a fake failing backend cannot do here,
+// unlike internal/auth or internal/entities' synchronous persistLocked)
+// rather than injecting a failing backend.
+
+// poisonDefinitionsStoreForTest inserts a raw entry that fails to
+// encode, so the next tryPersistLocked call in s returns ErrPersistFailed
+// regardless of which id a test is actually exercising.
+func poisonDefinitionsStoreForTest(s *DefinitionsStore) {
+	s.mu.Lock()
+	s.raw["\x00poison"] = json.RawMessage("{not valid json")
+	s.mu.Unlock()
+}
+
+func TestUpsertLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	poisonDefinitionsStoreForTest(s)
+
+	d := NewDefinition("new rule", IntentDetection, KindDeclarative)
+	d.Provenance = Provenance{Origin: ProvenanceCustom}
+	d.Detection = testDetectionSpec()
+
+	if err := s.Upsert(d); err == nil {
+		t.Fatal("Upsert against a document that cannot be encoded = nil error, want one")
+	} else if !errors.Is(err, ErrPersistFailed) {
+		t.Errorf("Upsert error = %v, want ErrPersistFailed", err)
+	}
+	if _, ok := s.Get(d.ID); ok {
+		t.Error("expected the definition to not exist in memory after a failed persist")
+	}
+}
+
+// TestUpsertRestoresThePreviousDefinitionWhenPersistFails proves the
+// rollback restores the previous bytes, not just "nothing new
+// appeared" -- an edit that cannot be saved must leave the old name in
+// place.
+func TestUpsertRestoresThePreviousDefinitionWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDefinition("original name", IntentDetection, KindDeclarative)
+	d.Provenance = Provenance{Origin: ProvenanceCustom}
+	d.Detection = testDetectionSpec()
+	if err := s.Upsert(d); err != nil {
+		t.Fatal(err)
+	}
+
+	poisonDefinitionsStoreForTest(s)
+	edited := d
+	edited.Name = "changed name"
+	if err := s.Upsert(edited); err == nil {
+		t.Fatal("Upsert against a document that cannot be encoded = nil error, want one")
+	}
+	got, ok := s.Get(d.ID)
+	if !ok || got.Definition.Name != "original name" {
+		t.Errorf("expected the previous definition restored after a failed persist, got %+v (ok=%v)", got, ok)
+	}
+}
+
+// TestSetEnabledAndScopeLeavesTheDefinitionUnchangedWhenPersistFails
+// exercises mutateLocking's rollback -- the shared door
+// SetEnabledAndScope, SetParams, SetName, SetFamily, SetDetection and
+// ResetParams all go through.
+func TestSetEnabledAndScopeLeavesTheDefinitionUnchangedWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedShippedDefinitions(s, nil, DefaultShippedDefaults()); err != nil {
+		t.Fatalf("SeedShippedDefinitions: %v", err)
+	}
+	before, _ := s.Get("port_scan")
+
+	poisonDefinitionsStoreForTest(s)
+	if err := s.SetEnabledAndScope("port_scan", !before.Definition.Enabled, Scope{}); err == nil {
+		t.Fatal("SetEnabledAndScope against a document that cannot be encoded = nil error, want one")
+	} else if !errors.Is(err, ErrPersistFailed) {
+		t.Errorf("SetEnabledAndScope error = %v, want ErrPersistFailed", err)
+	}
+	after, _ := s.Get("port_scan")
+	if after.Definition.Enabled != before.Definition.Enabled {
+		t.Errorf("Enabled changed despite a failed persist: before=%v after=%v", before.Definition.Enabled, after.Definition.Enabled)
+	}
+}
+
+func TestDeleteLeavesTheDefinitionInPlaceWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDefinition("to delete", IntentDetection, KindDeclarative)
+	d.Provenance = Provenance{Origin: ProvenanceCustom}
+	d.Detection = testDetectionSpec()
+	if err := s.Upsert(d); err != nil {
+		t.Fatal(err)
+	}
+
+	poisonDefinitionsStoreForTest(s)
+	if err := s.Delete(d.ID); err == nil {
+		t.Fatal("Delete against a document that cannot be encoded = nil error, want one")
+	} else if !errors.Is(err, ErrPersistFailed) {
+		t.Errorf("Delete error = %v, want ErrPersistFailed", err)
+	}
+	if _, ok := s.Get(d.ID); !ok {
+		t.Error("expected the definition to still exist after a failed persist")
+	}
+}
+
+// Reset itself is not converted -- see its own doc comment for why
+// resetLocking's wipe-before-encode shape leaves nothing for a poisoned
+// entry to break: there is no reachable failure here to write a
+// regression test against.
