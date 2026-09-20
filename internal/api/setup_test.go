@@ -4,6 +4,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -165,6 +167,36 @@ func TestSetupMarkAcceptsTheSixthStep(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /api/setup/mark for step 6 = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestSetupMarkRangeMessageMatchesMaxStep is #1304's F3: the refusal for
+// a step outside the ledger's range used to hardcode "1-6" in this
+// package while setup.MaxStep (the number that actually bounds a mark,
+// per that constant's own comment) had already moved to 7 -- a second
+// place carrying the step count, free to drift from the first. The
+// message is now built from setup.MaxStep directly, so this test would
+// catch a hardcoded literal here going stale again the way it did before
+// #1291 added the seventh step.
+func TestSetupMarkRangeMessageMatchesMaxStep(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: setup.MaxStep + 1, Outcome: "skipped"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST step past the last = %d, want 400", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading response body: %v", err)
+	}
+	want := fmt.Sprintf("step must be 1-%d and outcome one of skipped, forced\n", setup.MaxStep)
+	if got := string(body); got != want {
+		t.Errorf("body = %q, want %q", got, want)
 	}
 }
 
