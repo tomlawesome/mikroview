@@ -301,6 +301,56 @@ workflow:
       - frontend/node_modules/
     policy: $NPM_CACHE_POLICY
 
+# #1304 item E7: the comment above explains why gate:scenarios,
+# gate:scripts and perf:promotion cannot use .npm_cache above -- they run
+# the live-check image as its own `node` user (uid 1000, fixed by
+# live-check.Dockerfile), and that cache is written by the root-running
+# node:26 jobs. This is the same node_modules path under a key those
+# root jobs never touch (`prefix`, not the bare lockfile hash), so the
+# two caches never collide and every job that pulls or pushes it runs as
+# the same uid. A plain entry, not wrapped in a `cache:` key like
+# .npm_cache above, because gate:scenarios' three engines need it
+# alongside other fields in one list rather than merged in as a whole
+# job (see .gate_scenarios_shard below).
+.live_check_npm_cache_entry: &live_check_npm_cache_entry
+  key:
+    prefix: live-check
+    files:
+      - frontend/package-lock.json
+  paths:
+    - frontend/node_modules/
+  policy: $NPM_CACHE_POLICY
+
+# #1304 item E6: test:build-checks and security:licence-policy each curl
+# and untar the same pinned Go tarball from go.dev on every run. Keyed on
+# go.mod so a toolchain bump invalidates it, same convention as the npm
+# caches above. An entry, not a `cache:`-wrapped anchor, for the same
+# reason as live_check_npm_cache_entry: both jobs already carry
+# .npm_cache and a job cannot merge two anchors that each define `cache:`
+# (the second is silently dropped) -- see where these are used.
+.go_toolchain_cache_entry: &go_toolchain_cache_entry
+  key:
+    files:
+      - go.mod
+  paths:
+    - .go-toolchain-cache/
+  policy: $NPM_CACHE_POLICY
+
+# #1304 item E8: test:go and test:postgres each run
+# scripts/fetch-upgrade-fixtures.sh, which downloads every recorded
+# upgrade fixture from the generic package registry. The script already
+# skips a file already present, so caching .upgrade-fixtures/ turns a
+# repeat pipeline's two downloads into two no-ops rather than two fresh
+# fetches; a fixed key (not lockfile- or go.mod-keyed) because nothing in
+# the repo names which fixture versions exist -- the registry does, and
+# the script itself decides what is missing. Both jobs run as root in an
+# unmodified golang:1.27 container, so there is no cross-uid risk here.
+.upgrade_fixtures_cache_entry: &upgrade_fixtures_cache_entry
+  key: upgrade-fixtures
+  paths:
+    - .upgrade-fixtures/
+  policy: $NPM_CACHE_POLICY
+
 # Standing on an earlier run instead of repeating it (#1066, ported from
 # Orbit's reuse gate, orbit #898). A push that only touched one shard's
 # scenario files used to rerun all four gate:scenarios shards plus
@@ -526,6 +576,13 @@ test:go:
   # internal/config/env_docs_test.go and problem_docs_test.go). A prose
   # edit can fail this job for real, so it runs for prose.
   <<: *dev_or_mr
+  # #1304 item E8: shared with test:postgres below, so a fixture already
+  # fetched by either job on an earlier pipeline is not fetched again --
+  # see upgrade_fixtures_cache_entry above. fetch-upgrade-fixtures.sh
+  # already skips a file it finds present, so this only ever saves a
+  # download, never risks serving something stale.
+  cache:
+    - *upgrade_fixtures_cache_entry
   # GitLab's docker executor runs this container as root by default; GitHub's
   # ci.yml runs the same test directly on the runner VM as an unprivileged
   # user. That mismatch makes permission-enforcement tests (e.g.
@@ -604,9 +661,23 @@ test:build-checks:
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
       exists: ["frontend/package.json"]
-  <<: [*git_safe, *npm_cache]
+  <<: *git_safe
+  # #1304 item E6: a job cannot merge two anchors that each define
+  # `cache:` (only the first is kept), so this needs both cache entries
+  # written out rather than merging in .npm_cache -- see
+  # go_toolchain_cache_entry above, next to .npm_cache itself.
+  cache:
+    - key:
+        files:
+          - frontend/package-lock.json
+      paths:
+        - frontend/node_modules/
+      policy: $NPM_CACHE_POLICY
+    - *go_toolchain_cache_entry
   script:
-    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - mkdir -p .go-toolchain-cache
+    - test -f .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - (cd frontend && npm ci && npm run build)
     - node frontend/scripts/check-bundle-budget.mjs
@@ -630,6 +701,10 @@ test:postgres:
   tags: [light]
   image: golang:1.27
   <<: *dev_or_mr_code
+  # #1304 item E8: shared with test:go above -- see
+  # upgrade_fixtures_cache_entry and the comment on test:go's cache.
+  cache:
+    - *upgrade_fixtures_cache_entry
   services:
     - name: postgres:18-alpine
       alias: postgres
@@ -945,13 +1020,31 @@ gate:image:
 # The image runs as its own `node` user (the gate must not run as root --
 # docs/decisions/gitlab-ci-root-in-container-test-failure.md) and the
 # executor checks out world-writable, so no chown dance is needed here.
-gate:scenarios:
+#
+# A hidden template, `<<:`-merged into the three concrete jobs below,
+# rather than repeating the script: gate:scenarios (Chromium, every MR
+# and `dev` pipeline) and the two engines #1306 adds (Firefox and
+# WebKit, dev -> preview merge requests only) run the identical shard
+# script, so it is written once here. Each concrete job supplies its own
+# `rules:` -- the one thing that has to differ -- by merging *git_safe
+# (and *dev_or_mr_code for Chromium alone) alongside this anchor rather
+# than through it, since a job cannot merge two anchors that both set
+# `rules:`.
+.gate_scenarios_shard: &gate_scenarios_shard
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe]
   parallel: 4
   timeout: 30m
+  # #1304 item E7: node_modules for this image's own `node` user, keyed
+  # separately from .npm_cache so it never crosses paths with the
+  # root-owned cache (see live_check_npm_cache_entry above). All four
+  # shards, times three engines once #1306 lands, pull and push the same
+  # key: they install identical node_modules from the same lockfile, so
+  # a race on the upload just leaves whichever shard finished last, not
+  # a corrupt cache.
+  cache:
+    - *live_check_npm_cache_entry
   script:
     # #1066: CI_JOB_NAME under `parallel: 4` is "gate:scenarios 1/4" etc,
     # exactly the shape scripts/ci-reuse-inputs.js's JOB_INPUTS uses. Node
@@ -1054,6 +1147,38 @@ gate:scenarios:
       - ci-reuse-evidence/
     expire_in: 1 week
 
+gate:scenarios:
+  <<: [*dev_or_mr_code, *git_safe, *gate_scenarios_shard]
+
+# #1306: dev -> preview also runs the scenario suite under Firefox and
+# WebKit, not only Chromium -- owner ruling 2026-09-20. The live-check
+# image already carries all three engines (AGENTS.md, "The second host
+# live-check runs on"); #659 shipped a static `style` attribute Chromium
+# tolerates and Firefox refuses under this app's CSP, past a
+# Chromium-only gate, found only by the owner opening the app -- these
+# two engines are part of the dev -> preview promotion specifically so
+# that class of defect is caught here instead. A branch-tip push and an
+# ordinary merge request into `dev` stay Chromium-only: nothing here
+# changes gate:scenarios above.
+#
+# Rule shape copied from policy:promotion-hop (not the #1038 docs-only
+# ladder gate:scenarios uses): this blocks the merge exactly like the
+# Chromium shards -- same `gate` stage, no `allow_failure` -- on every
+# dev -> preview merge request, docs-only diff or not.
+gate:scenarios:firefox:
+  <<: [*git_safe, *gate_scenarios_shard]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+  variables:
+    MV_BROWSER: firefox
+
+gate:scenarios:webkit:
+  <<: [*git_safe, *gate_scenarios_shard]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+  variables:
+    MV_BROWSER: webkit
+
 # The four standalone shell checks (scripts/run-live-scripts.sh), once,
 # plus the quiet-host unit tests (#1003) -- plain bash, no live instance
 # needed, so they run here rather than earning their own job.
@@ -1063,6 +1188,10 @@ gate:scripts:
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: [*dev_or_mr_code, *git_safe]
   timeout: 30m
+  # #1304 item E7: same live-check-user npm cache gate:scenarios' shards
+  # share -- see live_check_npm_cache_entry above.
+  cache:
+    - *live_check_npm_cache_entry
   script:
     - set -o pipefail
     - (cd frontend && npm ci)
@@ -1176,6 +1305,14 @@ perf:promotion:
   # depends on the world-writable checkout (comment above it).
   variables:
     FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+  # #1304 item E7: the same live-check-user npm cache gate:scenarios and
+  # gate:scripts share (live_check_npm_cache_entry above) -- this job
+  # runs the identical image as the same uid 1000, so ownership is never
+  # the issue .npm_cache hit. It runs on the `big` lane rather than
+  # `light`; if that lane's runner does not share cache storage with
+  # `light`'s this is a harmless miss, same cold npm ci as today.
+  cache:
+    - *live_check_npm_cache_entry
   script:
     - set -o pipefail
     - t0=$(date +%s)
@@ -1463,10 +1600,23 @@ security:licence-policy:
   stage: security
   tags: [light]
   image: node:26-bookworm
-  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
+  <<: [*dev_or_mr_code, *git_safe]
+  # #1304 item E6: same reasoning as test:build-checks above -- a job
+  # cannot merge two `cache:`-defining anchors, so both entries are
+  # written out here rather than merging in .npm_cache.
+  cache:
+    - key:
+        files:
+          - frontend/package-lock.json
+      paths:
+        - frontend/node_modules/
+      policy: $NPM_CACHE_POLICY
+    - *go_toolchain_cache_entry
   script:
     - node --test tools/licenses/licence-policy.test.mjs
-    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - mkdir -p .go-toolchain-cache
+    - test -f .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     # `go install` drops the binary in $(go env GOPATH)/bin, which the node
     # image does not have on PATH; pipeline 287 failed with "command not
