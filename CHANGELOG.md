@@ -450,6 +450,16 @@ Nothing yet.
 
 ### Fixed
 
+- **Safari no longer stalls while the stream fills** (#1308). Once the
+  stream held a few hundred rows, each new line made Safari restyle
+  every row below it, and a burst of events could freeze the page for
+  a minute where Chrome and Firefox took seconds. A row now keeps its
+  stripe when newer lines arrive above it. The alternating pattern is
+  unchanged; which row it starts on now depends on arrival order rather
+  than always being the top one.
+- **"Run setup" on the map's degraded statement can be tapped in
+  Safari** (#1307). Safari never registers taps on the highlighted word
+  of an SVG line, so the whole line is the control now.
 - **Signing out now clears everything the last admin saw** (#1083).
   The API and ingest token list, the account list, the admin-action
   log, the storage panel's backend details, the config diagnostics, the

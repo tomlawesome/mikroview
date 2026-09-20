@@ -5583,24 +5583,30 @@
           <text x="-110" y="12" class="n-sub">{waistSub}</text>
           {#if degradedStatement}
             <text x="-110" y="34" class="deg-t">no address table pushed — zones from boundaries</text>
-            <text x="-110" y="50" class="deg-t"
-              ><tspan
-                class="deg-go"
-                role="button"
-                tabindex="0"
-                aria-label="Run setup — it adds the /ip address table"
-                onclick={(e) => {
+            <!-- The control is the whole line, not the accent words inside
+                 it: WebKit hit-tests SVG text at the <text> element and never
+                 at a tspan, so pointer events restored on the tspan alone
+                 left Safari with nothing to click (the v0.6.0 WebKit gate).
+                 The accent and the underline still mark the words that say
+                 what happens. -->
+            <text
+              x="-110"
+              y="50"
+              class="deg-t deg-line"
+              role="button"
+              tabindex="0"
+              aria-label="Run setup — it adds the /ip address table"
+              onclick={(e) => {
+                e.stopPropagation()
+                wizardState.launch()
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
                   e.stopPropagation()
                   wizardState.launch()
-                }}
-                onkeydown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    wizardState.launch()
-                  }
-                }}>Run setup ▸</tspan
-              > adds the address table</text
+                }
+              }}><tspan class="deg-go">Run setup ▸</tspan> adds the address table</text
             >
           {/if}
         </g>
@@ -8754,17 +8760,21 @@
     font-family: var(--font-mono);
   }
 
-  /* The way in, in the accent -- the one ability the statement carries.
-     The waist card is `.passive` so policy edges beneath it stay
-     clickable; this restores pointer events for the link alone. */
-  .deg-go {
-    fill: var(--accent);
+  /* The way in -- the one ability the statement carries. The waist
+     card is `.passive` so policy edges beneath it stay clickable; this
+     restores pointer events for the one line that is a control, on the
+     <text> itself since WebKit never hit-tests a tspan. */
+  .deg-line {
     pointer-events: auto;
     cursor: pointer;
   }
 
-  .deg-go:hover,
-  .deg-go:focus-visible {
+  .deg-go {
+    fill: var(--accent);
+  }
+
+  .deg-line:hover .deg-go,
+  .deg-line:focus-visible .deg-go {
     text-decoration: underline;
   }
 

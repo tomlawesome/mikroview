@@ -204,6 +204,34 @@
   const displayRendered = $derived([...rendered].reverse())
   const displayGroups = $derived([...groups].reverse())
 
+  // Which rows carry the #644 band. Not `i % 2` from the top: with the
+  // newest row first, that flips the stripe on every row below each
+  // arrival, and WebKit re-resolves style for every cell of every row
+  // whose class changed -- 450 events into an 800-row stream took
+  // 45-85 s in Safari against 4 s in Chromium (#1308). So a row keeps
+  // the stripe it was given, and a newcomer takes the opposite of the
+  // row beneath it; the walk is oldest-first so the bottom is the
+  // anchor and eviction there moves nobody. A row is only reassigned
+  // when keeping it would put two of the same stripe together (a
+  // filter change), which restyles once, on the user's action.
+  function assignStripes<K>(kept: Map<K, boolean>, keys: K[]): Map<K, boolean> {
+    const next = new Map<K, boolean>()
+    let below: boolean | null = null
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const had = kept.get(keys[i])
+      const band: boolean = below === null ? (had ?? false) : had !== undefined && had !== below ? had : !below
+      next.set(keys[i], band)
+      below = band
+    }
+    return next
+  }
+  // One memory per list: rows are keyed by event id, groups by group
+  // key, and each mode's derived only ever reads its own.
+  let rowStripeMemory = new Map<number, boolean>()
+  let groupStripeMemory = new Map<string, boolean>()
+  const rowStripes = $derived((rowStripeMemory = assignStripes(rowStripeMemory, displayRendered.map((e) => e.id))))
+  const groupStripes = $derived((groupStripeMemory = assignStripes(groupStripeMemory, displayGroups.map((g) => g.key))))
+
   // What the empty-body area shows when `rendered` has nothing in it --
   // one derived rather than the inline ternary chain this used to be,
   // because #549 adds a fourth case (still loading) ahead of the three
@@ -445,14 +473,14 @@
         </div>
 
         {#if groupModeState.enabled}
-          {#each displayGroups as group, gi (group.key)}
+          {#each displayGroups as group (group.key)}
             <EventRow
               event={group.head}
               deviceName={deviceName(group.head.deviceId)}
               count={group.count}
               sourceFlags={flagsBySourceMap.get(group.head.srcIp ?? '') ?? []}
               dimmed={isDimmed(group.head)}
-              banded={gi % 2 === 1}
+              banded={groupStripes.get(group.key) ?? false}
               expandable={group.count > 1}
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
@@ -494,13 +522,13 @@
             {/if}
           {/each}
         {:else}
-          {#each displayRendered as event, i (event.id)}
+          {#each displayRendered as event (event.id)}
             <EventRow
               {event}
               deviceName={deviceName(event.deviceId)}
               sourceFlags={flagsBySourceMap.get(event.srcIp ?? '') ?? []}
               dimmed={isDimmed(event)}
-              banded={i % 2 === 1}
+              banded={rowStripes.get(event.id) ?? false}
               onOpen={() => (selectedEvent = event)}
             />
           {/each}

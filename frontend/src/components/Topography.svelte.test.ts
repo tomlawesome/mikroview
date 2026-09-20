@@ -1076,6 +1076,29 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     wizardState.open = false
   })
 
+  it('makes the whole statement line the control, since WebKit never hit-tests a tspan', () => {
+    zonesState.pushed = []
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
+    wizardState.open = false
+    const { container } = render(Topography)
+    flushSync()
+
+    // The waist card is pointer-events: none, and WebKit hit-tests SVG
+    // text at the <text> element only -- a tspan restoring pointer
+    // events is unreachable there, which is what the v0.6.0 WebKit gate
+    // found. So the button, the handlers and the pointer-events
+    // restoration all sit on the line, and the accent tspan is only the
+    // words.
+    const line = container.querySelector<SVGTextElement>('.deg-go')?.closest('text')
+    expect(line?.getAttribute('role')).toBe('button')
+    expect(line?.getAttribute('tabindex')).toBe('0')
+    expect(container.querySelector('.deg-go')?.getAttribute('role')).toBeNull()
+    line!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(wizardState.open).toBe(true)
+    wizardState.open = false
+  })
+
   it('reads "from boundaries" in every zone address slot, never a blank one', () => {
     zonesState.pushed = []
     appState.events = [

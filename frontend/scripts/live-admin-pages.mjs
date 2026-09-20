@@ -34,7 +34,7 @@ import { session, check, done, goTo, openAccountMenu, launchBrowser } from './li
 
 const URL_BASE = process.env.MV_URL
 
-const { page, consoleErrors } = await session()
+const { page, consoleErrors } = await session({ mocksApi: true })
 
 /** navigates to a deck destination by its visible label and confirms it landed. Used to wait for `.page-header h2`
  * to show the right title too, but #700 unmounted PageHeader from every page it drew (EngineRoom, Fleet, Metrics)
