@@ -109,7 +109,10 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
 // agree on and the only handle a filter rule offers before it exists.
 // place-before is placement, not a property of the rule itself, so it
 // belongs to the add branch alone -- a rule already on the router keeps
-// the position it already has.
+// the position it already has. The set branch names disabled=no for
+// the reason routeros.SchedulerAdd's does: `set` changes only what it
+// names, so a rule the operator had disabled would otherwise stay off
+// through a re-paste that reported success.
 export function composeCommand(c: ComposeInput): string | null {
   if (!isRouterOsAddress(c.hostIp) || !isRouterOsAddress(c.target)) return null
   if (!PROTOCOL.test(c.proto)) return null
@@ -129,7 +132,7 @@ export function composeCommand(c: ComposeInput): string | null {
   return (
     `:if ([:len [/ip firewall filter find comment="${quotedComment}"]] = 0) do={ ` +
     `/ip firewall filter add ${shared} comment="${quotedComment}"${placeBefore} } else={ ` +
-    `/ip firewall filter set [find comment="${quotedComment}"] ${shared} }`
+    `/ip firewall filter set [find comment="${quotedComment}"] ${shared} disabled=no }`
   )
 }
 
