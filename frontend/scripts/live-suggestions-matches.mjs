@@ -51,7 +51,7 @@
 //    count elements and read text rather than asking whether a box is
 //    visible wherever the element may legitimately be zero-height.
 
-import { session, feedRaw, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, feedRaw, check, done, enrolDevice, goTo, launchBrowser, pushFrom } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -63,16 +63,17 @@ async function api(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
 
-async function push(token, payload) {
-  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  return res.status
+// Since #1281 a push is refused unless it arrives from the pushing
+// device's own enrolled address, so live-r33-router is enrolled at
+// ROUTER_ADDR below and every push is bound to it.
+const ROUTER_ID = 'live-r33-router'
+const ROUTER_ADDR = '127.0.0.44'
+
+function push(token, payload) {
+  return pushFrom(URL_BASE, ROUTER_ADDR, token, payload)
 }
 
 /** visible waits for a locator, returning false instead of throwing. */
@@ -308,10 +309,11 @@ if ((await older.count()) > 0) {
 // so it doubles as the fastest real path to fresh candidates without a
 // test-only knob added just for this.
 
+await enrolDevice(page.request, URL_BASE, ROUTER_ID, ROUTER_ADDR)
 const ingest = await api('POST', '/api/tokens', {
   name: 'live-r33',
   kind: 'ingest',
-  device: 'live-r33-router',
+  device: ROUTER_ID,
 })
 check(ingest.status === 201, `an ingest token is issued (${ingest.status})`)
 
@@ -360,7 +362,7 @@ check(await visible(sugg), 'the suggestions body renders under the watches, in t
 // The heading says what it is and counts what is open.
 const heading = ((await sugg.locator('.sdl').textContent()) ?? '').trim()
 check(
-  heading.startsWith('mikroview suggests'),
+  heading.startsWith('MikroView suggests'),
   `the suggestions heading reads as drawn (got ${JSON.stringify(heading)})`,
 )
 
@@ -629,5 +631,12 @@ if (viewerAccount) {
 } else {
   check(false, `could not find the viewer account "${VIEWER_USER}" to clean it up`)
 }
+
+// Leave the fleet as this scenario found it: a router left behind sorts
+// ahead of the harness's own in GET /api/devices, so the next scenario
+// that takes devices[0] mints a token for it and its pushes are refused
+// (#1281's push gate). live-token-ui failed on exactly that.
+const cleaned = await api('DELETE', `/api/devices/${encodeURIComponent(ROUTER_ID)}`)
+check(cleaned.status === 204, `${ROUTER_ID} is deleted so later scenarios see the fleet as it was (${cleaned.status})`)
 
 done()

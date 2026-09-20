@@ -27,7 +27,7 @@
 // every pair already on record other than the one this scenario means
 // to escalate gets an explicit forward accept of its own, named rather
 // than left to fall to 'unplanned' by default.
-import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, check, done, feedRaw, eventsTotal, waitForEventsTotal, clickSvgText } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -233,7 +233,7 @@ await waitForSettle(`${CARD} .camera`)
 // --- opening the trace from the unplanned callout's own `trace ▸` -------
 
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 15000 })
-await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
+await clickSvgText(page, page.locator(`${CARD} .uc-trace .uc-trace-t`))
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
 await nextPaint()
 
@@ -339,7 +339,7 @@ check((await page.locator(`${CARD} .trace-crumb`).count()) === 0, 'the second Es
 // missing.
 
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 10000 })
-await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
+await clickSvgText(page, page.locator(`${CARD} .uc-trace .uc-trace-t`))
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
 
 // The district stop (#869), not the wider city/borough overview: roads

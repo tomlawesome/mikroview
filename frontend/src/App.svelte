@@ -16,8 +16,10 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
+  // The upgrade notice (#1240): directly under the config-problem banner
+  // in the same stack, and admin-only like it -- see the component.
+  import UpgradeNotice from './components/UpgradeNotice.svelte'
   import Fleet from './components/Fleet.svelte'
-  import TuneLogging from './components/TuneLogging.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
@@ -56,6 +58,15 @@
   // 'fleet' is a deck view too now -- reachable from the deck's roll
   // rail for a viewer, same as every other card, rather than only from
   // the phone-width bottom bar.
+  //
+  // #1134 brought 'tune-logging' (Log every rule) in for the same
+  // reason. It rendered here, outside the deck, on the reading that it
+  // was a workflow stepped into and left -- which left it the one page
+  // in the app with no navigation on it at all. The owner's ruling is
+  // the same shell as every other page, so it is a deck card now
+  // (deckCards.ts's `log-every-rule`) and this branch is gone. Its
+  // view key keeps the endpoints' own spelling; #1134 renamed the page,
+  // not the two /api/tune-logging routes.
   const DECK_VIEWS = new Set([
     'fall',
     'topography',
@@ -67,6 +78,7 @@
     'entities',
     'engineroom',
     'fleet',
+    'tune-logging',
   ])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
@@ -306,7 +318,11 @@
        one fetch round-trip on the same origin, not worth the flash. -->
 {:else if authState.state === 'setup-required'}
   <AuthSetup />
-{:else if authState.state === 'unauthenticated'}
+{:else if authState.state === 'unauthenticated' || authState.state === 'must-change-password'}
+  <!-- 'must-change-password' draws the same door with one field swapped
+       (#1251). It is on this branch rather than inside the app because
+       the session behind it can reach the change-password route and
+       nothing else -- every scene below would be a wall of 403s. -->
   <AuthLogin />
 {:else}
   <!-- First in tab order: rendered ahead of BottomBar and every scene's
@@ -338,19 +354,12 @@
       <ConnectionBanner />
       <IngestLossDrawer />
       <ConfigProblemBanner />
+      <UpgradeNotice />
       <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
         {#if journeyState.phase === 'attach'}
           <JourneyAttach />
         {:else if inDeck}
           <Deck />
-        {:else if appState.view === 'tune-logging'}
-          <!-- Tune logging (#435) is deliberately outside the deck: a
-               workflow stepped into from the wizard's finish screen or
-               the topography's coverage lens, not a dashboard to swipe
-               among. Same operate-page shape this branch has always
-               offered Fleet. -->
-          <SceneBar />
-          <TuneLogging />
         {:else}
           <SceneBar />
           <Fleet />

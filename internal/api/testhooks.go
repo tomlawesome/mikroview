@@ -121,6 +121,12 @@ func (s *Server) handleTestReset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Store.Reset()
+	if s.Evaluation != nil {
+		// The engine reads the store by cursor (#1109); emptied under a
+		// backlog, the store looks to it like a flood it never caught,
+		// and the next scenario would inherit that as an outrun banner.
+		s.Evaluation.Forget()
+	}
 	s.Flags.Reset()
 	s.RouterState.Reset()
 	definitions := s.Definitions.Reset()

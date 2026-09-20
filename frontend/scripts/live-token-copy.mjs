@@ -15,7 +15,7 @@
 // changing, and the clipboard actually holding the raw IP -- not the
 // "nas-live-check" label the row displays -- after clicking it.
 
-import { session, feedRaw, check, done, unfoldStreamFilter } from './live-browser.mjs'
+import { session, feedRaw, check, done, unfoldStreamFilter, grantClipboard } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-token-copy'
@@ -71,16 +71,26 @@ async function waitForInputValue(selector, expected, timeoutMs = 3000) {
   return last
 }
 
-/** Polls a locator's computed opacity -- the real end of EventRow.svelte's 0.12s CSS transition, not a guessed margin over it. */
-async function waitForOpacity(locator, target, timeoutMs = 1000) {
+/** Polls a locator's computed text colour -- the real end of EventRow.svelte's 0.12s CSS transition, not a guessed margin over it.
+    Colour, not opacity: #1102 hides the row's buttons with transparent ink
+    rather than `opacity: 0`, because a partly-opaque element gets its own
+    paint layer and Blink hit-tests layers one by one. `transparent`
+    computes to `rgba(0, 0, 0, 0)`. */
+async function waitForColorAlpha(locator, transparent, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs
   let last = null
   while (Date.now() < deadline) {
-    last = await locator.evaluate((el) => getComputedStyle(el).opacity)
-    if (last === target) return last
+    last = await locator.evaluate((el) => getComputedStyle(el).color)
+    if (isTransparent(last) === transparent) return last
     await page.waitForTimeout(20)
   }
   return last
+}
+
+/** `rgba(r, g, b, 0)` in any channel spelling -- Chrome renders nothing at alpha 0 whatever the colour. */
+function isTransparent(color) {
+  const alpha = /^rgba?\([^)]*,\s*([\d.]+)\s*\)$/.exec(color ?? '')
+  return alpha ? Number(alpha[1]) === 0 : false
 }
 
 // A friendly label on the source IP -- the row must show HOST_LABEL, but
@@ -205,18 +215,18 @@ if (box) {
 const copyBtn = addrCell.locator('.copy-btn').first()
 await page.mouse.move(2, 2)
 await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur())
-const opacityBeforeHover = await waitForOpacity(copyBtn, '0')
-check(opacityBeforeHover === '0', `the copy glyph starts hidden (opacity ${opacityBeforeHover})`)
+const colorBeforeHover = await waitForColorAlpha(copyBtn, true)
+check(isTransparent(colorBeforeHover), `the copy glyph starts hidden (colour ${colorBeforeHover})`)
 
 // --- Hover-revealed copy glyph -------------------------------------------
 await row.hover()
-const opacityOnHover = await waitForOpacity(copyBtn, '1')
-check(opacityOnHover === '1', `hovering the row reveals the copy glyph (opacity ${opacityOnHover})`)
+const colorOnHover = await waitForColorAlpha(copyBtn, false)
+check(!isTransparent(colorOnHover), `hovering the row reveals the copy glyph (colour ${colorOnHover})`)
 
 // Clipboard permissions, granted explicitly, so the read-back below can
 // prove what actually landed on the clipboard rather than only that a
 // toast appeared (which would still pass if the write silently failed).
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await grantClipboard(page)
 
 await copyBtn.click()
 

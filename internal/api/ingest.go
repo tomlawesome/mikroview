@@ -126,13 +126,36 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		// first. Guarded anyway rather than trusting that invariant
 		// silently -- the alternative is a nil-pointer panic on tok.ID
 		// below.
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeUnauthorized(w, "unauthorized")
 		return
 	}
 
 	now := time.Now()
 	if !s.IngestLimiter.Reserve(tok.ID, now) {
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	// Issue #1281: an ingest token names a device, never an address --
+	// "any RouterOS user holding the built-in read policy can print an
+	// ingest token out of a script" (see noteIngest's own doc comment),
+	// so the token alone is not enough to say a push actually came from
+	// the router it claims to be. It must also arrive from that device's
+	// own enrolled address (config.yaml's sourceIp, or a redeemed
+	// enrolment token's acceptedIp) -- the same evidence bar syslog
+	// attribution holds pushes to, closing a gap a stolen token used to
+	// leave open: pushing fabricated router state from anywhere at all.
+	if s.Devices != nil && !s.Devices.IsEnrolledAt(tok.Device, s.ClientIP(r)) {
+		// Same noteIngest throttle as the decode-error and cap-refusal
+		// branches below: a repeatedly refused push is exactly the flood
+		// noteIngest exists to keep off the audit trail (see its own doc
+		// comment), and this refusal is just as caller-controlled and
+		// just as cheap to produce as a decode error.
+		if s.noteIngest(tok.Device, "", false, now) {
+			s.Audit.Record("device:"+tok.Device, "ingest.routeros.refused", tok.Device,
+				fmt.Sprintf("push refused: %s is not %s's enrolled address", s.ClientIP(r), tok.Device))
+		}
+		http.Error(w, "this address is not enrolled for that device", http.StatusForbidden)
 		return
 	}
 
@@ -168,6 +191,18 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #1170: the push is what puts this router in the one device
+	// registry every count reads. The token's own Device is the
+	// identity -- the operator minted it for one router and the wizard
+	// wrote it into that router -- so a router that pushes is a router
+	// mikroview knows about, whether or not its syslog has arrived yet
+	// and whether or not config.yaml declares it. Before this, a push
+	// had no effect on the list at all, and Watchlist could name five
+	// routers while Entities showed one.
+	if s.Devices != nil {
+		s.Devices.Ensure(tok.Device, now)
+	}
+
 	// Tell every open screen the pushed tables moved, so an answer
 	// derived from them refetches now instead of on its own poll. The
 	// visible one is watchlist coverage: before this, an operator who
@@ -186,6 +221,17 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	// push, not at some arbitrary later moment.
 	if payload.Kind == ingest.KindFilterRule {
 		s.refreshDecommissionCoverage()
+	}
+
+	// #1241's setup report: the one page that is not router data at all
+	// but the router's account of what the wizard left on it. Kept in
+	// the setup ledger rather than in RouterState, because it must
+	// survive a restart -- a router whose script predates the page never
+	// sends one, and with nothing on disk mikroview could not tell that
+	// router from one whose next push is simply not due yet. Keyed by
+	// the token's own device, like everything else here.
+	if payload.Kind == ingest.KindLogging && s.Setup != nil {
+		s.Setup.NoteLoggingReport(tok.Device, payload, now)
 	}
 
 	// #186 step 5: never persist a raw payload wholesale. RouterState

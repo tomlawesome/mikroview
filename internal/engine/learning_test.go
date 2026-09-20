@@ -348,7 +348,7 @@ func TestShippedActivitySpikeLearningMergesFallbackAndBuckets(t *testing.T) {
 // --- The engine accessor itself.
 
 func TestEngineLearningUnknownDefinition(t *testing.T) {
-	e := New()
+	e := New(nil)
 	if _, ok := e.Learning("no-such-id", time.Now()); ok {
 		t.Fatal("Learning() ok = true for an unregistered id, want false")
 	}
@@ -374,7 +374,7 @@ func (n *noLearningDefinition) Kind() string         { return "programmatic" }
 func (n *noLearningDefinition) Evaluate(store.Event) {}
 
 func TestEngineLearningNoWarmupConcept(t *testing.T) {
-	e := New()
+	e := New(nil)
 	e.Register(&noLearningDefinition{id: "no-warmup"})
 	if _, ok := e.Learning("no-warmup", time.Now()); ok {
 		t.Fatal("Learning() ok = true for a definition with no warm-up concept, want false")
@@ -389,7 +389,7 @@ func TestEngineLearningNoWarmupConcept(t *testing.T) {
 func TestEngineLearningRaceSafeAgainstConcurrentBaselineUpdates(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	d := newShippedRuleSpikeDefinition(t, fs, ShippedDeps{}, Scope{})
-	e := New()
+	e := New(nil)
 	e.Register(d)
 
 	stop := make(chan struct{})

@@ -133,7 +133,6 @@
   const HALF = $derived(Math.max(30, COL_W / 2 - 8))
 
   const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + flagGap)
-  const height = $derived(HEADER + Math.max(1, n) * ROW_H + BOTTOM)
 
   const refusedFrom = $derived(hour.traffic.findIndex((s) => s.ink === 'refused'))
 
@@ -146,6 +145,49 @@
   function yOf(index: number): number {
     return HEADER + rowOf(index) * ROW_H
   }
+
+  // The ×N beside a tick says how many episodes that one minute held.
+  // Rows are only ROW_H (8px) apart and the annotation is 9px type, so a
+  // run of busy minutes printed its figures on top of each other
+  // (#1155) -- "×6", "×5", "×4" overlapping into a smudge. Walk each
+  // column from the brink down and give a label the gap it needs from
+  // the one above, nudging it down only as far as that takes: an
+  // isolated annotation still sits exactly on its own tick, and a run
+  // reads as a short ladder beside the ticks it belongs to.
+  const TICK_N_GAP = 11
+
+  function tickLabels(values: number[]): { mi: number; v: number; y: number }[] {
+    const out: { mi: number; v: number; y: number }[] = []
+    let last = -Infinity
+    // rowOf() counts down from the brink, so newest-minute-first is
+    // top-of-column-first.
+    for (let mi = values.length - 1; mi >= 0; mi--) {
+      if (values[mi] <= 1) continue
+      const y = Math.max(yOf(mi), last + TICK_N_GAP)
+      out.push({ mi, v: values[mi], y })
+      last = y
+    }
+    return out
+  }
+
+  // TICK_N_GAP asks more room per label (11px) than ROW_H gives per row
+  // (8px), so a run of busy minutes long enough needs more vertical room
+  // for its ×N ladder than a plain n*ROW_H canvas provides. Previously
+  // nothing accounted for that: a long run's labels drifted below their
+  // own ticks with nothing capping it, past the paper's own bottom
+  // margin, rather than the paper growing to hold them (#1218 audit
+  // finding 9). Measured across every fired flag column -- only those
+  // draw ×N figures at all -- the deepest tickLabels() ever pushes any
+  // one column's ladder decides how much extra room the whole paper
+  // needs; a no-op whenever every ladder already fits inside the
+  // row-based height below.
+  const labelBottom = $derived(
+    firedFlags.reduce((deepest, s) => {
+      const labels = tickLabels(s.values)
+      return labels.length > 0 ? Math.max(deepest, labels[labels.length - 1].y) : deepest
+    }, -Infinity),
+  )
+  const height = $derived(Math.max(HEADER + Math.max(1, n) * ROW_H + BOTTOM, labelBottom + BOTTOM))
 
   function colX(i: number): number {
     return GUTTER + i * COL_W + COL_W / 2
@@ -239,7 +281,11 @@
           <text class="c-now ink-text-{series.ink}" x={cx - HALF} y="82"
             >{series.now}<tspan class="c-unit"> /min</tspan></text
           >
-          <text class="c-scale" x={cx - HALF} y="98">width {series.scale}/min</text>
+          <!-- #1167: "scale", not "width". The figure is what the ribbon
+               is drawn against (metricsSeries.ts's scaleFor, floored at
+               SCALE_FLOOR), so under an empty column "width 12/min" read
+               as a measurement of traffic that was not there. -->
+          <text class="c-scale" x={cx - HALF} y="98">scale {series.scale}/min</text>
           <line class="axis" x1={snapLine(cx, dpr)} x2={snapLine(cx, dpr)} y1={HEADER} y2={height - BOTTOM} />
           <path class="ribbon ink-{series.ink}" d={ribbon(series.values, cx, series.scale)} />
         {/each}
@@ -269,10 +315,12 @@
           {#each series.values as v, mi (mi)}
             {#if v > 0}
               <line class="tick" x1={cx - 9} x2={cx + 9} y1={snapLine(yOf(mi), dpr)} y2={snapLine(yOf(mi), dpr)} />
-              {#if v > 1}
-                <text class="tick-n" x={cx + 11} y={snapFill(yOf(mi), dpr) + 3}>×{v}</text>
-              {/if}
             {/if}
+          {/each}
+          <!-- Placed by tickLabels, not straight off the tick's own row:
+               see its comment for why a run has to be spread. -->
+          {#each tickLabels(series.values) as t (t.mi)}
+            <text class="tick-n" x={cx + 11} y={snapFill(t.y, dpr) + 3}>×{t.v}</text>
           {/each}
           <text class="f-total" class:quiet={!series.spoke} x={cx} y={height - BOTTOM + 14} text-anchor="middle"
             >{series.total}</text

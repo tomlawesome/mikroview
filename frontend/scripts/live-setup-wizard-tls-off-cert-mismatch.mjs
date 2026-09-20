@@ -31,7 +31,7 @@
 
 import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session()
+const { page, consoleErrors } = await session({ mocksApi: true })
 
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.

@@ -268,6 +268,62 @@ func TestRemovePassphraseNeedsTheCurrentOne(t *testing.T) {
 	}
 }
 
+// TestChangePassphraseNeedsTheCurrentOne is TestRemovePassphraseNeedsTheCurrentOne's
+// shape for #1222's PUT: a wrong current passphrase is refused and
+// audited the same way a wrong removal or unlock is, and the right one
+// swaps which passphrase opens the vault without disturbing what is
+// stored.
+func TestChangePassphraseNeedsTheCurrentOne(t *testing.T) {
+	const newPassphrase = "a different passphrase entirely"
+	s, ts, admin, gen := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	resp := putJSON(t, admin, ts.URL+"/api/router-backups/passphrase", vaultPassphraseChangeRequest{Current: "not the passphrase", Passphrase: newPassphrase})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("changing the passphrase with the wrong current one = %d, want 403", resp.StatusCode)
+	}
+	var guesses int
+	for _, e := range s.Audit.Query(audit.Query{Limit: 100}).Entries {
+		if e.Action == "router_backup.unlock_failed" {
+			guesses++
+		}
+	}
+	if guesses != 1 {
+		t.Fatalf("wrong-current-passphrase attempts audited = %d, want 1", guesses)
+	}
+
+	resp = putJSON(t, admin, ts.URL+"/api/router-backups/passphrase", vaultPassphraseChangeRequest{Current: testVaultPassphrase, Passphrase: newPassphrase})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("changing the passphrase with the right current one = %d, want 200", resp.StatusCode)
+	}
+	var changed int
+	for _, e := range s.Audit.Query(audit.Query{Limit: 100}).Entries {
+		if e.Action == "router_backup.passphrase_changed" {
+			changed++
+		}
+	}
+	if changed != 1 {
+		t.Fatalf("router_backup.passphrase_changed audit entries = %d, want 1", changed)
+	}
+
+	// The old passphrase no longer unlocks; the new one does.
+	oldResp := postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: testVaultPassphrase})
+	oldResp.Body.Close()
+	if oldResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unlocking with the old passphrase after a change = %d, want 403", oldResp.StatusCode)
+	}
+	newResp := postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: newPassphrase})
+	newResp.Body.Close()
+	if newResp.StatusCode != http.StatusOK {
+		t.Fatalf("unlocking with the new passphrase after a change = %d, want 200", newResp.StatusCode)
+	}
+	if got := downloadStatus(t, admin, ts, gen); got != http.StatusOK {
+		t.Fatalf("download after changing the passphrase = %d, want 200", got)
+	}
+}
+
 // #1120: the four paths where the private key outlived the promise that
 // it exists only while an admin holds a live unlock.
 

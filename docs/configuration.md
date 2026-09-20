@@ -6,18 +6,65 @@
 overrides the one before it. The list of monitored devices only comes
 from the YAML file (see below for why).
 
+## Files you mount into the container
+
+MikroView runs as **uid `1000`, gid `1000`** inside the container. On an
+ordinary Linux host 1000 is the first account created, so it is probably
+you: a file you own is readable by MikroView as it stands and there is
+nothing to do.
+
+Where a file belongs to some other account, MikroView cannot read it and
+refuses to start with `permission denied`. Don't loosen the mode — hand
+the file over instead:
+
+```sh
+sudo chown 1000:1000 the-file
+chmod 600 the-file
+```
+
+That is the rule for **every** file you mount in: `config.yaml`, the
+[Postgres DSN file](#postgres-optional),
+[`history.keyFile`](#on-disk-event-history-optional-off-by-default), your
+own [TLS `certFile`/`keyFile`](#tls), and the
+[GeoIP database](#geoip-country-flags-optional). A file only MikroView
+reads (the DSN, the history key, a TLS private key) should stay `600`; a
+certificate or a GeoIP database is not a secret and `644` is fine.
+
+A whole *directory* you bind-mount — the data directory — is the same
+idea with `-R`: `sudo chown -R 1000:1000 ./data`, described in
+[docs/install.md](install.md#persistent-data)'s "Persistent data"
+section.
+
+1000 is not a number MikroView invented for itself: it is the uid in the
+image's `USER` line, which `docker inspect` will show you. If you start
+the container with `--user`, or your host remaps uids, chown to whatever
+uid it is actually running as instead.
+
 ## config.yaml
 
-Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
-`docker-compose.yml` mounts that path into the container at
-`/etc/mikroview/config.yaml`.
+Put the file at `mikroview/config.yaml` and restart: copy
+`deploy/config.example.yaml` there and edit it.
+[`docker-compose.yml`](../deploy/docker-compose.yml) mounts the whole
+`mikroview/` folder read-only at `/etc/mikroview`, and with nothing
+naming a config file MikroView reads `/etc/mikroview/config.yaml` from
+it — so a bare `docker run` with the folder mounted needs no
+`MIKROVIEW_CONFIG`. The file is optional: a fresh install with an empty
+folder starts and runs on defaults. See
+[docs/decisions/app-folder.md](decisions/app-folder.md) for the folder
+layout and why.
+
+Naming a config file somewhere else — `MIKROVIEW_CONFIG` — is the older,
+still-supported way, and wins over the folder. One difference between
+them: a path you name and get wrong stops MikroView starting, because a
+typo is a mistake rather than a choice, while the folder's own
+`config.yaml` simply not being there is not an error at all.
 
 ```yaml
 listen:
   syslogTls: ":6514"    # RouterOS remote-protocol=tls -- mikroview's only syslog listener
   http: ":8080"
   httpRedirect: ":8081"
-  # Only set these if a reverse proxy fronts mikroview -- see
+  # Only set these if a reverse proxy fronts MikroView -- see
   # "Running behind a reverse proxy" below.
   # trustedProxies: ["private"]
   # clientIpHeader: "X-Forwarded-For"  # this is the default
@@ -37,14 +84,14 @@ devices:
   as a Go duration string (`24h`, `12h30m`, ...). A ceiling on what a
   query returns, not a promise that history exists — see
   [How events are stored](#how-events-are-stored) for why.
-- `store.maxMemory` — the memory budget for mikroview's event buffer, a
+- `store.maxMemory` — the memory budget for MikroView's event buffer, a
   Go duration-string-style size such as `120MiB` or `500MB` rather than
   an event count. Same section as above explains why a count would not
   mean anything portable between deployments.
 - `store.settingsStorePath` — where a size set from Settings' own memory
   control is kept. Once somebody moves that slider and applies it, the
   stored figure is the one that applies and `store.maxMemory` above is
-  ignored — mikroview says which one it took at startup. Delete the file
+  ignored — MikroView says which one it took at startup. Delete the file
   to go back to the config file's figure; there's no separate reset
   control, since moving the slider back is the same act. Optional
   persistence, same contract as `flags.storePath`: left empty, the
@@ -60,9 +107,34 @@ devices:
   change it. A router you have not listed can be renamed in the app, and
   that name is stored on the server, so everyone signed in sees it.
 
+  **Which identity wins, and why.** A device exists because you declared
+  it under `devices` here, because an ingest token named it on a push,
+  or because you added it from the Entities screen — either way it lands
+  in the one list everything in MikroView counts from. What decides
+  which device a syslog source address belongs to, strongest evidence
+  first: (a) a `devices[].sourceIp` you set above — you said so, so that
+  wins outright; (b) failing that, the address the router enrolled from
+  — you minted it an enrolment token (the setup ledger's "Send logs"
+  step, or **Re-enrol…** on its card) and the token's line arrived from
+  that address (#1281; see
+  [routeros-setup.md](routeros-setup.md#the-wizards-enrol-line)). There
+  is no (c): an address that is neither is refused at the syslog port,
+  its lines are not stored, and it is listed as a refused sender beside
+  your routers on the Entities screen. A router's own pushed
+  `/ip/address` table is still stored and shown, but it no longer counts
+  as evidence of which address is the router's — a router is not a
+  trustworthy witness to its own identity. One address belongs to one
+  device: enrolling a router from an address another device already
+  holds, declared or enrolled, is refused and the token stays unspent.
+  A NAT'd syslog relay sitting in front of several routers shows one
+  address for all of them, so nothing can tell which router sent a
+  line; name the relay itself under `devices`. Mint one ingest token per
+  router — two tokens for one physical router are two devices as far as
+  MikroView is concerned.
+
 ### How events are stored
 
-There is no database. Every event mikroview has seen lives in one
+There is no database. Every event MikroView has seen lives in one
 fixed-size block of memory (`internal/store/ring.go`) that holds the most
 recent events and overwrites the oldest once it fills — `store.maxMemory`
 is how big that block is, and `store.retention` is a ceiling applied when
@@ -75,7 +147,7 @@ between "nothing happened" and "it isn't there any more."
 **How long the buffer actually covers is set by your own traffic, and it
 varies enormously.** MikroTik firewall rules do not log by default — `log`
 is `no` unless you explicitly turn it on for a rule — so the rate
-mikroview sees is entirely a product of which rules you have logging
+MikroView sees is entirely a product of which rules you have logging
 enabled for, not of your link speed or how busy your network is. A router
 logging only dropped traffic and one logging every accepted connection
 can differ by four or more orders of magnitude. There is no default that
@@ -95,7 +167,7 @@ the raw log line is capped at 2KiB, which is about five times the
 longest line a real RouterOS device produces — so the figure above is a
 ceiling rather than a typical case that a pathological line can exceed.
 A row whose line was cut says so on hover, and in a CSV export. That figure is a budget
-for the buffer itself, not what mikroview's process occupies on the host
+for the buffer itself, not what MikroView's process occupies on the host
 — expect *resident* memory (what `docker stats` or `top` reports) to run
 about 1.47x higher once the Go runtime and process overhead are counted,
 so provisioning for the 120MiB default really means having roughly 175MiB
@@ -105,20 +177,20 @@ the measured ring-to-resident overhead (see #244), and it is the same
 prints at startup agree. The whole budget is reserved **immediately at startup**
 (`store.New` allocates it all up front), not filled up gradually — a
 value too large for the machine fails right away rather than degrading
-over hours, which is why mikroview warns above 1GiB (see
+over hours, which is why MikroView warns above 1GiB (see
 [CFG-0012](#cfg-0012)) without silently shrinking it back down: a large
 budget on a machine that genuinely has the memory is a legitimate choice,
 and the warning only makes sure you're making it with the real cost in
 front of you.
 
-**Settings' memory control can override the config file.** Admin ▸
-Settings' memory group carries a slider under the hours bar; dragging it
+**Settings' memory control can override the config file.** Settings'
+memory group carries a slider under the hours bar; dragging it
 only proposes a figure, and nothing changes until you press apply. Once
-you do, mikroview stores that figure and resizes the running buffer
+you do, MikroView stores that figure and resizes the running buffer
 immediately — growing it keeps every event already held, shrinking it
 drops the oldest first. From then on, the stored figure is what applies
 on every future restart too, and `store.maxMemory` in the config file is
-ignored — mikroview names which one it took in the startup log. To go
+ignored — MikroView names which one it took in the startup log. To go
 back to the file's figure, delete the settings document
 (`store.settingsStorePath`, `/var/lib/mikroview/settings.json` by
 default); there's no separate reset control, since moving the slider
@@ -133,7 +205,7 @@ allowed range is refused with a 400 rather than being clamped to the
 nearest end.
 
 **The allowed range.** The low end is a fixed 32MiB. The high end is
-worked out once at startup, per host: mikroview takes the smallest of
+worked out once at startup, per host: MikroView takes the smallest of
 the cgroup v2 `memory.max`, the cgroup v1 `memory.limit_in_bytes`, and
 `/proc/meminfo`'s `MemTotal` (whichever actually bounds this process),
 reserves headroom of whichever is larger — 256MiB or a quarter of that
@@ -157,7 +229,7 @@ rather than the config file). All of those are byte counts except
 Everything in the section above lives in memory, so a restart used to
 take all of it with it: the hourline went blank, every detector's
 rolling window started from nothing, and every device's "first seen"
-date silently became today. Mikroview now writes a small snapshot of
+date silently became today. MikroView now writes a small snapshot of
 that derived state every few minutes and puts it back on the next boot.
 
 **On by default.** These are the values in effect if you set nothing:
@@ -180,10 +252,10 @@ snapshot:
   deleted after each write. Below 1 the default is applied (see
   [CFG-0071](#cfg-0071)), since keeping none would delete the file just
   written. More than one is kept because the newest file is the one a
-  power cut mid-write can truncate; mikroview then falls through to the
+  power cut mid-write can truncate; MikroView then falls through to the
   next-newest rather than starting cold.
 - `snapshot.dir` — where the files go, as `snapshot-<UTC stamp>.json`,
-  mode 0600 in a 0700 directory. Left empty, mikroview puts them beside
+  mode 0600 in a 0700 directory. Left empty, MikroView puts them beside
   its other state.
 
 **What a snapshot holds:** counts, minute stamps, rule and log-prefix
@@ -209,9 +281,9 @@ it is unrecoverable, and losing the whole directory costs exactly one
 cold start — so there is no reason to spend a database round trip on it
 every few minutes, and no reason to carry it in a backup.
 
-**It never stops mikroview starting.** If `snapshot.dir` cannot be
+**It never stops MikroView starting.** If `snapshot.dir` cannot be
 created or written — a read-only mount, a wrong owner after a volume
-move — mikroview says so once in the startup log and runs without
+move — MikroView says so once in the startup log and runs without
 snapshots. You get the same monitoring, just a cold start after the next
 restart.
 
@@ -252,36 +324,60 @@ history:
 `history.enabled`, `history.days` and `history.maxBytes` are the values a
 fresh instance comes up on; from then on they are editable in Settings,
 beside the memory slider, and the figure set there wins on every future
-restart — mikroview names which one it took in the startup log. To go
+restart — MikroView names which one it took in the startup log. To go
 back to the file's figures, delete the settings document
 (`store.settingsStorePath`), exactly as for `store.maxMemory` above.
 `history.keyFile` and `history.dir` are **not** editable from the app and
 never will be: one names a mounted secret and the other a filesystem
-path, and neither belongs in the blast radius of a browser session.
+path, and neither belongs in the blast radius of a browser session. The
+setup wizard's backup step will *generate* a key for you when none is
+mounted, but it mints it in the browser and never sends it here (#1133):
+MikroView first sees that value in the file you mount, which is also why
+the wizard says it can never show it to you again.
 
 - `history.enabled` — the switch, and the initial position of the one in
   Settings. **Turning it off deletes what was already retained** — off
   has to mean the history is actually gone, or the setting is a lie.
   That applies to the control in the app as well: the files are gone
   before the change is confirmed on screen.
-- `history.keyFile` — path to a master key file that you generate and
-  mount, e.g.:
+- `history.keyFile` — path to a master key file that you generate.
+  **Put it at `mikroview/keys/history.key` and restart** — MikroView
+  finds it there with nothing else set:
 
   ```
-  head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+  mkdir -p mikroview/keys
+  head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
   ```
 
-  The file must hold at least 32 bytes. This is a path, never the key
-  itself — there is deliberately no environment variable carrying key
-  material; `MIKROVIEW_HISTORY_KEY_FILE` only names the file.
+  Mounted files have to be readable by the user MikroView runs as, or it
+  refuses to start with `permission denied` — see
+  [Files you mount into the container](#files-you-mount-into-the-container).
+  Generating the key as some other account is the usual way to get this
+  wrong.
 
-  **It must be mounted outside the data directory.** A key kept beside
-  the files it protects is decoration: whoever copies the directory
-  copies both, and now has everything needed to read it.
+  Naming the path explicitly instead — `MIKROVIEW_HISTORY_KEY_FILE`, or
+  `history.keyFile` pointing somewhere else — works and keeps working;
+  it wins over the folder. The file must hold at least 32 bytes either
+  way. This is a path, never the key itself — there is deliberately no
+  environment variable carrying key material.
+
+  Or let the app generate it: with no key mounted, the setup wizard's
+  step 6 hands you a key of exactly this shape, with the commands to
+  write it to a file, mount it and point MikroView at it. It is generated
+  in your browser and never sent to the server, so save it when it is
+  shown — nothing can reprint it.
+
+  **The key must not live inside the data store.** A key kept among the
+  files it protects is decoration: whoever copies the directory copies
+  both, and now has everything needed to read it. `mikroview/keys/`
+  beside `mikroview/data/` satisfies that — nothing MikroView writes,
+  and no backup of `data/` alone, ever carries the key. A copy of the
+  *whole* `mikroview/` folder is a copy of the key too: back up `data/`
+  on its own when the key must stay behind.
 
   **There is no unencrypted mode.** `history.enabled: true` with no key
   file set does not mean "retain, unencrypted" — it means nothing is
-  retained at all, and mikroview turns the switch back off and says so
+  retained at all, and MikroView turns the switch back off and says so
   (see [CFG-0080](#cfg-0080)). The control in Settings refuses the same
   request for the same reason, with a 409 and a sentence saying to mount
   a key.
@@ -297,7 +393,7 @@ path, and neither belongs in the blast radius of a browser session.
   flush would drop all but the day still being written. Also editable
   from Settings.
 - `history.dir` — where the daily files live, mode 0600 in a 0700
-  directory. Left empty, mikroview puts them beside the data directory.
+  directory. Left empty, MikroView puts them beside the data directory.
   Config-file only.
 
 **The setting is not the window.** `history.days` says how many days are
@@ -314,7 +410,7 @@ directory, or restoring a backup of it, yields nothing readable without
 the key file — and the key file lives outside that directory, so
 copying one doesn't carry the other. It is not protection against
 everything: root on the running host can still read whatever the
-mikroview process itself can, because the process holds the key to do
+MikroView process itself can, because the process holds the key to do
 its own reads and writes. The only way to avoid that is not retaining
 history at all, which is why staying off is a real, supported choice
 rather than a lesser one.
@@ -324,8 +420,8 @@ rather than a lesser one.
 Issue #394: a router's own scheduled script (the setup wizard's step 6
 prints it) pushes two files a night -- the binary `.backup` that
 restores the router whole, and the plain-text `.rsc` export kept for
-reading -- into a small SFTP server mikroview runs for exactly this.
-**Mikroview is the place you turn to when the router is gone**, so the
+reading -- into a small SFTP server MikroView runs for exactly this.
+**MikroView is the place you turn to when the router is gone**, so the
 copies have to be usable with nothing else in hand.
 
 ```yaml
@@ -343,15 +439,28 @@ backup:
   scanner traffic) — change it only if you need a different port
   mapped through a firewall or a container network.
 - `backup.vaultDir` — where encrypted generations live on disk. Left
-  empty, mikroview puts them beside the data directory. Config-file
+  empty, MikroView puts them beside the data directory. Config-file
   only, same as `history.dir`.
+
+**Turning this on also means publishing the port.** `backup.enabled:
+true` alone does not make the drop box reachable — the router still
+needs a path to it. `deploy/docker-compose.yml`'s `ports:` carries a
+matching entry, commented out beside the HTTPS and redirect mappings;
+uncomment it (keeping it in step with `backup.listen`) when you turn
+this on, or the router's script times out partway through the upload
+rather than failing cleanly (#1220). The setup wizard's step 6 names
+the port next to the script it hands over, for the same reason.
 
 **No key, no backups.** Every pair is encrypted under `history.keyFile`
 (above) — the same key, the same "no key, no storage" rule #853 applies
-to the rest of mikroview's state. With no key configured, the drop box
+to the rest of MikroView's state. With no key configured, the drop box
 refuses every login outright rather than accepting a push it has
 nowhere safe to keep; Settings' `router backups` group says so plainly.
 There is no separate key for this feature and no unencrypted fallback.
+The wizard's step 6 is the shortest way out of that state: with no key
+mounted it generates one in the browser and prints the steps to put it in
+place (see [`history.keyFile`](#on-disk-event-history-optional-off-by-default)
+above), then prints the router script once it is.
 
 **Login is the device, not a new credential.** Username is the router's
 device name, password is that device's ingest token — the very token
@@ -380,7 +489,7 @@ undo.
 **When the disk runs low, the history shortens — nothing is refused.**
 If free space on the filesystem holding the vault falls below its floor
 (2 backups' worth, or 5% of the filesystem, whichever is larger),
-mikroview stops growing the history and starts cycling it: each new
+MikroView stops growing the history and starts cycling it: each new
 arrival replaces the oldest kept generation rather than adding one. So
 you may see fewer than ten generations for a router while the disk is
 low. Two copies are always kept for every router: the newest one from
@@ -393,9 +502,9 @@ records `router_backup.low_space` when it starts and
 space, or move the data directory to a larger disk.
 
 **A missed push is said, not guessed.** Once a router has pushed at
-least twice, mikroview learns its interval from the arrivals
+least twice, MikroView learns its interval from the arrivals
 themselves — not from the scheduler line the wizard printed, which an
-operator could change on the router without mikroview knowing. One
+operator could change on the router without MikroView knowing. One
 missed interval is enough for the router's line in Settings to go
 amber with a count of how many pushes have been missed since the last
 one arrived. A router with a single push has no interval yet and shows
@@ -404,14 +513,14 @@ nothing.
 **Reading a backup back is audited.** Downloading either file is
 admin-only and session-gated, and every download writes an audit-log
 entry with the admin's name — a download is the router's whole
-configuration, credentials included. Mikroview reads only the header,
+configuration, credentials included. MikroView reads only the header,
 for the label above; it never claims a backup restores, and it never
 connects to a router to apply one. Restoring is the operator's own act
 on the replacement router (`/system backup load`).
 
 **A second lock, if you want one (optional, off by default).** An admin
-can set a *vault passphrase* that mikroview itself does not keep. With
-one set, the files already stored are re-encrypted so that mikroview
+can set a *vault passphrase* that MikroView itself does not keep. With
+one set, the files already stored are re-encrypted so that MikroView
 cannot read any of them until an admin types the passphrase, and backups
 that arrive afterwards are sealed the same way. Backups keep arriving
 while it is locked -- the router pushes on its own schedule, and nobody
@@ -422,20 +531,36 @@ sign-ins still see a locked vault. The key is dropped when that session
 locks the vault or signs out, when anyone signs out everywhere, changes
 a password or deletes an account, and fifteen minutes after the unlock
 was last *used*. Downloading a backup counts as using it; a settings page
-checking whether the vault is open does not, and mikroview drops the key
+checking whether the vault is open does not, and MikroView drops the key
 on time whether or not anything else is happening.
 
 **If you lose the passphrase, you lose those backups.** There is no
 recovery, deliberately: a way back in for you is a way back in for
 whoever copies the disk, which is the whole point of setting one. It is
-off by default, and there is no screen for it yet: setting, unlocking and
-removing a passphrase are API-only for now. The passphrase must
+off by default; the controls live in Settings' router-backups group, and
+the same operations are in the API table below. The passphrase must
 be at least 12 characters, and it protects a file an attacker could
 carry away and attack at their leisure, so pick accordingly.
 
+**A generation can be kept, taking it out of the ten-generation cycle
+above.** An admin marks one with a comment saying why (`before the
+7.16 upgrade`) — required, one line, 1 to 120 characters — and it
+moves into a pool of its own per router: it stops counting towards the
+ten, ordinary retention never evicts it, and the low-space cycling
+above never reaches it either. There is no limit on how many a router
+keeps. Releasing one puts it back into the cycling ten, in its place
+by age, where the oldest may then be dropped as normal — the only way
+an admin can free vault space by hand. Kept generations download
+through the same route as any other, and are re-sealed along with the
+rest whenever the vault passphrase is set, changed or removed. The
+comment lives in the vault's sealed index like the rest of the
+metadata; it is never logged or written to an audit entry, only that a
+generation was kept, released or had its comment changed (see [Audit
+log](#audit-log-admin-action-accountability-optional)).
+
 **Only on a network you trust.** RouterOS's SFTP client never verifies
 this server's host key (measured on RouterOS 7.23.3) — an attacker on
-the path between the router and mikroview could pose as mikroview and
+the path between the router and MikroView could pose as MikroView and
 receive the pair and the ingest token in plain sight. Run this push
 over a LAN or a VPN you control, never across the open internet. See
 [SECURITY.md](../SECURITY.md) for the full caveat. A router that cannot
@@ -456,7 +581,7 @@ regenerates the same way.
 `history.keyFile` does double duty. Everything above is about the event
 *log* specifically, switched on by `history.enabled`. Separately, and
 regardless of that switch, the same key file also decides what happens to
-most of what mikroview persists to a JSON file: flags, entities, the MAC
+most of what MikroView persists to a JSON file: flags, entities, the MAC
 registry, rule usage, detector settings, watchlist suggestions and
 definitions — every document the file-backed state store writes, other
 than the three named below.
@@ -473,7 +598,7 @@ recovery-key digests.** All three hold only one-way hashes — Argon2id
 password hashes, SHA-256 token hashes, hashed recovery keys — so a
 plaintext copy discloses usernames, roles and token names but nothing
 that lets anyone in. They keep persisting to a plain JSON file with no
-key configured, exactly as every mikroview release before #853, and are
+key configured, exactly as every MikroView release before #853, and are
 sealed like everything else once a key is mounted.
 
 **This is a significant change from earlier releases, but a smaller one
@@ -515,13 +640,13 @@ persistence row shows the same thing in plain words.
 
 ### Running behind a reverse proxy
 
-Mikroview rate-limits failed logins per source address as well as per
+MikroView rate-limits failed logins per source address as well as per
 username. Behind a reverse proxy, every request arrives carrying the
 *proxy's* address, so without configuration all your users share a
 single rate-limit bucket and one attacker's failed attempts lock
 everybody out.
 
-`listen.trustedProxies` fixes that by telling mikroview which peers it
+`listen.trustedProxies` fixes that by telling MikroView which peers it
 may believe a forwarding header from:
 
 ```yaml
@@ -551,7 +676,7 @@ are themselves trusted proxies, and the first untrusted address wins.
 That direction matters: entries are appended hop by hop, so the
 rightmost was written by your own proxy while anything further left
 could have been forged by the client before the request ever arrived.
-If the chain is malformed, or every entry is a trusted proxy, mikroview
+If the chain is malformed, or every entry is a trusted proxy, MikroView
 falls back to the directly-observed peer address rather than to
 something the client chose.
 
@@ -566,7 +691,7 @@ mikroview -validate-config
 ```
 
 In Docker, use `docker run`, **not** `docker exec`. A configuration bad
-enough to stop mikroview starting also means there is no running
+enough to stop MikroView starting also means there is no running
 container to exec into — `docker exec` answers "container is not
 running", which looks like a second, unrelated problem:
 
@@ -586,17 +711,17 @@ no directories are created, so it's safe to run anywhere.
 
 ### What happens when a setting is wrong
 
-Mikroview treats two kinds of mistake differently.
+MikroView treats two kinds of mistake differently.
 
 **Some settings stop it starting.** These are ones where carrying on
-would be unsafe or would mean mikroview isn't doing its job — an
+would be unsafe or would mean MikroView isn't doing its job — an
 unreadable listen address, a session that never expires, or session
 cookies without the `Secure` flag while TLS is on. The error names the
 setting so you know what to fix.
 
 **Everything else starts anyway, using a sensible default.** A negative
 retention or a zero event limit would mean nothing is kept at all, so
-mikroview substitutes the default rather than refusing — losing all your
+MikroView substitutes the default rather than refusing — losing all your
 monitoring over a typo would be worse. But it won't do that quietly: the
 substitution appears in the log **and** as a banner across the top of the
 web interface, naming the setting and the value actually in use.
@@ -605,20 +730,21 @@ That banner is only shown to admins, since the messages name file paths
 and hostnames.
 
 **File permissions**: the container runs as a fixed non-root user (uid
-65532, distroless `nonroot`) that is unrelated to any user on the Docker
-host. If `config.yaml` isn't world-readable (or owned by a matching
-uid/gid), the container will fail to start with a permission error —
-`chmod 644 deploy/config.yaml` after editing it.
+1000) — see
+[Files you mount into the container](#files-you-mount-into-the-container).
+If `config.yaml` isn't readable by that user, the container will fail to
+start with a permission error. `chmod 644 deploy/config.yaml` after
+editing it is the simplest fix here, since a config file is not a secret.
 
 ### Problem codes
 
-Every problem mikroview reports carries a code. The message already
+Every problem MikroView reports carries a code. The message already
 includes the fix and a snippet; this is the same information in one
 place, for when you would rather read than re-run.
 
 #### CFG-0001
 
-A listen address is empty. Mikroview would have nothing to bind.
+A listen address is empty. MikroView would have nothing to bind.
 
 ```yaml
 listen:
@@ -653,7 +779,7 @@ listen:
 #### CFG-0010
 
 `store.retention` is zero or negative, which would keep nothing.
-Mikroview starts anyway on the default rather than leaving you with no
+MikroView starts anyway on the default rather than leaving you with no
 monitoring, and says so.
 
 ```yaml
@@ -714,7 +840,7 @@ auth:
 ```
 
 Only set both to false if a reverse proxy terminates TLS **and**
-mikroview's own listener is never reachable from the LAN:
+MikroView's own listener is never reachable from the LAN:
 
 ```yaml
 tls:
@@ -828,7 +954,7 @@ watchlist:
 carry -- and every flag's contents with it -- crosses the network in
 cleartext. See [Notifications](#notifications-optional).
 
-Mikroview sends anyway: the receiver may well be on a network you
+MikroView sends anyway: the receiver may well be on a network you
 control end to end, and refusing would be MikroView deciding that for
 you.
 
@@ -922,7 +1048,7 @@ snapshot:
 #### CFG-0080
 
 `history.enabled` is on but `history.keyFile` is empty. There is no
-unencrypted mode, so nothing would be retained — mikroview turns
+unencrypted mode, so nothing would be retained — MikroView turns
 retention back off rather than write anything unprotected. See
 [On-disk event history](#on-disk-event-history-optional-off-by-default).
 
@@ -1014,7 +1140,7 @@ engine:
 
 ## Logging
 
-Mikroview's own server output (not event data -- see `store.retention`
+MikroView's own server output (not event data -- see `store.retention`
 above) is leveled and colorized, one line per entry:
 
 ```
@@ -1028,7 +1154,7 @@ log:
   level: info
 ```
 
-**On boot**, before the leveled log lines start, mikroview prints its
+**On boot**, before the leveled log lines start, MikroView prints its
 ASCII wordmark once (plain text, not a log line -- always shown,
 regardless of `level` or whether stdout is a terminal), followed by a
 `version` line identifying which build is running -- the short commit
@@ -1052,7 +1178,7 @@ only the real server-start path.
   `docker logs | grep`, or a log collector all see plain text, not raw
   ANSI escapes.
 - The component column (`auth`, `tls`, `flags`, `syslog-tls`, `http`,
-  ...) identifies which part of mikroview logged the line -- the same
+  ...) identifies which part of MikroView logged the line -- the same
   names used throughout this doc and SECURITY.md for the pieces they
   refer to.
 - This does **not** apply to the CLI recovery commands' own output
@@ -1062,22 +1188,30 @@ only the real server-start path.
 
 ## GeoIP country flags (optional)
 
-mikroview can show a country flag next to public source/destination
+MikroView can show a country flag next to public source/destination
 addresses, using a MaxMind GeoLite2 (or paid GeoIP2) **Country** or
-**City** database. This is entirely opt-in: mikroview doesn't bundle a
+**City** database. This is entirely opt-in: MikroView doesn't bundle a
 database or call out to MaxMind at runtime, since their license requires
 you to create your own free account to obtain one.
 
 1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
    and download `GeoLite2-Country.mmdb` (or generate a license key and use
    their `geoipupdate` tool to keep it current).
-2. Mount the `.mmdb` file into the container and point mikroview at it
-   with `MIKROVIEW_GEOIP_DB_PATH` (or `geoip.dbPath` in `config.yaml`, or
-   `-geoip-db` for local development).
+2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
+   MikroView finds it there with nothing else set. It has to be readable
+   by the user MikroView runs as — see
+   [Files you mount into the container](#files-you-mount-into-the-container).
+   A GeoIP database is not a secret, so `chmod 644` is fine here.
 
-If the path is unset, empty, or the file can't be opened/parsed, mikroview
+   Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
+   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development
+   — works and keeps working; it wins over the folder.
+
+If the path is unset, empty, or the file can't be opened/parsed, MikroView
 logs a note at startup and simply shows no flags — this is never a fatal
-error.
+error. The UI says so too rather than leaving a reader to guess why every
+flag is blank: the country filter's select carries a disabled "no GeoIP
+database" row, and Settings ▸ ingest states the same fact in one line.
 
 ## IP reputation lookup (optional)
 
@@ -1120,7 +1254,7 @@ configuration.
 ## Local IP/CIDR blocklist matching (optional, on by default)
 
 Independent of the live reputation lookups above (which run on demand,
-against public IPs a human clicks "investigate" on), mikroview also
+against public IPs a human clicks "investigate" on), MikroView also
 maintains a small local cache of known-malicious CIDR ranges from a
 vetted menu of free threat-intel feeds, and checks every ingested
 event's source IP against it — raising a `known_bad_ip` flag directly on
@@ -1140,7 +1274,7 @@ blocklist:
 
 - **`sources`** — which feeds from the vetted menu to enable. This is
   deliberately *not* an arbitrary URL field: both the trust story (an
-  operator ticking "Spamhaus DROP" is trusting mikroview's own vetting
+  operator ticking "Spamhaus DROP" is trusting MikroView's own vetting
   of that source, not whatever URL they happen to type) and the
   performance ceiling (every enabled list is consulted on the hot
   per-event ingest path — see below) depend on the menu staying small,
@@ -1203,9 +1337,78 @@ live reputation lookups above already play for those flags, just
 resolved synchronously (a local lookup needs no network round-trip)
 instead of asynchronously.
 
+## Drop list: operator-authored ranges to block (optional, #1223/#1224)
+
+Separate from the fetched feeds above: the drop list is a small store of
+ranges an admin has explicitly decided to block, typed in directly or
+raised from a flag's drawer, never written automatically. #461's ratified
+design shipped in three stages, all now in this release: the store and
+its validation (#1223: public IPv4 only, no broader than /24, and never a
+range the pushed router state shows as the router's own), the admin API
+and the RouterOS feed (#1224), and the Settings group and router setup
+card (#1225). Manage it from Settings ▸ Engine room's drop list group:
+add and remove entries with who/when/why, one drift line per router,
+mint or revoke the pull key, and copy the setup commands below already
+filled in.
+
+```yaml
+droplist:
+  # Where drop list entries are persisted, as a small JSON file. Same
+  # optional-persistence contract as audit.storePath: left unset,
+  # entries still work, they just don't survive a restart.
+  storePath: "/var/lib/mikroview/droplist.json"
+```
+
+### How the router fetches it
+
+A router pulls the current drop list itself, on its own schedule, with
+its own pull-only key -- MikroView never connects to a router (see
+`AGENTS.md`'s "MikroView observes; it never scans or connects"). Minting
+a key (`POST /api/droplist/key`, or Settings ▸ Engine room's drop list
+group) prints four RouterOS commands, already filled in with the real
+address and key, to paste into the router's terminal. Both are guarded
+by a `find` check, so pasting them a second time -- after rotating the
+key, say, which reprints the same block -- updates what is already there
+rather than leaving the router with two schedulers and two rules:
+
+```
+:if ([:len [/system scheduler find name=mikroview-drop]] = 0) do={ /system scheduler add name=mikroview-drop interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" } else={ /system scheduler set [find name=mikroview-drop] interval=5m on-event="/tool fetch url=\"https://<mikroview>/api/droplist.rsc\" http-header-field=\"Authorization: Bearer <key>\" check-certificate=yes dst-path=mikroview-drop.rsc; /import file-name=mikroview-drop.rsc" disabled=no }
+:if ([:len [/ip firewall raw find comment="mikroview drop list"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mikroview-drop action=drop comment="mikroview drop list" place-before=0 } else={ /ip firewall raw set [find comment="mikroview drop list"] chain=prerouting src-address-list=mikroview-drop action=drop disabled=no }
+```
+
+The scheduler is what keeps the router current -- it re-runs the fetch
+and import every 5 minutes, so an entry you add or remove reaches the
+router on its own, with nothing to re-paste. The firewall rule is what
+actually drops the traffic; without it the address list fills but
+nothing is blocked. Two more commands are rendered alongside these, for
+undoing either one without retyping: one disables the rule, the other
+empties the address list.
+
+The fetched script never rewrites the live `mikroview-drop` address list
+directly. It builds the new generation entirely in a staging list
+(`mikroview-drop-next`) first, and only swaps it onto the live list in
+its last two lines -- because RouterOS's own `/import` aborts at the
+first line that errors and leaves everything after it un-run, so a script
+that cleared the live list up front and then hit a bad line partway
+through would leave the router with an empty, wide-open drop list until
+the next successful fetch. With the staging-list swap, a failed import
+leaves the live list exactly as it was.
+
+A fetch failure -- the router unreachable, a network blip, an expired
+key -- imports nothing at all, so the last successfully-imported list
+stays in force; nothing is ever left half-applied.
+
+The key reads the drop list and nothing else: minting one (`POST
+/api/droplist/key`) mints a `droplist-pull` bearer token good for exactly
+one route, `GET /api/droplist.rsc`, the same structural, separate-mux
+guarantee the read-only and ingest tokens carry (see [API
+tokens](#api-tokens-read-only)). Minting again **replaces** the existing
+key rather than adding a second one -- every router that fetches the drop
+list uses the same key, so there is only ever one to rotate.
+
 ## Network attribution (optional, on by default)
 
-When you click "investigate" on an IP, mikroview also labels it with the
+When you click "investigate" on an IP, MikroView also labels it with the
 kind of network it belongs to — a Tor exit, a commercial VPN, cloud or
 datacenter space, or a privacy relay (Apple iCloud Private Relay,
 Cloudflare WARP). It shows up as a **Network** row in the lookup popover,
@@ -1228,7 +1431,7 @@ run yourself) never contributes anything, in either direction of the
 check. A match on its own, with no behavioral detection already
 triggered, never creates a flag — the same "absence of evidence is not
 evidence, but a mild match by itself is not evidence of anything either"
-floor-only contract every other reputation signal in mikroview follows.
+floor-only contract every other reputation signal in MikroView follows.
 Datacenter and privacy-relay matches never affect a score, only the
 display. To suppress attribution/reinforcement for a specific address
 you trust (your own VPN, a VPS you run), use the existing flag exclusion
@@ -1257,7 +1460,7 @@ ones, so the feature is quiet the day you enable it.
 Set `sources` to an empty list to turn attribution (and the Tor/VPN
 confidence reinforcement) off entirely.
 
-**No range data ships in mikroview.** Every list is fetched at runtime,
+**No range data ships in MikroView.** Every list is fetched at runtime,
 from the operator's own device, on a fixed daily cycle with a small
 random offset per install (so thousands of self-hosted instances don't
 refresh in lockstep). A release therefore can never ship stale security
@@ -1283,7 +1486,7 @@ oui:
   cachePath: /var/lib/mikroview/oui-registry.json
 ```
 
-**No vendor data ships in mikroview.** Your instance fetches IEEE's MA-L
+**No vendor data ships in MikroView.** Your instance fetches IEEE's MA-L
 registry itself, once a day, and caches the parsed result at `cachePath`
 so vendor names are there the moment it restarts rather than a minute
 later. The daily poll is conditional (`If-None-Match`), so an unchanged
@@ -1294,7 +1497,7 @@ publishes the MA-L listing for direct download, free, without
 registration, and with no licence or usage conditions attached -- so
 fetching it and looking addresses up in it is plainly fine. What nobody
 is granted is permission to *redistribute* it, so shipping a copy inside
-mikroview would be passing on someone else's data without the right to.
+MikroView would be passing on someone else's data without the right to.
 Your own copy, fetched from IEEE, avoids that question entirely and has
 the side benefit of being current rather than as old as your release.
 
@@ -1314,7 +1517,7 @@ Three answers are deliberately not vendor names:
   `52:54:00:...` is KVM/QEMU.
 - **Sub-delegated blocks.** A few hundred OUIs are held by IEEE itself,
   because they are carved into smaller MA-M/MA-S assignments listed in
-  files mikroview does not fetch. Reporting those devices as made by
+  files MikroView does not fetch. Reporting those devices as made by
   "IEEE Registration Authority" would be nonsense, so they are reported
   as sub-delegated with the vendor unknown.
 - **Private listings.** Some assignees pay to have their name withheld.
@@ -1345,7 +1548,7 @@ companion script (not part of the running app) for self-hosters: run it
 directly on a Docker host to list every running container's published
 ports, flagging which are bound to a public interface (`0.0.0.0`/`::`)
 versus loopback-only (`127.0.0.1`/`::1`) -- useful for cross-referencing
-"what does mikroview say this port usually is" against "what's actually
+"what does MikroView say this port usually is" against "what's actually
 listening on it, on this host."
 
 ## Friendly names (optional)
@@ -1374,7 +1577,7 @@ raw label/IP), so this is purely additive.
 Setting a `comment=` on the rule in RouterOS itself is the more durable
 fix for rule names specifically, if you're able to -- `ruleNames` is for
 when you can't or don't want to edit RouterOS config directly, or want a
-different name in mikroview than the RouterOS comment.
+different name in MikroView than the RouterOS comment.
 
 ## Entities: UI-managed host/rule/port labels and tags (optional)
 
@@ -1388,7 +1591,7 @@ mail-sender allowlist, and this IP/port/rule aliasing UI), so the record
 shape is deliberately generic (`type`, `key`, `label`, `tags`) rather
 than shaped around either one specifically. `type` is a free-form
 string, not a closed set -- `host`, `rule`, and `port` are just the
-values mikroview's own display sites (the live table, CSV export,
+values MikroView's own display sites (the live table, CSV export,
 `internal/naming.Resolver`) know to look up, not a validation allowlist.
 
 ```yaml
@@ -1401,7 +1604,7 @@ entities:
   storePath: "/var/lib/mikroview/entities.json"
 ```
 
-**One-time migration**: the very first time mikroview boots against a
+**One-time migration**: the very first time MikroView boots against a
 given entities store, if `ruleNames`/`hostNames` are non-empty it
 imports each entry as an entity (`type: rule`/`type: host`, `key` = the
 map key, `label` = the map value) so an existing deployment's aliases
@@ -1434,7 +1637,7 @@ already knowing its raw IP/rule label/port number: a **Discovered** section
 lists hosts, rules, and ports seen in live traffic that don't have a
 label yet (mirroring the auto-discovered-device pattern the **Fleet**
 view already uses for RouterOS sources), each with a one-click "Name it"
-action. Discovered rules come from mikroview's own unbounded-time
+action. Discovered rules come from MikroView's own unbounded-time
 per-rule usage record (`GET /api/rules`); discovered hosts/ports are
 derived from the events currently loaded in your browser tab, so that
 list is only as complete as what's been seen there so far -- the entity
@@ -1495,7 +1698,7 @@ which kind of quiet it is:
   automatically the next time an event from that host arrives, because a
   host that is back is not dismissed.
 
-mikroview learns all of this from the feed alone. It never probes a host
+MikroView learns all of this from the feed alone. It never probes a host
 to find out whether it is still there -- see the "observes, never scans"
 rule in [AGENTS.md](../AGENTS.md).
 
@@ -1512,7 +1715,7 @@ hosts:
 
 The register is bounded at **10,000 hosts**. A source address is
 something an attacker can forge one field at a time, so an unbounded
-list keyed by it would be a way to grow mikroview's memory from the
+list keyed by it would be a way to grow MikroView's memory from the
 outside. At the cap, the host with the oldest last-seen time *that
 carries no mark* is dropped -- your own decisions are the one thing here
 that cannot be rebuilt from the feed, so they are the last thing to go.
@@ -1530,11 +1733,73 @@ coverage declaration. `GET` is open to any signed-in user; the two writes
 are user tier and audit-logged, since saying a silence is deliberate
 carries the same weight as any other authored explanation.
 
+## Seen filter values (issue #1226, optional)
+
+Every filter on the live view is a picker over something known -- except
+two. `Proto` and `Interface` had no list behind them anywhere in the app,
+so both were free-text boxes: you typed `tcp`, or your best guess at an
+interface name, and hoped.
+
+MikroView now keeps the list itself. Every event that arrives records its
+protocol and its in and out interface names, with when each value was
+first and last seen, and the filter strip offers those as menus. Nothing
+is guessed and nothing is asked of your network: a value is in the menu
+only because a log line carrying it arrived.
+
+**Typing still works.** The menus are suggestions, not a closed set -- you
+can type a value MikroView has never seen, which is what lets you set a
+filter up *before* the traffic you are waiting for appears.
+
+There is one interface list, not one for inbound and one for outbound,
+because there is one interface filter: it matches an event whose in *or*
+out interface is the value you picked.
+
+```yaml
+seen:
+  # Where the list is persisted, as a small JSON file. Same
+  # optional-persistence contract as hosts.storePath above: left unset,
+  # the list still works, it just starts empty after a restart and
+  # refills as traffic arrives -- so a protocol or interface that has
+  # been quiet since the restart is missing from the menu until it is
+  # seen again. Typing an unlisted value is unaffected. If you set this
+  # in the container, mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/seen-values.json"
+```
+
+### How long a value stays in the menu
+
+**A value is kept while it has been seen in the last 90 days, and each
+field keeps at most 200 values -- when it is full, the one seen longest
+ago is dropped.**
+
+Neither figure is a setting. Both are fixed in MikroView.
+
+Three months is the line because a menu's whole usefulness is that
+everything in it is worth picking. Something that has arrived at all this
+quarter is traffic you may still want to filter on; something that has
+not is a stale entry between you and the one you wanted. The 200 cap is
+the safety half: protocol and interface names both arrive inside a log
+line, so a misconfigured or hostile feed could otherwise invent new
+interface names indefinitely and grow the list without bound.
+
+Ageing-out happens when a new value is recorded, not on a timer. An
+instance that stops receiving events stops expiring values, which is the
+honest behaviour -- nothing was observed, so nothing changed.
+
+Writes go to disk behind the scenes, never on the path an event takes
+through the app, the same way the host presence register above is
+written.
+
+The list is read via `GET /api/seen-values` (see [API
+reference](#api-reference)), and is carried in `-backup` envelopes with
+every other store.
+
 ## Device dossier (issue #410)
 
 `GET /api/hosts/{ip}/dossier` answers "what is this thing?" for one
-address, by assembling what mikroview already holds rather than by going
-and looking. It needs no configuration and is on whenever mikroview is,
+address, by assembling what MikroView already holds rather than by going
+and looking. It needs no configuration and is on whenever MikroView is,
 though several of its blocks are only as good as what your routers push
 (see [RouterOS setup](routeros-setup.md)).
 
@@ -1575,9 +1840,9 @@ unknown, because silence is not evidence. An address nobody has ever
 seen answers 200 with an honest empty card, not a 404 -- "never seen" is
 an answer, and often the one you needed.
 
-**mikroview never touches the host.** The card may print an `nmap`
+**MikroView never touches the host.** The card may print an `nmap`
 command or a browser URL for you to run yourself, built from the ports
-something has actually been seen reaching on that host. mikroview does
+something has actually been seen reaching on that host. MikroView does
 not run it and connects to nothing on your network: an observer that
 starts probing changes character, and starts appearing in other tools'
 logs as a scanner.
@@ -1604,7 +1869,7 @@ established regardless of how often it recurs, the same kind of
 permanent statement a coverage-gap declaration or a host's "intended"
 mark makes.
 
-mikroview learns all of this from the feed alone -- it never probes a
+MikroView learns all of this from the feed alone -- it never probes a
 line to find out whether it still exists; see the "observes, never
 scans" rule in [AGENTS.md](../AGENTS.md).
 
@@ -1651,7 +1916,7 @@ weight as any other authored explanation.
 
 ## Network segment decommissioning (issue #460, optional)
 
-Deleting a subnet from the router does not remove it from mikroview's map
+Deleting a subnet from the router does not remove it from MikroView's map
 the moment the config changes -- it is decommissioned when the traffic
 stops, not when the config is deleted. A retiring range enters a
 **draining** watch, and the watch only clears after a **clean window** --
@@ -1711,7 +1976,12 @@ deliberate exception to the "log admin actions" rule above:
   verdict suppresses detection for that (detector, target) pair while
   it stays within the recorded size, and "who decided this stopped being
   flagged" has to stay answerable. The admin-only "clear and never flag
-  this again" this replaced was logged for the same reason.
+  this again" this replaced was logged for the same reason. A verdict
+  given with a note says so -- "checked, with note" -- and **editing a
+  note** (`PUT /api/flags/{id}/note`) is logged as its own entry. Neither
+  carries the note's text: the flag is the only place the words live, so
+  undoing a verdict can discard them without an audit entry being
+  deleted or left quoting something that has gone.
 - **What that verdict wrote to the watchlist** is logged as though you
   had done it by hand: `definition.create` for an observing entry it
   created, `definition.promote` for the destinations it permitted, and
@@ -1730,14 +2000,24 @@ device-attributed exception:
   naming the router, generation and which half of the pair -- a
   router's whole configuration, credentials included, is never an
   unaccountable read.
+- Keeping a generation (`POST
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.protected`; releasing one (`DELETE
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.unprotected`; rewriting its comment (`PATCH
+  /api/router-backups/{device}/{generation}/protect`) is
+  `router_backup.comment_changed`. Each names the router and
+  generation; the comment itself is never in the detail -- like a
+  flag's note above, it lives only where it was written, in the
+  vault's sealed index.
 - The optional vault passphrase lock (see [Router backups over
   SFTP](#router-backups-over-sftp-optional-off-by-default)) logs each of
   its own changes: `router_backup.locked`, `router_backup.unlocked`,
   `router_backup.unlock_failed` (a wrong passphrase, whether unlocking
   or removing), `router_backup.passphrase_set`,
-  `router_backup.passphrase_removed`, and
+  `router_backup.passphrase_removed`,
   `router_backup.passphrase_remove_failed` (a removal whose re-seal did
-  not finish).
+  not finish), and `router_backup.passphrase_changed`.
 - The vault running low on disk space logs `router_backup.low_space`,
   and `router_backup.low_space_cleared` when free space recovers. Both
   are attributed to `system` against the vault: no admin asked for
@@ -1747,10 +2027,19 @@ device-attributed exception:
   carries the free, floor and total byte counts that made the decision.
 - A backup arriving over the HTTPS ingest channel (`POST
   /api/ingest/router-backup`) is `ingest.router_backup`; a refused push
-  is `ingest.router_backup.refused`; a storage fault on mikroview's own
+  is `ingest.router_backup.refused`; a storage fault on MikroView's own
   side is `ingest.router_backup.failed`. These three are attributed to
   the pushing device (`device:<name>`), or to `system` for a fault that
-  was mikroview's own rather than the router's.
+  was MikroView's own rather than the router's.
+
+- Adding or removing a drop list entry (issue #1223) is `droplist.add` /
+  `droplist.remove`, naming the range as its target and carrying the
+  entry's reason as detail (plus which flag raised it, when one did).
+  Minting or revoking the pull key a router fetches the feed with (#1224)
+  is `droplist.key_minted` (detail says "replaced the previous key" when
+  minting rotated an existing one rather than creating the first) and
+  `droplist.key_revoked`. Settings ▸ Engine room's drop list group (#1225)
+  is what actually writes these.
 
 Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
@@ -1761,11 +2050,11 @@ that endpoint's event-specific filters.
 ## Setup wizard ledger (optional)
 
 The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
-five steps. Most of what it shows is not stored anywhere: mikroview
+seven steps. Most of what it shows is not stored anywhere: MikroView
 never connects to your router, so each step's check is simply an
 observation of what arrived here -- a certificate fetch, a syslog
 connection, events carrying a decoded log-prefix, a pushed table -- and
-those are re-made from arriving traffic every time mikroview starts.
+those are re-made from arriving traffic every time MikroView starts.
 
 What *is* stored is the other half: the steps you **skipped** or
 **forced past**, each with who decided it and when. Those are decisions,
@@ -1793,13 +2082,47 @@ and stays there even after the evidence eventually arrives and the step
 turns green, while the ledger holds current state and clears itself the
 moment evidence outranks the decision.
 
+## Upgrade notice (issue #1218, optional)
+
+On the first boot after an upgrade (the version stamped into the binary
+differs from the one recorded in the data directory's `version` marker
+file), MikroView checks which settings this build understands that your
+`config.yaml` does not set at all, and logs how many it found:
+
+```
+5 new setting(s) are available -- see Settings ▸ Upgrade to review and copy them in
+```
+
+**Settings ▸ Upgrade** shows the actual YAML for each one -- comment and
+all, in the same order and style as `deploy/config.example.yaml` --
+ready to paste under your own `devices:` line. It never rewrites
+`config.yaml` itself: the compose file mounts it read-only, and even
+writably, reordering an operator's keys and dropping their own comments
+was rejected as worse than leaving the file alone (see the issue's
+ruling). The list is worked out fresh every time the page is opened, not
+just on the boot that logged it, so it stays reachable for as long as
+something is genuinely missing.
+
+It has a plain close button, nothing more: closing it puts it away for
+this visit and nothing is saved. The owner's ruling was verbatim "Just
+have a close button. It's simple." Navigate away from Settings and
+back, or restart MikroView, and it shows again for as long as something
+is genuinely missing.
+
+The reverse direction -- a key your config sets that this version no
+longer understands -- is issue #1207's unknown-key check: it refuses to
+start rather than silently ignoring the key, naming what replaced it
+when something did. That happens before this notice (or anything else
+in the app) could ever show it, so there is nothing for this screen to
+add on that side.
+
 ## Watchlist (optional)
 
 Issue #243 grew the old Control Ports tab into a user-tuned watchlist:
 instead of one flat list of "interesting" ports shared by everyone, an
 operator defines entries scoped by source device, destination and port
 set. Matches are persisted so they survive both the in-memory event ring
-wrapping and a mikroview restart -- unlike Control Ports before it, which
+wrapping and a MikroView restart -- unlike Control Ports before it, which
 only ever saw whatever was still in the browser's own capped, volatile
 event buffer.
 
@@ -1813,7 +2136,7 @@ Two kinds of entry, chosen per entry, not globally:
   while it's on screen.
 - **Invert** -- "this device should only ever reach these destinations,"
   the other direction: instead of naming ports to watch for, you name a
-  device and let mikroview tell you what it actually does. A new
+  device and let MikroView tell you what it actually does. A new
   inverted entry starts **observing**: nothing fires while observing --
   every distinct destination the device touches gets recorded as a
   candidate for review, not treated as a violation. You look at what it
@@ -1903,18 +2226,18 @@ file-backend-only concept -- so it's bounded by age instead:
 that runs hourly.
 
 Watchlist coverage is bounded by the same thing every detector in this
-app is bounded by: mikroview only ever sees what RouterOS actually
+app is bounded by: MikroView only ever sees what RouterOS actually
 logs. An entry watching a port the router's own rules don't log traffic
 for, or a device whose traffic never crosses a logged rule, will never
 produce a match -- not because the entry is wrong, but because there's
-nothing here for mikroview to observe. Tuning entries, like tuning
+nothing here for MikroView to observe. Tuning entries, like tuning
 detector thresholds below, is an expected, ongoing part of running this
 against a real network, not a one-time setup step.
 
 ### Suggested watchlist entries (issue #243)
 
 Building a watchlist from a blank page means already knowing what to
-watch. mikroview instead suggests entries from data your router has
+watch. MikroView instead suggests entries from data your router has
 already pushed (see [RouterOS setup](routeros-setup.md)) -- named
 devices from your DHCP leases, and ports an existing firewall rule
 already drops or rejects -- so you have something to react to rather
@@ -1963,12 +2286,12 @@ meaningful to call it.
 
 ## Behavioral flags (optional, on by default)
 
-mikroview watches the ingested event stream for a small set of patterns
+MikroView watches the ingested event stream for a small set of patterns
 worth a human's attention, and raises a **flag** (visible in the UI, in
 `GET /api/flags`) for each one -- never an automatic action. This is an
 "interrogation helper," not an intrusion-prevention system: nothing here
 blocks, drops, or reports traffic anywhere. If you're running a proper
-IPS alongside mikroview (e.g. CrowdSec), this is meant to complement it,
+IPS alongside MikroView (e.g. CrowdSec), this is meant to complement it,
 not duplicate it -- see the detector descriptions below for what each one
 is actually good at spotting.
 
@@ -2032,13 +2355,13 @@ flags:
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
-  JSON file. This is the one deliberate exception to mikroview's
+  JSON file. This is the one deliberate exception to MikroView's
   otherwise in-memory-only design (see [SECURITY.md](../SECURITY.md)): a
   flag is meant to stay visible until a human clears it, so unlike
-  everything else it survives a restart. Left empty (the default),
-  flags still work, they just reset like everything else does. If you
-  set this in the container, mount a volume for its parent directory —
-  see `deploy/docker-compose.yml`.
+  everything else it survives a restart. The default is the path
+  shown above; set it empty and flags still work, they just reset like
+  everything else does. In the container, mount a volume for its parent
+  directory — see `deploy/docker-compose.yml`.
 - **Port scan** — one source touching `portScanThreshold`+ distinct
   destination ports within `portScanWindow`. Applies to any source,
   internal or external.
@@ -2195,7 +2518,7 @@ flags:
   That separate record exists specifically because `internal/store`'s
   counters are windowed to `store.retention` (24h by default) — nowhere
   near long enough to notice "hasn't fired in a month." **Accepted
-  trade-off:** mikroview only sees a rule when it fires in syslog, with
+  trade-off:** MikroView only sees a rule when it fires in syslog, with
   no visibility into the router's actual configured rule set (it's
   passive-syslog-only) — so a rule you've already removed will keep
   surfacing as stale until you manually clear the flag. Harmless: the
@@ -2220,7 +2543,7 @@ flags:
   — a single new SMTP connection to one destination wouldn't trip that.
   If you self-host your own outbound mail server, tag its host entity
   `trusted-mail-sender` once (**Admin ▸ Entities**, admin-only, or `POST
-  /api/entities`) and mikroview never flags it for this again. Like
+  /api/entities`) and MikroView never flags it for this again. Like
   stale-rule, this doesn't currently support the live enable/scope
   toggle described in [Per-detector
   toggles](#per-detector-toggles-and-scope-restrictions-optional), and
@@ -2294,13 +2617,13 @@ as less alarming than an identical LAN-sourced one.
 **Deliberately out of scope**, for now: tracking the WireGuard peer's
 *outer* UDP endpoint (their real internet source IP) or handshake state.
 Firewall logs never see that -- it only exists in
-`/interface/wireguard/peers` on the router itself, which mikroview has
+`/interface/wireguard/peers` on the router itself, which MikroView has
 no access to today (passive syslog only, no RouterOS API client). That
-data is what would let mikroview tell "this peer roamed to a new IP"
+data is what would let MikroView tell "this peer roamed to a new IP"
 (normal for a mobile client) apart from "this peer's private key was
 stolen and is now being used from somewhere else" (a real compromise
 signal) -- arguably the more interesting half of "VPN peer anomaly,"
-but it's blocked on issue #21 deciding whether/how mikroview talks to
+but it's blocked on issue #21 deciding whether/how MikroView talks to
 the RouterOS API at all.
 
 **Confidence score.** Every detector except global-volume-spike and
@@ -2397,7 +2720,7 @@ exposes all of this as `reputation`, `country`, and `evidence` fields.
 
 **Tor/hosting-provider signal (issue #58).** AbuseIPDB's response
 already includes an `isTor` flag and a `usageType` classification (e.g.
-"Data Center/Web Hosting/Transit") that mikroview now captures alongside
+"Data Center/Web Hosting/Transit") that MikroView now captures alongside
 the abuse score. Either one also contributes to the confidence floor,
 using the same floor-raise-only reasoning as the abuse score itself,
 with the *strongest* of the two independent signals applied: a Tor exit
@@ -2416,7 +2739,7 @@ fresh entry rather than silently resurrecting the old one.
 ### Verdicts: how a flag ends
 
 Every flag ends one of two ways: either the firewall is improved so the
-traffic you do not want stops arriving, or mikroview is told this
+traffic you do not want stops arriving, or MikroView is told this
 traffic is acceptable, at these characteristics. There is no third bin
 -- nothing is dismissed without a judgement. The row offers **expected ·
 checked · investigate**, and once something is being investigated,
@@ -2428,7 +2751,7 @@ checked · investigate**, and once something is being investigated,
 | `expected` | Normal for this host, at this size | Clears the flag and records an expectation: further firings of that detector on that host are absorbed silently while their size stays within **1.5x** the size of the firing you judged. Above that the flag returns, reading "expected up to 30, saw 120"; saying expected again raises the recorded size |
 | `checked` | Looked suspicious, checked, fine this time | Clears the flag. Suppresses nothing, but is remembered: a later firing of the same pair says "you checked this on 2 Sept and found it fine" |
 | `investigate` | Of concern, being looked at | Leaves the flag open, and switches its row to expected · resolved |
-| `resolved` | Dealt with, normally by a firewall change | Clears the flag, and deliberately does **not** suppress. A line only reaches mikroview if the firewall let it get that far, so a correct fix makes the lines stop; if the same circumstances recur the flag returns, reading "resolved on 2 Sept -- it's back". If what you want is to keep logging those drops, that is an expected verdict at that rate, not a resolved one |
+| `resolved` | Dealt with, normally by a firewall change | Clears the flag, and deliberately does **not** suppress. A line only reaches MikroView if the firewall let it get that far, so a correct fix makes the lines stop; if the same circumstances recur the flag returns, reading "resolved on 2 Sept -- it's back". If what you want is to keep logging those drops, that is an expected verdict at that rate, not a resolved one |
 
 Each detector declares what its "size" is -- usually the measure it
 compares against its threshold (distinct ports for `port_scan`, events
@@ -2443,6 +2766,35 @@ against a moving baseline). An expected verdict on one of those means
 verdict. Undoing an expected verdict withdraws the expectation it
 recorded -- removing it, or putting a raised size back where it was --
 and takes back the permitted destinations it wrote, below.
+
+### Notes: why you called it that
+
+The drawer has a box across the bottom, above the verdict buttons. Write
+in it whatever you want about the flag -- what you checked, what you
+found, what you decided to leave alone -- and then click Expected,
+Checked or Investigate. What you wrote is kept with the verdict you
+chose, and read back in full the next time that flag returns, under the
+line that already says when you last looked at it.
+
+Four things about it are worth knowing:
+
+- **It is always optional.** No verdict ever needs one.
+- **You can change it afterwards.** Reopen the flag and edit the box;
+  it saves when you click away. Emptying it takes the note back.
+- **Undoing the verdict discards the note.** The note is the reason for
+  a decision, so withdrawing the decision withdraws the reason. There is
+  no second copy anywhere to go back to.
+- **The audit log records the event, never the words.** It says a
+  verdict was given with a note attached, and that a note was later
+  edited, so who wrote and changed things stays answerable without the
+  text living in two places that could disagree.
+
+A note written before the verdict travels with it on
+`POST /api/flags/{id}/verdict`, as an optional `note` alongside the
+verdict. Editing one afterwards is `PUT /api/flags/{id}/note` with
+`{"note": "..."}`, available to any signed-in user (not a viewer), same
+as the verdict itself. It answers 404 for a flag MikroView does not
+know, and 409 for one carrying no verdict for the note to belong to.
 
 ### What a verdict writes to the watchlist
 
@@ -2498,7 +2850,7 @@ that suppresses anything.
 
 ### The expectations ledger
 
-Every expectation mikroview has been given -- "this much of this, from
+Every expectation MikroView has been given -- "this much of this, from
 this host, is normal here" -- is listed on the watchers station, under
 the detector bench (**Settings ▸ detection ▸ tune…**), headed *What it
 has been told to expect*. Each row names the detector and the host, the
@@ -2518,7 +2870,7 @@ expected can take it back). See [API reference](#api-reference).
 
 ## New-device detection (optional, on by default)
 
-Raises a `new_device` flag the first time mikroview ever sees a given
+Raises a `new_device` flag the first time MikroView ever sees a given
 LAN client MAC address (`store.Event.SrcMAC`). Unlike every detector
 above, this isn't a threshold-crossing or a statistical judgment -- it's
 a deterministic "have I ever seen this MAC before," so there's nothing
@@ -2530,7 +2882,7 @@ deviceMac:
   storePath: "/var/lib/mikroview/mac-registry.json"
 ```
 
-- **`storePath`** — where the registry of every MAC address mikroview
+- **`storePath`** — where the registry of every MAC address MikroView
   has ever seen (just a MAC plus first/last-seen timestamps) is
   persisted, as a small JSON file. This needs its own store, separate
   from `flags.storePath` above: it must survive a restart for "new" to
@@ -2544,7 +2896,7 @@ deviceMac:
 **Coverage.** `SrcMAC` is only present on RouterOS log lines from
 LAN-side/bridge-aware firewall rules -- by the time traffic reaches a
 WAN-side rule, its Layer 2 source-MAC information is already gone
-(that's how routing works, not a mikroview limitation). If your
+(that's how routing works, not a MikroView limitation). If your
 firewall ruleset only logs WAN-side traffic, this detector simply never
 fires; that's a data-availability gap, not a bug.
 
@@ -2557,7 +2909,7 @@ yet scored" detectors above.
 
 ## Notifications (optional)
 
-Flags are only visible if someone has the mikroview UI open. `notify`
+Flags are only visible if someone has the MikroView UI open. `notify`
 sends an alert through one or more external channels whenever a new
 flag *episode* is raised (a first-ever raise, or a revival after a human
 clears an already-cleared flag -- never a plain re-fire of an
@@ -2645,9 +2997,9 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **The watchers station** -- part of the engine room, in the navigation
-  rail's Admin group -- lets an admin override that starting point. Any
-  signed-in user can open the engine room and see the watchers station,
+- **The watchers station** -- part of Settings -- lets an admin override
+  that starting point. Any signed-in user can open Settings and see the
+  watchers station,
   with a READ-ONLY marker in the header; the on/off switches and scope
   fields simply aren't there unless you're the admin. A change persists
   to the definitions store (`engine.definitionsStorePath`) and is what
@@ -2720,10 +3072,15 @@ host, port, or rule, so scoping either wouldn't mean anything.
 
 ## Authentication
 
-The first time mikroview loads with no accounts and no prior decision,
+The first time MikroView loads with no accounts and no prior decision,
 it shows a one-time choice screen instead of the live view: **create
 the admin account**. That is the only option -- running without
-authentication was removed, and creating an account is the floor. See
+authentication was removed, and creating an account is the floor. It is
+a username and a password; the username can't be an email address, and
+SSO is never offered in its place. What happens straight afterwards
+depends on whether your OIDC details are already in the config file --
+see [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin). See
 [SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
 section is the configuration reference.
 
@@ -2745,7 +3102,7 @@ auth:
   **Persists with or without `history.keyFile` (#853 rule 6).** Accounts
   hold only usernames and Argon2id hashes, never a plaintext password, so
   this file keeps persisting in plain JSON with no key configured, the
-  same as every mikroview release before #853 -- the choice screen above
+  same as every MikroView release before #853 -- the choice screen above
   does not reappear on restart. Most other file-backed stores are
   memory-only without a key; see
   [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853).
@@ -2756,7 +3113,7 @@ auth:
   kind of connection to have a session on. Only turn this off if you've
   also set `tls.enabled: false`, or sessions won't work at all.
 
-  Setting it to `false` while `tls.enabled` is `true` stops mikroview
+  Setting it to `false` while `tls.enabled` is `true` stops MikroView
   starting, with [CFG-0021](#cfg-0021) — the cookie would be sendable
   over a plain connection the deployment has otherwise ruled out. The
   env var is `MIKROVIEW_AUTH_SECURE_COOKIE`.
@@ -2774,9 +3131,9 @@ auth:
 and the login/session endpoints requires a valid session, permanently,
 from then on. Whoever completes the form becomes the admin.
 
-**Until then, mikroview serves nothing else.** There is no "run it
+**Until then, MikroView serves nothing else.** There is no "run it
 without a login" option. An earlier version had one, and it was removed:
-an open mikroview shows anyone who can reach it which of your hosts are
+an open MikroView shows anyone who can reach it which of your hosts are
 being scanned, which rules are firing, which ports are under pressure,
 and which accounts exist. That is a map of your network, and "it's only
 for five minutes while I try it out" is exactly how a deployment ends up
@@ -2796,9 +3153,13 @@ One gzipped file holding every store: accounts, API tokens, recovery-key
 digests, flags, rule usage, detector settings, entities, the MAC
 registry, the audit log, the event-buffer size an admin set from
 Settings (`store.settingsStorePath`), the watchlist, watchlist
-suggestions, the watchlist match log, and the router-backup vault
-(`backup.vaultDir`, #394) — every generation still encrypted exactly as
-it sits on disk, so a restore never needs the retention key to move it.
+suggestions, the watchlist match log, the data directory's schema
+number (`schema.json`, #1238 / #1244) — so a restore comes back stamped
+at the schema it was actually taken at, rather than reading as a fresh,
+unmigrated install and re-running migrations that already landed — and
+the router-backup vault (`backup.vaultDir`, #394) — every generation
+still encrypted exactly as it sits on disk, so a restore never needs the
+retention key to move it.
 
 Three things are deliberately left out, and always have been:
 
@@ -2806,13 +3167,13 @@ Three things are deliberately left out, and always have been:
   directory of generated key material, not a single document like every
   store above, and restoring it onto a different host is more likely to
   be wrong than right (different hostname/IP SANs, a CA nothing there
-  has trusted yet). It regenerates on its own the next time mikroview
+  has trusted yet). It regenerates on its own the next time MikroView
   starts without it.
 - **The recovery pepper** (`auth.recoveryPepperPath`) — the secret mixed
   into every recovery-key digest. Keeping it out means a stolen backup
   carries the digests and nothing able to verify them against.
 - **The GeoIP database** (`geoip.dbPath`) — a file you downloaded from
-  MaxMind yourself, not something mikroview wrote. A fresh download
+  MaxMind yourself, not something MikroView wrote. A fresh download
   replaces it exactly.
 
 **It contains your credentials.** That is deliberate — a backup that
@@ -2831,6 +3192,16 @@ file, where the alternative to "unchanged" is "locked out".
 `-restore` refuses to overwrite stores that already exist unless you pass
 `--force`.
 
+**Peak memory tracks the backup you actually have, not a worst case you
+don't.** A restore holds the decompressed envelope in memory before
+writing anything to disk, so peak memory is roughly the envelope's
+decompressed size — for a handful of routers with real RouterOS exports,
+that's tens of MiB. Anything claiming to decompress to more than
+`internal/backup.MaxDecompressed` (~6.5 GiB) is refused outright; that
+figure is a ceiling on what a hostile file may claim, sized for far more
+routers and generations than this product targets, not a memory budget
+real restores approach.
+
 > **Using Postgres?** These commands refuse, on purpose. Back up the
 > database with `pg_dump` or your provider's snapshots — see
 > [CHANGELOG.md](../CHANGELOG.md) and the migration section above.
@@ -2846,13 +3217,13 @@ files and risk getting the ownership wrong.
 mikroview -migrate-data <destination-directory> [--force]
 ```
 
-**Stop mikroview first.** Then run the image with the old location
+**Stop MikroView first.** Then run the image with the old location
 mounted where it always is, the new one mounted at
 `/var/lib/mikroview-migrate`, and the config as usual:
 
 ```sh
 # Named volume -> bind mount. /path/on/host/new-data must exist and be
-# owned by uid 65532 first -- see "Ownership" below.
+# owned by uid 1000 first -- see "Ownership" below.
 docker run --rm \
   -v mikroview-data:/var/lib/mikroview \
   -v /path/on/host/new-data:/var/lib/mikroview-migrate \
@@ -2873,15 +3244,15 @@ docker run --rm \
 ```
 
 **Use `/var/lib/mikroview-migrate`, not a path of your own choosing.**
-The image ships that directory owned by uid 65532 for exactly this job.
+The image ships that directory owned by uid 1000 for exactly this job.
 Docker copies a fresh named volume's ownership from whatever the image
 has at the mount point, so a new volume mounted anywhere else — `/mnt`,
 `/data`, anything the image never created — arrives owned by root, and
-mikroview cannot write a single byte into it.
+MikroView cannot write a single byte into it.
 
 Once the copy is done, the destination becomes the deployment's normal
 `/var/lib/mikroview` mount: change the `volumes:` line in your compose
-file to name the new volume or host directory, and start mikroview
+file to name the new volume or host directory, and start MikroView
 again. Nothing in the running deployment ever mounts
 `/var/lib/mikroview-migrate`.
 
@@ -2904,8 +3275,8 @@ where the same certificate and pepper are the wrong thing to restore. A
 migration never leaves the host, so carrying them across is exactly
 right.
 
-**Ownership.** mikroview creates every file on the destination itself,
-so the copy ends up owned by the user mikroview runs as (uid `65532` in
+**Ownership.** MikroView creates every file on the destination itself,
+so the copy ends up owned by the user MikroView runs as (uid `1000` in
 the shipped image) with no `chown` step afterwards. A named volume needs
 nothing — Docker hands it to the container on first use. A bind-mount
 destination on the host has to be writable by that uid *before* you run
@@ -2916,7 +3287,7 @@ directory's current owner, and the exact `chown` to run.
 you remove it yourself:
 
 1. Check the summary it prints.
-2. Stop mikroview.
+2. Stop MikroView.
 3. Point the deployment's mount at the new location.
 4. Start it, and sign in.
 5. Once you're satisfied, delete the old directory.
@@ -2927,7 +3298,7 @@ around.
 
 **Verification.** Every file is hashed as it's written, then re-read and
 re-hashed off the destination, and each store is opened to prove
-mikroview can actually read and write it there — not just that the bytes
+MikroView can actually read and write it there — not just that the bytes
 match. A failure at any point leaves the source untouched.
 
 `-migrate-data` refuses:
@@ -2948,16 +3319,19 @@ match. A failure at any point leaves the source untouched.
 
 ### Adding and removing people
 
-Open the engine room (Admin group in the navigation rail) and its
+Open **Settings** and its
 **"who may look in"** door. Only the admin sees this door -- it's
 absent entirely for anyone else, not shown read-only.
 
-![The engine room's people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
+![Settings' people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
 
 Press **+ Let someone in**, type a username and password, press **Let
-them in**, and the account appears in the list. Everyone added here gets an ordinary account: admin-only
+them in**, and the account appears in the list. The username can't be an
+email address — see [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin) for why MikroView keeps its
+own names clear of the ones identity providers send. Everyone added here gets an ordinary account: admin-only
 pages are simply absent from their navigation, with one exception --
-they can open the engine room and read it, but every control there is
+they can open Settings and read it, but every control there is
 missing rather than greyed out, so they still can't change settings,
 manage accounts, or create API tokens.
 
@@ -2978,13 +3352,20 @@ to it: open the account menu at the bottom of the rail (click your
 username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
-**This deletes your MikroView password, and can't be undone from
-MikroView.** After connecting:
+**Unless you are the admin, this deletes your MikroView password, and
+can't be undone from MikroView.** After connecting:
 
 - You sign in through your identity provider only.
 - If you lose access to that provider, MikroView can't recover the
-  account for you — that includes the admin account, so read
-  "Recovering the admin account" above before connecting the admin.
+  account for you.
+
+**The admin is the exception: it keeps its password.** MikroView holds
+exactly one admin, and a provider outage with no password anywhere locks
+everybody out rather than one person — so for that account SSO is an
+extra way in rather than a replacement, and the dialog says so instead
+of warning about a deletion that does not happen. See [SSO is additive:
+keep a local admin](#sso-is-additive-keep-a-local-admin).
+
 - You stay signed in on the browser you did it from. Anywhere else
   you're signed in gets signed out.
 
@@ -3089,12 +3470,59 @@ You can't regenerate them while a set exists — that would let anyone
 with access to the machine mint themselves a fresh key and walk straight
 through the gate. They rotate automatically after each use instead.
 
+### Resetting someone's password
+
+Somebody has forgotten their password, or you think someone else has
+learned it. You reset it from the web interface, and MikroView gives you
+a one-time code to hand over. **MikroView never sends email** — it holds
+no address for anyone, so there is no reset link and nothing to send one
+to. You are the delivery mechanism.
+
+Settings → **people** → **reset password** on their row. Clicking it
+once arms it, clicking again does it, and a dialog then shows a code
+like `K7RM-4TQD-9WXF-3HJP`. Copy it, or read it out: the alphabet has no
+`0`, `O`, `1` or `I` in it, so there is nothing ambiguous to dictate.
+
+Give it to them **in person or over a call you trust**. It is a password
+for the next 24 hours, so a chat message that sits in someone's history
+is the wrong channel.
+
+What the reset does the moment you confirm it:
+
+- their old password stops working — you do not wait for them to act;
+- they are signed out everywhere, on every device;
+- the code works once, or for 24 hours, whichever comes first;
+- **the code is shown once.** MikroView stores only a hash of it and
+  cannot show it again. Lost it? Reset again — that mints a new code and
+  kills the old one.
+
+They then type their own account name and the code where the password
+normally goes. MikroView lets them in, shows them **Set a new password**
+and nothing else until they have chosen one — no part of the app is
+reachable in between. Once they do, the code is finished with and they
+carry on as normal.
+
+Two accounts you cannot do this to:
+
+- **your own.** Change it from the account menu if you still know it, or
+  use `mikroview -recover-admin-account` from the console if you do not
+  (see below). Since MikroView has one admin, that keeps the admin
+  account out of this path entirely — no one can mint themselves a
+  credential for it.
+- **an account that signs in through SSO only.** Its password belongs to
+  your identity provider; reset it there.
+
+The reset is recorded in the [audit log](#audit-log-admin-action-accountability-optional)
+— who reset whom, and when the code expires. The code itself is never
+written down anywhere: not the audit log, not MikroView's own logs, not
+the accounts file.
+
 ### Recovering the admin account
 
 If you can't sign in as the admin, you get back in from the command
-line, not from the web interface -- so being locked out of mikroview
+line, not from the web interface -- so being locked out of MikroView
 doesn't stop you fixing it. You need two things: access to the machine
-(or container) mikroview runs on, and one of your recovery keys.
+(or container) MikroView runs on, and one of your recovery keys.
 
 ```sh
 mikroview -recover-admin-account   # asks for a recovery key, then a new password
@@ -3113,16 +3541,16 @@ your original keys stay valid.
 
 Changing the password signs out that account everywhere immediately,
 including on an already-running server. You don't need to restart
-mikroview.
+MikroView.
 
 Two things this command deliberately won't do:
 
 - **It only recovers the admin account.** Other people's accounts are
   managed by the admin from the web interface.
 - **It can't help if the admin signs in through SSO only.** There's no
-  password for mikroview to reset -- reset it at your identity
+  password for MikroView to reset -- reset it at your identity
   provider, or use `-transfer-admin` to move the admin role to an
-  account that does have a mikroview password.
+  account that does have a MikroView password.
 
 If you have no recovery keys yet (your deployment predates them), run
 `mikroview -generate-recovery-keys` once, on a terminal, and store what
@@ -3130,11 +3558,11 @@ it prints.
 
 **A corrupt or unreadable accounts file refuses to boot, rather than
 silently reopening.** If `auth.storePath` points at a file that exists
-but can't be loaded, mikroview exits immediately with an error rather
+but can't be loaded, MikroView exits immediately with an error rather
 than falling back to an empty, zero-account state -- the same state a
 genuine fresh install starts from, which would otherwise mean a lost or
 corrupted accounts file silently presents the first-run setup screen to
-whoever loads mikroview next, indistinguishable from a real fresh
+whoever loads MikroView next, indistinguishable from a real fresh
 install in both behavior and the logs. A missing file (no persistence
 configured, or a genuine first-ever boot) is unaffected and boots
 normally either way -- only a file that exists but won't parse triggers
@@ -3146,13 +3574,13 @@ separate CLI mode for what `mv`/`rm` already does.
 
 ## API tokens (read-only)
 
-For a separate service to pull mikroview's data over the network with
+For a separate service to pull MikroView's data over the network with
 no browser involved -- e.g. a companion OpenCanary-dashboard project
-cross-referencing incidents against mikroview's event/flag history -- a
+cross-referencing incidents against MikroView's event/flag history -- a
 session cookie doesn't work: there's no login flow to hold one. API
 tokens are a long-lived bearer credential for exactly that case,
-admin-created from the engine room's **"which machines may speak"**
-door (Admin group in the navigation rail), or directly via the API
+admin-created from Settings' **"which machines may speak"**
+door, or directly via the API
 below.
 
 **Scope is deliberately narrow: read-only, five endpoints, nothing
@@ -3203,8 +3631,8 @@ issued for.
 
 What a push feeds, today: host names (a DNS static entry, DHCP lease
 hostname, or WireGuard peer comment pushed by the router names that
-address everywhere mikroview shows one -- and **RouterOS always wins**
-over a label set in mikroview for the same address, so manage
+address everywhere MikroView shows one -- and **RouterOS always wins**
+over a label set in MikroView for the same address, so manage
 router-known hosts in RouterOS; labels for anything the router doesn't
 name are untouched), the pushed firewall rule and NAT tables, served
 read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
@@ -3212,14 +3640,14 @@ RouterOS's own display order, and the pushed `/ip address` table at
 `.../addresses`, sorted by address. Pushed state is held in memory only
 --
 never written to disk, never in a backup -- and re-arrives with the
-router's next scheduled push, so a mikroview restart costs at most one
+router's next scheduled push, so a MikroView restart costs at most one
 push interval of naming/table enrichment and nothing else. Pushed data
 never raises, lowers, clears or suppresses a detection: that boundary
 is a build-failing test, not a convention.
 
 See [routeros-setup.md](routeros-setup.md#4-push-router-state-for-names-and-rule-lookups-optional)
 for the router-side walkthrough -- minting the token, importing
-mikroview's certificate, and the script itself, explained line by line.
+MikroView's certificate, and the script itself, explained line by line.
 
 ## Single sign-on (OIDC/SSO)
 
@@ -3263,21 +3691,81 @@ oidc:
   `MIKROVIEW_OIDC_CLIENT_SECRET` instead of `config.yaml`, the same
   secret-via-env precedent `notify.smtp.password`/`reputation.abuseIPDBKey`
   already have.
-- **`publicBaseUrl`** — mikroview's own externally-reachable origin,
+- **`publicBaseUrl`** — MikroView's own externally-reachable origin,
   used to build the `redirect_uri` registered at the provider
   (`publicBaseUrl` + `/api/auth/oidc/callback`). Required whenever
   `issuerUrl` is set. Deliberately never inferred from a request's
   `Host` header -- doing so is a known `redirect_uri`-confusion
   vulnerability class. Covers either deployment mode this app
-  supports: mikroview's own self-signed TLS on a LAN IP/hostname
+  supports: MikroView's own self-signed TLS on a LAN IP/hostname
   (`https://192.168.1.10:8443`), or fronted by a reverse proxy
   terminating a real domain (`https://mikroview.example.com`).
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
 
+### SSO is additive: keep a local admin
+
+**Your admin account keeps its MikroView password, whether or not you
+connect it to SSO.** That password is the way back in on the day your
+identity provider is down, misconfigured after an upgrade, or has lost
+the admin's directory entry. MikroView never signs in to your provider
+on its own behalf, so if the provider cannot answer, SSO cannot let
+anybody in.
+
+What this means in practice:
+
+- **First run always creates a local admin**, with a username and a
+  password. MikroView never offers SSO instead of that, even when SSO
+  is configured — the local account is step one either way.
+- **Then one of two things happens.** If your OIDC details are already
+  in the config file, MikroView sends you to your provider to sign in,
+  and connects the identity you sign in with to the admin account you
+  just created. It is the same browser throughout, which is how
+  MikroView knows it is the same person — it compares no email address,
+  and stores none. If the details are not there, MikroView says the
+  account has been created and that the OIDC settings go in the config
+  file; add them, restart, and connect the account from the account
+  menu whenever you like.
+- **Connecting the admin to SSO keeps its password.** Afterwards you
+  can sign in either way: through your provider normally, with the
+  password when the provider is unreachable.
+- **Everybody else loses their password when they connect.** A user or
+  viewer who connects their account signs in through your provider from
+  then on, and MikroView cannot recover that account for them. That is
+  unchanged, and it costs the deployment nothing — the admin still has
+  a password.
+- **A MikroView username can't be an email address.** Identity
+  providers send an email as the username, so keeping local names clear
+  of them means the two can never be the same name and MikroView never
+  has to compare addresses — which is how it goes on holding no email
+  for anyone. Only new accounts are checked: one created before this
+  rule keeps its name and still signs in.
+- If your admin signs in through SSO only — which happens when a
+  deployment was bootstrapped entirely through your provider, the first
+  person to sign in becoming the admin — MikroView says so in its log
+  at every start. Nothing breaks while the provider is up; the warning
+  is about the day it isn't.
+
+If you end up locked out — the provider is unreachable and the admin
+has no password — the way back in is the command line, on the machine
+MikroView runs on:
+
+```bash
+mikroview -transfer-admin <username>
+```
+
+It moves the admin role onto an account that does have a password, and
+asks for a [recovery key](#recovery-keys) first. Its sibling
+`mikroview -recover-admin-account` resets the admin's own password, and
+deliberately refuses an admin who signs in through SSO only — there is
+no password there to reset, which is why `-transfer-admin` is the one
+that helps. See [Handing admin to someone
+else](#handing-admin-to-someone-else) and [Recovering the admin
+account](#recovering-the-admin-account).
+
 ### Supported providers
 
-**Mikroview supports self-hosted identity providers only** — Authentik,
+**MikroView supports self-hosted identity providers only** — Authentik,
 Keycloak, Zitadel, or a Microsoft Entra **single-tenant** issuer URL
 (`https://login.microsoftonline.com/<tenant-guid>/v2.0`).
 
@@ -3286,7 +3774,7 @@ Multi-tenant providers are **refused at startup**: Google
 `/organizations` and `/consumers` endpoints. SSO stays disabled and the
 reason is logged; local login is unaffected.
 
-The reason is that mikroview's OIDC support rests on the issuer URL
+The reason is that MikroView's OIDC support rests on the issuer URL
 *being* the access control. Every ID token is verified against that
 issuer's own signing keys and your client ID, so pointing `issuerUrl` at
 a directory you run means only accounts in that directory can sign in.
@@ -3296,7 +3784,7 @@ first account to register becomes an admin, such a deployment would hand
 admin to whoever reached the login page first.
 
 A safe configuration for a public provider is possible (pin a claim
-identifying the organisation), and mikroview deliberately does not offer
+identifying the organisation), and MikroView deliberately does not offer
 it: it would make every deployment's safety depend on an operator
 getting an extra restriction exactly right, where the failure is silent
 and indistinguishable from working correctly. See
@@ -3344,7 +3832,7 @@ never *which* condition they failed — that goes to the server log, since
 the specifics would map out your allowlist for an outsider.
 
 ```yaml
-# Scope mikroview to one Authentik group
+# Scope MikroView to one Authentik group
 oidc:
   issuerUrl: "https://authentik.example.com/application/o/mikroview/"
   clientId: "mikroview"
@@ -3356,7 +3844,7 @@ oidc:
 **Identity**: an account is matched by the immutable `(issuer, subject)`
 pair from the verified ID token, never by email or username -- an
 identity provider reassigning someone's email must never silently
-inherit a different mikroview account. A first-ever login via SSO
+inherit a different MikroView account. A first-ever login via SSO
 just-in-time creates a local account (no pre-registration step), using
 the ID token's `preferred_username`/`email` claim as a display name
 only if it's free; otherwise a stable synthetic username is generated.
@@ -3380,7 +3868,7 @@ at startup) rather than affecting local login in any way.
      one out of the box) -- **do not leave this unset**. Authentik's
      `id_token_signing_alg_values_supported` in its discovery document
      depends entirely on this being assigned; without it, token signing
-     may not use an algorithm mikroview's allowlist accepts.
+     may not use an algorithm MikroView's allowlist accepts.
    - Note the generated **Client ID**/**Client Secret**.
 2. **Applications → Applications → Create**, bind it to the provider
    above. Its slug is what appears in the issuer URL
@@ -3388,8 +3876,8 @@ at startup) rather than affecting local login in any way.
 3. Under the provider's **Property mappings**, make sure the standard
    `openid`, `profile`, and `email` scope mappings are attached (they
    usually are by default) -- these are what put `email`/
-   `preferred_username` in the ID token for mikroview's username hint.
-4. Set mikroview's `oidc.issuerUrl` to
+   `preferred_username` in the ID token for MikroView's username hint.
+4. Set MikroView's `oidc.issuerUrl` to
    `https://<your-authentik-host>/application/o/<slug>/` (the exact
    value shown as **OpenID Configuration Issuer** on the provider's
    overview page -- confirm by fetching
@@ -3399,20 +3887,20 @@ at startup) rather than affecting local login in any way.
 Verified end-to-end against a real, freshly bootstrapped Authentik
 instance (provider + application configured via Authentik's own API):
 the full redirect → real Authentik login form → PKCE code exchange →
-RS256 ID token verification → JIT account provisioning → mikroview
+RS256 ID token verification → JIT account provisioning → MikroView
 session flow, including a second login correctly reusing the same
 account rather than creating a duplicate.
 
 ## TLS
 
-Mikroview serves TLS by default on its main listener -- the
+MikroView serves TLS by default on its main listener -- the
 application itself is never served over plain HTTP. See
 [SECURITY.md](../SECURITY.md#tls) for the full reasoning; this section
 is the configuration reference.
 
 **Typing the address into a browser works.** A browser given
 `mikroview-host:8080` tries `http://` first, which arrives as plaintext
-on the HTTPS listener. Mikroview answers that with a redirect to
+on the HTTPS listener. MikroView answers that with a redirect to
 `https://` on the same host and port, rather than the bare error a TLS
 server would normally return -- so one published port is all a
 deployment needs (issue #325). The redirect target is validated against
@@ -3440,10 +3928,10 @@ this listener directly.
 
 A third listener, `listen.syslogTls` (default `:6514`, RFC 5425's
 syslog-over-TLS port), accepts RouterOS's `remote-protocol=tls` logging
-action -- mikroview's only syslog listener. Confidentiality for log
-traffic on the wire, and mikroview authenticating itself to the router
+action -- MikroView's only syslog listener. Confidentiality for log
+traffic on the wire, and MikroView authenticating itself to the router
 with a certificate: the same one the main HTTPS listener presents when
-`tls.enabled` is true (the router already imports mikroview's
+`tls.enabled` is true (the router already imports MikroView's
 generated CA to verify HTTPS ingest, so this is that same trust step,
 not a second one), or a self-generated one on its own if `tls.enabled`
 is false -- unlike `httpRedirect`, this listener is started whenever it's
@@ -3453,7 +3941,7 @@ to disable syslog ingest entirely.
 
 This listener does **not** authenticate the sender: RouterOS's logging
 action has no client-certificate option (only `check-certificate`,
-verifying the router trusts mikroview, not the reverse), so anything
+verifying the router trusts MikroView, not the reverse), so anything
 able to reach the port can still connect and inject log lines. Point
 RouterOS at it with:
 
@@ -3461,12 +3949,12 @@ RouterOS at it with:
 /system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls remote-log-format=syslog
 ```
 
-and import mikroview's CA (`GET /ca.crt`) under
+and import MikroView's CA (`GET /ca.crt`) under
 `/certificate import` first, or the router will refuse the connection
 with `SSL: ssl: no trusted CA certificate found`.
 
 `remote-log-format=syslog` puts a standard header (timestamp and topic)
-on every message, which is how mikroview tells one firewall log line
+on every message, which is how MikroView tells one firewall log line
 from the next when several arrive close together -- see
 [routeros-setup.md](routeros-setup.md#1-point-routeros-at-the-container-over-tls)
 for the full reasoning.
@@ -3479,48 +3967,66 @@ tls:
   certFile: ""
   keyFile: ""
   # Hostnames/IPs a generated certificate should cover (SANs) --
-  # whatever you'll actually use to reach mikroview. Defaults to
+  # whatever you'll actually use to reach MikroView. Defaults to
   # localhost/127.0.0.1 if empty -- still fully encrypted either way,
   # just only strictly verifiable under those names unless you add your
   # own.
   hosts: []
   # Persists the self-generated CA + certificate across restarts, so
   # the trust step only happens once. Unlike flags.storePath, this one
-  # is not optional: mikroview refuses to start if it cannot read or
+  # is not optional: MikroView refuses to start if it cannot read or
   # write here.
   storePath: "/var/lib/mikroview/tls"
 ```
 
 - **`enabled`** — on by default. The one supported reason to set this
-  `false` is a deployment where mikroview's listener is *provably* only
+  `false` is a deployment where MikroView's listener is *provably* only
   reachable from your own reverse proxy over an isolated docker network
   -- never published to a LAN or the internet at all. In that specific
   topology the RP already owns TLS termination for real clients, and
-  there's no bypass surface for mikroview to additionally protect on
-  that internal hop. Never set this `false` if mikroview's port is
+  there's no bypass surface for MikroView to additionally protect on
+  that internal hop. Never set this `false` if MikroView's port is
   reachable from a LAN or the internet in any other way -- doing so
   serves the app, credentials included, in cleartext. Logged clearly at
   startup whenever it's off, so it's never a silent state. Syslog
   ingest is unaffected either way: `listen.syslogTls` loads its own
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
-- **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set. See "Renewing your own
-  certificate" below if something renews it for you.
+- **`certFile`/`keyFile`** — your own certificate, instead of the
+  self-generated one. **Put the files at `mikroview/certs/tls.crt` and
+  `mikroview/certs/tls.key` and restart** — MikroView finds them there
+  with nothing else set, and skips local-CA generation entirely. Both
+  are mounted files, so both have to be readable by the user MikroView
+  runs as — see
+  [Files you mount into the container](#files-you-mount-into-the-container);
+  the private key should stay `600`, the certificate can be `644`. See
+  "Renewing your own certificate" below if something renews it for you.
+
+  **Both or neither.** One of the two in the folder without the other is
+  a startup error naming the file that is missing. The alternative would
+  be to start on MikroView's own certificate instead, which is the
+  failure an operator half-way through installing their own would notice
+  last — the name they expected their certificate to serve, served by a
+  different one.
+
+  Naming `certFile`/`keyFile` explicitly elsewhere, or the
+  `MIKROVIEW_TLS_CERT_FILE`/`MIKROVIEW_TLS_KEY_FILE` env vars, works and
+  keeps working; either wins over the folder, and setting just one of
+  them behaves exactly as it always has.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
   verifiable against that name without adding it here.
 - **`storePath`** — where the generated CA + certificate persist across
-  restarts. **Mikroview refuses to start if this directory cannot be
+  restarts. **MikroView refuses to start if this directory cannot be
   read or written**, which is the one place it deliberately differs from
   every other `storePath` in this file.
 
-  The reason is who else is affected. The other stores hold mikroview's
+  The reason is who else is affected. The other stores hold MikroView's
   own data, and losing an unsaved entry is annoying but visible. The CA
   is a *trust anchor*: your router is configured to trust that specific
   CA before it will send logs over TLS. Replace it and the router stops
-  delivering, mikroview goes quiet, and nothing looks broken from the
+  delivering, MikroView goes quiet, and nothing looks broken from the
   inside -- so a silent regeneration costs you the log stream, not just
   a setting.
 
@@ -3529,7 +4035,7 @@ tls:
   - the directory cannot be written, so a newly generated CA could not
     be saved and would be replaced again on the next restart;
   - CA files are present but cannot be read or parsed -- typically
-    ownership, since the container runs as uid `65532`. Mikroview will
+    ownership, since the container runs as uid `1000`. MikroView will
     not overwrite them, because those files may be the only copy of the
     anchor everything currently trusts.
 
@@ -3571,7 +4077,7 @@ half-written, MikroView logs an error and carries on with the
 certificate it already has, rather than dropping to none — you sent the
 signal expecting an improvement, and an outage is not one.
 
-**Zero-config default**: with no `certFile`/`keyFile`, mikroview
+**Zero-config default**: with no `certFile`/`keyFile`, MikroView
 generates its own local certificate authority and a leaf certificate on
 first start (`internal/servertls`). This CA is trust-on-first-use, not a
 globally trusted root -- your browser will show an untrusted-certificate
@@ -3602,7 +4108,7 @@ mainstream reverse proxy supports backend/upstream TLS (Caddy's
 `reverse_proxy https://...`, Traefik's backend TLS transport, nginx's
 `proxy_pass https://...`), typically via either skipping strict
 verification for that specific upstream (reasonable here, since you
-configured that upstream address yourself) or trusting mikroview's
+configured that upstream address yourself) or trusting MikroView's
 local CA explicitly (more correct, and what `/ca.crt` is for).
 
 ## Environment variables
@@ -3669,6 +4175,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_HOSTS_STORE_PATH` | `hosts.storePath` (see [Host presence register](#host-presence-register-issue-1016-optional)) |
+| `MIKROVIEW_SEEN_STORE_PATH` | `seen.storePath` (see [Seen filter values](#seen-filter-values-issue-1226-optional)) |
 | `MIKROVIEW_BASELINE_STORE_PATH` | `baseline.storePath` (see [Baseline line register](#baseline-line-register-issue-1016-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
@@ -3706,6 +4213,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+| `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-12231224)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
@@ -3792,11 +4300,13 @@ postgres:
 
 or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
 
-**The file has to be readable by the container's user.** MikroView runs
-as uid `65532` (distroless `nonroot`), which is not the user that created
-the file on your host — so a `0600` file, which is the natural mode for
-something holding a password, is unreadable inside the container and
-MikroView refuses to start:
+**The file has to be readable by the container's user** — the same rule
+as every other mounted file, see
+[Files you mount into the container](#files-you-mount-into-the-container).
+MikroView runs as uid `1000`, so on a single-user host it is you and a
+`0600` file you own already works. Where the file belongs to some other
+account, `0600` leaves it unreadable inside the container and MikroView
+refuses to start:
 
 ```
 ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permission denied
@@ -3805,7 +4315,7 @@ ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permis
 Keep the tight mode and hand it to that user:
 
 ```sh
-chown 65532:65532 postgres-dsn
+sudo chown 1000:1000 postgres-dsn
 chmod 600 postgres-dsn
 ```
 
@@ -3943,27 +4453,36 @@ before it could reach a database at all.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`
-and `-generate-recovery-keys` are standalone modes -- each does its one job and
-exits, rather than starting the server. See
-[Authentication](#authentication) for all but the first.
+`-version`, `-healthcheck`, `-validate-config`,
+`-recover-admin-account`, `-generate-recovery-keys`,
+`-transfer-admin <username>`, `-backup`, `-restore` and `-migrate-data`
+are standalone modes -- each does its one job and exits, rather than
+starting the server. `mikroview -h` lists them too. See
+[Authentication](#authentication) for the account ones.
 
 ## API reference
 
 | Endpoint | Description |
 |---|---|
 | `GET /api/healthz` | liveness/uptime/version check |
-| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- present whenever mikroview generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
+| `GET /ca.crt` | MikroView's self-generated CA certificate, unauthenticated -- present whenever MikroView generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
-| `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC mikroview has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
-| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what mikroview actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
+| `POST /api/devices` | admin-only (#1281): declare a syslog-only router by name, with no address yet -- the same thing the Entities screen's "+ add router" does. It exists so a router with no ingest token and no `devices[].sourceIp` can still be enrolled |
+| `DELETE /api/devices/{id}` | admin-only: remove a device that was declared through `POST /api/devices`, along with its enrolled address and any pending token. A device declared in `config.yaml` refuses with 400 -- it would only come back at the next restart |
+| `POST /api/devices/{id}/enrolment` | admin-only, and re-checks your password (#1291): mint (or reroll) the device's one-time enrolment token, 15-minute life, bound to the address you name. The response is the token and its expiry; `POST /api/setup/commands` renders it into the `/log info "mikroview-enrol …"` line the ledger shows |
+| `DELETE /api/devices/{id}/enrolment` | admin-only: revoke a pending enrolment token before it is redeemed |
+| `POST /api/devices/{id}/enrolment/address` | admin-only (#1291): point a pending token at a different address without rerolling it -- the way back when the address you named was wrong and the router was turned away. Only an address already in the refused-senders list is accepted |
+| `POST /api/devices/{id}/registration` | admin-only (#1291): record that you have confirmed this router -- the ledger's final Register step. Grants nothing; it stamps the device with a name and a date |
+| `GET /api/devices/refused` | admin-only (#1281): every syslog source address the listener has refused a line from -- `ip`, `firstSeen`, `lastSeen` and a `lines` count. These addresses have proven nothing about themselves, so this sits at the audit-log tier rather than the fleet's own |
+| `GET /api/devices/macs` | the persisted MAC-registry history (issue #675): every MAC MikroView has seen, its first/last-seen times, and the IP it was last paired with -- backs the Entities panel's named-host join, same tier as `GET /api/devices` |
+| `GET /api/rules` | every rule label MikroView has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated. Also carries `recordingSince`: when this store started recording, so a client computing "rules seen firing in the last 7 days" can bound that window by what MikroView actually covered instead of claiming a fixed seven days it may not have seen (issue #701) |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec, and a `memory` object naming the event buffer's current budget, the range it may be moved within, and what it's actually costing the host (see [How events are stored](#how-events-are-stored)). Also `liveSince` (RFC 3339 UTC, when this process started observing) and, only after a warm restart, `restoredTo` (when the snapshot it loaded was taken) -- absent rather than null on a cold start, see [Warm restart](#warm-restart-what-survives-a-restart) |
 | `GET /api/stats/tops` | per-minute top-port/top-talker breakdown of the last hour, same tier as `GET /api/stats` -- feeds the Metrics page |
-| `POST /api/syslog/loss/clear` | user tier: zeroes the four monotonic ingest-loss counters `GET /api/stats`' `syslog.loss` field is built from, so a transient loss the operator has already seen stops permanently marking the instance (issue #1015). Audit-logged once per call, carrying the totals cleared. Same tier as `POST /api/flags/clear-all` |
+| `POST /api/syslog/loss/clear` | user tier: zeroes the five monotonic ingest-loss counters `GET /api/stats`' `syslog.loss` field is built from -- `dropped`, `rejectedConfigured`, `rejected`, `oversized`, and `duplicateSightings` (added by #1234) -- so a transient loss the operator has already seen stops permanently marking the instance (issue #1015). Audit-logged once per call, carrying the totals cleared. Same tier as `POST /api/flags/clear-all` |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
-| `GET /api/routeros/{device}/rules` | the pushed firewall filter table for one router, in RouterOS's own display order (#186) -- read from mikroview's own stored state, never a live call to the router |
+| `GET /api/routeros/{device}/rules` | the pushed firewall filter table for one router, in RouterOS's own display order (#186) -- read from MikroView's own stored state, never a live call to the router |
 | `GET /api/routeros/{device}/nat` | the pushed NAT table for one router, same shape and tier as the rules table above |
 | `GET /api/routeros/{device}/addresses` | the pushed `/ip/address` table for one router (#627) -- an interface's own configured address, distinct from the ARP/DHCP tables' observed-elsewhere addresses |
 | `GET /api/routeros/{device}/wireguard` | the pushed WireGuard interface and peer tables for one router, with per-tunnel up/down state derived from each peer's last handshake (issue #874) -- same tier and read-only shape as the three routeros routes above |
@@ -3994,12 +4513,13 @@ exits, rather than starting the server. See
 | `GET /api/hosts` | open to any signed-in user (see [Host presence register](#host-presence-register-issue-1016-optional)): every host the feed has shown, each with its interface, address, last-seen hostname, first/last seen times, event count and any mark on it. Not reachable with a read-only API token: it is a partial inventory of your private address space |
 | `PUT /api/hosts/{key}/mark` | user tier: say what a quiet host is, taking `{"kind": "intended"\|"dismissed", "reason": "..."}` in the JSON body. `reason` is required for `intended` and optional for `dismissed`; `by`/`at` are set server-side. 400 on an unknown kind or an empty/oversized/control-character key or reason, 404 if no event has ever registered that key. Audit-logged as `hosts.mark` |
 | `DELETE /api/hosts/{key}/mark` | user tier: take the mark off the host at `key`, putting it back to whatever its own last-seen time says it is. 404 if there is no mark there. Audit-logged as `hosts.unmark` |
-| `GET /api/hosts/{ip}/dossier` | open to any signed-in user (see [Device dossier](#device-dossier-issue-410)): everything already known about one address, assembled -- traffic fingerprint, MAC with its vendor and the locally-administered bit, names with their provenance, lease-versus-fixed, first/last seen, matched firewall rules, and a suggested identity with its evidence and a confidence in words. Accepts a bare address or a host-register key (`bridge-lan|10.0.10.5`). 200 with an honest empty card for an address nothing is known about, 400 for something that is not an address. May include a `suggestedProbe` -- a command for *you* to run; mikroview never connects to a host on your network. Not reachable with a read-only API token: it is one host's traffic, peers and hardware address in a single response |
+| `GET /api/hosts/{ip}/dossier` | open to any signed-in user (see [Device dossier](#device-dossier-issue-410)): everything already known about one address, assembled -- traffic fingerprint, MAC with its vendor and the locally-administered bit, names with their provenance, lease-versus-fixed, first/last seen, matched firewall rules, and a suggested identity with its evidence and a confidence in words. Accepts a bare address or a host-register key (`bridge-lan|10.0.10.5`). 200 with an honest empty card for an address nothing is known about, 400 for something that is not an address. May include a `suggestedProbe` -- a command for *you* to run; MikroView never connects to a host on your network. Not reachable with a read-only API token: it is one host's traffic, peers and hardware address in a single response |
 | `GET /api/baseline/off` | open to any signed-in user (see [Baseline line register](#baseline-line-register-issue-1016-optional)): today's off-baseline lines, the establishment threshold that judged them, and the configured host-quiet window. Not reachable with a read-only API token: it is a partial inventory of your private address space, with destinations and ports attached |
 | `PUT /api/baseline/{key}/expected` | user tier: say the line at `key` is meant to be there, taking `{"reason": "..."}` in the JSON body. `reason` is required; empty is refused. 400 on an invalid key, 404 if no event has ever registered it. Audit-logged as `baseline.expected` |
 | `DELETE /api/baseline/{key}/expected` | user tier: take the mark off the line at `key`, putting it back to whatever its own recurrence says it is. 404 if there is no mark there. Audit-logged as `baseline.unexpected` |
+| `GET /api/seen-values` | open to any signed-in user (see [Seen filter values](#seen-filter-values-issue-1226-optional)): the values this instance has actually observed for the two filter fields that have no list anywhere else. Answers `{"fields": {"proto": [...], "interface": [...]}}`, each entry carrying `value`, `firstSeen` and `lastSeen`, most recently seen first. One call serves both menus. Anything past the 90-day retention is already left out. Not reachable with a read-only API token: the interface list is a partial inventory of your network's shape |
 | `GET /api/decommission` | viewer tier: every pending segment-retirement offer and every live watch over one (see [Network segment decommissioning](#network-segment-decommissioning-issue-460-optional)) -- one response for both, since an offer and a ghost on the map are the same object one decision apart |
-| `POST /api/decommission/watches` | user tier: answer a pending offer with yes, creating a watch that keeps the retiring segment on the map as a ghost until its clean window elapses. Only reachable against a departure mikroview actually observed, never an arbitrary range. Audit-logged |
+| `POST /api/decommission/watches` | user tier: answer a pending offer with yes, creating a watch that keeps the retiring segment on the map as a ghost until its clean window elapses. Only reachable against a departure MikroView actually observed, never an arbitrary range. Audit-logged |
 | `POST /api/decommission/dismiss` | user tier: answer a pending offer with no -- the segment leaves the map at once and no watch is created. Audit-logged |
 | `POST /api/decommission/watches/{id}/force` | user tier: force-remove a still-active watch from the map immediately while the watch itself keeps running to the same clean window. Requires `{"reason": "..."}` in the body -- a recorded override, never a silent one. Audit-logged |
 | `POST /api/decommission/watches/{id}/undo` | user tier: take a retirement back within the hour after it happened, putting the ghost back on the map. Refused as a conflict if the watch never retired or the window has passed. Audit-logged |
@@ -4018,32 +4538,45 @@ exits, rather than starting the server. See
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
-| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser |
+| `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
+| `POST /api/auth/users/{id}/reset-password` | admin-only: issue a one-time code for somebody who has lost their password -- returns the code once, kills that account's old password and every session it holds, and forces a new password at their next sign-in. Refused (409) on your own account and on an SSO-only one. See [Resetting someone's password](#resetting-someones-password) |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
 | `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else). Narrowed back from user tier by #657: the viewer-readable settings page it was widened for (#490) is gone, and issuing keys is treated as a setup task rather than day-to-day product use |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
-| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
-| `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what mikroview has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
+| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, which deletes that account's password -- except for the admin, which keeps it, so SSO becomes a second way into that one account rather than a replacement. Takes no parameters: the account is the session's. See [Connecting your account to SSO](#connecting-your-account-to-sso) and [SSO is additive](#sso-is-additive-keep-a-local-admin) |
+| `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what MikroView has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
 | `POST /api/setup/commands` | same tier as `GET /api/setup/status` beside it, not admin-gated (#436): renders the RouterOS commands the setup wizard shows -- the dialect table's own bounds, what an operator-picked RouterOS version resolves to, every router whose version is known and where it stands against the table, and the five command blocks themselves |
 | `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
-| `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435, "Tune logging"). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
+| `POST /api/setup/address` | admin-only (#1213): the address your routers reach this instance on, as typed into the setup ledger's header field; persisted beside the ledger's own marks and rendered into every router command the ledger shows |
+| `PUT /api/setup/backup-transport` | admin-only (#955): how step 6's router script delivers its backup -- `{"transport":"sftp"}` for the drop box in [7c](routeros-setup.md#7c-the-script), `{"transport":"https"}` for the slice push an HTTPS-only deployment needs. Stored beside the wizard's address answer, so it is the deployment's choice rather than one browser's, and `POST /api/setup/commands` renders whichever is stored. Writes one audit entry (`setup.backup_transport_set`) |
+| `POST /api/tune-logging/analyse` | user tier: reads an uploaded RouterOS `/export hide-sensitive`, refuses it if it carries a secret-shaped value (not truly hide-sensitive output), and -- once the device has been observed for 24 hours -- lists the filter rules that cross a dark boundary, with their packet/byte counters from the latest push where they can be matched (#435; the page is "Log every rule" since #1134, the endpoint path is not). Body capped at 2 MiB, its own limit above the shared 64 KiB JSON cap. Nothing about the upload is logged, persisted, or stored |
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
-| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's kept generations (arrival times, sizes, `.backup` header), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
+| `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
+| `POST /api/router-backups/{device}/{generation}/protect` | admin-only: mark a generation kept, given `{"comment": "..."}` -- required, one line, 1 to 120 characters, control characters refused. Moves it out of the ten-generation cycle into a pool of its own for that router, with no limit on how many it holds. 400 for a missing or over-length comment, 404 if the vault holds no such router or generation, 409 if it is already kept. Answers with the router's whole block (both lists), so the screen renders what the vault now holds. Audited as `router_backup.protected` |
+| `DELETE /api/router-backups/{device}/{generation}/protect` | admin-only: release a kept generation back into the cycling ten, in its place by age -- the one way to free vault space by hand. 404 if it is not kept. Same response shape as keeping it above. Audited as `router_backup.unprotected` |
+| `PATCH /api/router-backups/{device}/{generation}/protect` | admin-only: rewrite a kept generation's comment, given `{"comment": "..."}` -- same 400/404 as keeping it above. Same response shape. Audited as `router_backup.comment_changed` |
 | `POST /api/router-backups/unlock` | admin-only: opens the vault passphrase lock for the calling session, given `{"passphrase": "..."}` -- the unlock belongs to this session/tab, not the account, and lasts until it is locked, the session ends, or fifteen minutes pass with no download. Rate-limited through the same limiter as login. A wrong passphrase is a 403, audited as `router_backup.unlock_failed`; success is audited as `router_backup.unlocked` |
 | `POST /api/router-backups/lock` | admin-only: closes the vault again, from any admin session regardless of who opened it. Audited as `router_backup.locked`; a 409 if no passphrase is set |
 | `POST /api/router-backups/passphrase` | admin-only: turns the lock on, given `{"passphrase": "..."}` (at least 12 characters) -- generates an X25519 key pair, re-seals every stored backup to the public half, and leaves the vault open for the session that set it. Audited as `router_backup.passphrase_set`; a 500 if a file could not be re-sealed, which is still audited and named in the response |
-| `DELETE /api/router-backups/passphrase` | admin-only: turns the lock off, given the current `{"passphrase": "..."}` -- re-seals every backup back to the retention key mikroview holds itself. Rate-limited like unlock. A wrong passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_removed`; a partial re-seal failure as `router_backup.passphrase_remove_failed` |
-| `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or mikroview itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
+| `DELETE /api/router-backups/passphrase` | admin-only: turns the lock off, given the current `{"passphrase": "..."}` -- re-seals every backup back to the retention key MikroView holds itself. Rate-limited like unlock. A wrong passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_removed`; a partial re-seal failure as `router_backup.passphrase_remove_failed` |
+| `PUT /api/router-backups/passphrase` | admin-only: changes the passphrase, given `{"current": "...", "passphrase": "..."}` -- re-wraps the vault's existing key pair under the new passphrase and a fresh salt in one atomic write; no stored backup is touched, so this cannot be interrupted half-way. Rate-limited like unlock. A wrong current passphrase is a 403 audited as `router_backup.unlock_failed`; success as `router_backup.passphrase_changed` |
+| `GET /api/droplist` | admin-only: every drop-list entry (`cidr`, `addedBy`, `addedAt`, `reason`, `flagID` if raised from a flag) plus the pull key's own status (`key.present`, and when present `createdAt`/`createdBy`/`lastUsedAt`); `ownRangesKnown` (#1224); and, for #1225, `routers` (one `{device, held, total, confirmedAt}` per device that has ever pushed an address-list snapshot, `held` being how many of the drop list's entries that snapshot actually holds) plus `setup` (the four RouterOS commands rendered for the `address` query parameter, falling back to the request's own Host, with the key placeholder `<DROP-LIST-KEY>`) (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)) |
+| `POST /api/droplist` | admin-only: add an entry, given `{"cidr": "...", "reason": "...", "flagID": "..."}` (`flagID` optional). 201 with the stored entry, plus a `warning` string when no router has ever reported its own addresses yet -- the range still could not be checked against the router's own ranges, so the entry is stored anyway (refusing would break first-time setup) but the operator is told the check did not actually run. 400 for a range `internal/droplist.Validate` refuses (too broad, not public, or the router's own range), naming the specific rule in the response body; 400 if `flagID` names no flag; 409 for a duplicate of an existing entry |
+| `DELETE /api/droplist/{cidr}` | admin-only: remove the entry for `cidr` (e.g. `DELETE /api/droplist/203.0.113.0/24`). 204 on success, 404 if no entry matches |
+| `POST /api/droplist/key` | admin-only: mint the droplist-pull key a router's scheduled fetch presents at `GET /api/droplist.rsc` -- an optional body `{"address": "..."}` (empty body still allowed, same fallback to Host as `GET /api/droplist`'s `address` parameter) sets what the returned `scheduler` command fetches from. Returns `{"key": "...", "createdAt": ..., "scheduler": "..."}`, the raw key and the filled-in scheduler command both shown exactly once (#1225). Minting again **replaces** any existing key rather than adding a second one, since every router fetches the same feed with the same credential; audited as `droplist.key_minted` |
+| `DELETE /api/droplist/key` | admin-only: revoke the droplist-pull key. 204 on success, 404 if none exists. Audited as `droplist.key_revoked` |
+| `GET /api/droplist.rsc` | droplist-pull-token-only, not session-gated and not reachable with any other token kind (#1224) -- the RouterOS-importable script a router's own scheduled `/tool fetch` pulls: a staging-list build followed by a live-list swap, so a fetch or import failure never leaves the live list empty (see [Drop list](#drop-list-operator-authored-ranges-to-block-optional-12231224)). `Cache-Control: no-store`; 401 (carrying `WWW-Authenticate: Bearer realm="mikroview"`, RFC 9110 §15.5.2, so RouterOS's own `/tool fetch` can parse the refusal instead of erroring on the missing header) with no key or an invalid/revoked one, 429 over the same per-token rate limit ingest pushes use. Never audited per pull -- the key's own `lastUsedAt` (visible on `GET /api/droplist`) is the record |
+| `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
 | `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; **turning it off deletes every retained file before the response is written**. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |

@@ -48,6 +48,13 @@ const maxListItems = 64
 // to an attacker-chosen number.
 const maxPages = 1000
 
+// maxWizardVersion bounds the wizard script version a push may claim
+// (#1241). The real value is routeros.WizardVersion, bumped by hand
+// when a pasted block changes; this only keeps a malformed or hostile
+// number out of the comparison that decides whether a router's setup is
+// behind.
+const maxWizardVersion = 10000
+
 var (
 	// ErrUnknownKind is returned by DecodePayload for a Kind this build
 	// does not recognise -- refused rather than accepted-and-ignored, so
@@ -57,6 +64,10 @@ var (
 	// ErrBadPage is returned for a page/pages combination outside
 	// [1, pages] with pages capped at maxPages.
 	ErrBadPage = errors.New("ingest: page/pages out of range")
+	// ErrBadWizardVersion is returned for a wizardVersion outside
+	// [0, maxWizardVersion] -- 0 being the "script predates the stamp"
+	// case, which is legitimate.
+	ErrBadWizardVersion = errors.New("ingest: wizardVersion out of range")
 	// errTrailingData is returned when the body contains more than one
 	// JSON value -- e.g. a second object concatenated after the first --
 	// which a plain single Decode call would silently ignore.
@@ -85,6 +96,16 @@ type wireFormat struct {
 	// leaves new fields unset). Nothing warns on a mismatch yet -- that
 	// half of #436 is not this issue.
 	RouterOSVersion string `json:"routerosVersion"`
+	// WizardVersion is which version of the wizard's pasted script wrote
+	// the script doing the pushing (#1241, routeros.WizardVersion). Like
+	// RouterOSVersion it describes the router's setup rather than a row
+	// of any table, so it rides the envelope and every block carries it.
+	//
+	// Optional in exactly the same sense: a script pasted before this
+	// existed sends nothing, which decodes as 0 -- "never said", not
+	// "version zero". That absence is itself the first signal a router's
+	// setup is behind (docs/decisions/upgrade-framework.md).
+	WizardVersion int `json:"wizardVersion"`
 }
 
 // Payload is one fully decoded and validated page of RouterOS state.
@@ -103,6 +124,11 @@ type Payload struct {
 	// wireFormat.RouterOSVersion.
 	RouterOSVersion string
 
+	// WizardVersion is the wizard script version the router stamped this
+	// push with, or 0 when its script predates the stamp. See
+	// wireFormat.WizardVersion.
+	WizardVersion int
+
 	AddressList         []AddressListEntry
 	FilterRules         []FilterRule
 	NATRules            []NATRule
@@ -113,6 +139,7 @@ type Payload struct {
 	WireguardPeers      []WireguardPeer
 	IPAddresses         []IPAddressEntry
 	PPPActive           []PPPActiveSession
+	Logging             []LoggingEntry
 }
 
 // RecordCount returns how many records are in whichever slice matches
@@ -141,6 +168,8 @@ func (p Payload) RecordCount() int {
 		return len(p.IPAddresses)
 	case KindPPPActive:
 		return len(p.PPPActive)
+	case KindLogging:
+		return len(p.Logging)
 	default:
 		return 0
 	}
@@ -181,7 +210,22 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		return Payload{}, err
 	}
 
-	out := Payload{Kind: wire.Kind, Page: wire.Page, Pages: wire.Pages, RouterOSVersion: wire.RouterOSVersion}
+	// A version number is not text, so it gets the bound its own shape
+	// asks for: a negative or absurd value is refused rather than stored
+	// and compared against routeros.WizardVersion later. maxWizardVersion
+	// is a ceiling on a counter bumped by hand a few times a year, not a
+	// number any real script approaches.
+	if wire.WizardVersion < 0 || wire.WizardVersion > maxWizardVersion {
+		return Payload{}, ErrBadWizardVersion
+	}
+
+	out := Payload{
+		Kind:            wire.Kind,
+		Page:            wire.Page,
+		Pages:           wire.Pages,
+		RouterOSVersion: wire.RouterOSVersion,
+		WizardVersion:   wire.WizardVersion,
+	}
 
 	var err error
 	switch wire.Kind {
@@ -205,6 +249,8 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		out.IPAddresses, err = decodeRecords[IPAddressEntry](wire.Records)
 	case KindPPPActive:
 		out.PPPActive, err = decodeRecords[PPPActiveSession](wire.Records)
+	case KindLogging:
+		out.Logging, err = decodeRecords[LoggingEntry](wire.Records)
 	default:
 		return Payload{}, ErrUnknownKind
 	}
@@ -456,4 +502,38 @@ func (a IPAddressEntry) validate() error {
 		return err
 	}
 	return validateFieldText("comment", a.Comment)
+}
+
+func (e LoggingEntry) validate() error {
+	if err := validateFieldText("type", e.Type); err != nil {
+		return err
+	}
+	if err := validateFieldText("name", e.Name); err != nil {
+		return err
+	}
+	if err := validateFieldText("target", e.Target); err != nil {
+		return err
+	}
+	if err := validateFieldText("remote", e.Remote); err != nil {
+		return err
+	}
+	if err := validateFieldText("remotePort", string(e.RemotePort)); err != nil {
+		return err
+	}
+	if err := validateFieldText("remoteProtocol", e.RemoteProtocol); err != nil {
+		return err
+	}
+	if err := validateFieldText("remoteLogFormat", e.RemoteLogFormat); err != nil {
+		return err
+	}
+	if err := validateFieldText("checkCertificate", string(e.CheckCertificate)); err != nil {
+		return err
+	}
+	if err := validateFieldList("topics", e.Topics); err != nil {
+		return err
+	}
+	if err := validateFieldText("action", e.Action); err != nil {
+		return err
+	}
+	return validateFieldText("disabled", string(e.Disabled))
 }

@@ -33,7 +33,7 @@ describe('ConnectionBanner', () => {
 
     const banner = screen.getByRole('status')
     expect(banner.className).toContain('banner-connecting')
-    expect(banner.textContent).toContain('Connecting to mikroview')
+    expect(banner.textContent).toContain('Connecting to MikroView')
   })
 
   it('shows the disconnected line while the socket is closed', () => {

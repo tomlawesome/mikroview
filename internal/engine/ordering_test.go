@@ -53,7 +53,7 @@ func (d tickingDef) TickInterval() time.Duration { return d.every }
 func TestEvaluationOrderIsDeterministicAndRespectsOrdered(t *testing.T) {
 	var log []string
 	var mu sync.Mutex
-	eng := New()
+	eng := New(nil)
 
 	// Registered in an order that is neither the id order nor the rank
 	// order, so neither can be satisfied by accident.
@@ -78,7 +78,7 @@ func TestEvaluationOrderIsDeterministicAndRespectsOrdered(t *testing.T) {
 func TestEvaluationOrderIsStableAcrossManyEvents(t *testing.T) {
 	var log []string
 	var mu sync.Mutex
-	eng := New()
+	eng := New(nil)
 	for _, id := range []string{"d", "b", "e", "a", "c"} {
 		eng.Register(&recordingDef{id: id, log: &log, mu: &mu})
 	}
@@ -103,7 +103,7 @@ func TestEvaluationOrderIsStableAcrossManyEvents(t *testing.T) {
 func TestRegisterKeepsTheOrderCurrent(t *testing.T) {
 	var log []string
 	var mu sync.Mutex
-	eng := New()
+	eng := New(nil)
 	eng.Register(&recordingDef{id: "c", log: &log, mu: &mu})
 	eng.Register(orderedDef{&recordingDef{id: "reinforce", rank: ReinforcementOrder, log: &log, mu: &mu}})
 	eng.evaluateEvent(store.Event{SrcIP: "203.0.113.9", ReceivedAt: time.Now()})
@@ -129,7 +129,7 @@ func TestTickHonoursEachDefinitionsOwnInterval(t *testing.T) {
 	var mu sync.Mutex
 	fast := tickingDef{&recordingDef{id: "fast", log: &log, mu: &mu, every: 10 * time.Second}}
 	slow := tickingDef{&recordingDef{id: "slow", log: &log, mu: &mu, every: time.Minute}}
-	eng := New()
+	eng := New(nil)
 	eng.Register(fast)
 	eng.Register(slow)
 
@@ -153,7 +153,7 @@ func TestTickHonoursEachDefinitionsOwnInterval(t *testing.T) {
 // evaluate path's fault gate rather than having its own -- a definition
 // the engine has stopped evaluating is stopped, not stopped-except-on-a-timer.
 func TestTickSkipsFaultedDefinitions(t *testing.T) {
-	eng := New()
+	eng := New(nil)
 	d := &panickingTicker{}
 	eng.Register(d)
 

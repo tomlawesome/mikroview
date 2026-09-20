@@ -54,6 +54,16 @@ describe('learningSummary', () => {
     expect(learningSummary(state)).toBe('Learning: 3 of 14 days')
   })
 
+  it('a one-day floor says "day", not "1 days" (#1167)', () => {
+    const state: LearningState = {
+      floor: { minDurationSeconds: 86400 },
+      keys: 1,
+      ready: 0,
+      nearest: { observedForSeconds: 0, samples: 0 },
+    }
+    expect(learningSummary(state)).toBe('Learning: 0 of 1 day')
+  })
+
   it('state 3: keys observed, none ready, many keys -- names the nearest and the count ready', () => {
     const state: LearningState = {
       floor: { minSamples: 14 },

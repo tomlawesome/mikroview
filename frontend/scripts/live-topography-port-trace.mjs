@@ -17,7 +17,7 @@
 // The data story is round 49's, which round 53 filters: 445/tcp
 // accepted from LAN to Servers, refused from IoT, and 3389/tcp seen
 // nowhere with one rule naming it.
-import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal } from './live-browser.mjs'
+import { session, check, done, feedRaw, goTo, eventsTotal, waitForEventsTotal, DESKTOP_VIEWPORT, clickSvgText } from './live-browser.mjs'
 import { mkdirSync } from 'node:fs'
 
 const URL_BASE = process.env.MV_URL
@@ -309,7 +309,9 @@ const beforeFeed = await eventsTotal(page)
 feedRaw(...smbLines, ...refusedLines, ...webLines, ...printLinesArr)
 await waitForEventsTotal(page, beforeFeed + smbLines.length + refusedLines.length + webLines.length + printLinesArr.length)
 
-await page.setViewportSize({ width: 1600, height: 900 })
+// Desktop width, so the stream row further down still carries its
+// Interfaces cell (and the ⌖ in it): since #1117, 1600 starts narrow.
+await page.setViewportSize(DESKTOP_VIEWPORT)
 // zonesState/policyState/coverageState (and the reality picture they
 // feed) only refresh on load, not from a push made straight over the
 // ingest API -- the lane row, the doors and the escalated callout below
@@ -461,7 +463,7 @@ check((await page.locator(`${CARD} .lit-half`).count()) === 0, 'the ✕ puts the
 // unplanned callout, which is where the refused pair is already named.
 
 await page.waitForSelector(`${CARD} .uc-trace`, { state: 'attached', timeout: 15000 })
-await page.locator(`${CARD} .uc-trace .uc-trace-t`).click()
+await clickSvgText(page, page.locator(`${CARD} .uc-trace .uc-trace-t`))
 await page.waitForSelector(`${CARD} .trace-crumb`, { timeout: 10000 })
 
 // B1 (round 56, #1050): the callout's own `trace ▸` now opens the list

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/droplist"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -30,6 +32,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/seen"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 )
@@ -58,7 +61,9 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	}
 	ru, _ := rules.Open("")
 	cs, _ := coverage.Open("")
+	ds, _ := droplist.Open("")
 	hr, _ := hosts.Open("")
+	sv, _ := seen.Open("")
 	as, _ := audit.Open("")
 	ss, _ := suggest.Open("")
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
@@ -78,7 +83,9 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Entities:      es,
 		Rules:         ru,
 		Coverage:      cs,
+		Droplist:      ds,
 		Hosts:         hr,
+		SeenValues:    sv,
 		Audit:         as,
 		Suggest:       ss,
 		MatchLog:      ml,
@@ -91,7 +98,42 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		StartTime:     time.Now(),
 		Version:       "test-version",
 	}
+	// The wiring main does (issue #1281): the drop-list's own-range
+	// refusal reads the registry's real evidence (config.yaml's sourceIp
+	// and a redeemed enrolment token's acceptedIp), not the pushed
+	// tables, so a test server answers the same way the app does.
+	s.Droplist.SetOwnRanges(s.Devices)
 	return s, st
+}
+
+// pushingRouter is what a router looks like to the registry: an ingest
+// token names it on a push (so its pushed /ip/address table exists for
+// display, e.g. GET /api/routeros/{device}/addresses), and -- issue
+// #1281's audit having removed that table as attribution evidence -- it
+// is also enrolled directly at cidr's host address, the same redeemed-
+// token evidence a real "mikroview-enrol <token>" syslog line would
+// establish. cidr is written the way RouterOS writes one
+// ("203.0.113.9/24"); callers that go on to Resolve() its host address
+// see it attributed to id, exactly as #1170's original pushed-table
+// behaviour used to give them before #1281 narrowed what counts as
+// evidence.
+func pushingRouter(t *testing.T, s *Server, id, cidr string) {
+	t.Helper()
+	now := time.Now()
+	s.Devices.Ensure(id, now)
+	pushIPAddresses(t, s, id, ingest.IPAddressEntry{Address: cidr})
+
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		t.Fatalf("pushingRouter: %q does not parse as a CIDR: %v", cidr, err)
+	}
+	token, _, err := s.Devices.MintEnrolment(id, prefix.Addr().String(), now)
+	if err != nil {
+		t.Fatalf("pushingRouter: MintEnrolment(%q): %v", id, err)
+	}
+	if !s.Devices.TryEnrol(prefix.Addr().String(), []byte("mikroview-enrol "+token)) {
+		t.Fatalf("pushingRouter: TryEnrol failed to enrol %q at %q", id, prefix.Addr().String())
+	}
 }
 
 func TestHandleHealthz(t *testing.T) {
@@ -117,6 +159,36 @@ func TestHandleHealthz(t *testing.T) {
 	}
 	if body["version"] != "test-version" {
 		t.Errorf("version field = %v, want test-version", body["version"])
+	}
+	if body["geoip"] != false {
+		t.Errorf("geoip field = %v, want false (Server.GeoIP defaults to false)", body["geoip"])
+	}
+}
+
+// #1198: a country database is nil-means-disabled like every other
+// optional integration -- main sets Server.GeoIP from
+// geoip.Lookup.Configured(), and this is the one place a caller (the
+// country filter, the ingest settings card) can tell "no database" apart
+// from "no public traffic yet". Covers both states the field can report;
+// TestHandleHealthz above already covers the rest of the payload.
+func TestHandleHealthzGeoIP(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.GeoIP = true
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["geoip"] != true {
+		t.Errorf("geoip field = %v, want true", body["geoip"])
 	}
 }
 
@@ -272,7 +344,9 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 
 	// newTestServer's "core" device is configured but has never had
 	// Resolve called for it -- exactly the "never_seen" case.
-	s.Devices.Resolve("203.0.113.9", time.Now()) // an auto-discovered, currently-live device
+	pushingRouter(t, s, "lab-crs", "203.0.113.9/24") // a router that pushed, currently live
+	pushingRouter(t, s, "old-hex", "198.51.100.1/24")
+	s.Devices.Resolve("203.0.113.9", time.Now())
 	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute))
 	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute)) // same source, stays stale either way
 
@@ -302,11 +376,11 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 	if byID["core"] != "never_seen" {
 		t.Errorf("expected core's status = never_seen (configured, zero events), got %q", byID["core"])
 	}
-	if byID["203.0.113.9"] != "live" {
-		t.Errorf("expected 203.0.113.9's status = live (just resolved), got %q", byID["203.0.113.9"])
+	if byID["lab-crs"] != "live" {
+		t.Errorf("expected lab-crs's status = live (just resolved), got %q", byID["lab-crs"])
 	}
-	if byID["198.51.100.1"] != "stale" {
-		t.Errorf("expected 198.51.100.1's status = stale (last seen 30m ago, threshold 10m), got %q", byID["198.51.100.1"])
+	if byID["old-hex"] != "stale" {
+		t.Errorf("expected old-hex's status = stale (last seen 30m ago, threshold 10m), got %q", byID["old-hex"])
 	}
 }
 
@@ -353,6 +427,48 @@ func TestHandleDevicesReportsMultihomedCandidates(t *testing.T) {
 		if byID[id] != nil {
 			t.Errorf("expected undeclared %s to carry no candidates, got %v", id, byID[id])
 		}
+	}
+}
+
+// TestUnattributedViewsExplainsConflictingClaimantsForAnyCount is the
+// v0.6.0 pre-release audit's finding, owner-ruled: unattributedViews'
+// Explanation sentence was hard-wired to exactly two claimants ("X and
+// Y have both pushed..."), so three or more routers sharing a
+// management or VRRP address produced ungrammatical prose ("core, edge
+// and dmz have both pushed..."). Rewritten in the owner's own plain
+// register and checked here for both the two- and three-claimant case,
+// so it can never again silently stop generalising past two.
+func TestUnattributedViewsExplainsConflictingClaimantsForAnyCount(t *testing.T) {
+	infos := []device.Info{
+		{ID: "core", Name: "core"},
+		{ID: "edge", Name: "edge"},
+		{ID: "dmz", Name: "dmz"},
+	}
+
+	two := unattributedViews([]device.Source{
+		{Address: "10.0.0.1", Claimants: []string{"core", "edge"}},
+	}, infos)
+	if len(two) != 1 {
+		t.Fatalf("unattributedViews (two claimants) = %+v, want one view", two)
+	}
+	if got := two[0].Explanation; !strings.Contains(got, "core and edge") || strings.Contains(got, "both") {
+		t.Errorf("two-claimant explanation = %q, want it to name both without the word %q", got, "both")
+	}
+	if got := two[0].Explanation; !strings.Contains(got, "MikroView") {
+		t.Errorf("explanation = %q, want it to name the product as %q", got, "MikroView")
+	}
+
+	three := unattributedViews([]device.Source{
+		{Address: "10.0.0.2", Claimants: []string{"core", "edge", "dmz"}},
+	}, infos)
+	if len(three) != 1 {
+		t.Fatalf("unattributedViews (three claimants) = %+v, want one view", three)
+	}
+	if got := three[0].Explanation; !strings.Contains(got, "core, edge and dmz") {
+		t.Errorf("three-claimant explanation = %q, want it to name all three in a grammatical list", got)
+	}
+	if got := three[0].Explanation; strings.Contains(got, "both") {
+		t.Errorf("three-claimant explanation = %q, want no %q -- that only ever names two", got, "both")
 	}
 }
 
@@ -927,21 +1043,28 @@ func TestHandleStatsWarmRestartReportsRestoredTo(t *testing.T) {
 	}
 }
 
-// droppedStub reports a fixed count for the Evaluation interface, so the
+// lagStub reports fixed figures for the Evaluation interface, so the
 // stats endpoint can be tested without standing up a real engine.
-type droppedStub uint64
+type lagStub struct {
+	behind        uint64
+	behindSeconds float64
+	outrun        uint64
+}
 
-func (d droppedStub) Dropped() uint64 { return uint64(d) }
+func (l lagStub) Lag() (uint64, float64, uint64) { return l.behind, l.behindSeconds, l.outrun }
+func (l lagStub) Forget()                        {}
 
-// #1107: the engine sheds events it cannot evaluate under a burst --
-// they are stored and broadcast, so nothing looks wrong, and the only
-// symptom is flags that were never raised. This pins the number being
-// readable at all. Absent rather than zero when no engine is wired: a
-// Server without one cannot honestly say "nothing was skipped", and
-// zero is exactly that claim.
-func TestHandleStatsReportsWhatTheEngineNeverEvaluated(t *testing.T) {
+// #1109: checking reads forward from the event store by cursor, so it
+// can run late (behind/behindSeconds) without anything being lost, and
+// the only real gap left is a flood that outran the whole retention
+// window (outrun). Both are invisible without this: events are stored
+// and broadcast either way, and the only symptom is flags that were
+// never raised. Absent rather than zero when no engine is wired: a
+// Server without one cannot honestly say "caught up, nothing missed",
+// and zeros are exactly that claim.
+func TestHandleStatsReportsEngineLagAndOutrun(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.Evaluation = droppedStub(12000)
+	s.Evaluation = lagStub{behind: 4200, behindSeconds: 3.5, outrun: 12000}
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
@@ -949,8 +1072,14 @@ func TestHandleStatsReportsWhatTheEngineNeverEvaluated(t *testing.T) {
 	if !ok {
 		t.Fatal(`body["engine"] missing or not an object`)
 	}
-	if got := eng["droppedFromEvaluation"].(float64); got != 12000 {
-		t.Errorf("droppedFromEvaluation = %v, want 12000", got)
+	if got := eng["behind"].(float64); got != 4200 {
+		t.Errorf("behind = %v, want 4200", got)
+	}
+	if got := eng["behindSeconds"].(float64); got != 3.5 {
+		t.Errorf("behindSeconds = %v, want 3.5", got)
+	}
+	if got := eng["outrun"].(float64); got != 12000 {
+		t.Errorf("outrun = %v, want 12000", got)
 	}
 }
 
@@ -989,8 +1118,9 @@ func getStats(t *testing.T, base string) map[string]any {
 // that distinction before offering a field.
 func TestHandleDevicesServesTheStoredNameWithProvenance(t *testing.T) {
 	s, _ := newTestServer(t)
+	pushingRouter(t, s, "lab-crs", "203.0.113.9/24")
 	s.Devices.Resolve("203.0.113.9", time.Now())
-	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "203.0.113.9", Label: "lab crs"}); err != nil {
+	if _, err := s.Entities.Upsert(entities.Entity{Type: entities.TypeDevice, Key: "lab-crs", Label: "lab crs"}); err != nil {
 		t.Fatal(err)
 	}
 	// The wiring main does: one resolver, held by the registry and by
@@ -1021,8 +1151,8 @@ func TestHandleDevicesServesTheStoredNameWithProvenance(t *testing.T) {
 	for _, d := range body.Devices {
 		got[d.ID] = [2]string{d.Name, d.NameSource}
 	}
-	if got["203.0.113.9"] != [2]string{"lab crs", naming.SourceEntity} {
-		t.Errorf("discovered device = %v, want the stored rename reported as an entity name", got["203.0.113.9"])
+	if got["lab-crs"] != [2]string{"lab crs", naming.SourceEntity} {
+		t.Errorf("pushing device = %v, want the stored rename reported as an entity name", got["lab-crs"])
 	}
 	if got["core"] != [2]string{"Core", naming.SourceConfigDevice} {
 		t.Errorf("declared device = %v, want config.yaml's name reported as config-owned", got["core"])

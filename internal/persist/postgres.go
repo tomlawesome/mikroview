@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -382,7 +381,7 @@ func (p *Pool) Migrate(ctx context.Context) error {
 
 	endVersion := pending[len(pending)-1].version
 	schemaLog.Warn(fmt.Sprintf("database schema updated from version %d to version %d -- "+
-		"an older mikroview image may no longer read this database correctly",
+		"an older MikroView image may no longer read this database correctly",
 		startVersion, endVersion))
 	return nil
 }
@@ -429,7 +428,7 @@ func verifyApplied(applied map[int64]string, migrations []migration, describe st
 		if recorded != m.checksum() {
 			return fmt.Errorf(
 				"persist: %s reports migration %d (%s) as applied, but its recorded checksum does not match the one "+
-					"in this build -- the database schema is not what this version of mikroview expects. That means "+
+					"in this build -- the database schema is not what this version of MikroView expects. That means "+
 					"either the migration file changed after release (it must never change once applied), or "+
 					"schema_version was written to directly. Refusing to start rather than run queries against a "+
 					"schema of unknown shape",
@@ -464,35 +463,52 @@ func (m migration) checksum() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// loadMigrations reads the embedded .sql files, ordered by the numeric
-// prefix rather than by filename string, so 0010 sorts after 0009
-// instead of between 0001 and 0002.
+// loadMigrations returns the database half of the shared migration list
+// in schema.go: for every entry that names a .sql file, the embedded
+// file's text.
+//
+// The list is the source of the numbering rather than the filenames
+// (#1238), so a schema version means the same thing on either backend --
+// but the two must agree, and both directions are checked here. A file
+// whose prefix does not match its entry's number, or one sitting in
+// migrations/ that no entry names, is a mistake this refuses to start
+// on: silently ignoring an unlisted migration would mean a database
+// never runs it.
 func loadMigrations() ([]migration, error) {
+	if err := validateSchemaList(schemaMigrations); err != nil {
+		return nil, err
+	}
+
+	out := make([]migration, 0, len(schemaMigrations))
+	listed := make(map[string]bool, len(schemaMigrations))
+	for _, m := range schemaMigrations {
+		if m.Postgres == "" {
+			continue // file-backend-only migration; nothing for the database
+		}
+		var prefix int64
+		if _, err := fmt.Sscanf(m.Postgres, "%d_", &prefix); err != nil || prefix != m.Number {
+			return nil, fmt.Errorf("persist: migration %q is the postgres step of schema version %d -- "+
+				"its numeric prefix must be that same number", m.Postgres, m.Number)
+		}
+		body, err := migrationFS.ReadFile("migrations/" + m.Postgres)
+		if err != nil {
+			return nil, fmt.Errorf("persist: reading migration %q: %w", m.Postgres, err)
+		}
+		listed[m.Postgres] = true
+		out = append(out, migration{version: m.Number, name: m.Postgres, sql: string(body)})
+	}
+
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		return nil, fmt.Errorf("persist: reading embedded migrations: %w", err)
 	}
-	out := make([]migration, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
-		var version int64
-		if _, err := fmt.Sscanf(e.Name(), "%d_", &version); err != nil || version <= 0 {
-			return nil, fmt.Errorf("persist: migration %q must start with a positive version number", e.Name())
-		}
-		body, err := migrationFS.ReadFile("migrations/" + e.Name())
-		if err != nil {
-			return nil, fmt.Errorf("persist: reading migration %q: %w", e.Name(), err)
-		}
-		out = append(out, migration{version: version, name: e.Name(), sql: string(body)})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
-
-	for i := 1; i < len(out); i++ {
-		if out[i].version == out[i-1].version {
-			return nil, fmt.Errorf("persist: two migrations share version %d (%s, %s)",
-				out[i].version, out[i-1].name, out[i].name)
+		if !listed[e.Name()] {
+			return nil, fmt.Errorf("persist: migrations/%s is not in the schema list in schema.go -- "+
+				"every migration is numbered there, for both backends, or it never runs", e.Name())
 		}
 	}
 	return out, nil

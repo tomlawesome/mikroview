@@ -103,3 +103,174 @@ describe('column visibility (#729)', () => {
     expect(trackCount(columnState.gridTemplate)).toBe(PINNED_COLUMNS.size)
   })
 })
+
+// #1150: at 1366 the fifteen columns measure 1762px into a 1308px box,
+// so the table's right-hand end fell off the edge. Below the breakpoint
+// MAC, Interfaces and (#1117) NAT start hidden -- and start hidden *in
+// the picker* too, so the operator can see what was taken and put it
+// back. The breakpoint itself moved from 1500 to 1600 in #1117: 1500 was
+// measured against the pre-#1149/#1197 column widths, which have since
+// grown enough that it no longer covered the width (1600) the reopened
+// bug was reported at -- see columns.svelte.ts's own comment on
+// NARROW_BREAKPOINT for the math.
+describe('the narrow starting column set (#1150, #1117)', () => {
+  const NARROW_HIDDEN = ['mac', 'iface', 'nat']
+
+  // The width is read once, at module load (see startsNarrow), so proving
+  // it needs a genuinely fresh module instance -- same vi.resetModules
+  // route the pinned-column load guard above uses.
+  async function loadAt(narrow: boolean) {
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: narrow && query.includes('1600'),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }) as unknown as MediaQueryList) as typeof window.matchMedia
+    try {
+      localStorage.removeItem('mikroview-column-visibility-v1')
+      vi.resetModules()
+      return await import('./columns.svelte')
+    } finally {
+      window.matchMedia = original
+    }
+  }
+
+  it('starts MAC, Interfaces and NAT hidden below 1600px, and nothing else', async () => {
+    const fresh = await loadAt(true)
+
+    for (const col of fresh.COLUMNS) {
+      expect(fresh.columnState.isColumnVisible(col.key), col.key).toBe(!NARROW_HIDDEN.includes(col.key))
+    }
+    // The picker reads exactly this, so "hidden" and "drawn unticked"
+    // cannot come apart.
+    expect(fresh.columnState.visibleColumns.map((c) => c.key)).not.toContain('mac')
+  })
+
+  it('changes nothing above 1600px -- the shipped default is still all fifteen', async () => {
+    const fresh = await loadAt(false)
+
+    for (const col of fresh.COLUMNS) {
+      expect(fresh.columnState.isColumnVisible(col.key), col.key).toBe(true)
+    }
+  })
+
+  it('lets the operator put one back, and persists that the way any other picker choice persists', async () => {
+    const fresh = await loadAt(true)
+
+    fresh.columnState.toggleColumn('mac')
+    expect(fresh.columnState.isColumnVisible('mac')).toBe(true)
+
+    // One mechanism, not a second one for narrow screens: the same
+    // localStorage entry the picker has always written.
+    const parsed = JSON.parse(localStorage.getItem('mikroview-column-visibility-v1') as string)
+    expect(parsed.mac).toBe(true)
+    expect(parsed.iface).toBe(false)
+    expect(parsed.nat).toBe(false)
+
+    localStorage.removeItem('mikroview-column-visibility-v1')
+  })
+
+  it('honours a saved choice over the narrow default -- the width never overrules the reader', async () => {
+    const stored: Record<string, boolean> = Object.fromEntries([...COLUMNS].map((col) => [col.key, true]))
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) =>
+      ({ matches: query.includes('1600'), media: query, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList) as typeof window.matchMedia
+    try {
+      localStorage.setItem('mikroview-column-visibility-v1', JSON.stringify(stored))
+      vi.resetModules()
+      const fresh = await import('./columns.svelte')
+      expect(fresh.columnState.isColumnVisible('mac')).toBe(true)
+      expect(fresh.columnState.isColumnVisible('iface')).toBe(true)
+      expect(fresh.columnState.isColumnVisible('nat')).toBe(true)
+    } finally {
+      window.matchMedia = original
+      localStorage.removeItem('mikroview-column-visibility-v1')
+    }
+  })
+})
+
+// #1117 (reopened twice: !1029, !1051): the release screenshot at
+// 1600x900, v7 defaults, showed DST ADDRESS cut to "10.0." and RULE to
+// three letters. Widening individual columns never touched the real
+// cause -- NARROW_BREAKPOINT (above) still let all fifteen columns try
+// to fit at 1600px, and they cannot: Deck.svelte reserves its own 30px
+// roll-rail plus a 14px+14px card-body inset (58px) before the table
+// gets anything, and Rule can never draw below its own 140px floor.
+// This sums what the *fixed* (non-Rule) visible columns declare at
+// 1600px against that floor and that chrome, so a future width bump
+// that quietly breaks the fit fails here instead of in a screenshot.
+describe('the last column fits at 1600px (#1117)', () => {
+  const RAIL_AND_INSET = 30 + 14 + 14
+
+  async function loadAt1600() {
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: query.includes('1600'),
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }) as unknown as MediaQueryList) as typeof window.matchMedia
+    try {
+      localStorage.removeItem('mikroview-column-visibility-v1')
+      localStorage.removeItem('mikroview-column-widths-v8')
+      vi.resetModules()
+      return await import('./columns.svelte')
+    } finally {
+      window.matchMedia = original
+    }
+  }
+
+  it('leaves Rule its full floor once the other visible columns and the chrome are accounted for', async () => {
+    const fresh = await loadAt1600()
+
+    const visibleFixedWidths = fresh.COLUMNS.map((c, i) => ({ key: c.key, width: fresh.columnState.widths[i] })).filter(
+      ({ key }) => key !== 'rule' && fresh.columnState.isColumnVisible(key),
+    )
+    expect(visibleFixedWidths.every(({ width }) => typeof width === 'number')).toBe(true)
+
+    const sum = visibleFixedWidths.reduce((total, { width }) => total + (width as number), 0)
+
+    expect(sum + fresh.FLEX_MIN_WIDTH + RAIL_AND_INSET).toBeLessThanOrEqual(1600)
+
+    localStorage.removeItem('mikroview-column-widths-v8')
+  })
+})
+
+describe('column headers and default widths (#1149)', () => {
+  function labelOf(key: string): string {
+    return COLUMNS.find((c) => c.key === key)?.label as string
+  }
+
+  it('gives every column a label no other column shares', () => {
+    const labels = COLUMNS.map((c) => c.label)
+    expect(new Set(labels).size).toBe(labels.length)
+  })
+
+  it('says which side each half of a repeated pair belongs to', () => {
+    expect(labelOf('srcAddr')).toBe('Src address')
+    expect(labelOf('dstAddr')).toBe('Dst address')
+    expect(labelOf('srcPort')).toBe('Src port')
+    expect(labelOf('port')).toBe('Dst port')
+  })
+
+  // The measure the review took off the rendered table: a 17-character
+  // MAC needs ~163px and a 13-character bare IPv4 ~129px at the row's
+  // 14px mono, padding included. Both columns sat under that (150 and
+  // 104), so every MAC and every long address was cut with nothing to
+  // hover.
+  it('sizes MAC and the address columns above the content they hold', () => {
+    columnState.reset()
+    const widthOf = (key: string) => columnState.widths[COLUMNS.findIndex((c) => c.key === key)]
+
+    expect(widthOf('mac')).toBeGreaterThanOrEqual(163)
+    expect(widthOf('srcAddr')).toBeGreaterThanOrEqual(129)
+    expect(widthOf('srcAddr')).toBe(widthOf('dstAddr'))
+
+    // v8 (#1117): the storage key this test's own columnState.reset()
+    // call above persists under -- stale if left at the pre-bump name.
+    localStorage.removeItem('mikroview-column-widths-v8')
+  })
+})

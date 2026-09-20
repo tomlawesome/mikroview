@@ -70,7 +70,7 @@ type harness struct {
 
 func newHarness(t *testing.T, key *retention.Key) *harness {
 	t.Helper()
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

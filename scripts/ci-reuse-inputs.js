@@ -35,6 +35,13 @@ const SCENARIOS_PATHS = [...COMMON, ...GO_TREE, 'frontend/**', 'scripts/**'];
 
 const IMAGE_PATHS = [...SCENARIOS_PATHS, 'Dockerfile', 'live-check.Dockerfile'];
 
+// test:install-line builds the same image as test:container (so it needs
+// IMAGE_PATHS) and then runs install.sh, which lives at the repo root and
+// so matches none of IMAGE_PATHS' globs on its own (#1242) -- named here
+// explicitly rather than folded into scripts/**, which install.sh isn't
+// under.
+const INSTALL_LINE_PATHS = [...IMAGE_PATHS, 'install.sh'];
+
 const JOB_INPUTS = {
   'gate:scenarios 1/4': SCENARIOS_PATHS,
   'gate:scenarios 2/4': SCENARIOS_PATHS,
@@ -43,6 +50,7 @@ const JOB_INPUTS = {
   'gate:image': IMAGE_PATHS,
   'test:container': IMAGE_PATHS,
   'test:postgres': IMAGE_PATHS,
+  'test:install-line': INSTALL_LINE_PATHS,
 };
 
 function candidateJobs() {

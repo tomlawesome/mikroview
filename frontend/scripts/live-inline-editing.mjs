@@ -159,6 +159,10 @@ check(
 await dstCell.locator('.edit-btn').click()
 const editor = page.locator('.popover.name-editor')
 await editor.waitFor({ timeout: 5000 })
+// The popover opens loading and only renders `p.refusal` once
+// fetchNameProvenance resolves -- reading the text before that landed
+// read the loading copy instead and made the checks below flaky (#1128).
+await editor.locator('p.refusal').waitFor({ timeout: 5000 })
 
 const refusalText = (await editor.textContent()) ?? ''
 

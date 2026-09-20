@@ -20,17 +20,23 @@ function inactive(): SyslogIngestLoss {
     dropped: { recent: 0, lastAt: null, active: false },
     rejectedConfigured: { recent: 0, lastAt: null, active: false, hosts: [] },
     rejected: { recent: 0, lastAt: null, active: false },
-    oversized: { recent: 0, lastAt: null, active: false },
+    oversized: { recent: 0, lastAt: null, active: false, declared: false, runs: 0 },
   }
 }
 
-function rowInputs(overrides: Partial<SyslogIngestLoss> = {}, wsDropped = { recent: 0, active: false }): IngestLossRowInputs {
-  return { loss: { ...inactive(), ...overrides }, wsDropped }
+function rowInputs(
+  overrides: Partial<SyslogIngestLoss> = {},
+  wsDropped = { recent: 0, active: false },
+  outrun = { recent: 0, active: false },
+): IngestLossRowInputs {
+  return { loss: { ...inactive(), ...overrides }, outrun, wsDropped }
 }
 
 describe('selectIngestLossRows', () => {
   it('returns nothing when loss is absent -- stats not loaded yet, or an older server', () => {
-    expect(selectIngestLossRows({ wsDropped: { recent: 0, active: false } })).toEqual([])
+    expect(
+      selectIngestLossRows({ outrun: { recent: 0, active: false }, wsDropped: { recent: 0, active: false } }),
+    ).toEqual([])
   })
 
   it('returns nothing when every counter is inactive, however large its total was', () => {
@@ -58,7 +64,14 @@ describe('selectIngestLossRows', () => {
             hosts: ['branch-e4a1'],
           },
           rejected: { recent: 2867, lastAt: '2026-09-06T19:49:00Z', active: true },
-          oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true, host: '10.20.3.9' },
+          oversized: {
+            recent: 7,
+            lastAt: '2026-09-06T19:48:40Z',
+            active: true,
+            host: '10.20.3.9',
+            declared: false,
+            runs: 2,
+          },
         },
         { recent: 156, active: true },
       ),
@@ -84,14 +97,23 @@ describe('selectIngestLossRows', () => {
           hosts: ['branch-e4a1'],
         },
         rejected: { recent: 1, lastAt: '2026-09-06T19:49:00Z', active: true },
-        oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true, host: '10.20.3.9' },
+        oversized: {
+          recent: 7,
+          lastAt: '2026-09-06T19:48:40Z',
+          active: true,
+          host: '10.20.3.9',
+          declared: false,
+          runs: 2,
+        },
       }),
     )
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
     expect(byId.dropped.detail).toBe('12 log lines lost')
     expect(byId.rejectedConfigured.detail).toBe('3 refused (branch-e4a1 locked out)')
     expect(byId.rejectedUndeclared.detail).toBe('1 connection refused')
-    expect(byId.oversized.detail).toBe('7 oversized messages received from 10.20.3.9 were truncated')
+    expect(byId.oversized.detail).toBe(
+      '2 over-long runs were truncated from 10.20.3.9 — no declared device at that address',
+    )
   })
 
   it('omits the locked-out router name when no host is retained', () => {
@@ -101,11 +123,141 @@ describe('selectIngestLossRows', () => {
     expect(row.detail).toBe('43 refused')
   })
 
-  it('omits "received from" when no oversized sender host is known yet', () => {
-    const [row] = selectIngestLossRows(
-      rowInputs({ oversized: { recent: 7, lastAt: '2026-09-06T19:48:40Z', active: true } }),
-    )
-    expect(row.detail).toBe('7 oversized messages received were truncated')
+  // #1203: the oversized banner used to accuse a "non-RouterOS sender"
+  // and count discarded reads as if they were lost messages. These
+  // cover the label, the honest unit (runs, not reads), both wordings
+  // (declared router vs unknown address), the read-count fallback for
+  // an older server, and the singular/plural of each.
+  describe('oversized (#1203)', () => {
+    it('uses a neutral label, never "Non-RouterOS sender"', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 138309,
+            lastAt: '2026-09-13T10:00:00Z',
+            active: true,
+            host: '192.168.254.1',
+            declared: true,
+            runs: 42,
+          },
+        }),
+      )
+      expect(row.label).toBe('Oversized messages')
+    })
+
+    it('names a declared router and its likely fix, never calling it foreign', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 138309,
+            lastAt: '2026-09-13T10:00:00Z',
+            active: true,
+            host: '192.168.254.1',
+            declared: true,
+            runs: 42,
+          },
+        }),
+      )
+      expect(row.detail).toBe(
+        '42 over-long runs were truncated from 192.168.254.1 — likely a declared router missing remote-log-format=syslog',
+      )
+    })
+
+    it('calls an address foreign only when it is not a declared device', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 12,
+            lastAt: '2026-09-13T10:00:00Z',
+            active: true,
+            host: '203.0.113.9',
+            declared: false,
+            runs: 3,
+          },
+        }),
+      )
+      expect(row.detail).toBe('3 over-long runs were truncated from 203.0.113.9 — no declared device at that address')
+    })
+
+    it('singular: one run reads "run" and "was", not "runs" and "were"', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 1,
+            lastAt: '2026-09-13T10:00:00Z',
+            active: true,
+            host: '203.0.113.9',
+            declared: false,
+            runs: 1,
+          },
+        }),
+      )
+      expect(row.detail).toBe('1 over-long run was truncated from 203.0.113.9 — no declared device at that address')
+    })
+
+    it('never prints a read count with the word "messages"', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 138309,
+            lastAt: '2026-09-13T10:00:00Z',
+            active: true,
+            host: '192.168.254.1',
+            declared: true,
+            runs: 42,
+          },
+        }),
+      )
+      expect(row.detail).not.toContain('138,309')
+      expect(row.detail).not.toMatch(/\d[\d,]* messages/)
+    })
+
+    it('falls back to an honest read count against a server that predates Runs', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 7,
+            lastAt: '2026-09-06T19:48:40Z',
+            active: true,
+            host: '10.20.3.9',
+            declared: false,
+            runs: 0,
+          },
+        }),
+      )
+      expect(row.detail).toBe('7 discarded reads were truncated from 10.20.3.9 — no declared device at that address')
+    })
+
+    it('singular read fallback reads "read" and "was"', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 1,
+            lastAt: '2026-09-06T19:48:40Z',
+            active: true,
+            host: '10.20.3.9',
+            declared: false,
+            runs: 0,
+          },
+        }),
+      )
+      expect(row.detail).toBe('1 discarded read was truncated from 10.20.3.9 — no declared device at that address')
+    })
+
+    it('omits the host clause and the cause when no sender host is known yet', () => {
+      const [row] = selectIngestLossRows(
+        rowInputs({
+          oversized: {
+            recent: 7,
+            lastAt: '2026-09-06T19:48:40Z',
+            active: true,
+            declared: false,
+            runs: 3,
+          },
+        }),
+      )
+      expect(row.detail).toBe('3 over-long runs were truncated')
+    })
   })
 
   it('gives wsDropped no `details` target, unlike every real-loss row', () => {
@@ -119,6 +271,40 @@ describe('selectIngestLossRows', () => {
   it('demotes the feed-drop notice: wsDropped is info, never warn', () => {
     const [row] = selectIngestLossRows(rowInputs({}, { recent: 5, active: true }))
     expect(row.severity).toBe('info')
+  })
+
+  // #1109: checking reads events out of the buffer in order, so the only
+  // way one goes unchecked is the buffer wrapping past it first. The row
+  // says exactly that, in the ratified words, and says what to do.
+  describe('outrun (#1109)', () => {
+    it('renders the ratified copy for events that were never checked', () => {
+      const [row] = selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 4200, active: true }))
+      expect(row.id).toBe('outrun')
+      expect(row.label).toBe('More events arrived than the memory window holds before checking caught up')
+      expect(row.detail).toBe("4,200 never checked. Raise the memory setting or find the flood's source.")
+    })
+
+    it('points at the ingest group, as every real-loss row does', () => {
+      const [row] = selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 1, active: true }))
+      expect(row.details).toBe('engineroom/ingest')
+      expect(row.severity).toBe('warn')
+    })
+
+    it('shows nothing once the flood has passed, however large the total was', () => {
+      expect(selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 98000, active: false }))).toEqual([])
+    })
+
+    it('shows nothing when nothing was ever outrun', () => {
+      expect(selectIngestLossRows(rowInputs({}, { recent: 0, active: false }, { recent: 0, active: true }))).toEqual([])
+    })
+
+    it('has no row for a backlog: late is not lost, so only outrun is reported', () => {
+      // The stats block also carries behind/behindSeconds, and they
+      // deliberately reach no banner at all -- there is nothing an
+      // operator needs to do about checking that is catching up.
+      const rows = selectIngestLossRows(rowInputs())
+      expect(rows).toEqual([])
+    })
   })
 })
 

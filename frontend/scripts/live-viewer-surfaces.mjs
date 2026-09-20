@@ -136,18 +136,32 @@ for (const absent of ['Watchlist', 'Settings', 'Entities', 'Audit log', 'Run set
 }
 check(viewerNav.disabledRows.length === 0, `no menu row is disabled for a viewer -- got ${JSON.stringify(viewerNav.disabledRows)}`)
 
-// --- 2: a user's navigation adds Watchlist, Settings and Entities -------
+// --- 2: a user's navigation adds the four edit-tier surfaces ------------
 
 const editor = await signIn(EDITOR_USER, EDITOR_PASS)
 const editorNav = await visibleSurfaces(editor.page)
 check(
   JSON.stringify(editorNav.union) ===
     JSON.stringify(
-      sortedSet(['The fall', 'Topography', 'Stream', 'Metrics', 'Flags', 'Watchlist', 'Settings', 'Entities']),
+      sortedSet([
+        'The fall',
+        'Topography',
+        'Stream',
+        'Metrics',
+        'Flags',
+        'Watchlist',
+        'Settings',
+        'Entities',
+        'Log every rule',
+      ]),
     ),
-  `a user's whole navigation adds Watchlist, Settings and Entities -- got ${JSON.stringify(editorNav.union)}`,
+  `a user's whole navigation adds Watchlist, Settings, Entities and Log every rule -- got ${JSON.stringify(editorNav.union)}`,
 )
-for (const added of ['Watchlist', 'Settings', 'Entities']) {
+// Log every rule joined the deck under #1134 (deckCards.ts's
+// `log-every-rule`), behind the same `edit` gate as Watchlist, Settings
+// and Entities -- so it reaches this tier's navigation, and a viewer's
+// set below is unchanged.
+for (const added of ['Watchlist', 'Settings', 'Entities', 'Log every rule']) {
   check(editorNav.union.includes(added), `${added} is present in a user's navigation`)
 }
 // Fleet is the viewer's own stand-in for Entities/Settings (deckCards.ts's
@@ -181,7 +195,18 @@ check(!(await editor.page.locator(PEOPLE).count()), 'people is absent for a user
 // into the room #657 removed. It moves here rather than disappearing:
 // the user tier is who can still open the page, so they are who the
 // grammar has to hold for now.
-const editorDisabled = await editor.page.$$eval('.page button, .page input', (els) => els.filter((e) => e.disabled).length)
+//
+// Scoped to the Settings card rather than to `.page`, because the deck
+// mounts a card's neighbours: #1134's Log every rule draws a `.page` of
+// its own next door, and its Analyse button is disabled until an export
+// has been dropped on the zone (LogEveryRule.svelte's `!device ||
+// !exportText.trim()`). That is form validity, the same for an admin as
+// for a user, and not the tier gating this claim is about -- so the
+// query names the card whose grammar is being read.
+const editorDisabled = await editor.page.$$eval(
+  '.card[data-card="engineroom"] button, .card[data-card="engineroom"] input',
+  (els) => els.filter((e) => e.disabled).length,
+)
 check(editorDisabled === 0, `nothing on Settings is rendered disabled for a user -- got ${editorDisabled}`)
 
 // --- 4: GET /api/tokens narrowed to admin (#657) -------------------------

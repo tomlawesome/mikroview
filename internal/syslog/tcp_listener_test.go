@@ -933,6 +933,109 @@ func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
 	}
 }
 
+// TestRFC3164HeaderLenPRIBoundary pins rfc3164HeaderLen (and, through
+// it, nextHeaderStart) at every place a PRI's closing '>' can land --
+// including well past the 4-byte width any legal PRI allows. It exists
+// to prove that bounding how much of data gets scanned for '>' (see the
+// sec2 fix, rfc3164MaxHeaderBytes) doesn't change what counts as a
+// header, only how much work deciding that costs: every case here must
+// return the same thing whether the scan is bounded or not.
+func TestRFC3164HeaderLenPRIBoundary(t *testing.T) {
+	ts := "Aug 29 20:52:44"
+	validTail := ts + " chr a-live-in input: message"
+	// All-lowercase and no further '<': nothing in here can itself look
+	// like a header start (a bare header needs an uppercase first byte,
+	// and rfc3164HeaderLen's cheap reject rules out every digit and
+	// lowercase byte immediately). So if the PRI at offset 0 is
+	// rejected, there is genuinely no header anywhere in data -- what
+	// the invalid rows below need to make -1 the right answer for
+	// nextHeaderStart too, not just for rfc3164HeaderLen at offset 0.
+	invalidTail := " chr a-live-in input: message, nothing else here looks like a header"
+
+	tests := []struct {
+		name string
+		data string
+		want int // -1 means rejected
+	}{
+		{"gt_at_pos_1_empty_pri", "<>" + invalidTail, -1},
+		{"gt_at_pos_2_one_digit_pri", "<5>" + validTail, len("<5>" + ts)},
+		{"gt_at_pos_3_two_digit_pri", "<55>" + validTail, len("<55>" + ts)},
+		{"gt_at_pos_4_three_digit_pri", "<155>" + validTail, len("<155>" + ts)},
+		{"gt_at_pos_5_four_digit_pri_too_wide", "<1555>" + invalidTail, -1},
+		{"gt_at_pos_6_five_digit_pri_too_wide", "<15555>" + invalidTail, -1},
+		{"no_gt_within_20_bytes_of_lt", "<" + strings.Repeat("1", 20) + ">" + invalidTail, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rfc3164HeaderLen([]byte(tt.data)); got != tt.want {
+				t.Errorf("rfc3164HeaderLen(%q) = %d, want %d", tt.data, got, tt.want)
+			}
+
+			// nextHeaderStart at offset 0 over the same bytes must agree
+			// -- every case above starts with '<', so a header found at
+			// all is found right at 0.
+			wantStart := -1
+			if tt.want >= 0 {
+				wantStart = 0
+			}
+			if got := nextHeaderStart([]byte(tt.data), 0); got != wantStart {
+				t.Errorf("nextHeaderStart(%q, 0) = %d, want %d", tt.data, got, wantStart)
+			}
+		})
+	}
+}
+
+// TestNextHeaderStartScalesLinearlyOnLongLTRun guards the sec2 fix
+// that bounded rfc3164HeaderLen's '>' scan: with the bound, a buffer
+// of nothing but '<' costs time proportional to its length; without
+// it every offset rescans the rest, so quadrupling the input costs
+// about sixteen times as long. The check is the ratio between two
+// sizes, not a wall-clock budget -- under -race on a shared CI runner
+// the fixed 1 MiB case took 2.2 s where it takes 11 ms here, and an
+// absolute budget failed on that (pipeline 1264, 2026-09-18). A ratio
+// cancels machine speed and the race detector alike.
+func TestNextHeaderStartScalesLinearlyOnLongLTRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("quadratic-time regression check; skipped under -short")
+	}
+
+	timeScan := func(n int) time.Duration {
+		data := bytes.Repeat([]byte{'<'}, n) // no '>' anywhere, no '\n'
+		best := time.Duration(1<<63 - 1)
+		for i := 0; i < 3; i++ {
+			start := time.Now()
+			if got := nextHeaderStart(data, 0); got != -1 {
+				t.Fatalf("nextHeaderStart = %d, want -1 (no '>' anywhere in data)", got)
+			}
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		return best
+	}
+
+	small := timeScan(1 << 18) // 256 KiB
+	large := timeScan(1 << 20) // 1 MiB, four times as much
+	ratio := float64(large) / float64(max(small, time.Microsecond))
+	t.Logf("nextHeaderStart: 256 KiB %s, 1 MiB %s, ratio %.1f (linear ~4, quadratic ~16)", small, large, ratio)
+
+	if ratio > 10 {
+		t.Errorf("1 MiB took %.1fx the 256 KiB case, want about 4x -- the per-offset '>' scan looks unbounded again", ratio)
+	}
+}
+
+// BenchmarkNextHeaderStartAllLT records the cost of the pathological
+// input the sec2 fix is about: a buffer that is nothing but '<' bytes,
+// so every offset attempts a PRI match.
+func BenchmarkNextHeaderStartAllLT(b *testing.B) {
+	data := bytes.Repeat([]byte{'<'}, 1<<16) // 64 KiB
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		nextHeaderStart(data, 0)
+	}
+}
+
 // --- #914: a header still arriving must not end the message before it ----
 
 // scriptTimeout is the error a net.Conn returns when a read deadline
@@ -1388,5 +1491,185 @@ func TestClearLossZeroesTotalsEpisodesAndHosts(t *testing.T) {
 	if after.Loss.Oversized.Recent != 0 || after.Loss.Oversized.Active ||
 		after.Loss.Oversized.LastAt != nil || after.Loss.Oversized.Host != "" {
 		t.Errorf("Loss.Oversized after ClearLoss = %+v, want zeroed with no host", after.Loss.Oversized)
+	}
+	if after.Loss.Oversized.Runs != 0 {
+		t.Errorf("Loss.Oversized.Runs after ClearLoss = %d, want 0", after.Loss.Oversized.Runs)
+	}
+}
+
+// TestLossOversizedRunsCountsRunsNotReads is #1203's central claim: one
+// over-long run can be spread across many discarded continuation reads
+// (Recent, the pre-existing per-read count), but it is still one run
+// (Runs, added by this issue) -- the gap the owner's real 138,309-read
+// report exposed, where the banner read as 138,309 lost messages. Drives
+// the two counters exactly as tcp_listener.go's read loop does: three
+// discarded reads belonging to the same run call noteOversizedHost
+// (and tcpOversized.Add) once per read, but the run-start counter only
+// once, at the point the run began.
+func TestLossOversizedRunsCountsRunsNotReads(t *testing.T) {
+	prevOversized := tcpOversized.Swap(0)
+	prevRuns := tcpOversizedRuns.Swap(0)
+	tcpOversizedHostMu.Lock()
+	prevHost, prevHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpOversized.Store(prevOversized)
+		tcpOversizedRuns.Store(prevRuns)
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevHost, prevHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpOversizedFreshness.clear()
+		tcpOversizedRunsFreshness.clear()
+	})
+	tcpOversizedFreshness.clear()
+	tcpOversizedRunsFreshness.clear()
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	const host = "203.0.113.20"
+
+	// The run starts (one over-long line, no newline yet).
+	tcpOversizedRuns.Add(1)
+	tcpOversizedRunsFreshness.hit(lossWindowOversized)
+	// ...and continues across two more discarded reads before a
+	// delimiter finally ends it -- three discarded reads, still the
+	// one run that started above.
+	for i := 0; i < 3; i++ {
+		tcpOversized.Add(1)
+		noteOversizedHost(host)
+	}
+
+	loss := Stats().Loss.Oversized
+	if loss.Recent != 3 {
+		t.Errorf("Loss.Oversized.Recent = %d, want 3 (three discarded reads)", loss.Recent)
+	}
+	if loss.Runs != 1 {
+		t.Errorf("Loss.Oversized.Runs = %d, want 1 (one run, however many reads it spanned)", loss.Runs)
+	}
+}
+
+// TestLossOversizedDeclaredField is #1203's other new field: Host is
+// only ever useful to the banner alongside whether it names a device
+// the operator actually declared -- a declared source gets "known
+// router" copy, anything else stays an unidentified sender.
+func TestLossOversizedDeclaredField(t *testing.T) {
+	prevOversized := tcpOversized.Swap(0)
+	prevConfigured := configuredSources.Load()
+	tcpOversizedHostMu.Lock()
+	prevHost, prevHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpOversized.Store(prevOversized)
+		configuredSources.Store(prevConfigured)
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevHost, prevHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpOversizedFreshness.clear()
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	const declaredHost = "203.0.113.21"
+	configured := map[string]bool{declaredHost: true}
+	configuredSources.Store(&configured)
+
+	tcpOversizedFreshness.clear()
+	tcpOversized.Add(1)
+	noteOversizedHost(declaredHost)
+
+	if loss := Stats().Loss.Oversized; !loss.Declared {
+		t.Errorf("Loss.Oversized.Declared = false for a declared host, want true")
+	}
+
+	const undeclaredHost = "203.0.113.22"
+	tcpOversized.Add(1)
+	noteOversizedHost(undeclaredHost)
+
+	if loss := Stats().Loss.Oversized; loss.Declared {
+		t.Errorf("Loss.Oversized.Declared = true for an undeclared host, want false")
+	}
+}
+
+// TestOversizedIsSetupDrift is #1205's detection rule: a declared
+// device with a sustained run of oversized activity should read as
+// "this router's setup is out of date", but a one-off, an address
+// nobody declared, or a run that has already gone quiet must not.
+func TestOversizedIsSetupDrift(t *testing.T) {
+	cases := []struct {
+		name     string
+		declared bool
+		active   bool
+		runs     uint64
+		want     bool
+	}{
+		{"declared, active, sustained", true, true, sustainedOversizedRuns, true},
+		{"declared, active, well past sustained", true, true, sustainedOversizedRuns + 10, true},
+		{"declared, active, one-off", true, true, 1, false},
+		{"declared, active, no runs yet", true, true, 0, false},
+		{"declared, sustained, but gone quiet", true, false, sustainedOversizedRuns, false},
+		{"undeclared, active, sustained -- stays a foreign sender", false, true, sustainedOversizedRuns, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := oversizedIsSetupDrift(c.declared, c.active, c.runs); got != c.want {
+				t.Errorf("oversizedIsSetupDrift(%v, %v, %d) = %v, want %v", c.declared, c.active, c.runs, got, c.want)
+			}
+		})
+	}
+}
+
+// TestLossOversizedSetupDriftField is the same rule wired through
+// Stats(): a sustained run from a declared device carries SetupDrift,
+// and the identical pattern from an address nobody declared does not --
+// #1205's Settings line keys off exactly this field.
+func TestLossOversizedSetupDriftField(t *testing.T) {
+	prevOversized := tcpOversized.Swap(0)
+	prevRuns := tcpOversizedRuns.Swap(0)
+	prevConfigured := configuredSources.Load()
+	tcpOversizedHostMu.Lock()
+	prevHost, prevHostLastAt := tcpOversizedHost, tcpOversizedHostLastAt
+	tcpOversizedHostMu.Unlock()
+	t.Cleanup(func() {
+		tcpOversized.Store(prevOversized)
+		tcpOversizedRuns.Store(prevRuns)
+		configuredSources.Store(prevConfigured)
+		tcpOversizedHostMu.Lock()
+		tcpOversizedHost, tcpOversizedHostLastAt = prevHost, prevHostLastAt
+		tcpOversizedHostMu.Unlock()
+		tcpOversizedFreshness.clear()
+		tcpOversizedRunsFreshness.clear()
+	})
+
+	now := time.Now()
+	setLossClock(func() time.Time { return now })
+	t.Cleanup(func() { setLossClock(nil) })
+
+	const declaredHost = "203.0.113.23"
+	configured := map[string]bool{declaredHost: true}
+	configuredSources.Store(&configured)
+
+	tcpOversizedFreshness.clear()
+	tcpOversizedRunsFreshness.clear()
+	for i := 0; i < sustainedOversizedRuns; i++ {
+		tcpOversizedRuns.Add(1)
+		tcpOversizedRunsFreshness.hit(lossWindowOversized)
+	}
+	tcpOversized.Add(1)
+	noteOversizedHost(declaredHost)
+
+	if loss := Stats().Loss.Oversized; !loss.SetupDrift {
+		t.Errorf("Loss.Oversized.SetupDrift = false for a declared host with %d sustained runs, want true", loss.Runs)
+	}
+
+	const undeclaredHost = "203.0.113.24"
+	tcpOversized.Add(1)
+	noteOversizedHost(undeclaredHost)
+
+	if loss := Stats().Loss.Oversized; loss.SetupDrift {
+		t.Errorf("Loss.Oversized.SetupDrift = true for an undeclared host, want false (foreign sender, not setup drift)")
 	}
 }

@@ -209,6 +209,12 @@ live-routeros:
 # Same scenarios, different environment: MV_ENV_SCRIPT is the only thing
 # that changes. A scenario needing to know which environment it is in
 # would drift between them, and being the *same* scenarios is the point.
+#
+# That includes the reset between scenarios: live-container.sh starts the
+# container with MV_TEST_HOOKS=1 too, so POST /api/test/reset exists here
+# exactly as it does under live-env.sh. A 404 from that route is no longer
+# a supported flavour of this harness -- it means the target is not a test
+# instance, and live-browser.mjs's resetInstance() treats it as fatal.
 live-container:
 	@MV_ENV_SCRIPT=scripts/live-container.sh; export MV_ENV_SCRIPT; \
 	  eval "$$(scripts/live-container.sh up)" || exit 1; \
@@ -305,7 +311,7 @@ live-routeros-container:
 engines-check:
 	test -n "$(MV_URL)" || { echo "MV_URL required -- an already-standing instance, reachable from a container (host LAN address, not 127.0.0.1)" >&2; exit 1; }
 	docker run --rm -v $(CURDIR):/repo:ro -w /repo/frontend -e MV_URL=$(MV_URL) \
-	  mcr.microsoft.com/playwright:v1.62.0-noble node scripts/live-door-engines.mjs
+	  mcr.microsoft.com/playwright:v1.63.0-noble node scripts/live-door-engines.mjs
 
 .PHONY: engines-check
 

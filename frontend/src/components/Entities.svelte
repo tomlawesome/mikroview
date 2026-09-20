@@ -78,7 +78,7 @@
   // the rule is on the router and fires on the router, so a rules view
   // that omits it is not the rule table. It stays unnameable: the row
   // is plain dim text with no rename affordance, for every tier.
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
@@ -92,16 +92,33 @@
     fetchRouterRules,
     fetchRouterAddresses,
     fetchRules,
+    fetchRefusedSenders,
     fetchSetupStatus,
-    fetchSetupCommands,
+    fetchUnattributedSources,
     type RouterFilterRule,
   } from '../lib/api'
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
-  import { deviceState, multihomedEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
-  import { instanceAddress, portOf } from '../lib/setupsteps'
-  import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
+  import {
+    deviceState,
+    multihomedEcho,
+    setupEcho,
+    sortedDevices,
+    ratePerSecond,
+    unattributedLabel,
+    UNATTRIBUTED_FIX,
+  } from '../lib/fleet'
+  import { REFUSED_STRIP_LEAD } from '../lib/setupsteps'
+  import { wizardState } from '../lib/wizard.svelte'
+  import type {
+    EntityType,
+    MACRegistryEntry,
+    RefusedSender,
+    RuleUsage,
+    SetupStatus,
+    UnattributedSource,
+  } from '../lib/types'
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
   const routerRows = $derived(sortedDevices(appState.devices))
@@ -127,6 +144,81 @@
   const registeredRouters = $derived(routerRows.filter((d) => d.configured))
   const unregisteredRouters = $derived(routerRows.filter((d) => !d.configured))
 
+  // The registry's other list (#1170): syslog sources no router has
+  // claimed -- no configured sourceIp matches them, and no router has
+  // enrolled from them (#1281). The server stopped
+  // inventing a device row for one, so they arrive alongside the
+  // devices rather than among them, and they are drawn as sources here,
+  // never as routers.
+  //
+  // Re-read whenever the fleet moves: a source stops being
+  // unattributed the moment config.yaml names it or a router enrols
+  // from it. A failed read just leaves the
+  // list empty -- these cards explain something, and an explanation is
+  // not worth an error state on this page.
+  //
+  // "moves" is judged on this signature, not on appState.devices
+  // itself (#1269). App.svelte's global 5s poll reassigns
+  // appState.devices to a brand-new array every tick regardless of
+  // whether anything in it changed -- a live router's rate/lastSeen
+  // update every cycle -- so watching the array directly re-asked GET
+  // /api/devices a second time, every 5 seconds, for the very payload
+  // that poll had just downloaded. id/sourceIp/configured are the only
+  // fields that can turn a source from unattributed to attributed;
+  // collapsing them into one string means Svelte reruns this effect on
+  // that string's *value* changing, not on the array's identity, so a
+  // poll tick that alters none of them costs nothing here.
+  const deviceSignature = $derived(routerRows.map((d) => `${d.id}:${d.sourceIp}:${d.configured}`).join('|'))
+  let unattributed = $state<UnattributedSource[]>([])
+  $effect(() => {
+    void deviceSignature
+    fetchUnattributedSources()
+      .then((list) => {
+        unattributed = list
+      })
+      .catch(() => {})
+  })
+
+  // The refused senders (#1281): addresses whose syslog lines were
+  // dropped for belonging to no enrolled router. They live here, beside
+  // the routers, because this is the screen an admin's deck actually
+  // draws for the fleet view (deckCards.ts, #785) and GET
+  // /api/devices/refused is admin-only -- the strip Fleet.svelte
+  // originally carried could be reached by nobody. Read on the fleet's
+  // own signature like the unattributed sources above; a failed read
+  // leaves the list empty, since these cards explain a silence rather
+  // than being one.
+  const isAdmin = $derived(authState.isAdmin)
+  let refused = $state<RefusedSender[]>([])
+  $effect(() => {
+    void deviceSignature
+    if (!isAdmin) {
+      refused = []
+      return
+    }
+    fetchRefusedSenders()
+      .then((list) => {
+        refused = list
+      })
+      .catch(() => {
+        refused = []
+      })
+  })
+
+  // Re-enrol… opens the router ledger at Send logs for one router with
+  // a fresh token: a replaced or re-addressed router needs the enrol
+  // line again and nothing else.
+  function reEnrol(deviceId: string) {
+    wizardState.openReEnrol(deviceId)
+  }
+
+  // Finish registering… (#1291) opens the router ledger straight at
+  // Register, for a router whose only gap is that one step -- its
+  // enrolment already stands, so nothing here mints a fresh token.
+  function finishRegistering(deviceId: string) {
+    wizardState.openRegister(deviceId)
+  }
+
   // Renaming is an edit, so the viewer tier does not get the affordance
   // and its names stop looking clickable. Nothing on this page says why:
   // the read-only fact is declared once, on the account chip
@@ -136,44 +228,18 @@
   const canRename = $derived(authState.canEdit)
 
   let status = $state<SetupStatus | null>(null)
-  // berthSyslogCommands is the empty berth's two paste lines -- POST
-  // /api/setup/commands' steps.syslog.commands (#436 moved the RouterOS
-  // syntax server-side), fetched once status carries the syslog port it
-  // needs.
-  let berthSyslogCommands = $state('')
 
   // The empty berth (#718): one more card at the end of the router row,
   // the same size and shape as a real one but empty -- an outline with
   // nothing in it. Activating it (click, Enter or Space -- a native
-  // <button>, so both keys work for free) swaps that outline for a panel
-  // holding the same port, paste lines and "never connects to them"
-  // assurance the old pill's dialog carried; Escape or the panel's own
-  // close button folds it back. The panel is positioned over the berth's
-  // own footprint rather than growing it, so opening never changes the
-  // row's height and the table below never moves (see .berth-panel).
-  let berthOpen = $state(false)
-  let berthTrigger = $state<HTMLButtonElement | null>(null)
-
+  // <button>, so both keys work for free) used to unfold it in place
+  // into the syslog paste lines; since #1284 it opens the router ledger
+  // instead -- the setup wizard's own router steps, which name the
+  // router, enrol it and print the same block with an enrol line at the
+  // end. Two surfaces printing the same commands in different words is
+  // exactly what the ledger being one component removes.
   function openBerth() {
-    berthOpen = true
-  }
-
-  // Returns focus to the trigger so a keyboard user who opened the berth
-  // and dismissed it lands back where they started, not at the top of
-  // the page -- awaits a tick because the trigger button doesn't exist
-  // in the DOM again until the {#if} below re-renders it.
-  async function closeBerth() {
-    berthOpen = false
-    await tick()
-    berthTrigger?.focus()
-  }
-
-  function onBerthKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && berthOpen) closeBerth()
-  }
-
-  function focusOnOpen(node: HTMLButtonElement) {
-    node.focus()
+    wizardState.openAddRouter()
   }
 
   // Per-router enrichment beyond what GET /api/devices already carries
@@ -511,19 +577,10 @@
       // Lane names fall back to the raw boundary id until this resolves.
     })
     fetchSetupStatus()
-      .then((s) => {
-        status = s
-        return fetchSetupCommands({
-          address: instanceAddress({ host: location.host }),
-          syslogPort: s.instance.syslogPort,
-        })
-      })
-      .then((r) => {
-        if (typeof r !== 'string') berthSyslogCommands = r.steps.syslog.commands
-      })
+      .then((s) => (status = s))
       .catch(() => {
-        // The "add a third router" card's paste-lines disclosure simply
-        // has nothing to show until this resolves.
+        // Nothing on this page depends on it beyond the unattributed
+        // card's own wording; it simply reads less until this resolves.
       })
     fetchRules()
       .then((r) => (rulesUsage = r))
@@ -619,7 +676,39 @@
   }
 </script>
 
-<svelte:window onkeydown={onBerthKeydown} />
+{#snippet reEnrolButton(deviceId: string, label: string)}
+  <!-- Re-enrol… (#1284): the ledger at Send logs with a fresh token,
+       for a router that has been replaced or has moved address. Absent
+       rather than disabled for anyone who cannot use it (#657's
+       grammar). One snippet for both cards below it renders on -- a
+       registered router and one only pushing -- so the two can never
+       read the same button differently (#1291 audit, stage 5). -->
+  <button
+    type="button"
+    class="row-action"
+    onclick={() => reEnrol(deviceId)}
+    aria-label="Re-enrol {label} — mint a fresh enrolment token for it"
+  >
+    Re-enrol…
+  </button>
+{/snippet}
+
+{#snippet finishRegisteringButton(deviceId: string, label: string)}
+  <!-- Finish registering… (#1291): the ledger at Register, keeping the
+       router's device and history, with no fresh token minted -- for a
+       router whose enrolment already stands and is only short of the
+       ledger's own confirmation. Re-enrol… stays offered beside it for
+       when the enrolment itself is the problem; this is for the one
+       step nearly finished, not the whole walk again. -->
+  <button
+    type="button"
+    class="row-action"
+    onclick={() => finishRegistering(deviceId)}
+    aria-label="Finish registering {label} — resume the Register step for it"
+  >
+    Finish registering…
+  </button>
+{/snippet}
 
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
@@ -651,11 +740,21 @@
               {/if}
               {#if multihomedEcho(d)}
                 <!-- The source-address split's echo (#442), the same
-                     sentence Fleet.svelte carries: the wizard's step 2
-                     owns the diagnosis and the command. -->
+                     sentence Fleet.svelte carries: Send logs owns the
+                     diagnosis and the command (named, not numbered --
+                     it read "step 2" until #1284 moved Send logs to
+                     third; see fleet.ts's multihomedEcho comment). -->
                 <div class="frow dim">{multihomedEcho(d)}</div>
               {/if}
+              {#if setupEcho(d)}
+                <!-- The same #1241 line Fleet.svelte carries: what this
+                     router reports of the wizard's own logging setup. -->
+                <div class="frow dim">{setupEcho(d)}</div>
+              {/if}
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
+              {#if isAdmin}
+                {@render reEnrolButton(d.id, d.name)}
+              {/if}
             </div>
           {/each}
           {#each unregisteredRouters as d (d.id)}
@@ -669,36 +768,115 @@
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
               </div>
               <div class="frow dim">its lines are kept; it has no name and no zones until it is registered</div>
+              {#if setupEcho(d)}
+                <!-- #1241's line belongs here too: a router discovered by
+                     its own push and never declared is the common case,
+                     and Fleet.svelte shows this on every card. Leaving it
+                     off here hid the one card most likely to need it. -->
+                <div class="frow dim">{setupEcho(d)}</div>
+              {/if}
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
-            </div>
-          {/each}
-          <div class="fcard berth" class:open={berthOpen}>
-          {#if berthOpen}
-            <div class="berth-panel" role="group" aria-label="Add a router">
-              <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
-              <p>
-                Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
-                it appears here.
-              </p>
-              <p>Routers push to mikroview — it never connects to them.</p>
-              {#if berthSyslogCommands}
-                <pre class="paste">{berthSyslogCommands}</pre>
-              {:else}
-                <p class="dim">Loading the commands to paste…</p>
+              <!-- #1291: enrolling and the ledger's Register step are
+                   independent, so the pair says how far the operator
+                   actually got. This card is where it has to be said --
+                   every router the wizard adds is drawn here, and the
+                   config.yaml-declared cards above can never carry a
+                   registeredAt at all (the server refuses to register
+                   one, since config.yaml rebuilds it every boot).
+                   Worded as "the Register step" rather than
+                   "registered": on this card that word already means
+                   declared in config.yaml, which is the chip in the
+                   header, and the two senses must not be read as one. -->
+              {#if d.acceptedIp && !d.registeredAt}
+                <div class="frow">its logs are accepted, but the Register step was never finished</div>
+              {:else if d.registeredAt && !d.acceptedIp}
+                <div class="frow dim">
+                  the Register step is done; still waiting for its enrolment token to arrive
+                </div>
+              {/if}
+              {#if isAdmin}
+                {#if d.acceptedIp && !d.registeredAt}
+                  <!-- #1291: this router's only gap is the Register
+                       step -- offer to finish that directly rather than
+                       sending it through Re-enrol's full mint-a-fresh-
+                       token walk for one step it nearly completed. -->
+                  {@render finishRegisteringButton(d.id, d.name || d.sourceIp)}
+                {/if}
+                <!-- Re-enrol… belongs on this card most of all: since
+                     #1281 a router earns its place by presenting a
+                     token, and a router the ledger declared is not in
+                     config.yaml, so every router the wizard itself adds
+                     is drawn here rather than above. -->
+                {@render reEnrolButton(d.id, d.name || d.sourceIp)}
               {/if}
             </div>
-          {:else}
+          {/each}
+          {#each unattributed as s (s.address)}
+            <!-- #1170: a source, not a router. Its own card and its own
+                 quiet vocabulary -- deliberately not .unreg, which means
+                 a router that pushes without being registered. Nothing
+                 here may count it as a router. -->
+            <div class="fcard unattr" role="group" aria-label={unattributedLabel(s)}>
+              <div class="fhead">
+                <b>unattributed · {s.address}</b><span class="fstate quiet">◌ NOT A ROUTER</span>
+              </div>
+              <div class="frow">syslog from an address no router has claimed</div>
+              <div class="frow dim">
+                {s.lines} line{s.lines === 1 ? '' : 's'} seen · first seen {formatHM(s.firstSeen)}
+              </div>
+              {#if s.explanation}
+                <!-- Present only where two routers have both pushed this
+                     address as their own, so nothing can say which of
+                     them sent the lines. -->
+                <div class="frow dim">{s.explanation}</div>
+              {/if}
+              <div class="frow dim">{UNATTRIBUTED_FIX}</div>
+            </div>
+          {/each}
+          {#each refused as r (r.ip)}
+            <!-- The refused senders (#1281), in the unattributed card's
+                 own quiet vocabulary: an address whose lines were
+                 dropped because no router is enrolled at it. There is no
+                 accept control here, by ruling -- an address is accepted
+                 only by a router presenting a one-time token, so the
+                 only ways on are Re-enrol… on a router above and the
+                 berth's + add a router. -->
+            <div
+              class="fcard unattr refused"
+              role="group"
+              aria-label="refused · {r.ip} — syslog from an address no router is enrolled at"
+            >
+              <div class="fhead">
+                <b>refused · {r.ip}</b><span class="fstate quiet">◌ REFUSED</span>
+              </div>
+              <div class="frow">syslog from an address no router is enrolled at</div>
+              <div class="frow dim">
+                {r.lines} line{r.lines === 1 ? '' : 's'} · first seen {formatHM(r.firstSeen)} · last seen {formatHM(r.lastSeen)}
+              </div>
+              <div class="frow dim">{REFUSED_STRIP_LEAD} Re-enrol the router it belongs to, or add it as a new one.</div>
+            </div>
+          {/each}
+          {#if isAdmin}
+          <!-- Adding a router is admin-only: POST /api/devices refuses
+               anyone else, and #657's grammar is absent rather than
+               disabled, so a user tier does not meet a berth that would
+               only fail at the end of the walk. -->
+          <div class="fcard berth">
+            <!-- #1168: the resting state says what it is. #718 asked for
+                 no words at all, on the reading that an empty shape in a
+                 row of full cards is affordance enough -- with no routers
+                 registered there is no row of full cards, and what the
+                 operator met on first run was one blank dashed box. -->
             <button
               type="button"
               class="berth-trigger"
-              bind:this={berthTrigger}
               onclick={openBerth}
               aria-label="Add a router"
-            ></button>
-          {/if}
+            ><span class="berth-label">+ add a router</span></button>
           </div>
+          {/if}
         </div>
     </div>
 
@@ -731,7 +909,7 @@
         <thead>
           <tr>
             <th>name</th>
-            <th>lane</th>
+            <th>zone</th>
             <th>address</th>
             <th>mac</th>
             <th>first seen</th>
@@ -755,7 +933,13 @@
                     disabled={renameSaving}
                   />
                 {:else if canRename}
-                  <button type="button" class="rename-btn" onclick={() => startRename('host', row.key, row.label)} title="Click to rename">
+                  <button
+                    type="button"
+                    class="rename-btn"
+                    class:unnamed={!row.label}
+                    onclick={() => startRename('host', row.key, row.label)}
+                    title="Click to rename"
+                  >
                     {row.label || '— click to name —'}
                   </button>
                 {:else}
@@ -779,7 +963,12 @@
                   onclick={(e) => dossierState.open(row.key, e.currentTarget)}>{row.key}</button
                 ></td
               >
-              <td class="dim">{row.mac ? elideMac(row.mac.mac) : 'private'}</td>
+              <!-- #1158: an em dash, the marker every other column here
+                   uses for a value nothing knows. It read "private"
+                   before, which on a row for 1.1.1.1 or 8.8.8.8 looked
+                   like a claim about the address rather than a MAC the
+                   router never told us. -->
+              <td class="dim">{row.mac ? elideMac(row.mac.mac) : '—'}</td>
               <td class="dim">{firstSeenOf(row)}</td>
               <td>{lastSeenOf(row)}</td>
               <td>
@@ -1006,6 +1195,41 @@
     border-color: color-mix(in srgb, var(--now) 45%, transparent);
   }
 
+  /* An unattributed source (#1170) is not a router, so it does not wear
+     .unreg's --now border: nothing about it is asking to be looked at
+     now. It takes the dim ink its own state chip uses (.fstate.quiet),
+     dashed like the berth to say the slot is not a real router either.
+     No new colour. */
+  .fcard.unattr {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--fg-dim) 40%, transparent);
+  }
+
+  /* Re-enrol… on a router card (#1284), ported from Fleet.svelte with
+     the fields it had there: a quiet outline button, not a primary. */
+  .row-action {
+    margin-top: 8px;
+    align-self: flex-start;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .row-action:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .row-action:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   /* The empty berth (#718): a further grid cell in .fcards, same
      minmax(280px, 1fr) track as a real router card, so with no routers
      at all it alone fills the row -- the correct first-run read. Closed,
@@ -1027,15 +1251,16 @@
     border-color: var(--accent);
   }
 
-  /* The whole card is the trigger -- no icon, no "+", no label: the
-     empty shape in a row of full ones is the affordance (#718's
-     "Design: the add-router control", Option 1). The accessible name
-     that a sighted operator never sees is set via aria-label in the
-     markup. */
+  /* The whole card is the trigger (#718's "Design: the add-router
+     control", Option 1), now carrying its own resting label (#1168):
+     the empty shape reads as an affordance beside full cards, and on
+     first run there are none to read it against. */
   .berth-trigger {
     all: unset;
     box-sizing: border-box;
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
     height: 100%;
     min-height: inherit;
@@ -1043,78 +1268,19 @@
     border-radius: inherit;
   }
 
+  .berth-label {
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+
+  .fcard.berth:hover .berth-label,
+  .fcard.berth:focus-within .berth-label {
+    color: var(--accent);
+  }
+
   .berth-trigger:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-  }
-
-  /* Unfolded, the berth becomes a panel positioned over its own closed
-     footprint (inset: 0 against the .fcard.berth it fills) rather than
-     growing that footprint -- the grid row's height never changes, so
-     the table below never moves. Same background/border/radius as a
-     real .fcard: this is that treatment, filled in and given room to
-     hold the paste commands, not a second card style. */
-  .berth-panel {
-    /* top/left/right only -- no "bottom" -- so the box grows downward
-       to fit its content instead of being stretched to exactly the
-       closed card's height (which is what a full "inset: 0" would do). */
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 100%;
-    padding: 16px 20px;
-    /* --bg-elevated, not the --glass a resting .fcard wears: glass is
-       66% opaque, which is fine for a card sitting on the page but not
-       for a panel that opens downward over the table below it -- the
-       rows would read straight through the paste commands. Same hue,
-       fully opaque. */
-    background: var(--bg-elevated);
-    border: 1px solid var(--accent);
-    border-radius: 12px;
-    font-size: 12.5px;
-    color: var(--fg-muted);
-    animation: berth-unfold 0.12s ease-out;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .berth-panel {
-      animation: none;
-    }
-  }
-
-  @keyframes berth-unfold {
-    from {
-      opacity: 0;
-      transform: scaleY(0.94);
-    }
-    to {
-      opacity: 1;
-      transform: scaleY(1);
-    }
-  }
-
-  .berth-panel p {
-    margin: 0;
-  }
-
-  .berth-close {
-    align-self: flex-end;
-    background: none;
-    border: none;
-    color: var(--fg-muted);
-    cursor: pointer;
-    font-size: 1rem;
-    padding: 0.25rem;
-    margin: -0.25rem -0.25rem 0 0;
-  }
-
-  .berth-close:hover {
-    color: var(--fg);
   }
 
   .fhead {
@@ -1154,19 +1320,6 @@
 
   .fcard .frow {
     padding: 3px 0;
-  }
-
-  .paste {
-    margin: 8px 0 0;
-    padding: 8px 10px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--fg-muted);
-    white-space: pre-wrap;
-    word-break: break-all;
   }
 
   /* --- the named-things table ------------------------------------------ */
@@ -1227,6 +1380,14 @@
   .rename-btn:hover {
     border-color: var(--border);
     color: var(--accent);
+  }
+
+  /* #1152: the "— click to name —" placeholder is one phrase, and at
+     1100px wide it broke after "name" and left its closing dash alone on
+     a second line. Only the placeholder -- a real host name may be long
+     enough to want the wrap. */
+  .rename-btn.unnamed {
+    white-space: nowrap;
   }
 
   .dossier-btn {

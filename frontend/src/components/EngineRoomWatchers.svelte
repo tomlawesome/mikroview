@@ -1789,6 +1789,56 @@
     flex: none;
   }
 
+  /* #1190: these were the browser's own checkboxes -- the only unstyled
+     controls in the product, drawn differently by each engine. Same
+     square, border ink and accent fill the room's other controls use, so
+     the bench reads as part of it. Both the per-row run toggle and a
+     bool param inside an open row, which had the same problem. */
+  input[type='checkbox'] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+  }
+
+  input[type='checkbox']::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 1px;
+    background: var(--accent);
+    transform: scale(0);
+  }
+
+  input[type='checkbox']:checked {
+    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+
+  input[type='checkbox']:checked::before {
+    transform: scale(1);
+  }
+
+  input[type='checkbox']:hover:not(:disabled) {
+    border-color: var(--fg-dim);
+  }
+
+  input[type='checkbox']:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  input[type='checkbox']:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
   .name {
     color: var(--fg);
     font-weight: 600;

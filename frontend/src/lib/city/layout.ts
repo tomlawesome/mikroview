@@ -78,9 +78,15 @@ const CARD_CIDR_CHAR_EM = 0.6 // monospace font, ~0.6em fixed advance/char
 /** The card's left text inset (Topography's `-fc.gr + 12`), mirrored on
  * the right so text never rides the plate's own edge. */
 const CARD_TEXT_PAD = 12
-/** What `.n-cidr` renders when a zone has no CIDR (Topography's
- * `fc.d.cidr ?? 'from boundaries'`). */
-const CARD_CIDR_FALLBACK = 'from boundaries'
+/**
+ * What an address slot reads where no address table was pushed and the
+ * zone's extent came from the boundaries instead. One wording for the
+ * city's plaque and the 2D map's lane card (#1137): the same district
+ * said it two ways, and a caption that changes with the view reads as
+ * two different facts about the same zone.
+ */
+export const CIDR_FALLBACK = 'from boundaries'
+const CARD_CIDR_FALLBACK = CIDR_FALLBACK
 
 /** A plate's half-width: the larger of what its host count wants
  * (`plateRadius(hostCount) * S * 0.9`, floored at 38 -- Topography's own
@@ -94,6 +100,34 @@ export function plateHalfWidth(d: Pick<District, 'r' | 'name' | 'cidr'>, S: numb
   const cidrW = (d.cidr ?? CARD_CIDR_FALLBACK).length * CARD_CIDR_CHAR_EM * CARD_CIDR_PX
   const textGr = Math.max(nameW, cidrW) / 2 + CARD_TEXT_PAD
   return Math.max(38, hostGr, textGr)
+}
+
+// The city plaque's own metrics (#1137), read off City.svelte's markup:
+// the dot sits 13 in from the left edge and the name starts at 22
+// (`.p-name`, 12.5px proportional, weight 600); the subnet is anchored
+// to the right edge less 11 (`.p-cidr`, 10px monospace). Same estimating
+// convention as the card metrics above -- generous per character, so a
+// plaque only ever errs wider than its two texts need.
+const PLAQUE_NAME_PX = 12.5
+const PLAQUE_CIDR_PX = 10
+const PLAQUE_LEFT_PAD = 22
+const PLAQUE_RIGHT_PAD = 11
+/** The gap the two texts keep between them on their shared baseline. */
+const PLAQUE_GAP = 10
+/** The plaque width round 49 drew, and still the floor. */
+export const PLAQUE_W = 200
+
+/**
+ * How wide a district's plaque must be for its name and its subnet to
+ * sit on one baseline without meeting (#1137: a district named
+ * "bridge-workshop" printed its name over its own caption, because the
+ * plaque was a fixed 200 whatever the name was). Never narrower than
+ * the 200 the round drew, so a short name's plaque is unchanged.
+ */
+export function plaqueWidth(d: Pick<District, 'name' | 'cidr'>): number {
+  const nameW = d.name.length * CARD_NAME_CHAR_EM * PLAQUE_NAME_PX
+  const cidrW = (d.cidr ?? CIDR_FALLBACK).length * CARD_CIDR_CHAR_EM * PLAQUE_CIDR_PX
+  return Math.max(PLAQUE_W, PLAQUE_LEFT_PAD + nameW + PLAQUE_GAP + cidrW + PLAQUE_RIGHT_PAD)
 }
 
 /** sampleBank flattens a bank's curve so anything can ask "where is the
@@ -404,7 +438,7 @@ export function layoutGround(input: CityInput): Ground {
             existing.ruleCount = Math.max(existing.ruleCount, ruleCount)
             continue
           }
-          seen.set(edgeKey, { label: `${from || 'any lane'} → ${to || 'any lane'}`, edgeKey, coverage, ruleCount })
+          seen.set(edgeKey, { label: `${from || 'any zone'} → ${to || 'any zone'}`, edgeKey, coverage, ruleCount })
         }
       }
       const directions = [...seen.values()].sort((a, b) => (a.edgeKey.startsWith(d.id + '|') ? -1 : b.edgeKey.startsWith(d.id + '|') ? 1 : 0))
@@ -576,22 +610,47 @@ export function layoutGround(input: CityInput): Ground {
     }
   }
 
-  // Bounds: everything, with the far bank and the highway's end.
-  let u0 = Infinity
-  let u1 = -Infinity
-  let v0 = Infinity
-  let v1 = -Infinity
-  const grow = (u: number, v: number, r = 0) => {
-    u0 = Math.min(u0, u - r)
-    u1 = Math.max(u1, u + r)
-    v0 = Math.min(v0, v - r)
-    v1 = Math.max(v1, v + r)
+  // Two frames, because they answer two questions.
+  //
+  // `bounds` is everything, with the far bank and the highway's end --
+  // what the minimap draws and how far the camera may be panned.
+  //
+  // `townBounds` is the town: the districts and their buildings, the
+  // routers and bridge-head posts, and the roads that join them. It
+  // leaves out the far bank and the spans that fade away across the
+  // water, which is what the default camera frames (#1180, Fable's
+  // ruling: the river is scenery and may run off both edges of the
+  // frame; a second borough is part of the town and stays in the fit).
+  type Box = { u0: number; u1: number; v0: number; v1: number }
+  const box = (): Box => ({ u0: Infinity, u1: -Infinity, v0: Infinity, v1: -Infinity })
+  const grow = (b: Box, u: number, v: number, r = 0) => {
+    b.u0 = Math.min(b.u0, u - r)
+    b.u1 = Math.max(b.u1, u + r)
+    b.v0 = Math.min(b.v0, v - r)
+    b.v1 = Math.max(b.v1, v + r)
   }
-  for (const d of districts) grow(d.u, d.v, d.r)
-  for (const n of nodes) grow(n.u, n.v, n.R)
-  for (const r of roads) for (const p of r.pts) grow(p[0], p[1])
-  for (const p of bankF) grow(p[0], p[1] - 10)
-  if (!isFinite(u0)) grow(0, 0, 40)
+  const all = box()
+  const town = box()
+  for (const d of districts) {
+    grow(all, d.u, d.v, d.r)
+    grow(town, d.u, d.v, d.r)
+  }
+  for (const n of nodes) {
+    grow(all, n.u, n.v, n.R)
+    grow(town, n.u, n.v, n.R)
+  }
+  for (const r of roads)
+    for (const p of r.pts) {
+      grow(all, p[0], p[1])
+      // A fading road is one leaving town -- the bridge's span to the
+      // far bank, the highway's end -- so it sets no edge of the town.
+      if (!r.fade) grow(town, p[0], p[1])
+    }
+  for (const p of bankF) grow(all, p[0], p[1] - 10)
+  if (!isFinite(all.u0)) grow(all, 0, 0, 40)
+  // Nothing standing at all: the town is whatever the estate is, rather
+  // than an inverted box the fit would divide by.
+  if (!isFinite(town.u0)) grow(town, (all.u0 + all.u1) / 2, (all.v0 + all.v1) / 2, 40)
 
-  return { districts, nodes, boroughs, roads, river, bridges, bounds: { u0, u1, v0, v1 } }
+  return { districts, nodes, boroughs, roads, river, bridges, bounds: all, townBounds: town }
 }

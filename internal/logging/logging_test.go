@@ -12,7 +12,7 @@ import (
 
 func TestFormatLineNoColorLayout(t *testing.T) {
 	ts := "18:43:44"
-	got := formatLine(ts, slog.LevelInfo, "auth", "no decision made yet", false)
+	got := formatLine(ts, slog.LevelInfo, "auth", "no decision made yet", "", false)
 	want := "18:43:44 INFO  auth        │ no decision made yet\n"
 	if got != want {
 		t.Errorf("formatLine =\n%q\nwant\n%q", got, want)
@@ -23,7 +23,7 @@ func TestFormatLineErrorLevelNoDoubleSpace(t *testing.T) {
 	// ERROR is one character wider than INFO/WARN, so it should get one
 	// space before the component, not two -- otherwise the │ column
 	// drifts out of alignment on error lines specifically.
-	got := formatLine("18:43:46", slog.LevelError, "syslog-tcp", "bind: address already in use", false)
+	got := formatLine("18:43:46", slog.LevelError, "syslog-tcp", "bind: address already in use", "", false)
 	want := "18:43:46 ERROR syslog-tcp  │ bind: address already in use\n"
 	if got != want {
 		t.Errorf("formatLine =\n%q\nwant\n%q", got, want)
@@ -31,7 +31,7 @@ func TestFormatLineErrorLevelNoDoubleSpace(t *testing.T) {
 }
 
 func TestFormatLineLongComponentDoesNotTruncate(t *testing.T) {
-	got := formatLine("18:43:44", slog.LevelInfo, "enable-auth-setup", "re-armed", false)
+	got := formatLine("18:43:44", slog.LevelInfo, "enable-auth-setup", "re-armed", "", false)
 	if !strings.Contains(got, "enable-auth-setup") {
 		t.Errorf("expected the full component name to survive padding, got %q", got)
 	}
@@ -41,7 +41,7 @@ func TestFormatLineLongComponentDoesNotTruncate(t *testing.T) {
 }
 
 func TestFormatLineColorWrapsLevelAndDimsTheRest(t *testing.T) {
-	got := formatLine("18:43:44", slog.LevelWarn, "flags", "permission denied", true)
+	got := formatLine("18:43:44", slog.LevelWarn, "flags", "permission denied", "", true)
 	if !strings.Contains(got, ansiYellow+"WARN "+ansiReset) {
 		t.Errorf("expected the level token colored yellow and reset, got %q", got)
 	}
@@ -96,6 +96,79 @@ func TestNewAttachesComponentAndHandleRendersIt(t *testing.T) {
 	}
 	if !strings.Contains(got, "generated a local CA") {
 		t.Errorf("expected the message to appear, got %q", got)
+	}
+}
+
+// TestHandleRendersNonComponentAttrsAfterMessage guards the actual bug
+// in #1228: every attr except "component" used to be walked and
+// silently discarded, so a caller like log.Warn(msg, "err", err) never
+// showed the cause. component must still select the column and must
+// not also show up in the tail.
+func TestHandleRendersNonComponentAttrsAfterMessage(t *testing.T) {
+	var buf strings.Builder
+	h := &handler{w: &buf, level: slog.LevelInfo, color: false, mu: &sync.Mutex{}}
+	logger := slog.New(h).With(slog.String("component", "storage"))
+
+	logger.Warn("history.keyFile is set but could not be used", "keyFile", "/etc/mikroview/key", "err", "permission denied")
+
+	got := buf.String()
+	want := "WARN  storage     │ history.keyFile is set but could not be used keyFile=/etc/mikroview/key err=\"permission denied\"\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("Handle() line =\n%q\nwant suffix\n%q", got, want)
+	}
+	if strings.Count(got, "component=") != 0 {
+		t.Errorf("expected component not to also render in the attr tail, got %q", got)
+	}
+}
+
+// TestHandleOrdersHandlerAttrsBeforeRecordAttrs matches
+// slog.TextHandler's convention: attrs attached via With/WithAttrs
+// (here, on the *slog.Logger) come first, then attrs passed at the
+// call site, in the order each was supplied.
+func TestHandleOrdersHandlerAttrsBeforeRecordAttrs(t *testing.T) {
+	var buf strings.Builder
+	h := &handler{w: &buf, level: slog.LevelInfo, color: false, mu: &sync.Mutex{}}
+	logger := slog.New(h).With(slog.String("component", "syslog-tcp"), slog.String("reqID", "abc123"))
+
+	logger.Info("closing connection", "reason", "idle", "duration", "30s")
+
+	got := buf.String()
+	wantOrder := "reqID=abc123 reason=idle duration=30s"
+	if !strings.Contains(got, wantOrder) {
+		t.Errorf("expected handler attrs before record attrs in call order, got %q", got)
+	}
+}
+
+// TestHandleRendersGroupAttrsDotted covers slog.Group: mikroview never
+// emits groups itself today, but nothing should crash or mis-render if
+// a future caller (or a wrapped library) does.
+func TestHandleRendersGroupAttrsDotted(t *testing.T) {
+	var buf strings.Builder
+	h := &handler{w: &buf, level: slog.LevelInfo, color: false, mu: &sync.Mutex{}}
+	logger := slog.New(h).With(slog.String("component", "retention"))
+
+	logger.Info("purge failed", slog.Group("job", slog.String("id", "42"), slog.Int("attempt", 3)))
+
+	got := buf.String()
+	if !strings.Contains(got, "job.id=42 job.attempt=3") {
+		t.Errorf("expected dotted group.key=value pairs, got %q", got)
+	}
+}
+
+// TestHandleQuotesAttrValuesThatWouldBeAmbiguous ensures a value
+// containing a space, an "=", or a control character can't run into
+// the next token or the newline-per-line invariant the rest of the log
+// format relies on.
+func TestHandleQuotesAttrValuesThatWouldBeAmbiguous(t *testing.T) {
+	var buf strings.Builder
+	h := &handler{w: &buf, level: slog.LevelInfo, color: false, mu: &sync.Mutex{}}
+	logger := slog.New(h).With(slog.String("component", "backups"))
+
+	logger.Warn("vault open failed", "err", "open /var/lib/x: permission denied")
+
+	got := buf.String()
+	if !strings.Contains(got, `err="open /var/lib/x: permission denied"`) {
+		t.Errorf("expected the space-containing value to be quoted, got %q", got)
 	}
 }
 
@@ -212,5 +285,17 @@ func TestPrintableLeavesOrdinaryTextAlone(t *testing.T) {
 		if got := Printable(s); got != s {
 			t.Errorf("Printable(%q) = %q, want it unchanged", s, got)
 		}
+	}
+}
+
+// A bidirectional override in an attribute value must be escaped like
+// any other character that would rearrange the operator's terminal.
+// strconv.Quote escapes it once quoting is triggered; the check that
+// triggers quoting is what this guards, since unicode.IsControl alone
+// lets U+202E through untouched.
+func TestAttrValueQuotesABidiOverride(t *testing.T) {
+	got := quoteAttrValue("host‮evil")
+	if strings.Contains(got, "‮") {
+		t.Errorf("quoteAttrValue left a bidi override unescaped: %q", got)
 	}
 }

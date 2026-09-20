@@ -2,10 +2,12 @@
 
 import { parseAddress, parseCidr } from './addressMatch'
 import type { OffBaseline } from './baseline'
+import type { ConfigUpgradeResponse } from './configUpgrade'
 import type {
   ApiToken,
   AuditResult,
   AuthSession,
+  BackupTransport,
   CoverageEvidence,
   DecommissionResponse,
   DecommissionWatch,
@@ -14,6 +16,11 @@ import type {
   DefinitionParamSchema,
   DetectorScope,
   Device,
+  EnrolmentToken,
+  RefusedSender,
+  UnattributedSource,
+  DroplistEntry,
+  DroplistResponse,
   Entity,
   EntityType,
   Exclusion,
@@ -27,11 +34,16 @@ import type {
   HostDossier,
   HourTopBucket,
   MACRegistryEntry,
+  PasswordResetCode,
   PersistenceInfo,
   ReplayResult,
   ReputationResult,
+  RouterBackupDiff,
+  RouterBackupRouter,
   RouterBackupsResponse,
+  RouterBackupText,
   RuleUsage,
+  VaultLock,
   SetupCommandsRequest,
   SetupCommandsResponse,
   Stats,
@@ -70,14 +82,74 @@ export class ApiError extends Error {
   }
 }
 
+// #1162: what the operator reads when a request fails.
+//
+// The throwing functions below used to carry only their own name and a
+// status ("mark as expected: setFlagVerdict: 403", "Could not load the
+// window: fetchEventsWindow: 500") while the server had already sent
+// words for it -- "user role required", "flag not found" -- in the body,
+// which was thrown away. putHostMark has forwarded that body all along;
+// this is the same move, with a fallback in words rather than a bare
+// number for the refusals that carry no body at all (the CSRF gate's
+// 403, a proxy's 502).
+//
+// The body is only forwarded when it reads like a message: mikroview's
+// own handlers answer with one short line (internal/api's httpError),
+// while an HTML error page from something in front of it is not
+// something to paste into a toast.
+function wordsForStatus(status: number): string {
+  if (status === 401) return 'your session has expired — sign in again'
+  if (status === 403) return 'you are not allowed to do that'
+  if (status === 404) return 'the server has no record of that'
+  if (status === 409) return 'something else changed it first — reload and try again'
+  if (status === 429) return 'too many requests just now — try again in a moment'
+  if (status >= 500) return `the server could not do that (${status})`
+  return `the server refused that (${status})`
+}
+
+async function serverSaid(res: Response): Promise<string> {
+  let body = ''
+  try {
+    body = (await res.text()).trim()
+  } catch {
+    // the body was already consumed, or the connection dropped
+    // mid-read: the status still has words of its own below
+  }
+  if (body && body.length <= 200 && !body.startsWith('<')) return body
+  return wordsForStatus(res.status)
+}
+
 // Every mutating request goes through this -- sets the CSRF mitigation
 // header the backend requires once auth is active (internal/api's
 // csrfHeaderName; a no-op while auth is inactive, but always sent since
 // the frontend can't know which state it's in ahead of the response).
 // Same-origin `fetch()` already includes cookies by default, so no
 // explicit `credentials` option is needed.
+// send is fetch for the four mutating helpers below, with the one
+// failure fetch reports by throwing -- the connection dropped, the
+// server restarting, DNS gone -- turned into the refusal shape every
+// caller already handles: a non-ok Response whose body says what
+// happened. Left to throw, it escaped the caller's `await` with its busy
+// flag still set: "minting…", "adding…", "saving…" stuck until a reload,
+// no error shown, no way to try again. #1218 audit finding 7 guarded
+// three call sites by hand (AuthSetup, SSOLinkOverlay, LogEveryRule);
+// the v0.6.0 audit found the same shape in Droplist, EngineRoom,
+// Entities and the wizard's command refresh. One guard here reaches all
+// of them and every site written later. 503 is the nearest honest
+// status: nothing was done, and trying again may work.
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    return new Response(`the connection dropped before the server answered — check the network and try again (${why})`, {
+      status: 503,
+    })
+  }
+}
+
 async function postJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -85,8 +157,19 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
 }
 
 async function putJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    body: JSON.stringify(body),
+  })
+}
+
+// PATCH, for the one route that edits a single field of something the
+// server already holds (a kept backup's comment, #1126). Same CSRF
+// header as its neighbours, for the same reason.
+async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
+  return send(url, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
   })
@@ -100,7 +183,7 @@ async function putJSON(url: string, body: unknown = {}): Promise<Response> {
 // internal/api's handleEntitiesDelete) -- an arbitrary entity Key never
 // has to round-trip through a URL at all this way.
 async function deleteJSON(url: string, body?: unknown): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'DELETE',
     headers:
       body === undefined
@@ -234,7 +317,7 @@ export async function fetchEventsWindow(params: {
   if (params.limit) qs.set('limit', String(params.limit))
   const q = qs.toString()
   const res = await fetch(`/api/events${q ? `?${q}` : ''}`)
-  if (!res.ok) throw new ApiError(`fetchEventsWindow: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -272,6 +355,93 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// createDevice is the router ledger's first step (#1284): naming a
+// router is what creates it, so the name field and the create are one
+// act. Admin-only server-side, same gate as every other write here.
+export async function createDevice(name: string): Promise<Device | string> {
+  const res = await postJSON('/api/devices', { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createDevice: ${res.status}`
+}
+
+// mintEnrolment mints the short-lived token the Send logs step writes
+// into its last logging line (#1281). Re-minting is what Reroll does --
+// the same call, which is why there is no second endpoint for it. The
+// value comes back once; the server keeps only its hash.
+export async function mintEnrolment(
+  device: string,
+  password: string,
+  expectedAddress: string,
+): Promise<EnrolmentToken | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`, {
+    password,
+    expectedAddress,
+  })
+  if (res.ok) return res.json()
+  return (await res.text()) || `mintEnrolment: ${res.status}`
+}
+
+// registerDevice records the operator's confirmation of a router --
+// the ledger's final Register step (#1291). It grants the router
+// nothing: the server never sets acceptedIp from this call, so an
+// address is still only accepted when a valid token arrives over
+// syslog from it. Answers the updated device.
+export async function registerDevice(device: string, name: string): Promise<Device | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/registration`, { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `registerDevice: ${res.status}`
+}
+
+// rebindEnrolment points a pending enrolment window at a different
+// address without touching the token (#1291, ruling 23a) -- the
+// one-click recovery when the operator named the wrong address and
+// their router was turned away at accept. The token keeps its value
+// and expiry, so nothing is pasted into the router a second time. The
+// server only accepts an address already in the refused-senders list.
+export async function rebindEnrolment(device: string, address: string): Promise<string | null> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment/address`, {
+    address,
+  })
+  if (res.ok) return null
+  return (await res.text()) || `rebindEnrolment: ${res.status}`
+}
+
+// burnEnrolment retires a minted token without using it. No surface
+// reaches for it yet -- the ledger's own Reroll re-mints rather than
+// burning, and closing the modal deliberately leaves a live token
+// standing, because a router still on its way to enrolling is progress
+// the record says closing must not lose. Kept as the typed client for
+// the endpoint the contract defines.
+export async function burnEnrolment(device: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`)
+  if (res.ok) return null
+  return (await res.text()) || `burnEnrolment: ${res.status}`
+}
+
+// fetchRefusedSenders reads the addresses whose lines were dropped for
+// not being any router's enrolled address (#1281). Read by the wizard's
+// Send logs step while it waits, and by the fleet's own strip.
+export async function fetchRefusedSenders(): Promise<RefusedSender[]> {
+  const res = await fetch('/api/devices/refused')
+  if (!res.ok) throw new ApiError(`fetchRefusedSenders: ${res.status}`, res.status)
+  const body = await res.json()
+  // The contract is a bare array; the envelope form is read too so this
+  // does not break if the endpoint grows one, the way /api/devices has.
+  return Array.isArray(body) ? body : (body.refused ?? [])
+}
+
+// fetchUnattributedSources serves the other half of the one device
+// registry (#1170): GET /api/devices' `unattributed` list -- the syslog
+// sources no router has claimed, which the server no longer invents a
+// device row for. fetchDevices above deliberately keeps its exact
+// signature, so every existing caller and test mock stays untouched.
+export async function fetchUnattributedSources(): Promise<UnattributedSource[]> {
+  const res = await fetch('/api/devices')
+  if (!res.ok) throw new ApiError(`fetchUnattributedSources: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.unattributed ?? []
 }
 
 // fetchDeviceMACs serves the persisted MAC-registry history (issue #675:
@@ -375,7 +545,7 @@ export interface RouterFilterRule {
   disabled?: boolean
   // packets/bytes (#435 decision 4, contract §1) are RouterOS's own
   // counters for this rule -- kept whether or not it logs, which is what
-  // lets Tune logging show "fired N times" as the cost of switching
+  // lets Log every rule show "fired N times" as the cost of switching
   // logging on before it is switched on. Optional for the same reason as
   // the fields above: a push predating #435 sends nothing.
   packets?: number
@@ -557,7 +727,7 @@ export async function fetchFlags(): Promise<FlagsResponse> {
 // were actually cleared, so the caller can refresh() rather than guess.
 export async function clearAllFlags(): Promise<number> {
   const res = await postJSON('/api/flags/clear-all')
-  if (!res.ok) throw new ApiError(`clearAllFlags: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
   return body.cleared ?? 0
 }
@@ -583,9 +753,24 @@ export async function clearIngestLoss(): Promise<void> {
 // Sent at once, not deferred behind Undo's window -- see
 // flagsState.judgeAndClear's own doc comment for why an earlier,
 // deferred version of this call lost verdicts silently on a reload.
-export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict })
-  if (!res.ok) throw new ApiError(`setFlagVerdict: ${res.status}`, res.status)
+// note (#1232) is whatever the operator had written in the drawer's box
+// when they clicked the verdict, and is always optional: it travels in
+// the same request so there is never a moment where the judgement is
+// recorded and the reason for it is not.
+export async function setFlagVerdict(id: string, verdict: Verdict, note = ''): Promise<Flag> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict, note })
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
+}
+
+// updateFlagNote (#1232) edits the note on a flag that already carries a
+// verdict -- the owner's "we should be able to edit". Sending "" is how
+// the words are taken back. Same access tier as setFlagVerdict above;
+// 404s on an unknown id, and 409s on a flag with no verdict for the note
+// to belong to, which the drawer never offers a box for.
+export async function updateFlagNote(id: string, note: string): Promise<Flag> {
+  const res = await putJSON(`/api/flags/${encodeURIComponent(id)}/note`, { note })
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -600,7 +785,7 @@ export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag
 // pattern more specific.
 export async function deleteFlagVerdict(id: string): Promise<Flag> {
   const res = await deleteJSON(`/api/flags/verdict/${encodeURIComponent(id)}`)
-  if (!res.ok) throw new ApiError(`deleteFlagVerdict: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
@@ -611,7 +796,7 @@ export async function deleteFlagVerdict(id: string): Promise<Flag> {
 // it back.
 export async function fetchExpectations(): Promise<Exclusion[]> {
   const res = await fetch('/api/flags/expectations')
-  if (!res.ok) throw new ApiError(`fetchExpectations: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
   return body.expectations ?? []
 }
@@ -705,6 +890,31 @@ export async function deleteUser(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteUser: ${res.status}`
+}
+
+// resetUserPassword is the admin's way back in for somebody who has lost
+// their password (#1251). It returns the one-time code on success and
+// error text otherwise, the same shape createToken uses -- and for the
+// same reason: the successful answer is a credential that exists in this
+// response and nowhere else. Nothing here may store it, log it or put it
+// in a URL; show it once and let it go.
+export async function resetUserPassword(id: string): Promise<PasswordResetCode | string> {
+  const res = await postJSON(`/api/auth/users/${encodeURIComponent(id)}/reset-password`)
+  if (res.ok) return res.json()
+  return (await res.text()) || `resetUserPassword: ${res.status}`
+}
+
+// setNewPasswordAfterReset is the far end of that flow, for a session
+// established with a reset code. Deliberately separate from
+// changePassword above rather than a variant of it with an empty
+// current password: there is no current password in this state (the
+// stored hash is unmatchable, and the code is already spent), so a call
+// that looks like it is supplying one would be misleading at every
+// reading.
+export async function setNewPasswordAfterReset(newPassword: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/password', { newPassword })
+  if (res.ok) return null
+  return (await res.text()) || `setNewPasswordAfterReset: ${res.status}`
 }
 
 // The one definitions surface (issue #407), replacing /api/detectors and
@@ -1020,7 +1230,7 @@ export async function fetchWatchlistMatches(params: {
   if (params.until) q.set('until', params.until)
   if (params.limit) q.set('limit', String(params.limit))
   const res = await fetch(`/api/matches?${q.toString()}`)
-  if (!res.ok) throw new ApiError(`fetchWatchlistMatches: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
   return body.matches ?? []
 }
@@ -1146,16 +1356,22 @@ export async function revokeToken(id: string): Promise<string | null> {
 // simple, read-only accountability list, not a searchable log viewer.
 export async function fetchAuditLog(): Promise<AuditResult> {
   const res = await fetch('/api/audit')
-  if (!res.ok) throw new ApiError(`fetchAuditLog: ${res.status}`, res.status)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   return res.json()
 }
 
-// startSSOLink begins converting the signed-in account to SSO-only.
-// POST, not a navigation, so the CSRF header applies -- linking
-// destroys the account's local password, and a GET-initiated flow could
-// be triggered cross-site (see internal/api/oidc.go's
-// handleOIDCLinkStart). Returns the provider URL for the caller to
-// navigate to, or an error message.
+// startSSOLink connects the signed-in account to an SSO identity: for
+// every role but admin that converts the account to SSO-only, and for
+// the admin it adds SSO alongside the password it keeps (#1252).
+// POST, not a navigation, so the CSRF header applies -- a
+// GET-initiated flow could be triggered cross-site (see
+// internal/api/oidc.go's handleOIDCLinkStart). Returns the provider URL
+// for the caller to navigate to, or an error message.
+//
+// No arguments: the account is the session's, never the body's. Both
+// callers are here -- SSOLinkOverlay.svelte for an account already in
+// the app, and AuthSetup.svelte immediately after first-run creates the
+// admin.
 export async function startSSOLink(): Promise<{ url: string } | string> {
   const res = await postJSON('/api/auth/oidc/link')
   if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`
@@ -1214,6 +1430,39 @@ export async function markSetupStep(
   const res = await postJSON('/api/setup/mark', { step, outcome, note })
   if (res.ok) return res.json()
   return (await res.text()) || `markSetupStep: ${res.status}`
+}
+
+// saveSetupAddress records the wizard header field's answer (#1213):
+// what address a router can reach this instance on. Admin-only
+// server-side, matching markSetupStep beside it -- every RouterOS
+// command the wizard renders downstream is written against whatever
+// this stores.
+export async function saveSetupAddress(address: string): Promise<string | null> {
+  const res = await postJSON('/api/setup/address', { address })
+  if (res.ok) return null
+  return (await res.text()) || `saveSetupAddress: ${res.status}`
+}
+
+// saveSetupBackupTransport records how step 6's script delivers its
+// backup (#955): over SFTP to the drop box, or in slices through the
+// ingest channel for an HTTPS-only install. Admin-only server-side, the
+// same gate as saveSetupAddress above -- and stored there rather than in
+// this browser, because the choice belongs to the deployment: the next
+// operator to open the wizard, on any machine, is offered the step their
+// install actually uses.
+export async function saveSetupBackupTransport(transport: BackupTransport): Promise<string | null> {
+  const res = await putJSON('/api/setup/backup-transport', { transport })
+  if (res.ok) return null
+  return (await res.text()) || `saveSetupBackupTransport: ${res.status}`
+}
+
+// fetchConfigUpgrade is #1218's "N new settings are available" notice --
+// admin-only, same gate as the two setup writes above, since there is
+// no read-only wizard for a viewer to reach it alongside.
+export async function fetchConfigUpgrade(): Promise<ConfigUpgradeResponse> {
+  const res = await fetch('/api/config/upgrade')
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
 }
 
 // CoverageDeclaration mirrors internal/coverage.Declaration -- an
@@ -1287,6 +1536,38 @@ export interface Host {
   lastSeen: string
   events: number
   mark?: HostMark
+}
+
+/** One value this instance has actually observed for a filter field
+ *  (#1226), and the window it has been seen across. */
+export interface SeenValue {
+  value: string
+  firstSeen: string
+  lastSeen: string
+}
+
+/** The seen-values register's two lists. `interface` is one list, not
+ *  two: the interface filter matches an event on its in *or* out
+ *  interface, so there is one filter and one menu behind it. */
+export interface SeenValues {
+  proto: SeenValue[]
+  interface: SeenValue[]
+}
+
+// fetchSeenValues: the values this instance has actually seen for the
+// two filter fields that have no list anywhere else (#1226). Open to any
+// signed-in user, same tier as fetchHosts below -- a viewer needs it to
+// set a filter at all.
+//
+// Both fields come back in one response: the lists are small, the filter
+// strip draws both menus at once, and a second round trip for the second
+// menu would buy nothing.
+export async function fetchSeenValues(): Promise<SeenValues> {
+  const res = await fetch('/api/seen-values')
+  if (!res.ok) throw new ApiError(`fetchSeenValues: ${res.status}`, res.status)
+  const body = await res.json()
+  const fields = body.fields ?? {}
+  return { proto: fields.proto ?? [], interface: fields.interface ?? [] }
 }
 
 // fetchHosts/putHostMark/deleteHostMark: the host presence register
@@ -1397,6 +1678,163 @@ export function routerBackupDownloadUrl(device: string, generation: string, kind
   return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/${kind}`
 }
 
+// Reading one stored export, and comparing two (#895). Both are pulled
+// through this module rather than navigated to, unlike the download
+// above: the answer is shown on the page, not saved, so the caller
+// needs the body and the server's own words when it refuses. Same
+// `T | string` failure shape as the controls below.
+
+export async function fetchRouterBackupText(
+  device: string,
+  generation: string,
+): Promise<RouterBackupText | string> {
+  const res = await fetch(
+    `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/text`,
+  )
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `fetchRouterBackupText: ${res.status}`
+}
+
+export async function fetchRouterBackupDiff(
+  device: string,
+  from: string,
+  to: string,
+): Promise<RouterBackupDiff | string> {
+  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+  const res = await fetch(`/api/router-backups/${encodeURIComponent(device)}/diff?${q}`)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `fetchRouterBackupDiff: ${res.status}`
+}
+
+// The vault passphrase's four controls (#1115, #956): unlock, lock, set
+// and remove, each admin-only server-side and each returning the same
+// VaultLock the GET above carries, so RouterBackups.svelte never has to
+// infer the new state from which of these it just called -- only from
+// what came back. Failure surfaces as the server's own words, the same
+// `T | string` shape setStoreMaxMemory/setHistorySettings use above.
+
+export async function unlockRouterBackupVault(passphrase: string): Promise<VaultLock | string> {
+  const res = await postJSON('/api/router-backups/unlock', { passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `unlockRouterBackupVault: ${res.status}`
+}
+
+export async function lockRouterBackupVault(): Promise<VaultLock | string> {
+  const res = await postJSON('/api/router-backups/lock', {})
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `lockRouterBackupVault: ${res.status}`
+}
+
+export async function setRouterBackupPassphrase(passphrase: string): Promise<VaultLock | string> {
+  const res = await postJSON('/api/router-backups/passphrase', { passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setRouterBackupPassphrase: ${res.status}`
+}
+
+export async function removeRouterBackupPassphrase(passphrase: string): Promise<VaultLock | string> {
+  const res = await deleteJSON('/api/router-backups/passphrase', { passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `removeRouterBackupPassphrase: ${res.status}`
+}
+
+// changeRouterBackupPassphrase re-wraps the vault's key under a new
+// passphrase in one call (#1222), rather than a remove followed by a
+// set: two calls leave the vault with no passphrase at all if the
+// second never runs.
+export async function changeRouterBackupPassphrase(current: string, passphrase: string): Promise<VaultLock | string> {
+  const res = await putJSON('/api/router-backups/passphrase', { current, passphrase })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `changeRouterBackupPassphrase: ${res.status}`
+}
+
+// The keep controls (#1126): mark one stored backup as one to hold on
+// to with a comment saying why, rewrite that comment, or release it
+// back into the cycling ten. Each returns the router's whole block, so
+// RouterBackups.svelte renders what the vault now holds rather than
+// what the call was expected to do -- the same reasoning as the
+// VaultLock controls above, and the same `T | string` failure shape.
+
+function keepUrl(device: string, generation: string): string {
+  return `/api/router-backups/${encodeURIComponent(device)}/${encodeURIComponent(generation)}/protect`
+}
+
+export async function keepRouterBackup(
+  device: string,
+  generation: string,
+  comment: string,
+): Promise<RouterBackupRouter | string> {
+  const res = await postJSON(keepUrl(device, generation), { comment })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `keepRouterBackup: ${res.status}`
+}
+
+export async function releaseRouterBackup(device: string, generation: string): Promise<RouterBackupRouter | string> {
+  const res = await deleteJSON(keepUrl(device, generation))
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `releaseRouterBackup: ${res.status}`
+}
+
+export async function setRouterBackupComment(
+  device: string,
+  generation: string,
+  comment: string,
+): Promise<RouterBackupRouter | string> {
+  const res = await patchJSON(keepUrl(device, generation), { comment })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setRouterBackupComment: ${res.status}`
+}
+
+// fetchDroplist reads Settings' "drop list" group (#1225, #461): the
+// router-pulled block list, its confirming routers, the pull key and
+// the printed setup card. Admin-only server-side, same shape as
+// fetchRouterBackups above.
+export async function fetchDroplist(address: string): Promise<DroplistResponse> {
+  const res = await fetch(`/api/droplist?address=${encodeURIComponent(address)}`)
+  if (!res.ok) throw new ApiError(`fetchDroplist: ${res.status}`, res.status)
+  return res.json()
+}
+
+// createDroplistEntry adds one address to the list -- 409 ("already
+// listed") and a 400 validation message both surface as the plain
+// string a caller shows inline, same T | string shape as
+// createWatchlistEntry above. A 201 can carry a `warning` alongside the
+// entry (e.g. the address falls inside the router's own ranges) --
+// still a success, not an error.
+export async function createDroplistEntry(req: {
+  cidr: string
+  reason: string
+  flagID?: string
+}): Promise<(DroplistEntry & { warning?: string }) | string> {
+  const res = await postJSON('/api/droplist', req)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `createDroplistEntry: ${res.status}`
+}
+
+export async function deleteDroplistEntry(cidr: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/droplist/${encodeURIComponent(cidr)}`)
+  if (res.ok) return null
+  return (await res.text()).trim() || `deleteDroplistEntry: ${res.status}`
+}
+
+// mintDroplistKey replaces any previous pull key with a fresh one --
+// the only place the key's cleartext value is ever returned, and only
+// once (#1225's one-time reveal). scheduler comes back with the real
+// key already filled in, unlike the placeholder version fetchDroplist's
+// own setup.scheduler carries.
+export async function mintDroplistKey(
+  address: string,
+): Promise<{ key: string; createdAt: string; scheduler: string } | string> {
+  const res = await postJSON('/api/droplist/key', { address })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `mintDroplistKey: ${res.status}`
+}
+
+export async function revokeDroplistKey(): Promise<string | null> {
+  const res = await deleteJSON('/api/droplist/key')
+  if (res.ok) return null
+  return (await res.text()).trim() || `revokeDroplistKey: ${res.status}`
+}
+
 // ===========================================================================
 // Definitions editor (issues #787, #786)
 //
@@ -1471,11 +1909,12 @@ export async function replayDefinition(
 }
 
 // ===========================================================================
-// Tune logging (#435)
+// Log every rule (#435; the page was "Tune logging" until #1134, which
+// left these two endpoint paths and the names that mirror them alone)
 //
 // The upload never leaves this pair of calls: the export text is sent in
 // the request body and nothing else in this file ever holds onto it (see
-// TuneLogging.svelte's own doc comment for how the component honours
+// LogEveryRule.svelte's own doc comment for how the component honours
 // that). Both endpoints share the fixed contract's shape -- a `rejected`
 // reason is a *value* in a normal 200 response body (see the contract's
 // §3 sample, `"rejected": null // or {"reason": "..."}`), not a thrown

@@ -36,14 +36,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import type { RouterFilterRule } from '../lib/api'
-import type { Entity, RuleUsage } from '../lib/types'
+import type { Device, Entity, RuleUsage } from '../lib/types'
 
 // Union of what Fall.svelte.test.ts, Entities.svelte.test.ts,
-// EngineRoom.svelte.test.ts and Docket.svelte.test.ts each already
-// mock to render their own piece under jsdom without reaching the
-// network. Topography, Metrics' SceneBar switcher, and the stream's
-// own Whisper/FilterBar/LiveTable read only their stores directly and
-// need nothing here (see those components' own test files).
+// EngineRoom.svelte.test.ts, Docket.svelte.test.ts and
+// LogEveryRule.svelte.test.ts each already mock to render their own
+// piece under jsdom without reaching the network. Topography, Metrics'
+// SceneBar switcher, and the stream's own Whisper/FilterBar/LiveTable
+// read only their stores directly and need nothing here (see those
+// components' own test files).
 vi.mock('../lib/api', () => ({
   fetchDevices: vi.fn(async () => []),
   fetchRouterRules: vi.fn(async () => ({ available: false, rules: [] })),
@@ -59,8 +60,15 @@ vi.mock('../lib/api', () => ({
   upsertEntity: vi.fn(async (): Promise<string | null> => null),
   deleteEntity: vi.fn(),
   fetchDeviceMACs: vi.fn(async () => []),
+  // #1170: Entities' own read of GET /api/devices' `unattributed` list.
+  fetchUnattributedSources: vi.fn(async () => []),
+  // #1281: the refused senders, drawn beside the routers for an admin.
+  fetchRefusedSenders: vi.fn(async () => []),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
   fetchRules: vi.fn(async (): Promise<RuleUsage[]> => []),
+  fetchCoverageDeclarations: vi.fn(async () => []),
+  fetchTuneLoggingAnalyse: vi.fn(),
+  fetchTuneLoggingRender: vi.fn(),
   fetchSetupStatus: vi.fn(async () => ({
     instance: { tlsEnabled: true, syslogPort: ':6514', hosts: [] },
     sources: [],
@@ -107,6 +115,13 @@ vi.mock('../lib/api', () => ({
     totalBytes: 0,
   })),
   routerBackupDownloadUrl: vi.fn((device: string, generation: string, kind: string) => `/api/router-backups/${device}/${generation}/${kind}`),
+  fetchDroplist: vi.fn(async () => ({
+    listName: 'mikroview-drops',
+    entries: [],
+    key: { present: false },
+    ownRangesKnown: false,
+    setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+  })),
   clearAllFlags: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),
@@ -191,6 +206,7 @@ const { default: LiveTable } = await import('./LiveTable.svelte')
 const { default: Docket } = await import('./Docket.svelte')
 const { default: Entities } = await import('./Entities.svelte')
 const { default: EngineRoom } = await import('./EngineRoom.svelte')
+const { default: LogEveryRule } = await import('./LogEveryRule.svelte')
 
 function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
   return {
@@ -199,6 +215,7 @@ function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     inInterface: 'iot',
     outInterface: 'bridge1',
     srcAddressList: 'iot',
+    slugs: [],
     label: 'iot → bridge1',
     coverage: 'observed',
     epithet: '',
@@ -261,6 +278,24 @@ const CARD_MOUNTERS: Record<string, (target: HTMLElement) => void> = {
   },
   engineroom: (target) => {
     render(EngineRoom, { target })
+  },
+  'log-every-rule': (target) => {
+    // The drop zone only renders once a device exists -- appState.devices
+    // empty draws "No routers known yet" instead (LogEveryRule.svelte's
+    // own guard), which is a real state but not the one this ring names.
+    appState.devices = [
+      {
+        id: 'edge-1',
+        name: 'edge-1',
+        sourceIp: '192.0.2.1',
+        configured: true,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: '2026-09-03T00:00:00Z',
+        eventCount: 100,
+        status: 'live',
+      } as Device,
+    ]
+    render(LogEveryRule, { target })
   },
 }
 

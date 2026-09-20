@@ -131,7 +131,7 @@ tls:
 auth:
   secureCookie: true
 
-# Or, only if a reverse proxy terminates TLS and mikroview's own
+# Or, only if a reverse proxy terminates TLS and MikroView's own
 # listener is never reachable from the LAN:
 # tls:
 #   enabled: false
@@ -468,9 +468,9 @@ func (c *Config) validateOIDC(warn warnFunc) {
 	}
 	if c.OIDC.PublicBaseURL == "" {
 		warn("CFG-0060", "oidc.publicBaseUrl",
-			"is empty while oidc.issuerUrl is set, so mikroview cannot build the redirect URI",
+			"is empty while oidc.issuerUrl is set, so MikroView cannot build the redirect URI",
 			"SSO login disabled; local login unaffected",
-			"set oidc.publicBaseUrl to the URL your users reach mikroview on, exactly as registered with the provider")
+			"set oidc.publicBaseUrl to the URL your users reach MikroView on, exactly as registered with the provider")
 	}
 	if c.OIDC.ClientID == "" || c.OIDC.ClientSecret == "" {
 		warn("CFG-0061", "oidc.clientId",
@@ -480,7 +480,7 @@ func (c *Config) validateOIDC(warn warnFunc) {
 	}
 	if err := oidc.AllowIssuer(c.OIDC.IssuerURL); err != nil {
 		warn("CFG-0062", "oidc.issuerUrl",
-			"names a multi-tenant provider, which mikroview does not support",
+			"names a multi-tenant provider, which MikroView does not support",
 			"SSO login disabled; local login unaffected",
 			"use a self-hosted provider (Authentik, Keycloak, Zitadel) or a single-tenant Entra issuer URL, where the issuer itself restricts who can sign in")
 	}

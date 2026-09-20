@@ -109,7 +109,7 @@ func TestSMTPNotifierSendsComposedMessage(t *testing.T) {
 
 	select {
 	case msg := <-server.received:
-		if !strings.Contains(msg, "Subject: mikroview: 1 new flag") {
+		if !strings.Contains(msg, "Subject: MikroView: 1 new flag") {
 			t.Errorf("expected a subject naming the batch size, got:\n%s", msg)
 		}
 		if !strings.Contains(msg, "203.0.113.9") || !strings.Contains(msg, "15 distinct ports in 60s") || !strings.Contains(msg, "87%") {

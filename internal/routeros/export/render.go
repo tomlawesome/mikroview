@@ -10,8 +10,8 @@ import (
 // LogPrefixFunc computes the log-prefix a rule should get when it has
 // none of its own, given its action -- routeros.LogPrefixForAction is
 // the production implementation; Render takes it as a parameter rather
-// than importing internal/routeros itself, so this package stays free
-// of any dependency on RouterOS's command-dialect table.
+// than reaching into the dialect table, so this package's only use of
+// internal/routeros is the quoting rule (see Quote).
 type LogPrefixFunc func(action string) string
 
 // Render returns e's text with logging switched on for every rule in

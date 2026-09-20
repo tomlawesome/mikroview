@@ -31,32 +31,42 @@ RUN mkdir -p /var/lib/mikroview
 # the same reason as the directory above: Docker seeds a fresh named
 # volume from whatever the image has at that path, ownership included, so
 # a volume mounted somewhere the image never created lands root-owned and
-# uid 65532 cannot write a byte to it. Confirmed rather than assumed --
-# `docker run --user 65532 -v newvol:/mnt/anywhere` gives a 0755 root:root
+# uid 1000 cannot write a byte to it. Confirmed rather than assumed --
+# `docker run --user 1000 -v newvol:/mnt/anywhere` gives a 0755 root:root
 # directory and "Permission denied". Migrating bind mount -> volume is
 # half of what #537 promises, so it needs a path where a brand new volume
 # arrives already owned by the runtime user.
 RUN mkdir -p /var/lib/mikroview-migrate
 
 # --- runtime ------------------------------------------------------------
-# distroless nonroot: uid 65532 can't bind ports <1024, which is why the
-# app's own HTTP ports are 8080/8081 and docker-compose.yml maps the
-# conventional 443/80 to them. Syslog needs no such remap: mikroview's
-# only syslog listener is RouterOS remote-protocol=tls on 6514, which is
-# already unprivileged.
+# The base is distroless nonroot, but the app runs as uid 1000 (see the
+# USER note below). Either way it is unprivileged, so it can't bind ports
+# <1024: that is why the app's own HTTP ports are 8080/8081 and
+# docker-compose.yml maps the conventional 443/80 to them. Syslog needs
+# no such remap: mikroview's only syslog listener is RouterOS
+# remote-protocol=tls on 6514, which is already unprivileged.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
-COPY --from=backend --chown=65532:65532 /var/lib/mikroview /var/lib/mikroview
-COPY --from=backend --chown=65532:65532 /var/lib/mikroview-migrate /var/lib/mikroview-migrate
-# Numeric, not the "nonroot" name. Same user either way -- distroless
-# resolves nonroot to 65532 -- but the number is verifiable without
-# reading the image's own /etc/passwd, which is what an orchestrator
-# checking runAsNonRoot, or an operator reading `docker inspect`, has to
-# do. It also matches the --chown just above and the uid
-# docs/configuration.md tells operators to chown their DSN file to, so
-# there is one number in play rather than a name and a number that a
-# reader has to know are the same thing. See #285's supply-chain notes.
-USER 65532:65532
+COPY --from=backend --chown=1000:1000 /var/lib/mikroview /var/lib/mikroview
+COPY --from=backend --chown=1000:1000 /var/lib/mikroview-migrate /var/lib/mikroview-migrate
+# 1000, not distroless's own "nonroot" (65532), because 1000 is the first
+# account created on an ordinary Linux host and so is almost always the
+# operator: a file they mount in -- the Postgres DSN, history.keyFile, a
+# TLS key -- is readable by the container as it stands, with no chown at
+# all. 65532 is nobody on the host, so every mounted file needed one, and
+# the missing chown was a plain "permission denied" at startup (#1210).
+# Still unprivileged, so nothing about the security posture changes: a
+# runAsNonRoot check passes and ports below 1024 remain unbindable, which
+# is why the app listens on 8080/8081.
+#
+# Numeric rather than a name, as before: the number is verifiable from
+# `docker inspect` without reading the image's own /etc/passwd, which is
+# what an orchestrator or an operator inspecting the image has to do.
+# There is no passwd entry for 1000 in distroless and none is needed --
+# nothing in the binary looks a user up. It also matches the --chown just
+# above and the uid the docs tell operators to chown mounted files to, so
+# there is one number in play throughout. See #285's supply-chain notes.
+USER 1000:1000
 # 8080/tcp serves HTTPS by default (TLS is on unless tls.enabled: false
 # -- see docs/configuration.md's "TLS" section). 8081/tcp is a
 # redirect-only listener that bounces plain HTTP to HTTPS -- see

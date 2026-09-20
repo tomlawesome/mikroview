@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -90,6 +91,64 @@ func TestSnapshotSeamsAreNoOpsWithoutADirectory(t *testing.T) {
 	}
 }
 
+// #1211: the warm-restart snapshot startup line used to check only "is
+// there a key", which is nil in both "no history.keyFile configured"
+// and "history.keyFile is set but unusable" -- so a broken key file
+// (unreadable, wrong permissions, too short) produced a WARN from
+// storage.go saying the key couldn't be used, immediately followed by
+// an INFO from here claiming no key was configured at all. This pins
+// the three states snapshotKeyState now distinguishes, matching
+// openStorage's own switch in storage.go.
+func TestSnapshotKeyStateDistinguishesTheThreeStates(t *testing.T) {
+	t.Run("no key configured", func(t *testing.T) {
+		log, buf := captureLog(t)
+		if snapshotKeyState(log, false, nil) {
+			t.Fatal("no key configured should not be usable")
+		}
+		got := buf.String()
+		if !strings.Contains(got, "level=INFO") {
+			t.Errorf("expected an INFO line (not a fault), got: %s", got)
+		}
+		if !strings.Contains(got, "no history.keyFile configured") {
+			t.Errorf("expected the no-key message, got: %s", got)
+		}
+		if strings.Contains(got, "could not be used") {
+			t.Errorf("no-key state must not claim a key was set: %s", got)
+		}
+	})
+
+	t.Run("key configured but unusable", func(t *testing.T) {
+		log, buf := captureLog(t)
+		cause := errors.New("retention: reading key file: permission denied")
+		if snapshotKeyState(log, false, cause) {
+			t.Fatal("an unusable key should not be usable")
+		}
+		got := buf.String()
+		if !strings.Contains(got, "level=WARN") {
+			t.Errorf("expected a WARN line, got: %s", got)
+		}
+		if !strings.Contains(got, "history.keyFile is set but could not be used") {
+			t.Errorf("expected the unusable-key message, got: %s", got)
+		}
+		if !strings.Contains(got, "permission denied") {
+			t.Errorf("expected the known cause to be named, got: %s", got)
+		}
+		if strings.Contains(got, "no history.keyFile configured") {
+			t.Errorf("unusable-key state must not claim no key was configured -- this is the exact contradiction #1211 reported: %s", got)
+		}
+	})
+
+	t.Run("key in use", func(t *testing.T) {
+		log, buf := captureLog(t)
+		if !snapshotKeyState(log, true, nil) {
+			t.Fatal("a loaded key should be usable")
+		}
+		if buf.Len() != 0 {
+			t.Errorf("the usable case has nothing of its own to say -- restoreSnapshot reports the actual restore; got: %s", buf.String())
+		}
+	})
+}
+
 func TestUsableSnapshotDirCreatesTheDirectory(t *testing.T) {
 	log, buf := captureLog(t)
 	dir := filepath.Join(t.TempDir(), "snapshots")
@@ -154,8 +213,8 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 	written := store.New(64, time.Hour)
 	written.Insert(store.Event{Action: store.ActionDrop, RuleLabel: "wan-in"})
 	writtenDevices := device.NewRegistry(nil)
-	writtenDevices.Resolve("192.168.1.1", time.Now())
-	eng := engine.New()
+	writtenDevices.Ensure("core", time.Now())
+	eng := engine.New(nil)
 
 	parts := []snapshot.Part{written.SnapshotPart(), writtenDevices.SnapshotPart(), engineSnapshotPart{eng: eng}}
 	writeSnapshot(log, snapshot.New(dir, 6, testSnapshotKey, parts...))
@@ -166,7 +225,7 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 	restored := store.New(64, time.Hour)
 	restoredDevices := device.NewRegistry(nil)
 	restoreSnapshot(log, dir, testSnapshotKey, time.Now(),
-		restored.SnapshotPart(), restoredDevices.SnapshotPart(), engineSnapshotPart{eng: engine.New()})
+		restored.SnapshotPart(), restoredDevices.SnapshotPart(), engineSnapshotPart{eng: engine.New(nil)})
 
 	line := buf.String()
 	if !strings.Contains(line, "warm start") {
@@ -192,7 +251,7 @@ func TestSnapshotRoundTripThroughTheWiredParts(t *testing.T) {
 // The engine's key in the document is a name a later boot has to find
 // again, so it is pinned rather than left to the adapter's spelling.
 func TestEngineSnapshotPartIsNamedEngine(t *testing.T) {
-	if got := (engineSnapshotPart{eng: engine.New()}).Name(); got != "engine" {
+	if got := (engineSnapshotPart{eng: engine.New(nil)}).Name(); got != "engine" {
 		t.Errorf("engineSnapshotPart.Name() = %q, want \"engine\" -- changing it orphans every snapshot already on disk", got)
 	}
 }

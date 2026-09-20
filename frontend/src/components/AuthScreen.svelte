@@ -16,6 +16,7 @@
   // annotation (round 23/24) -- not built here; the way out is instead
   // the same beat in reverse (reverseBeat below), no strip.
   import { authState } from '../lib/auth.svelte'
+  import Fullfall from './Fullfall.svelte'
 
   let {
     title = '',
@@ -32,11 +33,24 @@
     // whichever is asked for.
     gate = false,
     onEnter,
+    // The gate's button label, and #1252's other use of the gate: the
+    // first-run confirmation shown when the admin account has been
+    // created and there is no SSO to forward to. Same chrome, a title
+    // and a line of explanation above the button instead of nothing --
+    // the ratified door itself passes neither, so it is unchanged.
+    enterLabel = 'Enter',
     // Set by AuthLogin when this mount follows a sign-out (see
     // authState.consumeJustSignedOut()) -- plays the door's beat in
     // reverse first (the brink collapses, goes dark), then the ordinary
     // entrance below: brief, then the login, no storyboard strip.
     reverseBeat = false,
+    // #1251's forced change: the same door, with the account field gone.
+    // The person is already signed in -- with a one-time code an
+    // administrator read out to them -- so there is nobody to name; all
+    // that is left is choosing a password of their own. The confirm
+    // field comes with it, since a password typed once and never used
+    // again until the next sign-in is the worst case for a typo.
+    passwordOnly = false,
   }: {
     title?: string
     subtitle?: string
@@ -51,8 +65,14 @@
     ssoAvailable?: boolean
     gate?: boolean
     onEnter?: () => void
+    enterLabel?: string
     reverseBeat?: boolean
+    passwordOnly?: boolean
   } = $props()
+
+  // A password-only door always confirms; every other one does as its
+  // caller asks.
+  const needsConfirm = $derived(confirmPassword || passwordOnly)
 
   let username = $state('')
   let password = $state('')
@@ -68,7 +88,26 @@
     e.preventDefault()
     error = null
 
-    if (confirmPassword && password !== passwordConfirm) {
+    // #1187: the form carries novalidate, so an empty field is answered
+    // here rather than by the browser's own bubble -- that bubble was
+    // worded by the engine, in the browser's language rather than the
+    // app's, and pointed at a field the error line below already covers.
+    // The `required` attributes stay: they are what tells assistive tech
+    // the fields are not optional, and they no longer trigger the bubble.
+    if (!passwordOnly && !username) {
+      error = 'Enter your account name.'
+      return
+    }
+    if (!password) {
+      error = passwordOnly ? 'Choose a new password.' : 'Enter your password.'
+      return
+    }
+    if (needsConfirm && !passwordConfirm) {
+      error = 'Type the password a second time to confirm it.'
+      return
+    }
+
+    if (needsConfirm && password !== passwordConfirm) {
       error = 'Passwords do not match.'
       return
     }
@@ -88,41 +127,12 @@
      token block on this subtree under any theme or colorway. -->
 <div class="screen" class:reverse={reverseBeat} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
-       over the login elements: a radial mask carves the centre out of
-       the layer entirely (round 5 fourth batch). Seventeen strokes,
-       transform-only, is the whole cost -- no particle system. Each
-       stroke's --y is its resting place under reduced motion: the rain
-       hangs still instead of vanishing, so the scene keeps its texture
-       when its movement is declined. -->
-  <div class="fullfall" aria-hidden="true">
-    <!-- The round-29 scene's own seventeen, verbatim: eleven accepts,
-         four drops, two NAT marks. Their per-stroke left/delay/opacity
-         live in this component's stylesheet as nth-child rules, NOT in
-         style attributes: the app's CSP (default-src 'self') forbids
-         inline style attributes, and Firefox enforces that on statically
-         templated markup -- every stroke lost its position there and the
-         whole fall collapsed into one block at the layer's origin
-         (#645, owner report 2026-08-30). Chromium let the same markup
-         through, so no Chromium-driven check can see this class of
-         breakage. -->
-    <i></i>
-    <i></i>
-    <i class="r"></i>
-    <i></i>
-    <i></i>
-    <i class="v"></i>
-    <i></i>
-    <i class="r"></i>
-    <i></i>
-    <i></i>
-    <i></i>
-    <i class="v"></i>
-    <i class="r"></i>
-    <i></i>
-    <i></i>
-    <i class="r"></i>
-    <i></i>
-  </div>
+       over the login elements: the shared layer's `door` mask carves
+       the centre out entirely (round 5 fourth batch). Fullfall.svelte
+       carries the strokes, the CSP lesson and the reduced-motion rule
+       -- extracted under #1214 so the journey's attach beat rains the
+       same weather rather than going flat after this screen. -->
+  <Fullfall mask="door" />
 
   <div class="stack">
     <!-- The amber 1.5px box framing the wordmark (round 5 third batch,
@@ -133,7 +143,13 @@
 
     {#if gate}
       <div class="col">
-        <button type="button" class="submit-btn" onclick={() => onEnter?.()}>Enter</button>
+        {#if title}
+          <h1>{title}</h1>
+        {/if}
+        {#if subtitle}
+          <p class="subtitle">{subtitle}</p>
+        {/if}
+        <button type="button" class="submit-btn" onclick={() => onEnter?.()}>{enterLabel}</button>
       </div>
     {:else}
       <div class="col">
@@ -141,7 +157,7 @@
           <p class="error">{authState.ssoError}</p>
         {/if}
 
-        <form class="form-body" onsubmit={handleSubmit}>
+        <form class="form-body" onsubmit={handleSubmit} novalidate>
           <!-- No heading on the door itself: the framed wordmark is the
                title (the round-29 scene carries none). Setup still
                passes one -- that form explains itself. -->
@@ -158,17 +174,25 @@
                2026-08-30). The <label> stays for assistive tech,
                visually hidden -- the placeholder is presentation, not
                the accessible name. -->
-          <label>
-            <span class="sr-only">account</span>
-            <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
-          </label>
+          {#if !passwordOnly}
+            <label>
+              <span class="sr-only">account</span>
+              <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
+            </label>
+          {/if}
 
           <label>
-            <span class="sr-only">password</span>
-            <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} placeholder="password" bind:value={password} required />
+            <span class="sr-only">{passwordOnly ? 'new password' : 'password'}</span>
+            <input
+              type="password"
+              autocomplete={needsConfirm ? 'new-password' : 'current-password'}
+              placeholder={passwordOnly ? 'new password' : 'password'}
+              bind:value={password}
+              required
+            />
           </label>
 
-          {#if confirmPassword}
+          {#if needsConfirm}
             <label>
               <span class="sr-only">confirm password</span>
               <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />
@@ -203,61 +227,6 @@
     padding: 20px;
     background: var(--bg);
     overflow: hidden;
-  }
-
-  .fullfall {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    pointer-events: none;
-    /* The centre is carved out entirely -- the rain never crosses the
-       wordmark or the form, whatever their combined height turns out to
-       be (taller than the mockup's placeholder-only stack, since these
-       fields keep their labels). */
-    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
-    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
-  }
-
-  .fullfall i {
-    position: absolute;
-    top: -20px;
-    width: 2.5px;
-    height: 13px;
-    border-radius: 2px;
-    background: var(--fall-accept);
-    animation: fall 5.5s linear infinite;
-  }
-
-  .fullfall i.r {
-    background: var(--fall-drop);
-  }
-
-  .fullfall i.v {
-    background: var(--fall-nat);
-  }
-
-  .fullfall i:nth-child(1) { left: 4%; animation-delay: 0.2s; --y: 8%; opacity: 0.5; }
-  .fullfall i:nth-child(2) { left: 9%; animation-delay: 3.1s; --y: 64%; opacity: 0.3; }
-  .fullfall i:nth-child(3) { left: 15%; animation-delay: 1.6s; --y: 31%; opacity: 0.55; }
-  .fullfall i:nth-child(4) { left: 21%; animation-delay: 4.4s; --y: 78%; opacity: 0.4; }
-  .fullfall i:nth-child(5) { left: 26%; animation-delay: 2.2s; --y: 15%; opacity: 0.65; }
-  .fullfall i:nth-child(6) { left: 33%; animation-delay: 5.0s; --y: 52%; opacity: 0.45; }
-  .fullfall i:nth-child(7) { left: 38%; animation-delay: 0.9s; --y: 88%; opacity: 0.3; }
-  .fullfall i:nth-child(8) { left: 45%; animation-delay: 3.7s; --y: 24%; opacity: 0.4; }
-  .fullfall i:nth-child(9) { left: 51%; animation-delay: 1.2s; --y: 70%; opacity: 0.6; }
-  .fullfall i:nth-child(10) { left: 57%; animation-delay: 4.8s; --y: 41%; opacity: 0.35; }
-  .fullfall i:nth-child(11) { left: 63%; animation-delay: 2.7s; --y: 95%; opacity: 0.5; }
-  .fullfall i:nth-child(12) { left: 69%; animation-delay: 0.5s; --y: 58%; opacity: 0.4; }
-  .fullfall i:nth-child(13) { left: 75%; animation-delay: 3.4s; --y: 12%; opacity: 0.6; }
-  .fullfall i:nth-child(14) { left: 81%; animation-delay: 1.9s; --y: 83%; opacity: 0.35; }
-  .fullfall i:nth-child(15) { left: 86%; animation-delay: 5.3s; --y: 36%; opacity: 0.55; }
-  .fullfall i:nth-child(16) { left: 91%; animation-delay: 2.4s; --y: 67%; opacity: 0.35; }
-  .fullfall i:nth-child(17) { left: 96%; animation-delay: 4.1s; --y: 47%; opacity: 0.5; }
-
-  @keyframes fall {
-    to {
-      transform: translateY(106vh);
-    }
   }
 
   .stack {
@@ -345,14 +314,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    /* Still rain, not no rain: reduced motion declines the falling, not
-       the scene. Each stroke stops at its own --y instead of animating
-       from above the frame (where the animation's absence would
-       otherwise strand every stroke off-screen at top: -20px). */
-    .fullfall i {
-      animation: none;
-      top: var(--y, 50%);
-    }
+    /* The rain's own still-rain rule lives in Fullfall.svelte; this
+       block declines only this screen's entrance beats. */
     .stack,
     .wm-box,
     .screen.reverse .stack,

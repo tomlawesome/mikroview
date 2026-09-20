@@ -15,7 +15,7 @@ import (
 
 func vaultWithOnePush(t *testing.T) *backupvault.Vault {
 	t.Helper()
-	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t))
+	v, err := backupvault.Open(t.TempDir(), testRetentionKey(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +53,41 @@ func TestRouterBackupsListReportsDisabledWithNoKey(t *testing.T) {
 	if out.Enabled {
 		t.Error("Enabled = true with no vault configured")
 	}
+	if out.KeyUnreadable {
+		t.Error("KeyUnreadable = true with no key configured at all -- that is #394's ordinary disabled state, not a fault")
+	}
 	if len(out.Routers) != 0 {
 		t.Errorf("Routers = %v, want empty", out.Routers)
+	}
+}
+
+// TestRouterBackupsListReportsKeyUnreadable covers #1264 finding 5: with
+// no vault configured, Enabled is false whether history.keyFile was
+// never set or was set to a file that could not be read -- KeyUnreadable
+// is what tells those two apart, carried from
+// SetupInstance.BackupKeyUnreadable rather than derived from Vault at
+// all (Vault.Enabled() cannot see the difference either way).
+func TestRouterBackupsListReportsKeyUnreadable(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.SetupInstance.BackupKeyUnreadable = true
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := setUpAdmin(t, ts)
+
+	resp, err := client.Get(ts.URL + "/api/router-backups")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out routerBackupsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Enabled {
+		t.Error("Enabled = true with no vault configured")
+	}
+	if !out.KeyUnreadable {
+		t.Error("KeyUnreadable = false with SetupInstance.BackupKeyUnreadable set -- the operator would be told to mint a new key over the broken one")
 	}
 }
 
