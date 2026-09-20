@@ -21,7 +21,7 @@ import { session, feedSyslog, check, done, waitForStreamRows } from './live-brow
 
 const MATCHED_RULE = 'refetch-failure-373'
 
-const { page, consoleErrors } = await session()
+const { page, consoleErrors } = await session({ mocksApi: true })
 
 // Buffered locally so the client-side filter layer alone could, in
 // principle, find these -- the point of the scenario is that the

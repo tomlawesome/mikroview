@@ -23,7 +23,7 @@
 // clear of every existing ordering assumption instead of adding a new one
 // nothing else knows to avoid.
 
-import { session, feedSyslog, feedRaw, check, responsive, done, goTo, unfoldStreamFilter } from './live-browser.mjs'
+import { session, feedSyslog, feedRaw, check, responsive, done, goTo, unfoldStreamFilter, clickSvgText } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -415,7 +415,7 @@ const quieterLink = page
   .filter({ has: page.locator('.band-label:text-is("ether6 → bridge6")') })
   .locator('.quieter')
 await quieterLink.scrollIntoViewIfNeeded()
-await quieterLink.click()
+await clickSvgText(page, quieterLink)
 await page.waitForSelector('.filterline .fbox', { timeout: 15000 })
 await unfoldStreamFilter(page)
 await page.waitForSelector('input.rule', { timeout: 15000 })

@@ -20,7 +20,7 @@ const URL_BASE = process.env.MV_URL
 // Auto-launch will not have fired: it is gated on the instance having no
 // devices, and the harness declares a router the reset keeps -- so the
 // door under test here is the relaunch one, which is the same door.
-const { page, consoleErrors } = await session({ dismissSetup: false })
+const { page, consoleErrors } = await session({ dismissSetup: false, mocksApi: true })
 
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
