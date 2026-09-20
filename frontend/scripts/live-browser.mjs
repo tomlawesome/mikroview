@@ -337,6 +337,20 @@ function isScreenshotStyleRefusal(text) {
   return BROWSER_NAME === 'webkit' && text.startsWith('Refused to apply a stylesheet because its hash, its nonce, or ')
 }
 
+/**
+ * isResizeObserverLoopNotice filters "ResizeObserver loop completed with
+ * undelivered notifications." The browser prints it when a resize
+ * callback itself changes a size it is observing, so the remaining
+ * notifications are held to the next frame -- the spec says to report
+ * it, not to throw, and nothing is lost. WebKit surfaces it as a page
+ * error where the other two do not; it arrived in the first WebKit run
+ * on two layout-heavy scenarios (live-fall-composition,
+ * live-topography-layout) and on no functional step.
+ */
+function isResizeObserverLoopNotice(text) {
+  return text.includes('ResizeObserver loop completed with undelivered notifications')
+}
+
 /** session launches a browser and signs in, returning a live page. */
 /**
  * dismissSetupWizard closes the setup modal if a fresh instance
@@ -687,6 +701,7 @@ export async function session({
     if (isUntrustedCertServiceWorkerError(text)) return
     if (isNavigationCancelledFetch(text)) return
     if (isScreenshotStyleRefusal(text)) return
+    if (isResizeObserverLoopNotice(text)) return
     consoleErrors.push(text)
   }
   page.on('pageerror', (e) => record(String(e)))

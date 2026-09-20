@@ -103,6 +103,7 @@ each, recorded together because the cause is shared (#831's contention):
 - 2026-09-20 · f3d79bce (fix/v060-audit, !1069) · pipeline 1309, gate:scenarios 4/4 (job 17233) · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed a shell script and a CI comment, no frontend file. Fourth sighting, on #1301. Retried as a job retry.
 
 - 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", then "detached from the DOM" on every retry, 30s. First sighting under Firefox, so the engine is not the cause. Fifth sighting, on #1301.
+- 2026-09-20 · dd0607a5 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · one shard of four · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", "outside of the viewport", then "detached from the DOM" on every retry, 30s; the other 106 scenarios passed. The commit changed docs/flakes.md only. Sixth sighting, on #1301.
 
 ## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
 
