@@ -711,6 +711,64 @@ func runRestore(args []string) int {
 		}
 	}
 
+	// Before a store or the schema document is written, its current
+	// bytes are recorded -- the raw bytes if it exists (plain
+	// os.ReadFile, never decode/decrypt: putting it back never needs to
+	// understand it, only to reproduce it), or that nothing is there
+	// yet. rollback below uses this to put every target the loop or the
+	// schema step already touched back exactly as it was found, so one
+	// store's write failing partway through does not leave a mix of
+	// restored and pre-restore stores with nothing done about it (the
+	// v0.6.0 audit's Robustness stage, #1257, owner ruling 11a).
+	type priorState struct {
+		data    []byte
+		existed bool
+	}
+	before := map[string]priorState{}
+	recordPriorState := func(path string) error {
+		if _, ok := before[path]; ok {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		switch {
+		case readErr == nil:
+			before[path] = priorState{data: data, existed: true}
+		case os.IsNotExist(readErr):
+			before[path] = priorState{}
+		default:
+			return readErr
+		}
+		return nil
+	}
+	// rollback puts every target already recorded in before back to what
+	// it held before this restore touched it -- persist.WriteFileAtomic
+	// for one that existed, os.Remove for one that did not -- then logs
+	// the one failure that triggered it. A path that cannot itself be
+	// put back is named inline, so the operator knows exactly which
+	// files are left mixed rather than finding out later.
+	rollback := func(cause string) {
+		var mixed []string
+		for path, prior := range before {
+			var restoreErr error
+			if prior.existed {
+				restoreErr = persist.WriteFileAtomic(path, prior.data, 0o600)
+			} else {
+				restoreErr = os.Remove(path)
+				if restoreErr != nil && os.IsNotExist(restoreErr) {
+					restoreErr = nil
+				}
+			}
+			if restoreErr != nil {
+				mixed = append(mixed, fmt.Sprintf("%s: %v", path, restoreErr))
+			}
+		}
+		msg := cause + " -- the data directory has been returned to its pre-restore state"
+		if len(mixed) > 0 {
+			msg += "; could not be returned: " + strings.Join(mixed, "; ")
+		}
+		logger.Error(msg)
+	}
+
 	// Write every store through its backend -- persist.Backend.Save
 	// already does the atomic temp-file/fsync/rename dance, encrypting on
 	// the way when the store is one #853 covers. This never goes through
@@ -720,6 +778,10 @@ func runRestore(args []string) int {
 	// file, say) is still one --restore can overwrite.
 	for name, data := range decoded {
 		path := known[name]
+		if err := recordPriorState(path); err != nil {
+			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", path, name, err))
+			return 1
+		}
 		backend := backupBackendFor(path, ourKey)
 		// The version to overwrite with, read without needing the
 		// existing document to actually decrypt -- see
@@ -736,22 +798,26 @@ func runRestore(args []string) int {
 			expect = snap.Version
 		}
 		if err != nil {
-			logger.Error(fmt.Sprintf("reading the current version of %s (store %q): %v", path, name, err))
+			rollback(fmt.Sprintf("reading the current version of %s (store %q): %v", path, name, err))
 			return 1
 		}
 		if _, err := backend.Save(ctx, data, expect); err != nil {
-			logger.Error(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
+			rollback(fmt.Sprintf("writing %s (store %q): %v", path, name, err))
 			return 1
 		}
 	}
 	if haveSchema {
+		if err := recordPriorState(schemaPath); err != nil {
+			rollback(fmt.Sprintf("reading the current contents of %s (store %q) to be able to roll back: %v", schemaPath, schemaStoreName, err))
+			return 1
+		}
 		// Written raw, like it was read in runBackup: schema.json holds
 		// no operator data (see its own doc comment in
 		// internal/persist/schema.go), so there is no encryption pass to
 		// reverse here, only the same atomic-publish-by-rename every
 		// other document in the data directory gets.
 		if err := persist.WriteFileAtomic(schemaPath, schemaData, 0o600); err != nil {
-			logger.Error(fmt.Sprintf("writing %s (store %q): %v", schemaPath, schemaStoreName, err))
+			rollback(fmt.Sprintf("writing %s (store %q): %v", schemaPath, schemaStoreName, err))
 			return 1
 		}
 	}
@@ -767,9 +833,15 @@ func runRestore(args []string) int {
 	// framing a live process writes, under this deployment's own key --
 	// never the encrypted bytes themselves, which is what
 	// retainedEventsStore's own doc comment means by "the tools run with
-	// the key available". Written after every other store, same as the
-	// rest of this loop: nothing here is transactional across stores, and
-	// this was already true before retainedEventsStore existed.
+	// the key available". Written after every other store and the schema
+	// document: those now land together or roll back together on failure
+	// (#1257, owner ruling 11a), but the vault bundle above and this
+	// retained corpus still follow separately, outside that rollback --
+	// neither is a single document the way a store or schema.json is, so
+	// neither fits before/rollback's record-raw-bytes-and-put-them-back
+	// shape: the vault bundle is a directory of many per-router,
+	// per-generation files, and the retained corpus is its own
+	// append-only store.
 	if haveRetainedEvents {
 		dir := historyDirectory(cfg)
 		// #nosec G703 -- history.dir from this deployment's own config, not from a request.
