@@ -73,9 +73,8 @@ export const FLAG_TYPE_ORDER: readonly FlagType[] = [
   'known_bad_ip',
 ] as const
 
-// The flag-type labels. Flags.svelte, AuditLog.svelte and
-// Topography.svelte read this table; Exclusions.svelte still carries
-// its own copy (see its note). This copy replaces the one that lived
+// The one flag-type label table: Flags.svelte, AuditLog.svelte and
+// Topography.svelte all read it. This copy replaces the one that lived
 // in the removed FlagsChart.svelte.
 export const FLAG_TYPE_LABELS: Record<FlagType, string> = {
   port_scan: 'Port scan',
