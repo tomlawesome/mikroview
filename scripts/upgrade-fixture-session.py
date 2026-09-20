@@ -3,9 +3,10 @@
 #
 # The scripted session scripts/record-upgrade-fixture.sh records: an
 # admin, a viewer, an API token, a named entity, a watchlist entry, a
-# flag, a coverage declaration and a host mark -- each only where the
-# released version under test has it. It prints the manifest of what it
-# created as one JSON object on stdout, and nothing else.
+# flag, a coverage declaration, a host mark, and (v0.6.0 on) a declared
+# router -- each only where the released version under test has it. It
+# prints the manifest of what it created as one JSON object on stdout,
+# and nothing else.
 #
 # It runs *inside a throwaway container sharing the recorded container's
 # own network namespace*, not on the host, which is why every address
@@ -22,7 +23,13 @@
 #
 # Usage:
 #   upgrade-fixture-session.py <base-url> <syslog-host> <syslog-port> \
-#       <generation> <version> <syslog-mode>
+#       <generation> <version> <syslog-mode> <declared-router>
+#
+# <declared-router> is "yes" when record-upgrade-fixture.sh wrote a
+# config.yaml declaring DECLARED_ROUTER_ID/DECLARED_ROUTER_SOURCE_IP
+# below under `devices:` -- every version from v0.6.0 on, because
+# issue #1281 refuses a TLS syslog connection from an address nobody
+# declared before the handshake even starts -- and "no" otherwise.
 
 import json
 import socket
@@ -33,8 +40,9 @@ import urllib.error
 import urllib.request
 from urllib.parse import quote
 
-base_url, syslog_host, syslog_port, generation, version, syslog_mode = sys.argv[1:7]
+base_url, syslog_host, syslog_port, generation, version, syslog_mode, declared_router = sys.argv[1:8]
 syslog_port = int(syslog_port)
+declared_router = declared_router == "yes"
 
 CSRF_HEADER = "X-Requested-With"
 CSRF_VALUE = "mikroview"
@@ -57,6 +65,16 @@ HOST_IP = "172.20.30.40"
 HOST_MAC = "aa:bb:cc:00:ff:10"
 IFACE = "ether1"
 DEST_IP = "198.51.100.10"
+
+# Matches the devices: entry record-upgrade-fixture.sh writes to
+# config.yaml when declared_router is true -- same id and sourceIp, so
+# the manifest and the config agree about which router this was. The
+# sourceIp really is loopback, not a placeholder: the syslog line below
+# is sent from inside this container's own network namespace, shared
+# with the recorded container, so that connection's source address is
+# 127.0.0.1 regardless of version.
+DECLARED_ROUTER_ID = "upgrade-fixture-router"
+DECLARED_ROUTER_SOURCE_IP = "127.0.0.1"
 
 ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ssl_ctx.check_hostname = False
@@ -160,6 +178,13 @@ if generation in ("B", "C"):
     }
     api.post("/api/definitions", body)
     manifest["watchlist"] = {"name": "upgrade-fixture-watch", "ports": [443]}
+
+# 5a. Record the declared router before sending anything to it: it is
+# config.yaml, not this script, that actually enrols the address (see
+# record-upgrade-fixture.sh), but the syslog line below only gets
+# through at all because of it, from v0.6.0 on.
+if declared_router:
+    manifest["declaredRouter"] = {"id": DECLARED_ROUTER_ID, "sourceIp": DECLARED_ROUTER_SOURCE_IP}
 
 # 6. One syslog line, which raises a deterministic `new_device` flag
 # (first-ever traffic from HOST_MAC -- internal/flags.TypeNewDevice has
