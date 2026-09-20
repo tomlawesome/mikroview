@@ -175,11 +175,6 @@ var excludedFromMigration = map[string]string{
 		"config.Snapshot's own doc comment) whose loss costs one cold start of re-learning counters, " +
 		"not the operator's custody data event_history holds. Leaving it behind is the same call " +
 		"migratedStores' event_history entry already documents making.",
-	// Interim only: same reasoning as excludedFromBackup's entry in
-	// backup_cli.go -- this path's config option is removed in the very
-	// next commit, which deletes this entry along with it.
-	"ConfigDrift.StorePath": "the backend that read and wrote this store is gone (#1277); the config " +
-		"option itself is removed in the very next commit, which also deletes this entry.",
 }
 
 // migrationPlan is everything the move needs, resolved and checked

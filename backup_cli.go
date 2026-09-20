@@ -182,14 +182,6 @@ var excludedFromBackup = map[string]string{
 		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +
 		"and a backup is a copy that travels: keeping it out means an operator's backup carries " +
 		"their network's evidence and not four megabytes of IEEE's registry.",
-		// Interim only: the config option this path belongs to is on its
-		// way out too (#1277's next commit removes ConfigDrift from
-		// config.Config entirely, taking this entry with it). Nothing
-		// reads or writes this store any more -- see retiredStores in
-		// this same file for what an older backup that still carries it
-		// does on restore.
-		"ConfigDrift.StorePath": "the backend that read and wrote this store is gone (#1277); the config " +
-			"option itself is removed in the very next commit, which also deletes this entry.",
 }
 
 // jsonLinesStore is the one backedUpStores entry whose on-disk shape is
