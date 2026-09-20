@@ -365,5 +365,42 @@ class FeedRefusedConnectionTests(unittest.TestCase):
             seed_demo.time.sleep = orig_sleep
 
 
+class IngestPushSourceTests(unittest.TestCase):
+    """#1302: since #1281 a push is accepted only from the device's own
+    enrolled address, so each router's push must leave from its own
+    loopback address, as send_tls's already does."""
+
+    def test_push_leaves_from_the_routers_own_address(self):
+        import http.server
+        import json
+        import threading
+
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen.append(self.client_address[0])
+                self.rfile.read(int(self.headers["Content-Length"]))
+                body = json.dumps({"records": 1}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}"
+            seed_demo.ingest_push(url, "tok", "filter-rule", [], src_ip="127.0.0.2")
+        finally:
+            srv.shutdown()
+        self.assertEqual(seen, ["127.0.0.2"])
+
+
 if __name__ == "__main__":
     unittest.main()

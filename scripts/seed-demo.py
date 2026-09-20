@@ -1348,15 +1348,35 @@ class API:
         return r
 
 
-def ingest_push(base_url, token, kind, records, page=1, pages=1):
+class _SourceBoundAdapter(requests.adapters.HTTPAdapter):
+    """An adapter whose connections leave from one local address, the
+    HTTP-side twin of send_tls's `source_address`: since #1281 a push is
+    accepted only from the address the device is enrolled at, so each
+    demo router's tables must arrive from its own loopback address, not
+    whichever one the OS picks."""
+
+    def __init__(self, src_ip, **kw):
+        self._src_ip = src_ip
+        super().__init__(**kw)
+
+    def init_poolmanager(self, *args, **kw):
+        kw["source_address"] = (self._src_ip, 0)
+        return super().init_poolmanager(*args, **kw)
+
+
+def ingest_push(base_url, token, kind, records, page=1, pages=1, src_ip=None):
     # A demo seeder, pointed at a local instance serving the self-signed
     # certificate it generated at startup. There is no certificate here
     # worth checking and nothing this script does is deployed.
+    s = requests.Session()
+    if src_ip:
+        s.mount("https://", _SourceBoundAdapter(src_ip))
+        s.mount("http://", _SourceBoundAdapter(src_ip))
     # nosemgrep: python.requests.security.disabled-cert-validation.disabled-cert-validation
-    r = requests.post(f"{base_url.rstrip('/')}/api/ingest/routeros",
-                       headers={"Authorization": f"Bearer {token}"},
-                       json={"kind": kind, "page": page, "pages": pages, "records": records},
-                       verify=False)
+    r = s.post(f"{base_url.rstrip('/')}/api/ingest/routeros",
+               headers={"Authorization": f"Bearer {token}"},
+               json={"kind": kind, "page": page, "pages": pages, "records": records},
+               verify=False)
     if r.status_code != 200:
         raise RuntimeError(f"ingest {kind}: {r.status_code} {r.text[:300]}")
     return r.json()
@@ -1367,22 +1387,23 @@ def cmd_push(args):
     for router in FILTER_RULES:
         tok = api.post("/api/tokens", json={"name": f"{router}-ingest-seed", "kind": "ingest",
                                              "device": router}).json()["value"]
+        src = ROUTERS[router]["src"]
         filt = [{k: v for k, v in r.items() if k != "fires"} for r in FILTER_RULES[router]]
-        ack = ingest_push(args.url, tok, "filter-rule", filt)
+        ack = ingest_push(args.url, tok, "filter-rule", filt, src_ip=src)
         print(f"{router}: pushed {ack['records']} filter rules")
-        ack = ingest_push(args.url, tok, "nat-rule", NAT_RULES[router])
+        ack = ingest_push(args.url, tok, "nat-rule", NAT_RULES[router], src_ip=src)
         print(f"{router}: pushed {ack['records']} NAT rules")
-        ack = ingest_push(args.url, tok, "ip-address", IP_ADDRESSES[router])
+        ack = ingest_push(args.url, tok, "ip-address", IP_ADDRESSES[router], src_ip=src)
         print(f"{router}: pushed {ack['records']} address table entries")
         # The tunnel tables, where the router has any (#870: rb5009 only).
         # There is no read-back endpoint for either kind yet -- the city's
         # bridges slice (#866) is what will grow one -- so a successful
         # ack is all this can prove today.
         if router in WIREGUARD_INTERFACES:
-            ack = ingest_push(args.url, tok, "wireguard-interface", WIREGUARD_INTERFACES[router])
+            ack = ingest_push(args.url, tok, "wireguard-interface", WIREGUARD_INTERFACES[router], src_ip=src)
             print(f"{router}: pushed {ack['records']} wireguard interfaces")
         if router in WIREGUARD_PEERS:
-            ack = ingest_push(args.url, tok, "wireguard-peer", WIREGUARD_PEERS[router])
+            ack = ingest_push(args.url, tok, "wireguard-peer", WIREGUARD_PEERS[router], src_ip=src)
             print(f"{router}: pushed {ack['records']} wireguard peers")
 
 
