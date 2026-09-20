@@ -1,20 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// columnState now writes through preferencesState (#1283), which talks
+// to the backend through these two -- mocked so a toggle's debounced
+// flush (500ms after the change, real timers here) never reaches a real
+// fetch() mid- or post-test.
+vi.mock('./api', () => ({
+  fetchMyPreferences: vi.fn().mockResolvedValue({ version: 1, prefs: {} }),
+  saveMyPreferences: vi.fn().mockResolvedValue(null),
+}))
+
 import { COLUMNS, PINNED_COLUMNS, columnState } from './columns.svelte'
+import { preferencesState } from './preferences.svelte'
 
 // columnState is a module-level singleton (shared across every test file
 // that imports it), so each test here restores it to the all-visible
 // default rather than leaving a toggle to leak into whatever test runs
 // next -- the same hygiene this file's neighbours already give
 // appState/flagsState/etc. in their own beforeEach blocks.
+//
+// #1283 moved the underlying storage from localStorage to the shared
+// preferences record -- preferencesState.reset() is the equivalent
+// clear now, and a toggle still writes through preferencesState.set()
+// (debounced), so resetting it here also stops that pending write from
+// leaking into a later test.
 function resetVisibility() {
   columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
-  try {
-    localStorage.removeItem('mikroview-column-visibility-v1')
-  } catch {
-    // unavailable storage -- nothing to clear
-  }
+  preferencesState.reset()
 }
 
 beforeEach(resetVisibility)
@@ -44,36 +57,39 @@ describe('column visibility (#729)', () => {
     }
   })
 
-  it('persists the choice across reloads the way column widths already do -- a fresh read from storage', () => {
+  it('persists the choice the way column widths already do -- readable straight back out of the shared record', () => {
     columnState.toggleColumn('mac')
     columnState.toggleColumn('nat')
 
-    const raw = localStorage.getItem('mikroview-column-visibility-v1')
-    expect(raw).toBeTruthy()
-    const parsed = JSON.parse(raw as string)
-    expect(parsed.mac).toBe(false)
-    expect(parsed.nat).toBe(false)
+    const stored = preferencesState.get<{ visible: Record<string, boolean> }>('columns')
+    expect(stored?.visible.mac).toBe(false)
+    expect(stored?.visible.nat).toBe(false)
   })
 
-  it('ignores a stored value that tries to hide a pinned column -- loadInitialVisibility, exercised via a fresh module load', async () => {
-    // columnState is constructed once, at module import, from whatever
-    // storage held at that moment (loadInitialVisibility) -- writing to
-    // storage after the fact (as the rest of this file's tests do, via
-    // toggleColumn) never re-reads it. Proving the *load-time* guard
-    // itself needs a genuinely fresh module instance, via
+  it('ignores a stored value that tries to hide a pinned column -- sanitizeVisibility, exercised via a fresh module load', async () => {
+    // columnState is constructed once, at module import, and hydrates
+    // from whatever the shared record holds at that moment -- writing
+    // to the record after the fact (as the rest of this file's tests do,
+    // via toggleColumn) never re-hydrates it. Proving the *hydration*
+    // guard itself needs a genuinely fresh module instance, via
     // vi.resetModules() plus a new dynamic import, rather than the
-    // already-constructed singleton every other test in this file shares.
+    // already-constructed singleton every other test in this file
+    // shares -- and, since resetModules() also gives preferences.svelte
+    // a fresh singleton, seedForTest() on the freshly-imported module's
+    // own preferencesState, before importing columns.svelte, stands in
+    // for "the record already loaded with this".
     const stored: Record<string, boolean> = Object.fromEntries(COLUMNS.map((col) => [col.key, true]))
     stored.time = false
     stored.rule = false
     stored.device = false
-    localStorage.setItem('mikroview-column-visibility-v1', JSON.stringify(stored))
 
     vi.resetModules()
+    const freshPrefs = await import('./preferences.svelte')
+    freshPrefs.preferencesState.seedForTest({ columns: { visible: stored } })
     const fresh = await import('./columns.svelte')
 
     // A hand-edited (or pre-pinning) stored value marked Time and Rule
-    // hidden -- the load guard must not trust that for a pinned key.
+    // hidden -- the hydration guard must not trust that for a pinned key.
     expect(fresh.columnState.isColumnVisible('time')).toBe(true)
     expect(fresh.columnState.isColumnVisible('rule')).toBe(true)
     // Everything else in the stored value is honoured as saved.
@@ -118,7 +134,7 @@ describe('the narrow starting column set (#1150, #1117)', () => {
 
   // The width is read once, at module load (see startsNarrow), so proving
   // it needs a genuinely fresh module instance -- same vi.resetModules
-  // route the pinned-column load guard above uses.
+  // route the pinned-column hydration guard above uses.
   async function loadAt(narrow: boolean) {
     const original = window.matchMedia
     window.matchMedia = ((query: string) =>
@@ -129,7 +145,6 @@ describe('the narrow starting column set (#1150, #1117)', () => {
         removeEventListener: () => {},
       }) as unknown as MediaQueryList) as typeof window.matchMedia
     try {
-      localStorage.removeItem('mikroview-column-visibility-v1')
       vi.resetModules()
       return await import('./columns.svelte')
     } finally {
@@ -158,18 +173,17 @@ describe('the narrow starting column set (#1150, #1117)', () => {
 
   it('lets the operator put one back, and persists that the way any other picker choice persists', async () => {
     const fresh = await loadAt(true)
+    const freshPrefs = await import('./preferences.svelte')
 
     fresh.columnState.toggleColumn('mac')
     expect(fresh.columnState.isColumnVisible('mac')).toBe(true)
 
     // One mechanism, not a second one for narrow screens: the same
-    // localStorage entry the picker has always written.
-    const parsed = JSON.parse(localStorage.getItem('mikroview-column-visibility-v1') as string)
-    expect(parsed.mac).toBe(true)
-    expect(parsed.iface).toBe(false)
-    expect(parsed.nat).toBe(false)
-
-    localStorage.removeItem('mikroview-column-visibility-v1')
+    // shared-record key the picker has always written.
+    const stored = freshPrefs.preferencesState.get<{ visible: Record<string, boolean> }>('columns')
+    expect(stored?.visible.mac).toBe(true)
+    expect(stored?.visible.iface).toBe(false)
+    expect(stored?.visible.nat).toBe(false)
   })
 
   it('honours a saved choice over the narrow default -- the width never overrules the reader', async () => {
@@ -178,15 +192,15 @@ describe('the narrow starting column set (#1150, #1117)', () => {
     window.matchMedia = ((query: string) =>
       ({ matches: query.includes('1600'), media: query, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList) as typeof window.matchMedia
     try {
-      localStorage.setItem('mikroview-column-visibility-v1', JSON.stringify(stored))
       vi.resetModules()
+      const freshPrefs = await import('./preferences.svelte')
+      freshPrefs.preferencesState.seedForTest({ columns: { visible: stored } })
       const fresh = await import('./columns.svelte')
       expect(fresh.columnState.isColumnVisible('mac')).toBe(true)
       expect(fresh.columnState.isColumnVisible('iface')).toBe(true)
       expect(fresh.columnState.isColumnVisible('nat')).toBe(true)
     } finally {
       window.matchMedia = original
-      localStorage.removeItem('mikroview-column-visibility-v1')
     }
   })
 })
@@ -214,8 +228,6 @@ describe('the last column fits at 1600px (#1117)', () => {
         removeEventListener: () => {},
       }) as unknown as MediaQueryList) as typeof window.matchMedia
     try {
-      localStorage.removeItem('mikroview-column-visibility-v1')
-      localStorage.removeItem('mikroview-column-widths-v8')
       vi.resetModules()
       return await import('./columns.svelte')
     } finally {
@@ -234,8 +246,6 @@ describe('the last column fits at 1600px (#1117)', () => {
     const sum = visibleFixedWidths.reduce((total, { width }) => total + (width as number), 0)
 
     expect(sum + fresh.FLEX_MIN_WIDTH + RAIL_AND_INSET).toBeLessThanOrEqual(1600)
-
-    localStorage.removeItem('mikroview-column-widths-v8')
   })
 })
 
@@ -268,9 +278,5 @@ describe('column headers and default widths (#1149)', () => {
     expect(widthOf('mac')).toBeGreaterThanOrEqual(163)
     expect(widthOf('srcAddr')).toBeGreaterThanOrEqual(129)
     expect(widthOf('srcAddr')).toBe(widthOf('dstAddr'))
-
-    // v8 (#1117): the storage key this test's own columnState.reset()
-    // call above persists under -- stale if left at the pre-bump name.
-    localStorage.removeItem('mikroview-column-widths-v8')
   })
 })
