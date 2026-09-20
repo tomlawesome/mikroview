@@ -306,7 +306,13 @@ func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, error) {
 	e := Entry{CIDR: p, AddedBy: actor, AddedAt: s.now(), Reason: reason, FlagID: flagID}
 	cp := e
 	s.entries[key] = &cp
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// This is an enforcement list: a caller told the entry was added
+		// when it was not durably saved would carry on believing the
+		// range is blocked right up until a restart quietly drops it.
+		delete(s.entries, key)
+		return Entry{}, fmt.Errorf("saving droplist: %w", err)
+	}
 
 	if s.auditor != nil {
 		s.auditor.Record(actor, "droplist.add", key, auditDetail(reason, flagID))
@@ -335,7 +341,14 @@ func (s *Store) Remove(actor, cidr string) error {
 	}
 	reason, flagID := e.Reason, e.FlagID
 	delete(s.entries, key)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A lift that cannot be saved must not read as lifted: put the
+		// entry back rather than report success and have the router's
+		// next .rsc pull re-add the block anyway once this process
+		// restarts and forgets the removal ever happened.
+		s.entries[key] = e
+		return fmt.Errorf("saving droplist: %w", err)
+	}
 
 	if s.auditor != nil {
 		s.auditor.Record(actor, "droplist.remove", key, auditDetail(reason, flagID))
@@ -352,16 +365,14 @@ func auditDetail(reason, flagID string) string {
 	return fmt.Sprintf("%s (from flag %s)", reason, flagID)
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured. Write failures are swallowed rather than surfaced to the
-// caller: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than losing the mutation that
-// triggered this call -- same contract as every other store's
-// persistLocked in this codebase.
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for Add and
+// Remove: an enforcement list must not tell a caller a change is in
+// place when the write recording it failed -- see each one's own
+// restore-on-error comment. Keeps the same version/conflict handling as
+// persistLocked always has.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	entries := make([]*Entry, 0, len(s.entries))
 	for _, e := range s.entries {
@@ -371,16 +382,28 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(storeFile{Entries: entries}, "", "  ")
 	if err != nil {
-		entryPersistLog.Error(fmt.Sprintf("encoding droplist entries for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding droplist entries for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		entryPersistLog.Error(fmt.Sprintf("writing droplist entries to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing droplist entries to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		entryPersistLog.Warn(fmt.Sprintf("droplist entries were modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
 	s.version = version
+	return nil
+}
+
+// persistLocked writes the current state to disk if persistence is
+// configured. Write failures are swallowed rather than surfaced to the
+// caller: the in-memory state (which every read goes through) stays
+// correct either way, so a transient disk issue degrades to "won't
+// survive a restart right now" rather than losing the mutation that
+// triggered this call -- same contract as every other store's
+// persistLocked in this codebase.
+func (s *Store) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		entryPersistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }

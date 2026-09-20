@@ -76,6 +76,51 @@ func TestDeleteUnknownDeviceNotFound(t *testing.T) {
 	}
 }
 
+// TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails is the v0.6.0
+// audit's R6 fix: an enrolment that cannot be saved must not read as
+// enrolled in memory -- and the token must stay spendable -- or a
+// restart before the next good write would silently un-enrol a router
+// this call just told the caller succeeded.
+func TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails(t *testing.T) {
+	b := &failingSaveBackend{}
+	r, err := OpenRegistryWithBackend(b, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistryWithBackend: %v", err)
+	}
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
+
+	// Create above already spent one Save attempt (also against this
+	// always-failing backend, swallowed the same way every ordinary write
+	// is); what matters here is TryEnrol's own attempt, not the running
+	// total.
+	before := b.count()
+	if r.TryEnrol("10.10.0.1", line) {
+		t.Fatal("TryEnrol() = true against a backend that cannot save, want false")
+	}
+	if got := b.count() - before; got != 1 {
+		t.Errorf("TryEnrol attempted %d saves, want exactly 1", got)
+	}
+
+	got := r.List()
+	if len(got) != 1 || got[0].AcceptedIP != "" || !got[0].EnrolledAt.IsZero() {
+		t.Errorf("device state after a failed persist = %+v, want no AcceptedIP/EnrolledAt", got)
+	}
+	if r.Allowed("10.10.0.1") {
+		t.Error("Allowed(10.10.0.1) = true after a failed enrolment persist -- the address must not read as claimed")
+	}
+	if p := r.PendingEnrolment("hap-ax3"); !p.Pending {
+		t.Error("PendingEnrolment().Pending = false after a failed persist -- the token must stay redeemable for a retry")
+	}
+}
+
 // TestMintEnrolmentReplacesAnyPendingToken is the "Reroll" affordance:
 // minting again invalidates the previous token outright rather than
 // letting either one redeem.

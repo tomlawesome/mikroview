@@ -353,15 +353,14 @@ type persistedDevice struct {
 	RegisteredAt time.Time `json:"registeredAt,omitzero"`
 }
 
-// persistLocked writes every non-config.yaml device to disk, if
-// persistence is configured. Write failures are swallowed rather than
-// surfaced to the caller -- the in-memory state (which every read goes
-// through) stays correct either way, same contract as every other
-// store's persistLocked in this codebase (e.g. internal/droplist).
-// Must be called with r.mu held.
-func (r *Registry) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for TryEnrol:
+// an enrolment that cannot be saved must not read as enrolled in memory,
+// so that call needs to know the write failed rather than have it
+// swallowed. Keeps the same version/conflict handling as persistLocked
+// always has. Must be called with r.mu held.
+func (r *Registry) tryPersistLocked() error {
 	if r.backend == nil {
-		return
+		return nil
 	}
 	devices := make([]*persistedDevice, 0, len(r.byID))
 	for _, info := range r.byID {
@@ -385,18 +384,29 @@ func (r *Registry) persistLocked() {
 
 	data, err := json.MarshalIndent(registryFile{Devices: devices}, "", "  ")
 	if err != nil {
-		deviceLog.Error(fmt.Sprintf("encoding the device registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding the device registry for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), r.backend, data, r.version)
 	if err != nil {
-		deviceLog.Error(fmt.Sprintf("writing the device registry to %s failed: %v -- this change exists only in memory and will be lost on restart", r.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing the device registry to %s failed: %w", r.backend.Describe(), err)
 	}
 	if conflicted {
 		deviceLog.Warn(fmt.Sprintf("the device registry was modified by another process while this change was pending (%s); this change was applied on top", r.backend.Describe()))
 	}
 	r.version = version
+	return nil
+}
+
+// persistLocked writes every non-config.yaml device to disk, if
+// persistence is configured. Write failures are swallowed rather than
+// surfaced to the caller -- the in-memory state (which every read goes
+// through) stays correct either way, same contract as every other
+// store's persistLocked in this codebase (e.g. internal/droplist).
+// Must be called with r.mu held.
+func (r *Registry) persistLocked() {
+	if err := r.tryPersistLocked(); err != nil {
+		deviceLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }
 
 // Ensure records that deviceID has pushed, creating its registry entry
