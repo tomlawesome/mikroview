@@ -181,15 +181,35 @@
   // so it may never equal what was written.
   let routerBackupsFetchedAt = $state(0)
 
+  // #1275: two polls of the same endpoint can be in flight at once (the
+  // 60s tick, an `ask again`, a refresh a write asked for), and nothing
+  // makes them answer in the order they were sent. A poll issued at T1
+  // that answers after one issued at T3 carries data from before T3 --
+  // applying it puts the older rows back and walks the fetched-at stamp
+  // backwards, which in turn makes RouterBackups.svelte drop the
+  // optimistic row the operator just kept, so a keep that worked reads
+  // as one that did not.
+  //
+  // So every poll below remembers when it was issued and stands down if
+  // a newer one has already been answered -- the same freshness test
+  // RouterBackups.svelte applies to its own overrides. Its failure path
+  // stands down too: an older poll failing says nothing about data a
+  // newer one has already brought back.
+  function overtaken(startedAt: number, answeredAt: number): boolean {
+    return startedAt < answeredAt
+  }
+
   function refreshRouterBackups() {
     const startedAt = Date.now()
     fetchRouterBackups()
       .then((r) => {
+        if (overtaken(startedAt, routerBackupsFetchedAt)) return
         routerBackups = r
         routerBackupsFetchedAt = startedAt
         routerBackupsUnanswered = false
       })
       .catch(() => {
+        if (overtaken(startedAt, routerBackupsFetchedAt)) return
         routerBackupsUnanswered = true
       })
   }
@@ -207,8 +227,17 @@
   // draws it directly: the GET did not answer for a reason other than
   // role, and there is no settings object yet to render a control from.
   let droplistUnanswered = $state(false)
+  // Same stamp, same reason as routerBackupsFetchedAt above (#1275).
+  // Nothing renders from it, so a plain `let` rather than $state: it is
+  // only ever written and read inside the poll callbacks below.
+  // Droplist.svelte keeps no optimistic copy of its own -- it awaits
+  // onrefresh after every add, remove and mint and draws whatever comes
+  // back -- so an overtaking poll simply puts the entry the operator
+  // just added back out of the list.
+  let droplistFetchedAt = 0
 
   function refreshDroplist(): Promise<void> {
+    const startedAt = Date.now()
     // wizardState.address (#1213) is the operator's own saved answer to
     // "what address can your router reach mikroview on?", not this
     // tab's own window.location.host -- the setup card's four printed
@@ -217,24 +246,37 @@
     // reads (#1260) and copyRouterLines above reads for the push script.
     return fetchDroplist(wizardState.address)
       .then((r) => {
+        if (overtaken(startedAt, droplistFetchedAt)) return
         droplist = r
+        droplistFetchedAt = startedAt
         droplistUnanswered = false
       })
       .catch(() => {
+        if (overtaken(startedAt, droplistFetchedAt)) return
         droplistUnanswered = true
       })
   }
 
+  // Same stamp again (#1275). The disk group is raced by its own tick,
+  // its `ask again`, and historyChanged's 6s follow-up -- and the
+  // switch the operator just flipped is written straight into `history`
+  // by historyChanged, so an overtaking poll flips it back on screen.
+  let historyFetchedAt = 0
+
   function refreshHistory() {
+    const startedAt = Date.now()
     fetchHistorySettings()
       .then((h) => {
+        if (overtaken(startedAt, historyFetchedAt)) return
         history = h
+        historyFetchedAt = startedAt
         historyUnanswered = false
       })
       .catch((err: unknown) => {
         // ApiError carries the status; read it by shape so a test's
         // mocked api module needs no class of its own.
         if ((err as { status?: number } | null)?.status === 403) return
+        if (overtaken(startedAt, historyFetchedAt)) return
         historyUnanswered = true
       })
   }
@@ -246,6 +288,10 @@
   // the row for up to a minute (round 42's gap 8).
   function historyChanged(next: HistorySettings) {
     history = next
+    // The server just answered with this, so it is as fresh as anything
+    // a poll could bring back -- stamping it here is what stops a poll
+    // issued before the change from putting the old switch back (#1275).
+    historyFetchedAt = Date.now()
     if (historyRetry) clearTimeout(historyRetry)
     historyRetry = setTimeout(refreshHistory, 6_000)
   }
