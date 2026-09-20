@@ -36,6 +36,7 @@ import { usersState } from './users.svelte'
 import { auditState } from './audit.svelte'
 import { persistenceState } from './persistence.svelte'
 import { configProblemsState } from './configProblems.svelte'
+import { configUpgradeState } from './configUpgrade.svelte'
 import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
@@ -627,6 +628,25 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
 
     vi.unstubAllGlobals()
+  })
+
+  // Quality stage of the same audit, a round later: configUpgradeState
+  // is the sixth admin-only singleton of this shape and the one still
+  // missing from the list above. It holds which settings the previous
+  // admin's config.yaml does not set, and `loaded` true would let the
+  // panel show that list before its own refresh answered.
+  it('resets configUpgradeState', async () => {
+    configUpgradeState.settings = [{ key: 'flags.new_detector', description: 'd', defaultValue: '1', versionAdded: 'v0.6.0' } as never]
+    configUpgradeState.version = 'v0.6.0'
+    configUpgradeState.loaded = true
+    configUpgradeState.error = 'stale'
+
+    await authState.logout()
+
+    expect(configUpgradeState.settings).toEqual([])
+    expect(configUpgradeState.version).toBe('')
+    expect(configUpgradeState.loaded).toBe(false)
+    expect(configUpgradeState.error).toBeNull()
   })
 })
 

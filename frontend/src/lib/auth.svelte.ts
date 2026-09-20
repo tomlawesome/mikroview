@@ -19,6 +19,7 @@ import { usersState } from "./users.svelte";
 import { auditState } from "./audit.svelte";
 import { persistenceState } from "./persistence.svelte";
 import { configProblemsState } from "./configProblems.svelte";
+import { configUpgradeState } from "./configUpgrade.svelte";
 import type { AuthSession } from "./types";
 
 // 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
@@ -80,6 +81,11 @@ function clearSessionState() {
   auditState.reset();
   persistenceState.reset();
   configProblemsState.reset();
+  // And configUpgradeState, found a round later still: the same shape
+  // as auditState, and the last GET-only admin route (see the
+  // accessAdmin rows of internal/api/authz_matrix_test.go) whose
+  // answer lived in a module-level store rather than a component.
+  configUpgradeState.reset();
 }
 
 // 'loading' only lasts for the initial check() call on app boot; after
