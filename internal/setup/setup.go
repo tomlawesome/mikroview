@@ -480,17 +480,20 @@ type storeFile struct {
 // the same step: a step has exactly one outcome at a time, and changing
 // one's mind is not a second claim. Reports whether the mark was
 // accepted, so a caller can refuse to write an audit entry for input it
-// rejected.
+// rejected -- and separately, any error persisting it: a mark that only
+// exists in memory must not be reported as recorded, since the caller
+// writes an audit entry for it and a restart before the next good write
+// would silently un-skip or un-force the step (R6).
 //
 // Persists immediately, with no debounce -- a step decision is a rare,
 // operator-driven, interactive action, not a hot path, the same
 // reasoning audit.Store.Record gives.
-func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now time.Time) (Mark, bool) {
+func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now time.Time) (Mark, bool, error) {
 	if step < 1 || step > maxStep {
-		return Mark{}, false
+		return Mark{}, false, nil
 	}
 	if outcome != MarkSkipped && outcome != MarkForced {
-		return Mark{}, false
+		return Mark{}, false, nil
 	}
 	if len(note) > maxNote {
 		note = note[:maxNote]
@@ -501,9 +504,17 @@ func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now 
 	if s.marks == nil {
 		s.marks = make(map[int]Mark, maxStep)
 	}
+	prev, hadPrev := s.marks[step]
 	s.marks[step] = m
-	s.persistLocked()
-	return m, true
+	if err := s.tryPersistLocked(); err != nil {
+		if hadPrev {
+			s.marks[step] = prev
+		} else {
+			delete(s.marks, step)
+		}
+		return Mark{}, false, fmt.Errorf("saving the setup ledger: %w", err)
+	}
+	return m, true, nil
 }
 
 // marksLocked is Marks without taking the lock, for callers that already
@@ -518,19 +529,19 @@ func (s *Store) marksLocked() []Mark {
 	return out
 }
 
-// persistLocked writes the marks to the backend if persistence is
-// configured.
-//
-// Write failures are logged loudly and swallowed rather than surfaced to
-// NoteMark's caller, matching every sibling store: the in-memory state
-// (which every read goes through) stays correct either way, so a
-// transient disk problem degrades to "this will not survive a restart
-// right now" rather than failing the decision the operator just made --
-// which would be worse, since the audit entry for it is written either
-// way.
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for the
+// callers that record an operator's own decision and so must not let
+// the caller believe it was recorded when it wasn't: NoteMark (a step
+// marked skipped or forced), SetAddress and SetBackupTransport (setup.go),
+// and upgrade.go's/routersetup.go's own operator-facing writes -- see
+// each one's own restore-on-error comment. NoteWitnessed keeps using
+// persistLocked below: it records evidence the server observed on its
+// own, not something an operator asserted, and no caller of it checks
+// the returned bool today, so failing it outright would change nothing
+// but the log line.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	data, err := json.MarshalIndent(storeFile{
 		Marks:           append(s.marksLocked(), s.witnessedLocked()...),
@@ -540,18 +551,25 @@ func (s *Store) persistLocked() {
 		Upgrade:         s.upgrade,
 	}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding the setup ledger for persistence failed: %v -- this decision exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding the setup ledger for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing the setup ledger to %s failed: %v -- this decision exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing the setup ledger to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		persistLog.Warn(fmt.Sprintf("the setup ledger was modified by another process while this decision was pending (%s); this decision was applied on top", s.backend.Describe()))
 	}
 	s.version = version
+	return nil
+}
+
+// persistLocked is the swallow-and-log default -- see tryPersistLocked's
+// doc comment for which callers keep it and why.
+func (s *Store) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		persistLog.Error(fmt.Sprintf("%v -- this decision exists only in memory and will be lost on restart", err))
+	}
 }
 
 // Marks returns every recorded decision, ordered by step so the ledger
@@ -672,15 +690,25 @@ const maxAddress = 253
 // one implausibly long. No timestamp is kept: unlike a mark, there is
 // only ever one current answer, with nothing about past ones worth
 // reading back.
-func (s *Store) SetAddress(address string) bool {
+//
+// The returned error is a persistence failure: an address that only
+// exists in memory must not be reported as stored, since a restart
+// before the next good write would revert it to whatever (or nothing)
+// was there before, with every RouterOS command in the wizard rendered
+// against the wrong host and nobody told (R6).
+func (s *Store) SetAddress(address string) (bool, error) {
 	if address == "" || len(address) > maxAddress {
-		return false
+		return false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev := s.address
 	s.address = address
-	s.persistLocked()
-	return true
+	if err := s.tryPersistLocked(); err != nil {
+		s.address = prev
+		return false, fmt.Errorf("saving the setup ledger: %w", err)
+	}
+	return true, nil
 }
 
 // Address returns the operator's stored answer, or "" if they have not
@@ -723,15 +751,25 @@ func validBackupTransport(transport string) bool {
 // switching is not a second claim needing history. Reports whether the
 // value was accepted, so the caller can refuse to write an audit entry
 // for input it rejected.
-func (s *Store) SetBackupTransport(transport string) bool {
+//
+// The returned error is a persistence failure: a transport choice that
+// only exists in memory must not be reported as stored, since a restart
+// before the next good write would revert step 6's rendered script to
+// whichever transport (or default) was stored before, with nobody told
+// (R6).
+func (s *Store) SetBackupTransport(transport string) (bool, error) {
 	if !validBackupTransport(transport) {
-		return false
+		return false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev := s.backupTransport
 	s.backupTransport = transport
-	s.persistLocked()
-	return true
+	if err := s.tryPersistLocked(); err != nil {
+		s.backupTransport = prev
+		return false, fmt.Errorf("saving the setup ledger: %w", err)
+	}
+	return true, nil
 }
 
 // BackupTransport returns the stored answer, defaulting to

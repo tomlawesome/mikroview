@@ -323,3 +323,33 @@ func TestOIDCIdentityPersistsAndReloadsAcrossStoreOpen(t *testing.T) {
 		t.Errorf("reloaded ID %q, want %q", found.ID, created.ID)
 	}
 }
+
+// TestFindOrCreateOIDCUserRollsBackOnPersistFailure is the v0.6.0
+// audit's R6 fix: a JIT-provisioned account that cannot be saved must
+// not exist in memory either, or a restart before the next good write
+// would leave a session referencing an account ID that vanished, and a
+// retried login would silently mint a second account for the same
+// identity.
+func TestFindOrCreateOIDCUserRollsBackOnPersistFailure(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+
+	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "alice", time.Now())
+	if err == nil {
+		t.Fatal("FindOrCreateOIDCUser against a backend that cannot save = nil error, want one")
+	}
+	if created {
+		t.Error("created=true after a failed persist")
+	}
+	if u != nil {
+		t.Errorf("returned user = %+v, want nil after a failed persist", u)
+	}
+	if s.Count() != 0 {
+		t.Errorf("Count() = %d after a failed persist, want 0 -- the account must not exist in memory either", s.Count())
+	}
+	if _, ok := s.ByOIDCIdentity("https://idp.example", "sub-1"); ok {
+		t.Error("the identity index still resolves an account that was never durably created")
+	}
+}

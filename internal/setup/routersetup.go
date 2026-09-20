@@ -80,6 +80,13 @@ type LoggingReport struct {
 // cost is bounded further by only writing when the page actually changed
 // (a router pushing an unchanged setup every 20 minutes would otherwise
 // rewrite the ledger 72 times a day to say nothing new).
+//
+// Kept on the swallow-and-log persistLocked rather than converted for
+// R6: like NoteWitnessed, this is a device's own report about itself,
+// not an operator assertion, and it self-heals -- the same page arrives
+// again on the next 20-minute cycle regardless of whether this write
+// persisted, so a lost write costs one cycle's staleness in the
+// "standing" comparison, not a silently reverted operator decision.
 func (s *Store) NoteLoggingReport(device string, p ingest.Payload, now time.Time) {
 	if device == "" || p.Kind != ingest.KindLogging {
 		return
