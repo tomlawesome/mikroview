@@ -922,15 +922,17 @@ function toCandidate(e: FirewallEvent): MatchCandidate {
   return { id: e.id, ruleLabel: e.ruleLabel, raw: e.raw }
 }
 
-// isNatSide reports which side (if either) a NAT annotation's translated
+// natSide reports which side (if either) a NAT annotation's translated
 // address belongs to, mirroring internal/routeros/parser.go's
 // isNATChain exactly: only the two dedicated NAT chains say which side
 // was rewritten. A NAT annotation inherited onto a forward/input/output
 // line by an earlier NAT rule (see that file's parseNAT doc comment) has
 // no such chain to read the direction off, so it is left out of address
 // matching entirely rather than guessed -- matching the wrong side would
-// be worse than not matching it at all.
-function natSide(e: FirewallEvent): 'src' | 'dst' | null {
+// be worse than not matching it at all. Exported for EventRow's NAT
+// cell, so its click-to-filter reads the same rule rather than a third
+// copy of it.
+export function natSide(e: FirewallEvent): 'src' | 'dst' | null {
   const chain = e.chain?.toLowerCase()
   if (chain === 'srcnat') return 'src'
   if (chain === 'dstnat') return 'dst'
