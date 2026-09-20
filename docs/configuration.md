@@ -2046,7 +2046,7 @@ that endpoint's event-specific filters.
 ## Setup wizard ledger (optional)
 
 The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
-six steps. Most of what it shows is not stored anywhere: MikroView
+seven steps. Most of what it shows is not stored anywhere: MikroView
 never connects to your router, so each step's check is simply an
 observation of what arrived here -- a certificate fetch, a syslog
 connection, events carrying a decoded log-prefix, a pushed table -- and
@@ -2354,10 +2354,10 @@ flags:
   JSON file. This is the one deliberate exception to MikroView's
   otherwise in-memory-only design (see [SECURITY.md](../SECURITY.md)): a
   flag is meant to stay visible until a human clears it, so unlike
-  everything else it survives a restart. Left empty (the default),
-  flags still work, they just reset like everything else does. If you
-  set this in the container, mount a volume for its parent directory —
-  see `deploy/docker-compose.yml`.
+  everything else it survives a restart. The default is the path
+  shown above; set it empty and flags still work, they just reset like
+  everything else does. In the container, mount a volume for its parent
+  directory — see `deploy/docker-compose.yml`.
 - **Port scan** — one source touching `portScanThreshold`+ distinct
   destination ports within `portScanWindow`. Applies to any source,
   internal or external.

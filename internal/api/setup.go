@@ -356,7 +356,7 @@ func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
 	}
 	mark, ok := s.Setup.NoteMark(req.Step, setup.MarkOutcome(req.Outcome), auditActor(r), req.Note, time.Now())
 	if !ok {
-		http.Error(w, "step must be 1-6 and outcome one of skipped, forced", http.StatusBadRequest)
+		http.Error(w, "step must be 1-7 and outcome one of skipped, forced", http.StatusBadRequest)
 		return
 	}
 	// The audit vocabulary is owned by the caller (see internal/audit's
