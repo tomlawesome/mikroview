@@ -2000,10 +2000,6 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-// parseIntList parses a comma-separated list of integers (e.g. a port
-// list from an env var). Any single malformed entry invalidates the
-// whole value -- like every other env var here, a bad value is ignored
-// in favor of whatever was already set, rather than partially applied.
 // parseStringList parses a comma-separated list of plain strings (e.g.
 // notify.smtp.to's recipient addresses from an env var). Unlike
 // parseIntList, there's no format to validate here -- any entry is a
@@ -2020,6 +2016,10 @@ func parseStringList(v string) []string {
 	return out
 }
 
+// parseIntList parses a comma-separated list of integers (e.g. a port
+// list from an env var). Any single malformed entry invalidates the
+// whole value -- like every other env var here, a bad value is ignored
+// in favor of whatever was already set, rather than partially applied.
 func parseIntList(v string) ([]int, bool) {
 	parts := strings.Split(v, ",")
 	out := make([]int, 0, len(parts))
