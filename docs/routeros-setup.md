@@ -268,12 +268,12 @@ and does not tick it for you.
 ### NAT rules (optional)
 
 The same `log=yes log-prefix="..."` convention works on `/ip firewall nat`
-rules too — no separate setup needed. Add the topic forward for NAT the
-same way as step 2 covers firewall/info, then tag the NAT rules you care
-about:
+rules too — no separate setup needed. NAT log lines carry the same
+`firewall`/`info` topics filter rules do, so step 2's forwarding rule
+above already covers them — nothing to add there. Just tag the NAT rules
+you care about:
 
 ```
-:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 /ip firewall nat set <rule-number> log=yes log-prefix="N|port-fwd|"
 ```
 
