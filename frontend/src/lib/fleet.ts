@@ -118,7 +118,7 @@ export function setupEcho(d: Device): string | null {
 
 // unattributedLabel (#1170) names a syslog source the registry could not
 // attribute to any router: no configured devices[].sourceIp matches it,
-// and no single router's pushed address table carries it. It reads as
+// and no router has enrolled from it (#1281). It reads as
 // what it is -- an address that arrived -- and never as a router, which
 // is the whole point of the server having stopped inventing a device row
 // for one. Same one-line-and-no-more rule as setupEcho above.
@@ -126,8 +126,10 @@ export function unattributedLabel(s: UnattributedSource): string {
   return `unattributed · ${s.address} — syslog from an address no router has claimed`
 }
 
-// The remedy, which is the same one every time: name the source in
-// config.yaml. Kept beside the label so the card that states the fact
-// and the line that fixes it never drift apart.
+// The remedy: name the source in config.yaml, or enrol the router from
+// it. Kept beside the label so the card that states the fact and the
+// line that fixes it never drift apart. Since #1281 the listener
+// refuses an unknown address before it gets this far, so the card is
+// rare; the advice still has to be the current one.
 export const UNATTRIBUTED_FIX =
-  "Declare it under devices: in config.yaml, or check that the router's pushed address table carries it — a NAT'd relay's never will, so config is the answer there."
+  "Declare it under devices: in config.yaml, or enrol the router from this address (+ add a router, then Re-enrol…) — a NAT'd relay can't enrol, so config is the answer there."

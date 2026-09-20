@@ -145,15 +145,15 @@
   const unregisteredRouters = $derived(routerRows.filter((d) => !d.configured))
 
   // The registry's other list (#1170): syslog sources no router has
-  // claimed -- no configured sourceIp matches them, and no single
-  // router's pushed address table carries them. The server stopped
+  // claimed -- no configured sourceIp matches them, and no router has
+  // enrolled from them (#1281). The server stopped
   // inventing a device row for one, so they arrive alongside the
   // devices rather than among them, and they are drawn as sources here,
   // never as routers.
   //
   // Re-read whenever the fleet moves: a source stops being
-  // unattributed the moment config.yaml names it or exactly one
-  // router's address table claims it. A failed read just leaves the
+  // unattributed the moment config.yaml names it or a router enrols
+  // from it. A failed read just leaves the
   // list empty -- these cards explain something, and an explanation is
   // not worth an error state on this page.
   //
