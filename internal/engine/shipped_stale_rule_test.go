@@ -168,7 +168,7 @@ func TestShippedStaleRuleClearedFlagIsRevivedIfStillStale(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("setup: expected one flag, got %+v", list)
 	}
-	if _, ok, _ := fs.SetVerdict(list[0].ID, flags.VerdictChecked, "operator", "", now); !ok {
+	if _, ok := fs.SetVerdict(list[0].ID, flags.VerdictChecked, "operator", "", now); !ok {
 		t.Fatal("setup: expected Clear to succeed on the active flag")
 	}
 

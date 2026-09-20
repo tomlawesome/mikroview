@@ -149,7 +149,7 @@ func TestExpectationAbsorbsAndReRaisesThroughTheEngine(t *testing.T) {
 	if first.Size == nil || *first.Size != 20 {
 		t.Fatalf("expected the first firing to carry size 20, got %v", first.Size)
 	}
-	if _, ok, _ := fs.SetVerdict(first.ID, flags.VerdictExpected, "operator", "", t0); !ok {
+	if _, ok := fs.SetVerdict(first.ID, flags.VerdictExpected, "operator", "", t0); !ok {
 		t.Fatal("expected recording an expectation from the flag to succeed")
 	}
 
@@ -218,7 +218,7 @@ func TestSizelessDefinitionExpectationIgnoresOutright(t *testing.T) {
 	if id == "" {
 		t.Fatal("expected a device_silence flag to raise")
 	}
-	if _, ok, _ := fs.SetVerdict(id, flags.VerdictExpected, "operator", "", now); !ok {
+	if _, ok := fs.SetVerdict(id, flags.VerdictExpected, "operator", "", now); !ok {
 		t.Fatal("expected recording an expectation to succeed")
 	}
 

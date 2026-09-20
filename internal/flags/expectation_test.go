@@ -78,7 +78,7 @@ func TestExpectationAbsorbsFiringWithinTolerance(t *testing.T) {
 
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(30), now)
 	id := flagID(TypePortScan, "203.0.113.9")
-	if _, ok, _ := s.SetVerdict(id, VerdictExpected, "operator", "", now); !ok {
+	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", "", now); !ok {
 		t.Fatal("expected an expected verdict on the raised flag to succeed")
 	}
 
@@ -121,7 +121,7 @@ func TestExpectationRaisesAboveToleranceCarryingBothSizes(t *testing.T) {
 	now := time.Now()
 
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(30), now)
-	if _, ok, _ := s.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", "", now); !ok {
+	if _, ok := s.SetVerdict(flagID(TypePortScan, "203.0.113.9"), VerdictExpected, "operator", "", now); !ok {
 		t.Fatal("expected an expected verdict on the raised flag to succeed")
 	}
 
@@ -182,7 +182,7 @@ func TestExpectedAgainRaisesTheRecordedSize(t *testing.T) {
 	raiseSized(s, TypePortScan, "203.0.113.9", intPtr(120), now.Add(2*time.Minute))
 	mustFlag(t, s, TypePortScan, "203.0.113.9") // it came back
 
-	if _, ok, _ := s.SetVerdict(id, VerdictExpected, "operator", "", now.Add(3*time.Minute)); !ok {
+	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", "", now.Add(3*time.Minute)); !ok {
 		t.Fatal("expected a second expected verdict to succeed")
 	}
 	ex, _ := s.Expectation(TypePortScan, "203.0.113.9")
