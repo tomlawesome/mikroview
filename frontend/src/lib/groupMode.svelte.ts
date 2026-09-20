@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { preferencesState } from './preferences.svelte'
+
 // Whether the live view groups repeats of the same connection into one
 // row (#341). Its own small module, matching how theme/colorway/
 // retention/presets each get one rather than growing appState.
@@ -9,28 +11,26 @@
 // same connection, this one only records whether the operator has it
 // switched on.
 //
-// Persisted per browser, like the column widths and the retention
-// window: which way an operator prefers to read their own traffic is a
-// preference, not session state, and having it reset on every reload
-// would make it feel like a mode rather than a setting.
+// Kept in the shared per-user preferences record (#1283), like the
+// column widths and the retention window: which way an operator prefers
+// to read their own traffic is a preference, not session state, and
+// having it reset on every reload would make it feel like a mode rather
+// than a setting.
 //
 // Off by default. The live view's job is one row per event; this is an
 // option on top of it, not a new mode it starts in.
 
-const STORAGE_KEY = 'mikroview:group'
-
-function loadInitial(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === '1'
-  } catch {
-    // Private browsing and blocked storage both throw here; the feature
-    // works fine unpersisted, so this is not worth surfacing.
-    return false
-  }
-}
+// #1283: was its own localStorage key ('mikroview:group', '1'/'0').
+const PREFS_KEY = 'groupMode'
 
 class GroupModeState {
-  enabled = $state(loadInitial())
+  enabled = $state(false)
+
+  constructor() {
+    preferencesState.register(PREFS_KEY, (value) => {
+      this.enabled = value === true
+    })
+  }
 
   toggle() {
     this.set(!this.enabled)
@@ -38,12 +38,7 @@ class GroupModeState {
 
   set(value: boolean) {
     this.enabled = value
-    try {
-      localStorage.setItem(STORAGE_KEY, value ? '1' : '0')
-    } catch {
-      // As above -- a preference that cannot be saved still applies for
-      // this session.
-    }
+    preferencesState.set(PREFS_KEY, value)
   }
 }
 

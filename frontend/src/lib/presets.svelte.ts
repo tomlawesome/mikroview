@@ -1,32 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { emptyFilters, type Filters } from './types'
+import { preferencesState } from './preferences.svelte'
 
 export interface FilterPreset {
   name: string
   filters: Filters
 }
 
-const STORAGE_KEY = 'mikroview-filter-presets'
+// #1283: the key this module owns in the shared preferences record --
+// was its own localStorage key ('mikroview-filter-presets') before.
+const PREFS_KEY = 'presets'
 
-function loadInitial(): FilterPreset[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    // Merge each stored preset over a fresh emptyFilters() so a preset
-    // saved before a new filter field existed doesn't end up missing keys.
-    return parsed
-      .filter((p): p is FilterPreset => typeof p?.name === 'string' && typeof p?.filters === 'object')
-      .map((p) => ({ name: p.name, filters: { ...emptyFilters(), ...p.filters } }))
-  } catch {
-    return []
-  }
+// Merges each stored preset over a fresh emptyFilters() so a preset
+// saved before a new filter field existed doesn't end up missing keys.
+// Same shape of guard loadInitial() applied reading straight out of
+// localStorage; now applied to whatever the server hands back instead.
+function sanitize(value: unknown): FilterPreset[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((p): p is FilterPreset => typeof p?.name === 'string' && typeof p?.filters === 'object')
+    .map((p) => ({ name: p.name, filters: { ...emptyFilters(), ...p.filters } }))
 }
 
 class PresetState {
-  presets = $state<FilterPreset[]>(loadInitial())
+  presets = $state<FilterPreset[]>([])
+
+  constructor() {
+    // Registered at import time; hydrated once the shared record has
+    // loaded (see preferences.svelte.ts's ensureLoaded(), hooked to
+    // sign-in in auth.svelte.ts) -- undefined (no `presets` key saved
+    // yet) sanitizes to this module's own default, [].
+    preferencesState.register(PREFS_KEY, (value) => {
+      this.presets = sanitize(value)
+    })
+  }
 
   save(name: string, filters: Filters) {
     const trimmed = name.trim()
@@ -44,11 +52,7 @@ class PresetState {
   }
 
   private persist() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.presets))
-    } catch {
-      // storage unavailable -- presets just won't persist across reloads
-    }
+    preferencesState.set(PREFS_KEY, this.presets)
   }
 }
 
