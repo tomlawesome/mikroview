@@ -155,6 +155,8 @@ run "$r7" "$bin7"
 check "$([ "$rc" -ne 0 ] && echo true || echo false)" "a registry outage with a real gap still fails (rc=$rc)"
 check "$(case "$out" in *"registry listing failed"*) echo true;; *) echo false;; esac)" \
   "and notes the registry could not be checked, rather than pretending it confirmed the gap"
+check "$(case "$out" in *"glab api: glab: simulated failure"*) echo true;; *) echo false;; esac)" \
+  "and says what the registry call actually said, the way fetch-upgrade-fixtures.sh does"
 
 echo
 if [ "$fails" -ne 0 ]; then

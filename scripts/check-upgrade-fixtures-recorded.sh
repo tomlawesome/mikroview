@@ -40,15 +40,25 @@ log() { echo "check-upgrade-fixtures-recorded: $*" >&2; }
 # against whatever GitLab credential the caller's shell already has
 # (see ~/.config/agents/skills/github-credentials -- this script never
 # sets GLAB_CONFIG_DIR/GITLAB_HOST itself). Non-zero for anything that
-# is not a 200.
+# is not a 200, with curl/glab's own error text logged so a bad token,
+# DNS or a 5xx reads as what it was here too, not only in the fetch
+# script.
 api_get() {
-  local path="$1" dest="$2"
+  local path="$1" dest="$2" err
   if [ -n "${CI_JOB_TOKEN:-}" ]; then
     : "${CI_API_V4_URL:?check-upgrade-fixtures-recorded: CI_JOB_TOKEN is set but CI_API_V4_URL is not}"
-    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused --retry-delay 2 \
-      -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>/dev/null
+    if err="$(curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused --retry-delay 2 \
+      -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>&1)"; then
+      return 0
+    fi
+    log "curl: ${err:-curl gave no error output}"
+    return 1
   else
-    glab api "$path" >"$dest" 2>/dev/null
+    if err="$(glab api "$path" 2>&1 >"$dest")"; then
+      return 0
+    fi
+    log "glab api: ${err:-glab gave no error output}"
+    return 1
   fi
 }
 

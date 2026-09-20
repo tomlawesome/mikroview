@@ -1677,11 +1677,10 @@ sync:mirror-to-github:
 # "run scripts/record-upgrade-fixture.sh <tag> by hand", which is
 # exactly the remedy.
 #
-# Nothing here watches for either kind of failure and says so out loud
-# -- that is #1274 (open, unstarted), which covers the same
-# "allow_failure with nobody watching" gap across every job that has
-# one, not just this one. This job only stopped lying about which
-# failures are fine.
+# Nothing in this job watches for either kind of failure and says so
+# out loud: check:upgrade-fixture-recorded below does (#1274), by
+# listing the registry against the committed fixtures on every push
+# to dev. This job only stopped lying about which failures are fine.
 #
 # Stage `sync`, beside the GitHub mirror: it is the same kind of work —
 # something published outside this pipeline once the commit is final. The
