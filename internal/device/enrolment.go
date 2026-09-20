@@ -521,6 +521,13 @@ func (r *Registry) refuseLocked(host string) {
 // (internal/syslog.EnrolmentGate), feeding GET /api/devices/refused.
 // The line's content is not retained, only that one arrived: this is a
 // count against an unauthenticated address, not evidence to display.
+// EnrolLine reports whether line carries the enrolment marker, whatever
+// the token's state -- the syslog gate's cheap test for "give this to
+// TryEnrol even from an allowed address".
+func (r *Registry) EnrolLine(line []byte) bool {
+	return enrolLineRE.Match(line)
+}
+
 func (r *Registry) Refuse(host string, line []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -551,4 +558,3 @@ func (r *Registry) Refused() []Refused {
 	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out
 }
-

@@ -229,6 +229,12 @@ type EnrolmentGate interface {
 	// enrolled at host (the token burned) and TryEnrol reports true.
 	// Any other line reports false and changes nothing.
 	TryEnrol(host string, line []byte) bool
+	// EnrolLine reports whether line carries the enrolment marker at
+	// all, valid token or not. Lets gateAllows hand a marker from an
+	// already-allowed address to TryEnrol, so a collision (a token
+	// minted for an address another device already holds) is refused
+	// and counted rather than read as that device's ordinary traffic.
+	EnrolLine(line []byte) bool
 	// Refuse records that a line from host was neither already allowed
 	// nor a valid enrolment line, for the refused-senders list.
 	Refuse(host string, line []byte)
@@ -281,6 +287,15 @@ func gateAllows(host string, line []byte) bool {
 	}
 	g := *p
 	if g.Allowed(host) {
+		// A marker from an address some router already holds is still
+		// a redemption attempt. Without this branch TryEnrol never saw
+		// it, so a token minted for that address was silently swallowed
+		// as the holder's traffic and stayed pending with nothing under
+		// refused senders to say why; TryEnrol refuses and counts it.
+		if g.EnrolLine(line) {
+			g.TryEnrol(host, line)
+			return false
+		}
 		return true
 	}
 	if g.TryEnrol(host, line) {
