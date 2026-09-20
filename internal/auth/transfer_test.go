@@ -114,7 +114,10 @@ func TestTransferRejections(t *testing.T) {
 // admin role in memory either, or a restart before the next good write
 // would leave the deployment with the wrong admin -- or, briefly, two.
 func TestTransferAdminLeavesRolesUnchangedWhenPersistFails(t *testing.T) {
-	s, err := OpenWithBackend(failingSaveBackend{})
+	// Register and CreateUser below each persist too (createLocked is
+	// R6-converted as well), so the fixture needs a backend that saves
+	// twice before failing, not one that fails outright.
+	s, err := OpenWithBackend(&saveBudgetBackend{left: 2})
 	if err != nil {
 		t.Fatalf("OpenWithBackend: %v", err)
 	}
