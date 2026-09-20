@@ -564,7 +564,7 @@ const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
   register: 7,
 }
 
-// ROUTER_STEPS is the router ledger (#1284): the same five router-side
+// ROUTER_STEPS is the router ledger (#1284): the same six router-side
 // steps without the certificate step in front, which is an instance
 // question and is asked once.
 export const ROUTER_STEPS: readonly StepKey[] = ['name', 'syslog', 'rules', 'push', 'backup', 'register']
@@ -578,7 +578,7 @@ export function canonicalStep(key: StepKey): number {
 
 export interface LedgerStep {
   // n is where this step sits in the ledger being walked -- "Step 2 of
-  // 5" on the router ledger, "Step 3 of 6" on first-run setup.
+  // 6" on the router ledger, "Step 3 of 7" on first-run setup.
   n: number
   // canonical is the number the same step's marks are recorded under
   // (RECORD_NUMBERS), which never moves whatever order it is walked in.
@@ -631,7 +631,7 @@ export const TITLES: Record<StepKey, string> = {
   register: 'Register the router',
 }
 
-// STEP_TITLES is the six in RECORD_NUMBERS' order, not the walking
+// STEP_TITLES is the seven in RECORD_NUMBERS' order, not the walking
 // order: it is indexed by a stored mark's step number, wherever that
 // mark is read back (silenceExplanation's empty-state sentence, most of
 // all), so it has to name the step the server meant rather than
@@ -1170,11 +1170,11 @@ export const SKIP_CONSEQUENCES: Record<StepKey, string> = {
 
 // announceStep is what a screen reader is told when the step changes:
 // which step, its title, and where it stands. The record asks for
-// exactly this sentence -- "Step 4 of 5 — Push router state — waiting
+// exactly this sentence -- "Step 4 of 6 — Push router state — waiting
 // for the first push" -- rather than the step title alone, which would
 // announce a move without announcing what was moved to.
-// total is how many steps the open ledger holds -- five on the router
-// ledger, six on first-run setup -- so the announcement counts the list
+// total is how many steps the open ledger holds -- six on the router
+// ledger, seven on first-run setup -- so the announcement counts the list
 // in front of the operator rather than a list they are not walking.
 export function announceStep(step: LedgerStep, total: number = STEP_COUNT): string {
   // A witnessed step has nothing current to speak (#1221): status.detail
