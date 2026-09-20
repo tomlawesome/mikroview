@@ -65,6 +65,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
+	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -985,6 +986,21 @@ func main() {
 	mustOpenStore(droplistLog, err)
 	droplistStore.SetAuditor(auditStore)
 
+	// The per-user preferences store (issue #1283): one versioned JSON
+	// record per account, read on sign-in and written on change,
+	// replacing what used to live in the browser's localStorage.
+	// Persistence itself is optional, same contract as Droplist.StorePath
+	// above -- a deployment that hasn't mounted a key still has working
+	// preferences for the running process, they just don't survive a
+	// restart (see storage.go's backendFor and #853).
+	prefsLog := logging.New("prefs")
+	prefsBackend, err := persistence.backendFor(bootCtx, "prefs", cfg.Prefs.StorePath)
+	if err != nil {
+		prefsLog.Warn(err.Error())
+	}
+	prefsStore, err := prefs.OpenWithBackend(prefsBackend)
+	mustOpenStore(prefsLog, err)
+
 	// The watchlist's match log has no in-memory-only mode (durability
 	// is the entire point of it, see internal/matchlog's package doc
 	// comment), so a failure here is handled differently from every
@@ -1806,6 +1822,7 @@ func main() {
 		Rules:                   ru,
 		Audit:                   auditStore,
 		Droplist:                droplistStore,
+		Prefs:                   prefsStore,
 		Suggest:                 suggestStore,
 		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
 		MatchLog:                matchLog,

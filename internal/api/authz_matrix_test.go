@@ -246,6 +246,15 @@ var authzMatrix = []routeExpectation{
 			"The gate the issue asks for is the same gate the existing query carries. The mode learns nothing new in kind: a token that already reaches GET /api/events reads the live feed for every device, and a bounded page of matches is a strictly smaller view of the same traffic. And it is bounded by construction, not by the caller -- matchlog.RecentQuery clamps the limit to 5000 (100 by default) before either backend runs, which is the property that stops an all-entries read on an unrate-limited route being an arbitrarily large response. " +
 			"What did NOT change: the per-identity path still refuses an empty identity (matchlog.ErrEmptyIdentity), and entries=all refuses to be combined with mac/ip, so 'no identity' can never silently mean 'every device'"},
 	{http.MethodGet, "/api/rules", accessViewer, "core read"},
+	{http.MethodGet, "/api/me/preferences", accessViewer,
+		"reads the caller's own preferences record (#1283) -- same reasoning as /api/auth/password above: it acts " +
+			"only on the session's own account, there is no id in the request that could point it at someone else's, " +
+			"and even the lowest tier must be able to see its own presets, widgets and layout"},
+	{http.MethodPut, "/api/me/preferences", accessViewer,
+		"replaces the caller's own preferences record wholesale (#1283) -- same tier and same reasoning as the GET " +
+			"beside it and as /api/auth/password: a viewer changing their own accent colour or column widths is not " +
+			"an operational decision about what mikroview is watching, it is a personal setting following them to " +
+			"whichever browser they sign into"},
 	{http.MethodGet, "/api/third-party-notices", accessViewer,
 		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
 	{http.MethodGet, "/api/stats", accessViewer, "core read"},
