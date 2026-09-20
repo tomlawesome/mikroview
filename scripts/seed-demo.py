@@ -55,7 +55,6 @@ supported way to recover an earlier one.
 import argparse
 import collections
 import concurrent.futures
-import json
 import os
 import random
 import socket
@@ -298,9 +297,12 @@ IP_ADDRESSES = {
 #                       accept on an (inInterface, outInterface) pair; a
 #                       lamp on it is log=True. frontend/src/lib/
 #                       policy.svelte.ts keys on exactly that pair, and
-#                       Topography.svelte's zoneCaption reads a district's
-#                       badge off the two pairs it makes with the WAN. So
-#                       the DARK districts are DARK here by *omission of
+#                       frontend/src/lib/coverageRule.ts's boundaryCoverage
+#                       reads a district's coverage off the two pairs it
+#                       makes with the WAN (Topography.svelte's own
+#                       zoneCaption did this before #1014 unified the
+#                       three copies into that one rule). So the DARK
+#                       districts are DARK here by *omission of
 #                       log*, never by omission of a rule: IoT's three
 #                       rules toward ether1 all carry log=False (DARK
 #                       TOWARD WAN), Guest's and Cams' carry log=False in
