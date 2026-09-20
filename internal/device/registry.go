@@ -150,8 +150,17 @@ type Registry struct {
 	// refused holds every syslog source address the listener gate has
 	// refused a line from -- issue #1281's GET /api/devices/refused.
 	// Bounded and evicted the same oldest-last-seen-first way as
-	// sources; see pruneRefusedLocked.
+	// sources, plus the two extra preferences issue #1289 added; see
+	// pruneRefusedLocked.
 	refused map[string]*Refused
+	// refusedByPrefix indexes refused's keys by the IPv4 /24 or IPv6 /64
+	// each falls in, kept in step with refused on every add and remove
+	// (addRefusedLocked/removeRefusedLocked) -- issue #1289. Answering
+	// "how many refused addresses are in this prefix already" is then a
+	// map lookup rather than a walk of the whole refused list, which
+	// matters because prunePrefixLocked asks it on every newly refused
+	// address, not just on the rare global-cap overflow.
+	refusedByPrefix map[netip.Prefix]map[string]struct{}
 	// pendingByDevice holds each device's current enrolment token, by
 	// device id -- at most one per device, replaced (never
 	// accumulated) by MintEnrolment. Only the token's hash is kept; see
@@ -271,6 +280,7 @@ func OpenRegistryWithBackend(b persist.Backend, configured []config.Device) (*Re
 		byID:            make(map[string]*Info),
 		sources:         make(map[string]*Source),
 		refused:         make(map[string]*Refused),
+		refusedByPrefix: make(map[netip.Prefix]map[string]struct{}),
 		pendingByDevice: make(map[string]pendingToken),
 		pendingByHash:   make(map[string]string),
 		backend:         b,
@@ -559,15 +569,137 @@ func (r *Registry) pruneLocked() {
 	})
 }
 
-// pruneRefusedLocked is pruneLocked for the refused-address list --
-// same oldest-last-seen-first eviction, capped at maxRefusedAddresses.
+// pruneRefusedLocked is pruneLocked for the refused-address list, with
+// two preferences beyond sources' plain oldest-last-seen-first order
+// (issue #1289). First, no single IPv4 /24 or IPv6 /64 may hold more
+// than maxRefusedPerPrefix entries -- prunePrefixLocked enforces that
+// the moment a new address from an over-share prefix is added, before
+// this global cap is ever consulted. Second, once this cap
+// (maxRefusedAddresses) is reached, a one-shot entry (Lines == 1) is
+// shed before a repeat sender, oldest-last-seen first within each of
+// those two bands -- a router that keeps trying outranks a stranger's
+// single probe, whatever their relative ages.
 func (r *Registry) pruneRefusedLocked() {
 	if len(r.refused) <= maxRefusedAddresses {
 		return
 	}
-	evict.DownTo(r.refused, evict.Target(maxRefusedAddresses), func(s *Refused) time.Time {
-		return s.LastSeen
-	})
+	target := evict.Target(maxRefusedAddresses)
+	need := len(r.refused) - target
+
+	oneShot := make(map[string]*Refused)
+	for k, v := range r.refused {
+		if v.Lines == 1 {
+			oneShot[k] = v
+		}
+	}
+	r.evictBandLocked(oneShot, len(oneShot)-need)
+	if len(r.refused) <= target {
+		return
+	}
+
+	rest := make(map[string]*Refused, len(r.refused))
+	for k, v := range r.refused {
+		if v.Lines != 1 {
+			rest[k] = v
+		}
+	}
+	r.evictBandLocked(rest, target)
+}
+
+// prunePrefixLocked enforces maxRefusedPerPrefix for key's own prefix,
+// evicting that prefix's oldest-last-seen entries first when it runs
+// over its share -- issue #1289. Cheap in the common case: it does
+// nothing beyond the one refusedByPrefix lookup unless key's prefix is
+// actually over its share, which only a range of addresses genuinely
+// cycling through this instance can cause. Called right after key is
+// newly added to r.refused; must be called with r.mu held.
+func (r *Registry) prunePrefixLocked(key string) {
+	p, ok := refusedPrefix(key)
+	if !ok {
+		return
+	}
+	members := r.refusedByPrefix[p]
+	if len(members) <= maxRefusedPerPrefix {
+		return
+	}
+	band := make(map[string]*Refused, len(members))
+	for addr := range members {
+		band[addr] = r.refused[addr]
+	}
+	r.evictBandLocked(band, evict.Target(maxRefusedPerPrefix))
+}
+
+// evictBandLocked shrinks band to at most target entries, removing
+// whichever have the oldest LastSeen first, and removes those same
+// keys from the registry's own refused index (and its prefix index)
+// through removeRefusedLocked -- so callers can slice r.refused into
+// any bands issue #1289's preferences need (a prefix's own members, or
+// the one-shot/repeat-sender split) and evict within just that band
+// without disturbing the rest. Must be called with r.mu held.
+func (r *Registry) evictBandLocked(band map[string]*Refused, target int) {
+	before := make([]string, 0, len(band))
+	for k := range band {
+		before = append(before, k)
+	}
+	evict.DownTo(band, target, func(ref *Refused) time.Time { return ref.LastSeen })
+	for _, k := range before {
+		if _, still := band[k]; !still {
+			r.removeRefusedLocked(k)
+		}
+	}
+}
+
+// refusedPrefix returns the IPv4 /24 or IPv6 /64 that a normalised
+// refused-list key falls in, and false for a key that does not parse as
+// an address at all (defensive only -- normalizeIP's output always
+// does). Issue #1289.
+func refusedPrefix(key string) (netip.Prefix, bool) {
+	addr, err := netip.ParseAddr(key)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	bits := 24
+	if addr.Is6() {
+		bits = 64
+	}
+	p, err := addr.Prefix(bits)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	return p, true
+}
+
+// addRefusedLocked stores ref under key in both r.refused and
+// refusedByPrefix, so the two never drift apart. Must be called with
+// r.mu held.
+func (r *Registry) addRefusedLocked(key string, ref *Refused) {
+	r.refused[key] = ref
+	if p, ok := refusedPrefix(key); ok {
+		set := r.refusedByPrefix[p]
+		if set == nil {
+			set = make(map[string]struct{})
+			r.refusedByPrefix[p] = set
+		}
+		set[key] = struct{}{}
+	}
+}
+
+// removeRefusedLocked deletes key from both r.refused and
+// refusedByPrefix -- the other half of addRefusedLocked. A no-op for a
+// key not currently refused. Must be called with r.mu held.
+func (r *Registry) removeRefusedLocked(key string) {
+	if _, ok := r.refused[key]; !ok {
+		return
+	}
+	delete(r.refused, key)
+	if p, ok := refusedPrefix(key); ok {
+		if set, ok := r.refusedByPrefix[p]; ok {
+			delete(set, key)
+			if len(set) == 0 {
+				delete(r.refusedByPrefix, p)
+			}
+		}
+	}
 }
 
 // SetNames wires the display-name resolver in. Separate from
