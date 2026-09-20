@@ -210,9 +210,22 @@ func (s *Store) Upsert(e Entity) (Entity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	key := id(e.Type, e.Key)
+	previous, existed := s.byID[key]
 	cp := e
-	s.byID[id(e.Type, e.Key)] = &cp
-	s.persistLocked()
+	s.byID[key] = &cp
+	if err := s.tryPersistLocked(); err != nil {
+		// An entity add/rename that cannot be saved must not read back as
+		// applied (R6): put the previous record back (or drop the key
+		// entirely for a brand new one) rather than leave this write only
+		// in memory for a restart to discard silently.
+		if existed {
+			s.byID[key] = previous
+		} else {
+			delete(s.byID, key)
+		}
+		return Entity{}, fmt.Errorf("saving entities: %w", err)
+	}
 
 	out := cp
 	return out, nil
@@ -222,17 +235,28 @@ func (s *Store) Upsert(e Entity) (Entity, error) {
 // whether an entity was actually found and removed -- deleting an
 // unknown pair is a no-op, not an error, same "caller might be looking
 // at a stale list" reasoning flags.Store.Clear already documents.
-func (s *Store) Delete(entityType, key string) bool {
+//
+// Returns an error (rather than only the found/removed bool) when the
+// pair existed but the removal could not be saved -- see the
+// restore-on-error comment inside for why (R6).
+func (s *Store) Delete(entityType, key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	k := id(entityType, key)
-	if _, ok := s.byID[k]; !ok {
-		return false
+	existing, ok := s.byID[k]
+	if !ok {
+		return false, nil
 	}
 	delete(s.byID, k)
-	s.persistLocked()
-	return true
+	if err := s.tryPersistLocked(); err != nil {
+		// A delete that cannot be saved must not read as deleted (R6):
+		// put the entity back rather than report success and have it
+		// reappear, undeleted, after the next restart.
+		s.byID[k] = existing
+		return false, fmt.Errorf("saving entities: %w", err)
+	}
+	return true, nil
 }
 
 // List returns every known entity, sorted by (Type, Key) for a stable,
@@ -338,30 +362,45 @@ func (s *Store) HasTag(entityType, key, tag string) bool {
 // were empty) or how many entities exist afterward -- so this is safe
 // and cheap to call unconditionally on every startup. Returns the
 // number of entities imported (0 once already seeded).
-func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
+//
+// Returns an error, rather than only a count, when the seed write could
+// not be saved: the seeded marker and the imported records must not take
+// effect in memory only, or this would report the migration done and a
+// restart before the next good write would forget it ever ran -- running
+// it again against whatever config.yaml holds by then, which may no
+// longer be what a first boot actually saw (R6).
+func (s *Store) Seed(ruleNames, hostNames map[string]string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.seeded {
-		return 0
+		return 0, nil
 	}
-	s.seeded = true
+
+	prevByID := s.byID
+	byID := make(map[string]*Entity, len(s.byID))
+	for k, v := range s.byID {
+		byID[k] = v
+	}
 
 	imported := 0
 	for key, label := range ruleNames {
 		if key == "" {
 			continue
 		}
-		s.byID[id(TypeRule, key)] = &Entity{Type: TypeRule, Key: key, Label: label}
+		byID[id(TypeRule, key)] = &Entity{Type: TypeRule, Key: key, Label: label}
 		imported++
 	}
 	for key, label := range hostNames {
 		if key == "" {
 			continue
 		}
-		s.byID[id(TypeHost, key)] = &Entity{Type: TypeHost, Key: key, Label: label}
+		byID[id(TypeHost, key)] = &Entity{Type: TypeHost, Key: key, Label: label}
 		imported++
 	}
+
+	s.byID = byID
+	s.seeded = true
 
 	// Always persist, even when nothing was imported -- what's being
 	// recorded is "the migration decision point has already passed,"
@@ -370,22 +409,22 @@ func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
 	// config.yaml well after the first-ever boot must not have them
 	// suddenly appear -- Seed's contract is first-boot-only, not
 	// "import whatever's configured until the store has something").
-	s.persistLocked()
-	return imported
+	if err := s.tryPersistLocked(); err != nil {
+		s.byID = prevByID
+		s.seeded = false
+		return 0, fmt.Errorf("saving entities: %w", err)
+	}
+	return imported, nil
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured. Unlike flags.Store's persistLocked, there's no debounce
-// interval here -- entity mutations are rare, admin-only, interactive
-// actions (add/edit/remove one record at a time), not a high-rate
-// detection hot path, so there's nothing to rate-limit. Write failures
-// are swallowed rather than surfaced to Upsert/Delete/Seed's callers:
-// the in-memory state (which every read goes through) stays correct
-// either way, so a transient disk issue degrades to "won't survive a
-// restart right now" rather than breaking live use.
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for Upsert,
+// Delete and Seed -- every mutator on this store, all of which change
+// operator-visible entity records or the seeded migration marker, and so
+// must not let a caller believe a write happened when it didn't (v0.6.0
+// audit finding R6) -- see each one's own restore-on-error comment.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	list := s.listLocked()
 	ptrs := make([]*Entity, len(list))
@@ -394,20 +433,18 @@ func (s *Store) persistLocked() {
 	}
 	data, err := json.MarshalIndent(storeFile{Seeded: s.seeded, Entities: ptrs}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding entities for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding entities for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing entities to %s failed: %v -- this change exists only in memory and will be lost on restart",
-			s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing entities to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		persistLog.Warn(fmt.Sprintf("entity store was modified by another process while this change was pending (%s); this change was applied on top",
 			s.backend.Describe()))
 	}
 	s.version = version
+	return nil
 }
 
 // maxEntityTextLength bounds a key, label or tag. Generous next to any

@@ -295,6 +295,14 @@ func (s *Store) pruneLocked() {
 // called with s.mu already held -- see flags.Store.persistLocked's own
 // doc comment for the "lock covers the encode, not the backend call"
 // contract this mirrors.
+//
+// Kept on the swallow-and-log path rather than converted to an
+// error-returning tryPersistLocked (v0.6.0 audit finding R6): Touch
+// records a per-rule usage counter off the ingest hot path, bookkeeping
+// nobody waits on a success/failure answer for -- a repeat event bumps
+// the same counter again a moment later, so a save this process fails to
+// make durable is a usage record a little further behind, never data an
+// operator set and needs told is gone.
 func (s *Store) persistLocked() {
 	if s.wb == nil {
 		return

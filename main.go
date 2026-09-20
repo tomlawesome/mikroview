@@ -808,7 +808,15 @@ func main() {
 	}
 	entityStore, err := entities.OpenWithBackend(entityBackend)
 	mustOpenStore(entitiesLog, err)
-	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
+	// A failed seed write is logged, not fatal (unlike mustOpenStore's
+	// other callers): the store itself opened fine, and refusing to boot
+	// over a one-time migration step that can simply retry on the next
+	// restart would be a disproportionate response -- see Store.Seed's
+	// own doc comment on why it must not mark itself seeded when this
+	// happens (R6).
+	if n, err := entityStore.Seed(cfg.RuleNames, cfg.HostNames); err != nil {
+		entitiesLog.Error(fmt.Sprintf("importing config.yaml's ruleNames/hostNames failed: %v -- will retry on the next restart", err))
+	} else if n > 0 {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
 	}
 
