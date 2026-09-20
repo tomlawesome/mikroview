@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/device"
 )
 
 // fakeGate is an EnrolmentGate test double: allowed lists which hosts
@@ -48,6 +50,10 @@ func (g *fakeGate) TryEnrol(host string, line []byte) bool {
 	g.enrolled = append(g.enrolled, host)
 	g.token = "" // single-use, same contract as the real registry
 	return true
+}
+
+func (g *fakeGate) EnrolLine(line []byte) bool {
+	return bytes.Contains(line, []byte("mikroview-enrol "))
 }
 
 func (g *fakeGate) Refuse(host string, line []byte) {
@@ -249,5 +255,53 @@ func TestConnectionFromAllowedAddressIsAcceptedWithNoTokenPending(t *testing.T) 
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for the allowed line")
+	}
+}
+
+// TestGateRefusesATokenRedeemedFromAnAddressAnotherDeviceHolds drives the
+// real registry through gateAllows, not TryEnrol directly: Allowed used
+// to short-circuit the gate before TryEnrol ran, so a token minted for
+// an address some other router already held was never refused -- the
+// marker passed as the holder's traffic, the claimant stayed pending
+// with nothing under refused senders, and the operator had nothing to
+// go on.
+func TestGateRefusesATokenRedeemedFromAnAddressAnotherDeviceHolds(t *testing.T) {
+	r := device.NewRegistry(nil)
+	now := time.Now()
+	for _, id := range []string{"held", "claimant"} {
+		if _, err := r.Create(id, id, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	token, _, err := r.MintEnrolment("held", "10.0.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.TryEnrol("10.0.0.1", []byte("mikroview-enrol "+token)) {
+		t.Fatal("setup: held did not enrol")
+	}
+	SetEnrolmentGate(r)
+	t.Cleanup(func() { SetEnrolmentGate(nil) })
+
+	token, _, err = r.MintEnrolment("claimant", "10.0.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
+	if gateAllows("10.0.0.1", line) {
+		t.Error("gateAllows() = true, want the marker refused rather than passed as held's traffic")
+	}
+	for _, info := range r.List() {
+		if info.ID == "claimant" && info.AcceptedIP != "" {
+			t.Errorf("claimant AcceptedIP = %q, want unenrolled", info.AcceptedIP)
+		}
+	}
+	refused := r.Refused()
+	if len(refused) != 1 || refused[0].Address != "10.0.0.1" {
+		t.Errorf("Refused() = %+v, want the contested address counted once", refused)
+	}
+	// An ordinary line from the holder still passes.
+	if !gateAllows("10.0.0.1", []byte("<30>Jan  1 00:00:00 router firewall,info fwd: in:ether1")) {
+		t.Error("gateAllows() = false for held's own traffic")
 	}
 }
