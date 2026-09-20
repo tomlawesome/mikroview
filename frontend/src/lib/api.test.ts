@@ -8,8 +8,12 @@ import {
   fetchAuditLog,
   fetchEventsWindow,
   fetchSetupCommands,
+  mintDroplistKey,
   replayDefinition,
+  revokeDroplistKey,
+  saveSetupBackupTransport,
   setFlagVerdict,
+  setRouterBackupComment,
 } from './api'
 import { emptyFilters } from './types'
 
@@ -402,5 +406,55 @@ describe('deleteDroplistEntry (#1225)', () => {
     expect(url).toBe('/api/droplist/203.0.113.0%2F24')
     expect(init?.method).toBe('DELETE')
     expect(init?.body).toBeUndefined()
+  })
+})
+
+// A dropped connection used to escape every mutating call as a thrown
+// TypeError, past the caller's busy flag: "minting…" stuck until a
+// reload, with no error shown. The four mutating helpers now answer it
+// as a refusal instead, so each caller's existing error path shows it
+// (v0.6.0 audit, Robustness stage; the class #1218's finding 7 guarded
+// at three call sites by hand).
+describe('a dropped connection is a refusal, not a throw', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubDroppedConnection() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+  }
+
+  it('POST: mintDroplistKey returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await mintDroplistKey('203.0.113.9')
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
+    expect(result).toContain('Failed to fetch')
+  })
+
+  it('DELETE: revokeDroplistKey returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await revokeDroplistKey()
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
+  })
+
+  it('PUT: saveSetupBackupTransport returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await saveSetupBackupTransport('sftp')
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
+  })
+
+  it('PATCH: setRouterBackupComment returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await setRouterBackupComment('core', 'g1', 'note')
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
   })
 })
