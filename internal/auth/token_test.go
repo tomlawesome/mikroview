@@ -210,8 +210,8 @@ func TestRevokeAllCreatedByRemovesOnlyThatAccountsTokens(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if n := s.RevokeAllCreatedBy(alice.ID); n != 1 {
-		t.Errorf("revoked %d tokens, want 1", n)
+	if n, err := s.RevokeAllCreatedBy(alice.ID); err != nil || n != 1 {
+		t.Errorf("revoked (%d, %v), want (1, nil)", n, err)
 	}
 	if _, ok := s.Authenticate(aliceRaw, TokenKindAPI, time.Now()); ok {
 		t.Error("alice's token still authenticates after her account was deleted")
@@ -231,11 +231,11 @@ func TestRevokeAllCreatedByIgnoresUnattributedTokens(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if n := s.RevokeAllCreatedBy(""); n != 0 {
-		t.Errorf("an empty user ID revoked %d tokens, want 0", n)
+	if n, err := s.RevokeAllCreatedBy(""); err != nil || n != 0 {
+		t.Errorf("an empty user ID revoked (%d, %v), want (0, nil)", n, err)
 	}
-	if n := s.RevokeAllCreatedBy("user-someone"); n != 0 {
-		t.Errorf("deleting an unrelated account revoked %d unattributed tokens, want 0", n)
+	if n, err := s.RevokeAllCreatedBy("user-someone"); err != nil || n != 0 {
+		t.Errorf("deleting an unrelated account revoked (%d, %v) unattributed tokens, want (0, nil)", n, err)
 	}
 	if _, ok := s.Authenticate(raw, TokenKindAPI, time.Now()); !ok {
 		t.Error("an unattributed token was revoked by an unrelated account deletion")
@@ -494,5 +494,81 @@ func TestTokenByKindFiltersByKind(t *testing.T) {
 	}
 	if len(s.ByKind(TokenKindAPI)) != 1 {
 		t.Errorf("ByKind(api) = %d tokens, want 1", len(s.ByKind(TokenKindAPI)))
+	}
+}
+
+// TestTokenCreateReportsPersistFailure is the v0.6.0 audit's R6 fix: a
+// token that cannot be saved must not exist in memory either, since the
+// raw value is shown to the caller exactly once, here -- a restart
+// before the next good write would leave that caller holding a value
+// that authenticates against nothing durable.
+func TestTokenCreateReportsPersistFailure(t *testing.T) {
+	s, err := OpenTokenStoreWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+	}
+	raw, tok, err := s.Create("birdcage", TokenKindAPI, "", nil, time.Now())
+	if err == nil {
+		t.Fatal("Create against a backend that cannot save = nil error, want one")
+	}
+	if raw != "" || tok != nil {
+		t.Errorf("Create returned (%q, %v) after a failed persist, want (\"\", nil)", raw, tok)
+	}
+	if len(s.List()) != 0 {
+		t.Errorf("List() = %d tokens after a failed persist, want 0", len(s.List()))
+	}
+}
+
+// TestTokenRevokeLeavesTheTokenWorkingWhenPersistFails is the v0.6.0
+// audit's R6 fix: a revoke that cannot be saved must not remove the
+// token from memory either, or a restart before the next good write
+// would bring back a token the caller was told was dead.
+func TestTokenRevokeLeavesTheTokenWorkingWhenPersistFails(t *testing.T) {
+	// Create below persists too, so the fixture needs a backend that
+	// saves once before failing, not one that fails outright.
+	s, err := OpenTokenStoreWithBackend(&saveBudgetBackend{left: 1})
+	if err != nil {
+		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+	}
+	raw, tok, err := s.Create("birdcage", TokenKindAPI, "", nil, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := s.Revoke(tok.ID); err == nil {
+		t.Fatal("Revoke against a backend that cannot save = nil error, want one")
+	}
+	if _, ok := s.Authenticate(raw, TokenKindAPI, time.Now()); !ok {
+		t.Error("expected the token to still authenticate after a failed persist")
+	}
+}
+
+// TestRevokeAllCreatedByLeavesTokensWorkingWhenPersistFails is the same
+// R6 case for the bulk revoke handleAuthDeleteUser calls: a failed
+// persist must not remove any of the deleted account's tokens from
+// memory, and must report zero revoked rather than the count it
+// attempted.
+func TestRevokeAllCreatedByLeavesTokensWorkingWhenPersistFails(t *testing.T) {
+	// Create below persists too, so the fixture needs a backend that
+	// saves once before failing, not one that fails outright.
+	s, err := OpenTokenStoreWithBackend(&saveBudgetBackend{left: 1})
+	if err != nil {
+		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+	}
+	alice := &User{ID: "user-alice", Username: "alice"}
+	raw, _, err := s.Create("alice-integration", TokenKindAPI, "", alice, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	n, err := s.RevokeAllCreatedBy(alice.ID)
+	if err == nil {
+		t.Fatal("RevokeAllCreatedBy against a backend that cannot save = nil error, want one")
+	}
+	if n != 0 {
+		t.Errorf("revoked count = %d after a failed persist, want 0", n)
+	}
+	if _, ok := s.Authenticate(raw, TokenKindAPI, time.Now()); !ok {
+		t.Error("expected alice's token to still authenticate after a failed persist")
 	}
 }
