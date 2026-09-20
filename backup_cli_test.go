@@ -443,6 +443,108 @@ func TestRestoreRollsBackEveryStoreWhenOneWriteFails(t *testing.T) {
 	}
 }
 
+// TestRestoreRemovesTheMarkerOnSuccess is #1293's Done-when for the happy
+// path: restoreMarkerName goes down before the first store is touched,
+// and must come back off again once the restore has fully landed (the
+// store loop and, if the backup carries one, schema.json), so a later
+// start never finds #1293's marker for a restore that actually finished.
+func TestRestoreRemovesTheMarkerOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	if err := writeBackup(backupPath, true, map[string][]byte{"auth": []byte(`{"users":[]}`)}); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 0 {
+		t.Fatalf("runRestore(--force) = %d, want 0", code)
+	}
+
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("restore marker at %s after a successful restore: stat = %v, want it removed", markerPath, err)
+	}
+}
+
+// TestRestoreLeavesTheMarkerWhenRollbackCannotFullyRecover is #1293's
+// Done-when for the case checkNoRestoreInProgress exists to catch: a
+// write failure that even rollback (#1257) cannot fully undo must leave
+// restoreMarkerName in place, so the next start refuses instead of
+// coming up quietly on a data directory that is part restored-backup,
+// part whatever was there before.
+//
+// hostsPath's directory is made read-only after its original content is
+// written, so recordPriorState can still read it back (rollback needs
+// that), but both the restore's own write to hostsPath and rollback's
+// attempt to put the original bytes back fail the same way -- neither
+// persist.WriteFileAtomic call has anywhere to put its temp file.
+func TestRestoreLeavesTheMarkerWhenRollbackCannotFullyRecover(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test depends on")
+	}
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	hostsDir := filepath.Join(dir, "hostsdir")
+	if err := os.Mkdir(hostsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hostsPath := filepath.Join(hostsDir, "hosts.json")
+	if err := os.WriteFile(hostsPath, []byte(`{"marker":"original-hosts"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hostsDir, 0o500); err != nil { // read+execute, no write
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(hostsDir, 0o700) })
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+	t.Setenv("MIKROVIEW_HOSTS_STORE_PATH", hostsPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	if err := writeBackup(backupPath, true, map[string][]byte{"hosts": []byte(`{"marker":"new-hosts"}`)}); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 1 {
+		t.Fatalf("runRestore(--force) = %d, want 1 (hosts cannot be written back)", code)
+	}
+
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("restore marker at %s after an unrecoverable failure: stat = %v, want it left in place", markerPath, err)
+	}
+}
+
+// TestRestoreWithoutForceAdvisesCopyingTheDataDirectoryFirst pins #1293's
+// third requirement: the refusal an operator sees without --force must
+// say to copy the data directory first if they want a way back, since
+// -restore itself does not make that copy for them.
+func TestRestoreWithoutForceAdvisesCopyingTheDataDirectoryFirst(t *testing.T) {
+	src, err := os.ReadFile("backup_cli.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "copy the data directory") {
+		t.Error("the non-force refusal must tell the operator to copy the data directory first if they want a way back")
+	}
+
+	docs, err := os.ReadFile("docs/configuration.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(docs), "Copy the data directory") {
+		t.Error("docs/configuration.md's restore section must also say to copy the data directory first")
+	}
+}
+
 // TestRetiredStoreIsSkippedAndReported is #1277's Done-when for
 // retiredStoresIn: a store name a past release stopped writing (see
 // retiredStores) is pulled out of the envelope and never written to
