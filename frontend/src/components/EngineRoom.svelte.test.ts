@@ -184,8 +184,9 @@ beforeEach(() => {
   // as detectorSettingsState.list/flagsState.list above.
   persistenceState.info = null
   deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
-  // Reset between tests the same way Droplist.svelte.test.ts does -- this
-  // is the module-level singleton, not a fixture scoped to one test.
+  // wizardState is a module-level singleton, not a fixture scoped to one
+  // test, so the address the drop-list test below sets on it would
+  // otherwise leak into whatever test renders EngineRoom next.
   wizardState.address = ''
 })
 
