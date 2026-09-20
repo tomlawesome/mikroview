@@ -505,8 +505,8 @@ func TestHandleSetupCommandsHTTPSTransport(t *testing.T) {
 		t.Errorf("Backup.Blocked on the default transport = %v, want the drop box's own preconditions", sftp.Steps.Backup.Blocked)
 	}
 
-	if !s.Setup.SetBackupTransport(setup.BackupTransportHTTPS) {
-		t.Fatal("SetBackupTransport refused https")
+	if ok, err := s.Setup.SetBackupTransport(setup.BackupTransportHTTPS); err != nil || !ok {
+		t.Fatalf("SetBackupTransport refused https: ok=%v err=%v", ok, err)
 	}
 	https := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5:8443", Token: "tok-123"})
 	if len(https.Steps.Backup.Blocked) != 0 || len(https.Steps.BackupSchedule.Blocked) != 0 {

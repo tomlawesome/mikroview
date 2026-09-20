@@ -995,7 +995,17 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 	s.lockVaultForUser(user.ID)
 	revokedTokens := 0
 	if s.Tokens != nil {
-		revokedTokens = s.Tokens.RevokeAllCreatedBy(user.ID)
+		var err error
+		revokedTokens, err = s.Tokens.RevokeAllCreatedBy(user.ID)
+		if err != nil {
+			// The account deletion above already committed, so this
+			// request still succeeds -- but a failed write here leaves
+			// this user's tokens durably intact, so it's said out loud
+			// server-side rather than reported as done (R6): the
+			// response below reflects what actually persisted (zero),
+			// not what was attempted.
+			authLog.Error(fmt.Sprintf("revoking tokens for deleted user %s: %v", user.ID, err))
+		}
 	}
 
 	s.Audit.Record(auditActor(r), "user.delete", user.Username,
