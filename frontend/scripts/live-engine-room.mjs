@@ -55,6 +55,14 @@ await goTo(page, 'Settings')
 // states, and this list is a copy of the DOM order, not an independent
 // decision, so it has to keep up with what the page mounts.
 const GROUP_ORDER = ['ingest', 'new settings', 'keys', 'detection', 'memory', 'disk', 'router backups', 'drop list', 'account', 'people']
+// Router backups and the drop list mount only once their own GET has
+// answered (EngineRoom.svelte's `{#if routerBackups}` and its twin), so
+// straight after arrival the page can honestly hold eight groups for a
+// beat. Reading the order then compared a half-loaded page: WebKit on a
+// loaded shard lost that race once (2026-09-20) where Chromium never had.
+await page
+  .waitForFunction((want) => document.querySelectorAll('.stsection h3').length >= want, GROUP_ORDER.length, { timeout: 10000 })
+  .catch(() => {})
 const groupNames = await page.$$eval('.stsection h3', (els) => els.map((e) => e.textContent.trim()))
 check(
   JSON.stringify(groupNames) === JSON.stringify(GROUP_ORDER),

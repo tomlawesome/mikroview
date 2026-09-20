@@ -15,7 +15,7 @@
 // changing, and the clipboard actually holding the raw IP -- not the
 // "nas-live-check" label the row displays -- after clicking it.
 
-import { session, feedRaw, check, done, unfoldStreamFilter } from './live-browser.mjs'
+import { session, feedRaw, check, done, unfoldStreamFilter, grantClipboard } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const RULE = 'live-token-copy'
@@ -226,7 +226,7 @@ check(!isTransparent(colorOnHover), `hovering the row reveals the copy glyph (co
 // Clipboard permissions, granted explicitly, so the read-back below can
 // prove what actually landed on the clipboard rather than only that a
 // toast appeared (which would still pass if the write silently failed).
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await grantClipboard(page)
 
 await copyBtn.click()
 

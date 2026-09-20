@@ -12,7 +12,7 @@
 // So every assertion here goes through a real browser against a real
 // server.
 
-import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, waitForStreamRows, grantClipboard } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -20,7 +20,7 @@ const URL_BASE = process.env.MV_URL
 // Auto-launch will not have fired: it is gated on the instance having no
 // devices, and the harness declares a router the reset keeps -- so the
 // door under test here is the relaunch one, which is the same door.
-const { page, consoleErrors } = await session({ dismissSetup: false })
+const { page, consoleErrors } = await session({ dismissSetup: false, mocksApi: true })
 
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
@@ -695,7 +695,7 @@ const copiedKey = await keyField.inputValue()
 // Clipboard permissions granted explicitly, so this proves what landed on
 // the clipboard rather than only that a toast appeared (live-token-copy's
 // own reasoning).
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL_BASE })
+await grantClipboard(page)
 await page.click('.setup-wizard .keymint .copy-btn')
 await page.waitForSelector('.toast[role="status"]', { timeout: 3000 })
 const clipboardKey = await page.evaluate(() => navigator.clipboard.readText())
