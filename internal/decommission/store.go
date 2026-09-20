@@ -124,6 +124,22 @@ func (s *Store) Close(ctx context.Context) error { return s.wb.Close(ctx) }
 // write-behind writer. Whole-document rather than per-watch, matching
 // every sibling store: the document is small and bounded (maxWatches),
 // and one canonical encoding is what makes "did this change" answerable.
+//
+// This store has no tryPersistLocked error-returning half (v0.6.0 audit
+// finding R6, issue #1303): MarkDirty cannot fail -- it only hands a
+// snapshot to the write-behind writer's own goroutine -- and the
+// document above is built entirely from this package's own Watch type
+// (strings/ints/times/slices), so json.Marshal has nothing in it that
+// can fail to encode. A backend Save that fails happens later, off this
+// goroutine, on the writer's own retry schedule, and is reported through
+// OnSaveError (see OpenWithBackend) -- not silence, just asynchronous,
+// the same #400 trade-off internal/engine's DefinitionsStore.
+// persistLocked documents for its own write-behind document. A
+// synchronous, error-returning wrapper here would have nothing to ever
+// report failing, and forcing one to answer anyway (by calling Flush)
+// would put a disk write under s.mu, on the same lock the evaluation
+// goroutine's RecordTraffic takes on every matching event -- exactly the
+// hot-path wait #400 moved off callers in the first place.
 func (s *Store) persistLocked() {
 	if s.wb == nil {
 		return
