@@ -166,3 +166,48 @@ func TestDiffDoesNotBuildTheMyersTraceItWillThrowAway(t *testing.T) {
 			"abandoned Myers trace is being built again", allocated, budget)
 	}
 }
+
+// TestDiffOverLineCapNeverBuildsFullSides (#1280): two exports past
+// maxDiffLines on their own -- the shape of a pair crafted as millions
+// of short lines near the 16 MiB vault cap -- used to have both sides
+// built in full as []diffSide, one entry per line, before Diff ever
+// looked at maxDiffLines. That is the actual cost the compare screen
+// paid: hundreds of MB per side for a pair that was always going to
+// answer wholesale. The lines here never coincide between from and to
+// ("old N" vs "new N"), so the common-prefix/suffix trim the old code
+// ran first would not have removed anything either -- the early exit's
+// answer is provably the same one Diff returned before this fix for
+// this shape of input, just without paying to build either side.
+func TestDiffOverLineCapNeverBuildsFullSides(t *testing.T) {
+	var from, to strings.Builder
+	n := maxDiffLines + 200
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&from, "old line %d\n", i)
+		fmt.Fprintf(&to, "new line %d\n", i)
+	}
+	fromStr, toStr := from.String(), to.String()
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := Diff(fromStr, toStr)
+	runtime.ReadMemStats(&after)
+
+	if len(got) != 2*n {
+		t.Fatalf("diff has %d lines, want %d (every line of each side)", len(got), 2*n)
+	}
+	if got[0].Op != DiffRemoved || got[n].Op != DiffAdded {
+		t.Errorf("fallback = %s then %s, want every removal then every addition", got[0].Op, got[n].Op)
+	}
+
+	// Measured at this size: the code before this fix allocated about
+	// 8.07 MB building both full sides before ever checking the cap;
+	// walking the text directly instead brings that to about 4.03 MB
+	// (the wholesale output itself, which still has to exist). Budget
+	// partway between the two, so a regression back to building a full
+	// side first is caught well before it could reach the old figure.
+	const budget = 6 * 1024 * 1024
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > budget {
+		t.Errorf("Diff allocated %d bytes past the line cap, want under %d -- looks like a full side "+
+			"is being built before the cap is checked", allocated, budget)
+	}
+}

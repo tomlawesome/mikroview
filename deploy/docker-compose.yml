@@ -4,6 +4,11 @@ services:
       context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Runs as uid 1000 (the image default) unless overridden here. See
+    # docs/install.md, "Running as a different account", before
+    # uncommenting this -- a fresh named volume needs its own chown, and
+    # a bind-mounted mikroview/data needs the same uid/gid as below.
+    # user: "2000:2000"
     ports:
       # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port,
       # already unprivileged so no remap is needed). MikroView's only
@@ -155,6 +160,9 @@ services:
     #      start with "permission denied". Keep the tight mode and give
     #      it to that user:
     #        sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
+    #      Running mikroview itself as some other uid (see the `user:`
+    #      note near the top of this file)? Chown this file to that uid
+    #      instead of 1000.
     #   3. Mount it read-only and point config.yaml's postgres.dsnFile at
     #      it, or set MIKROVIEW_POSTGRES_DSN_FILE:
     #        - ./postgres-dsn:/run/secrets/mikroview-postgres-dsn:ro
