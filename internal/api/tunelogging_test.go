@@ -422,17 +422,11 @@ func TestTuneLoggingRenderMatcherFallsBackToNumbers(t *testing.T) {
 	}
 }
 
-// TestTuneLoggingRenderLoggingOnlyEnforcementBites is the load-bearing
-// negative test for #435's central invariant: it substitutes the
-// package-level renderExport hook with a version that corrupts a
-// non-logging attribute in the rendered text (chain=forward ->
-// chain=input, wherever it first appears), and asserts the mechanical
-// check catches it -- 500, the fixed error body, and nothing else. If
-// this test is deleted or renderExport reverted to always trust
-// itself, a rendering bug that touched more than logging would ship
-// silently.
-// The old check compared a handful of attributes; this proves the
-// enforcement also catches an attribute it never read being dropped.
+// TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute drops a
+// non-logging attribute from the rendered text (in-interface=bridge1)
+// and asserts the check catches it. The old check compared a handful of
+// attributes; this proves the enforcement also catches an attribute it
+// never read being dropped.
 func TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asUser(s.mux()))
@@ -454,6 +448,15 @@ func TestTuneLoggingRenderLoggingOnlyEnforcementSeesEveryAttribute(t *testing.T)
 	}
 }
 
+// TestTuneLoggingRenderLoggingOnlyEnforcementBites is the load-bearing
+// negative test for #435's central invariant: it substitutes the
+// package-level renderExport hook with a version that corrupts a
+// non-logging attribute in the rendered text (chain=forward ->
+// chain=input, wherever it first appears), and asserts the mechanical
+// check catches it -- 500, the fixed error body, and nothing else. If
+// this test is deleted or renderExport reverted to always trust
+// itself, a rendering bug that touched more than logging would ship
+// silently.
 func TestTuneLoggingRenderLoggingOnlyEnforcementBites(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asUser(s.mux()))
