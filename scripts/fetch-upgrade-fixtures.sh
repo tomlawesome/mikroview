@@ -158,7 +158,18 @@ if api_get "projects/${PROJECT_ID}/packages?package_type=generic&package_name=up
   # scripts/check-upgrade-fixtures-recorded.sh.
   found="$(grep -oE '"version":[[:space:]]*"[^"]*"' "$registry_list" | sed -E 's/.*"([^"]*)"$/\1/' | sort -u)" || true
   if [ -z "$found" ]; then
-    log "the registry lists no upgrade-fixtures versions -- committed versions only"
+    # Zero matches means "nothing recorded" only when the body really was
+    # the empty list GitLab returns for that case (`[]`). Anything else
+    # that matched no version field -- a truncated transfer, a rate-limit
+    # or error body that still came back 200 -- is a broken response, not
+    # an empty registry, and treating it as the latter would silently
+    # fall back to the committed set on every future run too.
+    if [ "$(tr -d '[:space:]' < "$registry_list")" = "[]" ]; then
+      log "the registry lists no upgrade-fixtures versions -- committed versions only"
+    else
+      log "registry listing came back 200 but didn't parse as a package list -- treating as a failed fetch, not an empty registry"
+      failed=$((failed + 1))
+    fi
   else
     echo "$found" >> "$versions_file"
   fi
