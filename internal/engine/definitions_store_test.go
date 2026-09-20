@@ -625,6 +625,7 @@ func TestUpsertLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	poisonDefinitionsStoreForTest(s)
 
 	d := NewDefinition("new rule", IntentDetection, KindDeclarative)
@@ -650,6 +651,7 @@ func TestUpsertRestoresThePreviousDefinitionWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	d := NewDefinition("original name", IntentDetection, KindDeclarative)
 	d.Provenance = Provenance{Origin: ProvenanceCustom}
 	d.Detection = testDetectionSpec()
@@ -678,6 +680,7 @@ func TestSetEnabledAndScopeLeavesTheDefinitionUnchangedWhenPersistFails(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	if err := SeedShippedDefinitions(s, nil, DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
@@ -700,6 +703,7 @@ func TestDeleteLeavesTheDefinitionInPlaceWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	d := NewDefinition("to delete", IntentDetection, KindDeclarative)
 	d.Provenance = Provenance{Origin: ProvenanceCustom}
 	d.Detection = testDetectionSpec()

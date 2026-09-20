@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -170,6 +171,7 @@ func TestUpsertExpectationLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	poisonDefinitionsStoreForTest(s)
 
 	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err == nil {
@@ -191,6 +193,7 @@ func TestUpsertExpectationRestoresThePreviousEntryWhenPersistFails(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Name: "original", Ports: []int{22}}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +213,7 @@ func TestDeleteExpectationLeavesTheEntryInPlaceWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +241,7 @@ func TestResetExpectationsLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err != nil {
 		t.Fatal(err)
 	}
