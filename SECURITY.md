@@ -566,6 +566,19 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   `docs/decisions/event-retention.md`'s amendment for why a second
   encryption layer there was not judged to add real value for this
   build.
+- **UI preferences follow the account, not the browser.** Saved filter
+  presets, top-talker widgets, column widths and visibility, colorway,
+  the topography altitude stop, group-repeats, the live table's
+  retention window, the metrics view and the deck's card order are one
+  record per user on the server, fetched on sign-in and written back
+  (debounced) on change. Signing out clears them from the browser's
+  memory; signing in as someone else on the same machine sees that
+  account's own preferences, never the previous one's, and the same
+  account sees its preferences in any browser it signs into (#1283,
+  v0.6.0 security audit). The only things still held in the browser are
+  the setup wizard's freshly-minted `history.keyFile` value for the tab
+  that generated it (sessionStorage, never sent anywhere) and a one-shot
+  flag that plays the sign-out animation on the next page load.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
