@@ -3,12 +3,31 @@
 package entities
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// failingSaveBackend lets Open/OpenWithBackend succeed (nothing stored
+// yet) but fails every Save -- the v0.6.0 audit's R6 fix needs a backend
+// that can never durably record the change a mutator is about to make.
+// Copied from internal/auth/store_test.go, which carries the fuller
+// doc comment; this package has no equivalent of its own.
+type failingSaveBackend struct{}
+
+func (failingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (failingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	return 0, errors.New("backend unavailable")
+}
+func (failingSaveBackend) Close() error     { return nil }
+func (failingSaveBackend) Describe() string { return "failing test backend" }
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
 	s, err := Open("")
@@ -156,8 +175,8 @@ func TestDeleteRemovesEntityAndReportsFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !s.Delete(TypeHost, "1.2.3.4") {
-		t.Error("expected Delete on a known entity to return true")
+	if ok, err := s.Delete(TypeHost, "1.2.3.4"); err != nil || !ok {
+		t.Errorf("expected Delete on a known entity to return (true, nil), got (%v, %v)", ok, err)
 	}
 	if len(s.List()) != 0 {
 		t.Errorf("expected the entity to be removed, got %d remaining", len(s.List()))
@@ -166,8 +185,8 @@ func TestDeleteRemovesEntityAndReportsFound(t *testing.T) {
 
 func TestDeleteUnknownIsNoOp(t *testing.T) {
 	s, _ := Open("")
-	if s.Delete(TypeHost, "nonexistent") {
-		t.Error("expected Delete on an unknown pair to return false")
+	if ok, err := s.Delete(TypeHost, "nonexistent"); err != nil || ok {
+		t.Errorf("expected Delete on an unknown pair to return (false, nil), got (%v, %v)", ok, err)
 	}
 }
 
@@ -240,8 +259,8 @@ func TestDeletePersists(t *testing.T) {
 	if _, err := s1.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4"}); err != nil {
 		t.Fatal(err)
 	}
-	if !s1.Delete(TypeHost, "1.2.3.4") {
-		t.Fatal("expected Delete to succeed")
+	if ok, err := s1.Delete(TypeHost, "1.2.3.4"); err != nil || !ok {
+		t.Fatalf("expected Delete to succeed, got (%v, %v)", ok, err)
 	}
 
 	s2, err := Open(path)
@@ -259,10 +278,13 @@ func TestDeletePersists(t *testing.T) {
 // empty (or freshly created) store.
 func TestSeedImportsWhenEmpty(t *testing.T) {
 	s, _ := Open("")
-	n := s.Seed(
+	n, err := s.Seed(
 		map[string]string{"r13": "WAN input"},
 		map[string]string{"192.168.1.1": "core router"},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 2 {
 		t.Fatalf("expected Seed to report importing 2 entities, got %d", n)
 	}
@@ -292,11 +314,14 @@ func TestSeedImportsWhenEmpty(t *testing.T) {
 // config maps than the first, must never import anything more.
 func TestSeedIsANoOpOnceAlreadySeeded(t *testing.T) {
 	s, _ := Open("")
-	if n := s.Seed(map[string]string{"r13": "WAN input"}, nil); n != 1 {
-		t.Fatalf("expected the first Seed to import 1 entity, got %d", n)
+	if n, err := s.Seed(map[string]string{"r13": "WAN input"}, nil); err != nil || n != 1 {
+		t.Fatalf("expected the first Seed to import 1 entity, got (%d, %v)", n, err)
 	}
 
-	n := s.Seed(map[string]string{"r99": "should never appear"}, map[string]string{"10.0.0.1": "should never appear"})
+	n, err := s.Seed(map[string]string{"r99": "should never appear"}, map[string]string{"10.0.0.1": "should never appear"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Errorf("expected a second Seed call to report 0 imports, got %d", n)
 	}
@@ -309,8 +334,8 @@ func TestSeedIsANoOpOnceAlreadySeeded(t *testing.T) {
 
 func TestSeedWithNoConfiguredNamesIsANoOp(t *testing.T) {
 	s, _ := Open("")
-	if n := s.Seed(nil, nil); n != 0 {
-		t.Errorf("expected Seed with empty maps to import nothing, got %d", n)
+	if n, err := s.Seed(nil, nil); err != nil || n != 0 {
+		t.Errorf("expected Seed with empty maps to import nothing, got (%d, %v)", n, err)
 	}
 	if len(s.List()) != 0 {
 		t.Errorf("expected the store to remain empty, got %+v", s.List())
@@ -325,11 +350,14 @@ func TestSeedWithNoConfiguredNamesIsANoOp(t *testing.T) {
 // point," not "keep importing until the store has something."
 func TestSeedWithNothingToImportStillMarksSeeded(t *testing.T) {
 	s, _ := Open("")
-	if n := s.Seed(nil, nil); n != 0 {
-		t.Fatalf("expected the first Seed (nothing configured) to import 0, got %d", n)
+	if n, err := s.Seed(nil, nil); err != nil || n != 0 {
+		t.Fatalf("expected the first Seed (nothing configured) to import 0, got (%d, %v)", n, err)
 	}
 
-	n := s.Seed(map[string]string{"r13": "added to config.yaml after the first boot"}, nil)
+	n, err := s.Seed(map[string]string{"r13": "added to config.yaml after the first boot"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Errorf("expected a later Seed call to still be a no-op, got %d", n)
 	}
@@ -357,17 +385,17 @@ func TestSeedDoesNotReimportAfterFullDeletionAcrossRestart(t *testing.T) {
 	}
 	ruleNames := map[string]string{"r13": "WAN input"}
 	hostNames := map[string]string{"192.168.1.1": "core router"}
-	if n := s1.Seed(ruleNames, hostNames); n != 2 {
-		t.Fatalf("expected the first Seed to import 2 entities, got %d", n)
+	if n, err := s1.Seed(ruleNames, hostNames); err != nil || n != 2 {
+		t.Fatalf("expected the first Seed to import 2 entities, got (%d, %v)", n, err)
 	}
 
 	// An admin deletes every entity, one at a time, via the store's own
 	// Delete -- exactly what DELETE /api/entities does.
-	if !s1.Delete(TypeRule, "r13") {
-		t.Fatal("expected deleting the seeded rule entity to succeed")
+	if ok, err := s1.Delete(TypeRule, "r13"); err != nil || !ok {
+		t.Fatalf("expected deleting the seeded rule entity to succeed, got (%v, %v)", ok, err)
 	}
-	if !s1.Delete(TypeHost, "192.168.1.1") {
-		t.Fatal("expected deleting the seeded host entity to succeed")
+	if ok, err := s1.Delete(TypeHost, "192.168.1.1"); err != nil || !ok {
+		t.Fatalf("expected deleting the seeded host entity to succeed, got (%v, %v)", ok, err)
 	}
 	if len(s1.List()) != 0 {
 		t.Fatalf("expected the store to be genuinely empty after deleting everything, got %+v", s1.List())
@@ -385,7 +413,10 @@ func TestSeedDoesNotReimportAfterFullDeletionAcrossRestart(t *testing.T) {
 	// main.go calls Seed unconditionally on every boot, with the same
 	// config.yaml maps as before -- this must stay a no-op, not
 	// resurrect what the admin deleted.
-	n := s2.Seed(ruleNames, hostNames)
+	n, err := s2.Seed(ruleNames, hostNames)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Errorf("expected Seed to report 0 after a full deletion + restart, got %d", n)
 	}
@@ -404,7 +435,9 @@ func TestCountReflectsStoreSize(t *testing.T) {
 	if s.Count() != 2 {
 		t.Errorf("expected Count()==2, got %d", s.Count())
 	}
-	s.Delete(TypeHost, "1.2.3.4")
+	if _, err := s.Delete(TypeHost, "1.2.3.4"); err != nil {
+		t.Fatal(err)
+	}
 	if s.Count() != 1 {
 		t.Errorf("expected Count()==1 after a delete, got %d", s.Count())
 	}
@@ -524,5 +557,102 @@ func TestUpsertRejectsControlCharactersInType(t *testing.T) {
 	}
 	if _, err := s.Upsert(Entity{Type: "host\x1b[31m", Key: "10.0.0.2"}); !errors.Is(err, ErrInvalidEntityText) {
 		t.Errorf("Upsert with an escape sequence in Type returned %v, want ErrInvalidEntityText", err)
+	}
+}
+
+// TestUpsertLeavesTheStoreUnchangedWhenPersistFails is the v0.6.0
+// audit's R6 fix: an entity add/rename that cannot be saved must not
+// take effect in memory either, or a restart before the next good write
+// would silently discard it while the caller was told it succeeded.
+func TestUpsertLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "core"}); err == nil {
+		t.Fatal("Upsert against a backend that cannot save = nil error, want one")
+	}
+	if s.Exists(TypeHost, "1.2.3.4") {
+		t.Error("expected the entity to not exist in memory after a failed persist")
+	}
+}
+
+// TestUpsertRestoresThePreviousEntityWhenPersistFails proves the
+// rollback restores the previous record, not just "nothing new
+// appeared" -- an edit that cannot be saved must leave the old label in
+// place, not silently blank it.
+func TestUpsertRestoresThePreviousEntityWhenPersistFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "entities.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "original"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Swap in a backend that can no longer save, then try to overwrite
+	// the existing entity's label.
+	s.backend = failingSaveBackend{}
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "changed"}); err == nil {
+		t.Fatal("Upsert against a backend that cannot save = nil error, want one")
+	}
+	if got := s.Label(TypeHost, "1.2.3.4"); got != "original" {
+		t.Errorf("Label after a failed persist = %q, want the previous label restored", got)
+	}
+}
+
+// TestDeleteLeavesTheEntityInPlaceWhenPersistFails is the v0.6.0 audit's
+// R6 fix: a delete that cannot be saved must not read as deleted, or a
+// restart before the next good write would resurrect an entity an
+// operator was told was already gone.
+func TestDeleteLeavesTheEntityInPlaceWhenPersistFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "entities.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4", Label: "core"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.backend = failingSaveBackend{}
+	deleted, err := s.Delete(TypeHost, "1.2.3.4")
+	if err == nil {
+		t.Fatal("Delete against a backend that cannot save = nil error, want one")
+	}
+	if deleted {
+		t.Error("expected Delete to report false when the removal could not be saved")
+	}
+	if !s.Exists(TypeHost, "1.2.3.4") {
+		t.Error("expected the entity to still exist after a failed persist")
+	}
+}
+
+// TestSeedDoesNotMarkItselfSeededWhenPersistFails is the v0.6.0 audit's
+// R6 fix: a Seed that cannot be saved must not set the seeded marker in
+// memory, or a restart before the next good write would forget the
+// migration ran at all and re-import against whatever config.yaml holds
+// by then -- Seed's own doc comment on why "first boot" must mean
+// exactly one decision point.
+func TestSeedDoesNotMarkItselfSeededWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+
+	n, err := s.Seed(map[string]string{"r13": "WAN input"}, nil)
+	if err == nil {
+		t.Fatal("Seed against a backend that cannot save = nil error, want one")
+	}
+	if n != 0 {
+		t.Errorf("expected Seed to report 0 imports on a failed persist, got %d", n)
+	}
+	if len(s.List()) != 0 {
+		t.Errorf("expected the store to remain empty after a failed persist, got %+v", s.List())
+	}
+	if s.seeded {
+		t.Error("expected seeded to stay false after a failed persist, so a later Seed can retry")
 	}
 }
