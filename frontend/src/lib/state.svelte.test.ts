@@ -14,8 +14,9 @@ vi.mock('./api', () => ({
 
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { appState, applyFilters } from './state.svelte'
+import { MAX_CLIENT_EVENTS } from './constants'
 import { matchingIds } from './ruleMatcher'
-import { emptyFilters, type FirewallEvent, type Filters, type Stats } from './types'
+import { emptyFilters, type ClientEvent, type FirewallEvent, type Filters, type Stats } from './types'
 
 // Covers applyFilters's rule/ruleRegex branch specifically -- a
 // performance audit found the regex used to be constructed inside the
@@ -523,4 +524,104 @@ describe('AppState.setStats and the outrun episode (#1109, #1218 finding 10)', (
 
     vi.restoreAllMocks()
   })
+})
+
+// #1304 E2: chainOptions/srcCountryOptions/dstCountryOptions used to be
+// $derived.by scans of the whole `events` buffer, so every flush re-walked
+// up to MAX_CLIENT_EVENTS items just to notice a value already counted.
+// They are now kept by running counts, updated only by the events that
+// actually joined or left the buffer.
+describe('#1304 E2: chain/country option lists stay correct incrementally', () => {
+  beforeEach(() => {
+    appState.reset()
+  })
+
+  it('picks up a newly observed chain and source country, then drops them once evicted', async () => {
+    appState.appendLive([evt({ id: 1, chain: 'mangle', srcIp: '203.0.113.9', srcCountry: 'FR' })])
+    await new Promise((r) => setTimeout(r, 220))
+
+    expect(appState.chainOptions).toContain('mangle')
+    expect(appState.srcCountryOptions.map((o) => o.value)).toContain('FR')
+
+    // Exactly enough unrelated events to push event id 1 out of the
+    // MAX_CLIENT_EVENTS window -- the only thing that should evict it.
+    const filler = Array.from({ length: MAX_CLIENT_EVENTS }, (_, i) =>
+      evt({ id: i + 100, chain: 'forward', srcIp: '198.51.100.1', srcCountry: 'US' }),
+    )
+    appState.appendLive(filler)
+    await new Promise((r) => setTimeout(r, 220))
+
+    expect(appState.chainOptions).not.toContain('mangle')
+    expect(appState.srcCountryOptions.map((o) => o.value)).not.toContain('FR')
+    // Builtins and the now-dominant country survive the eviction untouched.
+    expect(appState.chainOptions).toEqual(['input', 'forward', 'output', 'srcnat', 'dstnat'])
+    expect(appState.srcCountryOptions.map((o) => o.value)).toContain('US')
+  }, 10000)
+
+  // The correctness test above passes even against the old full-rescan
+  // implementation -- both produce the same answer, just at different
+  // cost. This is the regression test for the actual audit finding: the
+  // filter bar reads all three option lists on every render (see
+  // FilterBar.svelte), so a rescan-on-every-change implementation makes
+  // that read cost scale with the whole buffer. Asserted as a cost
+  // *ratio* between a small and a huge buffer, not a wall-clock ceiling,
+  // for the same contended-shared-runner reason as the LiveTable #728
+  // test above it in this suite -- appending the same 5 events should
+  // cost about the same whether the buffer already holds 200 or 20,000.
+  it('costs about the same to append a handful of events whether the buffer holds hundreds or tens of thousands', () => {
+    function clientEvt(overrides: Partial<FirewallEvent> = {}): ClientEvent {
+      return { ...evt(overrides), receivedAt: Date.now() }
+    }
+    // Measured through applyOptionCountDelta directly, not appendLive or
+    // even appendUnseen -- both of those also pay an unrelated O(buffer)
+    // cost building the id-dedup Set, which would swamp this measurement
+    // without narrowing what it says about E2's specific fix. This is the
+    // exact method the option lists are now maintained through.
+    function callApplyDelta(added: readonly ClientEvent[], removed: readonly ClientEvent[] = []) {
+      ;(
+        appState as unknown as {
+          applyOptionCountDelta(a: readonly ClientEvent[], r: readonly ClientEvent[]): void
+        }
+      ).applyOptionCountDelta(added, removed)
+    }
+
+    // Summed over many reps (each starting from a fresh buffer of the
+    // given size, built outside the timed section) so the signal clears
+    // timer-resolution noise -- a single sub-millisecond call is not
+    // reliably measurable on its own.
+    function totalCostOfFiveArrivals(bufferSize: number, reps: number): number {
+      let total = 0
+      for (let rep = 0; rep < reps; rep++) {
+        const base = rep * 100_000
+        appState.setInitialEvents(
+          Array.from({ length: bufferSize }, (_, i) =>
+            evt({ id: base + i + 1, chain: 'forward', srcIp: '198.51.100.1', srcCountry: 'US' }),
+          ),
+        )
+        const fresh = Array.from({ length: 5 }, (_, i) =>
+          clientEvt({ id: base + bufferSize + i + 1, chain: 'forward', srcIp: '198.51.100.1', srcCountry: 'US' }),
+        )
+        const t0 = performance.now()
+        callApplyDelta(fresh)
+        total += performance.now() - t0
+      }
+      return total
+    }
+
+    // Unmeasured warm-up: module/JIT costs would otherwise swamp the
+    // small-N sample below.
+    totalCostOfFiveArrivals(50, 5)
+
+    const small = 200
+    const large = MAX_CLIENT_EVENTS
+    const reps = 40
+    const smallCost = totalCostOfFiveArrivals(small, reps)
+    const largeCost = totalCostOfFiveArrivals(large, reps)
+
+    const bufferRatio = large / small // 100
+    const costRatio = largeCost / Math.max(smallCost, 0.5)
+    // A per-arrival rescan of the whole buffer would make this scale with
+    // buffer size (~100x here); incremental maintenance keeps it flat.
+    expect(costRatio).toBeLessThan(bufferRatio / 4)
+  }, 20000)
 })
