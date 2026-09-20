@@ -31,6 +31,18 @@ class ConfigUpgradeState {
       this.loaded = true
     }
   }
+
+  // #1083's rule -- every admin-only module-lifetime store is cleared
+  // on sign-out -- reached this one a round late (v0.6.0 audit, Quality
+  // stage). Without it, `loaded` stayed true across a failed sign-out
+  // and the panel could show the previous admin's list of unset
+  // settings before its own refresh answered.
+  reset() {
+    this.settings = []
+    this.version = ''
+    this.loaded = false
+    this.error = null
+  }
 }
 
 export const configUpgradeState = new ConfigUpgradeState()
