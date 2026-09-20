@@ -581,3 +581,67 @@ describe('the columns ▸ picker (#729/#1197)', () => {
     expect(resetBtn).toHaveProperty('disabled', true)
   })
 })
+
+// #1304 E11: statTalker/statPort used to rescan the whole appState.events
+// buffer (via eventsBetween's forward scan) every time either the buffer
+// or the active window changed -- while the panel is open and traffic is
+// live, that is most flushes. appState.events is oldest-first (the same
+// ordering ringHolds already leans on), and the window this panel ever
+// asks about sits at the *end* of the buffer, so the fix scans backward
+// from the end and stops the moment it passes the window's start.
+// Instrumented by counting reads of `receivedAt` (the one field the scan
+// touches per candidate) rather than timing, so this cannot flake on a
+// slow runner: a full scan reads it once per buffer item; an early-exit
+// scan reads it only for items at or after the window.
+describe('top talker/top port do not rescan old events outside the window (#1304 E11)', () => {
+  function trackedEvent(overrides: Partial<ClientEvent>, reads: { count: number }): ClientEvent {
+    const base: ClientEvent = {
+      id: Math.random(),
+      time: new Date(overrides.receivedAt ?? BASE).toISOString(),
+      deviceId: 'router1',
+      sourceIp: '203.0.113.10',
+      action: 'accept',
+      ruleLabel: 'test-rule',
+      chain: 'input',
+      raw: 'test',
+      receivedAt: BASE,
+      ...overrides,
+    }
+    return new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop === 'receivedAt') reads.count++
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+  }
+
+  it('reads receivedAt only for events in or after the window, not the whole buffer', () => {
+    const reads = { count: 0 }
+    // Far outside the [BASE, BASE + N*MIN) window the N=5 buckets above
+    // cover -- padding that a full forward scan would still have to
+    // visit, but a backward scan with early exit never reaches.
+    const padding = Array.from({ length: 3000 }, (_, i) =>
+      trackedEvent({ id: i, receivedAt: BASE - (i + 1) * 10 * MIN, srcIp: '198.51.100.9' }, reads),
+    )
+    // Inside the window: two events from the same host, one from another.
+    const recent = [
+      trackedEvent({ id: 100001, receivedAt: BASE + 1 * MIN, srcIp: '10.0.0.5', dstPort: 443 }, reads),
+      trackedEvent({ id: 100002, receivedAt: BASE + 2 * MIN, srcIp: '10.0.0.5', dstPort: 443 }, reads),
+      trackedEvent({ id: 100003, receivedAt: BASE + 3 * MIN, srcIp: '10.0.0.9', dstPort: 22 }, reads),
+    ]
+    appState.events = [...padding, ...recent]
+    reads.count = 0 // only the render below is under test
+
+    const { container } = render(Whisper)
+    flushSync()
+
+    expect(container.textContent).toContain('top talker')
+    expect(container.textContent).toContain('10.0.0.5')
+    expect(container.textContent).toContain('top port')
+    expect(container.textContent).toContain('443')
+    // Not the 3000 padding events plus the 3 recent ones (a full scan),
+    // just the recent handful and the one padding event the early-exit
+    // check itself reads before stopping.
+    expect(reads.count).toBeLessThan(20)
+  })
+})
