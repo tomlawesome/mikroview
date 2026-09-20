@@ -628,6 +628,13 @@ func writeDecommissionError(w http.ResponseWriter, err error) {
 		errors.Is(err, decommission.ErrNotRetired),
 		errors.Is(err, decommission.ErrUndoExpired):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, decommission.ErrSaveFailed):
+		// R6: a persistence failure is a server-side infrastructure
+		// problem, not a client mistake -- 500, and the backend detail
+		// ErrSaveFailed wraps stays server-side (the log line below)
+		// rather than reaching the client.
+		apiLog.Error("saving a decommission watch change failed: " + err.Error())
+		http.Error(w, "that change could not be saved, so nothing was changed", http.StatusInternalServerError)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}

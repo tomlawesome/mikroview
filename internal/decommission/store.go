@@ -120,20 +120,63 @@ func (s *Store) SetOnChange(fn func()) {
 func (s *Store) Flush(ctx context.Context) error { return s.wb.Flush(ctx) }
 func (s *Store) Close(ctx context.Context) error { return s.wb.Close(ctx) }
 
-// persistLocked re-encodes the whole document and hands it to the
-// write-behind writer. Whole-document rather than per-watch, matching
+// encodeAndMarkDirtyLocked re-encodes the whole document and hands it to
+// the write-behind writer. Whole-document rather than per-watch, matching
 // every sibling store: the document is small and bounded (maxWatches),
 // and one canonical encoding is what makes "did this change" answerable.
+// Shared by persistLocked and tryPersistLocked below.
+func (s *Store) encodeAndMarkDirtyLocked() error {
+	data, err := json.Marshal(document{Watches: s.watches})
+	if err != nil {
+		return fmt.Errorf("decommission: encoding the watch document failed: %w", err)
+	}
+	s.wb.MarkDirty(data)
+	return nil
+}
+
+// tryPersistLocked is persistLocked's error-returning half, for the
+// callers (Add, ForceRemove, Restore, Delete) that change a decommission
+// watch an operator explicitly created, force-removed, restored or
+// deleted -- see each one's own restore-on-error comment (R6). Every
+// other caller (RecordTraffic's straggler clock reset, SetCovered's
+// rule-derived coverage flag, Sweep's automatic retirement) keeps
+// calling persistLocked, which stays fire-and-forget -- see that
+// method's own doc comment for why.
+//
+// The write-behind writer never fails synchronously on its own --
+// MarkDirty only hands off a snapshot for its own goroutine to save
+// later. This calls its already-provided Flush escape hatch instead (see
+// Flush's own doc comment) to force that save now and wait for it, under
+// the same SaveTimeout bound every backend call in this codebase already
+// carries.
+func (s *Store) tryPersistLocked() error {
+	if s.wb == nil {
+		return nil
+	}
+	if err := s.encodeAndMarkDirtyLocked(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), persist.SaveTimeout)
+	defer cancel()
+	if err := s.wb.Flush(ctx); err != nil {
+		return fmt.Errorf("writing decommission watches to the backend failed: %w", err)
+	}
+	return nil
+}
+
+// persistLocked is the swallow-and-log default every ordinary write
+// uses -- see tryPersistLocked's own doc comment for exactly which
+// callers use that instead and why. The in-memory state (which every
+// read goes through) stays correct either way, so a transient disk
+// issue degrades to "won't survive a restart right now" rather than
+// breaking live use.
 func (s *Store) persistLocked() {
 	if s.wb == nil {
 		return
 	}
-	data, err := json.Marshal(document{Watches: s.watches})
-	if err != nil {
-		storeLog.Error("decommission: encoding the watch document failed", "error", err)
-		return
+	if err := s.encodeAndMarkDirtyLocked(); err != nil {
+		storeLog.Error("decommission: persisting the watch document failed", "error", err)
 	}
-	s.wb.MarkDirty(data)
 }
 
 // notify fires the change hook. Separate from persistLocked because it
@@ -198,7 +241,14 @@ func (s *Store) Add(w Watch) (Watch, error) {
 	}
 	stored := w
 	s.watches[w.ID] = &stored
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A watch that only exists in memory must not be reported as
+		// created (R6): a restart before the next good write would drop
+		// it silently, and the operator was told it was being watched.
+		delete(s.watches, w.ID)
+		s.mu.Unlock()
+		return Watch{}, fmt.Errorf("%w: saving the new watch: %v", ErrSaveFailed, err)
+	}
 	s.mu.Unlock()
 	s.notify()
 	return clone(&stored), nil
@@ -297,6 +347,12 @@ func (s *Store) RecordTraffic(srcIP, dstIP string, at time.Time, obs Observation
 		hit = append(hit, clone(w))
 	}
 	if len(hit) > 0 {
+		// The straggler clock reset this records is bookkeeping driven by
+		// traffic, not an operator action -- losing it to a transient
+		// disk issue costs at most one clean-window restart, the same
+		// "won't survive a restart right now" degradation every ordinary
+		// write in this codebase accepts, not a decision an operator was
+		// told was kept. Stays on the swallow-and-log default.
 		s.persistLocked()
 	}
 	s.mu.Unlock()
@@ -325,6 +381,11 @@ func (s *Store) SetCovered(id string, covered bool) error {
 		return nil
 	}
 	w.Covered = covered
+	// Recomputed periodically from the firewall's own rule set (see this
+	// method's own doc comment), not an operator action -- a value lost
+	// to a transient disk issue is simply re-derived on the next
+	// reconciliation pass, not a decision an operator was told was kept.
+	// Stays on the swallow-and-log default.
 	s.persistLocked()
 	s.mu.Unlock()
 	s.notify()
@@ -349,12 +410,21 @@ func (s *Store) ForceRemove(id, actor, reason string, at time.Time) (Watch, erro
 		s.mu.Unlock()
 		return Watch{}, ErrAlreadyEnded
 	}
+	prevDetached, prevForcedAt, prevForcedBy, prevForcedReason := w.Detached, w.ForcedAt, w.ForcedBy, w.ForcedReason
 	w.Detached = true
 	w.ForcedAt = at
 	w.ForcedBy = actor
 	w.ForcedReason = reason
 	out := clone(w)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A force-remove that only exists in memory must not be reported
+		// as done (R6): the segment would reappear on the map after a
+		// restart while the operator was told it was gone, with none of
+		// the who/when/why #385 requires this override to carry.
+		w.Detached, w.ForcedAt, w.ForcedBy, w.ForcedReason = prevDetached, prevForcedAt, prevForcedBy, prevForcedReason
+		s.mu.Unlock()
+		return Watch{}, fmt.Errorf("%w: saving the force-remove: %v", ErrSaveFailed, err)
+	}
 	s.mu.Unlock()
 	s.notify()
 	return out, nil
@@ -384,6 +454,12 @@ func (s *Store) Sweep(now time.Time) []Watch {
 		retired = append(retired, clone(w))
 	}
 	if len(retired) > 0 {
+		// An automatic transition on elapsed time, not an operator
+		// action -- StateAt already answers "retired" from CleanWindow
+		// alone (see this method's own doc comment), so a retirement
+		// timestamp lost to a transient disk issue is re-derived, at
+		// worst a little later, by the next sweep. Stays on the
+		// swallow-and-log default.
 		s.persistLocked()
 	}
 	s.mu.Unlock()
@@ -434,10 +510,18 @@ func (s *Store) Restore(id string, now time.Time) (Watch, error) {
 		s.mu.Unlock()
 		return Watch{}, ErrUndoExpired
 	}
+	prevRetiredAt, prevLastTrafficAt := w.RetiredAt, w.LastTrafficAt
 	w.RetiredAt = time.Time{}
 	w.LastTrafficAt = now
 	out := clone(w)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A restore that only exists in memory must not be reported as
+		// done (R6): the watch would still read as retired after a
+		// restart while the operator was told they had taken that back.
+		w.RetiredAt, w.LastTrafficAt = prevRetiredAt, prevLastTrafficAt
+		s.mu.Unlock()
+		return Watch{}, fmt.Errorf("%w: saving the restore: %v", ErrSaveFailed, err)
+	}
 	s.mu.Unlock()
 	s.notify()
 	return out, nil
@@ -448,12 +532,20 @@ func (s *Store) Restore(id string, now time.Time) (Watch, error) {
 // is "I no longer want to be asked about this range".
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
-	if _, ok := s.watches[id]; !ok {
+	w, ok := s.watches[id]
+	if !ok {
 		s.mu.Unlock()
 		return ErrNoSuchWatch
 	}
 	delete(s.watches, id)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A delete that only exists in memory must not be reported as
+		// done (R6): the watch would reappear after a restart while the
+		// operator was told they were no longer being asked about it.
+		s.watches[id] = w
+		s.mu.Unlock()
+		return fmt.Errorf("%w: saving the delete: %v", ErrSaveFailed, err)
+	}
 	s.mu.Unlock()
 	s.notify()
 	return nil

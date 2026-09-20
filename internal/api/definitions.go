@@ -1072,7 +1072,14 @@ func (s *Server) handleDefinitionsDelete(w http.ResponseWriter, r *http.Request)
 		writeDefinitionError(w, err)
 		return
 	}
-	s.Suggest.MarkHiddenByEntry(id)
+	if err := s.Suggest.MarkHiddenByEntry(id); err != nil {
+		// R6: the definition is already deleted by this point, and that
+		// cannot honestly be un-reported -- only the suggestion candidate
+		// that used to point at it might not durably reflect the hide.
+		// Logged, not turned into a failure of a delete that already
+		// succeeded.
+		apiLog.Error("hiding the suggestion candidate for a deleted definition failed: " + err.Error())
+	}
 	s.Audit.Record(auditActor(r), "definition.delete", id, sd.Definition.Name)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }

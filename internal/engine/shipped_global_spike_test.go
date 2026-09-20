@@ -125,7 +125,7 @@ func TestShippedGlobalSpike_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", "", now.Add(28*time.Second)); !ok {
+	if _, ok, _ := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", "", now.Add(28*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Tick(now.Add(29 * time.Second))

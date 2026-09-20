@@ -258,7 +258,7 @@ func TestAddRevivesClearedFlagAsFreshEpisode(t *testing.T) {
 
 	s.Add(TypePortScan, "1.2.3.4", "first episode", t0)
 	id := s.List()[0].ID
-	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", "", t1); !ok {
+	if _, ok, _ := s.SetVerdict(id, VerdictChecked, "operator", "", t1); !ok {
 		t.Fatal("Clear() on a freshly-added flag should succeed")
 	}
 
@@ -288,16 +288,16 @@ func TestAddRevivesClearedFlagAsFreshEpisode(t *testing.T) {
 // their mind about a flag they already dealt with.
 func TestVerdictOnUnknownOrAlreadyClearedFlag(t *testing.T) {
 	s, _ := Open("")
-	if _, ok := s.SetVerdict("nonexistent", VerdictChecked, "operator", "", time.Now()); ok {
+	if _, ok, _ := s.SetVerdict("nonexistent", VerdictChecked, "operator", "", time.Now()); ok {
 		t.Error("a verdict on an unknown ID should report not-found")
 	}
 
 	s.Add(TypePortScan, "1.2.3.4", "x", time.Now())
 	id := s.List()[0].ID
-	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", "", time.Now()); !ok {
+	if _, ok, _ := s.SetVerdict(id, VerdictChecked, "operator", "", time.Now()); !ok {
 		t.Fatal("the first verdict should succeed")
 	}
-	f, ok := s.SetVerdict(id, VerdictResolved, "operator", "", time.Now())
+	f, ok, _ := s.SetVerdict(id, VerdictResolved, "operator", "", time.Now())
 	if !ok {
 		t.Fatal("a second verdict on an already-cleared flag should still succeed")
 	}
@@ -798,7 +798,7 @@ func TestAddProvisionalNewEpisodeAfterClearCanSettle(t *testing.T) {
 
 	s.AddProvisional(TypeActivitySpike, "203.0.113.9", "warming up", 30, Evidence{}, "US", true, now)
 	f := s.List()[0]
-	if _, ok := s.SetVerdict(f.ID, VerdictChecked, "operator", "", now.Add(time.Second)); !ok {
+	if _, ok, _ := s.SetVerdict(f.ID, VerdictChecked, "operator", "", now.Add(time.Second)); !ok {
 		t.Fatal("expected Clear to succeed on the just-raised provisional flag")
 	}
 
@@ -1077,7 +1077,7 @@ func TestExpectedVerdictClearsAndPreventsFutureRaises(t *testing.T) {
 	s.Add(TypePortScan, "203.0.113.9", "20 ports in 60s", now)
 	id := s.List()[0].ID
 
-	if _, ok := s.SetVerdict(id, VerdictExpected, "operator", "", now.Add(time.Minute)); !ok {
+	if _, ok, _ := s.SetVerdict(id, VerdictExpected, "operator", "", now.Add(time.Minute)); !ok {
 		t.Fatal("expected an expected verdict on a known ID to succeed")
 	}
 
@@ -1100,7 +1100,7 @@ func TestExpectedVerdictClearsAndPreventsFutureRaises(t *testing.T) {
 
 func TestExpectedVerdictOnUnknownIDRecordsNothing(t *testing.T) {
 	s, _ := Open("")
-	if _, ok := s.SetVerdict("nonexistent", VerdictExpected, "operator", "", time.Now()); ok {
+	if _, ok, _ := s.SetVerdict("nonexistent", VerdictExpected, "operator", "", time.Now()); ok {
 		t.Error("expected an expected verdict on an unknown ID to report not-found")
 	}
 	if len(s.ListExclusions()) != 0 {
@@ -1128,7 +1128,7 @@ func TestRemoveExclusionReEnablesRaising(t *testing.T) {
 		t.Fatal("expected the flag to be suppressed while excluded")
 	}
 
-	if !s.RemoveExclusion(TypePortScan, "203.0.113.9") {
+	if ok, err := s.RemoveExclusion(TypePortScan, "203.0.113.9"); !ok || err != nil {
 		t.Fatal("expected RemoveExclusion on a known exclusion to return true")
 	}
 	if s.Excluded(TypePortScan, "203.0.113.9") {
@@ -1144,7 +1144,7 @@ func TestRemoveExclusionReEnablesRaising(t *testing.T) {
 
 func TestRemoveExclusionUnknownReturnsFalse(t *testing.T) {
 	s, _ := Open("")
-	if s.RemoveExclusion(TypePortScan, "203.0.113.9") {
+	if ok, _ := s.RemoveExclusion(TypePortScan, "203.0.113.9"); ok {
 		t.Error("expected RemoveExclusion on a never-excluded pair to return false")
 	}
 }
@@ -1154,10 +1154,10 @@ func TestRemoveExclusionByID(t *testing.T) {
 	s.Exclude(TypePortScan, "203.0.113.9")
 	id := flagID(TypePortScan, "203.0.113.9")
 
-	if !s.RemoveExclusionByID(id) {
+	if ok, err := s.RemoveExclusionByID(id); !ok || err != nil {
 		t.Fatal("expected RemoveExclusionByID on a known exclusion ID to return true")
 	}
-	if s.RemoveExclusionByID(id) {
+	if ok, _ := s.RemoveExclusionByID(id); ok {
 		t.Error("expected a second RemoveExclusionByID call to return false (already removed)")
 	}
 }
@@ -1413,7 +1413,10 @@ func TestClearAllClearsEveryActiveFlag(t *testing.T) {
 	preClearedAt := now.Add(time.Second)
 
 	later := now.Add(time.Minute)
-	n := s.ClearAll(later)
+	n, err := s.ClearAll(later)
+	if err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
 	if n != 3 {
 		t.Errorf("ClearAll returned %d, want 3 (the already-cleared flag must not be recounted)", n)
 	}
@@ -1461,8 +1464,8 @@ func TestClearAllCreatesNoExclusions(t *testing.T) {
 // panic on a store with nothing in it.
 func TestClearAllOnEmptyStoreIsANoOp(t *testing.T) {
 	s, _ := Open("")
-	if n := s.ClearAll(time.Now()); n != 0 {
-		t.Errorf("ClearAll on an empty store returned %d, want 0", n)
+	if n, err := s.ClearAll(time.Now()); n != 0 || err != nil {
+		t.Errorf("ClearAll on an empty store returned (%d, %v), want (0, nil)", n, err)
 	}
 }
 
@@ -1511,7 +1514,7 @@ func activeTargets(flags []Flag) []string {
 // the handler maps this to 404.
 func TestSetVerdictUnknownIDReturnsFalse(t *testing.T) {
 	s, _ := Open("")
-	if _, ok := s.SetVerdict("nonexistent", VerdictInvestigate, "alice", "", time.Now()); ok {
+	if _, ok, _ := s.SetVerdict("nonexistent", VerdictInvestigate, "alice", "", time.Now()); ok {
 		t.Error("SetVerdict() on an unknown ID should return false")
 	}
 }
@@ -1526,7 +1529,7 @@ func TestSetVerdictExpectedClearsFlag(t *testing.T) {
 	s.Add(TypePortScan, "203.0.113.9", "d", now)
 	id := s.List()[0].ID
 
-	f, ok := s.SetVerdict(id, VerdictExpected, "alice", "", now)
+	f, ok, _ := s.SetVerdict(id, VerdictExpected, "alice", "", now)
 	if !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
@@ -1553,7 +1556,7 @@ func TestSetVerdictCheckedClearsFlag(t *testing.T) {
 	s.Add(TypeActivitySpike, "203.0.113.10", "d", now)
 	id := s.List()[0].ID
 
-	f, ok := s.SetVerdict(id, VerdictChecked, "bob", "", now)
+	f, ok, _ := s.SetVerdict(id, VerdictChecked, "bob", "", now)
 	if !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
@@ -1579,7 +1582,7 @@ func TestSetVerdictInvestigateLeavesFlagOpen(t *testing.T) {
 	s.Add(TypeCriticalPort, "203.0.113.11", "d", now)
 	id := s.List()[0].ID
 
-	f, ok := s.SetVerdict(id, VerdictInvestigate, "carol", "", now)
+	f, ok, _ := s.SetVerdict(id, VerdictInvestigate, "carol", "", now)
 	if !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
@@ -1617,7 +1620,7 @@ func TestSetVerdictPersistsAndSurvivesReload(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.Add(TypeGlobalSpike, "global", "d", now)
 	id := s1.List()[0].ID
-	if _, ok := s1.SetVerdict(id, VerdictInvestigate, "dana", "", now); !ok {
+	if _, ok, _ := s1.SetVerdict(id, VerdictInvestigate, "dana", "", now); !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
 	flushForTest(t, s1)
@@ -1652,7 +1655,7 @@ func TestSetVerdictOverwritesPreviousVerdict(t *testing.T) {
 	id := s.List()[0].ID
 
 	s.SetVerdict(id, VerdictInvestigate, "alice", "", now)
-	f, ok := s.SetVerdict(id, VerdictChecked, "bob", "", now.Add(time.Minute))
+	f, ok, _ := s.SetVerdict(id, VerdictChecked, "bob", "", now.Add(time.Minute))
 	if !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
@@ -1678,7 +1681,7 @@ func TestReviveResetsVerdict(t *testing.T) {
 	now := time.Now()
 	s.Add(TypePortScan, "203.0.113.13", "d", now)
 	id := s.List()[0].ID
-	if _, ok := s.SetVerdict(id, VerdictChecked, "alice", "", now); !ok {
+	if _, ok, _ := s.SetVerdict(id, VerdictChecked, "alice", "", now); !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
 
@@ -1701,7 +1704,7 @@ func TestReviveResetsVerdict(t *testing.T) {
 // id case -- the handler maps this to 404.
 func TestUndoVerdictUnknownIDReturnsFalse(t *testing.T) {
 	s, _ := Open("")
-	if _, ok := s.UndoVerdict("nonexistent"); ok {
+	if _, ok, _ := s.UndoVerdict("nonexistent"); ok {
 		t.Error("UndoVerdict() on an unknown ID should return false")
 	}
 }
@@ -1717,7 +1720,7 @@ func TestUndoVerdictReopensAFlagTheVerdictItselfCleared(t *testing.T) {
 	id := s.List()[0].ID
 	before := s.clearedCount
 
-	f, ok := s.SetVerdict(id, VerdictChecked, "alice", "", now)
+	f, ok, _ := s.SetVerdict(id, VerdictChecked, "alice", "", now)
 	if !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
@@ -1728,7 +1731,7 @@ func TestUndoVerdictReopensAFlagTheVerdictItselfCleared(t *testing.T) {
 		t.Fatalf("clearedCount after judging = %d, want %d", got, before+1)
 	}
 
-	f, ok = s.UndoVerdict(id)
+	f, ok, _ = s.UndoVerdict(id)
 	if !ok {
 		t.Fatal("expected UndoVerdict to find the flag")
 	}
@@ -1758,12 +1761,12 @@ func TestUndoVerdictLeavesAnAlreadyClearedFlagCleared(t *testing.T) {
 	s.Add(TypePortScan, "203.0.113.21", "d", now)
 	id := s.List()[0].ID
 
-	if _, ok := s.SetVerdict(id, VerdictChecked, "operator", "", now); !ok {
+	if _, ok, _ := s.SetVerdict(id, VerdictChecked, "operator", "", now); !ok {
 		t.Fatal("setup: expected the first, clearing verdict to succeed")
 	}
 	before := s.clearedCount
 
-	f, ok := s.SetVerdict(id, VerdictExpected, "bob", "", now.Add(time.Minute))
+	f, ok, _ := s.SetVerdict(id, VerdictExpected, "bob", "", now.Add(time.Minute))
 	if !ok {
 		t.Fatal("expected SetVerdict to find the flag")
 	}
@@ -1774,7 +1777,7 @@ func TestUndoVerdictLeavesAnAlreadyClearedFlagCleared(t *testing.T) {
 		t.Fatalf("clearedCount after judging an already-cleared flag = %d, want unchanged %d", got, before)
 	}
 
-	f, ok = s.UndoVerdict(id)
+	f, ok, _ = s.UndoVerdict(id)
 	if !ok {
 		t.Fatal("expected UndoVerdict to find the flag")
 	}
@@ -1801,7 +1804,7 @@ func TestUndoVerdictOnUnjudgedFlagIsANoOp(t *testing.T) {
 	id := s.List()[0].ID
 	before := s.clearedCount
 
-	f, ok := s.UndoVerdict(id)
+	f, ok, _ := s.UndoVerdict(id)
 	if !ok {
 		t.Fatal("expected UndoVerdict to find the flag")
 	}
