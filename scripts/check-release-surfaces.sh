@@ -149,6 +149,10 @@ screenshot_sources() {
       echo "frontend/src/components/Topography.svelte" ;;
     docs/screenshots/engine-room-people-door.png)
       echo "frontend/src/components/EngineRoom.svelte frontend/src/components/ResetCodeOverlay.svelte" ;;
+    docs/screenshots/setup-wizard-ledger.png)
+      echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
+    docs/screenshots/entities-add-a-router.png)
+      echo "frontend/src/components/Entities.svelte" ;;
     *)
       return 1 ;;
   esac
