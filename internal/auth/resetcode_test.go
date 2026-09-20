@@ -107,6 +107,43 @@ func TestNormaliseResetCodeAcceptsWhatAPersonTypes(t *testing.T) {
 	}
 }
 
+// TestResetCodeStaysUnspentWhenTheSpendCannotBeSaved is the R6 rule at
+// the other end of the reset: a spend that only lands in memory is
+// undone by a restart, and the code is live again for whoever saw it.
+// The login is refused instead, and the code still works once the
+// store can write again.
+func TestResetCodeStaysUnspentWhenTheSpendCannotBeSaved(t *testing.T) {
+	backend := &saveBudgetBackend{left: 3} // register, create user, issue code
+	s, err := OpenWithBackend(backend)
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("admin", "admin-password-placeholder", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("bilbo", resetTestOldPassword, RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	_, code, err := s.IssueResetCode(u.ID, now)
+	if err != nil {
+		t.Fatalf("IssueResetCode: %v", err)
+	}
+
+	if _, err := s.Authenticate("bilbo", code, now); err == nil {
+		t.Fatal("Authenticate with a reset code the store cannot record as spent = nil error, want one")
+	}
+
+	backend.left = 1
+	if _, err := s.Authenticate("bilbo", code, now); err != nil {
+		t.Fatalf("expected the code to still be live once the store can write again, got %v", err)
+	}
+	if _, err := s.Authenticate("bilbo", code, now); !errors.Is(err, ErrInvalidCredentials) {
+		t.Errorf("expected the code to be spent after a recorded login, got %v", err)
+	}
+}
+
 // TestIssueResetCodeKillsTheOldPasswordAndLetsTheCodeIn is the positive
 // path: the code works in the password box, the old password does not,
 // and the account comes back flagged for a forced change.

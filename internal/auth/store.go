@@ -1091,8 +1091,22 @@ func (s *Store) Authenticate(username, password string, now time.Time) (*User, e
 		if !u.resetCodeLive(now) {
 			return nil, ErrInvalidCredentials
 		}
+		// Spending the code is the write that matters here: a spend
+		// that only lands in memory is undone by a restart, and the
+		// code is live again for whoever saw it. Refuse the login
+		// rather than honour a spend nothing recorded (R6). A missed
+		// LastLogin on an ordinary password login costs nothing, so
+		// that path keeps the log-and-carry-on write below.
+		prevHash, prevExpires, prevLogin := u.ResetCodeHash, u.ResetCodeExpiresAt, u.LastLogin
 		u.ResetCodeHash = ""
 		u.ResetCodeExpiresAt = time.Time{}
+		u.LastLogin = now
+		if err := s.tryPersistLocked(); err != nil {
+			u.ResetCodeHash, u.ResetCodeExpiresAt, u.LastLogin = prevHash, prevExpires, prevLogin
+			return nil, fmt.Errorf("saving the spent reset code: %w", err)
+		}
+		cp := *u
+		return &cp, nil
 	}
 	u.LastLogin = now
 	s.persistLocked()
