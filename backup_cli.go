@@ -114,7 +114,7 @@ type retiredStore struct {
 // else it carries instead of becoming permanently unrestorable.
 var retiredStores = map[string]retiredStore{
 	"config_drift": {
-		Version: "Unreleased",
+		Version: "v0.6.1",
 		Why: "the per-version dismissal state for the config-upgrade " +
 			"notice (#1218) was replaced by a plain close button, and its " +
 			"backend removed (#1277); nothing reads or writes this store " +
