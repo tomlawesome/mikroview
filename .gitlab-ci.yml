@@ -292,14 +292,16 @@ workflow:
 # image runs as `node`, and a cache the root jobs saved is restored
 # root-owned into a node-user job, so its `npm ci` fails with EACCES on
 # the first rmdir (#1098). Those jobs fetch cold; it costs them ~11 s.
+.npm_cache_entry: &npm_cache_entry
+  key:
+    files:
+      - frontend/package-lock.json
+  paths:
+    - frontend/node_modules/
+  policy: $NPM_CACHE_POLICY
+
 .npm_cache: &npm_cache
-  cache:
-    key:
-      files:
-        - frontend/package-lock.json
-    paths:
-      - frontend/node_modules/
-    policy: $NPM_CACHE_POLICY
+  cache: *npm_cache_entry
 
 # #1304 item E7: the comment above explains why gate:scenarios,
 # gate:scripts and perf:promotion cannot use .npm_cache above -- they run
@@ -667,12 +669,7 @@ test:build-checks:
   # written out rather than merging in .npm_cache -- see
   # go_toolchain_cache_entry above, next to .npm_cache itself.
   cache:
-    - key:
-        files:
-          - frontend/package-lock.json
-      paths:
-        - frontend/node_modules/
-      policy: $NPM_CACHE_POLICY
+    - *npm_cache_entry
     - *go_toolchain_cache_entry
   script:
     - mkdir -p .go-toolchain-cache
@@ -1291,6 +1288,12 @@ perf:promotion:
     - job: gate:scenarios
       optional: true
       artifacts: false
+    - job: gate:scenarios:firefox
+      optional: true
+      artifacts: false
+    - job: gate:scenarios:webkit
+      optional: true
+      artifacts: false
     - job: gate:scripts
       optional: true
       artifacts: false
@@ -1605,12 +1608,7 @@ security:licence-policy:
   # cannot merge two `cache:`-defining anchors, so both entries are
   # written out here rather than merging in .npm_cache.
   cache:
-    - key:
-        files:
-          - frontend/package-lock.json
-      paths:
-        - frontend/node_modules/
-      policy: $NPM_CACHE_POLICY
+    - *npm_cache_entry
     - *go_toolchain_cache_entry
   script:
     - node --test tools/licenses/licence-policy.test.mjs
