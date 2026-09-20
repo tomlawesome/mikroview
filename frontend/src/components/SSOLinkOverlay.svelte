@@ -45,9 +45,9 @@
   async function confirm() {
     error = null
     submitting = true
-    // startSSOLink answers a refusal as a string, but it is still a
-    // fetch and can throw outright -- a dropped connection, same as
-    // anywhere else. Left to propagate, it escapes confirm() with
+    // startSSOLink answers a refusal as a string, and since api.ts's
+    // send() a dropped connection too; a body that is not JSON can
+    // still throw outright. Left to propagate, it escapes confirm() with
     // submitting still true: the button stays on "Redirecting…", no
     // error is shown, and there is no way to try again without
     // reloading. AuthSetup.svelte guards its own call to this function

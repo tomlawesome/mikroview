@@ -781,10 +781,12 @@ describe('LogEveryRule device pick', () => {
     expect((screen.getByRole('button', { name: 'Analyse' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  // A dropped connection rejects rather than answering with an error
-  // string. Uncaught, that skipped the line freeing the button and left
-  // it reading "Analysing…" for a request that had already ended.
-  it('frees the Analyse button and says so when the connection drops', async () => {
+  // A dropped connection used to reject rather than answer with an
+  // error string (api.ts's send() now converts it). Uncaught, that
+  // skipped the line freeing the button and left it reading
+  // "Analysing…" for a request that had already ended; the catch still
+  // covers anything the call can throw.
+  it('frees the Analyse button and says so when the call throws', async () => {
     vi.mocked(fetchTuneLoggingAnalyse).mockRejectedValue(new Error('Failed to fetch'))
     const { container } = render(LogEveryRule)
     await typeExport(container)

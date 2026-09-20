@@ -239,13 +239,12 @@ class WizardState {
   // the server renders whichever transport it has stored.
   async setBackupTransport(transport: BackupTransport): Promise<void> {
     if (transport === this.backupTransport) return
-    // saveSetupBackupTransport only ever resolves to an error string for
-    // a refusal the server actually answered (postJSON/putJSON's own
-    // fetch throws instead on a dropped connection) -- caught here so a
-    // network failure surfaces the same way a refusal does, rather than
-    // as an unhandled rejection that leaves backupTransportError exactly
-    // as it was (most likely null), with nothing beside the pair saying
-    // the switch never took.
+    // saveSetupBackupTransport resolves to an error string for a refusal,
+    // and since api.ts's send() a dropped connection arrives the same
+    // way. The catch covers whatever else the call can still throw (a
+    // 200 whose body is not JSON): left as an unhandled rejection it
+    // would leave backupTransportError exactly as it was (most likely
+    // null), with nothing beside the pair saying the switch never took.
     let error: string | null
     try {
       error = await saveSetupBackupTransport(transport)
@@ -267,12 +266,12 @@ class WizardState {
   // state from that on the server side (commandStep.blocked's
   // "no-address" key, the same mechanism #1217 gave the backup block).
   //
-  // saveSetupAddress only ever resolves to an error string for a
-  // refusal the server actually answered (postJSON's own fetch throws
-  // instead on a dropped connection) -- caught here so a network
-  // failure surfaces the same way a refusal does, rather than as an
-  // unhandled rejection that leaves addressSaveError exactly as it was
-  // (most likely null), with the field looking saved when nothing was.
+  // saveSetupAddress resolves to an error string for a refusal, and
+  // since api.ts's send() a dropped connection arrives the same way.
+  // The catch covers whatever else the call can still throw (a 200
+  // whose body is not JSON): left as an unhandled rejection it would
+  // leave addressSaveError exactly as it was (most likely null), with
+  // the field looking saved when nothing was.
   async saveAddress(): Promise<void> {
     if (!this.address) {
       this.addressSaveError = null

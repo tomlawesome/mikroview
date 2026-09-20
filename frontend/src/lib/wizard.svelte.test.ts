@@ -203,15 +203,16 @@ describe('openRegister resumes an enrolled-but-unregistered router (#1291)', () 
   })
 })
 
-// #1218 audit finding 11: saveSetupAddress/saveSetupBackupTransport only
-// ever resolve to an error string for a refusal the server actually
-// answered -- a dropped connection rejects instead (postJSON/putJSON's
-// own fetch), and neither setter caught that. Left uncaught, the
-// rejection propagated to a fire-and-forget onclick/onblur caller in
-// SetupWizard.svelte with nothing there to catch it either, so
-// addressSaveError/backupTransportError were never set: no message
-// beside the field, which then just looked saved.
-describe('a dropped connection surfaces the same way a refusal does', () => {
+// #1218 audit finding 11: saveSetupAddress/saveSetupBackupTransport
+// used to reject on a dropped connection, and neither setter caught
+// that. Left uncaught, the rejection propagated to a fire-and-forget
+// onclick/onblur caller in SetupWizard.svelte with nothing there to
+// catch it either, so addressSaveError/backupTransportError were never
+// set: no message beside the field, which then just looked saved.
+// api.ts's send() now answers a dropped connection as a refusal string
+// (api.test.ts proves that); this keeps the setters honest about
+// anything the call can still throw.
+describe('a thrown call surfaces the same way a refusal does', () => {
   it('saveAddress', async () => {
     wizardState.address = '192.0.2.1'
     wizardState.addressSaveError = null
