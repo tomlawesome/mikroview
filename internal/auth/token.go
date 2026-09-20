@@ -322,7 +322,15 @@ func (s *TokenStore) Create(name string, kind TokenKind, device string, creator 
 	}
 	s.byID[t.ID] = t
 	s.byHash[hash] = t.ID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A token that only exists in memory must not be handed to the
+		// caller: the raw value is shown exactly once, here, so a
+		// restart before the next good write would leave the caller
+		// holding a value that authenticates against nothing.
+		delete(s.byID, t.ID)
+		delete(s.byHash, hash)
+		return "", nil, fmt.Errorf("saving API tokens: %w", err)
+	}
 
 	cp := *t
 	return raw, &cp, nil
@@ -377,6 +385,11 @@ func (s *TokenStore) Authenticate(raw string, want TokenKind, now time.Time) (*T
 	// while collapsing a poll loop's writes to one an hour. The
 	// in-memory value is always exact; only the durable copy is
 	// coarsened. See #285.
+	//
+	// Kept on the swallow-and-log persistLocked rather than converted
+	// for R6: LastUsedAt is a display convenience, not a credential or
+	// grant, so a failed write here costs nothing worth refusing an
+	// otherwise-valid authentication over.
 	if now.Sub(t.LastUsedAt) >= lastUsedGranularity {
 		t.LastUsedAt = now
 		s.persistLocked()
@@ -406,7 +419,15 @@ func (s *TokenStore) Revoke(id string) error {
 	}
 	delete(s.byID, id)
 	delete(s.byHash, t.HashedValue)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A revoke that only exists in memory must not be reported as
+		// done: the caller tells its operator the token is dead, and a
+		// restart before the next good write would let the raw value
+		// authenticate again with nobody the wiser.
+		s.byID[id] = t
+		s.byHash[t.HashedValue] = id
+		return fmt.Errorf("saving API tokens: %w", err)
+	}
 	return nil
 }
 
@@ -419,25 +440,38 @@ func (s *TokenStore) Revoke(id string) error {
 // tokens carry an empty CreatedBy, and treating that as a match would
 // let deleting any one account wipe every unattributed token in the
 // deployment.
-func (s *TokenStore) RevokeAllCreatedBy(userID string) int {
+//
+// On a persistence failure the deletions are rolled back and the
+// returned count is 0: a revoke that only exists in memory must not be
+// reported as done, or the caller (handleAuthDeleteUser) would tell its
+// operator every one of the deleted account's tokens is dead when a
+// restart could bring them all back.
+func (s *TokenStore) RevokeAllCreatedBy(userID string) (int, error) {
 	if userID == "" {
-		return 0
+		return 0, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	revoked := 0
+	removed := make([]*Token, 0)
 	for id, t := range s.byID {
 		if t.CreatedBy != userID {
 			continue
 		}
 		delete(s.byID, id)
 		delete(s.byHash, t.HashedValue)
-		revoked++
+		removed = append(removed, t)
 	}
-	if revoked > 0 {
-		s.persistLocked()
+	if len(removed) == 0 {
+		return 0, nil
 	}
-	return revoked
+	if err := s.tryPersistLocked(); err != nil {
+		for _, t := range removed {
+			s.byID[t.ID] = t
+			s.byHash[t.HashedValue] = t.ID
+		}
+		return 0, fmt.Errorf("saving API tokens: %w", err)
+	}
+	return len(removed), nil
 }
 
 // List returns every token's metadata, oldest first -- HashedValue is
@@ -479,9 +513,16 @@ func (s *TokenStore) ByKind(kind TokenKind) []*Token {
 	return out
 }
 
-func (s *TokenStore) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for the
+// callers (Create, Revoke, RevokeAllCreatedBy) that issue or revoke a
+// token and so must not let the caller believe a write happened when it
+// didn't -- see each one's own restore-on-error comment. Authenticate's
+// LastUsedAt update keeps using persistLocked below, which keeps
+// today's swallow-and-log behaviour: that field is a display
+// convenience, not worth failing an otherwise-valid authentication over.
+func (s *TokenStore) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	list := make([]*Token, 0, len(s.byID))
 	for _, t := range s.byID {
@@ -491,16 +532,23 @@ func (s *TokenStore) persistLocked() {
 
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding API tokens for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding API tokens for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing API tokens to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing API tokens to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		persistLog.Warn(fmt.Sprintf("API tokens was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
 	s.version = version
+	return nil
+}
+
+// persistLocked is the swallow-and-log default -- see tryPersistLocked's
+// doc comment for which callers keep it and why.
+func (s *TokenStore) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		persistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }

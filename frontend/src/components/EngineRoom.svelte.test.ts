@@ -135,7 +135,7 @@ import {
   fetchDroplist as fetchDroplistReal,
   fetchConfigUpgrade as fetchConfigUpgradeReal,
 } from '../lib/api'
-import type { Stats } from '../lib/types'
+import type { RouterBackupsResponse, Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
@@ -156,6 +156,22 @@ function stats(overrides: Partial<Stats> = {}): Stats {
     windowSeconds: 72 * 3600,
     connectedClients: 1,
     ...overrides,
+  }
+}
+
+// One router-backups answer naming a single router -- the whole of what
+// the out-of-order poll test below needs to tell two answers apart.
+function backupsWith(device: string): RouterBackupsResponse {
+  return {
+    enabled: true,
+    keyUnreadable: false,
+    routers: [
+      { device, generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 },
+    ],
+    totalGenerations: 1,
+    totalRouters: 1,
+    totalBytes: 1024,
+    lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
   }
 }
 
@@ -1244,6 +1260,45 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     // RouterBackups really is the thing mounted here, wired to the
     // fetched resp -- not an empty shell.
     expect(within(backups as HTMLElement).getByText('rb5009')).toBeTruthy()
+  })
+
+  // #1275: the 60s tick, `ask again` and the refresh a write asks for
+  // can all be in flight together, and nothing makes them answer in the
+  // order they were sent. The older answer carries the rows as they
+  // were before the newer request was even issued, so applying it puts
+  // the operator's just-kept row back to what it was -- and walks
+  // fetchedAt backwards, which is the stamp RouterBackups.svelte uses
+  // to decide its optimistic copy has been confirmed and can be
+  // dropped. The keep then reads on screen as one that did not happen.
+  it('ignores a router-backups poll that answers after a newer one (#1275)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: RouterBackupsResponse) => void)[] = []
+      const held = () => new Promise<RouterBackupsResponse>((resolve) => answer.push(resolve))
+      fetchRouterBackups.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      // The mount poll is out; the tick a minute later sends a second.
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The newer request answers first, then the older one comes back.
+      answer[1](backupsWith('rb-newer'))
+      await settle()
+      answer[0](backupsWith('rb-older'))
+      await settle()
+      await settle()
+
+      const backups = document.getElementById('bakg') as HTMLElement
+      expect(within(backups).getByText('rb-newer')).toBeTruthy()
+      expect(within(backups).queryByText('rb-older')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('"router backups" answers unknown, with a working ask again, when the server does not', async () => {

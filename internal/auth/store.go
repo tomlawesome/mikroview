@@ -601,10 +601,23 @@ func (s *Store) DeleteUser(id string) (*User, error) {
 
 	delete(s.byID, id)
 	delete(s.byName, strings.ToLower(u.Username))
+	oidcKeyDeleted := oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}
 	if u.OIDCIssuer != "" {
-		delete(s.oidcIndex, oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject})
+		delete(s.oidcIndex, oidcKeyDeleted)
 	}
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A deletion that only exists in memory must not be reported as
+		// done: the caller would revoke the account's sessions and
+		// tokens and tell its operator the account is gone, and a
+		// restart before the next good write would bring it straight
+		// back -- with none of those revocations remembered.
+		s.byID[id] = u
+		s.byName[strings.ToLower(u.Username)] = u.ID
+		if u.OIDCIssuer != "" {
+			s.oidcIndex[oidcKeyDeleted] = u.ID
+		}
+		return nil, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	cp.PasswordHash = ""
@@ -770,7 +783,15 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 	}
 	s.byID[u.ID] = u
 	s.byName[key] = u.ID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// An account that only exists in memory must not be reported as
+		// created: Register/CreateUser's callers hand the operator a
+		// session or a success response for it, and a restart before
+		// the next good write would erase the account under them.
+		delete(s.byID, u.ID)
+		delete(s.byName, key)
+		return nil, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	return &cp, nil
@@ -833,6 +854,10 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 	key := oidcKey{issuer: issuer, subject: subject}
 	if id, ok := s.oidcIndex[key]; ok {
 		if u, ok := s.byID[id]; ok {
+			// LastLogin only -- a missed update here costs nothing
+			// worth failing an otherwise-successful SSO login over, so
+			// this keeps the log-and-carry-on write (same reasoning as
+			// Authenticate's ordinary-login path below).
 			u.LastLogin = now
 			s.persistLocked()
 			cp := *u
@@ -868,7 +893,17 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 	s.byID[u.ID] = u
 	s.byName[strings.ToLower(u.Username)] = u.ID
 	s.oidcIndex[key] = u.ID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A JIT-provisioned account that only exists in memory must not
+		// be reported as created: the caller is about to sign this
+		// person in as though the account durably exists, and a restart
+		// before the next good write would erase it while sessions
+		// referencing its ID are still live.
+		delete(s.byID, u.ID)
+		delete(s.byName, strings.ToLower(u.Username))
+		delete(s.oidcIndex, key)
+		return nil, false, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	return &cp, true, nil
@@ -997,6 +1032,11 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 		return ErrOIDCAlreadyLinked
 	}
 
+	prevIssuer, prevSubject := u.OIDCIssuer, u.OIDCSubject
+	prevHash, prevHasLocalPassword := u.PasswordHash, u.HasLocalPassword
+	prevPasswordChangedAt := u.PasswordChangedAt
+	_, hadIndexEntry := s.oidcIndex[key]
+
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
 	if u.Role != RoleAdmin {
@@ -1014,7 +1054,23 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	// this ends.
 	u.PasswordChangedAt = now
 	s.oidcIndex[key] = userID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A link that only exists in memory must not be reported as
+		// done: for everyone but the admin this also destroyed the
+		// local password above, so the caller would tell its operator
+		// SSO is now the only way in when a restart could revert to a
+		// password nobody remembers is still live -- or, worse, leave
+		// the account's SSO index entry pointing nowhere durable.
+		u.OIDCIssuer, u.OIDCSubject = prevIssuer, prevSubject
+		u.PasswordHash, u.HasLocalPassword = prevHash, prevHasLocalPassword
+		u.PasswordChangedAt = prevPasswordChangedAt
+		if hadIndexEntry {
+			s.oidcIndex[key] = userID
+		} else {
+			delete(s.oidcIndex, key)
+		}
+		return fmt.Errorf("saving accounts: %w", err)
+	}
 	return nil
 }
 
@@ -1228,11 +1284,13 @@ func (s *Store) List() []User {
 }
 
 // tryPersistLocked is persistLocked's error-returning half, for the
-// handful of callers (IssueResetCode, TransferAdmin, SetPassword) that
-// change a credential or a role and so must not let the caller believe a
-// write happened when it didn't -- see each one's own restore-on-error
-// comment. Every other caller keeps using persistLocked below, which
-// keeps today's swallow-and-log behaviour.
+// callers (IssueResetCode, TransferAdmin, SetPassword, DeleteUser,
+// createLocked -- behind Register and CreateUser --,
+// FindOrCreateOIDCUser's new-account branch, LinkOIDCIdentity) that
+// change a credential, a role, or which accounts exist, and so must not
+// let the caller believe a write happened when it didn't -- see each
+// one's own restore-on-error comment. Every other caller keeps using
+// persistLocked below, which keeps today's swallow-and-log behaviour.
 func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
 		return nil
@@ -1269,6 +1327,10 @@ func (s *Store) tryPersistLocked() error {
 // uses: the in-memory state (which every read goes through) stays
 // correct either way, so a transient disk issue degrades to "won't
 // survive a restart right now" rather than failing the caller outright.
+// Kept by FindOrCreateOIDCUser's existing-login branch and
+// Authenticate's ordinary-login branch, both of which only touch
+// LastLogin -- a bookkeeping timestamp not worth failing an otherwise
+// successful login over.
 func (s *Store) persistLocked() {
 	if err := s.tryPersistLocked(); err != nil {
 		persistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))

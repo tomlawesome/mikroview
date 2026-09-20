@@ -147,7 +147,10 @@ func (s *Server) handleTestReset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.Suggest != nil {
-		s.Suggest.Reset()
+		if err := s.Suggest.Reset(); err != nil {
+			http.Error(w, fmt.Sprintf("clearing the suggestion candidates: %v", err), http.StatusInternalServerError)
+			return
+		}
 		s.Suggest.Sync(suggest.Generate(s.RouterState))
 	}
 

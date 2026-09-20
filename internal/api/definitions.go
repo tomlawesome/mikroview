@@ -1072,7 +1072,14 @@ func (s *Server) handleDefinitionsDelete(w http.ResponseWriter, r *http.Request)
 		writeDefinitionError(w, err)
 		return
 	}
-	s.Suggest.MarkHiddenByEntry(id)
+	if err := s.Suggest.MarkHiddenByEntry(id); err != nil {
+		// R6: the definition is already deleted by this point, and that
+		// cannot honestly be un-reported -- only the suggestion candidate
+		// that used to point at it might not durably reflect the hide.
+		// Logged, not turned into a failure of a delete that already
+		// succeeded.
+		apiLog.Error("hiding the suggestion candidate for a deleted definition failed: " + err.Error())
+	}
 	s.Audit.Record(auditActor(r), "definition.delete", id, sd.Definition.Name)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
@@ -1647,6 +1654,13 @@ func writeDefinitionError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, engine.ErrDefinitionImmutable):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, engine.ErrPersistFailed):
+		// A failed write (any tryPersistLocked branch in
+		// engine.DefinitionsStore), whose text can carry the backend's
+		// own path or detail and has no business leaving this process --
+		// see ErrPersistFailed's own doc comment (v0.6.0 audit finding
+		// R6).
+		http.Error(w, "the change could not be saved, so nothing was changed", http.StatusInternalServerError)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}

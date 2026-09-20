@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -155,6 +156,104 @@ func TestDeleteExpectationMissingIsNoop(t *testing.T) {
 	s := mustOpenExpectationsStore(t)
 	if err := s.DeleteExpectation("never-existed"); err != nil {
 		t.Errorf("DeleteExpectation(never-existed) = %v, want nil (a no-op)", err)
+	}
+}
+
+// --- R6: a write that cannot be saved must not take effect in memory --
+//
+// Same shape as definitions_store_test.go's poisonDefinitionsStoreForTest:
+// s.wb.MarkDirty cannot itself fail, so the only reachable failure is the
+// encode that has to happen before it, forced here by leaving an entry in
+// s.raw that cannot be marshalled.
+
+func TestUpsertExpectationLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	poisonDefinitionsStoreForTest(s)
+
+	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err == nil {
+		t.Fatal("UpsertExpectation against a document that cannot be encoded = nil error, want one")
+	} else if !errors.Is(err, ErrPersistFailed) {
+		t.Errorf("UpsertExpectation error = %v, want ErrPersistFailed", err)
+	}
+	if _, ok, _ := s.GetExpectation("e1"); ok {
+		t.Error("expected the expectation to not exist in memory after a failed persist")
+	}
+}
+
+// TestUpsertExpectationRestoresThePreviousEntryWhenPersistFails proves
+// the rollback restores the previous bytes, not just "nothing new
+// appeared" -- an edit that cannot be saved must leave the old name in
+// place.
+func TestUpsertExpectationRestoresThePreviousEntryWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Name: "original", Ports: []int{22}}); err != nil {
+		t.Fatal(err)
+	}
+
+	poisonDefinitionsStoreForTest(s)
+	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Name: "changed", Ports: []int{22}}); err == nil {
+		t.Fatal("UpsertExpectation against a document that cannot be encoded = nil error, want one")
+	}
+	got, ok, err := s.GetExpectation("e1")
+	if err != nil || !ok || got.Name != "original" {
+		t.Errorf("expected the previous entry restored after a failed persist, got %+v (ok=%v, err=%v)", got, ok, err)
+	}
+}
+
+func TestDeleteExpectationLeavesTheEntryInPlaceWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err != nil {
+		t.Fatal(err)
+	}
+
+	poisonDefinitionsStoreForTest(s)
+	if err := s.DeleteExpectation("e1"); err == nil {
+		t.Fatal("DeleteExpectation against a document that cannot be encoded = nil error, want one")
+	} else if !errors.Is(err, ErrPersistFailed) {
+		t.Errorf("DeleteExpectation error = %v, want ErrPersistFailed", err)
+	}
+	if _, ok, _ := s.GetExpectation("e1"); !ok {
+		t.Error("expected the expectation to still exist after a failed persist")
+	}
+}
+
+// TestResetExpectationsLeavesTheStoreUnchangedWhenPersistFails is
+// distinct from definitions_store.go's Reset: resetExpectationsLocking
+// only removes expectation entries from the existing map, so whatever
+// else is in it (a poisoned entry included) is still there for
+// tryPersistLocked to encode -- unlike Reset, which wipes to an empty
+// map first (see Reset's own doc comment for why that one has no
+// reachable failure to test).
+func TestResetExpectationsLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
+	s, err := OpenDefinitionsStore(filepath.Join(t.TempDir(), "definitions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	if err := s.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err != nil {
+		t.Fatal(err)
+	}
+
+	poisonDefinitionsStoreForTest(s)
+	if n, err := s.ResetExpectations(); err == nil {
+		t.Fatal("ResetExpectations against a document that cannot be encoded = nil error, want one")
+	} else if n != 0 {
+		t.Errorf("ResetExpectations reported n=%d on a failed persist, want 0", n)
+	}
+	if _, ok, _ := s.GetExpectation("e1"); !ok {
+		t.Error("expected the expectation to survive a ResetExpectations that could not be saved")
 	}
 }
 
