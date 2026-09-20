@@ -636,6 +636,15 @@ func main() {
 
 	previousVersion := logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
 
+	// Before checkStoresUsable below, which would otherwise see a
+	// mid-restore data directory as merely "usable" -- every store in it
+	// really is readable and writable, just not in a state that agrees
+	// with itself (#1293).
+	if err := checkNoRestoreInProgress(cfg); err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
+
 	// Before anything is built on top of them (#536). Checked here
 	// rather than at each store's first write so the operator gets one
 	// refusal naming the path, instead of the app coming up and

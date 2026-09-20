@@ -103,3 +103,65 @@ func TestCheckStoresUsableSkipsPostgresDeployments(t *testing.T) {
 		t.Fatalf("a Postgres deployment must not be blocked by file permissions, got: %v", err)
 	}
 }
+
+// TestCheckNoRestoreInProgressAllowsAQuietDataDirectory is #1293's
+// Done-when for the ordinary case: no marker, no refusal.
+func TestCheckNoRestoreInProgressAllowsAQuietDataDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{}
+	cfg.Auth.StorePath = filepath.Join(dir, "accounts.json")
+
+	if err := checkNoRestoreInProgress(cfg); err != nil {
+		t.Fatalf("a data directory with no restore marker must pass, got: %v", err)
+	}
+}
+
+// TestCheckNoRestoreInProgressRefusesWhileTheMarkerExists is #1293's
+// Done-when for the case this check exists to catch: a restore that
+// stopped part-way leaves restoreMarkerName behind, and startup must
+// refuse rather than boot quietly on a data directory that is a mixture
+// of the restored backup and whatever was there before. The refusal must
+// name both ways out: re-running the same -restore --force, or restoring
+// from the operator's own copy of the data directory.
+func TestCheckNoRestoreInProgressRefusesWhileTheMarkerExists(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{}
+	cfg.Auth.StorePath = filepath.Join(dir, "accounts.json")
+
+	if err := os.WriteFile(filepath.Join(dir, restoreMarkerName), []byte("restore in progress"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := checkNoRestoreInProgress(cfg)
+	if err == nil {
+		t.Fatal("expected a leftover restore marker to stop startup, got nil")
+	}
+	if !strings.Contains(err.Error(), "restore") {
+		t.Errorf("the refusal must say a restore stopped part-way, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "-restore") || !strings.Contains(err.Error(), "--force") {
+		t.Errorf("the refusal must name re-running -restore --force, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "own copy") {
+		t.Errorf("the refusal must name restoring from the operator's own copy of the data directory, got: %v", err)
+	}
+}
+
+// TestCheckNoRestoreInProgressSkipsPostgresDeployments: -restore itself
+// refuses outright on Postgres (refuseBackupOnPostgres), so the marker
+// can never legitimately be there, but the check should not depend on
+// that -- same defence in depth as checkStoresUsable's own Postgres skip.
+func TestCheckNoRestoreInProgressSkipsPostgresDeployments(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{}
+	cfg.Auth.StorePath = filepath.Join(dir, "accounts.json")
+	cfg.Postgres.DSNFile = "/run/secrets/pg-dsn"
+
+	if err := os.WriteFile(filepath.Join(dir, restoreMarkerName), []byte("restore in progress"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := checkNoRestoreInProgress(cfg); err != nil {
+		t.Fatalf("a Postgres deployment must not be blocked by a JSON-side marker, got: %v", err)
+	}
+}
