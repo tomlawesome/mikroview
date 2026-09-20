@@ -637,7 +637,14 @@
       token: value,
       kinds: status.pushKinds,
     })
-    if (typeof result === 'string') return
+    if (typeof result === 'string') {
+      // The keys panel's own error slot (v0.6.0 audit Lows, R9): this
+      // button lives in that panel, and a refused fetch here used to
+      // leave the operator clicking "copy for RouterOS" with nothing on
+      // screen saying why nothing was copied.
+      keyError = result
+      return
+    }
     try {
       await navigator.clipboard.writeText(result.steps.push.commands)
       routerCopied = true
