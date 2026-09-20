@@ -716,20 +716,71 @@ func BackupPushScheduleCommands(body, dialect string) string {
 	}, "\n")
 }
 
+// maxLogPrefixLen is docs/routeros-setup.md's own ceiling: RouterOS's log
+// formatter is known to corrupt or overwrite adjacent fields once a
+// log-prefix gets much past ~20 characters, so every prefix this package
+// generates stays at or under 15 to leave margin.
+const maxLogPrefixLen = 15
+
+// logPrefixSlug shortens the RouterOS action names whose prefix would
+// otherwise exceed maxLogPrefixLen -- filter/mangle's
+// add-{src,dst}-to-address-list and fasttrack-connection, and mangle's
+// mark-connection and strip-ipv4-options. Picked so every value here is
+// distinct from every other one (shortened or not) LogPrefixForAction
+// can produce: see TestLogPrefixForActionFitsAndDoesNotCollide, which
+// checks both properties for every action this package is known to
+// meet. An action not in this table falls through to LogPrefixForAction's
+// own length-safe truncation instead -- this table is for the ones worth
+// a slug a human reading the router's own log can still recognise, not
+// an exhaustive list of every RouterOS action there is.
+var logPrefixSlug = map[string]string{
+	"add-src-to-address-list": "add-src-list",
+	"add-dst-to-address-list": "add-dst-list",
+	"fasttrack-connection":    "fasttrack",
+	"mark-connection":         "mark-conn",
+	"strip-ipv4-options":      "strip-ipv4",
+}
+
 // LogPrefixForAction is the log-prefix convention RuleTaggingCommands'
 // bulk `[find action=...]` commands give a rule, applied to a single
 // action rather than to every rule of that action at once: D|drop|,
-// R|reject|, A|accept|, and <INITIAL>|<action>| for everything else,
-// INITIAL being the action's own first letter, upper-cased. #435's
-// per-rule tune-logging render step (POST /api/tune-logging/render)
-// calls this so a rule tagged individually gets the identical prefix
-// bulk-tagging would have given it, rather than a second convention
-// that could drift from the first. dialect is accepted for the same
-// reason every other function in this file takes one -- the seam a
-// second dialect would use, not a currently-live switch.
+// R|reject|, A|accept|, and <INITIAL>|<slug>| for everything else,
+// INITIAL being the action's own first letter, upper-cased, and slug
+// being the action name itself unless logPrefixSlug shortens it (S4 in
+// the v0.6.0 audit, #1304: several real RouterOS actions -- mangle's
+// mark-connection, both the filter and mangle add-*-to-address-list
+// actions -- render a prefix past maxLogPrefixLen with the action name
+// spelled out in full, which RouterOS's own log formatter can corrupt,
+// showing up on mikroview's side as an unrecognised prefix and an action
+// of "unknown" for every hit on that rule). #435's per-rule tune-logging
+// render step (POST /api/tune-logging/render) calls this so a rule
+// tagged individually gets the identical prefix bulk-tagging would have
+// given it, rather than a second convention that could drift from the
+// first. dialect is accepted for the same reason every other function in
+// this file takes one -- the seam a second dialect would use, not a
+// currently-live switch.
 func LogPrefixForAction(action, dialect string) string {
 	if action == "" {
 		return ""
 	}
-	return strings.ToUpper(action[:1]) + "|" + action + "|"
+	slug := action
+	if short, ok := logPrefixSlug[action]; ok {
+		slug = short
+	}
+	initial := strings.ToUpper(action[:1])
+	prefix := initial + "|" + slug + "|"
+	if len(prefix) > maxLogPrefixLen {
+		// An action neither short enough on its own nor named in
+		// logPrefixSlug above -- keep as much of it as fits rather than
+		// hand RouterOS a prefix its own log formatter can corrupt.
+		keep := maxLogPrefixLen - len(initial) - 2 // both '|' delimiters
+		if keep < 0 {
+			keep = 0
+		}
+		if keep > len(slug) {
+			keep = len(slug)
+		}
+		prefix = initial + "|" + slug[:keep] + "|"
+	}
+	return prefix
 }
