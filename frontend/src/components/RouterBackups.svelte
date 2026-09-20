@@ -390,12 +390,20 @@
   // unlock -- the idle timeout lapsing between the link being drawn and
   // the click -- rather than a client-side clock guessing at the
   // server's; see download() below.
-  async function refreshLock() {
+  //
+  // onFailure lets a caller surface this refresh's own failure the same
+  // way it already surfaces its primary one, rather than this staying
+  // silent (v0.6.0 audit Lows, R1): download() below is the one caller
+  // that has somewhere on screen to put it (downloadError, the same
+  // per-router slot a failed download itself uses); readExport and
+  // compareWithPrevious already show their own failure in the open
+  // viewer panel and have nothing to add.
+  async function refreshLock(onFailure?: () => void) {
     try {
       const r = await fetchRouterBackups()
       lockOverride = { lock: r.lock, at: Date.now() }
     } catch {
-      // the parent's own periodic refresh will catch up
+      onFailure?.()
     }
   }
 
@@ -408,7 +416,12 @@
     downloadError = null
     const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, kind), `${device}.${kind}`)
     if (outcome === 'forbidden') {
-      await refreshLock()
+      await refreshLock(() => {
+        downloadError = {
+          device,
+          message: "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+        }
+      })
     } else if (outcome === 'failed') {
       // The button used to do nothing and say nothing on anything but a
       // 403 -- a dropped connection or a 5xx looked identical to a
