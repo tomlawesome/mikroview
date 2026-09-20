@@ -125,8 +125,31 @@ async function serverSaid(res: Response): Promise<string> {
 // the frontend can't know which state it's in ahead of the response).
 // Same-origin `fetch()` already includes cookies by default, so no
 // explicit `credentials` option is needed.
+// send is fetch for the four mutating helpers below, with the one
+// failure fetch reports by throwing -- the connection dropped, the
+// server restarting, DNS gone -- turned into the refusal shape every
+// caller already handles: a non-ok Response whose body says what
+// happened. Left to throw, it escaped the caller's `await` with its busy
+// flag still set: "minting…", "adding…", "saving…" stuck until a reload,
+// no error shown, no way to try again. #1218 audit finding 7 guarded
+// three call sites by hand (AuthSetup, SSOLinkOverlay, LogEveryRule);
+// the v0.6.0 audit found the same shape in Droplist, EngineRoom,
+// Entities and the wizard's command refresh. One guard here reaches all
+// of them and every site written later. 503 is the nearest honest
+// status: nothing was done, and trying again may work.
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    return new Response(`the connection dropped before the server answered — check the network and try again (${why})`, {
+      status: 503,
+    })
+  }
+}
+
 async function postJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -134,7 +157,7 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
 }
 
 async function putJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -145,7 +168,7 @@ async function putJSON(url: string, body: unknown = {}): Promise<Response> {
 // server already holds (a kept backup's comment, #1126). Same CSRF
 // header as its neighbours, for the same reason.
 async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -160,7 +183,7 @@ async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
 // internal/api's handleEntitiesDelete) -- an arbitrary entity Key never
 // has to round-trip through a URL at all this way.
 async function deleteJSON(url: string, body?: unknown): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'DELETE',
     headers:
       body === undefined
