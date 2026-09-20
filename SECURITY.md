@@ -583,7 +583,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above; or an ingest bearer token, scoped to one device, for `POST /api/ingest/routeros` and `POST /api/ingest/router-backup` only — the latter is the sliced HTTPS router-backup push, up to 16MiB reassembled from `<=32KiB` pieces, one transfer per device at a time and 64MiB across every device's transfer combined, spending one ingest-rate-limit reservation per whole transfer rather than per piece); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
+| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above; or an ingest bearer token, scoped to one device, for `POST /api/ingest/routeros` and `POST /api/ingest/router-backup` only — the latter is the sliced HTTPS router-backup push, up to 16MiB reassembled from `<=32KiB` pieces, one transfer per device at a time and 64MiB across every device's transfer combined, spending one ingest-rate-limit reservation per whole transfer rather than per piece); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. `ui.allow` in `config.yaml` (file only, never settable from the UI) can additionally limit which addresses reach this listener at all — a refusal is a plain 403, and the router-facing paths are exempt; see "Recommended deployment hardening" below. |
 | Syslog TLS | None | Always (MikroView's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and MikroView authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 | Router-backup SFTP drop box (`internal/backupsftp`, issue #394) | Username = device name, password = that device's ingest token, checked against the same token store the syslog push uses; write-only, per-device, no listing/reading/deleting/renaming | SSH transport (host key generated on first start), but see the caveat below — **the router never verifies it** | Off by default (`backup.enabled: false`); opens a second listening port only once turned on. Login isolation, write-only scope and header/quota checks are enforced in `internal/backupvault`/`internal/backupsftp`, not by the transport. |
@@ -664,7 +664,39 @@ damage a hostile or misbehaving LAN device can do:
   `deploy/docker-compose.yml`'s port mappings the same way, rather than
   publishing on every interface. See
   [docs/configuration.md](docs/configuration.md) for the full option
-  reference.
+  reference. Concretely: **if a reverse proxy fronts MikroView, publish
+  the web port on loopback only** (`-p 127.0.0.1:443:8080`), so the
+  proxy is the only way in and nothing on the network can go round it;
+  and **firewall the syslog port to your routers' addresses**, since
+  that listener authenticates no sender (see the table above). A
+  container cannot firewall its own host, which is why this line of
+  defence lives here rather than in MikroView.
+- **Limit the web UI to the addresses that administer it**, with
+  `ui.allow` in `config.yaml` — a list of IPs or CIDRs; anything else
+  gets a plain `403`, not the login page. It is not a substitute for
+  signing in, and it is not a substitute for the port binding above; it
+  is the layer that still holds when a machine on the same LAN is
+  compromised. Behind a reverse proxy, set `listen.trustedProxies` as
+  well, or the address checked is the proxy's own and the list admits
+  everyone through it. Router-facing paths (`/ca.crt`, the two push
+  endpoints, the drop-list feed) are exempt, because a router cannot be
+  listed in a file it never reads and each already has a tighter gate
+  of its own.
+
+  **It is a file-only setting, and there is no way back in from the
+  browser** — the list governs the screen you would edit it on. If you
+  lock yourself out, edit the file on the volume and restart. The image
+  has no shell, so borrow one:
+
+  ```sh
+  docker run --rm -it -v mikroview-etc:/etc/mikroview alpine vi /etc/mikroview/config.yaml
+  docker restart mikroview
+  ```
+
+  Correct the `allow:` list, or delete the `ui:` block to admit every
+  address again. With a bind mount rather than a named volume, edit the
+  file on the host and restart. See
+  [docs/configuration.md](docs/configuration.md#limiting-which-addresses-can-reach-the-web-ui).
 - If you need to view MikroView from outside that LAN, put it behind a
   VPN (e.g. WireGuard/Tailscale) rather than port-forwarding it onto the
   open internet -- creating an account rather than skipping (see
