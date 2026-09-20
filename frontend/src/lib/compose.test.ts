@@ -104,6 +104,13 @@ describe('composeCommand', () => {
     expect(cmd.indexOf('place-before=', elseIndex)).toBe(-1)
   })
 
+  it('the set branch re-enables a rule the operator had disabled, as SchedulerAdd does', () => {
+    const cmd = composeCommand(base)!
+    const elseIndex = cmd.indexOf('} else={')
+    expect(cmd.indexOf('disabled=no', elseIndex)).toBeGreaterThan(elseIndex)
+    expect(cmd.indexOf('disabled=no')).toBeGreaterThan(elseIndex)
+  })
+
   it('refuses to compose when hostIp is not an address or CIDR', () => {
     const cmd = composeCommand({ ...base, hostIp: '1.2.3.4 dst-address=0.0.0.0/0' })
     expect(cmd).toBeNull()
