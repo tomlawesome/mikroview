@@ -5,6 +5,7 @@ package auth
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -173,12 +174,30 @@ func (s *Store) IssueResetCode(userID string, now time.Time) (*User, string, err
 		return nil, "", ErrNoLocalPassword
 	}
 
+	prevHash := u.PasswordHash
+	prevResetHash := u.ResetCodeHash
+	prevResetExpiresAt := u.ResetCodeExpiresAt
+	prevMustChange := u.MustChangePassword
+	prevPasswordChangedAt := u.PasswordChangedAt
+
 	u.PasswordHash = unmatchable
 	u.ResetCodeHash = codeHash
 	u.ResetCodeExpiresAt = now.Add(ResetCodeTTL)
 	u.MustChangePassword = true
 	u.PasswordChangedAt = now
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// The old password must still work and no code must be live: a
+		// reset that only exists in memory but is reported as issued
+		// would leave the admin reading out a code that a restart before
+		// the next good write silently un-issues, while the account's
+		// real credential is the one this rolled back to.
+		u.PasswordHash = prevHash
+		u.ResetCodeHash = prevResetHash
+		u.ResetCodeExpiresAt = prevResetExpiresAt
+		u.MustChangePassword = prevMustChange
+		u.PasswordChangedAt = prevPasswordChangedAt
+		return nil, "", fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	// The copy handed back is for the audit entry and the response

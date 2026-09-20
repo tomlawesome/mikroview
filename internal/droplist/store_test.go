@@ -3,6 +3,7 @@
 package droplist
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,7 +11,22 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// failingSaveBackend fails every Save -- the v0.6.0 audit's R6 fix needs
+// a backend that can never durably record the change Add/Remove are
+// about to make.
+type failingSaveBackend struct{}
+
+func (failingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (failingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	return 0, errors.New("backend unavailable")
+}
+func (failingSaveBackend) Close() error     { return nil }
+func (failingSaveBackend) Describe() string { return "failing test backend" }
 
 func must(t *testing.T, err error) {
 	t.Helper()
@@ -155,6 +171,69 @@ func TestAddAndRemoveAreAudited(t *testing.T) {
 	}
 	if remove.Detail != "scanning our SSH port (from flag flag-42)" {
 		t.Errorf("remove entry Detail = %q, want the removed entry's own reason carried through", remove.Detail)
+	}
+}
+
+// TestAddLeavesNoEntryWhenPersistFails is the v0.6.0 audit's R6 fix: an
+// entry that cannot be saved must not read as added in memory, or a
+// restart before the next good write would silently drop a block the
+// caller was already told exists.
+func TestAddLeavesNoEntryWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	as, err := audit.Open(filepath.Join(t.TempDir(), "audit.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetAuditor(as)
+
+	if _, err := s.Add("admin", "203.0.114.0/24", "reason", ""); err == nil {
+		t.Fatal("Add against a backend that cannot save = nil error, want one")
+	}
+	if len(s.List()) != 0 {
+		t.Errorf("List() after a failed Add = %v, want empty", s.List())
+	}
+	if len(as.Query(audit.Query{}).Entries) != 0 {
+		t.Error("a failed Add must not be audited")
+	}
+}
+
+// TestRemoveLeavesEntryInPlaceWhenPersistFails is Add's test above,
+// mirrored for Remove: a deletion that cannot be saved must put the
+// entry back, or the router's next .rsc pull would drop a block the
+// operator believes they lifted only to have this process restart and
+// forget the removal ever happened.
+func TestRemoveLeavesEntryInPlaceWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	as, err := audit.Open(filepath.Join(t.TempDir(), "audit.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetAuditor(as)
+
+	// Add itself cannot succeed against this backend, so the entry Remove
+	// is asked to delete is seeded directly -- exercising Remove's own
+	// restore-on-error path in isolation from Add's.
+	p, err := Validate("203.0.114.0/24", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.entries[p.String()] = &Entry{CIDR: p, AddedBy: "admin", Reason: "reason"}
+
+	if err := s.Remove("admin", "203.0.114.0/24"); err == nil {
+		t.Fatal("Remove against a backend that cannot save = nil error, want one")
+	}
+	got := s.List()
+	if len(got) != 1 || got[0].CIDR.String() != "203.0.114.0/24" {
+		t.Errorf("List() after a failed Remove = %+v, want the entry still present", got)
+	}
+	if len(as.Query(audit.Query{}).Entries) != 0 {
+		t.Error("a failed Remove must not be audited")
 	}
 }
 

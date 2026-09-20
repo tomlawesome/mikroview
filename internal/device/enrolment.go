@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/netip"
 	"regexp"
 	"sort"
@@ -481,6 +482,10 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 		return false
 	}
 
+	prevAcceptedIP := info.AcceptedIP
+	prevEnrolledAt := info.EnrolledAt
+	prevRefused, wasRefused := r.refused[key]
+
 	if info.AcceptedIP != "" {
 		delete(r.byAcceptedIP, normalizeIP(info.AcceptedIP))
 	}
@@ -492,7 +497,27 @@ func (r *Registry) TryEnrol(host string, line []byte) bool {
 	// it there would show the router just enrolled as a wrong sender.
 	delete(r.refused, key)
 	r.burnPendingLocked(device)
-	r.persistLocked()
+
+	if err := r.tryPersistLocked(); err != nil {
+		// Put every field this touched back, and leave the token spendable
+		// again -- an enrolment that cannot be saved must not read as
+		// enrolled in memory, or a restart before the next good write
+		// would silently un-enrol a router this call just told the caller
+		// succeeded.
+		delete(r.byAcceptedIP, key)
+		info.AcceptedIP = prevAcceptedIP
+		info.EnrolledAt = prevEnrolledAt
+		if prevAcceptedIP != "" {
+			r.byAcceptedIP[normalizeIP(prevAcceptedIP)] = info
+		}
+		if wasRefused {
+			r.refused[key] = prevRefused
+		}
+		r.pendingByDevice[device] = p
+		r.pendingByHash[hash] = device
+		deviceLog.Error(fmt.Sprintf("saving the device registry after enrolling %s at %s failed: %v -- this enrolment exists only in memory and will be lost on restart", device, key, err))
+		return false
+	}
 	deviceLog.Info("enrolled " + device + " at " + key)
 	return true
 }

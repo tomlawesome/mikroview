@@ -229,23 +229,27 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 
 	entry, err := s.Droplist.Add(auditActor(r), req.CIDR, req.Reason, req.FlagID)
 	if err != nil {
-		status := http.StatusInternalServerError
 		switch {
 		case errors.Is(err, droplist.ErrExists):
-			status = http.StatusConflict
+			// err.Error() is safe to echo in this case and the validation
+			// ones below: each names a rule about the submitted
+			// range/reason (too broad, not public, overlaps the router's
+			// own address, a duplicate), never anything about other
+			// operators' entries.
+			http.Error(w, err.Error(), http.StatusConflict)
 		case errors.Is(err, droplist.ErrInvalidCIDR),
 			errors.Is(err, droplist.ErrNotIPv4),
 			errors.Is(err, droplist.ErrTooBroad),
 			errors.Is(err, droplist.ErrNotPublic),
 			errors.Is(err, droplist.ErrRouterOwn),
 			errors.Is(err, droplist.ErrBadText):
-			status = http.StatusBadRequest
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			// Anything else reaching here is a failed write (Store.Add's
+			// tryPersistLocked branch), whose text can carry the backend's
+			// own path or detail and has no business leaving this process.
+			http.Error(w, "unable to add that entry", http.StatusInternalServerError)
 		}
-		// err.Error() is safe to echo in every one of these cases: it
-		// names a rule about the submitted range/reason (too broad, not
-		// public, overlaps the router's own address, a duplicate), never
-		// anything about other operators' entries.
-		http.Error(w, err.Error(), status)
 		return
 	}
 	resp := droplistCreateResponse{droplistEntryResponse: toDroplistEntryResponse(entry)}

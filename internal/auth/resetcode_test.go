@@ -145,6 +145,43 @@ func TestIssueResetCodeKillsTheOldPasswordAndLetsTheCodeIn(t *testing.T) {
 	}
 }
 
+// TestIssueResetCodeLeavesTheOldPasswordWorkingWhenPersistFails is the
+// v0.6.0 audit's R6 fix: a reset that cannot be saved must not kill the
+// old password or mint a live code in memory either, or a restart before
+// the next good write would silently un-reset the account while the
+// admin has already read a code out that no longer does anything.
+func TestIssueResetCodeLeavesTheOldPasswordWorkingWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("admin", "admin-password-placeholder", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("bilbo", resetTestOldPassword, RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := s.IssueResetCode(u.ID, time.Now()); err == nil {
+		t.Fatal("IssueResetCode against a backend that cannot save = nil error, want one")
+	}
+
+	if _, err := s.Authenticate("bilbo", resetTestOldPassword, time.Now()); err != nil {
+		t.Errorf("expected the old password to still work after a failed persist, got %v", err)
+	}
+	got, ok := s.Get(u.ID)
+	if !ok {
+		t.Fatal("expected the account to still be there")
+	}
+	if got.MustChangePassword {
+		t.Error("expected MustChangePassword to stay false after a failed persist")
+	}
+	if got.ResetCodeHash != "" {
+		t.Error("expected no reset code to be live after a failed persist")
+	}
+}
+
 // TestResetCodeRefusals covers the two accounts this must never mint a
 // code for, plus a request for an account that is not there.
 func TestResetCodeRefusals(t *testing.T) {
