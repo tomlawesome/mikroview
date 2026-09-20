@@ -72,8 +72,9 @@
 
     if (authState.ssoAvailable) {
       // The account already exists by this point (register() above
-      // succeeded), so a thrown exception here -- a dropped connection,
-      // same as any other fetch can suffer -- must not propagate: it
+      // succeeded), so a thrown exception here -- api.ts's send() turns
+      // a dropped connection into an error string, but a body that is
+      // not JSON still throws -- must not propagate: it
       // would skip both the redirect and the `created = true` below,
       // leaving AuthScreen's handleSubmit forever mid-`await` and its
       // submit button stuck on "Please wait…" with no way to retry

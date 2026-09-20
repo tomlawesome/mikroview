@@ -251,11 +251,12 @@
     const token = ++work.analyseToken
     analysingToken = token
     analyseError = null
-    // A dropped connection rejects rather than answering with an error
-    // string, and an uncaught rejection skips everything below --
-    // including the line that frees the button, leaving it reading
-    // "Analysing…" for a request that ended. Same shape as
-    // AuthSetup.svelte's startSSOLink call, and for the same reason.
+    // api.ts's send() answers a dropped connection as an error string,
+    // but anything the call can still throw (a 200 whose body is not
+    // JSON) would otherwise skip everything below -- including the line
+    // that frees the button, leaving it reading "Analysing…" for a
+    // request that ended. Same shape as AuthSetup.svelte's startSSOLink
+    // call, and for the same reason.
     let res: TuneLoggingAnalyseResponse | string
     try {
       res = await fetchTuneLoggingAnalyse({ device: work.device, export: work.exportText, darkBoundaries })
