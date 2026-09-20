@@ -16,6 +16,15 @@ rewritten.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Go toolchain was pinned to two different patches at once**:
+  `go.mod` and the Dockerfile named `1.27.0` while `.gitlab-ci.yml`
+  floated on `golang:1.27`, which had already moved to `1.27.1` — so CI
+  built and tested on a patch the shipped image never ran. All four
+  places now name `1.27.1`, and `lint:supply-chain-pins` fails if they
+  ever disagree again (#1312).
+
 ### Removed
 
 - **`configDrift.storePath` is gone**, along with the backend it

@@ -346,7 +346,7 @@ workflow:
 # fetches; a fixed key (not lockfile- or go.mod-keyed) because nothing in
 # the repo names which fixture versions exist -- the registry does, and
 # the script itself decides what is missing. Both jobs run as root in an
-# unmodified golang:1.27 container, so there is no cross-uid risk here.
+# unmodified golang:1.27.1 container, so there is no cross-uid risk here.
 .upgrade_fixtures_cache_entry: &upgrade_fixtures_cache_entry
   key: upgrade-fixtures
   paths:
@@ -509,7 +509,7 @@ lint:script-tests:
 lint:go:
   stage: lint
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go build ./...
@@ -571,7 +571,7 @@ lint:supply-chain-pins:
 test:go:
   stage: test
   # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
-  image: golang:1.27
+  image: golang:1.27.1
   # Not gated by #1038, and must not be: five tests read
   # docs/configuration.md and assert on its contents (ca_docs_test.go,
   # migrate_cli_test.go, internal/api/route_docs_test.go,
@@ -673,8 +673,8 @@ test:build-checks:
     - *go_toolchain_cache_entry
   script:
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - (cd frontend && npm ci && npm run build)
     - node frontend/scripts/check-bundle-budget.mjs
@@ -696,7 +696,7 @@ test:build-checks:
 test:postgres:
   stage: test
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: *dev_or_mr_code
   # #1304 item E8: shared with test:go above -- see
   # upgrade_fixtures_cache_entry and the comment on test:go's cache.
@@ -1491,7 +1491,7 @@ security:gosec:
 security:govulncheck:
   stage: security
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
@@ -1529,7 +1529,7 @@ security:govulncheck:
 security:fuzz:
   stage: security
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   timeout: 15m
   script:
@@ -1613,8 +1613,8 @@ security:licence-policy:
   script:
     - node --test tools/licenses/licence-policy.test.mjs
     - mkdir -p .go-toolchain-cache
-    - test -f .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
-    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.0.linux-amd64.tar.gz
+    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     # `go install` drops the binary in $(go env GOPATH)/bin, which the node
     # image does not have on PATH; pipeline 287 failed with "command not
@@ -1954,7 +1954,7 @@ check:upgrade-fixture-recorded:
 
 chr-exercise:run:
   stage: chr-exercise
-  image: golang:1.27
+  image: golang:1.27.1
   # #952: this job pushes chr/last-run.json to the chr-reports branch on
   # every run (scripts/chr-report.sh) and, on a fully clean exercise, also
   # pushes a branch and opens a merge request

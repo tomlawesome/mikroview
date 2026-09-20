@@ -14,11 +14,21 @@
   "labels": ["type: chore", "area: governance"],
   "commitMessagePrefix": "deps:",
   "branchPrefix": "renovate/",
-  "enabledManagers": ["gomod", "npm", "dockerfile", "gitlabci"],
+  "enabledManagers": ["gomod", "npm", "dockerfile", "gitlabci", "custom.regex"],
   "ignorePaths": ["**/node_modules/**", "tools/screenshots/**"],
   "gomod": {
     "postUpdateOptions": ["gomodTidy"]
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "live-check.Dockerfile's GO_VERSION ARG isn't a FROM line, so no built-in manager sees it (#1312) -- tracked here as the same golang/docker dep as the Dockerfile and .gitlab-ci.yml images so the packageRule below can group all three. GO_SHA256 on the line below is not templated: a version bump still needs its checksum updated by hand.",
+      "managerFilePatterns": ["/^live-check\\.Dockerfile$/"],
+      "matchStrings": ["ARG GO_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "golang"
+    }
+  ],
   "packageRules": [
     {
       "minimumReleaseAge": "7 days",
@@ -50,6 +60,14 @@
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<7.0.0",
       "description": "Held below 7 while svelte-check's peer range is ^5 || ^6 -- #286 has the measurement and the trigger"
+    },
+    {
+      "minimumReleaseAge": "7 days",
+      "matchDatasources": ["golang-version", "docker"],
+      "matchDepNames": ["go", "golang"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "go toolchain",
+      "description": "go.mod's go directive, the golang image in Dockerfile and .gitlab-ci.yml, and live-check.Dockerfile's GO_VERSION ARG move together, so the four Go pins #1312 found drifted cannot drift apart again"
     }
   ]
 }
