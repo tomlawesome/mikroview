@@ -107,3 +107,11 @@ each, recorded together because the cause is shared (#831's contention):
 ## security:trivy-fs: the vulnerability database will not download
 
 - 2026-09-20 · f57448b7 (fix/v060-audit) · pipeline 1298, `security:trivy-fs` (job 17011) · `FATAL run error: init error: DB error: failed to download vulnerability DB ... Get "https://mirror.gcr.io/v2/": dial tcp: lookup mirror.gcr.io on 192.168.254.1:53: server misbehaving`. DNS on the runner failed to resolve the mirror; the scan never started. Retried as job 17017 on the same commit and it passed in 41s, so nothing in the tree changed the outcome. Worth knowing if it recurs: the job depends on an external registry being reachable at run time, so a third sighting should probably be an issue about caching the database rather than about the scanner.
+
+## live-topography-port-trace: the picker offers no port chips on first read
+
+- 2026-09-20 · 72965118 (fix/v060-audit, !1069) · pipeline 1307, gate:scenarios 4/4 (job 17183) · `FAIL the picker offers a port the window carried ()` and `the picker offers a port only a rule names`, both with an empty chip list, every check before them passed. The script waits for the `.pill.p.edit` bar (`live-topography-port-trace.mjs:337`) and reads its `.ports .chip` children in the same beat, so the chips can still be a render behind the bar. The commit changed docs/flakes.md only. Pipeline 1309 on a later head is the re-run. First sighting under this heading; the `.note-t` timeout above is the same scenario at a different check.
+
+## live-city-river: wg0's bridge chip is not there on first read
+
+- 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.
