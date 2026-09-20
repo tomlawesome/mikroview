@@ -380,21 +380,26 @@ class AppState {
   // Off `events`, not `ageFilteredEvents` or `filteredEvents` -- the
   // option list should not shrink just because the display-duration
   // window or some other active filter currently hides a chain's rows.
-  chainOptions = $derived.by(() => {
-    const seen = new Set(BUILTIN_CHAINS)
-    const extra: string[] = []
-    for (const e of this.events) {
-      if (e.chain && !seen.has(e.chain)) {
-        seen.add(e.chain)
-        extra.push(e.chain)
-      }
-    }
-    extra.sort()
-    return [...BUILTIN_CHAINS, ...extra]
-  })
+  //
+  // #1304 E2: these three used to be $derived.by scans of the whole
+  // `events` buffer, so every flush re-walked up to MAX_CLIENT_EVENTS
+  // items just to notice a value it had already counted. They are now
+  // plain $state, kept in step by chainCounts/srcCountryCounts/
+  // dstCountryCounts (below) as events are appended and evicted --
+  // rebuildOptionLists only ever sorts the small set of distinct values
+  // seen, not the buffer itself.
+  chainOptions = $state<string[]>([...BUILTIN_CHAINS])
+  srcCountryOptions = $state<{ value: string; label: string }[]>([])
+  dstCountryOptions = $state<{ value: string; label: string }[]>([])
 
-  srcCountryOptions = $derived.by(() => countryOptionsFor(this.events, 'src'))
-  dstCountryOptions = $derived.by(() => countryOptionsFor(this.events, 'dst'))
+  // Running counts backing chainOptions/srcCountryOptions/dstCountryOptions.
+  // Not $state: nothing reads these directly, only the option lists they
+  // rebuild -- see adjustOptionCounts/rebuildOptionLists.
+  private chainCounts = new Map<string, number>()
+  private srcCountryCounts = new Map<string, number>()
+  private srcCountryUnknownCount = 0
+  private dstCountryCounts = new Map<string, number>()
+  private dstCountryUnknownCount = 0
 
   // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
   // its own, so toggling it on with an empty rule shouldn't count as an
@@ -508,12 +513,57 @@ class AppState {
       return true
     })
     if (fresh.length === 0) return []
-    this.events = [...this.events, ...fresh].slice(-MAX_CLIENT_EVENTS)
+    const combined = [...this.events, ...fresh]
+    const overflow = combined.length - MAX_CLIENT_EVENTS
+    // #1304 E2: whatever the cap trims off the front is exactly what
+    // chainCounts/srcCountryCounts/dstCountryCounts must be told left the
+    // buffer, so the option lists stay correct without rescanning it.
+    const dropped = overflow > 0 ? combined.slice(0, overflow) : []
+    this.events = overflow > 0 ? combined.slice(overflow) : combined
+    this.applyOptionCountDelta(fresh, dropped)
     // The wipe notice describes a silence, and the silence has ended --
     // "nothing since 14:02:11" is false the moment a line lands, and a
     // stale one would keep saying it for the rest of the session.
     this.wipedAt = null
     return fresh
+  }
+
+  // #1304 E2: adjusts the running per-value counts by exactly the events
+  // that joined/left the buffer, then rebuilds the (small) option lists
+  // from those counts -- never from `events` itself.
+  private applyOptionCountDelta(added: readonly ClientEvent[], removed: readonly ClientEvent[]) {
+    for (const e of removed) this.adjustOptionCounts(e, -1)
+    for (const e of added) this.adjustOptionCounts(e, 1)
+    this.rebuildOptionLists()
+  }
+
+  private adjustOptionCounts(e: ClientEvent, delta: number) {
+    if (e.chain) bumpCount(this.chainCounts, e.chain, delta)
+    if (e.srcCountry) bumpCount(this.srcCountryCounts, e.srcCountry.toUpperCase(), delta)
+    else if (e.srcIp) this.srcCountryUnknownCount += delta
+    if (e.dstCountry) bumpCount(this.dstCountryCounts, e.dstCountry.toUpperCase(), delta)
+    else if (e.dstIp) this.dstCountryUnknownCount += delta
+  }
+
+  private rebuildOptionLists() {
+    const extra = [...this.chainCounts.keys()].filter((c) => !BUILTIN_CHAINS.includes(c)).sort()
+    this.chainOptions = [...BUILTIN_CHAINS, ...extra]
+    this.srcCountryOptions = countryOptionsFromCounts(this.srcCountryCounts, this.srcCountryUnknownCount)
+    this.dstCountryOptions = countryOptionsFromCounts(this.dstCountryCounts, this.dstCountryUnknownCount)
+  }
+
+  // Rebuilds the counts (and so the option lists) from scratch -- used
+  // where the buffer is replaced outright rather than incrementally
+  // appended to (setInitialEvents, clearBuffer, reset), so there is no
+  // "added/removed" delta to apply.
+  private resetOptionCounts(events: readonly ClientEvent[]) {
+    this.chainCounts = new Map()
+    this.srcCountryCounts = new Map()
+    this.srcCountryUnknownCount = 0
+    this.dstCountryCounts = new Map()
+    this.dstCountryUnknownCount = 0
+    for (const e of events) this.adjustOptionCounts(e, 1)
+    this.rebuildOptionLists()
   }
 
   setInitialEvents(events: FirewallEvent[]) {
@@ -524,6 +574,7 @@ class AppState {
     this.events = stamp(events)
       .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
       .slice(-MAX_CLIENT_EVENTS)
+    this.resetOptionCounts(this.events)
     // As in appendUnseen: a refilled buffer is not a wiped one.
     if (this.events.length > 0) this.wipedAt = null
     this.syncRuleMatches()
@@ -659,6 +710,7 @@ class AppState {
 
   clearBuffer() {
     this.events = []
+    this.resetOptionCounts([])
     this.pendingBuffer = []
     this.pendingCount = 0
     this.incomingBuffer = []
@@ -875,6 +927,7 @@ class AppState {
   // nothing on it to leak.
   reset() {
     this.events = []
+    this.resetOptionCounts([])
     this.filters = emptyFilters()
     this.devices = []
     this.stats = null
@@ -1021,30 +1074,31 @@ export function applyFilters(
   })
 }
 
-// countryOptionsFor backs srcCountryOptions/dstCountryOptions: every
-// country code observed on this side in the current buffer, plus an
-// "Unknown" entry (lib/countryMatch.ts's UNKNOWN_COUNTRY) when at least
-// one event has an address on this side but no resolved country --
-// mirroring matchesCountry's own "has an address" rule, so the option
-// only appears when it would actually select something.
-function countryOptionsFor(
-  events: readonly FirewallEvent[],
-  side: 'src' | 'dst',
+// #1304 E2: increments (or decrements) a running count, deleting the key
+// once it drops to zero rather than leaving a stale zero entry behind --
+// bumpCount is the only place chainCounts/srcCountryCounts/
+// dstCountryCounts are mutated, so an evicted event's last occurrence
+// actually removes its option.
+function bumpCount(counts: Map<string, number>, key: string, delta: number) {
+  const next = (counts.get(key) ?? 0) + delta
+  if (next <= 0) counts.delete(key)
+  else counts.set(key, next)
+}
+
+// countryOptionsFromCounts backs srcCountryOptions/dstCountryOptions:
+// every country code with a nonzero running count, plus an "Unknown"
+// entry (lib/countryMatch.ts's UNKNOWN_COUNTRY) while unknownCount is
+// nonzero -- mirroring matchesCountry's own "has an address" rule, so the
+// option only appears when it would actually select something. Replaces
+// the old countryOptionsFor, which rescanned the whole event buffer on
+// every call; the counts it now reads are kept current incrementally (see
+// adjustOptionCounts).
+function countryOptionsFromCounts(
+  counts: ReadonlyMap<string, number>,
+  unknownCount: number,
 ): { value: string; label: string }[] {
-  const addrKey = side === 'src' ? 'srcIp' : 'dstIp'
-  const countryKey = side === 'src' ? 'srcCountry' : 'dstCountry'
-  const codes = new Set<string>()
-  let hasUnknown = false
-  for (const e of events) {
-    const country = e[countryKey]
-    if (country) {
-      codes.add(country.toUpperCase())
-    } else if (e[addrKey]) {
-      hasUnknown = true
-    }
-  }
-  const options = [...codes].sort().map((code) => ({ value: code, label: `${countryFlag(code)} ${code}`.trim() }))
-  if (hasUnknown) options.push({ value: UNKNOWN_COUNTRY, label: 'Unknown' })
+  const options = [...counts.keys()].sort().map((code) => ({ value: code, label: `${countryFlag(code)} ${code}`.trim() }))
+  if (unknownCount > 0) options.push({ value: UNKNOWN_COUNTRY, label: 'Unknown' })
   return options
 }
 
