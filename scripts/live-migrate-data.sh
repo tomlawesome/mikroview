@@ -22,6 +22,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
 . "$REPO/scripts/live-slot.sh"
+. "$REPO/scripts/live-web-dist.sh"
 
 DIR="$(mktemp -d)"
 # Port comes from the shared standalone allocator (live-slot.sh), not a
@@ -76,7 +77,7 @@ echo "== migrate-data, against a real instance"
 # may already have built it (#1091).
 if [ ! -f web/dist/index.html ]; then
   ( cd frontend && npm run build >/dev/null 2>&1 )
-  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
+  mv_rebuild_web_dist
 fi
 go build -buildvcs=false -o "$DIR/mikroview" .
 
