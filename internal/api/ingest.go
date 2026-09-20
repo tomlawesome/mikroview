@@ -5,7 +5,6 @@ package api
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -202,21 +201,6 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	// routers while Entities showed one.
 	if s.Devices != nil {
 		s.Devices.Ensure(tok.Device, now)
-	}
-
-	// Issue #1281's "Upgrading to 0.6.0" one-shot nudge (docs/upgrades.md):
-	// the first time a pushed /ip/address table arrives after this
-	// restart is the earliest point mikroview has any evidence to check
-	// -- routerState itself persists nothing (see main.go's wiring
-	// comment), so this cannot run any earlier. Naturally idempotent
-	// (EnrolFromPushedAddresses only ever touches a device with no
-	// acceptedIp yet), so calling it on every such push costs nothing
-	// once every device that is going to be settled this way already
-	// has been.
-	if payload.Kind == ingest.KindIPAddress && s.Devices != nil && s.RouterState != nil {
-		if upgraded := s.Devices.EnrolFromPushedAddresses(s.RouterState, now); len(upgraded) > 0 {
-			apiLog.Info(fmt.Sprintf("upgrade: enrolled %d device(s) at the address their own pushed table was the sole claimant of: %s -- see docs/upgrades.md", len(upgraded), strings.Join(upgraded, ", ")))
-		}
 	}
 
 	// Tell every open screen the pushed tables moved, so an answer

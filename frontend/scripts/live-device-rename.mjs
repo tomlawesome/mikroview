@@ -34,8 +34,9 @@
 // mechanism it tested. The former "arrives by push" step is gone too:
 // an ingest token's first push used to both Ensure the device and claim
 // 127.0.0.9 as evidence Resolve trusted on every line, and #1281
-// retired that per-line trust (device.Registry.EnrolFromPushedAddresses'
-// own doc comment is what is left of it, as a one-time upgrade nudge).
+// retired that per-line trust entirely -- a router's own pushed address
+// table is no longer consulted for attribution at all (see
+// device.Registry.Resolve's own doc comment).
 //
 // The router now arrives the same way any router does under #1281: an
 // admin declares it by name (POST /api/devices), mints it an enrolment

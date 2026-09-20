@@ -377,52 +377,6 @@ func TestOwnPrefixesReadsOnlySourceAndAcceptedIP(t *testing.T) {
 	}
 }
 
-// TestEnrolFromPushedAddressesEnrolsTheSoleClaimant is the "Upgrading
-// to 0.6.0" one-shot nudge: a device with no AcceptedIP yet, whose
-// pushed table is the only one naming a given address, is enrolled at
-// it once and the enrolment persists across the call boundary (never
-// re-run against a device that already has one).
-func TestEnrolFromPushedAddressesEnrolsTheSoleClaimant(t *testing.T) {
-	r := NewRegistry(nil)
-	now := time.Now()
-	r.Ensure("hap-ax3", now)
-	tables := pushedAddresses{"hap-ax3": {"10.10.0.1/24"}}
-
-	enrolled := r.EnrolFromPushedAddresses(tables, now)
-	if len(enrolled) != 1 || enrolled[0] != "hap-ax3" {
-		t.Fatalf("EnrolFromPushedAddresses() = %v, want [hap-ax3]", enrolled)
-	}
-	if id := r.Resolve("10.10.0.1", now); id != "hap-ax3" {
-		t.Errorf("Resolve() = %q after the upgrade nudge, want %q", id, "hap-ax3")
-	}
-
-	// Idempotent: a device already enrolled (by this call or a real
-	// token) is left alone on a later call, even with the same evidence
-	// still in front of it.
-	if again := r.EnrolFromPushedAddresses(tables, now); len(again) != 0 {
-		t.Errorf("EnrolFromPushedAddresses() on an already-enrolled device = %v, want none", again)
-	}
-}
-
-// TestEnrolFromPushedAddressesSkipsContestedAddresses: two devices
-// pushing the same address is exactly the case the old live-attribution
-// claim step could not settle either -- the one-shot nudge must not
-// guess, so neither device is enrolled from it.
-func TestEnrolFromPushedAddressesSkipsContestedAddresses(t *testing.T) {
-	r := NewRegistry(nil)
-	now := time.Now()
-	r.Ensure("a", now)
-	r.Ensure("b", now)
-	tables := pushedAddresses{
-		"a": {"172.23.0.1/16"},
-		"b": {"172.23.0.1/16"},
-	}
-
-	if enrolled := r.EnrolFromPushedAddresses(tables, now); len(enrolled) != 0 {
-		t.Errorf("EnrolFromPushedAddresses() = %v, want none: the address is contested", enrolled)
-	}
-}
-
 // TestAcceptedIPAndEnrolledAtSurviveRestart is issue #1281's core
 // persistence promise: a device this registry created, once enrolled,
 // keeps its AcceptedIP/EnrolledAt (and continues to exist at all) after
@@ -789,40 +743,6 @@ func TestValidateExpectedAddressSharedByMintAndRebind(t *testing.T) {
 	}
 }
 
-// TestEnrolFromPushedAddressesRefusesAnAddressAnotherDeviceAlreadyHolds
-// is audit finding 26c: the "an address belongs to one router" check is
-// shared with TryEnrol (addressHeldByAnotherDevice), and the two must
-// behave alike, not just agree on the outcome. Before this fix,
-// EnrolFromPushedAddresses silently skipped a colliding device -- no
-// refusal recorded, nothing for the wizard's warning box to show -- so a
-// push-time collision at upgrade left no trace anywhere. It must land in
-// Refused() exactly as a colliding live enrolment through TryEnrol does.
-func TestEnrolFromPushedAddressesRefusesAnAddressAnotherDeviceAlreadyHolds(t *testing.T) {
-	r := NewRegistry(nil)
-	now := time.Now()
-	for _, id := range []string{"held", "claimant"} {
-		if _, err := r.Create(id, id, now); err != nil {
-			t.Fatal(err)
-		}
-	}
-	enrolAt(t, r, "held", "10.10.0.1")
-
-	tables := pushedAddresses{"claimant": {"10.10.0.1/24"}}
-	if enrolled := r.EnrolFromPushedAddresses(tables, now); len(enrolled) != 0 {
-		t.Fatalf("EnrolFromPushedAddresses() = %v, want none: the address is already held", enrolled)
-	}
-	for _, info := range r.List() {
-		if info.ID == "claimant" && info.AcceptedIP != "" {
-			t.Errorf("claimant AcceptedIP = %q, want it left unenrolled", info.AcceptedIP)
-		}
-	}
-
-	refused := r.Refused()
-	if len(refused) != 1 || refused[0].Address != "10.10.0.1" {
-		t.Errorf("Refused() after a colliding push-time enrolment = %+v, want the address recorded exactly as a colliding TryEnrol would leave it", refused)
-	}
-}
-
 // TestCollisionReasonNamesTheWayOut is stage 6 finding 1 of the #1291
 // audit: TryEnrol's refusal for an address already enrolled to another
 // device used to stop at naming that device ("already enrolled as
@@ -830,9 +750,8 @@ func TestEnrolFromPushedAddressesRefusesAnAddressAnotherDeviceAlreadyHolds(t *te
 // whose router was swapped for new hardware at the same address has no
 // way to know that re-enrolling the old id elsewhere, or deleting its
 // device record, frees the address for the replacement. The wording
-// change belongs in the message every caller of collisionReason shares
-// (TryEnrol, EnrolFromPushedAddresses), so this checks it once at the
-// source rather than in each caller.
+// lives in collisionReason itself, so this checks it once at the source
+// rather than in each caller.
 func TestCollisionReasonNamesTheWayOut(t *testing.T) {
 	got := collisionReason("old-router", false)
 	if !strings.Contains(got, "old-router") {
