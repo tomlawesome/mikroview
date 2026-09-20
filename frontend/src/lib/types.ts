@@ -1788,7 +1788,7 @@ export interface SetupStatus {
 // are not only the wizard -- an empty stream explains its own silence
 // with the forced-past line that accounts for it.
 export interface SetupMark {
-  // 1-5, matching the wizard's five steps.
+  // 1-7, matching the wizard's seven steps.
   step: number
   // 'skipped' is quiet and moves on; 'forced' went past the heavy
   // warning and is recorded loudly. There is no third outcome: a step
