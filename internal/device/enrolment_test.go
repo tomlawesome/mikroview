@@ -82,8 +82,10 @@ func TestDeleteUnknownDeviceNotFound(t *testing.T) {
 // restart before the next good write would silently un-enrol a router
 // this call just told the caller succeeded.
 func TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails(t *testing.T) {
-	b := &failingSaveBackend{}
-	r, err := OpenRegistryWithBackend(b, nil)
+	// Create refuses against a backend that cannot save (#1303), so the
+	// device is made with no backend and the failing one is swapped in
+	// afterwards: what matters here is TryEnrol's own attempt.
+	r, err := OpenRegistryWithBackend(nil, nil)
 	if err != nil {
 		t.Fatalf("OpenRegistryWithBackend: %v", err)
 	}
@@ -95,12 +97,10 @@ func TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b := &failingSaveBackend{}
+	r.backend = b
 	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
 
-	// Create above already spent one Save attempt (also against this
-	// always-failing backend, swallowed the same way every ordinary write
-	// is); what matters here is TryEnrol's own attempt, not the running
-	// total.
 	before := b.count()
 	if r.TryEnrol("10.10.0.1", line) {
 		t.Fatal("TryEnrol() = true against a backend that cannot save, want false")

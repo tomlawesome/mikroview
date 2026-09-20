@@ -3,7 +3,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // deviceTestServer is an admin session against a server with a fresh,
@@ -78,6 +81,45 @@ func TestDeviceCreateConflictsOnADuplicateID(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+// unsavableBackend is a device registry backend whose every Save
+// fails, for the #1303 proof that a write the registry cannot keep is
+// reported to the operator rather than quietly applied in memory.
+type unsavableBackend struct{}
+
+func (unsavableBackend) Load(context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (unsavableBackend) Save(context.Context, []byte, int64) (int64, error) {
+	return 0, errors.New("disk full")
+}
+func (unsavableBackend) Close() error     { return nil }
+func (unsavableBackend) Describe() string { return "/var/lib/mikroview/secret-path/devices.json" }
+
+func TestDeviceCreateReportsAFailedSaveAndChangesNothing(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	reg, err := device.OpenRegistryWithBackend(unsavableBackend{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Devices = reg
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"})
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "nothing was changed") {
+		t.Errorf("body = %q, want the 'nothing was changed' sentence", body)
+	}
+	if strings.Contains(string(body), "secret-path") || strings.Contains(string(body), "disk full") {
+		t.Errorf("body = %q leaks the backend's path or error; that belongs in the log only", body)
+	}
+	if got := s.Devices.List(); len(got) != 0 {
+		t.Errorf("List() = %+v after a failed create, want empty", got)
 	}
 }
 
