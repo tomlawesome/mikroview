@@ -81,6 +81,19 @@ vi.mock('../lib/api', () => ({
   })),
 }))
 
+// #1304 E4: discoverHosts/discoverPorts each walk the whole client event
+// buffer. Wrapping the real implementation (rather than replacing it)
+// keeps every other test's rendered output unchanged and only adds a
+// call-count spy for the one test below that needs it.
+vi.mock('../lib/discoveredEntities', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/discoveredEntities')>()
+  return {
+    ...actual,
+    discoverHosts: vi.fn(actual.discoverHosts),
+    discoverPorts: vi.fn(actual.discoverPorts),
+  }
+})
+
 import { appState } from '../lib/state.svelte'
 import { entitiesState } from '../lib/entities.svelte'
 import { flagsState } from '../lib/flags.svelte'
@@ -90,6 +103,7 @@ import { authState } from '../lib/auth.svelte'
 import { UNATTRIBUTED_FIX, unattributedLabel } from '../lib/fleet'
 import { ROUTER_STEPS } from '../lib/setupsteps'
 import { wizardState } from '../lib/wizard.svelte'
+import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
 import Entities from './Entities.svelte'
 
 async function settle() {
@@ -490,6 +504,41 @@ describe('Entities named-things table (#675)', () => {
     expect(row?.textContent).toContain('10.0.10.2')
   })
 
+  // v0.6.0 audit Lows, E4: discoverHosts/discoverPorts each walk the
+  // whole client event buffer. That walk must run once per buffer
+  // change, not again every time entitiesState.list changes for a
+  // reason that has nothing to do with hosts or ports (a rule named
+  // elsewhere, say) -- rescanning the buffer on every such change costs
+  // more the longer a session runs and the buffer fills.
+  it('does not rescan the event buffer just because an unrelated entity was named', async () => {
+    appState.events = [
+      { srcIp: '10.0.10.9', dstIp: '', srcPort: 0, dstPort: 0, time: new Date().toISOString(), receivedAt: Date.now() },
+    ] as unknown as (typeof appState)['events']
+    render(Entities)
+    await settle()
+
+    const hostCalls = vi.mocked(discoverHosts).mock.calls.length
+    const portCalls = vi.mocked(discoverPorts).mock.calls.length
+    expect(hostCalls).toBeGreaterThan(0)
+    expect(portCalls).toBeGreaterThan(0)
+
+    entitiesState.list = [...entitiesState.list, { type: 'rule', key: 'some-rule', label: 'a rule', tags: [] }]
+    await settle()
+
+    expect(vi.mocked(discoverHosts).mock.calls.length).toBe(hostCalls)
+    expect(vi.mocked(discoverPorts).mock.calls.length).toBe(portCalls)
+
+    // The buffer itself changing is still picked up -- this is not a
+    // stale cache, it is scoped to the right dependency.
+    appState.events = [
+      ...appState.events,
+      { srcIp: '10.0.10.10', dstIp: '', srcPort: 0, dstPort: 0, time: new Date().toISOString(), receivedAt: Date.now() },
+    ] as unknown as (typeof appState)['events']
+    await settle()
+
+    expect(vi.mocked(discoverHosts).mock.calls.length).toBeGreaterThan(hostCalls)
+  })
+
   it('folds a discovered-but-unnamed host into the same table', async () => {
     appState.events = [
       { srcIp: '10.0.10.9', dstIp: '', time: new Date().toISOString(), receivedAt: Date.now() },
@@ -604,6 +653,49 @@ describe('Entities named-things table (#675)', () => {
     await fireEvent.blur(input)
     await settle()
     expect(upsertEntity).toHaveBeenCalledTimes(1)
+  })
+
+  // v0.6.0 audit Lows, R8: saveRename cleared renamingKey before its
+  // await and put it straight back on a refusal, with nothing checking
+  // whether the operator had, by the time the refusal came back, already
+  // started renaming a different row. A slow refusal for router A must
+  // not reopen A's editor over whatever the operator is doing to router
+  // B by then.
+  it('a refused rename does not overwrite a rename already in progress on a different row', async () => {
+    fetchEntities.mockResolvedValue([
+      { type: 'host', key: '10.0.10.2', label: 'router-a', tags: [] },
+      { type: 'host', key: '10.0.10.3', label: 'router-b', tags: [] },
+    ])
+    let settleFirst: (v: string | null) => void = () => {}
+    vi.mocked(upsertEntity).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settleFirst = resolve
+      }),
+    )
+    const { container, getByText } = render(Entities)
+    await settle()
+
+    await fireEvent.click(getByText('router-a'))
+    await settle()
+    const inputA = container.querySelector('.rename-input') as HTMLInputElement
+    await fireEvent.input(inputA, { target: { value: 'router-a-renamed' } })
+    await fireEvent.keyDown(inputA, { key: 'Enter' })
+    await settle()
+
+    // A's save is still in flight. The operator moves on and starts
+    // renaming a different row before it comes back.
+    const rowB = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('router-b'))
+    await fireEvent.click(rowB!.querySelector('.rename-btn') as HTMLElement)
+    await settle()
+
+    settleFirst('a name is already taken')
+    await settle()
+
+    // B's own editor is still the one open, and A's refusal never
+    // resurfaced over it.
+    expect(container.querySelectorAll('.rename-input')).toHaveLength(1)
+    expect(container.querySelector('.rename-error')).toBeNull()
+    expect(getByText('router-a')).toBeTruthy()
   })
 
   it('marks a host with an active new_device flag as a new talker, in the family ink', async () => {

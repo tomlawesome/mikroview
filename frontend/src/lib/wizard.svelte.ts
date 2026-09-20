@@ -608,6 +608,13 @@ class WizardState {
     }
     this.enrolmentError = null
     this.enrolMinting = true
+    // Captured before the await: a slow mint can still be in flight once
+    // the operator has clicked Back, Next, closed the modal, or opened a
+    // different router's walk. Applying it then would flash a token or a
+    // refusal that belongs to a pane nobody is looking at any more (v0.6.0
+    // audit Lows, F4).
+    const requestPane = this.pane
+    const requestDevice = this.ledgerDevice
     let result: EnrolmentToken | string
     try {
       result = await mintEnrolment(
@@ -624,6 +631,7 @@ class WizardState {
       this.enrolPassword = ''
       this.enrolMinting = false
     }
+    if (!this.open || this.pane !== requestPane || this.ledgerDevice !== requestDevice) return
     if (typeof result === 'string') {
       this.enrolmentError = result
       return
@@ -673,6 +681,11 @@ class WizardState {
     }
     this.registerError = null
     this.registering = true
+    // Same reasoning as mintEnrolmentToken's requestPane/requestDevice:
+    // a slow Register response must not land on a pane, or a router, the
+    // operator has already left (v0.6.0 audit Lows, F4).
+    const requestPane = this.pane
+    const requestDevice = this.ledgerDevice
     let result: Device | string
     try {
       result = await registerDevice(this.ledgerDevice, name)
@@ -681,6 +694,7 @@ class WizardState {
     } finally {
       this.registering = false
     }
+    if (!this.open || this.pane !== requestPane || this.ledgerDevice !== requestDevice) return
     if (typeof result === 'string') {
       this.registerError = result
       return

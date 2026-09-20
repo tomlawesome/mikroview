@@ -477,6 +477,55 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
   })
 
+  // v0.6.0 audit Lows, R9: a refused POST /api/setup/commands here used
+  // to leave "copy for RouterOS" doing nothing and saying nothing --
+  // indistinguishable from the click never registering. keyError is the
+  // same slot the panel already shows a refused mint or revoke through.
+  it('says so when copying the RouterOS lines fails, the same way the keys panel already shows a refusal', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchDevices, fetchSetupCommands } = await import('../lib/api')
+    vi.mocked(fetchDevices).mockResolvedValueOnce([
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        sourceIp: '203.0.113.5',
+        configured: true,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: '2026-09-01T00:00:00Z',
+        eventCount: 10,
+        status: 'live',
+        routerosVersion: '',
+      },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce({
+      id: 't10',
+      name: 'rb5009-b',
+      kind: 'ingest',
+      device: 'rb5009',
+      createdAt: '2026-09-01T00:00:00Z',
+      value: 'mv1_ingestsecret',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    vi.mocked(fetchSetupCommands).mockResolvedValueOnce('setup is locked while a restore is in progress')
+    await fireEvent.click(screen.getByRole('button', { name: 'copy for RouterOS' }))
+    await settle()
+
+    expect(screen.getByText('setup is locked while a restore is in progress')).toBeTruthy()
+    expect(screen.queryByText('copied for RouterOS')).toBeNull()
+  })
+
   it("revoke arms before it acts, and any other click disarms it", async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -1387,6 +1436,37 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     await settle()
 
     expect(fetchDroplist).toHaveBeenCalledWith('operator-saved.example:8443')
+  })
+
+  // FB12 (v0.6.0 audit): nothing exercised the case where this group
+  // mounts before the wizard has answered "what address can your router
+  // reach mikroview on?" -- wizardState.address only leaves '' once
+  // wizardState.refresh() resolves, which is driven by an effect
+  // elsewhere (SetupWizard.svelte's), not by this component. Today's
+  // behaviour: the fetch goes out with whatever is currently known, same
+  // as the saved-address test above -- there is no wait, and no crash.
+  // That matches saveAddress's own "an empty value renders its own
+  // no-command state server-side" reasoning (wizard.svelte.ts) rather
+  // than this component inventing a second way to say "not answered
+  // yet", so it is left as is: this test records the behaviour rather
+  // than changing it.
+  it('polls the drop list even before the wizard address is known, rather than waiting for it', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    expect(wizardState.address).toBe('')
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [],
+      key: { present: false },
+      ownRangesKnown: false,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(fetchDroplist).toHaveBeenCalledWith('')
+    expect(document.getElementById('engineroom-droplist')).toBeTruthy()
   })
 
   it('"drop list" answers unknown, with a working ask again, when the server does not', async () => {
