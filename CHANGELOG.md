@@ -16,7 +16,17 @@ rewritten.
 
 ## [Unreleased]
 
-Nothing yet.
+### Removed
+
+- **`configDrift.storePath` is gone**, along with the backend it
+  configured. 0.6.0's plain close button for Settings ▸ Upgrade
+  (#1218) already stopped anything reading or writing it; #1277 removes
+  the now-dead `internal/configdrift` package, `POST
+  /api/config/upgrade/dismiss`, and the response's `dismissed` field
+  that went with it. An older backup that still carries the store is
+  restored with everything else skipped rather than refused (see
+  `retiredStores` in `backup_cli.go`). Remove the key from
+  `config.yaml`.
 
 ## [0.6.0] - 2026-09-20
 

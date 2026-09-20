@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -82,16 +84,63 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"decommission", cfg.Engine.DecommissionStorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
-		// The "N new settings are available" notice's per-version
-		// dismissal (#1218) -- small operator state, same reasoning as
-		// setup just above: a restore that dropped it would bring the
-		// notice back for a version already dealt with.
-		{"config_drift", cfg.ConfigDrift.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
 		{"droplist", cfg.Droplist.StorePath},
 	}
+}
+
+// retiredStore documents a backup store name a past release stopped
+// writing to backedUpStores, so a restore carrying one can explain why
+// it is being skipped instead of refusing the whole bundle as unknown.
+// Version is the release it stopped being written in.
+//
+// Every entry here must trace to a real, dated CHANGELOG.md "### Removed"
+// line, the same rule internal/config/unknown_keys.go's
+// removedOrRenamedKeys follows for config keys -- a guessed mapping
+// would tell an operator restoring old state the wrong thing about why
+// their data is missing.
+type retiredStore struct {
+	Version string
+	Why     string
+}
+
+// retiredStores is every backup store name backedUpStores has stopped
+// listing, keyed by name. runRestore skips these via retiredStoresIn
+// rather than refusing the backup outright the way an actually-unknown
+// store name does -- see the "unknown store" branch below -- so a
+// backup made before a store's retirement still restores everything
+// else it carries instead of becoming permanently unrestorable.
+var retiredStores = map[string]retiredStore{
+	"config_drift": {
+		Version: "Unreleased",
+		Why: "the per-version dismissal state for the config-upgrade " +
+			"notice (#1218) was replaced by a plain close button, and its " +
+			"backend removed (#1277); nothing reads or writes this store " +
+			"any more.",
+	},
+}
+
+// retiredStoresIn deletes every retiredStores entry it finds in stores,
+// logging why each is being skipped rather than restored, and returns
+// their names (sorted, for a deterministic log order). Called before
+// the known-store loop in runRestore so a retired name is never also
+// reported as unknown.
+func retiredStoresIn(stores map[string]json.RawMessage, log *slog.Logger) []string {
+	var names []string
+	for name := range stores {
+		if _, ok := retiredStores[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		rs := retiredStores[name]
+		delete(stores, name)
+		log.Info(fmt.Sprintf("skipping store %q from this backup: retired in %s -- %s", name, rs.Version, rs.Why))
+	}
+	return names
 }
 
 // excludedFromBackup is every *Path field on config.Config that
@@ -634,6 +683,13 @@ func runRestore(args []string) int {
 	for _, s := range backedUpStores(cfg) {
 		known[s.Name] = s.Path
 	}
+	// Stores a past release retired (see retiredStores) are pulled out
+	// and logged here, before the known-store loop below could call them
+	// unknown -- the same pull-out-and-handle-first shape
+	// retainedEventsStore and schemaStoreName above already use, so a
+	// bundle made before a store's retirement still restores everything
+	// it still recognises instead of the whole backup being refused.
+	retiredStoresIn(env.Stores, logger)
 	// decoded holds the bytes each store will actually be written with --
 	// unwrapped up front, in the same fully-validated-before-anything-is-
 	// touched pass as the known-store checks below, so a corrupt
