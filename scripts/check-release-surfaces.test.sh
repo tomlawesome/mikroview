@@ -116,7 +116,7 @@ EOF
 set -- run -d --name mikroview --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
   -p 6514:6514 -p 443:8080 \
-  -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview \
+  -v mikroview-data:/var/lib/mikroview -v mikroview-etc:/etc/mikroview:ro \
   ghcr.io/tomlawesome/mikroview:latest
 EOF
   mkdir -p "$dir/deploy"
@@ -129,6 +129,8 @@ services:
       - ALL
     pids_limit: 128
     read_only: true
+    volumes:
+      - ./mikroview:/etc/mikroview:ro
 EOF
 
   commit "$dir" "2026-01-01T00:00:00" "initial"
@@ -202,21 +204,18 @@ check "$(case "$out" in *"FAIL: docs/development.md says Go 1.20+ but go.mod req
 
 # --- check 6: screenshots checked against their own mapped source files ---
 #
-# Pre-existing, unrelated to #1273: the shared new_repo() fixture's
-# synthetic install.sh/deploy/docker-compose.yml already fail check 8's
-# hardening-parity pairing (missing the ":ro" suffix on one volume line)
-# at HEAD, before any of this file's changes -- confirmed by running
-# this same test file, unmodified, checked out on its own. That makes
-# the script's overall rc always 1 for every fixture derived from
-# new_repo(), regardless of section 6. So the "passes" cases below
-# assert the section's own ok:/FAIL: lines directly rather than the
-# whole-script rc, which section 8's bug would otherwise poison. Report
-# check 8's bug separately; fixing it is out of scope here.
+# new_repo()'s install.sh/deploy/docker-compose.yml used to be missing
+# the ":ro" suffix on the /etc/mikroview volume line, which failed check
+# 8's hardening-parity pairing and made the script's overall rc always 1
+# for every fixture derived from new_repo() -- fixed (#1295). The
+# "passes" cases below now assert the whole-script rc again, alongside
+# the section's own ok:/FAIL: lines.
 shots="$TMP/screens"
 new_repo "$shots"
 
 # the all-good fixture's own screenshot passes against its mapped sources
 run "$shots"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "an unmodified fixture's screenshot check passes (rc=$rc)"
 check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*) echo true;; *) echo false;; esac)" \
   "a screenshot fresh against its mapped sources passes"
 check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
@@ -239,6 +238,7 @@ mkdir -p "$c6b/frontend/src/components"
 printf 'export const Other = 1;\n' >"$c6b/frontend/src/components/Other.svelte"
 commit "$c6b" "2026-01-02T12:00:00" "add unrelated component"
 run "$c6b"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "an unrelated component change still passes overall (rc=$rc)"
 check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
   "a change to an unmapped component does not flag fall-dark.png"
 
@@ -246,6 +246,7 @@ check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; e
 printf 'png-v2\n' >"$shots/docs/screenshots/fall-dark.png"
 commit "$shots" "2026-01-03T00:00:00" "recapture screenshot"
 run "$shots"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a recaptured screenshot's fixture passes overall (rc=$rc)"
 check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*) echo true;; *) echo false;; esac)" \
   "a recaptured screenshot passes"
 check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
