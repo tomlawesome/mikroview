@@ -171,7 +171,16 @@ check(true, 'the scene bar indicator clears with it')
 // grid-template-rows), so the content is still on its way back when
 // the banner's selector detaches: read the position with the same
 // settledMainTop() used for the baseline above, not a bare $eval --
-// otherwise this reading is what wobbles instead.
+// otherwise this reading is what wobbles instead. The wait before it
+// is still needed: settledMainTop() sees two equal frames and returns,
+// and before the fold has started the value is stably *wrong*.
+await page
+  .waitForFunction(
+    (want) => Math.abs(document.querySelector('#main-content').getBoundingClientRect().top - want) < 2,
+    mainTopConnected,
+    { timeout: 5000 },
+  )
+  .catch(() => {})
 const mainTopRecovered = await settledMainTop()
 check(
   Math.abs(mainTopRecovered - mainTopConnected) < 2,
