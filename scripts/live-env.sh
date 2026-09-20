@@ -344,7 +344,7 @@ up() {
     if mv_port_in_use "$port"; then
       echo "live-env: port $port is still in use after teardown." >&2
       echo "live-env: another live check is probably running from a different checkout." >&2
-      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
+      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
       exit 1
     fi
   done
