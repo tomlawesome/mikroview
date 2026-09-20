@@ -73,10 +73,10 @@ export const FLAG_TYPE_ORDER: readonly FlagType[] = [
   'known_bad_ip',
 ] as const
 
-// Same labels Flags.svelte and Exclusions.svelte carry -- duplicated
-// rather than shared, which is the convention already established in
-// this codebase for these two tables (see those files' own notes). This
-// copy replaces the one that lived in the removed FlagsChart.svelte.
+// The flag-type labels. Flags.svelte, AuditLog.svelte and
+// Topography.svelte read this table; Exclusions.svelte still carries
+// its own copy (see its note). This copy replaces the one that lived
+// in the removed FlagsChart.svelte.
 export const FLAG_TYPE_LABELS: Record<FlagType, string> = {
   port_scan: 'Port scan',
   activity_spike: 'Activity spike',

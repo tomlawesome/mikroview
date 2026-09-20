@@ -333,33 +333,15 @@
     return `${formatTime(e.time)} ${e.action}|${e.ruleLabel}| ${e.chain}: ${io}${proto}${flow}`
   }
 
-  // Same labels Exclusions.svelte and lib/metricsSeries.ts use --
-  // duplicated rather than shared, which is the long-standing convention
-  // for these two tables in this codebase. The record sets the flag
-  // column in caps; that is done in CSS, so the label a filter matches
-  // on stays the label everything else in the app uses.
-  const TYPE_LABELS: Record<FlagType, string> = {
-    port_scan: 'Port scan',
-    activity_spike: 'Activity spike',
-    critical_port: 'Critical-port attempts',
-    global_spike: 'Network-wide volume spike',
-    distributed_brute_force: 'Distributed brute-force',
-    outbound_anomaly: 'Outbound anomaly',
-    internal_recon: 'Internal reconnaissance',
-    rule_spike: 'Rule hit-rate spike',
-    repeated_drops: 'Repeated drops on a port',
-    low_slow_scan: 'Low-and-slow port scan',
-    off_hours_activity: 'Off-hours activity',
-    device_silence: 'Device gone quiet',
-    new_device: 'New device',
-    stale_rule: 'Stale firewall rule',
-    unexpected_mail_sender: 'Unexpected mail sender',
-    known_bad_ip: 'Known-bad IP (blocklist match)',
-  }
-
+  // The labels are lib/metricsSeries.ts's FLAG_TYPE_LABELS, already
+  // imported above for the droplist reason text; this file carried a
+  // second copy of the same sixteen entries until the v0.6.0 audit. The
+  // record sets the flag column in caps; that is done in CSS, so the
+  // label a filter matches on stays the label everything else in the
+  // app uses.
   // A custom detection's type is its author's own name for it -- the
   // honest label, not a key the sixteen-entry table above could know.
-  const labelFor = (t: FlagType) => TYPE_LABELS[t] ?? t
+  const labelFor = (t: FlagType) => FLAG_TYPE_LABELS[t] ?? t
 
   // Ids this visit judged, kept in the settled or shelf table -- dimmed,
   // carrying their stamp -- rather than dropped the instant the server
