@@ -147,6 +147,32 @@ mikroview/
 
 The bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try there. **The Compose form is no different**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and an empty folder starts on defaults just as the `docker run` above does. Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
 
+## Which ports to publish, and to whom
+
+The examples above publish every port on every interface, which is the
+right default for a first run on a LAN you trust. Two changes are worth
+making once it is more than that, and neither can be made from inside
+the container — a container cannot firewall its own host:
+
+- **A reverse proxy in front? Publish the web port on loopback only.**
+  `-p 127.0.0.1:443:8080` (or `"127.0.0.1:443:8080"` in the Compose
+  `ports:` list) means the proxy is the only way in and nothing else on
+  the network can go round it. Set `listen.trustedProxies` at the same
+  time, so MikroView sees your users' real addresses instead of the
+  proxy's — see
+  [docs/configuration.md](configuration.md#running-behind-a-reverse-proxy).
+- **Firewall the syslog port to your routers.** `6514/tcp` accepts a log
+  line from anything that can reach it — TLS proves MikroView's identity
+  to the router, not the router's to MikroView — so restrict it on the
+  host to your routers' addresses.
+
+You can also limit which addresses reach the web UI from MikroView's own
+side, with `ui.allow` in `config.yaml`; it is a file-only setting, and
+[docs/configuration.md](configuration.md#limiting-which-addresses-can-reach-the-web-ui)
+covers it, including how to get back in if you lock yourself out.
+[SECURITY.md](../SECURITY.md) has the rest of the deployment hardening
+advice.
+
 ## From source
 
 ```sh
