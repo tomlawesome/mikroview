@@ -56,6 +56,7 @@
     oldestArrival,
     previousGeneration,
     receiptLine,
+    vaultGated,
     MAX_GENERATIONS,
     MAX_KEEP_COMMENT,
   } from '../lib/backups'
@@ -72,25 +73,61 @@
 
   let {
     resp,
+    fetchedAt,
     onopenlost,
   }: {
     resp: RouterBackupsResponse
+    /** When the request behind `resp` was issued (EngineRoom's own
+     * clock). An optimistic write is held until this passes the moment
+     * the write landed -- see the overrides note below. */
+    fetchedAt: number
     /** Round 44's "is it gone?" link: opens the wizard's step 6 in its
      * lost-router shape (round 45), reached only from here. */
     onopenlost: (device: string) => void
   } = $props()
 
-  // routers is kept locally for the same reason lock is: a keep control
-  // answers with the router's whole block, and the screen shows that
-  // straight away rather than waiting up to a minute for the parent's
-  // own poll to come round again.
-  let routers = $state<RouterBackupRouter[]>(resp.routers)
+  // A keep/release/comment control answers with the router's whole
+  // block, and the screen shows that straight away rather than waiting
+  // up to a minute for the parent's own poll to come round again --
+  // but that used to be a straight `routers = resp.routers` mirror plus
+  // an effect that reran on every prop change, which fought the
+  // optimistic write: a poll already in flight when the mutation landed
+  // resolves with pre-mutation data moments later and, since the effect
+  // resyncs unconditionally, stomps the fresh row straight back to what
+  // it looked like before the click.
+  //
+  // overrides holds only what this tab wrote and the parent hasn't
+  // confirmed back yet, keyed by device, laid over resp.routers for
+  // rendering. Each carries the moment it was written; it is dropped
+  // once the parent's data comes from a request issued after that,
+  // since only such a request can have seen the write.
+  //
+  // It used to drop an override when the polled row matched it as
+  // text. That cannot work: a row carries a missed-backup count and an
+  // interval estimate that move on their own, and a newly arrived
+  // backup changes it outright. Click keep at 02:50, let the nightly
+  // backup land at 03:00, and the polled row never equals the written
+  // one again -- so the override was never dropped, and that router's
+  // block sat frozen on this tab's copy, hiding the new backup, until
+  // the page was reloaded. Freshness is the real question; equality
+  // only ever approximated it.
+  let overrides = $state<Record<string, { row: RouterBackupRouter; at: number }>>({})
+  const routers = $derived(resp.routers.map((r) => overrides[r.device]?.row ?? r))
+
   $effect(() => {
-    routers = resp.routers
+    const seenAt = fetchedAt
+    let next: Record<string, { row: RouterBackupRouter; at: number }> | undefined
+    for (const device in overrides) {
+      if (seenAt > overrides[device].at) {
+        next ??= { ...overrides }
+        delete next[device]
+      }
+    }
+    if (next) overrides = next
   })
 
   function applyRow(row: RouterBackupRouter) {
-    routers = routers.map((r) => (r.device === row.device ? row : r))
+    overrides = { ...overrides, [row.device]: { row, at: Date.now() } }
   }
 
   // canKeep is the viewer floor: a viewer reads the kept list and the
@@ -145,13 +182,17 @@
 
   // --- the vault passphrase (#1115, #956) ---------------------------------
   //
-  // lock is kept in local state, seeded from resp.lock and re-synced by
-  // the effect below whenever a fresh resp lands from the parent's own
-  // poll -- but a control's own call updates it immediately from the
-  // VaultLock that call returned, without waiting for the next poll.
-  let lock: VaultLock = $state(resp.lock)
+  // Same override-over-derived shape as routers/overrides above, and
+  // for the same reason: a control's own call updates lockOverride
+  // immediately from the VaultLock that call returned, without waiting
+  // for the parent's next poll -- and that write has to survive a poll
+  // already in flight resolving with the pre-mutation lock a moment
+  // later, not lose to it.
+  let lockOverride = $state<{ lock: VaultLock; at: number } | null>(null)
+  const lock = $derived(lockOverride?.lock ?? resp.lock)
+
   $effect(() => {
-    lock = resp.lock
+    if (lockOverride && fetchedAt > lockOverride.at) lockOverride = null
   })
 
   type PassState = 'off' | 'locked' | 'unlocked' | 'unlocked elsewhere'
@@ -163,10 +204,7 @@
   }
   const passphraseState = $derived(passState(lock))
 
-  // gated is round 44's download gate: a passphrase is set and this
-  // session does not hold the unlock, whether nobody has it open
-  // (locked) or another of the admin's own sign-ins does.
-  const gated = $derived(lock.passphraseSet && !lock.unlockedForYou)
+  const gated = $derived(vaultGated(lock))
 
   // 'keep' and 'edit' are the same one-field form (#1126): keeping a
   // backup and rewriting why it is kept are the same sentence, typed
@@ -224,7 +262,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -254,7 +292,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -268,7 +306,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -282,7 +320,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = { lock: result, at: Date.now() }
     closeForm()
   }
 
@@ -344,7 +382,7 @@
       formError = result
       return
     }
-    lock = result
+    lockOverride = { lock: result, at: Date.now() }
   }
 
   // refreshLock re-reads the lock object alone, off the back of the
@@ -355,15 +393,28 @@
   async function refreshLock() {
     try {
       const r = await fetchRouterBackups()
-      lock = r.lock
+      lockOverride = { lock: r.lock, at: Date.now() }
     } catch {
       // the parent's own periodic refresh will catch up
     }
   }
 
+  // downloadError is per-router, not one shared slot: a failed download
+  // for one router's generation should never read as if a different
+  // router's block is the one that failed.
+  let downloadError = $state<{ device: string; message: string } | null>(null)
+
   async function download(device: string, generation: string, kind: 'backup' | 'rsc') {
+    downloadError = null
     const outcome = await downloadFromUrl(routerBackupDownloadUrl(device, generation, kind), `${device}.${kind}`)
-    if (outcome === 'forbidden') await refreshLock()
+    if (outcome === 'forbidden') {
+      await refreshLock()
+    } else if (outcome === 'failed') {
+      // The button used to do nothing and say nothing on anything but a
+      // 403 -- a dropped connection or a 5xx looked identical to a
+      // click that never happened.
+      downloadError = { device, message: 'The download failed. Try again.' }
+    }
   }
 
   // --- reading one export, and comparing two (#895) -----------------------
@@ -490,7 +541,16 @@
     <div class="orow">
       <span>key</span>
       <span class="ov">
-        none mounted — a backup that arrives has nowhere safe to go, so the drop box is closed
+        {#if resp.keyUnreadable}
+          <!-- #1264 finding 5: a configured-but-broken key must never
+               read like "none mounted, mint one" -- that action
+               overwrites history.keyFile, and every backup already
+               encrypted under the old one becomes unreadable for good. -->
+          configured but could not be read — check the server logs and fix history.keyFile in place; do not
+          mint a new one, or every backup already stored under the old key becomes unrecoverable
+        {:else}
+          none mounted — a backup that arrives has nowhere safe to go, so the drop box is closed
+        {/if}
       </span>
     </div>
   </div>
@@ -525,6 +585,9 @@
           <b>{router.device}</b>
           <span class:brwarn={receipt.amber}>{receipt.text}</span>
         </div>
+        {#if downloadError && downloadError.device === router.device}
+          <p class="oghint err" role="alert">{downloadError.message}</p>
+        {/if}
         <svg
           class="brstrip"
           viewBox="0 0 520 58"

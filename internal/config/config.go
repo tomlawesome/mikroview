@@ -815,6 +815,17 @@ type DeviceMAC struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// DeviceRegistry configures internal/device's Registry (issue #1281):
+// its persisted acceptedIp/enrolledAt and the identity of any device
+// the registry itself created (Create or a pushing ingest token) rather
+// than a devices: declaration below, which is rebuilt from this file on
+// every boot regardless. Optional persistence, same contract as
+// DeviceMAC.StorePath above: left empty, enrolment still works, it just
+// starts over -- unenrolled -- on every restart.
+type DeviceRegistry struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Engine configures internal/engine's evaluation chassis
 // (docs/decisions/evaluation-engine.md): its persisted per-definition,
 // per-key baseline state (#399/#400: engine.StateStore), what a Baseline
@@ -1133,36 +1144,37 @@ type Backup struct {
 }
 
 type Config struct {
-	Listen      Listen      `yaml:"listen"`
-	Store       Store       `yaml:"store"`
-	Log         Log         `yaml:"log"`
-	GeoIP       GeoIP       `yaml:"geoip"`
-	Reputation  Reputation  `yaml:"reputation"`
-	Flags       Flags       `yaml:"flags"`
-	Auth        Auth        `yaml:"auth"`
-	Entities    Entities    `yaml:"entities"`
-	Coverage    Coverage    `yaml:"coverage"`
-	Hosts       Hosts       `yaml:"hosts"`
-	Seen        Seen        `yaml:"seen"`
-	Baseline    Baseline    `yaml:"baseline"`
-	Audit       Audit       `yaml:"audit"`
-	Setup       Setup       `yaml:"setup"`
-	ConfigDrift ConfigDrift `yaml:"configDrift"`
-	Watchlist   Watchlist   `yaml:"watchlist"`
-	Notify      Notify      `yaml:"notify"`
-	TLS         TLS         `yaml:"tls"`
-	OIDC        OIDC        `yaml:"oidc"`
-	Postgres    Postgres    `yaml:"postgres"`
-	Devices     []Device    `yaml:"devices"`
-	DeviceMAC   DeviceMAC   `yaml:"deviceMac"`
-	Blocklist   Blocklist   `yaml:"blocklist"`
-	Droplist    Droplist    `yaml:"droplist"`
-	NetClass    NetClass    `yaml:"netClass"`
-	OUI         OUI         `yaml:"oui"`
-	Engine      Engine      `yaml:"engine"`
-	Snapshot    Snapshot    `yaml:"snapshot"`
-	History     History     `yaml:"history"`
-	Backup      Backup      `yaml:"backup"`
+	Listen         Listen         `yaml:"listen"`
+	Store          Store          `yaml:"store"`
+	Log            Log            `yaml:"log"`
+	GeoIP          GeoIP          `yaml:"geoip"`
+	Reputation     Reputation     `yaml:"reputation"`
+	Flags          Flags          `yaml:"flags"`
+	Auth           Auth           `yaml:"auth"`
+	Entities       Entities       `yaml:"entities"`
+	Coverage       Coverage       `yaml:"coverage"`
+	Hosts          Hosts          `yaml:"hosts"`
+	Seen           Seen           `yaml:"seen"`
+	Baseline       Baseline       `yaml:"baseline"`
+	Audit          Audit          `yaml:"audit"`
+	Setup          Setup          `yaml:"setup"`
+	ConfigDrift    ConfigDrift    `yaml:"configDrift"`
+	Watchlist      Watchlist      `yaml:"watchlist"`
+	Notify         Notify         `yaml:"notify"`
+	TLS            TLS            `yaml:"tls"`
+	OIDC           OIDC           `yaml:"oidc"`
+	Postgres       Postgres       `yaml:"postgres"`
+	Devices        []Device       `yaml:"devices"`
+	DeviceMAC      DeviceMAC      `yaml:"deviceMac"`
+	DeviceRegistry DeviceRegistry `yaml:"deviceRegistry"`
+	Blocklist      Blocklist      `yaml:"blocklist"`
+	Droplist       Droplist       `yaml:"droplist"`
+	NetClass       NetClass       `yaml:"netClass"`
+	OUI            OUI            `yaml:"oui"`
+	Engine         Engine         `yaml:"engine"`
+	Snapshot       Snapshot       `yaml:"snapshot"`
+	History        History        `yaml:"history"`
+	Backup         Backup         `yaml:"backup"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -1328,6 +1340,9 @@ func defaults() Config {
 		},
 		DeviceMAC: DeviceMAC{
 			StorePath: DefaultDataDir + "/mac-registry.json",
+		},
+		DeviceRegistry: DeviceRegistry{
+			StorePath: DefaultDataDir + "/device-registry.json",
 		},
 		Engine: Engine{
 			StorePath:            DefaultDataDir + "/engine-state.json",
@@ -1985,10 +2000,6 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-// parseIntList parses a comma-separated list of integers (e.g. a port
-// list from an env var). Any single malformed entry invalidates the
-// whole value -- like every other env var here, a bad value is ignored
-// in favor of whatever was already set, rather than partially applied.
 // parseStringList parses a comma-separated list of plain strings (e.g.
 // notify.smtp.to's recipient addresses from an env var). Unlike
 // parseIntList, there's no format to validate here -- any entry is a
@@ -2005,6 +2016,10 @@ func parseStringList(v string) []string {
 	return out
 }
 
+// parseIntList parses a comma-separated list of integers (e.g. a port
+// list from an env var). Any single malformed entry invalidates the
+// whole value -- like every other env var here, a bad value is ignored
+// in favor of whatever was already set, rather than partially applied.
 func parseIntList(v string) ([]int, bool) {
 	parts := strings.Split(v, ",")
 	out := make([]int, 0, len(parts))

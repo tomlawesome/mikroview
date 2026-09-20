@@ -67,15 +67,32 @@ failed=0
 
 # api_get <api-path> <destination> -- GET one thing from this project's
 # API with whichever credential the environment offers. Returns non-zero
-# for anything that is not a 200, without distinguishing why: every
-# caller here decides for itself whether a miss is fatal.
+# for anything that is not a 200, without distinguishing why in its exit
+# code: every caller here decides for itself whether a miss is fatal.
+# curl/glab's own error text is logged either way, so a real failure
+# (timeout, DNS, 502) reads as what it was instead of looking identical
+# to an expected 404.
 api_get() {
-  local path="$1" dest="$2"
+  local path="$1" dest="$2" err
   if [ -n "${CI_JOB_TOKEN:-}" ]; then
     : "${CI_API_V4_URL:?fetch-upgrade-fixtures: CI_JOB_TOKEN is set but CI_API_V4_URL is not}"
-    curl -fsSL -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>/dev/null
+    # --connect-timeout/--max-time bound a hung connection or a stalled
+    # transfer; --retry covers a registry blip (connection refused, 5xx,
+    # timeout) rather than failing the whole job on the first hiccup.
+    # Without these a dead registry hangs this call for the shell's
+    # default (none), which stalls the job until its own CI timeout.
+    if err="$(curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused --retry-delay 2 \
+      -H "JOB-TOKEN: ${CI_JOB_TOKEN}" -o "$dest" "${CI_API_V4_URL}/${path}" 2>&1)"; then
+      return 0
+    fi
+    log "curl: ${err:-curl gave no error output}"
+    return 1
   else
-    glab api "$path" > "$dest" 2>/dev/null
+    if err="$(glab api "$path" 2>&1 >"$dest")"; then
+      return 0
+    fi
+    log "glab api: ${err:-glab gave no error output}"
+    return 1
   fi
 }
 
@@ -134,7 +151,12 @@ if api_get "projects/${PROJECT_ID}/packages?package_type=generic&package_name=up
   # listing that parses to nothing is reported rather than shrugged off,
   # since silently falling back to the committed set is exactly how a
   # tag-job recording would go untested.
-  found="$(grep -oE '"version":[[:space:]]*"[^"]*"' "$registry_list" | sed -E 's/.*"([^"]*)"$/\1/' | sort -u)"
+  # `|| true`: an empty/no-match listing is a real, valid case (nothing
+  # recorded in the registry yet) -- without it, grep's exit 1 on zero
+  # matches trips `set -o pipefail` and kills the script right here,
+  # silently, before it ever reports anything. Same bug, same fix, as
+  # scripts/check-upgrade-fixtures-recorded.sh.
+  found="$(grep -oE '"version":[[:space:]]*"[^"]*"' "$registry_list" | sed -E 's/.*"([^"]*)"$/\1/' | sort -u)" || true
   if [ -z "$found" ]; then
     log "the registry lists no upgrade-fixtures versions -- committed versions only"
   else

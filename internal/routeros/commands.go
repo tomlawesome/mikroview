@@ -69,8 +69,44 @@ func scriptSource(body string) string {
 // `source="<paste the script above>"` in another, which asked the
 // operator to nest one clipboard inside another and to do the escaping
 // this function does.
+//
+// Guarded by a find, same idiom and same reason as SyslogCommands'
+// action line (#1266): docs/routeros-setup.md promises re-pasting a
+// wizard block is safe and changes nothing on a router that is already
+// correct. An unguarded add broke that promise -- re-pasting step 4 or
+// step 6b after a wizard version bump left the router with a second
+// mv-push or mv-backup-https script rather than the new one replacing
+// the old.
 func scriptAdd(name, policy, body string) string {
-	return fmt.Sprintf(`/system script add name=%s policy=%s source="%s"`, name, policy, scriptSource(body))
+	source := scriptSource(body)
+	return fmt.Sprintf(`:if ([:len [/system script find name=%s]] = 0) do={ /system script add name=%s policy=%s source="%s" } else={ /system script set [find name=%s] policy=%s source="%s" }`, name, name, policy, source, name, policy, source)
+}
+
+// SchedulerAdd wraps a `/system scheduler add` in the same guarded
+// idiom scriptAdd uses for a script: add only when no entry of that
+// name exists yet, otherwise set the existing one to match. settings is
+// everything after `name=<name>` -- interval, start-time, policy and
+// on-event -- passed identically to both branches so a re-paste
+// converges an existing entry rather than leaving it as it was.
+//
+// Guarded for the same reason scriptAdd is (#1266): an unguarded add
+// left a second mv-push, mv-backup or mv-backup-https scheduler entry
+// on the router when a wizard block was pasted a second time, so the
+// script it runs fired twice as often as intended rather than merely
+// twice at setup.
+// Exported because internal/droplist generates a scheduler entry of its
+// own, for the drop-list pull, and was pasting it bare -- the guard has
+// to be the same one or the two drift.
+//
+// The set branch names disabled=no because `set` changes only the
+// properties it names (v0.6.0 pre-release audit, Security stage). An
+// entry the operator had turned off -- the drop list's own EmptyList
+// renders `/system scheduler disable` -- otherwise stayed off through a
+// re-paste that reported success, so the schedule silently never ran
+// again. add needs no such thing: a new entry is enabled already.
+// A script has no disabled property, so scriptAdd has no equivalent.
+func SchedulerAdd(name, settings string) string {
+	return fmt.Sprintf(`:if ([:len [/system scheduler find name=%s]] = 0) do={ /system scheduler add name=%s %s } else={ /system scheduler set [find name=%s] %s disabled=no }`, name, name, settings, name, settings)
 }
 
 // Hostname strips a port. Certificate names never carry one, so this is
@@ -123,7 +159,15 @@ func CaTrustCommands(address, dialect string) string {
 // Deliberately not the release version. Two releases whose pasted
 // blocks are identical share a wizard version, and a router is not
 // behind merely because mikroview was upgraded around it.
-const WizardVersion = 1
+//
+// Bumped to 3 by issue #1281: SyslogCommands can now render a trailing
+// enrolment line. The line itself is conditional (only present with a
+// pending token) and carries no persistent router-side state -- unlike
+// every earlier bump, nothing here is a drift target LoggingSetup
+// compares against -- but the doc comment above is unconditional about
+// what triggers a bump, and re-pasting step 2 is exactly what an
+// operator should be nudged to do once this ships.
+const WizardVersion = 3
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
@@ -185,7 +229,19 @@ func WizardLogging(address, syslogPort, dialect string) LoggingSetup {
 // upgrade must still reach a router whose action already exists,
 // which is why the action branches to `set` on the existing one rather
 // than leaving it as it was the day it was first created.
-func SyslogCommands(address, syslogPort, dialect string) string {
+//
+// enrolToken, when non-empty, appends issue #1281's enrolment line:
+// `/log info "mikroview-enrol <token>"`, a one-shot marker the listener
+// gate matches to attribute this router's syslog source address to the
+// device the operator minted the token for. Unlike the two guarded
+// blocks above it, this line is bare -- there is nothing to guard: it
+// changes no router-side configuration, so pasting it twice (or the
+// router itself repeating it on every restart, since it is not wrapped
+// in a script) costs nothing beyond a redundant, already-burned
+// enrolment attempt the gate simply ignores. Empty when the caller has
+// no pending token to embed, in which case this block is unchanged from
+// before #1281.
+func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 	want := WizardLogging(address, syslogPort, dialect)
 	// host and port are placed bare, not inside a quoted string -- the
 	// handler validates address/syslogPort's charset before either
@@ -196,10 +252,19 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 	// separate lines rather than one garbled one (#614). Keep this
 	// identical to docs/routeros-setup.md's block.
 	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
-	return strings.Join([]string{
+	lines := []string{
 		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
 		fmt.Sprintf(`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=%s action=mikroview }`, strings.Join(want.Topics, ",")),
-	}, "\n")
+	}
+	if enrolToken != "" {
+		// quote() has nothing to escape in the token's own alphabet
+		// (lowercase letters/digits only), but every value this package
+		// places inside a quoted string goes through it regardless -- see
+		// quote's own doc comment for why that is the one rule that must
+		// never have an exception.
+		lines = append(lines, fmt.Sprintf(`/log info "mikroview-enrol %s"`, quote(enrolToken)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // RuleTaggingCommands bulk-tags existing rules by action, which is the
@@ -245,16 +310,18 @@ func SyslogCommands(address, syslogPort, dialect string) string {
 // `find where` is not; they are idempotent, and on a router that was
 // never bitten they match rules that are already log=no.
 func RuleTaggingCommands(dialect string) string {
+	// The prefixes come from LogPrefixForAction so this block and the
+	// per-rule render below it cannot say the convention two ways.
 	return strings.Join([]string{
-		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"`,
-		`/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"`,
+		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="` + LogPrefixForAction("drop", dialect) + `"`,
+		`/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="` + LogPrefixForAction("reject", dialect) + `"`,
 		``,
 		`# An accept rule matching established or related traffic logs every`,
 		`# packet, not every connection -- that is your whole traffic volume.`,
 		`# So the accept line below skips any rule whose connection-state`,
 		`# mentions either, whatever else is in the list: RouterOS 7's default`,
 		`# rule says established,related,untracked.`,
-		`/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"`,
+		`/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="` + LogPrefixForAction("accept", dialect) + `"`,
 		``,
 		`# Repairs a router an earlier version of this block flooded, and matches the posture in section 6 of the setup guide: these rules never log.`,
 		`/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""`,
@@ -339,10 +406,14 @@ func PushBlock(address, token, kind, dialect string) string {
 		// script stamp). Optional server-side, and the same line in every
 		// block.
 		fmt.Sprintf(`:local %s [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=%d; "records"=$%s}]`, payload, kind, WizardVersion, recs),
-		// address sits inside url="...", so it goes through quote();
-		// token in the Bearer header is placed bare, relying on the
-		// handler's Token validation to keep it well-formed (#1095).
-		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, token),
+		// address and token both sit inside a quoted string here (the
+		// fetch url= and the Bearer header respectively), so both go
+		// through quote() -- the same defence-in-depth
+		// backupPushHTTPSBlock below argues for: this package must not
+		// rely on the handler's Token validation (#1095) to keep this
+		// string well-formed, because that validator lives in a
+		// different package and this function has no way to see it.
+		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, quote(token)),
 	}, "\n")
 }
 
@@ -411,7 +482,10 @@ func loggingPushBlock(address, token, dialect string) string {
 		`  }`,
 		`}`,
 		fmt.Sprintf(`:local logPayload [:serialize to=json value={"kind"="%s"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "wizardVersion"=%d; "records"=$logRecs}]`, loggingKind, WizardVersion),
-		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), token),
+		// Same reason as PushBlock's identical line above: token sits
+		// inside the Bearer header's quoted string, so it goes through
+		// quote() rather than being relied on to already be well-formed.
+		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), quote(token)),
 	}, "\n")
 }
 
@@ -430,7 +504,7 @@ const PushScriptPolicy = "read,test"
 func ScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
 		scriptAdd("mv-push", PushScriptPolicy, body),
-		fmt.Sprintf(`/system scheduler add name=mv-push interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy),
+		SchedulerAdd("mv-push", fmt.Sprintf(`interval=20m policy=%s on-event="/system script run mv-push"`, PushScriptPolicy)),
 		`/system script run mv-push`,
 	}, "\n")
 }
@@ -486,22 +560,32 @@ const BackupScriptPolicy = "read,write,test,sensitive"
 // destination file stem, matching internal/backupsftp's
 // kindForFilename.
 func BackupScript(address, port, device, token, dialect string) string {
-	// address, port, device (user=/dst-path=) are placed bare inside the
-	// outer source="..." block, relying on the handler's Address/Device
-	// validation to keep their charset safe (#1095); port here is
-	// server config, never operator input. token sits inside its own
-	// hand-written \"...\" wrapper, so it goes through quote() -- the
-	// one value here that still needs escaping if it ever carries a
-	// quote or backslash.
-	tok := quote(token)
-	return fmt.Sprintf(`/system script add name=mv-backup policy=%s source="
+	// address, port and device (user=/dst-path=) are placed bare here,
+	// relying on the handler's charset checks (#1095) to keep them
+	// well-formed at this level -- but token goes through quote(). The
+	// outer source="..." wrap scriptAdd's scriptSource applies below
+	// protects only the outer /system script add command line this
+	// whole body is pasted as; it says nothing about the inner
+	// password="..." string, which RouterOS parses fresh, a second
+	// time, when the saved script actually runs. Without quote() here a
+	// token carrying '"' would close that inner string early and turn
+	// the rest of the token into a second RouterOS command the moment
+	// the schedule fires -- the outer escaping never sees that boundary
+	// at all, so it cannot protect it (Security stage, v0.6.0 audit).
+	body := fmt.Sprintf(`
   /system backup save name=mv-backup dont-encrypt=yes
   /export hide-sensitive file=mv-export
-  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-backup.backup dst-path=%s.backup
-  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password=\"%s\" src-path=mv-export.rsc dst-path=%s.rsc
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password="%s" src-path=mv-backup.backup dst-path=%s.backup
+  /tool fetch mode=sftp upload=yes address=%s port=%s user=%s password="%s" src-path=mv-export.rsc dst-path=%s.rsc
   /file remove mv-backup.backup
   /file remove mv-export.rsc
-"`, BackupScriptPolicy, address, port, device, tok, device, address, port, device, tok, device)
+`, address, port, device, quote(token), device, address, port, device, quote(token), device)
+	// Guarded by scriptAdd, same idiom and same reason as ScheduleCommands
+	// (#1266): this used to build its own unguarded `/system script add`,
+	// so re-pasting step 6 after a wizard version bump left a second
+	// mv-backup script on the router rather than the new one replacing
+	// the old.
+	return scriptAdd("mv-backup", BackupScriptPolicy, body)
 }
 
 // BackupScheduleCommands is step 6's scheduler entry: nightly at 03:00,
@@ -509,7 +593,7 @@ func BackupScript(address, port, device, token, dialect string) string {
 // pass -- same "run once immediately" idiom as ScheduleCommands.
 func BackupScheduleCommands(dialect string) string {
 	return strings.Join([]string{
-		fmt.Sprintf(`/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy),
+		SchedulerAdd("mv-backup", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy)),
 		`/system script run mv-backup`,
 	}, "\n")
 }
@@ -627,7 +711,7 @@ func BackupPushScript(address, token, dialect string) string {
 func BackupPushScheduleCommands(body, dialect string) string {
 	return strings.Join([]string{
 		scriptAdd("mv-backup-https", BackupScriptPolicy, body),
-		fmt.Sprintf(`/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy),
+		SchedulerAdd("mv-backup-https", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy)),
 		`/system script run mv-backup-https`,
 	}, "\n")
 }

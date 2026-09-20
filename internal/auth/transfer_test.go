@@ -109,6 +109,43 @@ func TestTransferRejections(t *testing.T) {
 	}
 }
 
+// TestTransferAdminLeavesRolesUnchangedWhenPersistFails is the v0.6.0
+// audit's R6 fix: a transfer that cannot be saved must not move the
+// admin role in memory either, or a restart before the next good write
+// would leave the deployment with the wrong admin -- or, briefly, two.
+func TestTransferAdminLeavesRolesUnchangedWhenPersistFails(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	admin, err := s.Register("admin", "correct-horse-battery-staple", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser("second", "correct-horse-battery-staple", RoleUser, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := s.TransferAdmin("second", time.Now()); err == nil {
+		t.Fatal("TransferAdmin against a backend that cannot save = nil error, want one")
+	}
+
+	got := s.Admin()
+	if got == nil || got.ID != admin.ID {
+		t.Errorf("admin after a failed transfer = %v, want the original admin still in place", got)
+	}
+	second, ok := s.ByUsername("second")
+	if !ok || second.Role != RoleUser {
+		t.Errorf("second's role after a failed transfer = %v, want RoleUser unchanged", second)
+	}
+	// RoleChangedAt is what ends sessions issued before a role change,
+	// so a stray update here would log both accounts out for nothing.
+	if !got.RoleChangedAt.Equal(admin.RoleChangedAt) || !second.RoleChangedAt.IsZero() {
+		t.Errorf("RoleChangedAt after a failed transfer = admin %v, second %v; want both untouched",
+			got.RoleChangedAt, second.RoleChangedAt)
+	}
+}
+
 func TestTransferSurvivesReload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "users.json")

@@ -204,7 +204,9 @@ var authzMatrix = []routeExpectation{
 		"adds an entry to block -- admin-only, since #461 settled that a droplist entry is always operator-" +
 			"authored and never written by anything else, including a lesser-tier caller"},
 	{http.MethodDelete, "/api/droplist/{cidr...}", accessAdmin,
-		"removes an entry -- same tier as adding one"},
+		"removes an entry, CIDR taken from the path as a trailing wildcard -- same tier as adding one, and " +
+			"the only removal route: the bodied DELETE /api/droplist added during the v0.6.0 audit reached no " +
+			"caller and is gone"},
 	{http.MethodPost, "/api/droplist/key", accessAdmin,
 		"mints (or rotates) the droplist-pull key a router's own scheduled fetch presents at GET " +
 			"/api/droplist.rsc -- admin-only, mirroring POST /api/tokens: minting a bearer credential is a setup " +
@@ -421,6 +423,38 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/tokens", accessAdmin,
 		"narrowed back from accessViewer (#657). #490 widened it to serve a viewer-readable settings page; #657 removed that page from a viewer's navigation, and ruled the doors station admin-only on the grounds that issuing keys is a setup task rather than using the product -- so the user tier deliberately loses metadata it could see before. The old reasoning (the raw value never appears here, so the read hands out no secret) is still true and no longer the point: the surface it was widened for is gone"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
+
+	{http.MethodPost, "/api/devices", accessAdmin,
+		"declares a syslog-only router by name (issue #1281) -- admin-only, same tier as POST /api/tokens beside it: " +
+			"this creates a new device identity, and the router it names has no ingest token to auto-discover it " +
+			"through and no config.yaml sourceIp to declare it with"},
+	{http.MethodDelete, "/api/devices/{id}", accessAdmin,
+		"removes a device this registry itself created, clearing its enrolled address and any pending token with " +
+			"it -- same tier as creating one. A config.yaml declaration refuses with 400 rather than reaching this " +
+			"tier check meaningfully, since it would simply reappear on the next restart"},
+	{http.MethodPost, "/api/devices/{id}/registration", accessAdmin,
+		"records the operator's confirmation of a router on the device itself -- the ledger's final Register step " +
+			"(#1291). Admin tier like its neighbours, but deliberately no password re-proof on top: registering " +
+			"grants nothing (it never sets AcceptedIP), so spoofing it renames a device and stamps a date. The " +
+			"re-proof belongs on the endpoint that opens the door, which is minting"},
+	{http.MethodPost, "/api/devices/{id}/enrolment", accessAdmin,
+		"mints (or rerolls) a device's enrolment token (#1281) -- a bearer credential that attributes syslog traffic " +
+			"to a device, the same tier every other token-issuing endpoint in this API holds to (POST /api/tokens, " +
+			"POST /api/droplist/key). Since #1291 the admin tier is the floor, not the whole check: this endpoint " +
+			"also re-verifies the caller's password at the moment of minting, so a stolen session is not enough"},
+	{http.MethodPost, "/api/devices/{id}/enrolment/address", accessAdmin,
+		"points a pending enrolment window at a different address without touching the token (#1291, ruling 23a) -- " +
+			"the one-click recovery when the operator named the wrong address and their router was turned away at " +
+			"accept. No password re-proof, unlike minting: rebinding grants no acceptance (the token still has to " +
+			"arrive from that address), and the registry only accepts an address already in the refused-senders " +
+			"list, so it can open the window to somewhere that already reached the listener and nowhere else"},
+	{http.MethodDelete, "/api/devices/{id}/enrolment", accessAdmin,
+		"revokes a device's pending enrolment token before it is redeemed -- same tier as minting one"},
+	{http.MethodGet, "/api/devices/refused", accessAdmin,
+		"every syslog source address the listener gate has refused a line from (#1281) -- unlike GET /api/devices " +
+			"above, these addresses have proven nothing about themselves, which is closer to GET /api/audit's " +
+			"\"who has been probing this instance\" than to the fleet's own viewer-tier read"},
+
 	{http.MethodGet, "/api/setup/status", accessViewer,
 		"widened for the viewer-readable settings page (#490): a signed-in caller at any tier can see every device, source address and pushed table the setup wizard shows, same as an admin. It now also carries the ledger's marks (#487), for the same reason: an empty stream explains its own silence with the forced-past line that accounts for it, and a viewer looking at that stream needs the explanation as much as an admin does. The write side is a separate, admin-only route (POST /api/setup/mark)"},
 	{http.MethodPost, "/api/setup/commands", accessViewer,

@@ -174,7 +174,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 		for _, m := range file.Marks {
 			// Filtered on the way in, not trusted: a document written by
 			// an older build, or edited by hand, must not put a step 9
-			// into a ledger that has five steps.
+			// into a ledger that has seven steps.
 			if m.Step < 1 || m.Step > maxStep {
 				continue
 			}
@@ -408,10 +408,18 @@ const (
 	MarkWitnessed MarkOutcome = "witnessed"
 )
 
-// maxStep bounds the step numbers a mark may carry. Five steps, per the
-// ratified design; a mark outside that range is a client bug or a probe,
+// maxStep bounds the step numbers a mark may carry. Seven steps --
+// round 45 (#394) added the sixth, "Back up the router", after the
+// original five, and #1291 added the seventh, "Register this router";
+// see frontend/src/lib/setupsteps.ts's RECORD_NUMBERS, which this must
+// keep matching. A mark outside that range is a client bug or a probe,
 // and either way has nothing to describe.
-const maxStep = 5
+//
+// This number has now lagged the wizard twice (#1267, then #1257's
+// audit): the wizard gains a step, the ledger silently refuses every
+// decision about it, and the walk advances anyway so nobody sees the
+// refusal. If an eighth is ever added, this is the second edit.
+const maxStep = 7
 
 // Mark is one recorded decision about one step.
 type Mark struct {

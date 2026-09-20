@@ -16,18 +16,35 @@ running this same `docker run`. If you'd rather run it yourself instead
 of fetching a script:
 
 ```sh
-docker run -d --name mikroview \
+docker run -d --name mikroview --restart unless-stopped \
+    --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
     -p 6514:6514/tcp -p 443:8080 \
     -v mikroview-data:/var/lib/mikroview \
-    -v mikroview-etc:/etc/mikroview \
+    -v mikroview-etc:/etc/mikroview:ro \
     ghcr.io/tomlawesome/mikroview:latest
 ```
 
 The `mikroview-etc` volume is the app folder #1243 introduced: an empty
 folder is fine, and dropping a config file, GeoIP database or
-certificate pair into it (`docker cp`, or swap the named volume for a
-bind mount) is picked up at the next restart with no other change. See
-"Persistent data" below.
+certificate pair into it is picked up at the next restart with no other
+change. It is mounted read-only, as the Compose examples below have
+always mounted it -- MikroView only ever reads it, and nothing that
+breaks into the container gets to rewrite your config or your keys. So
+put files in from outside the app's own container, with either a helper
+container:
+
+```sh
+docker run --rm -v mikroview-etc:/etc/mikroview -v "$PWD:/from:ro" \
+    alpine cp /from/config.yaml /etc/mikroview/config.yaml
+```
+
+or by swapping the named volume for a bind mount of a folder on the
+host, which is what the Compose examples do. `docker cp` into the
+running container does not work here, by design: Docker refuses it with
+"mounted volume is marked read-only". That
+relies on nothing naming a config path explicitly, which is true of the
+`docker run` above but **not** of the Compose example below -- see the
+note under it. See "Persistent data" below.
 
 Or run it directly with Compose, without cloning the repo:
 
@@ -77,7 +94,11 @@ services:
       # set in config.yaml or the environment always wins over the
       # folder default. See docs/configuration.md.
     environment:
-      - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+      # Not needed: MikroView finds ./mikroview/config.yaml on its own
+      # and works fine without it too (defaults alone are a working
+      # deployment). Naming it here explicitly would make that file
+      # mandatory instead of optional -- see docs/configuration.md.
+      # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
       # file into mikroview/ is the old way and still works -- see
       # docs/configuration.md.
@@ -121,7 +142,7 @@ mikroview/
   data/                         MikroView's store; created for you
 ```
 
-The folder is optional: the bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try. Drop a file into the folder once you want it -- from the release that carries #1243, MikroView finds it there and picks it up at the next restart with no compose or config change. Once the folder exists, `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
+The bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try there. **The Compose form is no different**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and an empty folder starts on defaults just as the `docker run` above does. Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
 
 ## From source
 
@@ -196,7 +217,9 @@ read-write. Read-only mounts like `config.yaml` don't need either fix —
 world-readable (`chmod 644`, as in the Quickstart above) is enough, since
 the container only needs to read it, not own it.
 
-If a bind mount is misconfigured (wrong ownership), MikroView logs
-`permission denied` at startup and falls back to in-memory-only state
-rather than crashing — annoying (you lose flags/accounts/TLS cert on
-every restart) but not fatal.
+If a bind mount is misconfigured (wrong ownership), MikroView refuses to
+start rather than running on it: it logs which store and directory
+failed, the uid/gid it is running as versus the directory's actual
+owner, and the exact `chown` that fixes it, then exits. Under
+`restart: unless-stopped` that means a restart loop, not silent data
+loss -- fix the ownership and the next restart comes up clean.

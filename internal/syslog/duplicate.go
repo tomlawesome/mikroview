@@ -90,6 +90,23 @@ type dupRingEntry struct {
 // sightings and a histogram of their multiplicities. One mutex guards
 // all of it, since a line's ring scan, ring write, and (if it's a
 // sighting) episode update must happen as a single step.
+// dupClusterSlots is how many duplicate clusters one source may have
+// in flight at once. A router's pasted-twice logging rule duplicates
+// every event it matches, so several distinct events are mid-cluster
+// at any moment; eight covers the interleaving seen in practice while
+// staying a fixed, per-source cost.
+const dupClusterSlots = 8
+
+// dupCluster is one open multiplicity-histogram entry: which event
+// (hash), which bucket its weight currently sits in, and when it was
+// last seen, so a stale slot can be reused.
+type dupCluster struct {
+	used   bool
+	hash   uint64
+	bucket int
+	at     time.Time
+}
+
 type sourceDupState struct {
 	mu   sync.Mutex
 	ring [dupRingSize]dupRingEntry
@@ -98,6 +115,22 @@ type sourceDupState struct {
 	sightings      uint64
 	lastSightingAt time.Time // zero means no sighting yet in this episode
 	multiplicity   [dupMultiplicityBuckets]uint64
+
+	// clusters tracks the duplicate clusters whose multiplicity-
+	// histogram entries are still open -- each one a dispatched event
+	// being seen one copy further along (see noteDuplicateLine's doc
+	// comment). Recognising a continuation moves that entry's weight to
+	// the new, higher bucket in place, rather than counting the event a
+	// second time at its old, lower one.
+	//
+	// There are several slots rather than one because a busy source
+	// interleaves them: two duplicated events arriving a1, b1, a2, b2,
+	// a3 are two clusters in flight at once. With a single slot, b2
+	// evicted A, so a3 could not find its own open entry and added a
+	// fresh one instead of moving A's -- leaving a stale count in the
+	// lower bucket and skewing the reported copy count back down, the
+	// very fault the cluster tracking was added to fix.
+	clusters [dupClusterSlots]dupCluster
 
 	// lastLineAt is when this source last sent anything at all, not
 	// just a duplicate. dupStateFor reads it to decide which entry to
@@ -215,6 +248,7 @@ func noteDuplicateLine(host string, data []byte) {
 	if st.lastSightingAt.IsZero() || now.Sub(st.lastSightingAt) > lossWindowOversized {
 		st.sightings = 0
 		st.multiplicity = [dupMultiplicityBuckets]uint64{}
+		st.clusters = [dupClusterSlots]dupCluster{}
 	}
 	st.sightings++
 	st.lastSightingAt = now
@@ -223,7 +257,32 @@ func noteDuplicateLine(host string, data []byte) {
 	if bucket >= dupMultiplicityBuckets {
 		bucket = dupMultiplicityBuckets - 1
 	}
-	st.multiplicity[bucket]++
+	// A router pasting its logging block N times dispatches the same
+	// event N times, so this line's own multiplicity climbs by one on
+	// each successive copy of it: 2 on the second copy, 3 on the third,
+	// and so on. Left alone, that scored one histogram sighting at each
+	// intermediate count -- 2, 3, ..., N -- spreading an N-times-pasted
+	// event's weight evenly across N-1 buckets, and since ties favor
+	// the smaller multiplicity (modalMultiplicityLocked), the modal
+	// count reported for it could never rise past 2, however many
+	// copies were actually pasted (v0.6.0 pre-release audit: "a router
+	// pasted three times reports 2, ... the multiplicity histogram is
+	// dead"). A line recognised as the same cluster the previous entry
+	// already counted -- same hash, still inside the window -- moves
+	// that entry's weight to the new bucket instead of adding a second,
+	// independent one, so an N-times-pasted event ends up contributing
+	// exactly one histogram entry, at N.
+	if i := st.openClusterLocked(hash, now); i >= 0 {
+		if bucket != st.clusters[i].bucket {
+			st.multiplicity[st.clusters[i].bucket]--
+			st.multiplicity[bucket]++
+		}
+		st.clusters[i].bucket = bucket
+		st.clusters[i].at = now
+	} else {
+		st.multiplicity[bucket]++
+		st.clusters[st.freeClusterLocked(now)] = dupCluster{used: true, hash: hash, bucket: bucket, at: now}
+	}
 
 	if st.sightings < dupSightingsToReportDrift {
 		return
@@ -233,6 +292,56 @@ func noteDuplicateLine(host string, data []byte) {
 		return
 	}
 	noteDuplicateDrift(host, modal, st.sightings, now)
+}
+
+// openClusterLocked returns the slot holding this event's still-open
+// histogram entry, or -1 when it has none: either it was never seen,
+// or its last copy is far enough back that the next one starts a fresh
+// cluster rather than continuing this one.
+func (st *sourceDupState) openClusterLocked(hash uint64, now time.Time) int {
+	for i := range st.clusters {
+		c := st.clusters[i]
+		if c.used && c.hash == hash && now.Sub(c.at) <= dupSightingWindow {
+			return i
+		}
+	}
+	return -1
+}
+
+// freeClusterLocked picks the slot a new cluster should take: an
+// unused one, else one whose cluster has gone stale, else the least
+// recently seen -- retiring that last one's histogram weight on its
+// way out.
+//
+// The retirement is what keeps the bound honest, and it is not
+// symmetrical with the stale case. A stale cluster has finished: its
+// bucket is that event's final multiplicity and stays counted. A
+// still-open one has not finished, and its event's next copy
+// recomputes its multiplicity from the ring -- which still holds every
+// copy -- and opens a fresh entry at the higher bucket. Leaving the old
+// entry in place would weigh one event twice, once at a count it has
+// already passed, and ties favour the smaller multiplicity
+// (modalMultiplicityLocked), so that stale low entry is exactly what
+// makes a router pasted three times keep reporting 2. Widening one slot
+// to dupClusterSlots stopped that happening between two events; without
+// this it returns by another door as soon as more than dupClusterSlots
+// events duplicate at once, which an ordinary burst through a busy
+// router reaches with nobody attacking.
+func (st *sourceDupState) freeClusterLocked(now time.Time) int {
+	oldest := 0
+	for i := range st.clusters {
+		c := st.clusters[i]
+		if !c.used || now.Sub(c.at) > dupSightingWindow {
+			return i
+		}
+		if c.at.Before(st.clusters[oldest].at) {
+			oldest = i
+		}
+	}
+	if st.multiplicity[st.clusters[oldest].bucket] > 0 {
+		st.multiplicity[st.clusters[oldest].bucket]--
+	}
+	return oldest
 }
 
 // modalMultiplicityLocked returns the most common multiplicity seen in

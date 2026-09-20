@@ -203,6 +203,15 @@ store:
 # deviceMac:
 #   storePath: /var/lib/mikroview/mac-registry.json
 
+# The device registry's own enrolments (issue #1281): an enrolled
+# device's acceptedIp/enrolledAt, and the identity of any device declared
+# through the API rather than below under devices:, survive a restart
+# through this file. storePath already defaults to
+# /var/lib/mikroview/device-registry.json -- only uncomment this block to
+# move that path.
+# deviceRegistry:
+#   storePath: /var/lib/mikroview/device-registry.json
+
 # internal/engine's evaluation chassis (docs/decisions/evaluation-engine.md):
 # storePath persists per-definition, per-key baseline state, so a
 # statistical baseline resumes warm across a restart instead of losing
@@ -309,12 +318,14 @@ store:
 #     - spamhaus_drop
 #     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
 
-# The drop list (issue #1223, stage 1 of the design ratified on #461):
+# The drop list (issue #1223/#1224/#1225, the design ratified on #461):
 # operator-authored ranges to block, typed in directly or raised from a
 # flag's drawer -- unrelated to the fetched blocklist feeds above.
 # storePath already defaults to /var/lib/mikroview/droplist.json; only
-# uncomment this block to move that path. This stage has no API or UI
-# reading this store yet -- see #1224/#1225.
+# uncomment this block to move that path. Manage entries and fetch the
+# router setup commands from Settings > Engine room's drop list group,
+# or the /api/droplist routes directly -- see docs/configuration.md's
+# "Drop list" section.
 # droplist:
 #   storePath: /var/lib/mikroview/droplist.json
 
@@ -459,15 +470,15 @@ store:
 # setup:
 #   storePath: /var/lib/mikroview/setup.json
 
-# Which "N new settings are available" upgrade notice (#1218) has
-# already been dismissed -- so it stops appearing once you've dealt with
-# it, but comes back for the next version that actually adds something
-# new. The notice itself (what's new, and the exact YAML to paste) is
-# never stored here; it's worked out fresh from this file and the
-# running binary every time Settings is opened. storePath already
-# defaults to /var/lib/mikroview/config-drift.json; only uncomment this
-# block to move that path. See docs/configuration.md's "Upgrade notice"
-# section.
+# Nothing reads this any more, and you can leave it alone.
+#
+# The "N new settings are available" notice (#1218) used to record which
+# version you had dismissed, so it would stop appearing. It now just has
+# a close button: closing it puts it away for this visit, nothing is
+# saved, and Settings > Upgrade still shows the list whenever you want
+# to come back to it. That left this file with nothing to keep, so the
+# setting below only still exists to be removed in a later version. See
+# docs/configuration.md's "Upgrade notice" section.
 # configDrift:
 #   storePath: /var/lib/mikroview/config-drift.json
 

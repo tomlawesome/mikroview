@@ -8,6 +8,9 @@ package routeros
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -59,7 +62,7 @@ func TestCaTrustCommands(t *testing.T) {
 }
 
 func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
-	if got := SyslogCommands("192.0.2.10:8080", ":16514", "a"); !strings.Contains(got, "remote-port=16514") {
+	if got := SyslogCommands("192.0.2.10:8080", ":16514", "a", ""); !strings.Contains(got, "remote-port=16514") {
 		t.Errorf("syslogCommands did not honour the configured port: %s", got)
 	}
 }
@@ -68,14 +71,14 @@ func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
 // remote-log-format=syslog, which docs/routeros-setup.md has carried
 // since #614 -- without it a burst of lines can be read as one.
 func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
-	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote-log-format=syslog") {
 		t.Errorf("syslogCommands omitted remote-log-format=syslog: %s", cmd)
 	}
 }
 
 func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
-	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote=192.0.2.10") {
 		t.Errorf("syslogCommands missing remote=host: %s", cmd)
 	}
@@ -94,7 +97,7 @@ func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 // rather than leaving an upgraded install's action as it was the day it
 // was first created.
 func TestSyslogCommandsAreIdempotent(t *testing.T) {
-	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 
 	if !strings.Contains(cmd, `[:len [/system logging action find name=mikroview]] = 0`) {
 		t.Errorf("syslogCommands' action line is not guarded by a find: %s", cmd)
@@ -110,6 +113,39 @@ func TestSyslogCommandsAreIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "/system logging add topics=firewall,info action=mikroview") {
 		t.Errorf("syslogCommands lost the rule add: %s", cmd)
+	}
+}
+
+// TestSyslogCommandsOmitsTheEnrolLineWithNoToken is #1281's default:
+// nothing about the block changes when the caller has no pending token
+// to embed.
+func TestSyslogCommandsOmitsTheEnrolLineWithNoToken(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
+	if strings.Contains(cmd, "mikroview-enrol") {
+		t.Errorf("syslogCommands emitted an enrolment line with no token: %s", cmd)
+	}
+}
+
+// TestSyslogCommandsAppendsTheEnrolLineWithAToken is #1281's actual
+// contract: "the enrol line... ends with /log info "mikroview-enrol
+// <token>" when the chosen device has a pending token."
+func TestSyslogCommandsAppendsTheEnrolLineWithAToken(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "abcdefghijklmnopqrst")
+	want := `/log info "mikroview-enrol abcdefghijklmnopqrst"`
+	if !strings.HasSuffix(cmd, want) {
+		t.Errorf("syslogCommands = %q, want it to end with %q", cmd, want)
+	}
+}
+
+// TestSyslogCommandsQuotesTheEnrolToken pins that the token still goes
+// through quote() even though its own alphabet never needs escaping
+// (#1095's rule: every value placed inside a quoted string goes through
+// it, with no exceptions carved out for "this one happens not to need
+// it").
+func TestSyslogCommandsQuotesTheEnrolToken(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", `a"b\c`)
+	if !strings.Contains(cmd, `mikroview-enrol a\"b\\c`) {
+		t.Errorf("syslogCommands did not escape the token: %s", cmd)
 	}
 }
 
@@ -367,9 +403,11 @@ func unescapeRouterOS(t *testing.T, s string) string {
 }
 
 // scriptAddSource takes the source="..." value back out of a block
-// scriptAdd built: everything between the opening quote and the closing
-// one that ends the add, which is the quote immediately before the
-// scheduler line.
+// scriptAdd built: everything between the add branch's opening quote
+// and the closing one that ends it, which is the quote immediately
+// before the `} else={` that opens the set branch (#1266 guarded the
+// add with a find; both branches carry the same source, so either one
+// answers this).
 func scriptAddSource(t *testing.T, block string) (string, bool) {
 	t.Helper()
 	const open = `source="`
@@ -379,12 +417,48 @@ func scriptAddSource(t *testing.T, block string) (string, bool) {
 		return "", false
 	}
 	rest := block[i+len(open):]
-	j := strings.Index(rest, "\"\n/system scheduler")
+	j := strings.Index(rest, "\" } else={")
 	if j == -1 {
-		t.Errorf("the script add is not closed before the scheduler line:\n%s", block)
+		t.Errorf("the script add is not closed before the set branch:\n%s", block)
 		return "", false
 	}
 	return rest[:j], true
+}
+
+// extractEscapedValue finds marker in s and reads a RouterOS-escaped
+// value forward from there, stopping at the first unescaped `"` --
+// honouring the same backslash-escapes-the-next-character rule
+// unescapeRouterOS applies, rather than a plain strings.Index("\"")
+// that a value carrying \" would fool. It returns the raw (still
+// escaped) slice; the caller runs it through unescapeRouterOS to get
+// the value RouterOS itself would read.
+//
+// This is what lets a test check the *inner* string a saved script
+// actually parses when it runs -- not just that the outer
+// scriptSource wrapper contains some escaped bytes, which is true of
+// the vulnerable code too (#1095, defence-in-depth Security stage):
+// scriptSource escapes the whole body once regardless of whether an
+// inner quote was ever escaped on its own account.
+func extractEscapedValue(t *testing.T, s, marker string) string {
+	t.Helper()
+	i := strings.Index(s, marker)
+	if i == -1 {
+		t.Fatalf("marker %q not found in %q", marker, s)
+	}
+	start := i + len(marker)
+	for j := start; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+			if j >= len(s) {
+				t.Fatalf("value after %q ends on a lone backslash: %q", marker, s)
+			}
+		case '"':
+			return s[start:j]
+		}
+	}
+	t.Fatalf("value after %q never closes with an unescaped quote: %q", marker, s)
+	return ""
 }
 
 // TestScriptSourceRoundTrips is the escaping's real contract: whatever
@@ -431,9 +505,10 @@ func TestScriptSourceLeavesNoBareVariableOrQuote(t *testing.T) {
 // operator to paste into anything.
 func TestScheduleCommands(t *testing.T) {
 	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
-	want := "/system script add name=mv-push policy=read,test source=\":local recs [:toarray \\\"\\\"]\n" +
-		":set recs (\\$recs, 1)\"\n" +
-		"/system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\"\n" +
+	const source = ":local recs [:toarray \\\"\\\"]\n" +
+		":set recs (\\$recs, 1)"
+	want := ":if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=\"" + source + "\" } else={ /system script set [find name=mv-push] policy=read,test source=\"" + source + "\" }\n" +
+		":if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event=\"/system script run mv-push\" disabled=no }\n" +
 		"/system script run mv-push"
 	if cmd != want {
 		t.Errorf("scheduleCommands =\n%s\nwant\n%s", cmd, want)
@@ -450,8 +525,8 @@ func TestScheduleCommands(t *testing.T) {
 func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
 	body := PushScript("192.0.2.10:8080", "tok", []string{"filter-rule", "arp"}, "a")
 	got := ScheduleCommands(body, "a")
-	if !strings.HasPrefix(got, `/system script add name=mv-push policy=read,test source="`) {
-		t.Errorf("ScheduleCommands did not open with the script add:\n%s", got)
+	if !strings.HasPrefix(got, `:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("ScheduleCommands did not open with the guarded script add:\n%s", got)
 	}
 	if !strings.HasSuffix(got, "\n/system script run mv-push") {
 		t.Errorf("ScheduleCommands did not end by running it once:\n%s", got)
@@ -470,6 +545,94 @@ func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
 	}
 }
 
+// TestScheduleCommandsIsIdempotent covers #1266: scriptAdd used to
+// build a bare `/system script add`, so re-pasting an updated wizard
+// block (say, after a wizard version bump) left the router with a
+// second mv-push script rather than the newer one replacing the older
+// -- contrary to what docs/routeros-setup.md promises ("paste the
+// blocks again ... re-pasting a router that is already correct changes
+// nothing"). Guarded the same way SyslogCommands' action line already
+// is (TestSyslogCommandsAreIdempotent).
+func TestScheduleCommandsIsIdempotent(t *testing.T) {
+	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
+
+	if !strings.Contains(cmd, `[:len [/system script find name=mv-push]] = 0`) {
+		t.Errorf("ScheduleCommands' script add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script add name=mv-push") {
+		t.Errorf("ScheduleCommands lost the add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script set [find name=mv-push]") {
+		t.Errorf("ScheduleCommands does not update an existing script on a second run: %s", cmd)
+	}
+	// The scheduler entry itself is the other half of #1266: an
+	// unguarded `/system scheduler add` used to leave a second mv-push
+	// entry on a re-paste, so the script it runs fired twice as often
+	// as intended.
+	if !strings.Contains(cmd, `[:len [/system scheduler find name=mv-push]] = 0`) {
+		t.Errorf("ScheduleCommands' scheduler add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler add name=mv-push") {
+		t.Errorf("ScheduleCommands lost the scheduler add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler set [find name=mv-push]") {
+		t.Errorf("ScheduleCommands does not update an existing scheduler entry on a second run: %s", cmd)
+	}
+}
+
+// TestBackupScheduleCommandsIsIdempotent is TestScheduleCommandsIsIdempotent's
+// twin for step 6's scheduler entry (#1266): re-pasting step 6 after a
+// wizard version bump used to leave a second mv-backup scheduler entry
+// on the router rather than the new one replacing the old.
+func TestBackupScheduleCommandsIsIdempotent(t *testing.T) {
+	cmd := BackupScheduleCommands("a")
+
+	if !strings.Contains(cmd, `[:len [/system scheduler find name=mv-backup]] = 0`) {
+		t.Errorf("BackupScheduleCommands' scheduler add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler add name=mv-backup") {
+		t.Errorf("BackupScheduleCommands lost the scheduler add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler set [find name=mv-backup]") {
+		t.Errorf("BackupScheduleCommands does not update an existing scheduler entry on a second run: %s", cmd)
+	}
+}
+
+// TestBackupPushScheduleCommandsIsIdempotent is the same check for step
+// 6b's mv-backup-https scheduler entry (#1266).
+func TestBackupPushScheduleCommandsIsIdempotent(t *testing.T) {
+	cmd := BackupPushScheduleCommands(BackupPushScript("192.0.2.10:8080", "tok", "a"), "a")
+
+	if !strings.Contains(cmd, `[:len [/system scheduler find name=mv-backup-https]] = 0`) {
+		t.Errorf("BackupPushScheduleCommands' scheduler add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler add name=mv-backup-https") {
+		t.Errorf("BackupPushScheduleCommands lost the scheduler add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system scheduler set [find name=mv-backup-https]") {
+		t.Errorf("BackupPushScheduleCommands does not update an existing scheduler entry on a second run: %s", cmd)
+	}
+}
+
+// TestBackupScriptIsIdempotent covers #1266 for BackupScript itself,
+// which used to build its own bare `/system script add` rather than
+// going through scriptAdd: re-pasting step 6 after a wizard version
+// bump left a second mv-backup script on the router rather than the
+// new one replacing the old.
+func TestBackupScriptIsIdempotent(t *testing.T) {
+	cmd := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123", "a")
+
+	if !strings.Contains(cmd, `[:len [/system script find name=mv-backup]] = 0`) {
+		t.Errorf("BackupScript's script add is not guarded by a find: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script add name=mv-backup") {
+		t.Errorf("BackupScript lost the add branch for a first run: %s", cmd)
+	}
+	if !strings.Contains(cmd, "/system script set [find name=mv-backup]") {
+		t.Errorf("BackupScript does not update an existing script on a second run: %s", cmd)
+	}
+}
+
 // TestBackupScriptMatchesRound45 pins the wizard's step 6 script
 // (docs/design/concepts/round-45/build.py's SCRIPT constant) byte for
 // byte -- the copy is drawn, not invented, and a builder must match it
@@ -481,14 +644,17 @@ func TestScheduleCommandsCarriesTheWholePushScript(t *testing.T) {
 // and the two files' names say which is which.
 func TestBackupScriptMatchesRound45(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", `mvt-8f3a2c…c21e`, "a")
-	want := "/system script add name=mv-backup policy=read,write,test,sensitive source=\"\n" +
+	const source = "\n" +
 		"  /system backup save name=mv-backup dont-encrypt=yes\n" +
 		"  /export hide-sensitive file=mv-export\n" +
 		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n" +
 		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n" +
 		"  /file remove mv-backup.backup\n" +
-		"  /file remove mv-export.rsc\n" +
-		"\""
+		"  /file remove mv-export.rsc\n"
+	// The guard is #1266's plumbing (scriptAdd, same as every other
+	// saved script in this file); the source="..." body between the
+	// quotes is round 45's drawn script, unchanged.
+	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"" + source + "\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"" + source + "\" }"
 	if got != want {
 		t.Errorf("BackupScript =\n%s\nwant\n%s", got, want)
 	}
@@ -520,7 +686,7 @@ func TestBothNightlyScriptsExportHideSensitive(t *testing.T) {
 
 func TestBackupScheduleCommandsMatchesRound45(t *testing.T) {
 	got := BackupScheduleCommands("a")
-	want := "/system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\"\n" +
+	want := ":if ([:len [/system scheduler find name=mv-backup]] = 0) do={ /system scheduler add name=mv-backup interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" } else={ /system scheduler set [find name=mv-backup] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup\" disabled=no }\n" +
 		"/system script run mv-backup"
 	if got != want {
 		t.Errorf("BackupScheduleCommands =\n%s\nwant\n%s", got, want)
@@ -613,8 +779,9 @@ func TestBackupPushScriptGivesEachFileItsOwnVariables(t *testing.T) {
 func TestBackupPushScheduleCommandsMatchesTheHTTPSIdiom(t *testing.T) {
 	body := BackupPushScript("192.0.2.10:8080", "tok", "a")
 	got := BackupPushScheduleCommands(body, "a")
-	want := "/system script add name=mv-backup-https policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\"\n" +
-		"/system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\"\n" +
+	const name = "mv-backup-https"
+	want := ":if ([:len [/system script find name=" + name + "]] = 0) do={ /system script add name=" + name + " policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" } else={ /system script set [find name=" + name + "] policy=read,write,test,sensitive source=\"" + scriptSource(body) + "\" }\n" +
+		":if ([:len [/system scheduler find name=mv-backup-https]] = 0) do={ /system scheduler add name=mv-backup-https interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" } else={ /system scheduler set [find name=mv-backup-https] interval=1d start-time=03:00:00 policy=read,write,test,sensitive on-event=\"/system script run mv-backup-https\" disabled=no }\n" +
 		"/system script run mv-backup-https"
 	if got != want {
 		t.Errorf("BackupPushScheduleCommands =\n%s\nwant\n%s", got, want)
@@ -710,18 +877,115 @@ func TestPushBlockEscapesQuotedAddress(t *testing.T) {
 	}
 }
 
-// TestBackupScriptEscapesQuotedToken covers #1095's password=\"...\"
-// spot: BackupScript's hand-written quote wrapper around token must
-// route through the same escaping quote gives every other quoted value,
-// so a token carrying '"' or '\' cannot break out of it.
+// TestBackupScriptEscapesQuotedToken proves the real security property,
+// not merely that the outer source="..." wrapper carries some escaped
+// bytes -- a shallow "contains" check on that alone cannot tell this
+// function's own quote() apart from the outer wrap doing all the work
+// by accident, which is exactly the bug this test used to miss (v0.6.0
+// audit, Security stage): it un-wraps the outer layer first, the same
+// way RouterOS does when it saves the script, then reads the inner
+// password="..." value the same way RouterOS does a second time when
+// the saved script actually *runs*, and checks that value is the raw
+// token again, byte for byte -- proving the inner quoting survives
+// being nested inside the outer one rather than merely coexisting with
+// it.
 func TestBackupScriptEscapesQuotedToken(t *testing.T) {
-	benign := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123", "a")
-	tricky := BackupScript("10.0.40.5", "47022", "rb5009", `tok"; /system reset\`, "a")
-	if !strings.Contains(tricky, `password=\"tok\"; /system reset\\\"`) {
-		t.Errorf("BackupScript did not escape the token:\n%s", tricky)
+	token := "tok\"$evil\\; /system reset"
+	got := BackupScript("10.0.40.5", "47022", "rb5009", token, "a")
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
 	}
-	if got, want := unescapedQuoteCount(tricky), unescapedQuoteCount(benign); got != want {
-		t.Errorf("BackupScript unescaped quote count = %d, want %d (same structure as a benign token):\n%s", got, want, tricky)
+	body := unescapeRouterOS(t, source)
+	// BackupScript writes password="..." twice, once per SFTP upload
+	// line -- both must round-trip, not just whichever one a naive
+	// first-match search happens to find.
+	rest := body
+	for i := 0; i < 2; i++ {
+		value := extractEscapedValue(t, rest, `password="`)
+		if got := unescapeRouterOS(t, value); got != token {
+			t.Errorf("BackupScript's password=\"...\" #%d did not round-trip through the saved script: got %q, want %q\nbody:\n%s", i+1, got, token, body)
+		}
+		rest = rest[strings.Index(rest, `password="`)+len(`password="`)+len(value)+1:]
+	}
+}
+
+// TestBackupScriptNormalTokenIsUnchangedByTheFix pins BackupScript's
+// output for a token drawn from the charset validSetupToken actually
+// allows through in production (letters, digits, '-', '_' -- what
+// internal/auth's hex tokens look like) -- captured from the code
+// before quote() was added to token. Defence-in-depth quoting a value
+// that carries none of the characters quote() touches is a no-op, and
+// this is the test that would catch it being anything else.
+func TestBackupScriptNormalTokenIsUnchangedByTheFix(t *testing.T) {
+	got := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123_ABC", "a")
+	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" }"
+	if got != want {
+		t.Errorf("BackupScript with a normal token changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// TestPushBlockEscapesQuotedAndDollarToken is BackupScript's twin for
+// the ingest push block's Bearer header: the token has to survive being
+// read out of the saved mv-push script's inner Authorization header the
+// way RouterOS reads it when the schedule fires, not merely appear
+// escaped somewhere in the outer source="...".
+func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
+	token := "tok\"$evil\\; /system reset"
+	body := PushScript("192.0.2.10:8080", token, []string{"arp"}, "a")
+	got := ScheduleCommands(body, "a")
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
+	}
+	inner := unescapeRouterOS(t, source)
+	value := extractEscapedValue(t, inner, "Bearer ")
+	if got := unescapeRouterOS(t, value); got != token {
+		t.Errorf("PushBlock's Bearer header did not round-trip through the saved script: got %q, want %q\nbody:\n%s", got, token, inner)
+	}
+}
+
+// TestPushBlockNormalTokenIsUnchangedByTheFix is
+// TestBackupScriptNormalTokenIsUnchangedByTheFix's twin for PushBlock:
+// captured from the code before quote() was added to token, to pin that
+// a normal token's rendered output is byte-for-byte identical.
+func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
+	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	if got != want {
+		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+// TestLoggingPushBlockEscapesQuotedAndDollarToken is
+// TestPushBlockEscapesQuotedAndDollarToken's twin for the #1241 setup
+// report block, which carries its own Bearer header and its own %s
+// fmt.Sprintf call rather than sharing PushBlock's.
+func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
+	token := "tok\"$evil\\; /system reset"
+	// loggingPushBlock always rides along in PushScript (see PushScript),
+	// so asking for no tables at all still carries it.
+	body := PushScript("192.0.2.10:8080", token, nil, "a")
+	got := ScheduleCommands(body, "a")
+	source, ok := scriptAddSource(t, got)
+	if !ok {
+		return
+	}
+	inner := unescapeRouterOS(t, source)
+	value := extractEscapedValue(t, inner, "Bearer ")
+	if got := unescapeRouterOS(t, value); got != token {
+		t.Errorf("loggingPushBlock's Bearer header did not round-trip through the saved script: got %q, want %q\nbody:\n%s", got, token, inner)
+	}
+}
+
+// TestLoggingPushBlockNormalTokenIsUnchangedByTheFix is
+// TestPushBlockNormalTokenIsUnchangedByTheFix's twin for
+// loggingPushBlock: captured before quote() was added to token.
+func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
+	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
+	want := ":local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"name\") = \"mikroview\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if (($v->\"action\") = \"mikroview\") do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	if got != want {
+		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
 }
 
@@ -794,7 +1058,7 @@ func TestPushScriptStampsEveryBlockWithTheWizardVersion(t *testing.T) {
 // invisible.
 func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
 	want := WizardLogging("192.0.2.10:8443", "6514", "a")
-	cmd := SyslogCommands("192.0.2.10:8443", "6514", "a")
+	cmd := SyslogCommands("192.0.2.10:8443", "6514", "a", "")
 	if want.Remote != "192.0.2.10" || want.RemotePort != "6514" {
 		t.Fatalf("WizardLogging = %+v, want the host and port split out", want)
 	}
@@ -807,5 +1071,122 @@ func TestWizardLoggingMatchesWhatSyslogCommandsPastes(t *testing.T) {
 		if !strings.Contains(cmd, fragment) {
 			t.Errorf("syslogCommands does not paste %q:\n%s", fragment, cmd)
 		}
+	}
+}
+
+// docs/routeros-setup.md offers a hand-paste alternative beside every
+// block the wizard prints, and promises throughout that re-pasting is
+// safe. scriptAdd and schedulerAdd keep that promise for the generated
+// blocks; nothing kept it for the ones written out by hand in the doc,
+// and two of them -- mv-push in step 4e and mv-backup-https in step
+// 7c-ii -- were still bare `add` after the guards landed everywhere
+// else, including on their own scheduler lines directly beneath them.
+// RouterOS does not deduplicate, so an operator who set one up by hand
+// and re-pasted it got a second script of the same name and no way to
+// tell which one the scheduler ran.
+//
+// Reading the doc rather than the generator is the point: the generator
+// was already right both times.
+func TestSetupDocAddsAreAllGuarded(t *testing.T) {
+	// Every markdown file under docs/, walked rather than globbed --
+	// docs/decisions/ and the rest are directories a glob steps over.
+	// Scoping the first version of this test to routeros-setup.md alone
+	// is what let the drop list's own block in configuration.md stay
+	// bare: the same mistake the test exists to catch, made by the
+	// test. Both times the scope was narrower than the claim above it.
+	var docs []string
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		// docs/decisions holds dated records of what was decided and, in
+		// the spike notes, what was actually typed at a router during a
+		// verification run. Guarding those would falsify the record
+		// rather than protect anyone: nobody is told to paste them.
+		if d.IsDir() && d.Name() == "decisions" {
+			return fs.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(path, ".md") {
+			docs = append(docs, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking docs: %v", err)
+	}
+	for _, name := range []string{"README.md", "SECURITY.md"} {
+		docs = append(docs, filepath.Join(root, name))
+	}
+	if len(docs) < 10 {
+		t.Fatalf("found %d docs to check, expected the whole docs/ tree", len(docs))
+	}
+
+	// The adds MikroView itself generates and hands the operator to
+	// paste. Each has to survive being pasted again, since RouterOS
+	// does not deduplicate any of them.
+	//
+	// `/ip firewall filter add` is not here, and the reason is narrower
+	// than it first looks. routeros-setup.md's blank-firewall section
+	// prints several as an illustrative example of the operator's own
+	// ruleset, saying in as many words that they are "not something to
+	// paste in blind" -- guarding those would be wrong, since two
+	// filter rules with different match conditions are two rules rather
+	// than a duplicate. But MikroView does generate one elsewhere:
+	// frontend/src/lib/compose.ts's composeCommand, copied straight out
+	// of the reach composer in Topography and City. That one is not
+	// printed into any doc, so this test would not have caught it
+	// either way -- see the issue filed against it.
+	adds := []string{
+		"/system script add",
+		"/system scheduler add",
+		"/ip firewall raw add",
+		"/system logging add",
+	}
+
+	for _, path := range docs {
+		doc, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(doc), "\n") {
+			trimmed := strings.TrimSpace(line)
+			for _, add := range adds {
+				// Only a line that *is* the command. Prose naming one
+				// inline ("the script is one `/system script add`
+				// whose source ...") and a command quoted inside a
+				// sample log line are describing it, not asking anyone
+				// to paste it -- and a guarded block leads with its
+				// `:if ([:len [...`, so it is skipped here too rather
+				// than needing an exemption of its own.
+				if !strings.HasPrefix(trimmed, add) {
+					continue
+				}
+				shown, relErr := filepath.Rel(root, path)
+				if relErr != nil {
+					shown = path
+				}
+				t.Errorf("%s:%d has a bare %q; wrap it in the find guard SchedulerAdd/scriptAdd use, so a re-paste updates the entry instead of adding a second one:\n%s", shown, i+1, add, trimmed)
+			}
+		}
+	}
+}
+
+// TestSchedulerAddReEnablesAnExistingEntry covers the v0.6.0 fix-batch
+// audit's Security stage. #1266's guard converges an existing scheduler
+// entry by setting it, but RouterOS's `set` changes only the properties
+// named, and `disabled` was not one of them -- so an entry an operator
+// had turned off stayed off through a re-paste that reported success.
+// A script has no `disabled` property, so this is the scheduler's alone:
+// scriptAdd must not grow one.
+func TestSchedulerAddReEnablesAnExistingEntry(t *testing.T) {
+	cmd := SchedulerAdd("mv-push", `interval=1m on-event="mv-push"`)
+
+	_, elseBranch, found := strings.Cut(cmd, "} else={")
+	if !found {
+		t.Fatalf("SchedulerAdd has no else branch: %s", cmd)
+	}
+	if !strings.Contains(elseBranch, "disabled=no") {
+		t.Errorf("SchedulerAdd's else branch leaves a disabled entry disabled, so a re-paste reports success and the schedule never runs:\n%s", elseBranch)
 	}
 }

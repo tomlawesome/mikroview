@@ -229,23 +229,27 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 
 	entry, err := s.Droplist.Add(auditActor(r), req.CIDR, req.Reason, req.FlagID)
 	if err != nil {
-		status := http.StatusInternalServerError
 		switch {
 		case errors.Is(err, droplist.ErrExists):
-			status = http.StatusConflict
+			// err.Error() is safe to echo in this case and the validation
+			// ones below: each names a rule about the submitted
+			// range/reason (too broad, not public, overlaps the router's
+			// own address, a duplicate), never anything about other
+			// operators' entries.
+			http.Error(w, err.Error(), http.StatusConflict)
 		case errors.Is(err, droplist.ErrInvalidCIDR),
 			errors.Is(err, droplist.ErrNotIPv4),
 			errors.Is(err, droplist.ErrTooBroad),
 			errors.Is(err, droplist.ErrNotPublic),
 			errors.Is(err, droplist.ErrRouterOwn),
 			errors.Is(err, droplist.ErrBadText):
-			status = http.StatusBadRequest
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			// Anything else reaching here is a failed write (Store.Add's
+			// tryPersistLocked branch), whose text can carry the backend's
+			// own path or detail and has no business leaving this process.
+			http.Error(w, "unable to add that entry", http.StatusInternalServerError)
 		}
-		// err.Error() is safe to echo in every one of these cases: it
-		// names a rule about the submitted range/reason (too broad, not
-		// public, overlaps the router's own address, a duplicate), never
-		// anything about other operators' entries.
-		http.Error(w, err.Error(), status)
 		return
 	}
 	resp := droplistCreateResponse{droplistEntryResponse: toDroplistEntryResponse(entry)}
@@ -255,16 +259,22 @@ func (s *Server) handleDroplistCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// handleDroplistDelete removes one entry by its CIDR, taken from the
-// path as a trailing wildcard ({cidr...}) since a CIDR's own "/" would
-// otherwise be split across path segments.
+// handleDroplistDelete removes one entry, CIDR taken from the path as a
+// trailing wildcard ({cidr...}) since a CIDR's own "/" would otherwise
+// split across path segments. This is the route docs/configuration.md
+// documents and the only one frontend/src/lib/api.ts calls.
+//
+// A second, bodied DELETE /api/droplist route existed briefly: during
+// the v0.6.0 audit two fixes for the same contract mismatch landed from
+// different branches a minute apart, one moving the CIDR onto the path
+// and one adding a body for it. The bodied route reached no caller and
+// is gone. Do not re-add it without a caller that needs it.
 func (s *Server) handleDroplistDelete(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	cidr := r.PathValue("cidr")
-	if err := s.Droplist.Remove(auditActor(r), cidr); err != nil {
+	if err := s.Droplist.Remove(auditActor(r), r.PathValue("cidr")); err != nil {
 		if errors.Is(err, droplist.ErrNotFound) {
 			http.Error(w, "no entry for that range", http.StatusNotFound)
 			return
@@ -418,8 +428,22 @@ func (s *Server) handleDroplistPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	entries := s.Droplist.List()
+	if len(entries) == 0 && !s.Droplist.Persisted() {
+		// v0.6.0 pre-release audit, owner ruling: a memory-only store
+		// starts empty on every restart, and Script's full-sync shape
+		// means serving that empty state here would wipe the router's
+		// real, still-wanted list on its next scheduled fetch. Refuse
+		// instead -- a failed fetch leaves the router serving whatever
+		// it imported last (see this handler's own doc comment above).
+		// A genuinely empty, *persisted* list still serves normally:
+		// that is an operator's own deliberate state, not data loss.
+		http.Error(w, "droplist has no persisted entries to serve", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	w.Write(droplist.Script(s.Droplist.List(), now))
+	w.Write(droplist.Script(entries, now))
 }

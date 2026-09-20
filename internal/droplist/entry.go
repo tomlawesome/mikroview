@@ -9,10 +9,11 @@
 // the loop) are a separate, unrelated feature living in
 // internal/blocklist.
 //
-// This stage is the store and its validation only: no API route, no UI,
-// and nothing pushed to RouterOS. See Validate (validate.go) for the
-// rules an Entry's CIDR must satisfy, and #1224/#1225 for what is
-// deliberately not here yet.
+// This package is the store and its validation only: no API route, no
+// UI, and no RouterOS handling live here -- those are internal/api (the
+// /api/droplist routes and the .rsc feed, #1224) and the frontend's
+// Settings group and setup card (#1225), both now shipped. See Validate
+// (validate.go) for the rules an Entry's CIDR must satisfy.
 //
 // Persistence follows the exact convention internal/suggest.Store and
 // internal/audit.Store already use: mutex-protected, optional atomic-
@@ -169,7 +170,25 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			if e == nil {
 				continue
 			}
-			s.entries[e.CIDR.String()] = e
+			// Re-run through the same gate Add uses (v0.6.0 pre-release
+			// audit) rather than trusted verbatim: a loaded entry's CIDR
+			// must be canonicalised (Masked()) the same way Add's return
+			// value always is, or its map key here -- e.CIDR.String() --
+			// would never match the key Remove computes through
+			// parseCIDR().Masked(), leaving the entry unreachable by any
+			// client from the moment it loaded. own is nil: the router's
+			// own pushed ranges aren't wired until SetOwnRanges runs,
+			// after Open returns, and a check against them belongs at
+			// Add time (deciding whether a *new* entry is a mistake),
+			// not as a standing requirement a stored one must keep
+			// meeting after the router's own configuration moves.
+			p, err := Validate(e.CIDR.String(), nil)
+			if err != nil {
+				entryPersistLog.Warn(fmt.Sprintf("dropping a droplist entry loaded from disk that no longer validates (%v): %s", err, e.CIDR))
+				continue
+			}
+			e.CIDR = p
+			s.entries[p.String()] = e
 		}
 		return nil
 	})
@@ -180,6 +199,23 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 		s.version = version
 	}
 	return s, nil
+}
+
+// Persisted reports whether this store has a real backend behind it --
+// true once OpenWithBackend was given a non-nil persist.Backend, false
+// for the memory-only mode Open("") (or #853's "no key, no storage"
+// before the v0.6.0 audit's droplist exception -- see storage.go's
+// plaintextWithoutKeyStores) still allows. The one caller that needs
+// this is the API's pull-feed handler: every fetch of the .rsc feed is
+// a full sync of the router's live list (see Script's own doc comment),
+// so serving zero entries from a store with no durability guarantee
+// would not mean "the operator cleared the list" -- it would mean this
+// process just restarted and forgot, and the router's real entries
+// would be wiped on its next scheduled fetch.
+func (s *Store) Persisted() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backend != nil
 }
 
 // SetAuditor wires the audit log every Add/Remove writes to. A nil
@@ -270,7 +306,13 @@ func (s *Store) Add(actor, cidr, reason, flagID string) (Entry, error) {
 	e := Entry{CIDR: p, AddedBy: actor, AddedAt: s.now(), Reason: reason, FlagID: flagID}
 	cp := e
 	s.entries[key] = &cp
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// This is an enforcement list: a caller told the entry was added
+		// when it was not durably saved would carry on believing the
+		// range is blocked right up until a restart quietly drops it.
+		delete(s.entries, key)
+		return Entry{}, fmt.Errorf("saving droplist: %w", err)
+	}
 
 	if s.auditor != nil {
 		s.auditor.Record(actor, "droplist.add", key, auditDetail(reason, flagID))
@@ -299,7 +341,14 @@ func (s *Store) Remove(actor, cidr string) error {
 	}
 	reason, flagID := e.Reason, e.FlagID
 	delete(s.entries, key)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A lift that cannot be saved must not read as lifted: put the
+		// entry back rather than report success and have the router's
+		// next .rsc pull re-add the block anyway once this process
+		// restarts and forgets the removal ever happened.
+		s.entries[key] = e
+		return fmt.Errorf("saving droplist: %w", err)
+	}
 
 	if s.auditor != nil {
 		s.auditor.Record(actor, "droplist.remove", key, auditDetail(reason, flagID))
@@ -316,16 +365,14 @@ func auditDetail(reason, flagID string) string {
 	return fmt.Sprintf("%s (from flag %s)", reason, flagID)
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured. Write failures are swallowed rather than surfaced to the
-// caller: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than losing the mutation that
-// triggered this call -- same contract as every other store's
-// persistLocked in this codebase.
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for Add and
+// Remove: an enforcement list must not tell a caller a change is in
+// place when the write recording it failed -- see each one's own
+// restore-on-error comment. Keeps the same version/conflict handling as
+// persistLocked always has.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	entries := make([]*Entry, 0, len(s.entries))
 	for _, e := range s.entries {
@@ -335,16 +382,28 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(storeFile{Entries: entries}, "", "  ")
 	if err != nil {
-		entryPersistLog.Error(fmt.Sprintf("encoding droplist entries for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding droplist entries for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		entryPersistLog.Error(fmt.Sprintf("writing droplist entries to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing droplist entries to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		entryPersistLog.Warn(fmt.Sprintf("droplist entries were modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
 	s.version = version
+	return nil
+}
+
+// persistLocked writes the current state to disk if persistence is
+// configured. Write failures are swallowed rather than surfaced to the
+// caller: the in-memory state (which every read goes through) stays
+// correct either way, so a transient disk issue degrades to "won't
+// survive a restart right now" rather than losing the mutation that
+// triggered this call -- same contract as every other store's
+// persistLocked in this codebase.
+func (s *Store) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		entryPersistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }

@@ -110,6 +110,11 @@ type setupDevice struct {
 	// its address rather than a name.
 	Configured bool   `json:"configured"`
 	SourceIP   string `json:"sourceIp"`
+	// AcceptedIP is issue #1281's enrolled address, empty until a valid
+	// enrolment token is redeemed at some address (or, for a Configured
+	// device, never needed at all -- SourceIP already counts as
+	// enrolled). syslogSatisfied below is what reads this.
+	AcceptedIP string `json:"acceptedIp"`
 	Events     uint64 `json:"events"`
 	// DecodedActions is how many of those events carried an action
 	// decoded from a log-prefix. Zero, with events above zero, is the
@@ -150,6 +155,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 				Device:     info.ID,
 				Configured: info.Configured,
 				SourceIP:   info.SourceIP,
+				AcceptedIP: info.AcceptedIP,
 				Events:     uint64(info.EventCount),
 			}
 			if obs, ok := prefixByDevice[info.ID]; ok {
@@ -187,7 +193,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if receipt, ok := caSatisfied(sources); ok {
 			s.Setup.NoteWitnessed(1, receipt, now)
 		}
-		if receipt, ok := syslogSatisfied(sources); ok {
+		if receipt, ok := syslogSatisfied(devices); ok {
 			s.Setup.NoteWitnessed(2, receipt, now)
 		}
 		if receipt, ok := rulesSatisfied(devices); ok {
@@ -241,10 +247,21 @@ func caSatisfied(sources []setup.SourceObservation) (string, bool) {
 	return "", false
 }
 
-func syslogSatisfied(sources []setup.SourceObservation) (string, bool) {
-	for _, src := range sources {
-		if src.SyslogFirstSeenAt != nil {
-			return fmt.Sprintf("syslog connected from %s", src.Source), true
+// syslogSatisfied is issue #1281's tightening: any address completing a
+// TLS handshake used to be enough, including one that never went on to
+// send anything mikroview could attribute to the router being set up.
+// Real evidence now means either a device's enrolment token was
+// actually redeemed (AcceptedIP set) or a config.yaml-declared device
+// (already enrolled at its sourceIp, no token needed) has genuinely
+// logged something -- either way syslog reached the specific device the
+// operator is setting up, not merely some address.
+func syslogSatisfied(devices []setupDevice) (string, bool) {
+	for _, d := range devices {
+		if d.AcceptedIP != "" {
+			return fmt.Sprintf("enrolled at %s", d.AcceptedIP), true
+		}
+		if d.Configured && d.Events > 0 {
+			return fmt.Sprintf("logging from its declared address %s", d.SourceIP), true
 		}
 	}
 	return "", false
@@ -339,7 +356,7 @@ func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
 	}
 	mark, ok := s.Setup.NoteMark(req.Step, setup.MarkOutcome(req.Outcome), auditActor(r), req.Note, time.Now())
 	if !ok {
-		http.Error(w, "step must be 1-5 and outcome one of skipped, forced", http.StatusBadRequest)
+		http.Error(w, "step must be 1-7 and outcome one of skipped, forced", http.StatusBadRequest)
 		return
 	}
 	// The audit vocabulary is owned by the caller (see internal/audit's
@@ -474,6 +491,20 @@ type SetupInstance struct {
 	// a different listener entirely. Empty when backup.enabled is
 	// false: step 6 has no address to render a script for.
 	BackupPort string
+	// BackupKeyUnreadable is #1264 finding 5: true when history.keyFile
+	// names a file that could not be read (missing, truncated, wrong --
+	// anything other than simply being unset), set once at startup by
+	// main.go from backups.go's openRouterBackupVault. Vault.Enabled()
+	// alone cannot tell this apart from "no key configured at all" --
+	// both leave the vault's key nil -- so every surface that used to
+	// read Enabled() to decide what to tell the operator about the
+	// retention key (routerBackupsResponse.keyUnreadable, this step's
+	// own blocked key) reads this too, and must never fold the two back
+	// into one message. A configured-but-unreadable key must never be
+	// presented as "no key yet, mint one": minting overwrites the file,
+	// and every backup already encrypted under the old key becomes
+	// unreadable.
+	BackupKeyUnreadable bool
 	// Candidates are this instance's own guesses at the address a router
 	// could reach it on (#1213): every real address it is bound to, on
 	// the configured HTTPS port. Set once at startup by

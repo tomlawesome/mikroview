@@ -65,7 +65,12 @@ await goTo(page, 'Run setup…')
 const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible' })
 
-await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
+// The push step, which is where the mint form and a long command block
+// live. It is the fifth row since #1284 inserted "Name your router"
+// second: the walking order is ca, name, syslog, rules, push, backup
+// (SETUP_STEPS in lib/setupsteps.ts), while the numbers stored against
+// a step are the server's own and deliberately do not match it.
+await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').click()
 // SetupWizard.svelte renders two identical .mint blocks: step 4's own
 // (line 649, gated on `wizardState.status` as well as the step) and a
 // fallback in a later step for when step 4 was skipped (line 719).

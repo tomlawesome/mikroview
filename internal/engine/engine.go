@@ -356,6 +356,20 @@ type Engine struct {
 	// is the rendezvous, not queueing work up.
 	tasks chan func()
 
+	// afterOutrunIncrementForTest, if non-nil, is called from inside
+	// evaluateBatch's gap branch, between the outrun increment and the
+	// cursor store, while mu is still held. Test-only instrumentation
+	// (nil in production, so the cost is one nil check per gap): it lets
+	// a test hold that lock open for as long as it likes, so a
+	// concurrent Lag() call has to block on mu rather than race it --
+	// proving the two writes are no longer independently observable.
+	// Same technique as MemoryCorpus.Replay's afterReplayPageForTest
+	// (corpus.go) and internal/store's queryScanHook: deterministic
+	// instrumentation instead of a timing race, which here would be no
+	// test at all -- the natural window is too narrow to fail reliably.
+	// See TestLagNeverDoubleCountsAConcurrentGap.
+	afterOutrunIncrementForTest func()
+
 	mu   sync.Mutex
 	defs map[string]*registration
 	// order is defs' values sorted by (Ordered rank, ID) -- maintained
@@ -507,6 +521,18 @@ func (e *Engine) Forget() {
 // gap. /api/stats reports all three (see internal/api/rest.go) so the UI
 // can say so in those terms.
 //
+// outrun does not wait for evaluateBatch to notice a loss: it also counts,
+// from the store's current oldestHeld, anything already evicted past the
+// cursor that no batch has read yet -- otherwise an engine that has never
+// run one (nothing has called evaluateBatch, so e.outrun is still its
+// starting value) would report those events as behind, i.e. recoverable,
+// when the ring has already thrown them away. Once a batch does read
+// through that gap it counts it and advances the cursor past it under
+// the same lock (see evaluateBatch's gap branch), and the two loads
+// below take that lock too, so this and e.outrun.Load() never observe
+// one of that pair moved without the other -- which is what would let
+// them count the same loss twice.
+//
 // behindSeconds reads the next unevaluated event's ReceivedAt rather
 // than timing evaluation itself: "the oldest thing not yet looked at is
 // 4 seconds old" is a statement an operator can act on, where a rate is
@@ -515,8 +541,20 @@ func (e *Engine) Lag() (behind uint64, behindSeconds float64, outrun uint64) {
 	if e == nil {
 		return 0, 0, 0
 	}
+	e.mu.Lock()
 	cursor := e.cursor.Load()
-	next, _, newestHeld := e.read(cursor, 1)
+	outrun = e.outrun.Load()
+	e.mu.Unlock()
+	next, oldestHeld, newestHeld := e.read(cursor, 1)
+	if oldestHeld > cursor+1 {
+		// Same line evaluateBatch draws (see its recordOutrun call): the
+		// ring has evicted everything from the cursor up to the oldest
+		// survivor, so that part is gone for good, not merely late --
+		// reported here without waiting for a batch to notice, so an
+		// engine that has never run one doesn't show it as recoverable.
+		outrun += oldestHeld - 1 - cursor
+		cursor = oldestHeld - 1
+	}
 	if newestHeld > cursor {
 		behind = newestHeld - cursor
 	}
@@ -525,7 +563,7 @@ func (e *Engine) Lag() (behind uint64, behindSeconds float64, outrun uint64) {
 			behindSeconds = age
 		}
 	}
-	return behind, behindSeconds, e.outrun.Load()
+	return behind, behindSeconds, outrun
 }
 
 // read is Source.Since with the nil-source case folded in, so every
@@ -569,7 +607,7 @@ func (e *Engine) Run(ctx context.Context) {
 	for {
 		select {
 		case <-e.nudge:
-			e.catchUp()
+			e.catchUp(ctx)
 		case fn := <-e.tasks:
 			// Work another goroutine needs done with this one's
 			// exclusive access to definition state -- see
@@ -586,9 +624,26 @@ func (e *Engine) Run(ctx context.Context) {
 // catchUp reads batches forward from the cursor until one comes back
 // empty -- "caught up" is a fact about the store, not about how many
 // nudges have been answered, so a burst of 100,000 inserts behind one
-// doorbell is evaluated in full.
-func (e *Engine) catchUp() {
-	for e.evaluateBatch(time.Time{}) {
+// doorbell is evaluated in full -- unless ctx is cancelled first
+// (checked per event inside evaluateBatch) or Run's tasks channel has a
+// caller waiting (checked here, between batches): a deep backlog must
+// not make Run's ctx.Done() case, and everything downstream of it --
+// drain and its drainTimeout bound, ExportState, Forget -- wait for the
+// whole catch-up to finish, which is what the comment on Engine.tasks
+// promises ("Serviced between batches") and what the unfixed version of
+// this function did not honour.
+//
+// The tasks check is non-blocking: a task waiting is serviced at once,
+// same as an event would be, but catchUp never pauses waiting for one --
+// that would throttle catch-up throughput for no reason the caller asked
+// for.
+func (e *Engine) catchUp(ctx context.Context) {
+	for e.evaluateBatch(ctx, time.Time{}) {
+		select {
+		case fn := <-e.tasks:
+			fn()
+		default:
+		}
 	}
 }
 
@@ -596,10 +651,16 @@ func (e *Engine) catchUp() {
 // ingest order and advances the cursor across it, reporting whether the
 // batch held anything (i.e. whether there may be more behind it).
 //
-// A non-zero deadline stops it part-way through a batch; only shutdown
-// passes one (see drain), because only shutdown has a reason not to
-// finish what it has already copied out of the store.
-func (e *Engine) evaluateBatch(deadline time.Time) bool {
+// Checked once per event, in the same loop, are the two different ways a
+// caller may want to cut a batch short partway through: ctx.Done(),
+// catchUp's way of noticing Run's context was cancelled without waiting
+// out the rest of a slow batch; and a non-zero deadline, drain's own
+// wall-clock bound. Nothing ever needs both at once -- catchUp always
+// evaluates toward whatever ctx allows and passes a zero deadline; drain
+// runs deliberately past an already-cancelled ctx toward its own bound
+// and passes context.Background() so that cancellation is never seen
+// here -- so there is no ordering to decide between them.
+func (e *Engine) evaluateBatch(ctx context.Context, deadline time.Time) bool {
 	cursor := e.cursor.Load()
 	events, oldestHeld, _ := e.read(cursor, batchSize)
 	if oldestHeld > cursor+1 {
@@ -609,8 +670,24 @@ func (e *Engine) evaluateBatch(deadline time.Time) bool {
 		// oldest survivor is gone for good, and the honest move is to
 		// count it and carry on from what is left rather than pretend the
 		// cursor is still meaningful.
-		e.recordOutrun(oldestHeld - 1 - cursor)
+		//
+		// The count and the cursor move together under mu, held only
+		// across these two writes: Lag() (see its own doc comment) takes
+		// the same lock to read both, so a Lag() call can no longer land
+		// between them and see a cursor that hasn't moved yet paired
+		// with an outrun that already has -- which is what let it count
+		// the same loss twice. The warning recordOutrun used to log
+		// itself is emitted below instead, once mu is released -- it's
+		// I/O, not state, and has no business making a concurrent Lag()
+		// call wait on a log write.
+		e.mu.Lock()
+		total := e.recordOutrun(oldestHeld - 1 - cursor)
+		if e.afterOutrunIncrementForTest != nil {
+			e.afterOutrunIncrementForTest()
+		}
 		e.cursor.Store(oldestHeld - 1)
+		e.mu.Unlock()
+		e.warnOutrun(total)
 	}
 	if len(events) == 0 {
 		return false
@@ -624,19 +701,35 @@ func (e *Engine) evaluateBatch(deadline time.Time) bool {
 		if !deadline.IsZero() && time.Now().After(deadline) {
 			return false
 		}
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
 	}
 	return true
 }
 
 // recordOutrun counts n events the store evicted before the engine
-// reached them, and logs a rate-limited summary that says what was
-// actually lost -- detection for those events, not merely "the buffer
-// wrapped". #380's first item is why this matters: the observable
-// symptom of an evaluator that never saw an event is otherwise silence,
-// and silence reads as "nothing is wrong" rather than as the coverage
-// gap it is.
-func (e *Engine) recordOutrun(n uint64) {
-	total := e.outrun.Add(n)
+// reached them, and returns the new lifetime total for warnOutrun to
+// log. Called under mu (see evaluateBatch's gap branch) so the count and
+// the cursor move it pairs with land together from Lag()'s point of
+// view; it does no I/O itself so that lock is never held for a log
+// write.
+func (e *Engine) recordOutrun(n uint64) uint64 {
+	return e.outrun.Add(n)
+}
+
+// warnOutrun logs a rate-limited summary saying what was actually lost
+// -- detection for those events, not merely "the buffer wrapped". #380's
+// first item is why this matters: the observable symptom of an
+// evaluator that never saw an event is otherwise silence, and silence
+// reads as "nothing is wrong" rather than as the coverage gap it is.
+//
+// Takes the already-updated lifetime total rather than an increment, and
+// is called without mu held (see evaluateBatch's gap branch) -- the
+// warning is best-effort I/O, not part of the state Lag() reads.
+func (e *Engine) warnOutrun(total uint64) {
 	if _, ok := e.outrunGate.Allow(); ok {
 		logger.Warn(fmt.Sprintf("events arrived faster than they could be checked and left the memory window first -- %d event(s) never checked (they were stored and broadcast normally); raise store.maxMemory or find what is flooding", total))
 	}
@@ -708,9 +801,14 @@ func (e *Engine) Done() <-chan struct{} {
 // unconditional answer. The deadline is passed down into the batch so a
 // single slow definition cannot overrun it by a whole batch's worth of
 // events.
+//
+// Passes context.Background(), not the cancelled ctx Run was called
+// with, to evaluateBatch: drain's whole purpose is to keep going for a
+// bounded while *after* that ctx is already done, so checking it here
+// would stop drain on its very first event, every time.
 func (e *Engine) drain() {
 	deadline := time.Now().Add(drainTimeout)
-	for e.evaluateBatch(deadline) {
+	for e.evaluateBatch(context.Background(), deadline) {
 		if time.Now().After(deadline) {
 			return
 		}

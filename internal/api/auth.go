@@ -320,9 +320,13 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// Enforced here rather than in each handler for the same reason
 		// requireAuth exists at all: a gate that has to be remembered per
 		// endpoint is one forgotten endpoint away from not being a gate.
-		// GET /api/auth/session and the two logout-shaped routes stay
-		// reachable without a special case, because exemptPaths above has
-		// already returned by the time this runs.
+		// GET /api/auth/session and /api/auth/logout stay reachable
+		// without a special case, because exemptPaths above has already
+		// returned by the time this runs. /api/auth/logout-all is not on
+		// that list and gets no special case here either: ending every
+		// session but this one needs to trust whose sessions they are,
+		// which is exactly what a reset-code session does not have yet
+		// -- it 403s like everything else until the password is changed.
 		if user.MustChangePassword && r.URL.Path != changePasswordPath {
 			http.Error(w, "an administrator reset this account -- set a new password before going any further", http.StatusForbidden)
 			return
@@ -562,6 +566,21 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"username": user.Username, "role": user.Role})
 }
 
+// passwordRecheckLimiterKey is the bucket for endpoints that re-verify
+// a signed-in caller's own password -- changing it, and minting a
+// device enrolment token (#1291). Those guesses have to be counted,
+// but not in login's bucket: mikroview allows exactly one admin
+// (ErrSingleAdmin), so spending login's allowance on a run of typos at
+// one of these dialogs leaves nobody able to let them back in. If the
+// session then goes -- a closed tab, cleared cookies, a second machine
+// -- every sign-in is refused without the password being checked at
+// all, until the window slides or someone reaches the console. One
+// bucket for every re-check, so the rule stays in one place; the
+// vault-unlock gate keys its own the same way (vaultUnlockLimiterKey).
+func passwordRecheckLimiterKey(username string) string {
+	return "password-recheck:" + strings.ToLower(username)
+}
+
 // handleAuthLogin is rate-limited independently by username and by
 // source IP (see internal/auth.LoginLimiter) -- blocks either a single
 // source hammering many usernames, or many sources hammering one
@@ -664,13 +683,14 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	// being guessed here for the limiter to count, and no username in
 	// the body pointing anywhere but the caller's own account.
 	if !user.MustChangePassword {
-		// Rate-limited on the same limiter as login, keyed by user. The
-		// current password is a credential and this is a guess at it, so
-		// an endpoint that verifies one without counting the attempt is a
-		// brute-force oracle that happens to need a session -- and a
-		// session is exactly what an attacker who has stolen a cookie
-		// already has.
-		userKey := "user:" + strings.ToLower(user.Username)
+		// Rate-limited on the same limiter as login, in its own bucket:
+		// the current password is a credential and this is a guess at
+		// it, so an endpoint that verifies one without counting the
+		// attempt is a brute-force oracle that happens to need a
+		// session -- and a session is exactly what an attacker who has
+		// stolen a cookie already has. See passwordRecheckLimiterKey
+		// for why the bucket is not login's own.
+		userKey := passwordRecheckLimiterKey(user.Username)
 		if !s.LoginLimiter.Reserve(userKey, now) {
 			http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 			return

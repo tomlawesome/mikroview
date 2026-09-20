@@ -10,6 +10,8 @@ testing-and-ci skill (owner, 2026-09-08).
 
 - 2026-09-16 · 83b35730 (feature/m16-upgrade-guard-and-401, !1054) · pipeline 1168, `gate:scenarios 1/4` · `Escape restores the exact pan position (13.4 -> 19.3)` -- the mini-map viewport read 19.3 after the 900 ms settle instead of the 13.4 it started at; every other check in the scenario passed. The branch is backend-only (persist schema, a 401 header, `-backup`); the same scenario passed three times in a row locally at ebbce549, which contains that branch.
 
+- 2026-09-18 · f036645d (fix/v060-audit, !1069) · pipeline 1253, `gate:scenarios 1/4` · `Escape restores the exact pan position (14.3 -> 20.8)` -- same check, same shape as the 2026-09-16 sighting: the viewport read 20.8 after the settle instead of the 14.3 it started at, every other check in the scenario passed. The commit changes two unrelated scenario scripts (live-fleet-setup-standing, live-setup-wizard) and nothing that pans the map; shard 1 passed on the parent commit in pipeline 1252.
+
 ## live-topography-trace-list: a keyboard re-trace lands on no row
 
 - 2026-09-14 · 4a4655b2 (feature/wizard-upgrade-safety) · pipeline 1101, `gate:scenarios 4/4` · `the list stays open across a keyboard re-trace` and `the second row is now the traced one (-1)` -- `onIndex` came back `-1`, so the re-trace selected nothing rather than the wrong thing. The branch touches no topography code at all; `dev` passed the same scenario at e4296ef3 (pipeline 1100) an hour earlier, and the same branch passed it at bef16483 (pipeline 1102) with only banner-text and wizard changes in between.
@@ -91,3 +93,27 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-account-menu: the foot has no uptime segment
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
+
+## live-watchlist-manage: the drawer's "fence now" button never becomes stable
+
+- 2026-09-19 · 53b935f4 (fix/v060-audit, local `make live-check`) · 102 scenarios, this one the only failure · `waiting for locator('.wt-drawer').getByRole('button', { name: /fence now/ })` → "waiting for element to be visible, enabled and stable" three times, then the 30 s timeout. Run alone at the same commit on a fresh instance: PASS. The suite's previous run at the parent commit passed this scenario; the three other failures in that run were a real ordering fault (routers left behind by earlier scenarios) and are fixed, so this one is on its own. First sighting.
+
+- 2026-09-20 · dd84ce3b (fix/v060-audit, !1069) · pipeline 1305, gate:scenarios 4/4 (job 17145) · same `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs`: "element is not stable", then "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed docs and two Go error strings, no frontend file. Retried as job 17159. With the 2026-09-11 sighting above (same button, same TimeoutError, filed under the "learn again" heading before this one existed) this is the third: #1301.
+
+- 2026-09-20 · f3d79bce (fix/v060-audit, !1069) · pipeline 1309, gate:scenarios 4/4 (job 17233) · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed a shell script and a CI comment, no frontend file. Fourth sighting, on #1301. Retried as a job retry.
+
+## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
+
+- 2026-09-19 · df4ba9af (fix/v060-audit, local `python3 -m unittest scripts.seed_demo_test`) · full-file run, this the only failure · `AssertionError: 2 != 1` on `len(cam_beacon_lines)`. `lines_for_round40`'s DNS-beacon block (`scripts/seed-demo.py` ~1169) fires deterministically off `elapsed // CAM_BEACON_SECONDS`, but an earlier, unrelated block in the same function can independently emit a second line matching the test's own filter (cam-porch's mac plus `r40-iot-srv-dns`): it calls `random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])` for a random `iot`-zone host, so whenever that random pick lands on cam-porch and `r40-iot-srv-dns` together, the count goes to 2. **Root cause confirmed, not just suspected:** the test seeds nothing and reads the shared `random` module, which Python seeds from OS entropy fresh in every process -- `CamBeaconTests` run completely alone (`python3 -m unittest scripts.seed_demo_test.CamBeaconTests`, nothing else in the process) still failed 2 of 20 runs, so this has nothing to do with test order or other tests' random draws; it is a roughly 1-in-10 chance on any given process regardless of what else runs. (An earlier note here blamed #1272's new tests shifting shared state -- ruled out by this isolation run; kept as a correction rather than deleted per this file's own header about superseded reasoning.)
+
+## security:trivy-fs: the vulnerability database will not download
+
+- 2026-09-20 · f57448b7 (fix/v060-audit) · pipeline 1298, `security:trivy-fs` (job 17011) · `FATAL run error: init error: DB error: failed to download vulnerability DB ... Get "https://mirror.gcr.io/v2/": dial tcp: lookup mirror.gcr.io on 192.168.254.1:53: server misbehaving`. DNS on the runner failed to resolve the mirror; the scan never started. Retried as job 17017 on the same commit and it passed in 41s, so nothing in the tree changed the outcome. Worth knowing if it recurs: the job depends on an external registry being reachable at run time, so a third sighting should probably be an issue about caching the database rather than about the scanner.
+
+## live-topography-port-trace: the picker offers no port chips on first read
+
+- 2026-09-20 · 72965118 (fix/v060-audit, !1069) · pipeline 1307, gate:scenarios 4/4 (job 17183) · `FAIL the picker offers a port the window carried ()` and `the picker offers a port only a rule names`, both with an empty chip list, every check before them passed. The script waits for the `.pill.p.edit` bar (`live-topography-port-trace.mjs:337`) and reads its `.ports .chip` children in the same beat, so the chips can still be a render behind the bar. The commit changed docs/flakes.md only. Pipeline 1309 on a later head is the re-run. First sighting under this heading; the `.note-t` timeout above is the same scenario at a different check.
+
+## live-city-river: wg0's bridge chip is not there on first read
+
+- 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.

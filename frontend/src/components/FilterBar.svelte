@@ -25,7 +25,6 @@
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { buildFilterChips, type FilterChip } from '../lib/filterChips'
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
-  import { columnState } from '../lib/columns.svelte'
   import { geoipState } from '../lib/geoip.svelte'
   import { seenValuesState } from '../lib/seenValues.svelte'
   import {
@@ -42,6 +41,7 @@
   } from '../lib/tokenBar'
   import type { Filters } from '../lib/types'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
+  import ColumnToggles from './ColumnToggles.svelte'
   import { onMount } from 'svelte'
 
   // #1198: country flags go blank with no GeoIP database configured, and
@@ -73,43 +73,6 @@
   }
 
   const actions = ACTION_FILTER_OPTIONS
-
-  // #710: the chooser's own naming, distinct from COLUMNS' table-header
-  // labels (lib/columns.svelte). A flat list read "Device column",
-  // "Address column", "Address column" -- the same visible text twice,
-  // once for source's address and once for destination's, with nothing
-  // beside it to tell them apart. These three lists say the bare column
-  // name in the strip's own mono voice, and the source/destination
-  // facts (address, port, MAC) sit under a small heading naming which
-  // side they belong to instead of repeating "source"/"destination" on
-  // every row. Order here is the chooser's own -- COLUMNS interleaves
-  // source's and destination's facts around chain/proto for a table-
-  // layout reason (see its own comment) that has nothing to do with how
-  // this menu groups them.
-  interface ColumnChoice {
-    key: string
-    text: string
-    ariaLabel: string
-  }
-  const PLAIN_COLUMNS: ColumnChoice[] = [
-    { key: 'device', text: 'device', ariaLabel: 'Device column' },
-    { key: 'action', text: 'action', ariaLabel: 'Action column' },
-    { key: 'chain', text: 'chain', ariaLabel: 'Chain column' },
-    { key: 'source', text: 'source', ariaLabel: 'Source column' },
-    { key: 'destination', text: 'destination', ariaLabel: 'Destination column' },
-    { key: 'proto', text: 'proto', ariaLabel: 'Proto column' },
-    { key: 'iface', text: 'interface', ariaLabel: 'Interfaces column' },
-    { key: 'nat', text: 'NAT', ariaLabel: 'NAT column' },
-  ]
-  const SOURCE_COLUMNS: ColumnChoice[] = [
-    { key: 'srcAddr', text: 'address', ariaLabel: 'Source address column' },
-    { key: 'srcPort', text: 'src port', ariaLabel: 'Source port column' },
-    { key: 'mac', text: 'MAC', ariaLabel: 'Source MAC column' },
-  ]
-  const DEST_COLUMNS: ColumnChoice[] = [
-    { key: 'dstAddr', text: 'address', ariaLabel: 'Destination address column' },
-    { key: 'port', text: 'port', ariaLabel: 'Destination port column' },
-  ]
 
   // Below the breakpoint, the ~9 fields below move into a slide-up
   // drawer behind a trigger (issue #85) rather than staying always-
@@ -433,43 +396,6 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
-
-<!-- #729: the stream's column chooser snippets, for the mobile drawer's
-     own always-open list rendered from inside .bar below -- the desktop
-     "columns ▸" trigger and its popover moved to Whisper.svelte under
-     #1197's ruling, with its own copy of this same snippet (see that
-     file's comment). Time and Rule are pinned -- no checkbox for either,
-     since neither is ever offered as a toggle. -->
-{#snippet columnCheckbox(col: ColumnChoice)}
-  <!-- aria-label carries the disambiguated name ("Source address
-       column", not "Address column") on the input directly, which
-       wins over the wrapping <label>'s own text for the accessible
-       name -- so the visible word stays bare while a screen reader
-       still hears which side it belongs to. -->
-  <label class="col-toggle">
-    <input
-      type="checkbox"
-      checked={columnState.isColumnVisible(col.key)}
-      onchange={() => columnState.toggleColumn(col.key)}
-      aria-label={col.ariaLabel}
-    />
-    {col.text}
-  </label>
-{/snippet}
-
-{#snippet columnCheckboxes()}
-  {#each PLAIN_COLUMNS as col (col.key)}
-    {@render columnCheckbox(col)}
-  {/each}
-  <span class="col-group-heading">source</span>
-  {#each SOURCE_COLUMNS as col (col.key)}
-    {@render columnCheckbox(col)}
-  {/each}
-  <span class="col-group-heading">destination</span>
-  {#each DEST_COLUMNS as col (col.key)}
-    {@render columnCheckbox(col)}
-  {/each}
-{/snippet}
 
 {#if viewportState.isMobile}
   <div class="mobile-row">
@@ -928,7 +854,7 @@
       <div class="fb-field columns-field">
         <span class="fb-label">Columns</span>
         <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
-          {@render columnCheckboxes()}
+          <ColumnToggles touch />
         </div>
       </div>
     {/if}
@@ -1768,7 +1694,10 @@
      trigger and its popover moved to Whisper.svelte's own hand under
      #1197's ruling (see that file's comment). Same fb-field/fb-label
      shape every other control in the drawer already uses -- a row of
-     checkboxes, not a new kind of control. */
+     checkboxes, not a new kind of control. The checkboxes themselves
+     (.col-toggle/.col-group-heading) are ColumnToggles.svelte's own
+     styles now, `touch` for the drawer's 44px rows (issue #85) --
+     only this container and its flex layout stay here. */
   .columns-field {
     flex-basis: 100%;
   }
@@ -1777,58 +1706,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px 14px;
-  }
-
-  .col-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font: 12px var(--font-mono);
-    color: var(--fg-muted);
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .col-toggle:hover {
-    color: var(--fg);
-  }
-
-  .col-toggle input[type='checkbox'] {
-    cursor: pointer;
-  }
-
-  .col-toggle input[type='checkbox']:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  /* #710: the small heading naming which side "address"/"src port"/
-     "MAC" belongs to. flex-basis: 100% starts a new line the same way
-     the old, now-retired .columns-field did for the whole chooser --
-     here it is scoped to one heading inside the drawer list instead of
-     the whole strip. */
-  .col-group-heading {
-    flex-basis: 100%;
-    margin-top: 4px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-    font: 500 9px var(--font-mono);
-    letter-spacing: 0.1em;
-    color: var(--fg-dim);
-  }
-
-  /* The drawer's own 44px touch-target convention (issue #85) -- applies
-     to the whole label, not just the checkbox glyph, so the tap target is
-     the full "checkbox + column name" row rather than the ~16px box. */
-  .drawer .col-toggle {
-    min-height: 44px;
-    font: 14px var(--font-sans);
-    color: var(--fg);
-  }
-
-  .drawer .col-group-heading {
-    font-size: 11px;
-    padding-top: 10px;
   }
 
   .duration {

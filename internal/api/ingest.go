@@ -136,6 +136,29 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Issue #1281: an ingest token names a device, never an address --
+	// "any RouterOS user holding the built-in read policy can print an
+	// ingest token out of a script" (see noteIngest's own doc comment),
+	// so the token alone is not enough to say a push actually came from
+	// the router it claims to be. It must also arrive from that device's
+	// own enrolled address (config.yaml's sourceIp, or a redeemed
+	// enrolment token's acceptedIp) -- the same evidence bar syslog
+	// attribution holds pushes to, closing a gap a stolen token used to
+	// leave open: pushing fabricated router state from anywhere at all.
+	if s.Devices != nil && !s.Devices.IsEnrolledAt(tok.Device, s.ClientIP(r)) {
+		// Same noteIngest throttle as the decode-error and cap-refusal
+		// branches below: a repeatedly refused push is exactly the flood
+		// noteIngest exists to keep off the audit trail (see its own doc
+		// comment), and this refusal is just as caller-controlled and
+		// just as cheap to produce as a decode error.
+		if s.noteIngest(tok.Device, "", false, now) {
+			s.Audit.Record("device:"+tok.Device, "ingest.routeros.refused", tok.Device,
+				fmt.Sprintf("push refused: %s is not %s's enrolled address", s.ClientIP(r), tok.Device))
+		}
+		http.Error(w, "this address is not enrolled for that device", http.StatusForbidden)
+		return
+	}
+
 	// Same 64KiB bound every other JSON body on this API is held to (see
 	// maxJSONBodyBytes) -- it also happens to be the number RouterOS's
 	// own /tool fetch enforces client-side, so this can never be the

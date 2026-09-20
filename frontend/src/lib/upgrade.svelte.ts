@@ -13,6 +13,8 @@
 // in one place and tested without rendering: they are the design ruling
 // on the issue, not styling.
 
+import { TITLES } from './setupsteps'
+
 /** How the declared fleet stands against the current wizard (#1241). */
 export interface UpgradeRouters {
   /** Routers not reporting the current setup -- including any that have never reported. */
@@ -108,9 +110,9 @@ class UpgradeState {
     if (!u) return ''
     const r = u.routers
     if (r.total > 0 && r.behind > 0) {
-      return `upgraded from ${u.previous} · ${r.behind} of ${r.total} routers still on the old setup · paste step 1 again on each`
+      return `upgraded from ${u.previous} · ${r.behind} of ${r.total} routers still on the old setup · paste ${TITLES.ca} again on each`
     }
-    return `upgraded from ${u.previous} · paste step 1 of the setup again on each router`
+    return `upgraded from ${u.previous} · paste ${TITLES.ca} again on each router`
   }
 }
 

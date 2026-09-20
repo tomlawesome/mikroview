@@ -3,9 +3,11 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -167,6 +169,52 @@ func TestUpgradeAcknowledgePersistsAndAudits(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected an audit entry for upgrade.acknowledged against v0.5.0")
+	}
+}
+
+// TestUpgradeAcknowledgeWithNothingToAcknowledgeIsAConflict covers the
+// "nothing to acknowledge" branch this file never exercised: a first
+// install, or a click that raced a restart onto a version with no
+// crossing behind it. 409, not the 200 upgradeResponse shape a GET
+// returns -- see handleUpgradeAcknowledge's own doc comment for why
+// that is deliberate -- and no audit entry for a click against nothing.
+func TestUpgradeAcknowledgeWithNothingToAcknowledgeIsAConflict(t *testing.T) {
+	s := upgradeServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	resp := postJSON(t, adminClient, ts.URL+"/api/upgrade/acknowledge", struct{}{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("POST /api/upgrade/acknowledge with nothing to acknowledge = %d, want 409", resp.StatusCode)
+	}
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "upgrade.acknowledged" {
+			t.Error("a click against nothing to acknowledge wrote an audit entry")
+		}
+	}
+}
+
+// TestUpgradeAcknowledgeCommentMatchesTheConflictItReturns covers a
+// v0.6.0 audit finding (#1267): the comment above the "nothing to
+// acknowledge" branch called the 409 "not an error" and claimed the
+// caller gets "the same 'nothing to show' answer a GET would give" --
+// but the code right below writes http.Error with 409 Conflict, a
+// different status and a different body shape (a plain-text message,
+// not upgradeResponse's JSON) than the 200 a GET actually returns
+// (TestUpgradeAcknowledgeWithNothingToAcknowledgeIsAConflict pins the
+// real response). The 409 is the right call -- a genuine conflict, not
+// a caller mistake, and the frontend already treats any non-2xx here
+// alike (see upgrade.svelte.ts's acknowledge) -- so the comment was the
+// defect, not the status code.
+func TestUpgradeAcknowledgeCommentMatchesTheConflictItReturns(t *testing.T) {
+	source, err := os.ReadFile("upgrade.go")
+	if err != nil {
+		t.Fatalf("reading upgrade.go: %v", err)
+	}
+	if bytes.Contains(source, []byte(`the caller gets the same "nothing to show"`)) {
+		t.Error("handleUpgradeAcknowledge's comment still claims the 409 branch answers like a GET, but it writes a 409 with a different body shape entirely")
 	}
 }
 

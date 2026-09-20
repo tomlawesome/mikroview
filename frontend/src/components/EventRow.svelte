@@ -1,21 +1,23 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  import type { FirewallEvent } from '../lib/types'
+  import type { FirewallEvent, Flag } from '../lib/types'
   import { countryFlag, formatAddr, formatTimeMs, isPublicIp, rawTooltip } from '../lib/format'
-  import { appState } from '../lib/state.svelte'
+  import { appState, natSide } from '../lib/state.svelte'
   // #1200: both dropped from the row by #644's rewrite, restored here.
   // IpInvestigateButton is the same component EventDetailSheet.svelte
   // already mounts for its Source/Destination rows -- reused, not
   // reimplemented, so the popover it opens (lib/ipLookup.svelte) stays
   // the one instance both surfaces share.
   import IpInvestigateButton from './IpInvestigateButton.svelte'
-  // #1201: the ⚑ mark's own click target -- flagsState.list plus
-  // extractSourceIp is the same lookup flaggedSources (lib/grouping.ts)
-  // already does to decide *whether* to draw the mark; this reads it
-  // again to know *which* flag(s) it should open. topologyNavState is
-  // #724's own dial-to-docket handoff, reused unchanged for the
-  // one-flag case.
-  import { flagsState, extractSourceIp } from '../lib/flags.svelte'
+  // #1201: the ⚑ mark's own click target -- which flag(s) it should
+  // open. #1269: this used to be read here by filtering the whole
+  // flagsState.list against event.srcIp, independently, on every
+  // flagged row -- undoing the one-pass join LiveTable already built
+  // (lib/grouping.ts's flagsBySource) to decide *whether* to draw the
+  // mark in the first place. sourceFlags below is that join's own
+  // answer for this row, handed down as a prop instead of re-scanned.
+  // topologyNavState is #724's own dial-to-docket handoff, reused
+  // unchanged for the one-flag case.
   import { topologyNavState } from '../lib/topologyNav.svelte'
   // #729: LiveTable and this component share one flat CSS Grid (`.row` is
   // `display: contents`, so these cells become direct grid items, not
@@ -52,19 +54,21 @@
     // the time is the same second on every row at any real rate, so it
     // is the least useful thing in the most prominent column.
     count = 1,
-    // flagged means "this row's source has an active flag against it",
-    // not "this event caused that flag": a flag records what it was
-    // raised about, not which events evidenced it (#341). Drives the
-    // full-row wash (the-whole.html's tr.hl) *and* a ⚑ after the time
-    // (its .rmk): round 30 draws both, and the mark annotates the wash
-    // rather than replacing it. Round 29 drew no mark, which is why #685
-    // took one out; that ruling is superseded (#691's round-30 audit).
-    // The mark rides after the time, never before it -- ahead of the
-    // figures it pushes the first digit right and breaks the left edge
-    // the tabular numerals line up on. #1117: DOM order alone does not
-    // keep it there -- see .time/.rmk below for why the mark draws in
-    // its own reserved gutter instead of sharing the timestamp's box.
-    flagged = false,
+    // sourceFlags is this row's slice of LiveTable's one-pass join
+    // (lib/grouping.ts's flagsBySource): the open flags, if any, against
+    // this row's source -- not "this event caused that flag", a flag
+    // records what it was raised about, not which events evidenced it
+    // (#341). A non-empty list drives the full-row wash (the-whole.html's
+    // tr.hl) *and* a ⚑ after the time (its .rmk): round 30 draws both,
+    // and the mark annotates the wash rather than replacing it. Round 29
+    // drew no mark, which is why #685 took one out; that ruling is
+    // superseded (#691's round-30 audit). The mark rides after the time,
+    // never before it -- ahead of the figures it pushes the first digit
+    // right and breaks the left edge the tabular numerals line up on.
+    // #1117: DOM order alone does not keep it there -- see .time/.rmk
+    // below for why the mark draws in its own reserved gutter instead of
+    // sharing the timestamp's box.
+    sourceFlags = [],
     expandable = false,
     expanded = false,
     onToggle,
@@ -92,7 +96,7 @@
     event: FirewallEvent
     deviceName?: string
     count?: number
-    flagged?: boolean
+    sourceFlags?: Flag[]
     expandable?: boolean
     expanded?: boolean
     onToggle?: () => void
@@ -121,15 +125,12 @@
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
 
-  // #1201: the open flags against this row's own source -- same
-  // "target's address, suffix stripped" match flaggedSources uses, kept
-  // behind the `flagged` prop the caller already computed so a row
-  // never flagged skips the list scan. Cleared flags are excluded, same
-  // as flaggedSources: a called-and-cleared flag no longer has anything
-  // here for the mark to open.
-  const sourceFlags = $derived(
-    flagged && event.srcIp ? flagsState.list.filter((f) => !f.cleared && extractSourceIp(f.target) === event.srcIp) : [],
-  )
+  // flagged (#1201, #1269): whether this row's source carries any open
+  // flag at all -- derived from the sourceFlags prop LiveTable already
+  // built for this row (lib/grouping.ts's flagsBySource), not a fresh
+  // scan of the flag list. Drives the row wash and whether the mark
+  // draws at all.
+  const flagged = $derived(sourceFlags.length > 0)
 
   // "open this source's flag ▸" for the one honest choice, or a count
   // when there is more than one to choose among (#1201's ruling, items
@@ -172,13 +173,10 @@
       .concat(event.dstPort ? ` · ${event.dstPort}/${event.protocol ?? '?'}` : '') || 'this line',
   )
 
-  const natFilterKey = $derived(
-    event.chain?.toLowerCase() === 'srcnat'
-      ? 'srcQuery'
-      : event.chain?.toLowerCase() === 'dstnat'
-        ? 'dstQuery'
-        : null,
-  )
+  const natFilterKey = $derived.by(() => {
+    const side = natSide(event)
+    return side === 'src' ? 'srcQuery' : side === 'dst' ? 'dstQuery' : null
+  })
 
   // #439: row tokens (action, addresses, port, protocol, rule) used to be
   // <button> elements. That's *why* row text couldn't be selected/copied

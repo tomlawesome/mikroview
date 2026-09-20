@@ -4,11 +4,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildQuery,
   clearAllFlags,
+  deleteDroplistEntry,
   fetchAuditLog,
   fetchEventsWindow,
   fetchSetupCommands,
+  mintDroplistKey,
   replayDefinition,
+  revokeDroplistKey,
+  saveSetupBackupTransport,
   setFlagVerdict,
+  setRouterBackupComment,
 } from './api'
 import { emptyFilters } from './types'
 
@@ -378,5 +383,78 @@ describe('the message a failed request carries (#1162)', () => {
   it('does not paste a proxy’s HTML error page into the message', async () => {
     stubFetch(502, '<!doctype html><html><body>502 Bad Gateway</body></html>')
     await expect(fetchAuditLog()).rejects.toThrow('the server could not do that (502)')
+  })
+})
+
+// The server registers DELETE /api/droplist/{cidr...} (internal/api) --
+// the CIDR belongs in the path, not a JSON body. Droplist.svelte.test.ts
+// mocks this whole module, so it only proves the call happened, never
+// that it hit the right URL; this is what actually exercises the request.
+describe('deleteDroplistEntry (#1225)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('sends the CIDR in the path, not a JSON body', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deleteDroplistEntry('203.0.113.0/24')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/droplist/203.0.113.0%2F24')
+    expect(init?.method).toBe('DELETE')
+    expect(init?.body).toBeUndefined()
+  })
+})
+
+// A dropped connection used to escape every mutating call as a thrown
+// TypeError, past the caller's busy flag: "minting…" stuck until a
+// reload, with no error shown. The four mutating helpers now answer it
+// as a refusal instead, so each caller's existing error path shows it
+// (v0.6.0 audit, Robustness stage; the class #1218's finding 7 guarded
+// at three call sites by hand).
+describe('a dropped connection is a refusal, not a throw', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubDroppedConnection() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+  }
+
+  it('POST: mintDroplistKey returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await mintDroplistKey('203.0.113.9')
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
+    expect(result).toContain('Failed to fetch')
+  })
+
+  it('DELETE: revokeDroplistKey returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await revokeDroplistKey()
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
+  })
+
+  it('PUT: saveSetupBackupTransport returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await saveSetupBackupTransport('sftp')
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
+  })
+
+  it('PATCH: setRouterBackupComment returns the reason as a string', async () => {
+    stubDroppedConnection()
+    const result = await setRouterBackupComment('core', 'g1', 'note')
+    expect(typeof result).toBe('string')
+    expect(result).toContain('connection dropped')
   })
 })

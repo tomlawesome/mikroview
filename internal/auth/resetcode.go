@@ -5,6 +5,7 @@ package auth
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -41,7 +42,10 @@ const (
 )
 
 // ResetCodeTTL is how long an issued code stays usable -- the owner's
-// ruling on #1245 question 21 ("A"): 24 hours, single use.
+// ruling on #1245 question 21 ("A"): 24 hours, single use. "Single use"
+// means the login that redeems it spends it, whether or not the forced
+// password change is then completed; see Store.Authenticate's doc
+// comment.
 const ResetCodeTTL = 24 * time.Hour
 
 // ErrNoLocalPassword is returned by IssueResetCode for an account that
@@ -110,8 +114,8 @@ func NormaliseResetCode(typed string) string {
 
 // resetCodeLive reports whether u is currently holding an unexpired,
 // unspent reset code. Both halves matter: the hash is cleared the
-// moment a code is spent (single use), and the expiry is what ends an
-// unspent one 24 hours later.
+// moment the code is redeemed or a new password is set (single use),
+// and the expiry is what ends an unspent one 24 hours later.
 func (u *User) resetCodeLive(now time.Time) bool {
 	return u.ResetCodeHash != "" && now.Before(u.ResetCodeExpiresAt)
 }
@@ -170,12 +174,30 @@ func (s *Store) IssueResetCode(userID string, now time.Time) (*User, string, err
 		return nil, "", ErrNoLocalPassword
 	}
 
+	prevHash := u.PasswordHash
+	prevResetHash := u.ResetCodeHash
+	prevResetExpiresAt := u.ResetCodeExpiresAt
+	prevMustChange := u.MustChangePassword
+	prevPasswordChangedAt := u.PasswordChangedAt
+
 	u.PasswordHash = unmatchable
 	u.ResetCodeHash = codeHash
 	u.ResetCodeExpiresAt = now.Add(ResetCodeTTL)
 	u.MustChangePassword = true
 	u.PasswordChangedAt = now
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// The old password must still work and no code must be live: a
+		// reset that only exists in memory but is reported as issued
+		// would leave the admin reading out a code that a restart before
+		// the next good write silently un-issues, while the account's
+		// real credential is the one this rolled back to.
+		u.PasswordHash = prevHash
+		u.ResetCodeHash = prevResetHash
+		u.ResetCodeExpiresAt = prevResetExpiresAt
+		u.MustChangePassword = prevMustChange
+		u.PasswordChangedAt = prevPasswordChangedAt
+		return nil, "", fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	// The copy handed back is for the audit entry and the response

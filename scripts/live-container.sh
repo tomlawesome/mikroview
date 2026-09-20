@@ -196,6 +196,7 @@ EOF
     -v "$MV_DIR/pg.dsn:/etc/mikroview/pg.dsn:ro" \
     -v "$APP_NAME-data:/var/lib/mikroview" \
     -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+    -e MV_TEST_HOOKS=1 \
     $PG_ENV \
     -p "$BIND:$HTTP_PORT:8080" \
     -p "$BIND:$SYSLOG_TLS_PORT:6514" \
@@ -211,6 +212,7 @@ EOF
         -v "$MV_DIR/config.yaml:/etc/mikroview/config.yaml:ro" \
         -v "$APP_NAME-data:/var/lib/mikroview" \
         -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+        -e MV_TEST_HOOKS=1 \
         -p "$BIND:$HTTP_PORT:8080" \
         -p "$BIND:$SYSLOG_TLS_PORT:6514" \
         "$MV_IMAGE" >/dev/null

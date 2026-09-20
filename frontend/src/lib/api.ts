@@ -16,6 +16,8 @@ import type {
   DefinitionParamSchema,
   DetectorScope,
   Device,
+  EnrolmentToken,
+  RefusedSender,
   UnattributedSource,
   DroplistEntry,
   DroplistResponse,
@@ -123,8 +125,31 @@ async function serverSaid(res: Response): Promise<string> {
 // the frontend can't know which state it's in ahead of the response).
 // Same-origin `fetch()` already includes cookies by default, so no
 // explicit `credentials` option is needed.
+// send is fetch for the four mutating helpers below, with the one
+// failure fetch reports by throwing -- the connection dropped, the
+// server restarting, DNS gone -- turned into the refusal shape every
+// caller already handles: a non-ok Response whose body says what
+// happened. Left to throw, it escaped the caller's `await` with its busy
+// flag still set: "minting…", "adding…", "saving…" stuck until a reload,
+// no error shown, no way to try again. #1218 audit finding 7 guarded
+// three call sites by hand (AuthSetup, SSOLinkOverlay, LogEveryRule);
+// the v0.6.0 audit found the same shape in Droplist, EngineRoom,
+// Entities and the wizard's command refresh. One guard here reaches all
+// of them and every site written later. 503 is the nearest honest
+// status: nothing was done, and trying again may work.
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    return new Response(`the connection dropped before the server answered — check the network and try again (${why})`, {
+      status: 503,
+    })
+  }
+}
+
 async function postJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -132,7 +157,7 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
 }
 
 async function putJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -143,7 +168,7 @@ async function putJSON(url: string, body: unknown = {}): Promise<Response> {
 // server already holds (a kept backup's comment, #1126). Same CSRF
 // header as its neighbours, for the same reason.
 async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
@@ -158,7 +183,7 @@ async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
 // internal/api's handleEntitiesDelete) -- an arbitrary entity Key never
 // has to round-trip through a URL at all this way.
 async function deleteJSON(url: string, body?: unknown): Promise<Response> {
-  return fetch(url, {
+  return send(url, {
     method: 'DELETE',
     headers:
       body === undefined
@@ -330,6 +355,81 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// createDevice is the router ledger's first step (#1284): naming a
+// router is what creates it, so the name field and the create are one
+// act. Admin-only server-side, same gate as every other write here.
+export async function createDevice(name: string): Promise<Device | string> {
+  const res = await postJSON('/api/devices', { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createDevice: ${res.status}`
+}
+
+// mintEnrolment mints the short-lived token the Send logs step writes
+// into its last logging line (#1281). Re-minting is what Reroll does --
+// the same call, which is why there is no second endpoint for it. The
+// value comes back once; the server keeps only its hash.
+export async function mintEnrolment(
+  device: string,
+  password: string,
+  expectedAddress: string,
+): Promise<EnrolmentToken | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`, {
+    password,
+    expectedAddress,
+  })
+  if (res.ok) return res.json()
+  return (await res.text()) || `mintEnrolment: ${res.status}`
+}
+
+// registerDevice records the operator's confirmation of a router --
+// the ledger's final Register step (#1291). It grants the router
+// nothing: the server never sets acceptedIp from this call, so an
+// address is still only accepted when a valid token arrives over
+// syslog from it. Answers the updated device.
+export async function registerDevice(device: string, name: string): Promise<Device | string> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/registration`, { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `registerDevice: ${res.status}`
+}
+
+// rebindEnrolment points a pending enrolment window at a different
+// address without touching the token (#1291, ruling 23a) -- the
+// one-click recovery when the operator named the wrong address and
+// their router was turned away at accept. The token keeps its value
+// and expiry, so nothing is pasted into the router a second time. The
+// server only accepts an address already in the refused-senders list.
+export async function rebindEnrolment(device: string, address: string): Promise<string | null> {
+  const res = await postJSON(`/api/devices/${encodeURIComponent(device)}/enrolment/address`, {
+    address,
+  })
+  if (res.ok) return null
+  return (await res.text()) || `rebindEnrolment: ${res.status}`
+}
+
+// burnEnrolment retires a minted token without using it. No surface
+// reaches for it yet -- the ledger's own Reroll re-mints rather than
+// burning, and closing the modal deliberately leaves a live token
+// standing, because a router still on its way to enrolling is progress
+// the record says closing must not lose. Kept as the typed client for
+// the endpoint the contract defines.
+export async function burnEnrolment(device: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/devices/${encodeURIComponent(device)}/enrolment`)
+  if (res.ok) return null
+  return (await res.text()) || `burnEnrolment: ${res.status}`
+}
+
+// fetchRefusedSenders reads the addresses whose lines were dropped for
+// not being any router's enrolled address (#1281). Read by the wizard's
+// Send logs step while it waits, and by the fleet's own strip.
+export async function fetchRefusedSenders(): Promise<RefusedSender[]> {
+  const res = await fetch('/api/devices/refused')
+  if (!res.ok) throw new ApiError(`fetchRefusedSenders: ${res.status}`, res.status)
+  const body = await res.json()
+  // The contract is a bare array; the envelope form is read too so this
+  // does not break if the endpoint grows one, the way /api/devices has.
+  return Array.isArray(body) ? body : (body.refused ?? [])
 }
 
 // fetchUnattributedSources serves the other half of the one device
@@ -1365,15 +1465,6 @@ export async function fetchConfigUpgrade(): Promise<ConfigUpgradeResponse> {
   return res.json()
 }
 
-// dismissConfigUpgrade marks that same notice dealt with, for the
-// version the server is currently running -- it comes back on its own
-// the moment a later version has something new to say.
-export async function dismissConfigUpgrade(): Promise<ConfigUpgradeResponse> {
-  const res = await postJSON('/api/config/upgrade/dismiss')
-  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
-  return res.json()
-}
-
 // CoverageDeclaration mirrors internal/coverage.Declaration -- an
 // admin's on-record statement that a given boundary-direction pair
 // (`key`, e.g. "ether1|bridge1") is intentionally, not accidentally,
@@ -1720,7 +1811,7 @@ export async function createDroplistEntry(req: {
 }
 
 export async function deleteDroplistEntry(cidr: string): Promise<string | null> {
-  const res = await deleteJSON('/api/droplist', { cidr })
+  const res = await deleteJSON(`/api/droplist/${encodeURIComponent(cidr)}`)
   if (res.ok) return null
   return (await res.text()).trim() || `deleteDroplistEntry: ${res.status}`
 }

@@ -119,6 +119,55 @@ export interface Device {
   // setup ledger -- "never reported" is itself an answer, never a
   // missing field.
   setup?: RouterSetupReport
+  // acceptedIp (#1281) is the one address this router's logs are
+  // accepted from: the address the enrol line arrived from. Absent
+  // until a router has enrolled, which is exactly what the wizard's
+  // Send logs step waits for -- lines from any other address are
+  // refused (see RefusedSender below).
+  acceptedIp?: string
+  // enrolledAt is when that line arrived, for the step's arrived
+  // observation ("Enrolled at 192.168.88.1 · 14:02").
+  enrolledAt?: string
+  // enrolment is the token standing for this router: whether one is
+  // minted and waiting to be used, and when it lapses. Absent on a
+  // router nobody is currently enrolling.
+  enrolment?: DeviceEnrolment
+  // registeredAt (#1291) is when the operator confirmed this router on
+  // the device itself -- the ledger's final Register step. Absent until
+  // they do, and independent of acceptedIp: registering records intent
+  // and grants nothing, so a router can be registered without being
+  // enrolled, or enrolled without being registered. The pair is how the
+  // fleet tells a finished setup from one someone walked away from part
+  // way through.
+  registeredAt?: string
+}
+
+// DeviceEnrolment is the enrolment token's standing as GET /api/devices
+// reports it (#1281). Never the token itself: that is shown once, by
+// the response that minted it, and the server keeps only its hash.
+export interface DeviceEnrolment {
+  pending: boolean
+  expiresAt?: string
+}
+
+// EnrolmentToken is what POST /api/devices/{id}/enrolment answers with
+// (#1281) -- the value the wizard writes into its last logging line,
+// and the moment it lapses. Shown once; re-minting is Reroll.
+export interface EnrolmentToken {
+  token: string
+  expiresAt: string
+}
+
+// RefusedSender mirrors an entry of GET /api/devices/refused (#1281):
+// an address whose syslog lines were dropped because it is not any
+// router's enrolled address. A fact to read, never a thing to accept --
+// there is no accept control anywhere, by ruling: an address is
+// accepted only by a router presenting a token.
+export interface RefusedSender {
+  ip: string
+  firstSeen: string
+  lastSeen: string
+  lines: number
 }
 
 // Mirrors internal/setup.RouterSetup (#1241). scriptVersion is what the
@@ -1509,10 +1558,19 @@ export interface VaultLock {
 // GET /api/router-backups (#394, round 44's "router backups" group).
 // Mirrors internal/api's routerBackupsResponse.
 export interface RouterBackupsResponse {
-  // False when no retention key is configured at all -- #394's "no key,
-  // no backups": the drop box refuses every login and routers is always
-  // empty.
+  // False when the retention key is not open and usable -- #394's "no
+  // key, no backups": the drop box refuses every login and routers is
+  // always empty. False covers two different situations -- see
+  // keyUnreadable, which says which one.
   enabled: boolean
+  // keyUnreadable (#1264 finding 5): true when history.keyFile names a
+  // file that exists but could not be read (unreadable, truncated,
+  // wrong), as opposed to enabled being false because no key was
+  // configured at all. Never render the two the same way -- telling an
+  // operator with a broken key to mint a new one strands every backup
+  // already encrypted under the old one, since minting overwrites the
+  // file rather than repairing it.
+  keyUnreadable: boolean
   routers: RouterBackupRouter[]
   totalGenerations: number
   totalRouters: number
@@ -1730,7 +1788,7 @@ export interface SetupStatus {
 // are not only the wizard -- an empty stream explains its own silence
 // with the forced-past line that accounts for it.
 export interface SetupMark {
-  // 1-5, matching the wizard's five steps.
+  // 1-7, matching the wizard's seven steps.
   step: number
   // 'skipped' is quiet and moves on; 'forced' went past the heavy
   // warning and is recorded loudly. There is no third outcome: a step
@@ -1818,9 +1876,11 @@ export interface RouterosWarningRouter {
 // machine-readable keys (#1217) -- the server says which precondition
 // is missing, the frontend owns the sentence it says about each one.
 // Only backup/backupSchedule ever set this today: no-token, no-device,
-// backups-off, no-retention-key. Undefined/empty means either the block
-// is not blank, or it is blank for a reason not covered here (push and
-// schedule's own token-and-kinds gate).
+// backups-off, no-retention-key, retention-key-unreadable (#1264 finding
+// 5 -- a configured key that could not be read, distinct from
+// no-retention-key's "none configured at all"). Undefined/empty means
+// either the block is not blank, or it is blank for a reason not covered
+// here (push and schedule's own token-and-kinds gate).
 export interface CommandStep {
   commands: string
   note: string
@@ -1865,6 +1925,12 @@ export interface SetupCommandsRequest {
   kinds?: string[]
   version?: string
   device?: string
+  // enrolToken is the raw enrolment token minted for device (#1281),
+  // echoed back so the server can write it into the block's last line.
+  // Only a hash of it is stored, so the server cannot look it up; it
+  // verifies this value against that hash and renders nothing if it
+  // does not match device's current, unexpired token.
+  enrolToken?: string
 }
 
 // --- Log every rule (#435) --------------------------------------------

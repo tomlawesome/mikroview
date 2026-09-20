@@ -133,7 +133,6 @@
   const HALF = $derived(Math.max(30, COL_W / 2 - 8))
 
   const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + flagGap)
-  const height = $derived(HEADER + Math.max(1, n) * ROW_H + BOTTOM)
 
   const refusedFrom = $derived(hour.traffic.findIndex((s) => s.ink === 'refused'))
 
@@ -170,6 +169,25 @@
     }
     return out
   }
+
+  // TICK_N_GAP asks more room per label (11px) than ROW_H gives per row
+  // (8px), so a run of busy minutes long enough needs more vertical room
+  // for its ×N ladder than a plain n*ROW_H canvas provides. Previously
+  // nothing accounted for that: a long run's labels drifted below their
+  // own ticks with nothing capping it, past the paper's own bottom
+  // margin, rather than the paper growing to hold them (#1218 audit
+  // finding 9). Measured across every fired flag column -- only those
+  // draw ×N figures at all -- the deepest tickLabels() ever pushes any
+  // one column's ladder decides how much extra room the whole paper
+  // needs; a no-op whenever every ladder already fits inside the
+  // row-based height below.
+  const labelBottom = $derived(
+    firedFlags.reduce((deepest, s) => {
+      const labels = tickLabels(s.values)
+      return labels.length > 0 ? Math.max(deepest, labels[labels.length - 1].y) : deepest
+    }, -Infinity),
+  )
+  const height = $derived(Math.max(HEADER + Math.max(1, n) * ROW_H + BOTTOM, labelBottom + BOTTOM))
 
   function colX(i: number): number {
     return GUTTER + i * COL_W + COL_W / 2

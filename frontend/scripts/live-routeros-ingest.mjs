@@ -26,9 +26,22 @@
 // make live-routeros rather than requiring one just to be included.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
+import { session, check, done, enrolDevice, feedPortScan, pushFrom, waitForFlag } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
+
+// Since #1281 a push is refused unless it arrives from the device's own
+// declared or enrolled address, so every device this scenario pushes as
+// is enrolled first and its pushes are bound to that address. The
+// endpoint's own rejection surface -- the thing under test -- is
+// unchanged by that: a bad token is still 401 before any of it, and a
+// payload fault is still 400 once the sender is known.
+const ADDR = {
+  'router-a': '127.0.0.40',
+  'router-b': '127.0.0.41',
+  'router-revoked': '127.0.0.42',
+  'router-burst': '127.0.0.43',
+}
 
 
 const { page } = await session()
@@ -38,16 +51,14 @@ async function createToken(body) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     data: body,
   })
-  return { status: res.status(), body: res.status() < 400 ? await res.json() : null }
+  return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
 }
 
-async function push(token, payload) {
-  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: typeof payload === 'string' ? payload : JSON.stringify(payload),
-  })
-  return res.status
+// `device` names which enrolled address to push from; an unknown one
+// (the invalid-token case, which never reaches the enrolment check)
+// pushes from the default address like any stranger would.
+function push(token, payload, device = '') {
+  return pushFrom(URL_BASE, ADDR[device], token, payload)
 }
 
 // Uses page.request, which carries the browser session's cookies --
@@ -60,6 +71,8 @@ async function getTable(path_) {
 }
 
 // --- Setup: two independently-scoped ingest tokens ------------------------
+
+for (const [id, addr] of Object.entries(ADDR)) await enrolDevice(page.request, URL_BASE, id, addr)
 
 const tokA = await createToken({ name: 'live-ingest-a', kind: 'ingest', device: 'router-a' })
 check(tokA.status === 201, `token A issued (${tokA.status})`)
@@ -75,11 +88,11 @@ const validArp = {
 
 // --- A valid payload is accepted and surfaced through the read side -------
 
-check((await push(tokA.body.value, validArp)) === 200, 'a well-formed push is accepted (200)')
+check((await push(tokA.body.value, validArp, 'router-a')) === 200, 'a well-formed push is accepted (200)')
 
 // --- Device isolation: router-a's push must not appear under router-b -----
 
-check((await push(tokB.body.value, { ...validArp, records: [{ address: '198.51.100.10', mac: '11:22:33:44:55:66' }] })) === 200,
+check((await push(tokB.body.value, { ...validArp, records: [{ address: '198.51.100.10', mac: '11:22:33:44:55:66' }] }, 'router-b')) === 200,
   'router-b pushes its own arp table')
 
 {
@@ -90,10 +103,10 @@ check((await push(tokB.body.value, { ...validArp, records: [{ address: '198.51.1
 
 // --- Rejection surface ------------------------------------------------------
 
-check((await push(tokA.body.value, { ...validArp, records: [{ address: '198.51.100.9', mac: '', extra: 'field' }] })) === 400,
+check((await push(tokA.body.value, { ...validArp, records: [{ address: '198.51.100.9', mac: '', extra: 'field' }] }, 'router-a')) === 400,
   'an unknown field in a record is refused (400)')
 
-check((await push(tokA.body.value, { kind: 'not-a-real-kind', page: 1, pages: 1, records: [] })) === 400,
+check((await push(tokA.body.value, { kind: 'not-a-real-kind', page: 1, pages: 1, records: [] }, 'router-a')) === 400,
   'an unrecognised kind is refused (400)')
 
 {
@@ -105,7 +118,7 @@ check((await push(tokA.body.value, { kind: 'not-a-real-kind', page: 1, pages: 1,
     pages: 1,
     records: [{ address: '198.51.100.9', mac: 'a'.repeat(70 * 1024) }],
   }
-  const status = await push(tokA.body.value, huge)
+  const status = await push(tokA.body.value, huge, 'router-a')
   check(status === 400 || status === 413, `an oversized body is refused (got ${status}, want 400 or 413)`)
 }
 
@@ -117,7 +130,7 @@ check((await push('not-a-real-token', validArp)) === 401, 'an invalid token is r
     headers: { 'X-Requested-With': 'mikroview' },
   })
   check(del.status() === 200, 'the soon-to-be-tested token is revoked (200)')
-  check((await push(revokeMe.body.value, validArp)) === 401, 'a revoked token is refused (401)')
+  check((await push(revokeMe.body.value, validArp, 'router-revoked')) === 401, 'a revoked token is refused (401)')
 }
 
 // --- Rate limit: real requests, not a lowered test-only threshold ---------
@@ -130,7 +143,7 @@ check((await push('not-a-real-token', validArp)) === 401, 'an invalid token is r
   const burstToken = (await createToken({ name: 'live-ingest-burst', kind: 'ingest', device: 'router-burst' })).body.value
   let lastStatus = 0
   for (let i = 0; i < 121; i++) {
-    lastStatus = await push(burstToken, validArp)
+    lastStatus = await push(burstToken, validArp, 'router-burst')
     if (lastStatus === 429) break
   }
   check(lastStatus === 429, `a burst past the rate limit is refused (429) -- last status seen: ${lastStatus}`)
@@ -197,7 +210,7 @@ if (scanFlag) {
       page: 1,
       pages: 1,
       records: [{ list: 'blocked', address: '198.51.100.9', comment: `push ${i}`, dynamic: false }],
-    })
+    }, 'router-a')
   }
 
   const flagsAfter = await getTable('/api/flags')
@@ -208,6 +221,18 @@ if (scanFlag) {
   )
 } else {
   check(true, `skipped -- five pushes cannot be checked against a flag that never arrived (${raised.message})`)
+}
+
+// Leave the fleet as this scenario found it: four routers left behind
+// sort ahead of the harness's own in GET /api/devices, and the next
+// scenario that takes devices[0] then pushes as one of them and is
+// refused (#1281's push gate).
+for (const id of Object.keys(ADDR)) {
+  const res = await page.request.fetch(`${URL_BASE}/api/devices/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'X-Requested-With': 'mikroview' },
+  })
+  check(res.status() === 204, `${id} is deleted so later scenarios see the fleet as it was (${res.status()})`)
 }
 
 done()

@@ -643,7 +643,7 @@ for it explicitly.
     MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
     echo $! > "$MV_DIR/pid"
 
-    export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
+    export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_TLS_PORT=<what `up` exported>
     scripts/seed-demo.py push
     scripts/seed-demo.py entities
     scripts/seed-demo.py accounts

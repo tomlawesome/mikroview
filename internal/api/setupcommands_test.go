@@ -63,7 +63,7 @@ func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *tes
 	s, _ := newTestServer(t)
 	s.SetupInstance.BackupPort = "47022"
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,14 +262,87 @@ func TestHandleSetupCommandsPushRendersOnlyWithTokenAndKinds(t *testing.T) {
 			tokenOnly.Steps.Schedule.Commands, kindsOnly.Steps.Schedule.Commands)
 	}
 	schedule := both.Steps.Schedule.Commands
-	if !strings.HasPrefix(schedule, `/system script add name=mv-push policy=read,test source="`) {
-		t.Errorf("schedule commands = %q, want the script add that saves the push script", schedule)
+	if !strings.HasPrefix(schedule, `:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source="`) {
+		t.Errorf("schedule commands = %q, want the guarded script add that saves the push script", schedule)
 	}
 	if !strings.Contains(schedule, "Bearer tok-123") || !strings.HasSuffix(schedule, "\n/system script run mv-push") {
 		t.Errorf("schedule commands = %q, want the push script inside it and one run now", schedule)
 	}
 	if strings.Contains(schedule, "paste the script") {
 		t.Errorf("schedule commands still ask the operator to paste a script in: %q", schedule)
+	}
+}
+
+// TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken is issue
+// #1281's contract for step 2: the "Send logs" block ends with the
+// enrolment line once the caller's echoed EnrolToken actually matches
+// the named device's current pending token.
+func TestHandleSetupCommandsRendersTheEnrolLineWithAVerifiedToken(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "mv.example.com", Device: "hap-ax3", EnrolToken: token,
+	})
+	want := `/log info "mikroview-enrol ` + token + `"`
+	if !strings.HasSuffix(out.Steps.Syslog.Commands, want) {
+		t.Errorf("syslog commands = %q, want it to end with %q", out.Steps.Syslog.Commands, want)
+	}
+}
+
+// TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken covers
+// every way the check can fail closed: no token sent, a token that
+// names no pending record, a token for a different device, and a device
+// with nothing pending at all. Every case must render step 2 exactly as
+// it did before #1281 -- no enrolment line, nothing else changed.
+func TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	now := time.Now()
+	if _, err := s.Devices.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Devices.Create("other", "other", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := s.Devices.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, _, err := s.Devices.MintEnrolment("other", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		req  setupCommandsRequest
+	}{
+		{"no enrolToken at all", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3"}},
+		{"no device named", setupCommandsRequest{Address: "mv.example.com", EnrolToken: token}},
+		{"an unrelated, well-formed token", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3", EnrolToken: "zzzzzzzzzzzzzzzzzzzz"}},
+		{"another device's real pending token", setupCommandsRequest{Address: "mv.example.com", Device: "hap-ax3", EnrolToken: otherToken}},
+		{"a device with nothing pending", setupCommandsRequest{Address: "mv.example.com", Device: "core"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := postSetupCommands(t, ts.URL, tc.req)
+			if strings.Contains(out.Steps.Syslog.Commands, "mikroview-enrol") {
+				t.Errorf("syslog commands = %q, want no enrolment line", out.Steps.Syslog.Commands)
+			}
+		})
 	}
 }
 
@@ -294,7 +367,7 @@ func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	}
 
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +424,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	// case (#1217's correction note): backups switched off in config,
 	// everything else present.
 	key := testRetentionKey(t)
-	v, err := backupvault.Open(t.TempDir(), key)
+	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +455,33 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
+	}
+}
+
+// TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable covers #1264
+// finding 5: Vault.Enabled() being false covers both "no key configured"
+// and "a key is configured but could not be read" -- so the blocked key
+// must come from SetupInstance.BackupKeyUnreadable, not from Enabled()
+// alone, or an operator whose key merely failed to load gets told the
+// same "no-retention-key, set one" line as one who never had a key --
+// and following it (minting a fresh key) strands every backup already
+// encrypted under the old one.
+func TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupKeyUnreadable = true
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	out := postSetupCommands(t, ts.URL, setupCommandsRequest{
+		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
+	})
+	want := []string{"retention-key-unreadable"}
+	if !slicesEqual(out.Steps.Backup.Blocked, want) {
+		t.Errorf("Backup.Blocked = %v, want %v -- a broken key must never be reported as no-retention-key", out.Steps.Backup.Blocked, want)
+	}
+	if !slicesEqual(out.Steps.BackupSchedule.Blocked, want) {
+		t.Errorf("BackupSchedule.Blocked = %v, want %v (same condition as Backup)", out.Steps.BackupSchedule.Blocked, want)
 	}
 }
 
@@ -478,11 +578,23 @@ func TestHandleSetupCommandsRejectsUnsafeInput(t *testing.T) {
 		{"token with a dollar", setupCommandsRequest{Address: "mv.example.com", Token: "abc$def"}},
 		{"token with a quote", setupCommandsRequest{Address: "mv.example.com", Token: `abc"def`}},
 		{"token with a backslash", setupCommandsRequest{Address: "mv.example.com", Token: `abc\def`}},
+		// A comma in Token reaches PushBlock/loggingPushBlock's
+		// http-header-field=("Content-Type: ...,Authorization: Bearer
+		// <token>") bare -- RouterOS splits that value on commas into
+		// separate headers regardless of quoting, so a comma there adds
+		// a header rather than merely appearing inside one's value.
+		{"token with a comma", setupCommandsRequest{Address: "mv.example.com", Token: "a,b"}},
+		{"token with a colon and comma, header-injection shaped", setupCommandsRequest{Address: "mv.example.com", Token: "a:b,X-Injected:1"}},
 		{"syslogPort non-numeric", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "abc"}},
 		{"syslogPort zero", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "0"}},
 		{"syslogPort out of range", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "70000"}},
 		{"syslogPort listen address, bad port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "127.0.0.1:abc"}},
 		{"syslogPort listen address, zero port", setupCommandsRequest{Address: "mv.example.com", SyslogPort: "[::]:0"}},
+		// #1281's enrolment token: exactly 20 lowercase letters/digits,
+		// nothing else.
+		{"enrolToken too short", setupCommandsRequest{Address: "mv.example.com", EnrolToken: "abc123"}},
+		{"enrolToken uppercase", setupCommandsRequest{Address: "mv.example.com", EnrolToken: "AAAAAAAAAAAAAAAAAAAA"}},
+		{"enrolToken with a quote", setupCommandsRequest{Address: "mv.example.com", EnrolToken: `abcdefghijklmnopqrs"`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -532,6 +644,24 @@ func TestHandleSetupCommandsAcceptsSafeInput(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("device %q: status = %d, want 200", device, resp.StatusCode)
+		}
+	}
+
+	// Tokens internal/auth actually mints are hex; validSetupToken's
+	// charset also allows '-' and '_' so a hand-entered or future token
+	// shape in that alphabet is not refused.
+	for _, token := range []string{"deadbeef1234567890abcdef12345678", "abc-123_XYZ"} {
+		body, err := json.Marshal(setupCommandsRequest{Address: "mv.example.com", Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("token %q: status = %d, want 200", token, resp.StatusCode)
 		}
 	}
 

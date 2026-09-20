@@ -23,19 +23,29 @@
 // config declares live-router on 127.0.0.1 and every feeder sends from
 // there.
 //
-// #1170 changed how the second, undeclared router comes to exist: a
-// syslog source is never enough by itself any more, so 127.0.0.9
-// logging first only proves the other half of that ruling -- an
-// address nobody has declared or claimed sits in GET /api/devices'
-// `unattributed` list, never in `devices`. The router itself arrives
-// the way every push-discovered device now does: an ingest token
-// minted for a fresh id (UNDECLARED_ID, distinct from the address on
-// purpose) whose first push both Ensures the device and claims
-// 127.0.0.9 as its own /ip/address entry, so the syslog already
-// arriving from that address attributes to it from the next line on.
-// That leaves a push-created device behind on the shared instance for
-// every scenario sorting after this one, which is safe in a way it was
-// not before: Registry.List now orders configured devices first and
+// #1281 changed how the second, undeclared router comes to exist, and
+// broke this scenario's old mechanism outright: the syslog listener now
+// refuses a connection at accept from any address that is neither a
+// device's declared/enrolled address nor has an enrolment token
+// currently pending anywhere, so 127.0.0.9 logging first -- before
+// anything names it -- no longer arrives as an "unattributed" source to
+// prove a point about; the connection itself is refused, and the old
+// #1170 assertion that used to run against it is gone along with the
+// mechanism it tested. The former "arrives by push" step is gone too:
+// an ingest token's first push used to both Ensure the device and claim
+// 127.0.0.9 as evidence Resolve trusted on every line, and #1281
+// retired that per-line trust entirely -- a router's own pushed address
+// table is no longer consulted for attribution at all (see
+// device.Registry.Resolve's own doc comment).
+//
+// The router now arrives the same way any router does under #1281: an
+// admin declares it by name (POST /api/devices), mints it an enrolment
+// token (POST /api/devices/{id}/enrolment), and the router's own first
+// line carries the token (`mikroview-enrol <token>`) -- which is what
+// actually attributes 127.0.0.9 to it, not merely sending from there.
+// That leaves an enrolled device behind on the shared instance for
+// every scenario sorting after this one, which is safe in the same way
+// it always was: Registry.List orders configured devices first and
 // then by id (#600), so the devices[0] a dozen scenarios read is still
 // live-router. The entity this scenario writes is deleted at the end,
 // so the leftover device is named after its own id again, exactly as
@@ -51,6 +61,7 @@ import {
   dismissSetupWizard,
   goTo,
   unfoldStreamFilter,
+  enrolDevice,
 } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
@@ -58,13 +69,14 @@ const USER = process.env.MV_USER
 const PASS = process.env.MV_PASS
 
 // The undeclared router's syslog address: in 127.0.0.0/8, nothing else
-// feeds from it, so it is this scenario's alone. #1170: this is no
-// longer the device's identity -- it is the address its own pushed
-// /ip/address table claims, which is a different thing on purpose.
+// feeds from it, so it is this scenario's alone. It is the address its
+// enrolment token gets redeemed at (device.Registry.TryEnrol's
+// AcceptedIP), a different thing on purpose from the id below.
 const UNDECLARED_IP = '127.0.0.9'
-// The undeclared router's actual identity: the id its ingest token
-// names. Deliberately not UNDECLARED_IP -- #1170's whole point is that
-// a device id is never merely a syslog source address.
+// The undeclared router's actual identity: the name POST /api/devices
+// declares it under (Create sets both id and name to it). Deliberately
+// not UNDECLARED_IP -- a device id is never merely a syslog source
+// address.
 const UNDECLARED_ID = 'mv-rename-undeclared'
 // Neither label is a prefix of the other: the filter box matches on a
 // substring, so "live-device-rename" alone would show both routers'
@@ -82,20 +94,6 @@ async function api(client, method, path, body) {
     data: body,
   })
   return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
-}
-
-// push, unlike api() above, goes straight over fetch with a bearer
-// token rather than through the signed-in session's cookie jar --
-// there is no session-based path to the ingest endpoint at all (see
-// handleIngestRouterOS's own comment). Same shape as
-// live-fleet-setup-standing.mjs's push().
-async function push(token, payload) {
-  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  return res.status
 }
 
 const line = (rule, dst) =>
@@ -131,69 +129,30 @@ if (!declared) {
   done()
 }
 
-// --- #1170: an unclaimed syslog source is not a router --------------------
+// --- The undeclared router arrives by enrolment, not by syslog source -----
 //
-// Fed before anything claims it as an address. This is the ruling this
-// scenario now proves for its "undeclared router" half: a source
-// address with no config.yaml entry and no router's own address table
-// naming it never becomes a device, however many lines it sends -- it
-// sits under GET /api/devices' `unattributed` list instead.
-
-feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
-
-let unattributedSrc = null
-{
-  const deadline = Date.now() + 25000
-  while (Date.now() < deadline && !unattributedSrc) {
-    const { body } = await api(page.request, 'GET', '/api/devices')
-    unattributedSrc = (body?.unattributed ?? []).find((s) => s.address === UNDECLARED_IP)
-    if (unattributedSrc) break
-    await new Promise((r) => setTimeout(r, 1500))
-    feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
-  }
-}
-check(
-  !!unattributedSrc,
-  `a syslog source nobody has declared or claimed shows up as unattributed, not a device (${UNDECLARED_IP})`,
-)
-check(
-  !(await devices(page.request)).some((d) => d.id === UNDECLARED_IP),
-  'and never appears in the devices array -- #1170: a syslog source alone never invents a router',
-)
-
-// --- The undeclared router arrives by push, not by syslog source ----------
+// #1281: a device exists only because the operator declared it (here,
+// by name alone -- POST /api/devices, the admin path for a syslog-only
+// router) or config.yaml did. Declaring it is not attributing anything
+// to it yet -- that takes the enrolment token, redeemed by the
+// router's own first line, which is what actually claims 127.0.0.9 as
+// this device's address (AcceptedIP) and lets Resolve match every line
+// after it. (The old #1170 "an unclaimed source sits in `unattributed`"
+// step is gone: under #1281 that source's connection is refused at
+// accept before any line of it is ever read, so it never reaches
+// Resolve to become unattributed in the first place.)
 //
-// A device exists only because the operator minted an ingest token for
-// it (Ensure) or declared it in config.yaml. The token below names a
-// fresh device id, distinct from the address it will end up
-// attributed to; its first push both creates the device and claims
-// 127.0.0.9 as its own (an /ip/address table entry), so the syslog
-// already arriving from that address resolves to it from the next
-// line on.
+// The declare-mint-feed-poll sequence itself is enrolDevice's
+// (live-browser.mjs) -- shared since #1281 made it every scenario's
+// prerequisite, so it is driven from there rather than hand-rolled here
+// a second time (#1291 audit, stage 5: the two copies had already
+// started to disagree about what a completed enrolment even asserts).
+const enrolled = await enrolDevice(page.request, URL_BASE, UNDECLARED_ID, UNDECLARED_IP, { timeoutMs: 15000 })
 
-const undeclaredToken = await api(page.request, 'POST', '/api/tokens', {
-  name: 'live-device-rename-undeclared',
-  kind: 'ingest',
-  device: UNDECLARED_ID,
-})
-check(undeclaredToken.status === 201, `an ingest token is issued for ${UNDECLARED_ID} (${undeclaredToken.status})`)
-
-let undeclared = null
-if (undeclaredToken.status === 201 && undeclaredToken.body?.value) {
-  const pushStatus = await push(undeclaredToken.body.value, {
-    kind: 'ip-address',
-    page: 1,
-    pages: 1,
-    records: [{ address: `${UNDECLARED_IP}/32`, network: '', interface: '', comment: '' }],
-  })
-  check(pushStatus === 200, `the router's own address-table push is accepted (${pushStatus})`)
-
-  const list = await devices(page.request)
-  undeclared = list.find((d) => d.id === UNDECLARED_ID)
-}
+const undeclared = enrolled ? (await devices(page.request)).find((d) => d.id === UNDECLARED_ID) : null
 check(
-  !!undeclared,
-  `an undeclared router appears once it pushes its own state, not once its address logs (${UNDECLARED_ID})`,
+  undeclared?.acceptedIp === UNDECLARED_IP,
+  `the enrol line from ${UNDECLARED_IP} attributes the address to ${UNDECLARED_ID} (got ${JSON.stringify(undeclared?.acceptedIp)})`,
 )
 if (!undeclared) {
   check(true, 'skipped -- the rename cannot be exercised without a device to rename')
@@ -206,9 +165,8 @@ check(
 
 // --- The rename, from the live view --------------------------------------
 
-// Fed again now that 127.0.0.9 is claimed: Resolve attributes this
-// line, and everything after it, to UNDECLARED_ID instead of leaving
-// it as an unattributed source.
+// Fed now that 127.0.0.9 is enrolled: Resolve attributes this line, and
+// everything after it, to UNDECLARED_ID.
 feedRawFrom(UNDECLARED_IP, line(RULE_UNDECLARED, '192.168.1.11'))
 
 await page.fill('input.rule', RULE_UNDECLARED)
@@ -387,9 +345,10 @@ check(
 //
 // run-scenarios.sh runs one shared instance in filename order, so an
 // entity left here is an input to every scenario after this one. The
-// push-created device itself cannot be removed and does not need to
-// be: with its label gone it is named after its own device id again --
-// it was never named after its address (#1170).
+// enrolled device itself is left in place rather than deleted -- other
+// scenarios' devices[0] assumptions rely on Registry.List's ordering
+// (#600), not on the fleet being empty -- and with its label gone it is
+// named after its own device id again, exactly as it arrived.
 await api(page.request, 'DELETE', '/api/entities', { type: 'device', key: UNDECLARED_ID })
 const leftovers = await api(page.request, 'GET', '/api/entities')
 check(
@@ -401,6 +360,12 @@ check(
   restored?.name === UNDECLARED_ID,
   `and the device shows its own id again (name="${restored?.name}")`,
 )
+
+// Leave the fleet as this scenario found it -- a router left behind
+// sorts ahead of the harness's own and the next scenario's pushes get
+// refused (#1281's push gate).
+const cleanedUp = await api(page.request, 'DELETE', `/api/devices/${encodeURIComponent(UNDECLARED_ID)}`)
+check(cleanedUp.status === 204, `${UNDECLARED_ID} is deleted so later scenarios see the fleet as it was (${cleanedUp.status})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()

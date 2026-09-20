@@ -13,6 +13,8 @@
 
 import { chromium, firefox, webkit } from 'playwright'
 import { execFileSync } from 'child_process'
+import http from 'node:http'
+import https from 'node:https'
 import { setGlobalDispatcher, Agent } from 'undici'
 import { fileURLToPath } from 'url'
 import path from 'path'
@@ -22,6 +24,11 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
 const PASS = process.env.MV_PASS
+
+// Exported for #1291: minting an enrolment token asks the admin to
+// re-enter their password at that moment, so a scenario driving the
+// real ledger has to type it into the wizard as an operator would.
+export const adminPassword = PASS
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
@@ -551,11 +558,12 @@ export async function goTo(page, label, { unfold = true } = {}) {
  * enough traffic to out-rank somebody else's leftovers. Pipelines 819 and
  * 820 were both that failure.
  *
- * A 404 is not a failure. The route exists only where the process was
- * started with MV_TEST_HOOKS=1, which live-env.sh does and a shipped
- * image does not, so the container flavour of this harness runs the same
- * scenarios against an instance that simply cannot be reset. That is a
- * weaker guarantee, not a broken run.
+ * The route exists only where the process was started with
+ * MV_TEST_HOOKS=1 -- live-env.sh and live-container.sh both do. A 404 is
+ * not a weaker guarantee to carry on under: it means the target is not a
+ * test instance, and these scenarios sign in with fixed harness
+ * credentials and some of them create accounts, mint tokens and push
+ * data, so this refuses rather than risk doing that to a real mikroview.
  *
  * Returns whether a reset happened, so the caller knows to reload.
  */
@@ -564,7 +572,12 @@ async function resetInstance(page) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   })
-  if (res.status() === 404) return false
+  if (res.status() === 404) {
+    throw new Error(
+      'POST /api/test/reset answered 404 -- this is not a test instance (it was not started with MV_TEST_HOOKS=1). ' +
+        'The live scenarios create accounts and tokens and push data; refusing to run them against it.',
+    )
+  }
   if (res.status() !== 200) {
     throw new Error(`POST /api/test/reset answered ${res.status()} -- the instance was not reset, so this run would be judging residue`)
   }
@@ -749,6 +762,100 @@ export async function responsive(page, forMs = 2000) {
     await page.waitForTimeout(200)
   }
   return true
+}
+
+/**
+ * enrolDevice declares a router by name, mints its one-time token and
+ * redeems it from `addr` over syslog -- the same sequence the ledger
+ * walks an operator through (#1281), driven directly because most
+ * scenarios need a router in place rather than a wizard to drive.
+ *
+ * Shared because since #1281 every scenario that pushes needs it: a
+ * push is refused unless it arrives from the device's own declared or
+ * enrolled address (internal/api/ingest.go, IsEnrolledAt), and only the
+ * harness's own `live-router` is declared at 127.0.0.1.
+ *
+ * `request` is a Playwright APIRequestContext (page.request) or anything
+ * with the same fetch(url, {method, headers, data}) shape: the caller
+ * already has one carrying the admin session.
+ */
+export async function enrolDevice(request, base, id, addr, { timeoutMs = 15000 } = {}) {
+  const call = async (method, path, data) => {
+    const res = await request.fetch(`${base}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      data,
+    })
+    return { status: res.status(), body: res.status() < 400 ? await res.json().catch(() => null) : null }
+  }
+
+  const created = await call('POST', '/api/devices', { name: id })
+  if (created.status !== 201) {
+    check(false, `${id} is declared by name (got ${created.status})`)
+    return false
+  }
+  // #1291: minting re-proves the admin's identity at that moment, and
+  // binds the enrolment window to the one address the token may be
+  // redeemed from -- which here is the address this helper is about to
+  // feed the enrol line from.
+  const mint = await call('POST', `/api/devices/${encodeURIComponent(id)}/enrolment`, {
+    password: PASS,
+    expectedAddress: addr,
+  })
+  if (!mint.body?.token) {
+    check(false, `an enrolment token is minted for ${id} (got ${mint.status})`)
+    return false
+  }
+
+  feedRawFrom(addr, `<14>Jan  1 00:00:00 ${id} mikroview-enrol ${mint.body.token}`)
+
+  const deadline = Date.now() + timeoutMs
+  let enrolled = false
+  while (Date.now() < deadline && !enrolled) {
+    const { body } = await call('GET', '/api/devices')
+    enrolled = (body?.devices ?? []).some((d) => d.id === id && d.acceptedIp === addr)
+    if (!enrolled) await new Promise((r) => setTimeout(r, 500))
+  }
+  check(enrolled, `${id} enrols at ${addr} over syslog before anything is pushed to it`)
+  return enrolled
+}
+
+/**
+ * pushFrom sends an ingest push with the request's own local address
+ * bound to `localAddress`. Since #1281 the ingest handler answers 403
+ * for a push from anywhere but the device's enrolled address, and
+ * fetch() cannot choose one -- it leaves the address to the kernel's
+ * routing. Node's own http/https client is what exposes localAddress.
+ *
+ * Resolves to the status code.
+ */
+export function pushFrom(base, localAddress, token, payload) {
+  const url = new URL(`${base}/api/ingest/routeros`)
+  const mod = url.protocol === 'https:' ? https : http
+  const body = JSON.stringify(payload)
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: 'POST',
+        localAddress,
+        rejectUnauthorized: false,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode)
+      },
+    )
+    req.on('error', reject)
+    req.end(body)
+  })
 }
 
 export function done() {
