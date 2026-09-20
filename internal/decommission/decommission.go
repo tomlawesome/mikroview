@@ -303,6 +303,14 @@ var (
 	ErrAlreadyEnded = errors.New("decommission: that watch has already retired")
 	ErrNotRetired   = errors.New("decommission: that watch has not retired, so there is no retirement to undo")
 	ErrUndoExpired  = fmt.Errorf("decommission: that retirement is more than %s old and can no longer be undone", UndoWindow)
+	// ErrSaveFailed wraps a persistence failure from Add, ForceRemove,
+	// Restore or Delete (v0.6.0 audit finding R6): by the time this
+	// reaches a caller the change has already been rolled back in
+	// memory, so it is a server-side infrastructure failure, not a
+	// client mistake -- see internal/api's writeDecommissionError, which
+	// maps it to 500 without repeating the wrapped backend detail to the
+	// client.
+	ErrSaveFailed = errors.New("decommission: saving that change failed")
 )
 
 // NormaliseCIDR reduces a router-written address to the network prefix

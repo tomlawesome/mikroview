@@ -359,10 +359,19 @@ func (s *Store) Accept(id, entryID string) error {
 	if c.Status != StatusOff {
 		return ErrNotOff
 	}
+	prevStatus, prevEntryID, prevUpdatedAt := c.Status, c.EntryID, c.UpdatedAt
 	c.Status = StatusOn
 	c.EntryID = entryID
 	c.UpdatedAt = time.Now()
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// R6: an acceptance that only exists in memory must not be
+		// reported as kept -- the caller (handleSuggestionsAccept) has
+		// already created the real watchlist.Entry this candidate is
+		// meant to point at, and rolls that back too when this returns
+		// an error.
+		c.Status, c.EntryID, c.UpdatedAt = prevStatus, prevEntryID, prevUpdatedAt
+		return fmt.Errorf("saving suggestion candidates: %w", err)
+	}
 	return nil
 }
 
@@ -377,9 +386,15 @@ func (s *Store) Hide(id string) error {
 	if c.Status != StatusOff {
 		return ErrNotOff
 	}
+	prevStatus, prevUpdatedAt := c.Status, c.UpdatedAt
 	c.Status = StatusHide
 	c.UpdatedAt = time.Now()
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// R6: a dismissal that only exists in memory must not be
+		// reported as kept.
+		c.Status, c.UpdatedAt = prevStatus, prevUpdatedAt
+		return fmt.Errorf("saving suggestion candidates: %w", err)
+	}
 	return nil
 }
 
@@ -397,9 +412,15 @@ func (s *Store) Unhide(id string) error {
 	if c.Status != StatusHide {
 		return ErrNotHidden
 	}
+	prevStatus, prevUpdatedAt := c.Status, c.UpdatedAt
 	c.Status = StatusOff
 	c.UpdatedAt = time.Now()
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// R6: an un-hide that only exists in memory must not be reported
+		// as kept.
+		c.Status, c.UpdatedAt = prevStatus, prevUpdatedAt
+		return fmt.Errorf("saving suggestion candidates: %w", err)
+	}
 	return nil
 }
 
@@ -412,37 +433,72 @@ func (s *Store) Unhide(id string) error {
 // Hide rather than back to Off. A no-op, not an error, if no candidate
 // tracks that entry -- most entries are created directly, not from a
 // suggestion, and that is the expected common case, not a fault.
-func (s *Store) MarkHiddenByEntry(entryID string) {
+//
+// Returns a non-nil error if a candidate did track entryID but the
+// change could not be durably saved (R6) -- the candidate is put back
+// first. The caller (handleDefinitionsDelete) treats this as non-fatal
+// to the definition delete it already committed: that deletion already
+// succeeded and cannot honestly be un-reported, so a failure here is
+// logged rather than turned into a 500 for a request that, from the
+// operator's own definition, already worked.
+func (s *Store) MarkHiddenByEntry(entryID string) error {
 	if entryID == "" {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, c := range s.candidates {
 		if c.EntryID == entryID {
+			prevStatus, prevEntryID, prevUpdatedAt := c.Status, c.EntryID, c.UpdatedAt
 			c.Status = StatusHide
 			c.EntryID = ""
 			c.UpdatedAt = time.Now()
-			s.persistLocked()
-			return
+			if err := s.tryPersistLocked(); err != nil {
+				c.Status, c.EntryID, c.UpdatedAt = prevStatus, prevEntryID, prevUpdatedAt
+				return fmt.Errorf("saving suggestion candidates: %w", err)
+			}
+			return nil
 		}
 	}
+	return nil
 }
 
 // Reset wipes every candidate -- the tracking half of the "nuke" action
 // (#243 slice 5's deliberate, confirm-gated, fully destructive reset).
 // The watchlist entries themselves are a separate store; the caller
 // (internal/api) is responsible for wiping both together.
-func (s *Store) Reset() {
+//
+// Returns a non-nil error if the wipe could not be durably saved (R6) --
+// the previous candidates are put back first, so a restart before the
+// next good write does not resurrect candidates the operator was told
+// were gone. The caller (handleSuggestionsReset) has, by this point,
+// already wiped the real watchlist entries through a separate store; that
+// deletion is not reversed by this method failing, since there is no
+// honest way to un-report it once it has happened.
+func (s *Store) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	prev := s.candidates
 	s.candidates = make(map[string]*Candidate)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		s.candidates = prev
+		return fmt.Errorf("saving suggestion candidates: %w", err)
+	}
+	return nil
 }
 
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for the
+// callers (Accept, Hide, Unhide, Reset, MarkHiddenByEntry) that change a
+// candidate's Status -- accepted, dismissed, un-dismissed, wiped, or
+// forced to Hide by a definition delete -- so a failed save must not be
+// reported as kept (R6, see each one's own restore-on-error comment).
+// Sync keeps using persistLocked below: it is a periodic, idempotent
+// regeneration from routerstate data (see its own doc comment), so a
+// write lost to a transient disk issue is simply reproduced, unchanged,
+// on the next run rather than an operator decision going missing.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	candidates := make([]*Candidate, 0, len(s.candidates))
 	for _, c := range s.candidates {
@@ -452,16 +508,23 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(storeFile{Candidates: candidates}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding suggestion candidates for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding suggestion candidates for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing suggestion candidates to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing suggestion candidates to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		persistLog.Warn(fmt.Sprintf("suggestion candidates were modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
 	s.version = version
+	return nil
+}
+
+// persistLocked is the swallow-and-log default -- see tryPersistLocked's
+// own doc comment for exactly which callers use that instead and why.
+func (s *Store) persistLocked() {
+	if err := s.tryPersistLocked(); err != nil {
+		persistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
+	}
 }

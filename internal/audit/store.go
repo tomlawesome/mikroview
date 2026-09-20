@@ -174,6 +174,22 @@ func (s *Store) pruneLocked() {
 // stays correct either way, so a transient disk issue degrades to "won't
 // survive a restart right now" rather than breaking the mutation that
 // triggered this call.
+//
+// This is this package's only persistLocked, and it stays on this
+// swallow-and-log form rather than gaining a tryPersistLocked
+// error-returning half (v0.6.0 audit finding R6): Record is always
+// called *after* the state-changing write it documents has already
+// succeeded and been durably saved by its own store (see, across this
+// codebase's other R6 fixes, each converted method's own
+// restore-on-error comment -- a caller only reaches its own
+// s.Audit.Record call once its own tryPersistLocked has already
+// returned nil). Failing the whole request because only the
+// after-the-fact accountability entry about an already-completed,
+// already-durable action could not be saved would report that action as
+// failed when it was not -- a worse defect than the one an unreturned
+// error here would be. An audit entry lost to a transient disk issue is
+// exactly this store's own accepted "won't survive a restart right now"
+// case, same as any other write here.
 func (s *Store) persistLocked() {
 	if s.backend == nil {
 		return

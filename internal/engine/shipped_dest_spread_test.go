@@ -280,7 +280,7 @@ func TestShippedOutboundAnomaly_FieldsRefireClearRevive(t *testing.T) {
 	}
 
 	// Clear + revive.
-	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", "", t0.Add(26*time.Second)); !ok {
+	if _, ok, _ := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", "", t0.Add(26*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(store.Event{SrcIP: src, DstIP: pub3(26), DstPort: 443, ReceivedAt: t0.Add(27 * time.Second)})
@@ -755,7 +755,7 @@ func TestShippedInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
 	}
 
-	if _, ok := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", "", t0.Add(11*time.Second)); !ok {
+	if _, ok, _ := fs.SetVerdict(f2.ID, flags.VerdictChecked, "operator", "", t0.Add(11*time.Second)); !ok {
 		t.Fatal("expected Clear to succeed")
 	}
 	d.Evaluate(store.Event{SrcIP: src, DstIP: lan3(11), DstPort: 445, ReceivedAt: t0.Add(12 * time.Second)})
