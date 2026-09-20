@@ -729,6 +729,7 @@ func runRestore(args []string) int {
 		if _, ok := before[path]; ok {
 			return nil
 		}
+		// #nosec G703 -- a store path from this deployment's own config (known[name]) or schemaPath, never from the restore file.
 		data, readErr := os.ReadFile(path)
 		switch {
 		case readErr == nil:
