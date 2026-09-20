@@ -446,6 +446,29 @@ rewritten.
 
 ### Fixed
 
+- **Signing out now clears everything the last admin saw** (#1083).
+  The API and ingest token list, the account list, the admin-action
+  log, the storage panel's backend details, the config diagnostics, the
+  setup ledger, a pasted export and the history key all lived on past
+  sign-out on the same tab, and were shown to whoever signed in next.
+  Sign-out and a 401 bounce now reset each of them, and the page reloads
+  so nothing is left in memory at all.
+- **Losing the vault index no longer loses the router backups** (#1294).
+  Deleting an unreadable `meta.enc` to get the service started came
+  back to a vault that adopted new pushes and then, at the next
+  restart, removed every file the rebuilt index did not name -- kept
+  generations included. The vault now rebuilds its index from the files
+  it finds, keeps every recovered generation, and re-keys each one by
+  its router's real name from the ingest tokens and the device list.
+  Repair demotes a generation missing one of its two files instead of
+  deleting the survivor, and the sweep only takes crash temp files and
+  malformed names. The error for an index that is present but
+  unreadable now says what deleting it costs (the notes, kept-since
+  dates and anchor) and what it does not (the backups). Separately, a
+  configured backup key that cannot be read is no longer reported as
+  "no key": the wizard's step 6 and Settings say the key is unreadable
+  and warn against minting a replacement, which would strand every
+  backup encrypted under the old one.
 - **Settings ▸ Upgrade's dismiss is now a plain close button** (#1218).
   The old "dismiss for this version" button swapped itself for a note
   saying it was dismissed, but never actually hid the list of unset
