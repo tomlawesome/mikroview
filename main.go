@@ -47,7 +47,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -1374,17 +1373,6 @@ func main() {
 	// re-raised by them.
 	setupStore.NoteUpgrade(previousVersion, version, time.Now())
 
-	// #1218: which "N new settings are available" notice an operator has
-	// already dismissed -- the notice's own content (missingSettings,
-	// computed above) is never persisted, only this. Same optional-
-	// persistence contract as setupStore just above.
-	configDriftLog := logging.New("configdrift")
-	configDriftBackend, err := persistence.backendFor(bootCtx, "config_drift", cfg.ConfigDrift.StorePath)
-	if err != nil {
-		configDriftLog.Warn(err.Error())
-	}
-	configDriftStore, err := configdrift.OpenWithBackend(configDriftBackend)
-	mustOpenStore(configDriftLog, err)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
 	// #600: the registry answers device display names through the same
 	// resolver, so a rename stored by one operator is what every
@@ -1811,7 +1799,6 @@ func main() {
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
-		ConfigDrift:           configDriftStore,
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
