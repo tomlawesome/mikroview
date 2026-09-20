@@ -151,7 +151,12 @@ if api_get "projects/${PROJECT_ID}/packages?package_type=generic&package_name=up
   # listing that parses to nothing is reported rather than shrugged off,
   # since silently falling back to the committed set is exactly how a
   # tag-job recording would go untested.
-  found="$(grep -oE '"version":[[:space:]]*"[^"]*"' "$registry_list" | sed -E 's/.*"([^"]*)"$/\1/' | sort -u)"
+  # `|| true`: an empty/no-match listing is a real, valid case (nothing
+  # recorded in the registry yet) -- without it, grep's exit 1 on zero
+  # matches trips `set -o pipefail` and kills the script right here,
+  # silently, before it ever reports anything. Same bug, same fix, as
+  # scripts/check-upgrade-fixtures-recorded.sh.
+  found="$(grep -oE '"version":[[:space:]]*"[^"]*"' "$registry_list" | sed -E 's/.*"([^"]*)"$/\1/' | sort -u)" || true
   if [ -z "$found" ]; then
     log "the registry lists no upgrade-fixtures versions -- committed versions only"
   else
