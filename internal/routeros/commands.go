@@ -310,16 +310,18 @@ func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 // `find where` is not; they are idempotent, and on a router that was
 // never bitten they match rules that are already log=no.
 func RuleTaggingCommands(dialect string) string {
+	// The prefixes come from LogPrefixForAction so this block and the
+	// per-rule render below it cannot say the convention two ways.
 	return strings.Join([]string{
-		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"`,
-		`/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"`,
+		`/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="` + LogPrefixForAction("drop", dialect) + `"`,
+		`/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="` + LogPrefixForAction("reject", dialect) + `"`,
 		``,
 		`# An accept rule matching established or related traffic logs every`,
 		`# packet, not every connection -- that is your whole traffic volume.`,
 		`# So the accept line below skips any rule whose connection-state`,
 		`# mentions either, whatever else is in the list: RouterOS 7's default`,
 		`# rule says established,related,untracked.`,
-		`/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"`,
+		`/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="` + LogPrefixForAction("accept", dialect) + `"`,
 		``,
 		`# Repairs a router an earlier version of this block flooded, and matches the posture in section 6 of the setup guide: these rules never log.`,
 		`/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""`,
