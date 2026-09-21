@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+)
+
+// preferencesSchemaVersion is the only version PUT /api/me/preferences
+// currently accepts. It exists so a future, incompatible reshaping of
+// the document has something to bump and refuse the old shape against,
+// the same reason every other versioned document in this codebase
+// carries one -- there is no migration logic yet because nothing has
+// ever needed one.
+const preferencesSchemaVersion = 1
+
+// preferencesDocument is the wire shape both GET and PUT use (#1283):
+// a schema version alongside the caller's own opaque preferences
+// object. This package never looks inside Prefs -- see internal/prefs's
+// own doc comment for why that is deliberate.
+type preferencesDocument struct {
+	Version int             `json:"version"`
+	Prefs   json.RawMessage `json:"prefs"`
+}
+
+// emptyPrefsObject is what GET answers for a user with no stored
+// record -- the documented "missing record" default, distinct from a
+// user who explicitly stored `{}`, which reads back the same way. #1283
+// settled that a missing record and an empty one are indistinguishable
+// on the wire, since either means every frontend module falls back to
+// its own default.
+var emptyPrefsObject = json.RawMessage(`{}`)
+
+// handlePreferencesGet answers the caller's own preferences record,
+// always as the caller's own -- there is no id in the request, the same
+// "acts only on the session's own account" shape as /api/auth/password
+// and /api/auth/logout-all. A user with no stored record yet (never
+// saved anything, or freshly created) gets version 1 and an empty
+// object, not a 404: an empty record is a normal, expected state, not
+// an error.
+func (s *Server) handlePreferencesGet(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.sessionUser(r, time.Now())
+	if !ok {
+		writeUnauthorized(w, "sign in first")
+		return
+	}
+
+	doc := preferencesDocument{Version: preferencesSchemaVersion, Prefs: emptyPrefsObject}
+	if raw, ok := s.Prefs.Get(user.ID); ok {
+		doc.Prefs = raw
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+// handlePreferencesPut replaces the caller's whole preferences record.
+//
+// The body is capped at maxJSONBodyBytes the same way every other JSON
+// body on this API is (decodeJSONBody), version must be exactly
+// preferencesSchemaVersion, and prefs must decode as a JSON object --
+// not an array, string, number or null. Anything outside that is a 400;
+// there is nothing here for a caller to be forbidden from doing (see the
+// route comment in server.go), so every failure this handler can
+// produce is the caller's mistake, never a permission question.
+func (s *Server) handlePreferencesPut(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.sessionUser(r, time.Now())
+	if !ok {
+		writeUnauthorized(w, "sign in first")
+		return
+	}
+
+	var req preferencesDocument
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.Version != preferencesSchemaVersion {
+		http.Error(w, "unsupported preferences version", http.StatusBadRequest)
+		return
+	}
+	// json.RawMessage already proved req.Prefs is syntactically valid
+	// JSON (or absent, which decodes to nil and fails this the same
+	// way) -- this proves it is specifically an object, not any other
+	// valid JSON value, without this package ever needing to know what
+	// is inside it. `null` is the one value json.Unmarshal accepts into
+	// a map with no error while still not being an object -- it leaves
+	// probe nil rather than allocating an empty map, which is exactly
+	// how an absent Prefs field decodes too, so nil is refused
+	// alongside it explicitly.
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(req.Prefs, &probe); err != nil || probe == nil {
+		http.Error(w, "prefs must be a JSON object", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.Prefs.Put(user.ID, req.Prefs); err != nil {
+		apiLog.Error("saving preferences for " + user.ID + ": " + err.Error())
+		http.Error(w, "preferences could not be saved", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -48,6 +48,7 @@ baseline: {storePath: $dir/baseline.json}
 audit: {storePath: $dir/audit.json}
 setup: {storePath: $dir/setup.json}
 droplist: {storePath: $dir/droplist.json}
+prefs: {storePath: $dir/preferences.json}
 watchlist:
   matchLogPath: $dir/matchlog.jsonl
   suggestionsStorePath: $dir/suggestions.json

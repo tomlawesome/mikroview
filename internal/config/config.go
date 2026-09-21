@@ -949,6 +949,16 @@ type Droplist struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Prefs configures internal/prefs's persisted store of per-user
+// preferences (issue #1283): one versioned JSON record per account,
+// read on sign-in and written on change, replacing what used to live in
+// the browser's localStorage. StorePath left empty is the same optional-
+// persistence contract as Droplist.StorePath above: preferences still
+// work for the running session, they just don't survive a restart.
+type Prefs struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // NetClass configures internal/netclass's local IP attribution: labelling
 // an address as a Tor exit, a commercial VPN, cloud/datacenter space, or
 // a privacy relay (issue #114). It adds context to a manual IP lookup,
@@ -1225,6 +1235,7 @@ type Config struct {
 	DeviceRegistry DeviceRegistry `yaml:"deviceRegistry"`
 	Blocklist      Blocklist      `yaml:"blocklist"`
 	Droplist       Droplist       `yaml:"droplist"`
+	Prefs          Prefs          `yaml:"prefs"`
 	NetClass       NetClass       `yaml:"netClass"`
 	OUI            OUI            `yaml:"oui"`
 	Engine         Engine         `yaml:"engine"`
@@ -1419,6 +1430,9 @@ func defaults() Config {
 		},
 		Droplist: Droplist{
 			StorePath: DefaultDataDir + "/droplist.json",
+		},
+		Prefs: Prefs{
+			StorePath: DefaultDataDir + "/preferences.json",
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here
@@ -1978,6 +1992,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_DROPLIST_STORE_PATH"); v != "" {
 		cfg.Droplist.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_PREFS_STORE_PATH"); v != "" {
+		cfg.Prefs.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
