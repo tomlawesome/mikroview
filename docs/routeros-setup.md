@@ -163,7 +163,7 @@ block, with a live token already filled in:
 /log info "mikroview-enrol <token>"
 ```
 
-<!-- shot: the wizard's Send logs step, showing the token line "Token good until HH:MM (15 minutes) · Reroll" -->
+![The wizard's Send logs step just after minting a token: the command block above, and "Token good until 14:32 (15 minutes) · Reroll" beneath it](screenshots/setup-wizard-send-logs.png)
 
 Before it mints that token the wizard asks for the router's own address
 and for your password. The address is the only one MikroView opens the
@@ -1188,7 +1188,7 @@ valid enrol line — so you can tell an unrecognised address apart from a
 router that simply is not sending yet. There is no control on it that
 accepts an address: a router is accepted only by presenting a token.
 
-<!-- shot: a refused-sender card beside the routers on Entities -->
+![A refused-sender card beside a router card on Entities: an address whose lines have no enrolled router, with no control that would accept it](screenshots/entities-refused-sender.png)
 
 **Run setup…** is unchanged: it still opens the first-run ledger with
 **Trust the certificate** in front.
