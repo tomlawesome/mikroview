@@ -6,10 +6,19 @@
 // never mounted -- #683 left it unmounted rather than invent a place for
 // it -- so this is the first coverage of it, and it covers the menu's
 // behaviour (open, apply, forget, save, close) rather than its dress.
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { fireEvent } from '@testing-library/dom'
 import { flushSync } from 'svelte'
+
+// presetState now writes through preferencesState (#1283), which talks
+// to the backend through these two -- mocked so a save/forget's
+// debounced flush never reaches a real fetch() mid- or post-test.
+vi.mock('../lib/api', () => ({
+  fetchMyPreferences: vi.fn().mockResolvedValue({ version: 1, prefs: {} }),
+  saveMyPreferences: vi.fn().mockResolvedValue(null),
+}))
+
 import FilterPresetsMenu from './FilterPresetsMenu.svelte'
 import { appState } from '../lib/state.svelte'
 import { presetState, type FilterPreset } from '../lib/presets.svelte'
@@ -19,9 +28,9 @@ function preset(name: string, filters: Partial<Filters> = {}): FilterPreset {
   return { name, filters: { ...emptyFilters(), ...filters } }
 }
 
-// Both of these are module-level singletons loaded once from
-// localStorage, so a preset saved or forgotten by one test is still
-// saved or forgotten in the next one without this.
+// Both of these are module-level singletons loaded once from the shared
+// per-user preferences record (#1283), so a preset saved or forgotten
+// by one test is still saved or forgotten in the next one without this.
 beforeEach(() => {
   presetState.presets = [
     preset('drops only', { action: 'drop' }),

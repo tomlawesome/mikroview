@@ -597,8 +597,10 @@ export async function goTo(page, label, { unfold = true } = {}) {
 
 /**
  * resetInstance puts the shared instance back to having seen nothing:
- * events, flags, matches, pushed router tables, definitions and
- * suggestions all go; accounts, sessions, devices, ingest tokens,
+ * events, flags, matches, pushed router tables, definitions,
+ * suggestions and every account's preferences record (#1283 -- the
+ * fresh browser context used to give each scenario fresh preferences
+ * for free) all go; accounts, sessions, devices, ingest tokens,
  * settings and the setup ledger stay (#1064, POST /api/test/reset).
  *
  * Scenarios in a shard share one instance and run in filename order, so

@@ -223,7 +223,6 @@ beforeEach(() => {
   // moves the slider would otherwise leak its last stop into whichever
   // test runs next in this file.
   altitudeStopState.stop = 'city'
-  localStorage.removeItem('mikroview:topography-altitude')
   nextEventId = 1
   nextFlagId = 1
   nextEntryId = 1

@@ -64,6 +64,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"suggestions":     {"watchlist", "suggestionsStorePath"},
 		"match_log":       {"watchlist", "matchLogPath"},
 		"droplist":        {"droplist", "storePath"},
+		"prefs":           {"prefs", "storePath"},
 	}
 
 	sections := parseStoreBlock(text)

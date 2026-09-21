@@ -437,7 +437,6 @@ func TestStaticCacheHeaders(t *testing.T) {
 		{"/assets/index-BShEGKey.js", "public, max-age=31536000, immutable", "content-hashed: the name changes when the bytes do"},
 		{"/assets/index-CE5qYX4Y.css", "public, max-age=31536000, immutable", "content-hashed"},
 		{"/sw.js", "no-cache", "stable name, and the file that decides whether an upgrade is noticed at all"},
-		{"/registerSW.js", "no-cache", "stable name"},
 		{"/", "no-cache", "index.html under a stable name"},
 		{"/index.html", "no-cache", "stable name"},
 		{"/manifest.webmanifest", "no-cache", "stable name"},

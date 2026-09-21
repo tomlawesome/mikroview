@@ -2337,3 +2337,14 @@ export interface DecommissionResponse {
   // logging this" cannot be trusted as a definite negative.
   evidenceComplete: boolean
 }
+
+// #1283: the one per-user preferences record, GET/PUT at /api/me/preferences.
+// The server stores and returns this whole; it never looks inside `prefs`
+// -- lib/preferences.svelte.ts owns the keys within it (one per preference
+// module: presets, topTalkers, colorway, altitudeStop, columns, groupMode,
+// retention, metrics, deckOrder). A missing record reads as version 1 with
+// an empty prefs object, never a 404.
+export interface PreferencesRecord {
+  version: number
+  prefs: Record<string, unknown>
+}

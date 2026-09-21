@@ -35,7 +35,15 @@ export default defineConfig({
       // showing stale, possibly-misleading security data as if it were
       // live.
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      // #1314: the app registers the worker itself (src/lib/serviceWorker.ts,
+      // called from src/main.ts). The script this plugin injects instead
+      // leaves the registration promise without a handler, and Firefox
+      // rejects one still in flight when the page is navigated away --
+      // printing `InvalidStateError: An attempt was made to use an object
+      // that is not, or is no longer, usable` to the console, where no
+      // app-side listener can reach it. Generated code cannot be given a
+      // `catch`, so the registration moves into the app to get one.
+      injectRegister: false,
       manifest: {
         name: 'MikroView',
         short_name: 'MikroView',
