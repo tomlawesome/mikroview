@@ -5,6 +5,7 @@ package droplist
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,7 +47,7 @@ func mustOpen(t *testing.T) *Store {
 
 func TestAddStoresCanonicalEntry(t *testing.T) {
 	s := mustOpen(t)
-	e, err := s.Add("admin", "203.0.114.7/24", "scanning our SSH port", "")
+	e, _, err := s.Add("admin", "203.0.114.7/24", "scanning our SSH port", "")
 	must(t, err)
 	if e.CIDR.String() != "203.0.114.0/24" {
 		t.Errorf("Entry.CIDR = %v, want the canonical, masked range", e.CIDR)
@@ -61,11 +62,58 @@ func TestAddStoresCanonicalEntry(t *testing.T) {
 	}
 }
 
+// flippingOwnRanges simulates a router's own address becoming known in
+// the exact gap between Add's internal own-range check and a caller
+// asking a second, separate time -- the v0.6.0 audit's S1 (#1304).
+// OwnPrefixes reports no evidence on its first call (what Add's Validate
+// call sees) and evidence on every call after (what a later, separate
+// read -- the old handleDroplistCreate's own s.Droplist.OwnRangesKnown()
+// call after Add returned -- would see instead).
+type flippingOwnRanges struct {
+	calls int
+}
+
+func (f *flippingOwnRanges) OwnPrefixes() []netip.Prefix {
+	f.calls++
+	if f.calls == 1 {
+		return nil
+	}
+	return []netip.Prefix{netip.MustParsePrefix("10.10.0.1/32")}
+}
+
+// TestAddReportsOwnRangesKnownAsOfItsOwnCheck is #1304's S1: Add's
+// ownRangesKnown return value must describe what its own Validate call
+// actually checked cidr against, not whatever a later, separate call to
+// OwnRangesKnown() would say once more evidence has arrived. Before this
+// fix, handleDroplistCreate asked s.Droplist.OwnRangesKnown() again after
+// Add returned -- a second call that could land after
+// flippingOwnRanges-style evidence appeared, silently dropping the "not
+// checked against the router's own ranges" warning for an entry that, in
+// fact, was added before that evidence existed.
+func TestAddReportsOwnRangesKnownAsOfItsOwnCheck(t *testing.T) {
+	s := mustOpen(t)
+	own := &flippingOwnRanges{}
+	s.SetOwnRanges(own)
+
+	_, ownRangesKnown, err := s.Add("admin", "203.0.114.0/24", "reason", "")
+	must(t, err)
+	if ownRangesKnown {
+		t.Error("Add reported ownRangesKnown = true, want false: its own Validate call saw no own ranges at the moment it ran")
+	}
+
+	// Confirms the race is real, not merely asserted: a second, later
+	// call now sees the address that "arrived" right after Add's check,
+	// which is exactly the wrong answer a caller must not fall back to.
+	if !s.OwnRangesKnown() {
+		t.Fatal("OwnRangesKnown() after the flip = false, want true -- otherwise this test is not exercising the race it claims to")
+	}
+}
+
 func TestAddRefusesDuplicate(t *testing.T) {
 	s := mustOpen(t)
 	must(t, ignoreEntry(s.Add("admin", "203.0.114.0/24", "first", "")))
 	// A different spelling of the same range must still collide.
-	if _, err := s.Add("admin", "203.0.114.9/24", "second", ""); !errors.Is(err, ErrExists) {
+	if _, _, err := s.Add("admin", "203.0.114.9/24", "second", ""); !errors.Is(err, ErrExists) {
 		t.Errorf("Add(duplicate) error = %v, want ErrExists", err)
 	}
 	if len(s.List()) != 1 {
@@ -75,7 +123,7 @@ func TestAddRefusesDuplicate(t *testing.T) {
 
 func TestAddRejectsInvalidCIDR(t *testing.T) {
 	s := mustOpen(t)
-	if _, err := s.Add("admin", "10.0.0.0/24", "bad", ""); !errors.Is(err, ErrNotPublic) {
+	if _, _, err := s.Add("admin", "10.0.0.0/24", "bad", ""); !errors.Is(err, ErrNotPublic) {
 		t.Errorf("Add(private range) error = %v, want ErrNotPublic", err)
 	}
 	if len(s.List()) != 0 {
@@ -91,10 +139,10 @@ func TestAddRejectsInvalidCIDR(t *testing.T) {
 // file.
 func TestAddRejectsLineAndParagraphSeparators(t *testing.T) {
 	s := mustOpen(t)
-	if _, err := s.Add("admin", "203.0.114.0/24", "line break", ""); !errors.Is(err, ErrBadText) {
+	if _, _, err := s.Add("admin", "203.0.114.0/24", "line break", ""); !errors.Is(err, ErrBadText) {
 		t.Errorf("Add(reason with U+2028) error = %v, want ErrBadText", err)
 	}
-	if _, err := s.Add("admin", "203.0.114.0/24", "para break", ""); !errors.Is(err, ErrBadText) {
+	if _, _, err := s.Add("admin", "203.0.114.0/24", "para break", ""); !errors.Is(err, ErrBadText) {
 		t.Errorf("Add(reason with U+2029) error = %v, want ErrBadText", err)
 	}
 	if len(s.List()) != 0 {
@@ -135,7 +183,7 @@ func TestAddUsesInjectableClock(t *testing.T) {
 	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	s.now = func() time.Time { return fixed }
 
-	e, err := s.Add("admin", "203.0.114.0/24", "reason", "")
+	e, _, err := s.Add("admin", "203.0.114.0/24", "reason", "")
 	must(t, err)
 	if !e.AddedAt.Equal(fixed) {
 		t.Errorf("Entry.AddedAt = %v, want the injected clock's %v", e.AddedAt, fixed)
@@ -189,7 +237,7 @@ func TestAddLeavesNoEntryWhenPersistFails(t *testing.T) {
 	}
 	s.SetAuditor(as)
 
-	if _, err := s.Add("admin", "203.0.114.0/24", "reason", ""); err == nil {
+	if _, _, err := s.Add("admin", "203.0.114.0/24", "reason", ""); err == nil {
 		t.Fatal("Add against a backend that cannot save = nil error, want one")
 	}
 	if len(s.List()) != 0 {
@@ -263,7 +311,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 }
 
-func ignoreEntry(_ Entry, err error) error { return err }
+func ignoreEntry(_ Entry, _ bool, err error) error { return err }
 
 // TestOpenCanonicalisesAnUnmaskedEntryLoadedFromDisk is the v0.6.0
 // pre-release audit's finding: OpenWithBackend's load loop indexed each

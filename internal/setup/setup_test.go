@@ -155,12 +155,12 @@ func TestMarksAreOrderedByStep(t *testing.T) {
 // TestMarksRefuseWhatTheyCannotDescribe. The step numbers and outcomes
 // are the ratified design's, not free text: a mark on step 9 describes
 // nothing, and neither the ledger nor the audit log should carry it.
-// TestMarkAcceptsTheWizardsSixthStep covers #1267: maxStep was still 5
+// TestMarkAcceptsTheWizardsSixthStep covers #1267: MaxStep was still 5
 // with a comment claiming "five steps, per the ratified design", but
 // round 45 (#394) added a sixth ("Back up the router") -- see
 // frontend/src/lib/setupsteps.ts's STEP_TITLES, the six-entry list this
 // package's step count must match. NoteMark refused any skip or force
-// decision on that sixth step until maxStep caught up.
+// decision on that sixth step until MaxStep caught up.
 func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
 	s := New()
 	if _, ok, err := s.NoteMark(6, MarkSkipped, "tom", "", time.Now()); err != nil || !ok {
@@ -170,7 +170,7 @@ func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
 
 // TestMarkAcceptsTheWizardsSeventhStep is #1267 recurring: #1291 added
 // "Register this router" as RECORD_NUMBERS.register = 7 in
-// frontend/src/lib/setupsteps.ts and maxStep stayed at 6, so skipping
+// frontend/src/lib/setupsteps.ts and MaxStep stayed at 6, so skipping
 // that step 400s while the wizard advances anyway -- the operator sees
 // the step pass and the ledger never records the decision. Found by the
 // v0.6.0 audit (#1257).
@@ -190,7 +190,7 @@ func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 		outcome MarkOutcome
 	}{
 		{"step zero", 0, MarkSkipped},
-		{"step past the last", maxStep + 1, MarkSkipped},
+		{"step past the last", MaxStep + 1, MarkSkipped},
 		{"outcome that is not a decision", 1, MarkOutcome("done")},
 		{"empty outcome", 1, MarkOutcome("")},
 	} {

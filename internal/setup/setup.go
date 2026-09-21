@@ -175,7 +175,7 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			// Filtered on the way in, not trusted: a document written by
 			// an older build, or edited by hand, must not put a step 9
 			// into a ledger that has seven steps.
-			if m.Step < 1 || m.Step > maxStep {
+			if m.Step < 1 || m.Step > MaxStep {
 				continue
 			}
 			// Routed by outcome into the map that outcome belongs to --
@@ -408,7 +408,7 @@ const (
 	MarkWitnessed MarkOutcome = "witnessed"
 )
 
-// maxStep bounds the step numbers a mark may carry. Seven steps --
+// MaxStep bounds the step numbers a mark may carry. Seven steps --
 // round 45 (#394) added the sixth, "Back up the router", after the
 // original five, and #1291 added the seventh, "Register this router";
 // see frontend/src/lib/setupsteps.ts's RECORD_NUMBERS, which this must
@@ -419,7 +419,11 @@ const (
 // audit): the wizard gains a step, the ledger silently refuses every
 // decision about it, and the walk advances anyway so nobody sees the
 // refusal. If an eighth is ever added, this is the second edit.
-const maxStep = 7
+//
+// Exported (#1304) so api.handleSetupMark's refusal message can be built
+// from this same number instead of carrying its own copy of "7" that
+// could lag behind it a third time.
+const MaxStep = 7
 
 // Mark is one recorded decision about one step.
 type Mark struct {
@@ -489,7 +493,7 @@ type storeFile struct {
 // operator-driven, interactive action, not a hot path, the same
 // reasoning audit.Store.Record gives.
 func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now time.Time) (Mark, bool, error) {
-	if step < 1 || step > maxStep {
+	if step < 1 || step > MaxStep {
 		return Mark{}, false, nil
 	}
 	if outcome != MarkSkipped && outcome != MarkForced {
@@ -502,7 +506,7 @@ func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.marks == nil {
-		s.marks = make(map[int]Mark, maxStep)
+		s.marks = make(map[int]Mark, MaxStep)
 	}
 	prev, hadPrev := s.marks[step]
 	s.marks[step] = m
@@ -521,7 +525,7 @@ func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now 
 // hold it.
 func (s *Store) marksLocked() []Mark {
 	out := make([]Mark, 0, len(s.marks))
-	for step := 1; step <= maxStep; step++ {
+	for step := 1; step <= MaxStep; step++ {
 		if m, ok := s.marks[step]; ok {
 			out = append(out, m)
 		}
@@ -621,7 +625,7 @@ func (s *Store) Marks() []Mark {
 // did. Reading the two back together (which wins when both exist) is a
 // rendering choice for the caller, not this store's to make.
 func (s *Store) NoteWitnessed(step int, receipt string, now time.Time) (Mark, bool) {
-	if step < 1 || step > maxStep {
+	if step < 1 || step > MaxStep {
 		return Mark{}, false
 	}
 	s.mu.Lock()
@@ -634,7 +638,7 @@ func (s *Store) NoteWitnessed(step int, receipt string, now time.Time) (Mark, bo
 	}
 	m := Mark{Step: step, Outcome: MarkWitnessed, At: now, Note: receipt}
 	if s.witnessed == nil {
-		s.witnessed = make(map[int]Mark, maxStep)
+		s.witnessed = make(map[int]Mark, MaxStep)
 	}
 	s.witnessed[step] = m
 	s.persistLocked()
@@ -645,7 +649,7 @@ func (s *Store) NoteWitnessed(step int, receipt string, now time.Time) (Mark, bo
 // already hold it -- the same pattern marksLocked follows.
 func (s *Store) witnessedLocked() []Mark {
 	out := make([]Mark, 0, len(s.witnessed))
-	for step := 1; step <= maxStep; step++ {
+	for step := 1; step <= MaxStep; step++ {
 		if m, ok := s.witnessed[step]; ok {
 			out = append(out, m)
 		}

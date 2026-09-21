@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	// The IANA zone database, compiled in as a fallback (#680). A watch
@@ -513,6 +514,25 @@ func joinOnShutdown(wg *sync.WaitGroup, ctx context.Context, shutdown func(conte
 		defer cancel()
 		shutdown(shutdownCtx)
 	}()
+}
+
+// reportListenerFailure is what a listener dying on its own -- a bind
+// failure, or Serve returning a real error -- calls instead of
+// os.Exit(1) directly (R7, v0.6.0 audit, #1304). Exiting on the spot
+// used to skip closeStoreOnShutdown, writeFinalSnapshot and
+// hist.Close() entirely: the same "a change made right before shutdown
+// is silently dropped" failure issue #400 exists to prevent, just
+// reached from a listener dying instead of an operator's signal.
+//
+// Marking failed and calling stop routes the failure through the exact
+// path a real signal takes: stop cancels the context every
+// joinOnShutdown registration is waiting on, so main falls through to
+// the shared drain sequence exactly as it would for SIGTERM, and only
+// exits nonzero once that has actually run (see the end of main).
+func reportListenerFailure(log *slog.Logger, err error, failed *atomic.Bool, stop func()) {
+	log.Error(err.Error())
+	failed.Store(true)
+	stop()
 }
 
 func main() {
@@ -1306,6 +1326,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// listenFailed is reportListenerFailure's flag -- see that function.
+	// Set from more than one goroutine (the syslog TLS listener runs on
+	// its own), so this is an atomic rather than a plain bool.
+	var listenFailed atomic.Bool
+
 	// shutdownWG tracks every goroutine that has to finish before main
 	// proceeds past the blocking Serve call below, so the process
 	// actually waits out the graceful window instead of exiting the
@@ -2041,8 +2066,7 @@ func main() {
 		// cfg.TLS.Enabled, see that block's comment for why.
 		go func() {
 			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, certReloader, raw); err != nil && ctx.Err() == nil {
-				logging.New("syslog-tls").Error(err.Error())
-				os.Exit(1)
+				reportListenerFailure(logging.New("syslog-tls"), err, &listenFailed, stop)
 			}
 		}()
 	}
@@ -2067,21 +2091,20 @@ func main() {
 		// internal/tlssniff (#325).
 		ln, lnErr := net.Listen("tcp", httpServer.Addr)
 		if lnErr != nil {
-			logging.New("http").Error(lnErr.Error())
-			os.Exit(1)
+			reportListenerFailure(logging.New("http"), lnErr, &listenFailed, stop)
+		} else {
+			sniffLog := logging.New("http")
+			serveErr = httpServer.ServeTLS(
+				tlssniff.Listener(ln, sniffLog, func(requested string) string {
+					return samePortRedirectHost(requested, cfg.TLS.Hosts, ln.Addr().String())
+				}),
+				"", "")
 		}
-		sniffLog := logging.New("http")
-		serveErr = httpServer.ServeTLS(
-			tlssniff.Listener(ln, sniffLog, func(requested string) string {
-				return samePortRedirectHost(requested, cfg.TLS.Hosts, ln.Addr().String())
-			}),
-			"", "")
 	} else {
 		serveErr = httpServer.ListenAndServe()
 	}
 	if serveErr != nil && serveErr != http.ErrServerClosed {
-		logging.New("http").Error(serveErr.Error())
-		os.Exit(1)
+		reportListenerFailure(logging.New("http"), serveErr, &listenFailed, stop)
 	}
 
 	// ServeTLS/ListenAndServe unblocks as soon as Shutdown is *called*
@@ -2117,6 +2140,16 @@ func main() {
 	// events themselves -- but a planned restart should lose nothing.
 	if err := hist.Close(); err != nil {
 		logging.New("history").Warn("could not flush the retained event history at shutdown", "err", err)
+	}
+
+	// Everything above has now run -- stores drained, snapshot and
+	// history flushed -- exactly as it would for an operator's signal.
+	// Only now does a listener failure actually end the process (R7,
+	// #1304): the nonzero exit still has to happen, so systemd, Docker
+	// and anyone else watching the exit code see a crash as a crash, not
+	// a clean stop.
+	if listenFailed.Load() {
+		os.Exit(1)
 	}
 }
 

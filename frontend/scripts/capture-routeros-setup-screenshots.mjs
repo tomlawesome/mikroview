@@ -82,9 +82,18 @@ async function signedInPage() {
   await page.waitForSelector('.setup-wizard', { state: 'visible', timeout: 10000 })
   // The step list's receipts ("466 of 466 events carry an action") come
   // from /api/setup/status, which resolves after the modal paints.
-  // Capturing without this waits leaves the ledger reading "nothing has
-  // arrived yet" against an instance that has heard plenty.
-  await page.waitForTimeout(2000)
+  // Wait for the "rules" step's own receipt to actually say so, rather
+  // than a fixed sleep and hoping the API won by then -- capturing too
+  // early leaves the ledger reading "nothing has arrived yet" against an
+  // instance that has heard plenty.
+  await page.waitForFunction(
+    () => {
+      const receipt = document.querySelector('.setup-wizard .steps li:nth-child(4) .step-receipt')
+      return !!receipt && /events carry an action/.test(receipt.textContent ?? '')
+    },
+    null,
+    { timeout: 15000 },
+  )
   const title = (await page.locator('#setup-wizard-title').textContent())?.trim()
   if (title !== 'Trust the certificate') {
     throw new Error(`wizard opened at ${JSON.stringify(title)}, not step 1 -- the shot is meant to show the ledger at its first step`)
@@ -119,9 +128,20 @@ async function signedInPage() {
     { timeout: 15000 },
   )
   // Each router card's live rate arrives with the first stats poll after
-  // the card mounts; without this the row reads as a fleet that has
-  // never said anything.
-  await page.waitForTimeout(2500)
+  // the card mounts; wait for an actual positive rate on at least one
+  // live card rather than a fixed sleep, or the row reads as a fleet
+  // that has never said anything.
+  await page.waitForFunction(
+    () => {
+      const rows = Array.from(document.querySelectorAll('.card[data-card="entities"] .fcard.live .frow'))
+      return rows.some((el) => {
+        const m = /([\d.]+) events\/s now/.exec(el.textContent ?? '')
+        return m !== null && parseFloat(m[1]) > 0
+      })
+    },
+    null,
+    { timeout: 15000 },
+  )
   const row = page.locator('.card[data-card="entities"] .og').first()
   const berth = await row.locator('.fcard.berth').count()
   if (berth !== 1) {

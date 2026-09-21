@@ -427,6 +427,53 @@ func TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns(t *testing.T) 
 	}
 }
 
+// TestLagStaysStableOnceABatchHasAlreadyRecordedTheGap is #1304's FB11:
+// every existing outrun/Lag test calls Lag() either before any batch has
+// run (TestLagReportsAlreadyEvictedEventsAsOutrunBeforeAnyBatchRuns) or
+// exactly once right after one finishes (TestOutrunCountsWhatTheRingWrappedPast).
+// None calls it *again* once the batch has already moved the cursor past
+// the gap and recorded it -- the state Lag() is in for essentially all of
+// an engine's life.
+//
+// withBatchSize(0) makes evaluateBatch's own read return no events at
+// all (store.Store.Since treats max<=0 as "just tell me what you hold"),
+// so the one call below runs only the gap branch: cursor lands exactly
+// on oldestHeld-1, the sharpest version of "a batch has already recorded
+// the gap" -- Lag()'s own top-up branch (oldestHeld > cursor+1) sits
+// right on its own boundary rather than resolving it by having also
+// evaluated everything else the ring held.
+func TestLagStaysStableOnceABatchHasAlreadyRecordedTheGap(t *testing.T) {
+	e, st := newEngineOnStore(t, 10)
+
+	for i := 0; i < 30; i++ {
+		st.Insert(evt("198.51.100.1")) // IDs 21..30 survive, cursor is still 0
+	}
+	withBatchSize(t, 0)
+	if more := e.evaluateBatch(context.Background(), time.Time{}); more {
+		t.Fatal("evaluateBatch with batchSize 0 reported more work to do, want it to have read and evaluated nothing")
+	}
+
+	first, _, firstOutrun := e.Lag()
+	if firstOutrun != 20 {
+		t.Fatalf("outrun right after the batch recorded the gap = %d, want the 20-event gap", firstOutrun)
+	}
+	if first != 10 {
+		t.Fatalf("behind right after the batch = %d, want the 10 events the ring still holds and the batch never read", first)
+	}
+
+	// A second, independent Lag() call with nothing new having happened:
+	// the gap is old news by now, sitting right on Lag()'s own
+	// oldestHeld > cursor+1 boundary -- it must not be found and counted
+	// a second time.
+	second, _, secondOutrun := e.Lag()
+	if secondOutrun != firstOutrun {
+		t.Fatalf("outrun on a second Lag() call = %d, want it unchanged at %d -- a batch that already recorded the gap must not have it counted twice", secondOutrun, firstOutrun)
+	}
+	if second != first {
+		t.Fatalf("behind on a second Lag() call = %d, want it unchanged at %d", second, first)
+	}
+}
+
 // TestLagNeverDoubleCountsAConcurrentGap pins the race Lag()'s own doc
 // comment promises against: evaluateBatch's gap branch used to add to
 // e.outrun and store e.cursor as two separate, unlocked writes, with

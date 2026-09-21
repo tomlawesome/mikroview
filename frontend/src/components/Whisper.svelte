@@ -64,12 +64,11 @@
     bucketAt,
     bucketTotal,
     dropShare,
-    eventsBetween,
     recentBuckets,
     topPort,
     topTalker,
   } from '../lib/whisperStats'
-  import type { TimeBucket } from '../lib/types'
+  import type { ClientEvent, TimeBucket } from '../lib/types'
   import ColumnToggles from './ColumnToggles.svelte'
 
   // The desktop columns ▸ trigger and its popover (#1197, moved here from
@@ -348,8 +347,32 @@
     return [windowStartMs, windowEndMs]
   })
 
-  const statTalker = $derived(statRangeMs ? topTalker(eventsBetween(appState.events, ...statRangeMs)) : undefined)
-  const statPort = $derived(statRangeMs ? topPort(eventsBetween(appState.events, ...statRangeMs)) : undefined)
+  // #1304 E11: eventsBetween (lib/whisperStats.ts) forward-scans whatever
+  // array it's handed -- fine for a bounded slice, but handing it the
+  // whole appState.events buffer (up to MAX_CLIENT_EVENTS) meant every
+  // statTalker/statPort recompute rescanned the entire live buffer just
+  // to pull out a window a few minutes wide. appState.events arrives
+  // oldest-first (state.svelte's own append order -- ringHolds above
+  // already leans on this same ordering for its span), and every window
+  // this panel ever asks about -- rolling, fenced, or a seek -- sits
+  // inside the last WHISPER_WINDOW_MINUTES, i.e. at the *end* of the
+  // buffer. Scanning backward from the end and stopping the moment an
+  // event falls before the window turns that O(buffer) scan into
+  // O(events actually in the window). Reversed back to oldest-first
+  // before returning so topNBy's tie-breaks (stable-sorted on first
+  // insertion order) land on the same event they always did.
+  function recentEventsBetween(events: readonly ClientEvent[], startMs: number, endMs: number): ClientEvent[] {
+    const out: ClientEvent[] = []
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]
+      if (e.receivedAt < startMs) break
+      if (e.receivedAt < endMs) out.push(e)
+    }
+    return out.reverse()
+  }
+
+  const statTalker = $derived(statRangeMs ? topTalker(recentEventsBetween(appState.events, ...statRangeMs)) : undefined)
+  const statPort = $derived(statRangeMs ? topPort(recentEventsBetween(appState.events, ...statRangeMs)) : undefined)
 
   const statRate = $derived.by((): number | null => {
     if (statWindow.kind === 'seek') return bucketTotal(statWindow.bucket) / 60

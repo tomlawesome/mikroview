@@ -279,6 +279,116 @@ describe('Flags table sort and filter (#649)', () => {
     expect(screen.getByText('No flags match these filters.')).toBeTruthy()
     expect(screen.queryByText('Nothing open.')).toBeNull()
   })
+
+  // #1304 E9: the table's filter-and-sort pass (building and ordering
+  // `rows`) used to read appState.now unconditionally while checking the
+  // age filter and while sorting by age, which made the whole pass a
+  // clock dependency -- it reran in full (re-filtering, re-grouping,
+  // re-sorting) on every tick even with no age filter set and nothing
+  // about the flags or filters changed. `rows`/campaign members are only
+  // ever produced by calling .sort(), so a spy on it proves whether the
+  // pass re-ran without timing anything (which would flake on a
+  // contended runner the way #728's LiveTable test comment describes).
+  it('does not re-sort the table on a clock tick alone, with no age filter set', () => {
+    render(Flags)
+    flushSync()
+
+    const sortSpy = vi.spyOn(Array.prototype, 'sort')
+    sortSpy.mockClear()
+
+    appState.now += 5 * 60 * 1000
+    flushSync()
+
+    expect(sortSpy).not.toHaveBeenCalled()
+    sortSpy.mockRestore()
+  })
+
+  // The flip side of the test above: an age filter is exactly the case
+  // that legitimately needs the clock (a flag's matching age changes as
+  // time passes), so the pass must still track it once one is set --
+  // proving the short-circuit above only skips the clock when it is
+  // genuinely unneeded, not always.
+  it('still re-filters on a clock tick once an age filter is set', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.input(screen.getByLabelText('Filter by age'), { target: { value: 'm' } })
+    flushSync()
+
+    const sortSpy = vi.spyOn(Array.prototype, 'sort')
+    sortSpy.mockClear()
+
+    appState.now += 5 * 60 * 1000
+    flushSync()
+
+    expect(sortSpy).toHaveBeenCalled()
+    sortSpy.mockRestore()
+  })
+})
+
+// #1304 E10: each campaign row's "why these are one campaign" sentence
+// used to find its own nearest same-IP outsider by scanning *every* open
+// flag. Fixed by grouping every open flag by source IP once
+// (activeBySourceIp), so each campaign only walks the flags sharing its
+// own IP. The risk a grouping rewrite like that specifically invites is
+// cross-talk between groups -- one campaign's row quoting another
+// campaign's outsider, or missing its own because it looked in the wrong
+// bucket -- so this pins two campaigns at different IPs, each with its
+// own distinct outsider, open at once.
+describe('campaign summaries stay per-campaign after the one-pass rewrite (#1304 E10)', () => {
+  const now = Date.parse('2026-01-01T13:55:00Z')
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.now = now
+    flagsState.clearPins()
+    flagsState.list = [
+      // Campaign 1, at .14: two flags inside the window, plus its own
+      // outsider two hours earlier.
+      testFlag({ id: 'a1', type: 'port_scan', target: '10.0.20.14', detail: 'twenty ports', count: 20, firstSeen: '2026-01-01T13:28:00Z', lastSeen: '2026-01-01T13:30:00Z' }),
+      testFlag({ id: 'a2', type: 'repeated_drops', target: '10.0.20.14 -> port 445', detail: 'six drops', count: 6, firstSeen: '2026-01-01T13:40:00Z', lastSeen: '2026-01-01T13:52:00Z' }),
+      testFlag({ id: 'a-outsider', type: 'activity_spike', target: '10.0.20.14', detail: 'busy hour', count: 300, firstSeen: '2026-01-01T11:10:00Z', lastSeen: '2026-01-01T11:50:00Z' }),
+      // Campaign 2, at a different IP entirely: two flags inside the
+      // window, plus a *different* outsider at a different distance.
+      testFlag({ id: 'b1', type: 'port_scan', target: '10.0.30.2', detail: 'ten ports', count: 10, firstSeen: '2026-01-01T13:20:00Z', lastSeen: '2026-01-01T13:22:00Z' }),
+      testFlag({ id: 'b2', type: 'repeated_drops', target: '10.0.30.2 -> port 22', detail: 'four drops', count: 4, firstSeen: '2026-01-01T13:35:00Z', lastSeen: '2026-01-01T13:36:00Z' }),
+      testFlag({ id: 'b-outsider', type: 'outbound_anomaly', target: '10.0.30.2', detail: 'mail out', count: 3, firstSeen: '2026-01-01T12:00:00Z', lastSeen: '2026-01-01T12:05:00Z' }),
+    ]
+  })
+
+  function campaigns() {
+    return Array.from(document.querySelectorAll('tr.frow.camp')) as HTMLElement[]
+  }
+
+  it("names each campaign's own outsider, never the other campaign's", async () => {
+    render(Flags)
+    flushSync()
+
+    const rows = campaigns()
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      await fireEvent.click(row)
+    }
+    flushSync()
+
+    const rules = Array.from(document.querySelectorAll('tr.crule td')).map((td) => td.textContent?.replace(/\s+/g, ' ').trim())
+    const ruleFor14 = rules.find((r) => r?.includes("10.0.20.14's"))
+    const ruleFor30 = rules.find((r) => r?.includes("10.0.30.2's"))
+
+    expect(ruleFor14).toContain("10.0.20.14's ACTIVITY SPIKE at 11:10 is 1 h from these, so it keeps its own row.")
+    expect(ruleFor30).toContain("10.0.30.2's OUTBOUND ANOMALY at 12:00 is 1 h from these, so it keeps its own row.")
+    // Neither row's sentence mentions the other campaign's IP or outsider.
+    expect(ruleFor14).not.toContain('10.0.30.2')
+    expect(ruleFor30).not.toContain('10.0.20.14')
+  })
 })
 
 // #653's tiers, on the ratified surface: clearing a flag is a normal
@@ -1847,5 +1957,20 @@ describe('block… into the drop list (#1225, #461)', () => {
       flagID: 's1',
     })
     expect(appState.view).toBe('engineroom')
+  })
+})
+
+// #1304 P1: dead CSS from two retired flows -- `.act.quiet` (no button
+// ever carried `quiet` alongside `.act`; the four action buttons above
+// are the whole set) and `.clear-note`/`.clear-note-input` (#640's
+// retired inline note-input shown after clicking a verdict, superseded
+// by the always-present `.note` textarea round 59 added, #1232). Pinned
+// here so either does not quietly come back: a class with no markup to
+// match it is dead weight in the stylesheet, not a preserved feature.
+describe('dead CSS removed (#1304 P1)', () => {
+  it('does not carry .act.quiet or .clear-note/.clear-note-input rules any more', () => {
+    expect(flagsSource).not.toMatch(/\.act\.quiet\s*\{/)
+    expect(flagsSource).not.toMatch(/\.clear-note\s*\{/)
+    expect(flagsSource).not.toMatch(/\.clear-note-input\s*\{/)
   })
 })

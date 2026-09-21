@@ -12,8 +12,11 @@ docker pull ghcr.io/tomlawesome/mikroview:latest
 
 The README's quickstart (`curl ... | sh`) is
 [`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
-running this same `docker run`. If you'd rather run it yourself instead
-of fetching a script:
+running this same `docker run`. After pulling, it prints the exact image
+digest it just pulled (`ghcr.io/tomlawesome/mikroview@sha256:...`) --
+see [SECURITY.md](../SECURITY.md) for verifying that digest with
+`cosign verify` before you trust it. If you'd rather run it yourself
+instead of fetching a script:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
