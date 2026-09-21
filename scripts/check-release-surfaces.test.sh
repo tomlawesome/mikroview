@@ -252,6 +252,30 @@ check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*
 check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
   "and no FAIL line names it"
 
+# a recapture that comes out pixel-identical (#1317): the source moved
+# somewhere the crop does not show, so git has nothing to commit and the
+# image's own commit cannot move. A sibling .checked file records that
+# the recapture was run, and clears the failure.
+c6d="$TMP/case6d-identical-recapture"
+cp -r "$good" "$c6d"
+printf 'changed\n' >>"$c6d/frontend/src/components/Fall.svelte"
+commit "$c6d" "2026-01-03T00:00:00" "move the component the crop does not show"
+run "$c6d"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "before the record, the identical recapture still fails (rc=$rc)"
+printf 'recaptured at this commit, output identical\n' >"$c6d/docs/screenshots/fall-dark.png.checked"
+commit "$c6d" "2026-01-04T00:00:00" "record the identical recapture"
+run "$c6d"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a recorded identical recapture passes overall (rc=$rc)"
+check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*) echo true;; *) echo false;; esac)" \
+  "and the screenshot reads as fresh"
+
+# the record does not silence later drift: the source moving again after
+# it fails exactly as an unrecaptured screenshot does
+printf 'changed again\n' >>"$c6d/frontend/src/components/Fall.svelte"
+commit "$c6d" "2026-01-05T00:00:00" "move the component again"
+run "$c6d"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "drift after the record fails again (rc=$rc)"
+
 # a screenshot with no entry in screenshot_sources() fails loudly, naming
 # itself, rather than silently passing or guessing
 c6c="$TMP/case6c-unmapped"

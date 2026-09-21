@@ -1,0 +1,5 @@
+Recaptured at d5fdc4eb (2026-09-21) and the output was byte-for-byte
+identical to the committed image: that commit changed EngineRoom.svelte's
+key-copy error handling in the Settings panel, which this crop of the
+#people door does not show. Recorded here because an identical recapture
+leaves git nothing to commit, so the image's own commit cannot move.
