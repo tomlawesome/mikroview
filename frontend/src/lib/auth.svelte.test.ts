@@ -14,6 +14,13 @@ vi.mock('./api', () => ({
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
   fetchPersistence: vi.fn(),
+  // #1283: preferences.svelte.ts (imported transitively through
+  // clearSessionState's preferencesState.reset(), and through apply()'s
+  // preferencesState.ensureLoaded()) talks to the backend only through
+  // these two -- mocked here for the same reason as every other api.ts
+  // call this file already stubs.
+  fetchMyPreferences: vi.fn(),
+  saveMyPreferences: vi.fn(),
 }))
 
 import {
@@ -24,6 +31,8 @@ import {
   setNewPasswordAfterReset,
   signOutEverywhere,
   fetchPersistence,
+  fetchMyPreferences,
+  saveMyPreferences,
 } from './api'
 import { authState, pageReload } from './auth.svelte'
 import { appState } from './state.svelte'
@@ -37,6 +46,7 @@ import { auditState } from './audit.svelte'
 import { persistenceState } from './persistence.svelte'
 import { configProblemsState } from './configProblems.svelte'
 import { configUpgradeState } from './configUpgrade.svelte'
+import { preferencesState } from './preferences.svelte'
 import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
@@ -66,6 +76,14 @@ beforeEach(() => {
   // jsdom cannot navigate; the reload tests below assert on this spy.
   sessionStorage.clear()
   vi.spyOn(pageReload, 'now').mockImplementation(() => {})
+  // preferencesState is a module-level singleton too (#1283) -- reset
+  // between tests for the same reason appState/flagsState/etc. already
+  // are, and give the two calls apply()/logout() make a safe default so
+  // a test that doesn't care about preferences at all isn't left with
+  // an unhandled rejection from an unmocked resolution.
+  preferencesState.reset()
+  vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+  vi.mocked(saveMyPreferences).mockResolvedValue(null)
 })
 
 describe('AuthState.check', () => {
@@ -136,6 +154,46 @@ describe('AuthState.check', () => {
   })
 })
 
+// #1283: preferences load from the server once, on the transition into
+// the real 'authenticated' view -- not on every check(), and not for a
+// forced password change, which cannot reach the app to use them.
+describe('AuthState wires preferencesState to sign-in (#1283)', () => {
+  it('loads preferences once the session is authenticated', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin' }),
+    )
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'pulse' } })
+
+    await authState.check()
+    await preferencesState.ensureLoaded()
+
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+    expect(preferencesState.get('colorway')).toBe('pulse')
+  })
+
+  it('does not load preferences for a forced password change -- that session cannot reach the app', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'bilbo', role: 'user', mustChangePassword: true }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('must-change-password')
+    expect(fetchMyPreferences).not.toHaveBeenCalled()
+  })
+
+  it('does not re-fetch on a second check() once already loaded', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
+
+    await authState.check()
+    await preferencesState.ensureLoaded()
+    await authState.check()
+    await preferencesState.ensureLoaded()
+
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('AuthState.login', () => {
   it('re-checks the session and returns null on success', async () => {
     vi.mocked(login).mockResolvedValue(null)
@@ -201,6 +259,31 @@ describe('AuthState.logout', () => {
     // Set so AuthLogin's next mount plays the door's way-out beat
     // (#645) -- consumeJustSignedOut() below is how it reads this.
     expect(authState.justSignedOut).toBe(true)
+  })
+
+  // #1283: a debounced write still sitting inside its 500ms window must
+  // reach the server before the session it depends on is gone --
+  // flush() has to run, and it has to run before the server logout
+  // call, not after.
+  it('flushes any pending preference write before ending the session', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue(null)
+    preferencesState.seedForTest({})
+    preferencesState.set('colorway', 'nebula')
+
+    const order: string[] = []
+    vi.mocked(saveMyPreferences).mockImplementation(async () => {
+      order.push('saveMyPreferences')
+      return null
+    })
+    vi.mocked(logout).mockImplementation(async () => {
+      order.push('logout')
+      return null
+    })
+
+    await authState.logout()
+
+    expect(order).toEqual(['saveMyPreferences', 'logout'])
   })
 })
 
@@ -648,6 +731,25 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     expect(configUpgradeState.loaded).toBe(false)
     expect(configUpgradeState.error).toBeNull()
   })
+
+  // #1283: preferencesState is the seventh module-lifetime singleton in
+  // this batch. logout() flushes it first (its own test, above); this
+  // is the "dropped from memory" half -- the next sign-in on this tab
+  // must call ensureLoaded() again rather than see the previous
+  // account's cached record.
+  it('drops preferencesState from memory and re-fetches on the next ensureLoaded()', async () => {
+    preferencesState.seedForTest({ colorway: 'nebula' })
+    expect(preferencesState.get('colorway')).toBe('nebula')
+
+    await authState.logout()
+
+    expect(preferencesState.get('colorway')).toBeUndefined()
+
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'frequency' } })
+    await preferencesState.ensureLoaded()
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+    expect(preferencesState.get('colorway')).toBe('frequency')
+  })
 })
 
 describe('AuthState.handleUnauthorized clears the previous session state (#1083)', () => {
@@ -661,6 +763,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     watchlistState.loaded = true
     tokensState.list = [fixtureApiToken()]
     tokensState.justCreated = fixtureApiToken()
+    preferencesState.seedForTest({ colorway: 'nebula' })
 
     authState.handleUnauthorized()
 
@@ -672,6 +775,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     expect(watchlistState.loaded).toBe(false)
     expect(tokensState.list).toEqual([])
     expect(tokensState.justCreated).toBeNull()
+    expect(preferencesState.get('colorway')).toBeUndefined()
   })
 
   it('leaves every store untouched when the session was not authenticated', () => {
