@@ -40,6 +40,7 @@ func (c *Config) Validate() Result {
 	}
 
 	c.validateListen(fatal)
+	c.validateUI(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
 	c.validateBaseline(warn)
@@ -89,6 +90,12 @@ var examplesByCode = map[string]string{
   trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
   # ... or the shorthand for a proxy on your LAN or docker network
   # trustedProxies: ["private"]`,
+
+	"CFG-0004": `ui:
+  # only these may reach the web UI ...
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+  # ... or leave the list out entirely, which admits every address
+  # allow: []`,
 
 	"CFG-0010": `store:
   retention: 24h`,
@@ -190,6 +197,21 @@ auth:
   days: 30`,
 	"CFG-0082": `history:
   maxBytes: 1073741824   # 1 GiB`,
+}
+
+// validateUI checks ui.allow (issue #1287).
+//
+// Fatal, the same stance validateListen takes for trustedProxies and
+// for the same reason: an entry MikroView skipped would leave the
+// operator believing an address is admitted (or kept out) when it is
+// neither. It matters more here, because this setting is only editable
+// in the file -- a list that quietly dropped an entry is either a wall
+// that is not there or a lockout nobody can fix from the screen.
+func (c *Config) validateUI(fatal problemFunc) {
+	if _, err := ParseUIAllow(c.UI.Allow); err != nil {
+		fatal("CFG-0004", "ui.allow", err.Error(),
+			"list each address as an IP or CIDR, or leave the list empty to let every address reach the web UI")
+	}
 }
 
 func (c *Config) validateListen(fatal problemFunc) {

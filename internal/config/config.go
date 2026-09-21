@@ -144,16 +144,86 @@ func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 			}
 			continue
 		}
-		if p, err := netip.ParsePrefix(entry); err == nil {
-			out = append(out, p.Masked())
-			continue
-		}
-		addr, err := netip.ParseAddr(entry)
-		if err != nil {
+		p, ok := parseAddressEntry(entry)
+		if !ok {
 			return nil, fmt.Errorf("trusted proxy %q is neither an IP address nor a CIDR", entry)
 		}
-		addr = addr.Unmap()
-		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// parseAddressEntry turns one bare-IP-or-CIDR entry into a prefix. A
+// bare address becomes a single-host prefix, so "10.0.0.5" and
+// "10.0.0.5/32" mean the same thing wherever an operator writes a list
+// of addresses.
+//
+// Shared by ParseTrustedProxies and ParseUIAllow so the two lists
+// cannot start accepting subtly different spellings of the same
+// address. The Unmap matters: internal/api's clientIP reports an
+// IPv4-mapped IPv6 peer as plain IPv4, so a prefix written the mapped
+// way would never match the address it was meant to.
+func parseAddressEntry(entry string) (netip.Prefix, bool) {
+	if p, err := netip.ParsePrefix(entry); err == nil {
+		return p.Masked(), true
+	}
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	addr = addr.Unmap()
+	return netip.PrefixFrom(addr, addr.BitLen()), true
+}
+
+// UI holds settings for the browser-facing web interface itself, as
+// distinct from listen:'s ports (which the routers use too).
+//
+// There is exactly one key here and it is deliberately file-only: see
+// Allow.
+type UI struct {
+	// Allow limits which addresses may reach the web UI, as bare IPs or
+	// CIDRs (issue #1287). Empty or absent -- the default, and what
+	// every deployment before this key existed has -- means every
+	// address may, so an upgrade changes nothing.
+	//
+	// **This is a config-file setting and is never settable from the
+	// UI.** An admin editing an allow list from inside the screen the
+	// list governs can lock themselves out of it in one keystroke, with
+	// no way back in from the browser. Recovery is documented in
+	// docs/configuration.md and SECURITY.md: edit the file on the
+	// mikroview-etc volume and restart.
+	//
+	// The address judged is internal/api's resolved client address, so
+	// listen.trustedProxies decides whether a forwarding header counts.
+	// Behind a proxy with no trustedProxies set, every request carries
+	// the proxy's own address: the list would then admit everybody or
+	// nobody, which is why the two settings belong together.
+	//
+	// Router-facing paths are exempt -- see internal/api's
+	// uiAllowExemptPaths for the list and the reason each is on it.
+	Allow []string `yaml:"allow"`
+}
+
+// ParseUIAllow turns UI.Allow into prefixes for internal/api.
+//
+// Deliberately stricter than ParseTrustedProxies: there is no "private"
+// shorthand here. trustedProxies names infrastructure the operator
+// runs, where "the proxy is somewhere on my LAN" is a fair description;
+// this names the machines allowed to administer MikroView, and
+// "everything on the LAN, plus CGNAT, plus link-local" is not a list
+// anyone means to write for that.
+func ParseUIAllow(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, raw := range entries {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		p, ok := parseAddressEntry(entry)
+		if !ok {
+			return nil, fmt.Errorf("ui.allow entry %q is neither an IP address nor a CIDR", entry)
+		}
+		out = append(out, p)
 	}
 	return out, nil
 }
@@ -1131,6 +1201,7 @@ type Backup struct {
 
 type Config struct {
 	Listen         Listen         `yaml:"listen"`
+	UI             UI             `yaml:"ui"`
 	Store          Store          `yaml:"store"`
 	Log            Log            `yaml:"log"`
 	GeoIP          GeoIP          `yaml:"geoip"`

@@ -41,6 +41,30 @@ listen:
   # balancers; change it for a proxy that sets something else.
   # clientIpHeader: "X-Forwarded-For"
 
+# Which addresses may reach the web UI (issue #1287). Leave it out and
+# every address may, which is what every deployment before this key
+# existed has -- so upgrading changes nothing.
+#
+# Bare IPs or CIDRs. There is no "private" shorthand here, unlike
+# trustedProxies above: this says who may administer MikroView, and the
+# whole LAN plus CGNAT plus link-local is not what anyone means by that.
+#
+# Behind a reverse proxy, set listen.trustedProxies as well -- otherwise
+# every request carries the proxy's own address and this list admits
+# everybody or nobody.
+#
+# Routers are exempt: /ca.crt, the two push endpoints and the drop-list
+# feed still answer, since a router cannot be listed in a file it never
+# reads and each already has a tighter gate of its own.
+#
+# THIS IS A FILE-ONLY SETTING. It is deliberately not editable from
+# inside the app -- one slip on the screen the list governs would lock
+# you out of it. If that happens anyway, edit this file on the
+# mikroview-etc volume and restart; docs/configuration.md and
+# SECURITY.md show the exact command for a container with no shell.
+# ui:
+#   allow: ["192.168.1.20", "10.0.0.0/24"]
+
 store:
   retention: 24h
   # A memory budget, not an event count -- see docs/configuration.md's

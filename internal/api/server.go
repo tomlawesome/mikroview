@@ -354,6 +354,17 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	ClientIPHeader string
 
+	// UIAllow is config.yaml's ui.allow (issue #1287), parsed by
+	// config.ParseUIAllow: the addresses that may reach the web UI at
+	// all. Empty -- the default, and every deployment before the key
+	// existed -- admits everyone, so an upgrade changes nothing. See
+	// uiallow.go, and RestrictToAllowList for where it is enforced.
+	//
+	// Never settable from the UI: the list governs the screen it would
+	// be edited from, so a slip locks the admin out with no way back in
+	// from the browser.
+	UIAllow []netip.Prefix
+
 	// Tokens holds read-only API and ingest bearer tokens (issues #101,
 	// #186) -- always non-nil (internal/auth.OpenTokenStore("") returns a
 	// usable, empty, unpersisted store), same nil-never convention as
@@ -431,6 +442,16 @@ type Server struct {
 	// every test constructs) needs no extra setup.
 	ingestAuditMu sync.Mutex
 	ingestAudit   map[ingestAuditKey]ingestAuditState
+
+	// uiAllowAudit remembers, per refused address, when that address
+	// last produced an audit row, so a browser retrying (or a scanner
+	// hammering) does not write one per request. Same shape and same
+	// reasoning as ingestAudit above -- see noteUIRefusal, which also
+	// explains the extra cap this map needs and that one does not.
+	// Unexported and lazily built, so a zero-valued Server needs no
+	// setup.
+	uiAllowAuditMu sync.Mutex
+	uiAllowAudit   map[string]time.Time
 
 	// definitionsEnabledScopeMu serializes handleDefinitionsUpdate's
 	// read-merge-write of a definition's Enabled/Scope fields (issue

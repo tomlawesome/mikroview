@@ -69,6 +69,11 @@ listen:
   # trustedProxies: ["private"]
   # clientIpHeader: "X-Forwarded-For"  # this is the default
 
+# Optional. Leave it out and every address may reach the web UI -- see
+# "Limiting which addresses can reach the web UI" below.
+# ui:
+#   allow: ["192.168.1.20", "10.0.0.0/24"]
+
 store:
   retention: 24h
   maxMemory: 120MiB
@@ -684,6 +689,82 @@ A misconfigured entry here fails startup rather than being skipped —
 silently ignoring it would leave you believing forwarded addresses were
 being honoured when they weren't.
 
+### Limiting which addresses can reach the web UI
+
+`ui.allow` lists the addresses allowed to open MikroView in a browser.
+Anything else gets a plain `403 Forbidden` — not the login page, so
+there is nothing there to guess at.
+
+```yaml
+ui:
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+```
+
+- Bare IPs or CIDRs. There is no `"private"` shorthand here, unlike
+  `trustedProxies` above: that setting describes where your own proxy
+  sits, this one says who may administer MikroView, and "the whole LAN,
+  plus CGNAT, plus link-local" is not what anyone means by that.
+- **Leave the key out and every address may reach the UI.** That is the
+  default, and it is what every deployment had before this setting
+  existed, so upgrading changes nothing until you set it.
+- A bad entry fails startup rather than being skipped, for the same
+  reason as `trustedProxies` — and it matters more here, because a
+  skipped entry is either a wall that isn't there or a lockout.
+
+**Behind a reverse proxy, set `listen.trustedProxies` too.** The address
+checked is the one MikroView resolved for the request, which is the
+proxy's own address unless you have declared that proxy — so without it
+the list admits everyone who comes through the proxy, or nobody. See
+[Running behind a reverse proxy](#running-behind-a-reverse-proxy).
+
+**Your routers are not affected.** The certificate download (`/ca.crt`),
+the two push endpoints (`/api/ingest/routeros`,
+`/api/ingest/router-backup`) and the drop-list feed (`/api/droplist.rsc`)
+answer from any address, because a router cannot be listed in a file it
+never reads, and each of those already has a tighter gate of its own —
+a push is accepted only from the address that device enrolled from.
+Enrolling a router is unaffected as well: the router enrols by logging a
+marker line to the syslog port, not over the web port.
+
+This is not a replacement for signing in, and it does not change CSRF
+protection: a cross-site request rides your own browser, at your own —
+allowed — address.
+
+Each address turned away is recorded in the audit log once an hour
+(action `ui.address_refused`), not once per request: a scanner retrying
+would otherwise push every other entry out of the log.
+
+#### This setting is in the file only, and how to get back in
+
+`ui.allow` cannot be edited from inside MikroView, on purpose: the list
+governs the screen you would be editing it on, so one slip locks you out
+with no way back. It is read once at startup, so a change needs a
+restart.
+
+If you have locked yourself out, edit the file on the volume and restart
+the container. The image has no shell, so borrow one — this runs a
+throwaway `alpine` container with the same volume mounted, edits the
+file there, and exits:
+
+```sh
+docker run --rm -it -v mikroview-etc:/etc/mikroview alpine vi /etc/mikroview/config.yaml
+docker restart mikroview
+```
+
+Fix the `allow:` list to include the address you are coming from, or
+delete the whole `ui:` block to go back to admitting everyone. If you
+are using a bind mount (`./mikroview:/etc/mikroview:ro`) rather than a
+named volume, the file is just a file on the host — edit it there and
+restart, no helper container needed.
+
+Two things worth checking before you conclude the list is wrong:
+
+- Run `mikroview -validate-config` (see below) — it reports a malformed
+  entry with the key name and a corrected example.
+- Check which address MikroView actually sees you arriving from. Behind
+  a proxy that is the proxy's address unless `listen.trustedProxies`
+  names it.
+
 ### Checking your config before you deploy
 
 ```
@@ -774,6 +855,21 @@ ignored entirely.
 listen:
   trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
   # trustedProxies: ["private"]   # a proxy on your LAN or docker network
+```
+
+#### CFG-0004
+
+`ui.allow` has an entry that is not an IP or a CIDR. There is no
+`private` shorthand for this key. Leaving the list out entirely is fine
+and means every address may reach the web UI. See
+[Limiting which addresses can reach the web UI](#limiting-which-addresses-can-reach-the-web-ui).
+
+```yaml
+ui:
+  # only these may reach the web UI ...
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+  # ... or leave the list out entirely, which admits every address
+  # allow: []
 ```
 
 #### CFG-0010
