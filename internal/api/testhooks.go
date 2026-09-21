@@ -99,8 +99,8 @@ func (s *Server) handleTestClockAdvance(w http.ResponseWriter, r *http.Request) 
 // expectations a verdict recorded), the match log, every pushed
 // router-state table, every definition -- re-seeded straight afterwards
 // with this binary's shipped catalogue, since an empty definitions store
-// evaluates nothing -- and the watchlist suggestions generated from
-// router state.
+// evaluates nothing -- the watchlist suggestions generated from router
+// state, and every account's preferences record (#1283).
 //
 // What it keeps is identity and configuration: accounts, live sessions
 // (the caller's own included, or this would sign the harness out
@@ -154,8 +154,20 @@ func (s *Server) handleTestReset(w http.ResponseWriter, r *http.Request) {
 		s.Suggest.Sync(suggest.Generate(s.RouterState))
 	}
 
+	if s.Prefs != nil {
+		// #1283: preferences live on the server per account now, and
+		// every scenario signs in as the same harness admin -- so
+		// without this, one scenario's altitude or column choice is the
+		// next one's starting point (pipeline 1408, shards 1 and 4).
+		// Before #1283 the fresh browser context did this for free.
+		if err := s.Prefs.Reset(); err != nil {
+			http.Error(w, fmt.Sprintf("clearing preferences: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cleared":     []string{"events", "flags", "matches", "router-state", "definitions", "suggestions"},
+		"cleared":     []string{"events", "flags", "matches", "router-state", "definitions", "suggestions", "preferences"},
 		"kept":        []string{"accounts", "sessions", "devices", "tokens", "settings", "setup"},
 		"definitions": definitions,
 	})

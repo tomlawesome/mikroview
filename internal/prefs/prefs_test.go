@@ -57,6 +57,36 @@ func TestPutThenGetRoundTrips(t *testing.T) {
 	}
 }
 
+func TestResetDropsEveryRecordAndPersistsThat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"user-1", "user-2"} {
+		if err := s.Put(id, json.RawMessage(`{"colorway":"teal"}`)); err != nil {
+			t.Fatalf("Put %s: %v", id, err)
+		}
+	}
+	if err := s.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	for _, id := range []string{"user-1", "user-2"} {
+		if _, ok := s.Get(id); ok {
+			t.Errorf("%s still has a record after Reset", id)
+		}
+	}
+	// Durable, not just in memory: a reopened store must not resurrect
+	// what the reset was told had gone.
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reopened.Get("user-1"); ok {
+		t.Error("user-1's record came back after reopening the store")
+	}
+}
+
 func TestPutReplacesTheWholeRecord(t *testing.T) {
 	s, err := Open("")
 	if err != nil {
