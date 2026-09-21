@@ -274,6 +274,34 @@ else
   echo "skip: install/compose hardening parity (install.sh or deploy/docker-compose.yml not present)"
 fi
 
+# ---------------------------------------------------------------------
+# 9. shot markers realized: a `<!-- shot: ... -->` marker in README.md,
+#    docs/*.md or .github/workflows/pages.yml marks where a screenshot
+#    belongs. Capturing the image replaces the marker with an
+#    ![alt](screenshots/x.png) line in its place (see 37ed20af) -- so a
+#    marker still standing means no image was ever captured for it,
+#    whatever filename it will eventually get. Check 6 above only ever
+#    saw markers that had already become images; two markers that never
+#    did sat unnoticed in docs/routeros-setup.md until a human audit
+#    found them (#1297).
+# ---------------------------------------------------------------------
+shot_fails=0
+for f in README.md docs/*.md .github/workflows/pages.yml; do
+  [ -f "$f" ] || continue
+  grep -noE '<!-- shot:.*-->' "$f" 2>/dev/null >"$tmpd/shot-hits" || true
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    lineno=${hit%%:*}
+    marker=${hit#*:}
+    desc=$(echo "$marker" | sed -E 's/^<!-- shot: *//; s/ *-->$//')
+    fail "$f:$lineno -- shot marker '$desc' has no screenshot yet, capture the image and replace the marker with it"
+    shot_fails=$((shot_fails + 1))
+  done <"$tmpd/shot-hits"
+done
+if [ "$shot_fails" -eq 0 ]; then
+  ok "no unrealized shot markers"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then
   echo "check-release-surfaces: $fails check(s) failed"
