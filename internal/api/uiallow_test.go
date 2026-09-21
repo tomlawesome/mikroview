@@ -191,8 +191,10 @@ func TestUIAllowJudgesForwardedAddressesOnlyFromATrustedProxy(t *testing.T) {
 }
 
 // TestUIAllowExemptPathsStayReachableFromOutsideTheList: a router is
-// not a browser, and it cannot be listed in a file it never reads. Each
-// of these paths has its own, narrower gate -- see uiAllowExemptPaths.
+// not a browser, and it cannot be listed in a file it never reads; nor
+// is the container's own HEALTHCHECK, which probes /api/healthz from
+// loopback. Each of these paths has its own, narrower gate (or, for
+// healthz, nothing to guard) -- see uiAllowExemptPaths.
 func TestUIAllowExemptPathsStayReachableFromOutsideTheList(t *testing.T) {
 	s := uiAllowServer(t, []string{"192.168.1.0/24"})
 	h, reached := uiAllowReached(s)
@@ -205,6 +207,7 @@ func TestUIAllowExemptPathsStayReachableFromOutsideTheList(t *testing.T) {
 		"/api/ingest/routeros",
 		"/api/ingest/router-backup",
 		"/api/droplist.rsc",
+		"/api/healthz",
 	} {
 		*reached = false
 		w := httptest.NewRecorder()

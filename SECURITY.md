@@ -681,7 +681,8 @@ damage a hostile or misbehaving LAN device can do:
   everyone through it. Router-facing paths (`/ca.crt`, the two push
   endpoints, the drop-list feed) are exempt, because a router cannot be
   listed in a file it never reads and each already has a tighter gate
-  of its own.
+  of its own; so is `/api/healthz`, which the container's own health
+  check probes from loopback and which never needed a session anyway.
 
   **It is a file-only setting, and there is no way back in from the
   browser** — the list governs the screen you would edit it on. If you

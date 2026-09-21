@@ -33,6 +33,14 @@ import (
 //   - "/api/droplist.rsc" -- the drop-list feed a router's scheduled
 //     `/tool fetch` pulls (#1224). Bearer-only, on its own single-route
 //     mux, and the whole blast radius of that key is this one file.
+//   - "/api/healthz" -- the liveness probe. The container's own
+//     HEALTHCHECK (main.go's runHealthcheck) fetches it from loopback,
+//     and an orchestrator's readiness probe fetches it from wherever
+//     the orchestrator lives; neither is a browser, and an operator who
+//     listed only their workstation would otherwise have Docker mark
+//     the container unhealthy and restart it on a loop. It was already
+//     the one endpoint answering with no auth and no session
+//     (server.go, Version), so exempting it discloses nothing new.
 //
 // The enrolment flow is not on this list because none of it is served
 // over HTTP: a router enrols by logging the marker line
@@ -52,6 +60,7 @@ var uiAllowExemptPaths = map[string]bool{
 	"/api/ingest/routeros":      true,
 	"/api/ingest/router-backup": true,
 	"/api/droplist.rsc":         true,
+	"/api/healthz":              true,
 }
 
 // uiAllowAuditInterval is how long one refused address may keep being

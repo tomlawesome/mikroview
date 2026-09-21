@@ -28,7 +28,9 @@ rewritten.
   both push endpoints and the drop-list feed still answer from any
   address, because a router cannot be listed in a file it never reads
   and each already has a tighter gate of its own. Enrolling a router is
-  unaffected too — that happens over the syslog port.
+  unaffected too — that happens over the syslog port. The health probe
+  (`/api/healthz`) stays open as well, so the container's own health
+  check keeps passing whatever you list.
 
   Behind a reverse proxy, set `listen.trustedProxies` as well: the
   address checked is the one MikroView resolved for the request, which

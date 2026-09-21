@@ -724,7 +724,10 @@ answer from any address, because a router cannot be listed in a file it
 never reads, and each of those already has a tighter gate of its own —
 a push is accepted only from the address that device enrolled from.
 Enrolling a router is unaffected as well: the router enrols by logging a
-marker line to the syslog port, not over the web port.
+marker line to the syslog port, not over the web port. The health probe
+(`/api/healthz`) also answers from any address, so the container's own
+health check — which runs from inside the container, at an address you
+would not think to list — keeps passing.
 
 This is not a replacement for signing in, and it does not change CSRF
 protection: a cross-site request rides your own browser, at your own —
