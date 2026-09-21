@@ -138,6 +138,15 @@ fi
 #    than falling back to a guess this check cannot stand behind. Add
 #    an entry (and keep it current) whenever a screenshot is added or
 #    the component it depicts changes shape.
+#
+#    A recapture that comes out pixel-identical is the awkward case
+#    (#1317): the component moved somewhere the crop does not show, so
+#    the picture is genuinely current, but git has nothing to commit
+#    and the image's own last commit cannot move -- the check would
+#    then fail for ever, with no honest way to clear it. A sibling
+#    `<image>.checked` file records that recapture: whoever ran it says
+#    which commit they ran it at, and that file's commit counts as the
+#    capture point. Drift after it is caught exactly as before.
 # ---------------------------------------------------------------------
 screenshot_sources() {
   case "$1" in
@@ -170,6 +179,10 @@ while IFS= read -r png; do
   if [ -z "$last" ]; then
     fail "$png -- untracked (never committed), capture and commit a real screenshot before release"
     continue
+  fi
+  rechecked=$(git log -1 --format=%H -- "$png.checked" 2>/dev/null || true)
+  if [ -n "$rechecked" ] && ! git merge-base --is-ancestor "$rechecked" "$last" 2>/dev/null; then
+    last="$rechecked"
   fi
   sources=$(screenshot_sources "$png") || {
     fail "$png -- no entry in check-release-surfaces.sh's screenshot_sources(), add one naming the file(s) it depicts so freshness can be checked"
