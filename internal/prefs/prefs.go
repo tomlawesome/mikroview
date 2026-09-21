@@ -172,6 +172,26 @@ func (s *Store) Delete(userID string) error {
 	return nil
 }
 
+// Reset drops every user's record. Only the test-hook reset
+// (handleTestReset, #1064) calls it: scenarios in a gate shard share
+// one instance and one admin account, and before #1283 each scenario's
+// fresh browser context gave it fresh preferences for free -- with the
+// record on the server, a sibling's altitude or column choice would
+// otherwise carry into the next scenario. Restore-on-error like Delete,
+// for the same reason.
+func (s *Store) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prev := s.records
+	s.records = make(map[string]json.RawMessage)
+	if err := s.tryPersistLocked(); err != nil {
+		s.records = prev
+		return fmt.Errorf("saving preferences: %w", err)
+	}
+	return nil
+}
+
 // tryPersistLocked re-encodes the whole document and writes it through
 // persist.SaveWithRetry. Whole-document rather than per-user, matching
 // every sibling store: one canonical encoding is what makes "did this
