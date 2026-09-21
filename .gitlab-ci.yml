@@ -1466,7 +1466,17 @@ security:gosec:
     name: ghcr.io/securego/gosec:2.29.0
     entrypoint: [""]
   <<: *dev_or_mr_code
+  # The image ships its own Go (1.27.0 in 2.29.0) with GOTOOLCHAIN=local,
+  # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.1)
+  # gosec cannot load a single package -- and in SARIF mode it says
+  # nothing about why: exit 1, an empty results array, one second of
+  # runtime. `auto` lets Go fetch the go.mod toolchain instead; `go
+  # version` prints which one actually ran so the next mismatch is
+  # readable in the log rather than reconstructed from the timing.
+  variables:
+    GOTOOLCHAIN: auto
   script:
+    - go version
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
     when: always
