@@ -138,6 +138,10 @@ workflow:
   - "docs/**/*.gif"
   - "docs/**/*.webp"
   - "docs/**/*.svg"
+  # The note beside a screenshot recording that a recapture came out
+  # byte-for-byte identical (#1317, check-release-surfaces.sh). It is a
+  # sentence about a picture, and changes nothing the code does.
+  - "docs/**/*.png.checked"
 
 .code_paths: &code_paths
   # Source extensions at any depth. These are what catch a file in a
