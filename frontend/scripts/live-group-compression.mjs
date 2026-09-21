@@ -42,7 +42,9 @@ await waitForStreamRows(page, 50)
 const rowCount = () => page.$$eval('.grid .row', (els) => els.length)
 
 async function setGroupMode(desired) {
-  const current = await page.evaluate(() => localStorage.getItem('mikroview:group') === '1')
+  // The pill's own pressed state, not a storage key: the preference
+  // lives on the server since #1283, and the pill is what a reader sees.
+  const current = (await page.getAttribute('.spans.hand button:text-is("group")', 'aria-pressed')) === 'true'
   if (current !== desired) {
     // Round 30 retired the scene-bar toolbar's "Group" button; rounds
     // 36-38 put it on the whisper's own hand as a lowercase `group` pill

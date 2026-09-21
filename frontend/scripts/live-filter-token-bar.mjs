@@ -171,13 +171,32 @@ check(
 //
 // Saved through the app's own store rather than the `save this filter
 // as…` row, which opens a window.prompt() a scenario cannot type into.
-await page.evaluate(() => {
-  const preset = {
-    name: 'mv1246 scans',
-    filters: { action: 'drop', chain: 'forward', srcScope: 'external' },
-  }
-  localStorage.setItem('mikroview-filter-presets', JSON.stringify([preset]))
-})
+// The store is the per-user record on the server since #1283 (key
+// `presets`), so the seed is a PUT of that record, read back by the
+// reload below the same way a fresh sign-in would read it.
+const putPresets = (page, presets) =>
+  page.evaluate(async (presets) => {
+    const res = await fetch('/api/me/preferences', { cache: 'no-store' })
+    const body = res.ok ? await res.json() : { version: 1, prefs: {} }
+    const prefs = { ...(body.prefs ?? {}) }
+    if (presets === null) delete prefs.presets
+    else prefs.presets = presets
+    const put = await fetch('/api/me/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      body: JSON.stringify({ version: 1, prefs }),
+    })
+    return put.status
+  }, presets)
+check(
+  (await putPresets(page, [
+    {
+      name: 'mv1246 scans',
+      filters: { action: 'drop', chain: 'forward', srcScope: 'external' },
+    },
+  ])) === 204,
+  'the saved filter is seeded into the per-user preferences record',
+)
 await page.reload({ waitUntil: 'networkidle' })
 await page.waitForSelector('#main-content', { timeout: 15000 })
 // A bare reload lands back on the app's own default view (the fall,
@@ -240,7 +259,7 @@ check(
 
 // Cleanup: leave the box empty and the saved list as it was found, for
 // whatever runs next on this shared instance.
-await page.evaluate(() => localStorage.removeItem('mikroview-filter-presets'))
+await putPresets(page, null)
 await page.keyboard.press('Escape')
 await page.reload({ waitUntil: 'networkidle' }).catch(() => {})
 
