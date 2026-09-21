@@ -88,7 +88,6 @@ beforeEach(() => {
   topologyNavState.pendingDescend = null
   wizardState.open = false
   altitudeStopState.stop = 'city'
-  localStorage.removeItem('mikroview:topography-altitude')
 })
 
 afterEach(() => {

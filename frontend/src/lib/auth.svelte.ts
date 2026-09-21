@@ -20,6 +20,7 @@ import { auditState } from "./audit.svelte";
 import { persistenceState } from "./persistence.svelte";
 import { configProblemsState } from "./configProblems.svelte";
 import { configUpgradeState } from "./configUpgrade.svelte";
+import { preferencesState } from "./preferences.svelte";
 import type { AuthSession } from "./types";
 
 // 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
@@ -86,6 +87,14 @@ function clearSessionState() {
   // accessAdmin rows of internal/api/authz_matrix_test.go) whose
   // answer lived in a module-level store rather than a component.
   configUpgradeState.reset();
+  // #1283: the shared per-user preferences record (presets, top-talker
+  // widgets, colorway, and the rest of the nine modules that used to
+  // read/write localStorage directly). logout() below has already
+  // flushed anything pending while the session was still good; this
+  // just drops the in-memory copy so the next sign-in on this tab
+  // starts from ensureLoaded() again rather than the previous
+  // account's cached record.
+  preferencesState.reset();
 }
 
 // 'loading' only lasts for the initial check() call on app boot; after
@@ -262,6 +271,19 @@ class AuthState {
       this.hasLocalPassword = session.hasLocalPassword ?? true;
       this.ssoConnected = session.ssoConnected ?? false;
       this.signedInSince = session.signedInSince ?? "";
+      // #1283: the one place preferences load from the server, rather
+      // than each of the nine modules reading localStorage at import
+      // time. Gated on the real 'authenticated' view, not
+      // 'must-change-password' -- that session 403s everything but the
+      // set-a-new-password route (see AuthViewState's own comment), so
+      // there is nothing yet for this account to fetch or apply. Not
+      // awaited -- check() runs on every boot and re-check (login,
+      // register, signOutEverywhere), and ensureLoaded() is itself
+      // idempotent (a no-op once loaded, joins the same fetch if one is
+      // already in flight), so calling it here on every pass is cheap
+      // and simpler than tracking "did this transition freshly into
+      // authenticated" separately.
+      if (this.state === "authenticated") void preferencesState.ensureLoaded();
     } else {
       this.state = "unauthenticated";
       this.username = "";
@@ -312,6 +334,12 @@ class AuthState {
   // check() straight back into the account the user just tried to
   // leave.
   async logout(): Promise<string | null> {
+    // #1283: send any preference change still sitting inside its 500ms
+    // debounce window before the server call below ends the session --
+    // clearSessionState() further down drops the in-memory record
+    // (preferencesState.reset()) but does not itself flush, since by
+    // then the session may already be gone.
+    await preferencesState.flush();
     const err = await logout();
     this.state = "unauthenticated";
     this.username = "";
