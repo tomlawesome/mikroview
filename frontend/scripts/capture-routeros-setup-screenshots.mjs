@@ -207,7 +207,11 @@ async function signedInPage() {
   await page.click('button.berth-trigger[aria-label="Add a router"]')
   const wizard = page.locator('.setup-wizard')
   await wizard.waitFor({ timeout: 10000 })
-  await page.fill('#router-name', 'capture-send-logs-router')
+  // Named like a real fleet member, not like capture scaffolding: this
+  // name is in frame at step 1 ("named branch-hex"), and seed-demo.py's
+  // own devices (border-rb5009, office-hex, ...) and the refused-sender
+  // shot's rb5009 set the voice a shipped doc image should match.
+  await page.fill('#router-name', 'branch-hex')
   // Next is what creates the router on the Name step, and it advances
   // the ledger to Send logs itself (SetupWizard.svelte's onNext) -- there
   // is no second Next to click for that move.
@@ -289,7 +293,7 @@ async function signedInPage() {
   const deviceId = await page.evaluate(async () => {
     const res = await fetch('/api/devices')
     const body = await res.json()
-    return body.devices?.find((d) => d.name === 'capture-send-logs-router')?.id ?? null
+    return body.devices?.find((d) => d.name === 'branch-hex')?.id ?? null
   })
   if (deviceId) {
     const deleteStatus = await page.evaluate(async (id) => {
