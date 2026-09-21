@@ -332,6 +332,24 @@ check "$([ "$rc" -eq 0 ] && echo true || echo false)" "no install.sh/docker-comp
 check "$(case "$out" in *"skip: install/compose hardening parity"*) echo true;; *) echo false;; esac)" \
   "and says so"
 
+# --- check 9: shot markers realized -----------------------------------------
+
+# a <!-- shot: --> marker with no image in its place fails, naming the
+# file, the line, and the marker's own text
+c9a="$TMP/case9a-shot-marker"
+cp -r "$good" "$c9a"
+printf '\n<!-- shot: the widget in its collapsed state -->\n' >>"$c9a/docs/x.md"
+commit "$c9a" "2026-01-02T00:00:00" "add an unrealized shot marker"
+run "$c9a"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "an unrealized shot marker fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/x.md:"*"shot marker 'the widget in its collapsed state' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
+  "and names the file, the line, and the marker's own text"
+
+# a fixture with no shot markers at all passes that check specifically
+run "$good"
+check "$(case "$out" in *"ok: no unrealized shot markers"*) echo true;; *) echo false;; esac)" \
+  "a fixture with no shot markers passes"
+
 echo
 if [ "$fails" -ne 0 ]; then
   echo "check-release-surfaces.test.sh: $fails check(s) failed"
