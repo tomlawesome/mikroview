@@ -163,7 +163,7 @@ block, with a live token already filled in:
 /log info "mikroview-enrol <token>"
 ```
 
-![The wizard's Send logs step just after minting a token: the command block above, and "Token good until 14:32 (15 minutes) · Reroll" beneath it](screenshots/setup-wizard-send-logs.png)
+![The wizard's Send logs step just after minting a token: the command block above, its last line blanked out, and the token's expiry beside a Reroll control beneath it](screenshots/setup-wizard-send-logs.png)
 
 Before it mints that token the wizard asks for the router's own address
 and for your password. The address is the only one MikroView opens the
