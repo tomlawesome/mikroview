@@ -153,6 +153,10 @@ screenshot_sources() {
       echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
     docs/screenshots/entities-add-a-router.png)
       echo "frontend/src/components/Entities.svelte" ;;
+    docs/screenshots/entities-refused-sender.png)
+      echo "frontend/src/components/Entities.svelte" ;;
+    docs/screenshots/setup-wizard-send-logs.png)
+      echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
     *)
       return 1 ;;
   esac
