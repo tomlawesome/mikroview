@@ -203,7 +203,18 @@ check(
 )
 
 const permitAllBtn = openDrawer().getByRole('button', { name: /permit all/ })
-if (await permitAllBtn.count()) await permitAllBtn.click()
+if (await permitAllBtn.count()) {
+  await permitAllBtn.click()
+  // permit all only shows while unpermitted.length > 0 (Watchlist.svelte) --
+  // its own success takes that to 0, so this button leaves the DOM, which
+  // shifts "fence now" left in the same button row right as the next click
+  // is attempted. Under Firefox that lands mid-shift often enough to report
+  // "not stable" / "outside of the viewport" / "detached" for the full 30s
+  // (#1315). Wait for the drawer's own settled signal -- this button
+  // actually gone -- rather than a sleep, so "fence now" is clicked only
+  // once the row has stopped moving.
+  await permitAllBtn.waitFor({ state: 'detached', timeout: 5000 })
+}
 
 await openDrawer().getByRole('button', { name: /fence now/ }).click()
 // isVisible() does not wait (live-suggestions-matches.mjs's own header

@@ -16,6 +16,42 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **You can limit the web UI to the addresses that administer it**
+  (#1287). A new `ui.allow` in `config.yaml` takes a list of IPs or
+  CIDRs; anything else gets a plain `403` rather than the login page.
+  Leave the key out — as every existing deployment has — and every
+  address may reach the UI, so upgrading changes nothing.
+
+  Your routers are unaffected: the certificate download (`/ca.crt`),
+  both push endpoints and the drop-list feed still answer from any
+  address, because a router cannot be listed in a file it never reads
+  and each already has a tighter gate of its own. Enrolling a router is
+  unaffected too — that happens over the syslog port. The health probe
+  (`/api/healthz`) stays open as well, so the container's own health
+  check keeps passing whatever you list.
+
+  Behind a reverse proxy, set `listen.trustedProxies` as well: the
+  address checked is the one MikroView resolved for the request, which
+  is the proxy's own until you declare the proxy.
+
+  **It is a config-file setting and is deliberately not editable from
+  the app** — the list governs the screen you would edit it on. If you
+  lock yourself out, edit the file on the `mikroview-etc` volume and
+  restart the container; docs/configuration.md and SECURITY.md give the
+  exact command for an image with no shell. Each address turned away is
+  audited once an hour (`ui.address_refused`), not once per request.
+
+### Fixed
+
+- **The Go toolchain was pinned to two different patches at once**:
+  `go.mod` and the Dockerfile named `1.27.0` while `.gitlab-ci.yml`
+  floated on `golang:1.27`, which had already moved to `1.27.1` — so CI
+  built and tested on a patch the shipped image never ran. All four
+  places now name `1.27.1`, and `lint:supply-chain-pins` fails if they
+  ever disagree again (#1312).
+
 ### Removed
 
 - **`configDrift.storePath` is gone**, along with the backend it

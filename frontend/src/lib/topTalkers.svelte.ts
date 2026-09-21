@@ -2,6 +2,7 @@
 
 import { emptyFilters, type Filters } from './types'
 import type { GroupByField } from './groupBy'
+import { preferencesState } from './preferences.svelte'
 
 export interface TopTalkerWidget {
   id: string
@@ -10,29 +11,22 @@ export interface TopTalkerWidget {
   filters: Filters
 }
 
-const STORAGE_KEY = 'mikroview-top-talker-widgets'
+// #1283: was its own localStorage key ('mikroview-top-talker-widgets').
+const PREFS_KEY = 'topTalkers'
 const DEFAULT_GROUP_BY: GroupByField = 'srcIp'
 
-function loadInitial(): TopTalkerWidget[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    // Merge each stored widget's filters over a fresh emptyFilters(), same
-    // reasoning as lib/presets.svelte.ts: a widget saved before a new
-    // filter field existed shouldn't end up missing keys.
-    return parsed
-      .filter((w): w is TopTalkerWidget => typeof w?.id === 'string' && typeof w?.title === 'string')
-      .map((w) => ({
-        id: w.id,
-        title: w.title,
-        groupBy: (w.groupBy as GroupByField) || DEFAULT_GROUP_BY,
-        filters: { ...emptyFilters(), ...w.filters },
-      }))
-  } catch {
-    return []
-  }
+// Same reasoning as lib/presets.svelte.ts: a widget saved before a new
+// filter field existed shouldn't end up missing keys.
+function sanitize(value: unknown): TopTalkerWidget[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((w): w is TopTalkerWidget => typeof w?.id === 'string' && typeof w?.title === 'string')
+    .map((w) => ({
+      id: w.id,
+      title: w.title,
+      groupBy: (w.groupBy as GroupByField) || DEFAULT_GROUP_BY,
+      filters: { ...emptyFilters(), ...w.filters },
+    }))
 }
 
 function makeId(): string {
@@ -40,7 +34,13 @@ function makeId(): string {
 }
 
 class TopTalkerWidgetsState {
-  widgets = $state<TopTalkerWidget[]>(loadInitial())
+  widgets = $state<TopTalkerWidget[]>([])
+
+  constructor() {
+    preferencesState.register(PREFS_KEY, (value) => {
+      this.widgets = sanitize(value)
+    })
+  }
 
   add(title: string, groupBy: GroupByField, filters: Filters) {
     const trimmed = title.trim()
@@ -55,11 +55,7 @@ class TopTalkerWidgetsState {
   }
 
   private persist() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.widgets))
-    } catch {
-      // storage unavailable -- widgets just won't persist across reloads
-    }
+    preferencesState.set(PREFS_KEY, this.widgets)
   }
 }
 

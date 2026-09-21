@@ -69,6 +69,11 @@ listen:
   # trustedProxies: ["private"]
   # clientIpHeader: "X-Forwarded-For"  # this is the default
 
+# Optional. Leave it out and every address may reach the web UI -- see
+# "Limiting which addresses can reach the web UI" below.
+# ui:
+#   allow: ["192.168.1.20", "10.0.0.0/24"]
+
 store:
   retention: 24h
   maxMemory: 120MiB
@@ -684,6 +689,85 @@ A misconfigured entry here fails startup rather than being skipped —
 silently ignoring it would leave you believing forwarded addresses were
 being honoured when they weren't.
 
+### Limiting which addresses can reach the web UI
+
+`ui.allow` lists the addresses allowed to open MikroView in a browser.
+Anything else gets a plain `403 Forbidden` — not the login page, so
+there is nothing there to guess at.
+
+```yaml
+ui:
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+```
+
+- Bare IPs or CIDRs. There is no `"private"` shorthand here, unlike
+  `trustedProxies` above: that setting describes where your own proxy
+  sits, this one says who may administer MikroView, and "the whole LAN,
+  plus CGNAT, plus link-local" is not what anyone means by that.
+- **Leave the key out and every address may reach the UI.** That is the
+  default, and it is what every deployment had before this setting
+  existed, so upgrading changes nothing until you set it.
+- A bad entry fails startup rather than being skipped, for the same
+  reason as `trustedProxies` — and it matters more here, because a
+  skipped entry is either a wall that isn't there or a lockout.
+
+**Behind a reverse proxy, set `listen.trustedProxies` too.** The address
+checked is the one MikroView resolved for the request, which is the
+proxy's own address unless you have declared that proxy — so without it
+the list admits everyone who comes through the proxy, or nobody. See
+[Running behind a reverse proxy](#running-behind-a-reverse-proxy).
+
+**Your routers are not affected.** The certificate download (`/ca.crt`),
+the two push endpoints (`/api/ingest/routeros`,
+`/api/ingest/router-backup`) and the drop-list feed (`/api/droplist.rsc`)
+answer from any address, because a router cannot be listed in a file it
+never reads, and each of those already has a tighter gate of its own —
+a push is accepted only from the address that device enrolled from.
+Enrolling a router is unaffected as well: the router enrols by logging a
+marker line to the syslog port, not over the web port. The health probe
+(`/api/healthz`) also answers from any address, so the container's own
+health check — which runs from inside the container, at an address you
+would not think to list — keeps passing.
+
+This is not a replacement for signing in, and it does not change CSRF
+protection: a cross-site request rides your own browser, at your own —
+allowed — address.
+
+Each address turned away is recorded in the audit log once an hour
+(action `ui.address_refused`), not once per request: a scanner retrying
+would otherwise push every other entry out of the log.
+
+#### This setting is in the file only, and how to get back in
+
+`ui.allow` cannot be edited from inside MikroView, on purpose: the list
+governs the screen you would be editing it on, so one slip locks you out
+with no way back. It is read once at startup, so a change needs a
+restart.
+
+If you have locked yourself out, edit the file on the volume and restart
+the container. The image has no shell, so borrow one — this runs a
+throwaway `alpine` container with the same volume mounted, edits the
+file there, and exits:
+
+```sh
+docker run --rm -it -v mikroview-etc:/etc/mikroview alpine vi /etc/mikroview/config.yaml
+docker restart mikroview
+```
+
+Fix the `allow:` list to include the address you are coming from, or
+delete the whole `ui:` block to go back to admitting everyone. If you
+are using a bind mount (`./mikroview:/etc/mikroview:ro`) rather than a
+named volume, the file is just a file on the host — edit it there and
+restart, no helper container needed.
+
+Two things worth checking before you conclude the list is wrong:
+
+- Run `mikroview -validate-config` (see below) — it reports a malformed
+  entry with the key name and a corrected example.
+- Check which address MikroView actually sees you arriving from. Behind
+  a proxy that is the proxy's address unless `listen.trustedProxies`
+  names it.
+
 ### Checking your config before you deploy
 
 ```
@@ -774,6 +858,21 @@ ignored entirely.
 listen:
   trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
   # trustedProxies: ["private"]   # a proxy on your LAN or docker network
+```
+
+#### CFG-0004
+
+`ui.allow` has an entry that is not an IP or a CIDR. There is no
+`private` shorthand for this key. Leaving the list out entirely is fine
+and means every address may reach the web UI. See
+[Limiting which addresses can reach the web UI](#limiting-which-addresses-can-reach-the-web-ui).
+
+```yaml
+ui:
+  # only these may reach the web UI ...
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+  # ... or leave the list out entirely, which admits every address
+  # allow: []
 ```
 
 #### CFG-0010
@@ -1405,6 +1504,29 @@ guarantee the read-only and ingest tokens carry (see [API
 tokens](#api-tokens-read-only)). Minting again **replaces** the existing
 key rather than adding a second one -- every router that fetches the drop
 list uses the same key, so there is only ever one to rotate.
+
+## Preferences: settings live on the server, per user (#1283)
+
+Every preference a user's browser used to keep in `localStorage` --
+saved filter presets, top-talker widgets, accent colour, column widths
+and visibility, and the rest -- is now one versioned JSON record per
+account on the server, read on sign-in and written on change. Signing
+out and signing in as someone else on the same browser shows that
+person's own settings, not the last one's, and a user's settings follow
+them to any browser they sign into. The record is cleared when the
+account itself is deleted. See `GET`/`PUT /api/me/preferences` in the
+[API reference](#api-reference); this package never interprets what is
+inside a record, so the frontend modules that own each key are the
+source of truth for its shape.
+
+```yaml
+prefs:
+  # Where preferences are persisted, as a small JSON file. Same
+  # optional-persistence contract as droplist.storePath: left unset,
+  # preferences still work for the running process, they just don't
+  # survive a restart.
+  storePath: "/var/lib/mikroview/preferences.json"
+```
 
 ## Network attribution (optional, on by default)
 
@@ -4215,6 +4337,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
 | `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-12231224)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
+| `MIKROVIEW_PREFS_STORE_PATH` | `prefs.storePath` (see [Preferences: settings live on the server, per user](#preferences-settings-live-on-the-server-per-user-1283)) -- where per-user preferences records persist |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
@@ -4542,6 +4665,8 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
+| `GET /api/me/preferences` | open to any signed-in user, not admin-gated: the caller's own preferences record (#1283), as `{"version": 1, "prefs": {...}}`. A user with no stored record yet gets `{"version": 1, "prefs": {}}`, not a 404 -- see [Preferences](#preferences-settings-live-on-the-server-per-user-1283) |
+| `PUT /api/me/preferences` | open to any signed-in user, not admin-gated: replaces the caller's whole preferences record with the given `{"version": 1, "prefs": {...}}`. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |

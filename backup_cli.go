@@ -88,6 +88,12 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
 		{"droplist", cfg.Droplist.StorePath},
+		// Per-user preferences (#1283): a versioned JSON record per
+		// account -- presets and top-talker widgets carry account
+		// content that used to live only in the browser, so a restore
+		// missing this would silently reset every user back to the
+		// defaults their own module ships with.
+		{"prefs", cfg.Prefs.StorePath},
 	}
 }
 

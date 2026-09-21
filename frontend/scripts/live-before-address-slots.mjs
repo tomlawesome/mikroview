@@ -165,6 +165,22 @@ check(
 // zonesState.refresh() only runs from Topography's own mount effect,
 // keyed on the device list rather than this push (Topography.svelte) --
 // load-only, so the freshly pushed table needs a reload to reach the map.
+//
+// The reload has to come back at the same stop, or the zone cards below
+// stay put away behind the city. Since #1283 the slider's choice lives
+// on the server (GET /api/me/preferences, key `altitudeStop`) behind a
+// 500ms debounce, so wait for the record to hold it rather than race
+// the write with the reload.
+const storedStop = await page.evaluate(async () => {
+  for (let i = 0; i < 20; i++) {
+    const res = await fetch('/api/me/preferences', { cache: 'no-store' })
+    const body = res.ok ? await res.json() : {}
+    if (body?.prefs?.altitudeStop === 'zones') return 'zones'
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  return null
+})
+check(storedStop === 'zones', `the altitude stop is persisted before the reload -- got ${JSON.stringify(storedStop)}`)
 await page.reload()
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector(`${topo} .zone`, { timeout: 10000 })

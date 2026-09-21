@@ -31,6 +31,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
+	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -256,6 +257,15 @@ type Server struct {
 	// /api/droplist/{cidr...}, the key routes and the RouterOS feed
 	// below all read and write through this store.
 	Droplist *droplist.Store
+	// Prefs is the per-user preferences store (issue #1283): one
+	// versioned JSON record per account, read on sign-in and written on
+	// change, replacing what used to live in the browser's localStorage.
+	// Always non-nil (internal/prefs.Open("") returns a usable, empty,
+	// unpersisted store), same always-usable convention as Droplist
+	// above. GET/PUT /api/me/preferences (preferences.go) are the only
+	// routes that touch it; handleAuthDeleteUser clears a user's record
+	// when the account itself is deleted.
+	Prefs *prefs.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
 	// same threshold detect.DeviceSilenceDetector uses to raise an actual
@@ -354,6 +364,17 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	ClientIPHeader string
 
+	// UIAllow is config.yaml's ui.allow (issue #1287), parsed by
+	// config.ParseUIAllow: the addresses that may reach the web UI at
+	// all. Empty -- the default, and every deployment before the key
+	// existed -- admits everyone, so an upgrade changes nothing. See
+	// uiallow.go, and RestrictToAllowList for where it is enforced.
+	//
+	// Never settable from the UI: the list governs the screen it would
+	// be edited from, so a slip locks the admin out with no way back in
+	// from the browser.
+	UIAllow []netip.Prefix
+
 	// Tokens holds read-only API and ingest bearer tokens (issues #101,
 	// #186) -- always non-nil (internal/auth.OpenTokenStore("") returns a
 	// usable, empty, unpersisted store), same nil-never convention as
@@ -431,6 +452,16 @@ type Server struct {
 	// every test constructs) needs no extra setup.
 	ingestAuditMu sync.Mutex
 	ingestAudit   map[ingestAuditKey]ingestAuditState
+
+	// uiAllowAudit remembers, per refused address, when that address
+	// last produced an audit row, so a browser retrying (or a scanner
+	// hammering) does not write one per request. Same shape and same
+	// reasoning as ingestAudit above -- see noteUIRefusal, which also
+	// explains the extra cap this map needs and that one does not.
+	// Unexported and lazily built, so a zero-valued Server needs no
+	// setup.
+	uiAllowAuditMu sync.Mutex
+	uiAllowAudit   map[string]time.Time
 
 	// definitionsEnabledScopeMu serializes handleDefinitionsUpdate's
 	// read-merge-write of a definition's Enabled/Scope fields (issue
@@ -683,6 +714,15 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/suggestions/{id}/unhide", s.handleSuggestionsUnhide},
 
 		{http.MethodGet, "/api/third-party-notices", s.handleThirdPartyNotices},
+
+		// The caller's own preferences record (issue #1283): presets,
+		// widgets and layout, held on the server instead of the
+		// browser's localStorage. Open to any signed-in user, same
+		// reasoning as /api/auth/password above -- it acts only on the
+		// session's own account, with no id in the request that could
+		// point it at someone else's.
+		{http.MethodGet, "/api/me/preferences", s.handlePreferencesGet},
+		{http.MethodPut, "/api/me/preferences", s.handlePreferencesPut},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 
