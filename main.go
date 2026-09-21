@@ -268,7 +268,7 @@ func securityHeaders(next http.Handler, hsts bool) http.Handler {
 //   - /assets/* is content-hashed by Vite -- index-BShEGKey.js changes
 //     its *name* whenever its contents change, so a copy can never go
 //     stale and is safe to keep for as long as the browser likes.
-//   - Everything else (index.html, sw.js, registerSW.js, the manifest,
+//   - Everything else (index.html, sw.js, the manifest,
 //     the icons) keeps a fixed name across builds, so it gets no-cache:
 //     store it, but check with the server before using it again.
 //
