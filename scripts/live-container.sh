@@ -260,22 +260,34 @@ EOF
 # the listener hands each line to a buffered channel with a
 # non-blocking send, so one bulk write outruns the consumer and loses
 # events (575 of 900 before pacing, 900 of 900 after).
+#
+# Takes an optional source IP as $1, the same shape as live-env.sh's own
+# send_tls, for rawfrom below. Note this is weaker here than in
+# live-env.sh: that harness binds a real host loopback alias per device,
+# while this one's traffic reaches a *published* container port -- a
+# connection from this same host to its own published port is a hairpin
+# path, and Docker's masquerade rule for it can replace the bound source
+# address before the container ever sees it. rawfrom is still worth
+# having (some scenarios only need the CLI shape, not real attribution),
+# but don't trust it for a test that depends on which device an event
+# lands under.
 send_tls() {
   python3 -c '
 import socket, ssl, sys, time
 host, port = sys.argv[1], int(sys.argv[2])
+src = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
 lines = [l for l in sys.stdin.buffer.read().split(b"\n") if l]
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
-with socket.create_connection((host, port), timeout=15) as sock:
+with socket.create_connection((host, port), timeout=15, source_address=(src, 0) if src else None) as sock:
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     with ctx.wrap_socket(sock, server_hostname=host) as tls:
         for i, line in enumerate(lines):
             tls.sendall(line + b"\n")
             if i % 25 == 24:
                 time.sleep(0.01)
-' "$BIND" "$SYSLOG_TLS_PORT"
+' "$BIND" "$SYSLOG_TLS_PORT" "${1:-}"
 }
 
 # syslog N [label] -- N synthetic firewall events.
@@ -297,6 +309,14 @@ raw() {
   printf '%s\n' "$1" | send_tls
 }
 
+# rawfrom SOURCE-IP LINE -- the same, appearing to come from source-ip --
+# see send_tls's own note above on why that is weaker here than in
+# live-env.sh. Use raw for the declared router.
+rawfrom() {
+  src="$1"; shift
+  printf '%s\n' "$1" | send_tls "$src"
+}
+
 # portscan N [source-ip] -- N distinct destination ports from one source
 # inside the port-scan window, so a real port_scan flag is raised by the
 # detector rather than synthesized.
@@ -308,6 +328,21 @@ for i in range(n):
     print(f"firewall,info D|scan-src| forward: in:ether1 out:bridge1, "
           f"connection-state:new, proto TCP (SYN), "
           f"{src}:{40000+i}->192.168.1.10:{1000+i}, len 60")
+PY
+}
+
+# recon N [source-ip] [dest-port] -- N distinct internal destinations from
+# one LAN source inside internal_recon's default window, each reached on
+# a stated port, so a real internal_recon flag is raised carrying
+# evidence pairs rather than the test synthesizing them.
+recon() {
+  python3 - "${1:-12}" "${2:-192.168.1.60}" "${3:-445}" <<'PY' | send_tls
+import sys
+n, src, port = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+for i in range(n):
+    print(f"firewall,info D|recon-src| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"{src}:{40000+i}->192.168.1.{100+i}:{port}, len 60")
 PY
 }
 
@@ -325,7 +360,9 @@ case "${1:-}" in
   down) down ;;
   syslog) shift; syslog "$@" ;;
   raw) shift; raw "$@" ;;
+  rawfrom) shift; rawfrom "$@" ;;
   portscan) shift; portscan "$@" ;;
+  recon) shift; recon "$@" ;;
   logs) logs ;;
-  *) echo "usage: $0 {up|down|syslog N [label]|raw LINE|portscan N [src-ip]|logs}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|down|syslog N [label]|raw LINE|rawfrom SRC-IP LINE|portscan N [src-ip]|recon N [src-ip] [port]|logs}" >&2; exit 2 ;;
 esac

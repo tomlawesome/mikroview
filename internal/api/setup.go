@@ -361,7 +361,11 @@ func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		http.Error(w, "step must be 1-7 and outcome one of skipped, forced", http.StatusBadRequest)
+		// The bound comes from setup.MaxStep (#1304), not a literal repeated
+		// here, so this message cannot lag the wizard's step count the way
+		// it twice lagged before that constant existed (see MaxStep's own
+		// comment).
+		http.Error(w, fmt.Sprintf("step must be 1-%d and outcome one of skipped, forced", setup.MaxStep), http.StatusBadRequest)
 		return
 	}
 	// The audit vocabulary is owned by the caller (see internal/audit's

@@ -674,13 +674,25 @@
     return sortDir === 'asc' ? '▲' : '▼'
   }
 
+  // #1304 E9: matchesFilter's arguments are evaluated eagerly, so
+  // `matchesFilter(formatFlagAge(x, appState.now), filters.age)` used to
+  // read the clock on every flag/campaign, on every call, whether or not
+  // an age filter was even set -- which made `rows` below (the whole
+  // filter-and-sort pass) a dependency of the clock, rerunning in full on
+  // every tick regardless of whether any flag or filter had actually
+  // changed. Short-circuited: with no age filter (the common case), this
+  // never touches appState.now at all.
+  function ageMatches(lastSeen: string, query: string): boolean {
+    return !query.trim() || matchesFilter(formatFlagAge(lastSeen, appState.now), query)
+  }
+
   function flagMatches(f: Flag): boolean {
     return (
       (pickedType ? f.type === pickedType : matchesFilter(labelFor(f.type), filters.type)) &&
       matchesFilter(f.target, filters.where) &&
       matchesFilter(f.detail, filters.evidence) &&
       matchesFilter(String(f.count), filters.count) &&
-      matchesFilter(formatFlagAge(f.lastSeen, appState.now), filters.age)
+      ageMatches(f.lastSeen, filters.age)
     )
   }
 
@@ -711,13 +723,21 @@
     return `${formatHM(c.firstSeen)} → ${arriving ? 'still arriving' : formatHM(c.lastSeen)}`
   }
 
+  // Same eager-argument trap as ageMatches above: campaignEvidence pulls
+  // in campaignSpan's live "still arriving" check, so computing it
+  // unconditionally would put the same clock dependency back via the
+  // evidence filter instead of the age one.
+  function evidenceMatches(c: Campaign, query: string): boolean {
+    return !query.trim() || matchesFilter(campaignEvidence(c), query)
+  }
+
   function campaignMatches(c: Campaign): boolean {
     return (
       (pickedType ? false : matchesFilter(campaignLabel(c), filters.type)) &&
       matchesFilter(c.ip, filters.where) &&
-      matchesFilter(campaignEvidence(c), filters.evidence) &&
+      evidenceMatches(c, filters.evidence) &&
       matchesFilter(String(c.count), filters.count) &&
-      matchesFilter(formatFlagAge(c.firstSeen, appState.now), filters.age)
+      ageMatches(c.firstSeen, filters.age)
     )
   }
 
@@ -754,8 +774,17 @@
   // Elapsed time since firstSeen -- ascending means smallest elapsed
   // (newest) first, the default that reproduces the fixed order `active`
   // used to be stuck with.
+  //
+  // #1304 E9: `appState.now - aMs` vs `appState.now - bMs` used to read
+  // the clock to compute this, but `now` is common to both sides of the
+  // comparison and cancels out of it -- comparing elapsed time is the
+  // same as comparing the timestamps directly (just flipped: smaller
+  // elapsed is a *larger* timestamp). Written this way so sorting by age
+  // never touches appState.now, which used to make the whole
+  // filter-and-sort pass (`rows`) a clock dependency, rerunning on every
+  // tick even when no flag or filter had changed.
   function compareAge(aMs: number, bMs: number): number {
-    return compareNumeric(appState.now - aMs, appState.now - bMs, sortDir)
+    return compareNumeric(bMs, aMs, sortDir)
   }
 
   const newestMs = (c: Campaign) => Math.max(...c.flags.map((f) => new Date(f.firstSeen).getTime()))
@@ -809,14 +838,41 @@
   // then -- when the same source has a flag outside the window -- the
   // nearest such flag and how far off it sits, so the other half of the
   // rule is visible on the same screen.
-  function campaignRule(c: Campaign): { rule: string; outsider: string | null } {
+  //
+  // #1304 E10: this used to be a function called once per rendered
+  // campaign row, each call scanning the *entire* `active` list to find
+  // its own nearest same-IP outsider -- with C campaigns open, that's C
+  // full scans of every open flag on every render. activeBySourceIp
+  // below groups every active flag by source IP in one pass; each
+  // campaign then only walks the (typically tiny) group sharing its own
+  // IP, and campaignRules builds every campaign's summary in that same
+  // one pass rather than the template calling back in per row.
+  const activeBySourceIp = $derived.by(() => {
+    const byIp = new Map<string, Flag[]>()
+    for (const f of active) {
+      const ip = extractSourceIp(f.target)
+      if (ip === null) continue
+      const list = byIp.get(ip)
+      if (list) list.push(f)
+      else byIp.set(ip, [f])
+    }
+    return byIp
+  })
+
+  const campaignRules = $derived.by(() => {
+    const out = new Map<string, { rule: string; outsider: string | null }>()
+    for (const c of grouped.campaigns) out.set(c.id, campaignRuleFor(c))
+    return out
+  })
+
+  function campaignRuleFor(c: Campaign): { rule: string; outsider: string | null } {
     const n = c.flags.length
     const rule = `one source, ${spellCount(n)} ${n === 1 ? 'flag' : 'flags'}, each inside 30 minutes of the last`
     const start = new Date(c.firstSeen).getTime()
     const end = new Date(c.lastSeen).getTime()
     let nearest: { flag: Flag; gapMs: number } | null = null
-    for (const f of active) {
-      if (extractSourceIp(f.target) !== c.ip || c.flags.includes(f)) continue
+    for (const f of activeBySourceIp.get(c.ip) ?? []) {
+      if (c.flags.includes(f)) continue
       const fs = new Date(f.firstSeen).getTime()
       const fe = new Date(f.lastSeen).getTime()
       const gapMs = fs > end ? fs - end : start - fe
@@ -1563,7 +1619,7 @@
   {@const family = worstFamilyOf(types)}
   {@const kind = campaignKind(c.flags)}
   {@const done = campaignDone(c.flags)}
-  {@const why = campaignRule(c)}
+  {@const why = campaignRules.get(c.id) ?? { rule: '', outsider: null }}
   <tr
     class="frow camp"
     class:open
@@ -2616,34 +2672,6 @@
   }
 
   .act:hover {
-    border-color: var(--accent);
-  }
-
-  .act.quiet {
-    color: var(--fg-dim);
-  }
-
-  .clear-note {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 1;
-    min-width: 180px;
-  }
-
-  .clear-note-input {
-    flex: 1;
-    min-width: 0;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 12px;
-    font-size: 12px;
-    color: var(--fg);
-    outline: none;
-  }
-
-  .clear-note-input:focus {
     border-color: var(--accent);
   }
 

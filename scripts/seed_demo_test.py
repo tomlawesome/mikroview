@@ -161,6 +161,11 @@ class CamBeaconTests(unittest.TestCase):
     def setUp(self):
         seed_demo._r40_state["last_cam_beacon"] = -1
         seed_demo._r40_state["last_unplanned_wave"] = -1
+        # lines_for_round40 also rolls an unrelated random iot->dns line
+        # that matches these tests' filter about one run in ten
+        # (docs/flakes.md, CamBeaconTests). A fixed seed makes that roll
+        # the same every run; the beacon itself is cadence, not chance.
+        random.seed(40)
 
     def test_beacon_fires_once_per_period(self):
         lines = seed_demo.lines_for_round40("rb5009", elapsed=0, tick=0)

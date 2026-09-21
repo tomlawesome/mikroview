@@ -54,7 +54,7 @@ supported way to recover an earlier one.
 """
 import argparse
 import collections
-import json
+import concurrent.futures
 import os
 import random
 import socket
@@ -297,9 +297,12 @@ IP_ADDRESSES = {
 #                       accept on an (inInterface, outInterface) pair; a
 #                       lamp on it is log=True. frontend/src/lib/
 #                       policy.svelte.ts keys on exactly that pair, and
-#                       Topography.svelte's zoneCaption reads a district's
-#                       badge off the two pairs it makes with the WAN. So
-#                       the DARK districts are DARK here by *omission of
+#                       frontend/src/lib/coverageRule.ts's boundaryCoverage
+#                       reads a district's coverage off the two pairs it
+#                       makes with the WAN (Topography.svelte's own
+#                       zoneCaption did this before #1014 unified the
+#                       three copies into that one rule). So the DARK
+#                       districts are DARK here by *omission of
 #                       log*, never by omission of a rule: IoT's three
 #                       rules toward ether1 all carry log=False (DARK
 #                       TOWARD WAN), Guest's and Cams' carry log=False in
@@ -1409,19 +1412,23 @@ def cmd_push(args):
 
 def cmd_entities(args):
     api = API(args.url, args.user, args.password)
-    n = 0
-    for h in HOSTS:
-        if h[4] is None:
-            continue
-        api.post("/api/entities", json={"type": "host", "key": full_ip(h), "label": h[4], "tags": [h[1]]})
-        n += 1
-    for prefix, label in RULE_ENTITIES.items():
-        api.post("/api/entities", json={"type": "rule", "key": prefix, "label": label, "tags": []})
-        n += 1
-    for port, label in PORT_ENTITIES.items():
-        api.post("/api/entities", json={"type": "port", "key": port, "label": label, "tags": []})
-        n += 1
-    print(f"seeded {n} named entities")
+    bodies = [{"type": "host", "key": full_ip(h), "label": h[4], "tags": [h[1]]}
+              for h in HOSTS if h[4] is not None]
+    bodies += [{"type": "rule", "key": prefix, "label": label, "tags": []}
+               for prefix, label in RULE_ENTITIES.items()]
+    bodies += [{"type": "port", "key": port, "label": label, "tags": []}
+               for port, label in PORT_ENTITIES.items()]
+
+    # There is no bulk entities endpoint (each is its own upsert), but
+    # every POST here is independent of every other -- a distinct
+    # type+key with no shared state between them -- so a small thread
+    # pool fires them concurrently instead of waiting on each round trip
+    # in turn. list() drives the map to completion and re-raises the
+    # first request's exception, same failure behaviour as the loop this
+    # replaced.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda body: api.post("/api/entities", json=body), bodies))
+    print(f"seeded {len(bodies)} named entities")
 
 
 DEMO_USER_PASSWORD = "atlas-review-user-2026"

@@ -54,6 +54,7 @@ type ingestAckResponse struct {
 // via naming.Resolver, the rule/NAT table endpoints -- is display and
 // attribution only; internal/routerstate's isolation test guarantees
 // pushed data cannot reach a suspicion signal in either direction.
+
 // ingestAuditInterval is how long a device may keep pushing the same
 // kind with the same outcome before it is worth another audit row. A
 // heartbeat, not a record of each push.

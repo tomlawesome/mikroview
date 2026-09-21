@@ -76,6 +76,35 @@ func (u *vaultUnlockState) release() {
 	u.lastUsed = time.Time{}
 }
 
+// lockIfHolder calls lock (Vault.Lock in every real caller) and, only
+// when it succeeds and sessionID is still the one holding the unlock,
+// clears it -- both decided under the one lock claim() also takes, so a
+// claim landing between a caller reading who the holder was and calling
+// this can never be wiped by a decision that was actually about the
+// session it just replaced (R4, v0.6.0 audit, #1304). Reports whether
+// the unlock was cleared.
+//
+// lock runs while u.mu is held rather than before or after: running it
+// first (outside the lock) would let Vault.Lock() drop the key before
+// this ever checks whether sessionID is still current, which is exactly
+// the race this exists to close -- a still-live, freshly claimed unlock
+// would lose its key even though the metadata check below would
+// correctly refuse to touch its record.
+func (u *vaultUnlockState) lockIfHolder(sessionID string, lock func() bool) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.sessionID != sessionID {
+		return false
+	}
+	if !lock() {
+		return false
+	}
+	u.sessionID = ""
+	u.userID = ""
+	u.lastUsed = time.Time{}
+	return true
+}
+
 // heldBy reports whether sessionID still holds a live unlock, renewing
 // it when it does. For using the unlock, and nothing else.
 func (u *vaultUnlockState) heldBy(sessionID string, now time.Time) bool {
@@ -154,7 +183,11 @@ func (s *Server) vaultUnlockedFor(r *http.Request, now time.Time) bool {
 		return false
 	}
 	if _, ok := s.Sessions.Validate(sessionID, now); !ok {
-		s.lockVault()
+		// sessionID's own session is gone, so its unlock must end -- but
+		// only its unlock: bare lockVault() would drop whatever is
+		// current by the time this runs, including a different session's
+		// unlock claimed in the gap since heldBy checked above (R4).
+		s.lockVaultIfHolder(sessionID)
 		return false
 	}
 	return true
@@ -188,6 +221,18 @@ func (s *Server) requireVaultUnlocked(w http.ResponseWriter, r *http.Request, ve
 
 // expireVaultUnlock drops the unlock if whoever holds it has gone idle
 // or lost their session.
+//
+// holder, isLive and Sessions.Validate below are all read outside any
+// single lock, so the answer they give can already be stale by the time
+// this function decides what to do with it -- a session expiring right
+// as a *different* one successfully claims the vault (R4, v0.6.0 audit,
+// #1304) is exactly that gap. That is safe here only because every
+// branch's actual effect goes through lockVaultIfHolder(holder), which
+// re-checks holder is still current atomically immediately before ever
+// touching the key -- so a stale read here can make this function do
+// nothing when it should have expired something (harmless: the next
+// sweep a minute later catches it), but can never make it drop a claim
+// that was never the one being decided about.
 func (s *Server) expireVaultUnlock(now time.Time) {
 	holder := s.vaultUnlock.holder()
 	if holder == "" {
@@ -196,7 +241,7 @@ func (s *Server) expireVaultUnlock(now time.Time) {
 		// Nothing is ever going to come and claim it, and it used to sit
 		// there until the process restarted.
 		if s.Vault.PassphraseSet() && !s.Vault.Locked() {
-			s.lockVault()
+			s.lockVaultIfHolder("")
 		}
 		return
 	}
@@ -205,7 +250,7 @@ func (s *Server) expireVaultUnlock(now time.Time) {
 			return
 		}
 	}
-	s.lockVault()
+	s.lockVaultIfHolder(holder)
 }
 
 // vaultUnlockSweep is how often the expiry above runs on its own.
@@ -266,11 +311,32 @@ func (s *Server) lockVault() bool {
 	return true
 }
 
+// lockVaultIfHolder is lockVault, but for a caller enacting a decision
+// made about a *specific* session rather than "whoever currently holds
+// it" -- the idle sweep, a caller whose own session stopped validating,
+// a session signing out, an account being acted on. Every one of those
+// reads who the holder was, decides that session's unlock should end,
+// and only then gets around to actually ending it; bare lockVault()
+// would drop whatever is open at that later moment regardless.
+//
+// R4 (v0.6.0 audit, #1304): a vault unlocked again by a *different*
+// session in the gap between that read and this call -- the previous
+// holder expiring or signing out at the exact moment a new, entirely
+// legitimate unlock claims it -- used to be dropped by a decision that
+// was actually about the session it had just replaced. lockIfHolder
+// checks sessionID and calls Vault.Lock() atomically under the one lock
+// claim() also takes, so sessionID no longer holding anything by the
+// time this runs means there is nothing of theirs left to lock -- the
+// current claim, whoever it belongs to, is left alone, key and all.
+func (s *Server) lockVaultIfHolder(sessionID string) bool {
+	return s.vaultUnlock.lockIfHolder(sessionID, s.Vault.Lock)
+}
+
 // lockVaultForSession locks the vault if sessionID is the session
 // holding it open -- called when that session signs out.
 func (s *Server) lockVaultForSession(sessionID string) {
-	if sessionID != "" && s.vaultUnlock.holder() == sessionID {
-		s.lockVault()
+	if sessionID != "" {
+		s.lockVaultIfHolder(sessionID)
 	}
 }
 
@@ -298,7 +364,11 @@ func (s *Server) lockVaultForUser(userID string) {
 	if holderUser != "" && holderUser != userID {
 		return
 	}
-	s.lockVault()
+	// Enacts the decision about holder specifically (R4): bare lockVault()
+	// would drop whatever is current by the time this runs, which is not
+	// necessarily still holder if a different session claimed the vault
+	// in the meantime.
+	s.lockVaultIfHolder(holder)
 }
 
 // callerUserID is the authenticated account's ID, or "" when auth is

@@ -740,6 +740,49 @@ describe('SetupWizard', () => {
   })
 })
 
+// v0.6.0 audit Lows, E12: refusedLine/refusedForThisWalk (the Send logs
+// step's warning box) only ever draw on the syslog pane -- see the
+// `step.key === 'syslog'` guard around them further down this file. The
+// poll behind them must not run every 5s regardless of which pane is in
+// front of the operator.
+describe('SetupWizard -- the refused-senders poll is scoped to the pane that shows it (#1304 E12)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not poll on a pane that never draws the result', async () => {
+    wizardState.pane = PANE.name
+    render(SetupWizard)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetchRefusedSenders).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(fetchRefusedSenders).not.toHaveBeenCalled()
+  })
+
+  it('polls while Send logs is open, and stops once the operator moves to a pane that does not show it', async () => {
+    wizardState.pane = PANE.syslog
+    render(SetupWizard)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchRefusedSenders).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(fetchRefusedSenders).toHaveBeenCalledTimes(2)
+
+    wizardState.pane = PANE.push
+    await tick()
+    const callsOnLeaving = vi.mocked(fetchRefusedSenders).mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(fetchRefusedSenders).toHaveBeenCalledTimes(callsOnLeaving)
+  })
+})
+
 // #1213: the wizard header's own field, above the numbered steps -- what
 // address a router can reach mikroview on, editable at any time, with
 // every RouterOS command block written against it instead of the
