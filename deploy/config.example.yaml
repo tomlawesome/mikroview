@@ -353,6 +353,16 @@ store:
 # droplist:
 #   storePath: /var/lib/mikroview/droplist.json
 
+# Per-user preferences (issue #1283): presets, widgets and layout, held
+# on the server per account instead of in the browser's localStorage, so
+# they follow a user to any browser and a shared machine shows the next
+# operator nothing of the last one. storePath already defaults to
+# /var/lib/mikroview/preferences.json; only uncomment this block to move
+# that path. Managed through GET/PUT /api/me/preferences -- see
+# docs/configuration.md's "Preferences" section.
+# prefs:
+#   storePath: /var/lib/mikroview/preferences.json
+
 # Optional (on by default): local IP attribution for the manual IP-lookup
 # popover -- labels an address as a Tor exit, commercial VPN,
 # cloud/datacenter, or privacy relay. Never raises a flag by itself for
