@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-watchers-editor: the cloned shipped watcher's row has no open drawer
+
+- 2026-09-21 · 83609eae (dev, base of batch/v061-wave-4) · local 4-shard Firefox gate run by the #1314 sub-agent · `FAIL the copy opens into the conditions editor, ready to be changed` at `live-watchers-editor.mjs:278` -- the "Port scan (copy)" row appeared after Clone, but its `.drawer` count read 0 when checked straight after the row became visible; every other check passed. The run was on an otherwise idle worktree and the change under test (service-worker registration) does not touch the watchers bench; the same commit passed the scenario in pipeline 1386 (!1078, `gate:scenarios`).
+
 ## live-city-reach: Escape does not restore the exact pan position
 
 - 2026-09-16 · 83b35730 (feature/m16-upgrade-guard-and-401, !1054) · pipeline 1168, `gate:scenarios 1/4` · `Escape restores the exact pan position (13.4 -> 19.3)` -- the mini-map viewport read 19.3 after the 900 ms settle instead of the 13.4 it started at; every other check in the scenario passed. The branch is backend-only (persist schema, a 401 header, `-backup`); the same scenario passed three times in a row locally at ebbce549, which contains that branch.
