@@ -152,16 +152,24 @@ fi
 printf '%s' "$GHCR_PUBLISH_TOKEN" | "$docker_cmd" login ghcr.io -u tomlawesome --password-stdin ||
   fail "docker login to ghcr.io failed"
 
-# Key-based signing against a private key: there is no Fulcio certificate
-# here for Rekor to attach a public identity to, and --tlog-upload=false
-# needs --use-signing-config=false alongside it on the pinned cosign v3
-# (verified against the pinned binary, 2026-09-08) -- the same flag pair
-# orbit's own key-based evidence signing uses and for the same reason.
+# The signature goes into the transparency log, unlike orbit's key-based
+# signing, which sets --tlog-upload=false. That is the one place the two
+# projects genuinely differ: orbit signs into its own private registry,
+# where nobody outside can verify anything anyway, while this image is
+# public on GHCR and the whole point of the pair is that an operator can
+# check both signatures themselves.
+#
+# It is not a preference. `cosign verify --key` requires a log entry by
+# default (--insecure-ignore-tlog defaults to false, and cosign's own help
+# says an artefact "cannot be publicly verified when not included in a
+# log"), so a signature made with --tlog-upload=false would fail both the
+# GitHub countersignature's verify step and the plain command SECURITY.md
+# hands operators -- and telling them to pass --insecure-ignore-tlog to
+# check a release is not a story worth having. Rekor also timestamps the
+# signature, which only strengthens the second custody.
 "$cosign_cmd" sign \
   --key "$key_path" \
   --yes \
-  --tlog-upload=false \
-  --use-signing-config=false \
   "${repository}@${digest}" ||
   fail "cosign could not sign ${repository}@${digest}"
 
