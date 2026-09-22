@@ -213,6 +213,13 @@ workflow:
   - ".gitignore"
   - ".gitleaksignore"
   - "renovate.json"
+  # cosign.pub is the public half of the release signing key (#1309). It
+  # has no source extension, so without this line it matches neither list
+  # and the guard refuses the pipeline -- which is what happened on
+  # !1089's first run. It belongs here rather than in .docs_only_paths: a
+  # change to it changes what a released digest verifies against, so it
+  # must never be paired with a README edit and read as documentation.
+  - "cosign.pub"
 
 # .dev_or_mr, plus the three-rule ladder described above. Everything
 # .dev_or_mr does is unchanged and comes first: schedules and the
