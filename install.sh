@@ -43,9 +43,12 @@ if [ -z "${MIKROVIEW_IMAGE:-}" ]; then
   # this same digest). Never fail the install over this -- an inspect
   # that errors or comes back empty (offline registry mirrors, older
   # Docker) just means no line gets printed.
+  # #1309: a release carries two independent signatures and both must
+  # verify, so the line says two rather than sending the reader off
+  # expecting one.
   digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image" 2>/dev/null)" || digest=""
   if [ -n "$digest" ]; then
-    echo "install.sh: pulled $digest -- see SECURITY.md to verify that digest with cosign verify before you trust it."
+    echo "install.sh: pulled $digest -- before you trust it, see SECURITY.md and cosign verify that digest. A release carries two independent signatures and both must verify."
   fi
 fi
 
