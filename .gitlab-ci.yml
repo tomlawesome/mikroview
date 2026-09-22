@@ -1945,6 +1945,15 @@ record:upgrade-fixture:
 sign:release-digest:
   stage: sync
   tags: [mikroview-signing]
+  # No daemon and no dind, the same shape orbit's sign_evidence job uses:
+  # `docker manifest inspect`, `docker buildx imagetools inspect` and
+  # `docker login` are all registry operations the CLI performs itself over
+  # HTTPS, and cosign talks to the registry directly too. Verified against a
+  # real GHCR tag with DOCKER_HOST pointed at a socket that does not exist
+  # (2026-09-22). So this job needs no Docker socket mounted into it, which
+  # matters: the signing runner is the better-protected half of the pair,
+  # and handing it daemon access to earn a digest lookup would be a poor
+  # trade. Setting DOCKER_HOST here at all was misleading and is gone.
   image: docker:29-cli
   # Waits on GHCR, not on this pipeline's own lint/test/security -- same
   # reasoning as record:upgrade-fixture's needs: [].
@@ -1955,8 +1964,6 @@ sign:release-digest:
   timeout: 1h
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
-  variables:
-    DOCKER_HOST: unix:///var/run/docker.sock
   script:
     # bash because the script is `#!/usr/bin/env bash` and Alpine ships
     # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
