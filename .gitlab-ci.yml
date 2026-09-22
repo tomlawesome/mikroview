@@ -142,6 +142,13 @@ workflow:
   # byte-for-byte identical (#1317, check-release-surfaces.sh). It is a
   # sentence about a picture, and changes nothing the code does.
   - "docs/**/*.png.checked"
+  # The console transcript the weekly CHR exercise commits for the
+  # RouterOS version it booted (#894, scripts/routeros-chr-open-mr.sh).
+  # Same reasoning as the line above: it is a record of what a router
+  # said, written after the fact, and nothing reads it back. Scoped to
+  # that one tree rather than `**/*.log`, so an ordinary log file
+  # appearing anywhere else still stops the guard and gets a decision.
+  - "docs/routeros-verification-logs/**/*.log"
 
 .code_paths: &code_paths
   # Source extensions at any depth. These are what catch a file in a
