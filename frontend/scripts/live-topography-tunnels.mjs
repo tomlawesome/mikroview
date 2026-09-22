@@ -303,7 +303,7 @@ const zoomed = (await waitForViewBoxSettle()).split(' ').map(Number)
 check(zoomed[2] < Number(before.split(' ')[2]), `the wheel zooms the map in (${zoomed.join(' ')})`)
 await page.click(chipSel)
 const backToFit2 = await waitForViewBoxSettle()
-check(backToFit2 === before, 'and the fit chip brings the whole map back again')
+check(backToFit2 === before, `and the fit chip brings the whole map back again (got ${backToFit2}, want ${before})`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join(' | ')})`)
 
