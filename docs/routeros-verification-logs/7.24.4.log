@@ -1,0 +1,56 @@
+== /tool fetch url="https://203.0.113.10:8443/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+== /tool fetch url="https://203.0.113.10:8443/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+/tool fetch url="https://203.0.113.10:8443/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+  status: connecting
+  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+-- [written to "console-dump.txt"]  status: connecting
+  status: connecting
+-- [written to "console-dump.txt"]      status: failed
+  downloaded: 0KiB  
+failure: timeout connecting
+[admin@CHR] >
+== /certificate import file-name=mikroview-ca.crt passphrase=""
+== /certificate import file-name=mikroview-ca.crt passphrase=""
+/certificate import file-name=mikroview-ca.crt passphrase=""
+input does not match any value of file-name
+[admin@CHR] >
+== :if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
+== :if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
+:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote
+-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check
+-certificate=yes }
+[admin@CHR] >
+== :if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
+== :if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
+:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
+[admin@CHR] >
+== /ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"
+== /ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"
+/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix="D|drop|"
+[admin@CHR] >
+== /ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"
+== /ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"
+/ip firewall filter set [find where !dynamic action=reject] log=yes log-prefix="R|reject|"
+[admin@CHR] >
+== /ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"
+== /ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"
+/ip firewall filter set [find where !dynamic and action=accept and !(connection-state~"established") and !(connection-state~"related")] log=yes log-prefix="A|accept|"
+[admin@CHR] >
+== /ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+== /ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"established"] log=no log-prefix=""
+[admin@CHR] >
+== /ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+== /ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+/ip firewall filter set [find where !dynamic and action=accept and connection-state~"related"] log=no log-prefix=""
+[admin@CHR] >
