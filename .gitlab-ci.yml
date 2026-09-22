@@ -72,7 +72,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -228,7 +228,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: *code_paths
@@ -251,7 +251,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -675,7 +675,7 @@ test:build-checks:
       when: never
     # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
     # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -1971,12 +1971,34 @@ sign:release-digest:
   timeout: 1h
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+    # The exercise path (#1309). A v* tag on this project *is* a release --
+    # the mirror job pushes it to GitHub and GitHub's docker workflow
+    # publishes from it -- so there is no throwaway tag that exercises
+    # signing without also cutting a release. Instead the job can be started
+    # by hand against an already-published tag, the same web/API-plus-
+    # variable shape CHR_EXERCISE and CHR_WATCH use, and SIGN_EXERCISE is on
+    # their `never` lists above so triggering it does not re-run all of dev
+    # (#951).
+    #
+    # Owner decision, 2026-09-22: exercise it by signing v0.6.0's digest for
+    # real rather than dry-running, so the GHCR write and the signature push
+    # are proved too, not just the key mount and the digest lookup. Signing
+    # an already-published release adds a valid second signature to it; it
+    # changes nothing about what that release contains.
+    #
+    # Run it from the web UI on a protected branch -- the signing runner
+    # refuses unprotected refs -- with SIGN_EXERCISE=true and
+    # SIGN_TAG=v0.6.0.
+    - if: '$SIGN_EXERCISE == "true" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
   script:
     # bash because the script is `#!/usr/bin/env bash` and Alpine ships
     # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
     # checksum verification inside it.
     - apk add --no-cache bash coreutils curl >/dev/null
-    - bash scripts/sign-release-digest.sh "$CI_COMMIT_TAG"
+    # SIGN_TAG only when exercising by hand; a tag pipeline has no SIGN_TAG
+    # and signs its own CI_COMMIT_TAG. If neither is set the script refuses
+    # rather than sign something it guessed.
+    - bash scripts/sign-release-digest.sh "${SIGN_TAG:-$CI_COMMIT_TAG}"
 
 # record:upgrade-fixture above is allow_failure (a slow build or a GHCR
 # blip must not redden a tag already cut -- see its own header), so it
