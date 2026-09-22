@@ -1203,6 +1203,7 @@ gate:scripts:
     - scripts/assert-ui-built.test.sh
     - scripts/check-release-surfaces.test.sh
     - scripts/dockerignore.test.sh
+    - scripts/gitignore.test.sh
     - scripts/install.test.sh
   artifacts:
     when: always
