@@ -1206,6 +1206,7 @@ gate:scripts:
     - scripts/gitignore.test.sh
     - scripts/install.test.sh
     - scripts/ensure-cosign.test.sh
+    - scripts/sign-release-digest.test.sh
   artifacts:
     when: always
     paths:
@@ -1915,6 +1916,46 @@ record:upgrade-fixture:
     # know that it has not, and a spare dump costs kilobytes, while a
     # missing one costs a hand step nobody will remember.
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
+
+# The GitLab half of #1309's second signature. GitHub Actions already signs
+# the release image keylessly the moment it publishes it (.github/workflows
+# /docker.yml, the release job's "Sign the release" step, Fulcio/OIDC).
+# This job adds an independent, key-based signature from a private key that
+# exists only on this dedicated, protected `mikroview-signing` runner's
+# host, mounted read-only into its jobs -- so compromising GitHub's OIDC
+# issuer alone is not enough to forge both signatures over the same digest.
+# Same runner-is-the-key-fence reasoning as orbit's `sign_evidence`
+# (orbit/docs/releasing.md): this GitLab is CE, which has no protected
+# environments or environment-scoped variables, so a CI/CD variable would
+# be readable by every job in a protected-branch pipeline.
+#
+# Waits for GHCR to have the image GitHub Actions publishes (same tag
+# pipeline, same 45-minute budget as record:upgrade-fixture above), then
+# resolves and signs its digest. All the logic is in the script -- unit
+# tested in scripts/sign-release-digest.test.sh against stubbed
+# docker/cosign, never the network -- so this job only installs what it
+# needs and calls it.
+sign:release-digest:
+  stage: sync
+  tags: [mikroview-signing]
+  image: docker:29-cli
+  # Waits on GHCR, not on this pipeline's own lint/test/security -- same
+  # reasoning as record:upgrade-fixture's needs: [].
+  needs: []
+  # A cancelled signing run leaves a published release with only one of
+  # its two signatures and nothing to show why -- never cut mid-write.
+  interruptible: false
+  timeout: 1h
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  script:
+    # bash because the script is `#!/usr/bin/env bash` and Alpine ships
+    # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
+    # checksum verification inside it.
+    - apk add --no-cache bash coreutils curl >/dev/null
+    - bash scripts/sign-release-digest.sh "$CI_COMMIT_TAG"
 
 # record:upgrade-fixture above is allow_failure (a slow build or a GHCR
 # blip must not redden a tag already cut -- see its own header), so it

@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Mints the second signature over a release image (#1309): a cosign
+# key-based signature from a private key that exists only on this
+# dedicated, protected `mikroview-signing` runner's host, independent of
+# GitHub Actions' own keyless (Fulcio/OIDC) signature over the same digest
+# (.github/workflows/docker.yml, the release job's "Sign the release"
+# step). Two signatures from two unrelated trust roots: compromising
+# GitHub's OIDC issuer alone is not enough to forge both.
+#
+# The image is published by GitHub Actions, not this pipeline, so this
+# script waits for it to appear on GHCR before it can resolve anything to
+# sign. That wait loop is copied from the `record:upgrade-fixture` job in
+# .gitlab-ci.yml (also triggered by a v* tag, also waiting on the same
+# GHCR image) rather than re-invented.
+#
+# Usage:
+#   scripts/sign-release-digest.sh <tag>
+#
+# Argument:
+#   <tag>   The `v*` release tag naming the ghcr.io/tomlawesome/mikroview
+#           image to sign. Falls back to $CI_COMMIT_TAG when omitted --
+#           that is how the CI job below calls this; the argument form is
+#           for running it by hand.
+#
+# Inputs (environment):
+#   MV_SIGNING_DIR      The signing runner's read-only key mount. Must
+#                        hold `cosign.key` and `password`.
+#                        Default: /etc/mikroview-signing
+#                        ASSUMED, not confirmed: this mirrors orbit's own
+#                        /etc/orbit-signing convention (orbit
+#                        docs/releasing.md) with the project name swapped
+#                        in, because the exact path this project's runner
+#                        actually mounts was not stated anywhere this
+#                        script could read it from. Check the real path
+#                        against the `mikroview-signing` runner's
+#                        config.toml volume mount before relying on the
+#                        default; override with MV_SIGNING_DIR if it
+#                        differs.
+#   COSIGN_PRIVATE_KEY   Path to the private key. Takes priority over
+#                        MV_SIGNING_DIR when set; settable directly so
+#                        tests never need a fake /etc directory.
+#   COSIGN_PASSWORD      The key's password. Takes priority over
+#                        MV_SIGNING_DIR when set, for the same reason.
+#                        cosign reads this from the environment itself.
+#   GHCR_PUBLISH_TOKEN   A GHCR token scoped to write:packages (already a
+#                        masked, protected CI/CD variable). Piped to
+#                        `docker login` on stdin -- never a command-line
+#                        argument, so it never appears in a process
+#                        listing.
+#   MV_IMAGE             Optional; default ghcr.io/tomlawesome/mikroview.
+#   MV_DOCKER            Optional; the docker command to run. Overridable
+#                        only so tests can stub it; real use takes the
+#                        default `docker`.
+#   MV_COSIGN            Optional; the cosign command to run. Overridable
+#                        only so tests can stub it; real use resolves the
+#                        pinned binary via scripts/ensure-cosign.sh.
+#   MV_SIGN_WAIT_ATTEMPTS,
+#   MV_SIGN_WAIT_INTERVAL  Optional; default 45 and 60 (seconds), the same
+#                        45-minute budget record:upgrade-fixture uses.
+#                        Overridable only so tests do not actually wait.
+set -Eeuo pipefail
+
+repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_root"
+
+fail() { printf 'sign-release-digest: %s\n' "$1" >&2; exit 1; }
+
+tag="${1:-${CI_COMMIT_TAG:-}}"
+[[ -n "$tag" ]] || fail "an image tag is required, as \$1 or \$CI_COMMIT_TAG"
+
+: "${GHCR_PUBLISH_TOKEN:?GHCR_PUBLISH_TOKEN is not set -- it is a masked, protected CI/CD variable scoped to write:packages only}"
+
+docker_cmd="${MV_DOCKER:-docker}"
+repository="${MV_IMAGE:-ghcr.io/tomlawesome/mikroview}"
+image="${repository}:${tag}"
+
+# --- key material preflight, before the 45-minute wait below can even start ---
+signing_dir="${MV_SIGNING_DIR:-/etc/mikroview-signing}"
+
+if [[ -n "${COSIGN_PRIVATE_KEY:-}" ]]; then
+  key_path="$COSIGN_PRIVATE_KEY"
+else
+  key_path="${signing_dir}/cosign.key"
+fi
+[[ -f "$key_path" ]] ||
+  fail "no private key at ${key_path} -- the signing runner mounts it read-only from the host; set MV_SIGNING_DIR or COSIGN_PRIVATE_KEY if it lives elsewhere"
+
+if [[ -n "${COSIGN_PASSWORD:-}" ]]; then
+  password="$COSIGN_PASSWORD"
+else
+  password_path="${signing_dir}/password"
+  [[ -f "$password_path" ]] ||
+    fail "no key password at ${password_path} -- the signing runner mounts it read-only alongside cosign.key; set MV_SIGNING_DIR or COSIGN_PASSWORD if it lives elsewhere"
+  password="$(<"$password_path")"
+fi
+export COSIGN_PASSWORD="$password"
+
+# --- wait for GHCR to have the image (copied from record:upgrade-fixture, .gitlab-ci.yml) ---
+attempts="${MV_SIGN_WAIT_ATTEMPTS:-45}"
+interval="${MV_SIGN_WAIT_INTERVAL:-60}"
+echo "waiting for $image on GHCR (every ${interval}s, up to ${attempts} attempts)"
+found=0
+for attempt in $(seq 1 "$attempts"); do
+  if "$docker_cmd" manifest inspect "$image" > /dev/null 2>&1; then
+    found=1
+    break
+  fi
+  echo "  attempt $attempt/$attempts: not published yet"
+  [ "$attempt" = "$attempts" ] || sleep "$interval"
+done
+[ "$found" = 1 ] || fail "$image never appeared on GHCR after ${attempts} attempts"
+echo "$image is published"
+
+# --- resolve the digest, refusing rather than guessing ---
+#
+# `imagetools inspect` always prints exactly one top-level `Digest:` line --
+# the digest of whatever the tag currently names, list or plain manifest --
+# so counting that line can never catch a multi-arch image (verified
+# against a real multi-platform image, 2026-09-22). What makes an image
+# ambiguous is more than one *real* platform manifest under it: this
+# project's release build has no `platforms:` input, so today's image is a
+# single linux/amd64 manifest plus provenance/SBOM attestation manifests,
+# which buildx reports as `Platform: unknown/unknown` and which are not a
+# second image to be confused with the first. A genuine second platform
+# (say linux/arm64 added later) is the case this refuses on, rather than
+# silently signing one platform's digest and calling it the image's.
+inspect_out="$("$docker_cmd" buildx imagetools inspect "$image" 2>&1)" ||
+  fail "could not inspect $image: $inspect_out"
+
+top_digest="$(printf '%s\n' "$inspect_out" | awk '$1 == "Digest:" { print $2; exit }')"
+[ -n "$top_digest" ] || fail "$image: buildx imagetools inspect produced no Digest: line"
+
+platform_count="$(printf '%s\n' "$inspect_out" |
+  awk '$1 == "Platform:" && $2 != "unknown/unknown" { c++ } END { print c + 0 }')"
+if [ "$platform_count" -gt 1 ]; then
+  fail "$image resolves to $platform_count platform manifests, not one -- refusing to guess which digest to sign for a multi-arch image"
+fi
+
+[[ "$top_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+  fail "resolved digest for $image is not sha256:<64 hex>: ${top_digest}"
+
+digest="$top_digest"
+
+# --- sign ---
+cosign_cmd="${MV_COSIGN:-}"
+if [ -z "$cosign_cmd" ]; then
+  cosign_cmd="$(bash scripts/ensure-cosign.sh)"
+fi
+
+printf '%s' "$GHCR_PUBLISH_TOKEN" | "$docker_cmd" login ghcr.io -u tomlawesome --password-stdin ||
+  fail "docker login to ghcr.io failed"
+
+# Key-based signing against a private key: there is no Fulcio certificate
+# here for Rekor to attach a public identity to, and --tlog-upload=false
+# needs --use-signing-config=false alongside it on the pinned cosign v3
+# (verified against the pinned binary, 2026-09-08) -- the same flag pair
+# orbit's own key-based evidence signing uses and for the same reason.
+"$cosign_cmd" sign \
+  --key "$key_path" \
+  --yes \
+  --tlog-upload=false \
+  --use-signing-config=false \
+  "${repository}@${digest}" ||
+  fail "cosign could not sign ${repository}@${digest}"
+
+printf 'sign-release-digest: signed %s\n' "${repository}@${digest}"
