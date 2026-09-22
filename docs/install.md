@@ -15,8 +15,12 @@ The README's quickstart (`curl ... | sh`) is
 running this same `docker run`. After pulling, it prints the exact image
 digest it just pulled (`ghcr.io/tomlawesome/mikroview@sha256:...`) --
 see [SECURITY.md](../SECURITY.md) for verifying that digest with
-`cosign verify` before you trust it. If you'd rather run it yourself
-instead of fetching a script:
+`cosign verify` before you trust it. A release carries **two independent
+signatures**, one made by the GitLab tag pipeline with a held key and one
+made keyless on GitHub by hand, and a digest is only good if **both**
+verify -- treat either one missing as a reason not to trust it.
+SECURITY.md has both commands. If you'd rather run it yourself instead of
+fetching a script:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
