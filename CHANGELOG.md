@@ -86,6 +86,19 @@ rewritten.
   from June, not today's; `renovate.json` now tracks every `go install
   …@vX.Y.Z` pin in `.gitlab-ci.yml` so this can't happen silently again.
 
+- **`internal/netclass` matches on `go4.org/netipx`, not
+  `github.com/gaissmai/bart`** (#1313, owner ruling 2026-09-20 on #1288).
+  `bart` is a single-author module; `netipx` is Tailscale-maintained and
+  already a transitive dependency. `netipx` has no trie, so where two
+  enabled sources both claim an address, a fixed class order now decides
+  instead of longest-prefix match: **Tor, then VPN, then Private Relay,
+  then datacenter, then cloud** — the more specific *claim* wins
+  regardless of prefix width, so a Tor exit inside an AWS range still
+  reads as Tor. One visible consequence: where X4BNet's VPN feed has
+  copied Apple Private Relay's ranges verbatim, an exact-prefix overlap
+  now classifies as VPN rather than Private Relay, the reverse of the
+  old trie's tie-break.
+
 ### Security
 
 - `VerifyPassword` now refuses, before hashing, a stored hash whose
