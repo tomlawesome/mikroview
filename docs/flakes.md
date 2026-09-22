@@ -8,6 +8,8 @@ testing-and-ci skill (owner, 2026-09-08).
 
 ## live-watchers-editor: the cloned shipped watcher's row has no open drawer
 
+- 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox, first deliberate Firefox run of this shard · `FAIL the copy is already expanded, ready to be edited` at `live-watchers-editor.mjs:344` -- the sibling check 66 lines below the 2026-09-21 sighting's, same clone, same drawer-not-open shape. Every check before it passed. The immediately following Firefox run of the same shard on the same commit passed this scenario, and two Chromium runs of it passed, so the engine is not the cause. Second sighting.
+
 - 2026-09-21 · 83609eae (dev, base of batch/v061-wave-4) · local 4-shard Firefox gate run by the #1314 sub-agent · `FAIL the copy opens into the conditions editor, ready to be changed` at `live-watchers-editor.mjs:278` -- the "Port scan (copy)" row appeared after Clone, but its `.drawer` count read 0 when checked straight after the row became visible; every other check passed. The run was on an otherwise idle worktree and the change under test (service-worker registration) does not touch the watchers bench; the same commit passed the scenario in pipeline 1386 (!1078, `gate:scenarios`).
 
 ## live-city-reach: Escape does not restore the exact pan position
@@ -68,6 +70,10 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
 - 2026-09-11 · c3bcb56f (dev, after !1031) · pipeline 996, gate:scenarios 4/4 · `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs:208`: Playwright reported the button "outside of the viewport" then "detached from the DOM" on every retry, so the drawer replaced the button's node under the click. Pipeline 997 ran the same commit as !1032's MR pipeline and passed. Same button as the sighting above, one check earlier. Job retried (11971).
+
+## live-viewer-surfaces: goTo("Flags") times out waiting for the docket card
+
+- 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox · `goTo("Flags") timed out waiting for card "docket"` at `live-browser.mjs:514`, from `visibleSurfaces` before any surface was read, so the scenario threw and printed no verdict. The diagnostic says the deck and the card were both present with `offsetFromDeckTop: 2880`, so the card had mounted and the roll never settled on it -- the same family as the `live-decommission`, `live-rule-regex`, `live-settings-doors` and `live-log-every-rule` entries. The preceding Firefox run of the same shard on the same commit passed this scenario, as did two Chromium runs. First sighting.
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
