@@ -114,3 +114,42 @@ job does the real pairing check the first time it runs.
 Until the key material is in place, `sign:release-digest` fails at its
 preflight naming the path it could not find — before the 45-minute wait for
 GHCR, so a misplaced key fails fast rather than an hour in.
+
+## Exercising the signing job without cutting a release
+
+A `v*` tag on this project **is** a release: the mirror job pushes it to
+GitHub and GitHub's `docker` workflow publishes from it. So there is no
+throwaway tag that exercises signing without also cutting a release.
+
+Instead `sign:release-digest` can be started by hand against an
+already-published tag, using the same web/API-plus-variable shape
+`CHR_EXERCISE` and `CHR_WATCH` use. `SIGN_EXERCISE` is on their `never` lists,
+so triggering it does not re-run all of dev (#951).
+
+Owner decision, 2026-09-22: exercise it by **signing v0.6.0's digest for
+real**, rather than dry-running, so the GHCR write and the signature push are
+proved as well as the key mount and the digest lookup. Signing an
+already-published release adds a valid second signature to it and changes
+nothing about what that release contains.
+
+Run it from the GitLab web UI, on a **protected** branch -- the signing runner
+refuses unprotected refs, so `dev` works and a feature branch does not -- with:
+
+| Variable | Value |
+| --- | --- |
+| `SIGN_EXERCISE` | `true` |
+| `SIGN_TAG` | `v0.6.0` |
+
+v0.6.0 is `sha256:3a5e61e840cb23f2ec9e5c964b42ed6d1b6c0734936d9c0b5b7d7bd4fd5eb024`
+(resolved 2026-09-22), so that is the digest the job should report signing. On
+a tag pipeline there is no `SIGN_TAG` and the job signs its own
+`CI_COMMIT_TAG`; with neither set the script refuses rather than sign
+something it guessed.
+
+Afterwards, confirm the signature verifies with the public key the same way an
+operator would:
+
+```sh
+cosign verify --key cosign.pub \
+  ghcr.io/tomlawesome/mikroview@sha256:3a5e61e840cb23f2ec9e5c964b42ed6d1b6c0734936d9c0b5b7d7bd4fd5eb024
+```
