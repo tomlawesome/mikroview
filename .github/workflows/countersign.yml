@@ -74,24 +74,37 @@ jobs:
       #               than exactly one matching signature.
       - name: Verify GitLab's key-based signature
         run: |
+          # stdout and stderr are captured separately and never merged.
+          # cosign writes its "Verification for ..." banner and the
+          # checks-performed list to *stderr* even on success, so a 2>&1
+          # here would prepend prose to the JSON and make the jq below
+          # fail on the path that is supposed to succeed.
           set +e
-          output="$(cosign verify --key cosign.pub --output json "${IMAGE}@${DIGEST}" 2>&1)"
+          output="$(cosign verify --key cosign.pub --output json "${IMAGE}@${DIGEST}" 2>"$RUNNER_TEMP/cosign.err")"
           status=$?
           set -e
+          errors="$(cat "$RUNNER_TEMP/cosign.err")"
 
           if [ "$status" -ne 0 ]; then
-            if grep -qiE 'no matching signatures' <<< "$output"; then
+            if grep -qiE 'no matching signatures' <<< "$errors"; then
               echo "::error::no key-based signature found for ${DIGEST} -- refusing (absence)"
-            elif grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|NAME_UNKNOWN|404 Not Found' <<< "$output"; then
+            elif grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|NAME_UNKNOWN|404 Not Found' <<< "$errors"; then
               echo "::error::${DIGEST} does not resolve in ${IMAGE} (expired, pruned, or never pushed) -- refusing (expiry)"
             else
               echo "::error::the key-based signature on ${DIGEST} does not verify against cosign.pub -- refusing (mismatch)"
             fi
-            echo "$output" >&2
+            echo "$errors" >&2
             exit 1
           fi
 
-          count="$(jq 'length' <<< "$output")"
+          # A refusal is also the right answer to output that is not the
+          # JSON array this expects -- never a fall-through to signing.
+          if ! count="$(jq -e 'if type == "array" then length else error("not an array") end' <<< "$output")"; then
+            echo "::error::could not read cosign's verification output for ${DIGEST} -- refusing"
+            echo "$output" >&2
+            echo "$errors" >&2
+            exit 1
+          fi
           if [ "$count" -ne 1 ]; then
             echo "::error::${DIGEST} resolved to ${count} verified key-based signatures, expected exactly 1 -- refusing (ambiguous)"
             echo "$output" >&2
