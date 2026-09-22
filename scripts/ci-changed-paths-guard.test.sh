@@ -38,6 +38,8 @@ grep -q 'code_paths' "$TMP/err" && echo "ok - failure says where to add it" || {
 run_stdin 1 "doc + unlisted path fails" README.md newdir/thing.rs
 run_stdin 0 "THIRD-PARTY-NOTICES.md is listed (as code)" THIRD-PARTY-NOTICES.md
 run_stdin 0 "docs mockup is listed (as code)" docs/design/concepts/round-46/index.html
+run_stdin 0 "a CHR verification log is listed (as docs)" docs/routeros-verification-logs/7.24.4.log
+run_stdin 1 "a log outside that tree still fails" some/other/place.log
 
 # The lists must come from the CI file: a file without them is exit 2.
 printf 'stages: [lint]\n' >"$TMP/no-lists.yml"
