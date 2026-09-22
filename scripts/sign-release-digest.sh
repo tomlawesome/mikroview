@@ -27,17 +27,15 @@
 # Inputs (environment):
 #   MV_SIGNING_DIR      The signing runner's read-only key mount. Must
 #                        hold `cosign.key` and `password`.
-#                        Default: /etc/mikroview-signing
-#                        ASSUMED, not confirmed: this mirrors orbit's own
-#                        /etc/orbit-signing convention (orbit
-#                        docs/releasing.md) with the project name swapped
-#                        in, because the exact path this project's runner
-#                        actually mounts was not stated anywhere this
-#                        script could read it from. Check the real path
-#                        against the `mikroview-signing` runner's
-#                        config.toml volume mount before relying on the
-#                        default; override with MV_SIGNING_DIR if it
-#                        differs.
+#                        Default: /etc/mikroview-signing, confirmed by the
+#                        owner against the signing runner's config.toml on
+#                        2026-09-22: the runner mounts
+#                        "/etc/mikroview-signing:/etc/mikroview-signing:ro".
+#                        The default is therefore the real path, not a
+#                        guess; MV_SIGNING_DIR exists for tests and for a
+#                        future runner that mounts it elsewhere.
+#                        Note the mount is read-only, so nothing here can
+#                        write to it even by accident.
 #   COSIGN_PRIVATE_KEY   Path to the private key. Takes priority over
 #                        MV_SIGNING_DIR when set; settable directly so
 #                        tests never need a fake /etc directory.
