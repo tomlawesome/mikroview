@@ -1205,6 +1205,7 @@ gate:scripts:
     - scripts/dockerignore.test.sh
     - scripts/gitignore.test.sh
     - scripts/install.test.sh
+    - scripts/ensure-cosign.test.sh
   artifacts:
     when: always
     paths:
