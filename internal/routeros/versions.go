@@ -38,9 +38,17 @@ const (
 	// or that test fails.
 	//
 	// Which were exercised and which only read: 7.23.3 and 7.24.2 were
-	// run against a real CHR on 2026-09-04 by the exercise job (#894);
-	// 7.24 and 7.24.1 have only ever been read from release notes. See
-	// dialects.go's Rows for which, when, and what each found.
+	// run against a real CHR on 2026-09-04 by the exercise job (#894),
+	// and 7.24.4 on 2026-09-22 by the same job; 7.24, 7.24.1 and 7.24.3
+	// have only ever been read from release notes. See dialects.go's
+	// Rows for which, when, and what each found.
+	//
+	// "Exercised" means the commands were pasted into a booted CHR and
+	// the console accepted them. It does not mean they did their work:
+	// the job runs no mikroview beside the router, so the CA fetch times
+	// out and /certificate import is parsed rather than performed. That
+	// gap matters most for 7.24.3, whose changes are almost entirely in
+	// certificate handling.
 	//
 	// The "7.24.0 find-lookup bug" this comment used to point at was not
 	// one. It was #924: the bulk tagging command was written
@@ -54,7 +62,7 @@ const (
 	// releases tolerated them silently. Nothing mikroview emits relies
 	// on a bad parameter being tolerated, but it raises the cost of any
 	// command that turns out to have one.
-	ReviewedVersion = "7.24.2"
+	ReviewedVersion = "7.24.4"
 )
 
 // Standing is where a router's reported version sits relative to what
