@@ -111,6 +111,17 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-20 · 6341af40 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable" on every retry, 30s. The commits since the sixth sighting touch LiveTable, the changelog, two screenshots and one other scenario script. Seventh sighting, on #1301.
 
+- 2026-09-22 · every sighting above predates the fix. `d3f51622` (#1315,
+  2026-09-20 21:41 +0100) added the settle #1301's body asks for -- wait for
+  `permit all` to leave the DOM before clicking `fence now`
+  (`live-watchlist-manage.mjs:205-217`). The seventh sighting, `6341af40`, is
+  15:11 the same day, six hours earlier, and is not a descendant of it. The
+  issue's other candidate cause is ruled out too: all three each-blocks on the
+  path are keyed (`Watchlist.svelte:1525`, `:1683`, `:1690`), so a poll never
+  destroys the button's node. Shard 4/4 run twice on post-fix code, 25/25
+  reporting and 0 failed both times. Heading kept rather than deleted: two runs
+  do not clear an intermittent fault, and an eighth sighting belongs here.
+
 ## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
 
 - 2026-09-19 · df4ba9af (fix/v060-audit, local `python3 -m unittest scripts.seed_demo_test`) · full-file run, this the only failure · `AssertionError: 2 != 1` on `len(cam_beacon_lines)`. `lines_for_round40`'s DNS-beacon block (`scripts/seed-demo.py` ~1169) fires deterministically off `elapsed // CAM_BEACON_SECONDS`, but an earlier, unrelated block in the same function can independently emit a second line matching the test's own filter (cam-porch's mac plus `r40-iot-srv-dns`): it calls `random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])` for a random `iot`-zone host, so whenever that random pick lands on cam-porch and `r40-iot-srv-dns` together, the count goes to 2. **Root cause confirmed, not just suspected:** the test seeds nothing and reads the shared `random` module, which Python seeds from OS entropy fresh in every process -- `CamBeaconTests` run completely alone (`python3 -m unittest scripts.seed_demo_test.CamBeaconTests`, nothing else in the process) still failed 2 of 20 runs, so this has nothing to do with test order or other tests' random draws; it is a roughly 1-in-10 chance on any given process regardless of what else runs. (An earlier note here blamed #1272's new tests shifting shared state -- ruled out by this isolation run; kept as a correction rather than deleted per this file's own header about superseded reasoning.)
