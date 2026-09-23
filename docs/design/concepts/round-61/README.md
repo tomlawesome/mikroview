@@ -111,4 +111,19 @@ three directions; it is not part of the design.
 
 ## Owner verdicts
 
-(to be pasted verbatim)
+Owner, 2026-09-23, on the batch of three: *"Two keys approved."*
+
+**two keys — accepted.** It is what gets built: the `'must-enrol-factor'`
+phase in `frontend/src/lib/auth.svelte.ts`, drawn by `App.svelte` beside
+`'must-change-password'` and `'pending-factor'`, ported from
+`two-keys.html` markup and CSS rather than from an impression of it.
+
+**the same door — dropped.** **the porch — dropped.** Neither was
+commented on. Nothing in either is carried into the build; they stay
+here as the record of what was considered.
+
+Decisions inside the accepted direction, ratified with it: recovery
+codes are shown on the door before it opens; the passkeys-unusable
+state stays visible and disabled with its reason rather than being
+hidden; the authenticator app is listed first; and the fact that there
+is no way past the door is said in the mono caption line.
