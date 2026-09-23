@@ -554,7 +554,16 @@ func (c *Config) validatePublicURL(warn warnFunc) {
 					`passkeys unavailable (status "ip")`,
 					"set a hostname you actually use to reach MikroView, e.g. https://mikroview.home.lan:8443, or leave publicUrl unset")
 			}
-			if u.Scheme == "http" && u.Hostname() != "localhost" {
+			// Any scheme that is not https, rather than http alone.
+			// CFG-0102 names http because that is what an operator
+			// actually mistypes, but the runtime side (NewRelyingParty
+			// in internal/api) treats every non-https scheme as
+			// insecure, and the two have to agree: a setting that
+			// switches passkeys off while this check stays silent is
+			// the silent failure the design rules out. http on
+			// localhost is the one exemption, because a browser counts
+			// it as a secure context.
+			if !(u.Scheme == "https" || (u.Scheme == "http" && u.Hostname() == "localhost")) {
 				warn("CFG-0102", "publicUrl",
 					fmt.Sprintf("scheme is %q, and browsers only offer passkeys over https", u.Scheme),
 					`passkeys unavailable (status "insecure")`,
