@@ -3530,10 +3530,12 @@ hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
 
 A row also carries an **authenticator app** tag once that person has
-turned one on, and, beside it, a **clear authenticator app** button for
-when their phone is lost and they still have their password -- never on
-your own row, since that would let a signed-in admin remove their own
-second step with nothing to stop them. See
+turned one on, and a **passkeys** tag counting how many they have
+registered. Beside each sits a **clear authenticator app** or **clear
+passkeys** button, for when the phone or the key is lost and they still
+have their password -- never on your own row, since that would let a
+signed-in admin remove their own second step with nothing to stop them.
+Clearing one kind leaves the other standing. See
 [docs/authenticator-app.md](authenticator-app.md) for setting one up and
 every way to recover from a lost phone, including the console command
 for an admin locked out of their own.
