@@ -179,7 +179,21 @@ type User struct {
 	// without the authenticator app -- hashed with HashPassword, the same
 	// Argon2id treatment a password gets, never stored in clear. See
 	// GenerateRecoveryCodes and BurnRecoveryCode in recoverycodes.go.
+	//
+	// Shared between the authenticator app and passkeys below (#1250):
+	// one set of ten covers whichever factors are active. See
+	// HasSecondFactor and ClearTOTP's doc comment for the clearing rule,
+	// and DeletePasskey/ClearPasskeys in passkeys.go for the same rule
+	// from the passkey side.
 	RecoveryCodes []RecoveryCode `json:"recoveryCodes,omitempty"`
+	// Passkeys are this account's registered WebAuthn credentials
+	// (#1250) -- zero or more, unlike TOTPSecret's single shared secret,
+	// because an account may reasonably hold more than one authenticator
+	// (a phone and a security key, say). See passkeys.go for the type
+	// and every method that touches this field; this package does not
+	// perform the WebAuthn ceremony itself, only stores what it produced
+	// -- internal/api/webauthn.go (a parallel #1250 slice) owns that.
+	Passkeys []Passkey `json:"passkeys,omitempty"`
 }
 
 // LocalPassword reports whether this account has a real, user-chosen
@@ -193,6 +207,26 @@ func (u *User) LocalPassword() bool { return u.HasLocalPassword }
 // see TOTPConfirmedAt's doc comment.
 func (u *User) HasActiveTOTP() bool {
 	return u.TOTPSecret != "" && !u.TOTPConfirmedAt.IsZero()
+}
+
+// HasSecondFactor reports whether u has any active second factor at
+// all -- authenticator app or at least one passkey. This is #1250's
+// widening of the single-factor question #1249 only had to ask:
+// everywhere that used to gate on HasActiveTOTP alone now gates on this
+// instead (handleAuthLogin's login-requires-a-second-step check chief
+// among them, internal/api, wave 2), and everywhere that decides
+// whether recovery codes may still be cleared (ClearTOTP below,
+// DeletePasskey and ClearPasskeys in passkeys.go) asks this rather than
+// re-deriving "any factor left" from TOTP and Passkeys separately.
+//
+// Every passkey counts here regardless of whether it's stale (the
+// design's "when publicUrl changes" section): staleness only affects
+// whether a passkey can complete a *login*, not whether the account is
+// considered to have a second factor at all. An account with only stale
+// passkeys still shows 2FA as on and its recovery codes still apply --
+// it just can't redeem them by presenting that passkey anymore.
+func (u *User) HasSecondFactor() bool {
+	return u.HasActiveTOTP() || len(u.Passkeys) > 0
 }
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
@@ -1479,13 +1513,15 @@ func (s *Store) RecordTOTPCounter(userID string, matchedCounter uint64) error {
 }
 
 // ClearTOTP removes userID's authenticator-app factor entirely: the
-// secret, its confirmation, the replay counter, and every recovery
-// code, all in the one write. The four are cleared together rather than
-// leaving a caller to remember all four fields, because a partial clear
-// is worse than none -- a leftover recovery code would still get someone
-// past a login that believes it turned 2FA off, and a leftover secret or
-// counter would let a disable-then-re-enable cycle inherit state from
-// the factor that was supposedly removed.
+// secret, its confirmation and the replay counter, always. The
+// account's recovery codes went the same way unconditionally before
+// #1250; now they're cleared only if this was the account's last second
+// factor. Recovery codes are shared between the authenticator app and
+// passkeys (#1250): stripping them here while a passkey remains would
+// silently orphan that passkey's fallback, for a call this was never
+// asked to touch. See HasSecondFactor's doc comment for the shared
+// test, and DeletePasskey/ClearPasskeys in passkeys.go for the same
+// rule applied from the passkey side.
 func (s *Store) ClearTOTP(userID string) error {
 	if !s.Persisted() {
 		return ErrNotPersisted
@@ -1508,12 +1544,15 @@ func (s *Store) ClearTOTP(userID string) error {
 	u.TOTPSecret = ""
 	u.TOTPConfirmedAt = time.Time{}
 	u.TOTPLastCounter = 0
-	u.RecoveryCodes = nil
+	if len(u.Passkeys) == 0 {
+		u.RecoveryCodes = nil
+	}
 	if err := s.tryPersistLocked(); err != nil {
 		// A clear that only exists in memory must not be reported as
-		// done: the caller tells its operator 2FA is off, and a restart
-		// before the next good write would silently bring back the old
-		// secret, counter and recovery codes underneath that claim.
+		// done: the caller tells its operator the authenticator app is
+		// off, and a restart before the next good write would silently
+		// bring back the old secret, counter and (if it was cleared)
+		// recovery codes underneath that claim.
 		u.TOTPSecret = prevSecret
 		u.TOTPConfirmedAt = prevConfirmedAt
 		u.TOTPLastCounter = prevCounter
@@ -1546,6 +1585,18 @@ func (s *Store) List() []User {
 		// an admin-facing account list.
 		cp.TOTPSecret = ""
 		cp.RecoveryCodes = nil
+		// Passkeys carries each credential's PublicKey -- not a secret
+		// the way a private key would be, but still credential material
+		// an admin-facing account list has no business serializing, same
+		// stance as the three fields above. Blanked wholesale rather
+		// than per-field, same as TOTPSecret: a caller that needs a
+		// count (the users list's passkeyCount, internal/api wave 2)
+		// must call PasskeyCount(userID) (passkeys.go) instead of
+		// reading len(this copy's Passkeys), which always reads zero
+		// now. #1249 shipped exactly this mistake once already, reading
+		// HasActiveTOTP off a List() copy whose TOTPSecret was blanked
+		// the same way -- see PasskeyCount's doc comment.
+		cp.Passkeys = nil
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
