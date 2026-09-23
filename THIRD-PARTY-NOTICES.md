@@ -557,7 +557,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### github.com/jackc/pgx/v5 v5.10.0
+### github.com/jackc/pgx/v5 v5.11.0
 
 <!-- LICENSE -->
 
@@ -784,7 +784,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-### golang.org/x/crypto v0.56.0
+### golang.org/x/crypto v0.57.0
 
 <!-- LICENSE -->
 
@@ -852,7 +852,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/sync v0.22.0
+### golang.org/x/sync v0.23.0
 
 <!-- LICENSE -->
 
@@ -920,7 +920,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/term v0.45.0
+### golang.org/x/term v0.46.0
 
 <!-- LICENSE -->
 
@@ -954,7 +954,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### golang.org/x/text v0.41.0
+### golang.org/x/text v0.42.0
 
 <!-- LICENSE -->
 
