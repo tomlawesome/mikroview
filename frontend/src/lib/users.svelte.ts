@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
+import { clearUserPasskeys, clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
 import type { PasswordResetCode, UserSummary } from './types'
 
 // Admin-only account management (issue #133) -- its own small state
@@ -49,6 +49,17 @@ class UsersState {
   // server's new answer, not an assumption that the call did what it said.
   async clearFactor(id: string): Promise<string | null> {
     const err = await clearUserTOTP(id)
+    if (err) return err
+    await this.refresh()
+    return null
+  }
+
+  // clearPasskeys mirrors clearFactor above for #1250's own lost-device
+  // path -- a separate method, not a parameter on clearFactor, since the
+  // two clear different server routes and EngineRoom offers them as two
+  // distinct buttons (an account can hold either factor, or both).
+  async clearPasskeys(id: string): Promise<string | null> {
+    const err = await clearUserPasskeys(id)
     if (err) return err
     await this.refresh()
     return null
