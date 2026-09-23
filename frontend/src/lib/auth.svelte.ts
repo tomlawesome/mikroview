@@ -157,11 +157,6 @@ class AuthState {
   // account action reached from the menu.
   showChangePassword = $state(false);
   showSSOLink = $state(false);
-  // Drives AuthenticatorOverlay -- the enrol/confirm/recovery-codes flow,
-  // and the turn-off form once a factor is already active (#1249). Same
-  // kind of thing as the two flags above: an account action reached from
-  // the menu.
-  showAuthenticator = $state(false);
   // Whether this account has an active authenticator-app factor.
   // Mirrors sessionResponse.hasTOTP -- set here, read by AccountMenu to
   // decide what its row says and which screen the overlay opens on, and

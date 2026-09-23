@@ -22,6 +22,13 @@
   import { trapFocus } from '../lib/focusTrap'
   import { qrCode } from '../lib/qrcode'
 
+  // Bound to the caller's local state (#1332): AccountMenu mounts one
+  // copy of this per card on the deck, and reading a shared auth flag
+  // here opened every copy at once. AboutOverlay, one line above this
+  // in AccountMenu, already took its open state as a bound prop -- this
+  // now matches it rather than being the one overlay that didn't.
+  let { open = $bindable(false) }: { open?: boolean } = $props()
+
   type Step = 'status' | 'enrolling' | 'codes' | 'turning-off' | 'off-done'
 
   let step = $state<Step>('status')
@@ -62,7 +69,7 @@
   // (see the markup below): the ten codes exist in clear nowhere else,
   // so leaving is only ever the explicit "I have saved these".
   function close() {
-    authState.showAuthenticator = false
+    open = false
     resetFields()
   }
 
@@ -130,7 +137,7 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#if authState.showAuthenticator}
+{#if open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app" tabindex="-1" use:trapFocus>
       <div class="modal-header">

@@ -53,7 +53,6 @@ beforeEach(() => {
   authState.ssoConnected = false
   authState.ssoAvailable = false
   authState.hasTOTP = false
-  authState.showAuthenticator = false
 })
 
 // #1252: the admin keeps its password after connecting to SSO, so
@@ -128,9 +127,32 @@ describe('the Authenticator app row (#1249)', () => {
     render(AccountMenu)
     await openMenu()
 
-    expect(authState.showAuthenticator).toBe(false)
+    expect(screen.queryByRole('dialog', { name: /authenticator app/i })).toBeNull()
     await fireEvent.click(screen.getByRole('menuitem', { name: /authenticator app/i }))
-    expect(authState.showAuthenticator).toBe(true)
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+})
+
+// #1332: AuthenticatorOverlay used to open off authState.showAuthenticator,
+// a single flag shared by every mounted copy -- so the deck keeping
+// several cards (and several AccountMenus) mounted at once meant one
+// click opened every copy's dialog together, stacked with competing
+// focus traps. Reproduces that directly: two menus mounted side by
+// side, only one clicked.
+describe('two mounted account menus do not share the authenticator dialog (#1332)', () => {
+  it('opens the dialog in the clicked menu only, not in an unrelated mounted copy', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    render(AccountMenu)
+
+    const chips = screen.getAllByTitle('Account and operate pages')
+    await fireEvent.click(chips[0])
+    flushSync()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /authenticator app/i }))
+    flushSync()
+
+    expect(screen.getAllByRole('dialog', { name: /authenticator app/i })).toHaveLength(1)
   })
 })
 
