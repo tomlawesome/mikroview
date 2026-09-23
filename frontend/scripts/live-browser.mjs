@@ -16,6 +16,7 @@ import { execFileSync } from 'child_process'
 import http from 'node:http'
 import https from 'node:https'
 import { setGlobalDispatcher, Agent } from 'undici'
+import { createHmac } from 'node:crypto'
 import { fileURLToPath } from 'url'
 import path from 'path'
 
@@ -661,6 +662,158 @@ export const DESKTOP_VIEWPORT = { width: 1920, height: 1080 }
  * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
  * instead of being moved off it.
  */
+// ---- The second step at sign-in (#1253) ----------------------------------
+//
+// Every local account must now hold a second factor, so the right
+// password on its own no longer signs anybody in: the door asks for a
+// code instead. scripts/live-env.sh enrols an authenticator-app factor
+// for the admin when it stands the instance up, and exports the secret
+// as MV_TOTP_SECRET precisely so this can finish the job.
+//
+// Kept here, in session()'s own sign-in, rather than pushed into every
+// scenario: none of them are about the login door, and the two that are
+// (live-passkeys.mjs and the authenticator scenarios) drive it
+// themselves from a signed-out page.
+
+const TOTP_SECRET = process.env.MV_TOTP_SECRET
+
+// base32Decode is RFC 4648 without padding -- node has no built-in, and
+// the alternative is a dependency for fifteen lines.
+function base32Decode(s) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = 0
+  let value = 0
+  const out = []
+  for (const ch of s.replace(/=+$/, '').toUpperCase()) {
+    const idx = alphabet.indexOf(ch)
+    if (idx === -1) throw new Error(`MV_TOTP_SECRET is not base32: unexpected ${JSON.stringify(ch)}`)
+    value = (value << 5) | idx
+    bits += 5
+    if (bits >= 8) {
+      bits -= 8
+      out.push((value >> bits) & 0xff)
+    }
+  }
+  return Buffer.from(out)
+}
+
+// The same RFC 6238 computation internal/auth/totp.go does: HMAC-SHA1
+// of the big-endian 30-second counter, dynamic truncation, six digits.
+function totpCode(secret) {
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000 / 30)))
+  const mac = createHmac('sha1', base32Decode(secret)).update(counter).digest()
+  const offset = mac[mac.length - 1] & 0x0f
+  const truncated = mac.readUInt32BE(offset) & 0x7fffffff
+  return String(truncated % 1000000).padStart(6, '0')
+}
+
+// completeFactorOverApi finishes a sign-in made with fetch rather than
+// through the screen -- POST /api/auth/login answers 200 with a
+// pending-factor body, not a session, for any account holding a factor,
+// which since #1253 is every local account. Exported because one
+// scenario (live-change-password.mjs) signs a second, genuinely
+// separate client in to watch it be signed out again.
+//
+// Retries across time steps for the same reason completeSecondFactor
+// does: one code, one sign-in, and a second attempt inside the same
+// 30-second window is refused as a replay.
+export async function completeFactorOverApi(request, urlBase = URL_BASE) {
+  if (!TOTP_SECRET) {
+    throw new Error('completeFactorOverApi needs MV_TOTP_SECRET -- run `eval "$(scripts/live-env.sh up)"`')
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await request.fetch(`${urlBase}/api/auth/login/factor`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      data: { code: totpCode(TOTP_SECRET) },
+    })
+    if (res.status() === 200) return true
+    await new Promise((r) => setTimeout(r, 30000 - (Date.now() % 30000) + 1000))
+  }
+  return false
+}
+
+// Waits for whichever of the two outcomes the password produced, so a
+// server without the door costs nothing here rather than a fixed
+// timeout: either the app is already up, or the code box is.
+async function completeSecondFactor(page) {
+  const codeBox = 'input[autocomplete="one-time-code"]'
+  // Which of the two outcomes the password produced is decided by which
+  // wait wins, not by asking afterwards. page.isVisible() answers from
+  // the DOM as it stands at that instant, and the auth screen re-renders
+  // as it swaps the password step for the code step -- so a check made
+  // between the wait and the render said "no code box" for a code box
+  // that was about to appear, and sign-in was skipped. Intermittent, and
+  // the same trap live-passkeys.mjs hit.
+  const outcome = await Promise.race([
+    page.waitForSelector(codeBox, { timeout: 20000 }).then(
+      () => 'factor',
+      () => 'gave-up',
+    ),
+    page.waitForSelector('#main-content', { timeout: 20000 }).then(
+      () => 'signed-in',
+      () => 'gave-up',
+    ),
+  ])
+  if (outcome === 'signed-in') return
+  if (outcome === 'gave-up') {
+    // No code box, but the step may still be here leading with a
+    // passkey: an account holding both factors offers whichever suits
+    // the origin first, and passkeys win wherever they are usable (a
+    // scenario driving MV_PUBLIC_URL, say). The switch back to the
+    // authenticator app is a plain button on that screen, and this
+    // harness always has the secret, never a virtual authenticator.
+    const toApp = page.locator('button:has-text("Use your authenticator app instead")')
+    if (!(await toApp.count())) return
+    await toApp.first().click()
+    if (
+      !(await page
+        .waitForSelector(codeBox, { timeout: 10000 })
+        .then(() => true)
+        .catch(() => false))
+    ) {
+      return
+    }
+  }
+  if (!TOTP_SECRET) {
+    throw new Error(
+      'sign-in stopped at the second-factor step but MV_TOTP_SECRET is unset -- ' +
+        're-run `eval "$(scripts/live-env.sh up)"`, which enrols the factor and exports it',
+    )
+  }
+
+  // Retried across time steps, because one authenticator code is good
+  // for exactly one sign-in. VerifyTOTP's replay guard
+  // (TOTPLastCounter, internal/auth/store.go) refuses any counter it
+  // has already accepted, and it advances on every success -- so a
+  // second sign-in inside the same 30-second window is refused however
+  // correct the code is. Two scenarios in a row do exactly that, and so
+  // does the very first one after live-env.sh enrols the factor, since
+  // confirming enrolment burns that window's code too.
+  //
+  // Nothing here can shorten the wait: the server accepts a code only
+  // within one step of its own clock, so there is no "next" code to
+  // reach for -- the only thing that helps is the window turning over.
+  // Costs nothing when the window has already moved on, which is the
+  // common case for anything but a fast scenario following another.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.fill(codeBox, totpCode(TOTP_SECRET))
+    await page.click('button[type="submit"]')
+    const signedIn = await page
+      .waitForSelector('#main-content', { timeout: 8000 })
+      .then(() => true)
+      .catch(() => false)
+    if (signedIn) return
+    // +1s so the new step has definitely begun on the server's clock too.
+    await page.waitForTimeout(30000 - (Date.now() % 30000) + 1000)
+  }
+  throw new Error(
+    'the second-factor step refused three codes from MV_TOTP_SECRET across three time steps -- ' +
+      'the exported secret and the enrolled factor have probably drifted apart; re-run scripts/live-env.sh up',
+  )
+}
+
 export async function session({
   dismissSetup = true,
   landing = 'stream',
@@ -700,7 +853,15 @@ export async function session({
     ...(mocksApi ? { serviceWorkers: 'block' } : {}),
   })
   const consoleErrors = []
+  // Set only while completeSecondFactor is retrying a refused code (see
+  // its own comment): a refused authenticator code is a 401 the browser
+  // logs as a console error, and it is this harness's own sign-in
+  // making it, not the app misbehaving. Without this, every scenario
+  // that follows another inside one 30-second window fails "no console
+  // errors" for a login that then succeeded.
+  let signingIn = false
   const record = (text) => {
+    if (signingIn) return
     if (isUntrustedCertServiceWorkerError(text)) return
     if (isNavigationCancelledFetch(text)) return
     if (isScreenshotStyleRefusal(text)) return
@@ -716,6 +877,12 @@ export async function session({
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
+  signingIn = true
+  try {
+    await completeSecondFactor(page)
+  } finally {
+    signingIn = false
+  }
   // #main-content is the one marker present on every signed-in view
   // (App.svelte wraps all of them in it) -- unlike the old `input.rule`
   // wait, it does not assume which view is the landing page.

@@ -140,16 +140,33 @@ await page.click('button:has-text("Continue")')
 
 // The ceremony (navigator.credentials.create(), begin -> browser prompt
 // -> finish) round-trips through the virtual authenticator with no
-// further input needed. This account had no factor before the cleanup
-// above, so this registration is its first -- which is what mints the
-// ten recovery codes (docs/plans/passkeys-second-factor.md, "Recovery
-// codes are shared": "Mint when a factor activation finds
-// RecoveryCodes empty").
-await page.waitForSelector('[data-testid="recovery-codes"]', { timeout: 10000 })
-const codeCount = await page.locator('[data-testid="recovery-codes"] .rc').count()
-check(codeCount === 10, `ten recovery codes are minted for the account's first factor (saw ${codeCount})`)
-await page.click('button:has-text("I have saved these")')
-check(!(await visible('[aria-label="Passkeys"]')), 'saving the codes closes the dialog')
+// further input needed.
+//
+// What the dialog shows next depends on whether this passkey is the
+// account's first factor: the first one mints ten shared recovery codes
+// and shows them once, a later one says the existing codes still cover
+// it (docs/plans/passkeys-second-factor.md, "Recovery codes are
+// shared": "Mint when a factor activation finds RecoveryCodes empty").
+//
+// In practice it is the later one, because since #1253 every local
+// account must hold a factor and scripts/live-env.sh enrols an
+// authenticator app for this admin when it stands the instance up --
+// so the codes were minted there. Both paths are asserted anyway
+// rather than only the expected one, so this scenario keeps its meaning
+// if the harness ever stops doing that.
+if (await visible('[data-testid="recovery-codes"]', 5000)) {
+  const codeCount = await page.locator('[data-testid="recovery-codes"] .rc').count()
+  check(codeCount === 10, `ten recovery codes are minted for the account's first factor (saw ${codeCount})`)
+  await page.click('button:has-text("I have saved these")')
+} else {
+  check(
+    await visible('text=Your recovery codes were already issued'),
+    'a passkey added beside an existing factor reuses the recovery codes already minted',
+  )
+  await page.click('button:has-text("Close")')
+  await page.keyboard.press('Escape')
+}
+check(!(await visible('[aria-label="Passkeys"]', 2000)), 'the dialog is closed once the passkey is added')
 
 await openAccountMenu(page)
 check(
@@ -171,11 +188,13 @@ await page.click('button[type="submit"]')
 // A right password on an account holding a factor does not sign the
 // caller in on its own (docs/plans/passkeys-second-factor.md,
 // "handleAuthLogin's gate widens ... to HasSecondFactor()") -- the door
-// asks for the second step instead, passkey first since it is the only
-// factor this account has.
+// asks for the second step instead. This account holds both kinds since
+// #1253 (scripts/live-env.sh enrols an authenticator app at startup),
+// and the passkey is offered first here because this scenario drives
+// MV_PUBLIC_URL, where the credential is usable.
 check(
   await visible('button:has-text("Use your passkey")'),
-  'the second step offers "Use your passkey" for an account whose only factor is one',
+  'the second step offers "Use your passkey" to an account that holds one',
 )
 await page.click('button:has-text("Use your passkey")')
 
