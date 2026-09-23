@@ -16,6 +16,7 @@ import { execFileSync } from 'child_process'
 import http from 'node:http'
 import https from 'node:https'
 import { setGlobalDispatcher, Agent } from 'undici'
+import fs from 'node:fs'
 import { createHmac } from 'node:crypto'
 import { fileURLToPath } from 'url'
 import path from 'path'
@@ -699,13 +700,51 @@ function base32Decode(s) {
 
 // The same RFC 6238 computation internal/auth/totp.go does: HMAC-SHA1
 // of the big-endian 30-second counter, dynamic truncation, six digits.
-function totpCode(secret) {
-  const counter = Buffer.alloc(8)
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000 / 30)))
-  const mac = createHmac('sha1', base32Decode(secret)).update(counter).digest()
+function totpCode(secret, counter) {
+  const buf = Buffer.alloc(8)
+  buf.writeBigUInt64BE(BigInt(counter))
+  const mac = createHmac('sha1', base32Decode(secret)).update(buf).digest()
   const offset = mac[mac.length - 1] & 0x0f
   const truncated = mac.readUInt32BE(offset) & 0x7fffffff
   return String(truncated % 1000000).padStart(6, '0')
+}
+
+// freshTotpCode hands back a code for a time step this instance has not
+// already spent, waiting for the next one if it has to.
+//
+// Submitting a code that cannot work is not free, which is what makes
+// this necessary rather than tidy. VerifyTOTP's replay guard refuses any
+// counter already accepted, and a refused code is a *failed* login:
+// handleAuthLoginFactor reserves the same LoginLimiter buckets
+// handleAuthLogin does, five attempts per five minutes per account and
+// per source address, released only on success. So retrying a doomed
+// code three times, twice, locks the admin out of its own harness -- and
+// every scenario after it fails on a 429 that has nothing to do with
+// what it was testing. That is exactly how the first full-suite run
+// went: 22 scenarios failed, cascading from the first few collisions.
+//
+// The spent counter lives in $MV_DIR, not in this process, because each
+// scenario is its own node process and the guard is server-side and
+// shared. scripts/live-env.sh seeds it with the counter it spent
+// confirming enrolment.
+const COUNTER_FILE = process.env.MV_DIR ? path.join(process.env.MV_DIR, 'totp-last-counter') : null
+
+async function freshTotpCode(secret) {
+  for (;;) {
+    const counter = Math.floor(Date.now() / 1000 / 30)
+    let spent = -1
+    try {
+      spent = Number.parseInt(fs.readFileSync(COUNTER_FILE, 'utf8').trim(), 10)
+    } catch {
+      spent = -1
+    }
+    if (!Number.isFinite(spent) || counter > spent) {
+      if (COUNTER_FILE) fs.writeFileSync(COUNTER_FILE, String(counter))
+      return totpCode(secret, counter)
+    }
+    // +1s so the server's clock has certainly crossed the boundary too.
+    await new Promise((r) => setTimeout(r, 30000 - (Date.now() % 30000) + 1000))
+  }
 }
 
 // completeFactorOverApi finishes a sign-in made with fetch rather than
@@ -722,16 +761,15 @@ export async function completeFactorOverApi(request, urlBase = URL_BASE) {
   if (!TOTP_SECRET) {
     throw new Error('completeFactorOverApi needs MV_TOTP_SECRET -- run `eval "$(scripts/live-env.sh up)"`')
   }
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await request.fetch(`${urlBase}/api/auth/login/factor`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-      data: { code: totpCode(TOTP_SECRET) },
-    })
-    if (res.status() === 200) return true
-    await new Promise((r) => setTimeout(r, 30000 - (Date.now() % 30000) + 1000))
-  }
-  return false
+  const res = await request.fetch(`${urlBase}/api/auth/login/factor`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    data: { code: await freshTotpCode(TOTP_SECRET) },
+  })
+  // Not retried, for the reason completeSecondFactor gives: the code was
+  // already known-unspent, so a refusal is a fault worth surfacing rather
+  // than an attempt worth spending.
+  return res.status() === 200
 }
 
 // Waits for whichever of the two outcomes the password produced, so a
@@ -797,21 +835,23 @@ async function completeSecondFactor(page) {
   // reach for -- the only thing that helps is the window turning over.
   // Costs nothing when the window has already moved on, which is the
   // common case for anything but a fast scenario following another.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await page.fill(codeBox, totpCode(TOTP_SECRET))
-    await page.click('button[type="submit"]')
-    const signedIn = await page
-      .waitForSelector('#main-content', { timeout: 8000 })
-      .then(() => true)
-      .catch(() => false)
-    if (signedIn) return
-    // +1s so the new step has definitely begun on the server's clock too.
-    await page.waitForTimeout(30000 - (Date.now() % 30000) + 1000)
+  await page.fill(codeBox, await freshTotpCode(TOTP_SECRET))
+  await page.click('button[type="submit"]')
+  const signedIn = await page
+    .waitForSelector('#main-content', { timeout: 15000 })
+    .then(() => true)
+    .catch(() => false)
+  // Deliberately not retried. freshTotpCode already guarantees an unspent
+  // counter, so a refusal here is a real fault -- a drifted secret, a
+  // cleared factor -- and trying again would only spend the account's
+  // five-per-five-minutes allowance on it and turn one broken scenario
+  // into every later one failing on a 429.
+  if (!signedIn) {
+    throw new Error(
+      'the second-factor step refused a fresh code from MV_TOTP_SECRET -- the exported secret and ' +
+        'the enrolled factor have drifted apart; re-run `eval "$(scripts/live-env.sh up)"`',
+    )
   }
-  throw new Error(
-    'the second-factor step refused three codes from MV_TOTP_SECRET across three time steps -- ' +
-      'the exported secret and the enrolled factor have probably drifted apart; re-run scripts/live-env.sh up',
-  )
 }
 
 export async function session({
