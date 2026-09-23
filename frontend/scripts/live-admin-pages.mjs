@@ -30,7 +30,7 @@
 // The room's own read-only grammar is live-engine-room.mjs's job. This
 // scenario stops at the menu and the group's page-level facts.
 
-import { session, check, done, goTo, openAccountMenu, launchBrowser } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -199,7 +199,7 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
+await enrolFactorAndSignIn(viewerPage)
 
 await openAccountMenu(viewerPage)
 const viewerLabels = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
