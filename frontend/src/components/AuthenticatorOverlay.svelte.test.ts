@@ -93,7 +93,7 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
 
   it('shows all ten codes and flips authState.hasTOTP on a right code', async () => {
     const codes = Array.from({ length: 10 }, (_, i) => `code-${i}`)
-    vi.mocked(confirmTOTP).mockResolvedValue(codes)
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: codes, alreadyIssued: false })
     await reachEnrolling()
 
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
@@ -103,6 +103,25 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
     const block = await screen.findByTestId('recovery-codes')
     expect(codes.every((c) => block.textContent?.includes(c))).toBe(true)
     expect(authState.hasTOTP).toBe(true)
+  })
+
+  // #1250: recovery codes are shared with passkeys and minted once, by
+  // whichever factor activates first -- a passkey already on this
+  // account means confirming TOTP has nothing new to show.
+  it('skips the codes screen and notes the existing codes still stand when a passkey already minted them', async () => {
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: null, alreadyIssued: true })
+    await reachEnrolling()
+
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    expect(authState.hasTOTP).toBe(true)
+    expect(screen.queryByTestId('recovery-codes')).toBeNull()
+    expect(await screen.findByText(/already issued/i)).toBeTruthy()
+    // Nothing sensitive on this screen (there are no fresh codes to
+    // lose) -- both the header X and the footer's explicit Close are
+    // offered, unlike the real codes screen just above.
+    expect(screen.getAllByRole('button', { name: /close/i }).length).toBe(2)
   })
 
   it('shows the refusal and stays on the enrol screen for a wrong code', async () => {
@@ -120,7 +139,7 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
   // X and Escape are the two easy ways to lose them by accident, so
   // neither is wired on this screen (see the backdrop/Escape guard too).
   it('offers no header close button on the codes screen -- only the explicit acknowledgement', async () => {
-    vi.mocked(confirmTOTP).mockResolvedValue(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'])
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], alreadyIssued: false })
     await reachEnrolling()
 
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
@@ -132,7 +151,7 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
   })
 
   it('Escape does not close the codes screen, but does close every other screen', async () => {
-    vi.mocked(confirmTOTP).mockResolvedValue(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'])
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], alreadyIssued: false })
     await reachEnrolling()
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
@@ -146,7 +165,7 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
   })
 
   it('closes and clears state once "I have saved these" is clicked', async () => {
-    vi.mocked(confirmTOTP).mockResolvedValue(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'])
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'], alreadyIssued: false })
     await reachEnrolling()
     await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
     await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))

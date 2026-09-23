@@ -29,7 +29,11 @@
   // now matches it rather than being the one overlay that didn't.
   let { open = $bindable(false) }: { open?: boolean } = $props()
 
-  type Step = 'status' | 'enrolling' | 'codes' | 'turning-off' | 'off-done'
+  // 'on-done' is #1250's addition: reached instead of 'codes' when this
+  // account's recovery codes were already minted by an earlier passkey
+  // -- confirming still turns the factor on, it just has no fresh codes
+  // to show (see confirm() below).
+  type Step = 'status' | 'enrolling' | 'codes' | 'on-done' | 'turning-off' | 'off-done'
 
   let step = $state<Step>('status')
   let uri = $state('')
@@ -105,8 +109,17 @@
       error = result
       return
     }
-    recoveryCodes = result
     authState.hasTOTP = true
+    // #1250: recovery codes are shared with passkeys and minted once, by
+    // whichever factor activates first. A passkey already on this
+    // account means confirmTOTP just turned the factor on with nothing
+    // new to show -- the codes step exists nowhere to skip to, only the
+    // one-line note that the ones already issued still cover this too.
+    if (result.alreadyIssued) {
+      step = 'on-done'
+      return
+    }
+    recoveryCodes = result.recoveryCodes ?? []
     step = 'codes'
   }
 
@@ -233,9 +246,23 @@
           <p class="muted">
             Every other session this account was signed in on has been ended.
           </p>
+          <!-- #1250: the two overlays' one cross-reference line -- codes
+               are shared, so whichever second factor is added later
+               reuses these rather than minting its own. -->
+          <p class="muted">Your ten recovery codes cover your authenticator app and your passkeys alike.</p>
         </div>
         <div class="actions">
           <button type="button" class="confirm" onclick={finish}>I have saved these</button>
+        </div>
+      {/if}
+
+      {#if step === 'on-done'}
+        <div class="body">
+          <p>Authenticator app turned on.</p>
+          <p class="muted">Your recovery codes were already issued, and still cover this too.</p>
+        </div>
+        <div class="actions">
+          <button type="button" class="confirm" onclick={close}>Close</button>
         </div>
       {/if}
 

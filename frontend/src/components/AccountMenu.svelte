@@ -17,6 +17,7 @@
   import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
+  import PasskeysOverlay from './PasskeysOverlay.svelte'
   import UptimeBadge from './UptimeBadge.svelte'
 
   let open = $state(false)
@@ -26,6 +27,8 @@
   // copy of AuthenticatorOverlay; a flag shared through authState opened
   // every copy of the dialog at once instead of just this menu's.
   let showAuthenticator = $state(false)
+  // Same reasoning, same fix, for #1250's own overlay.
+  let showPasskeys = $state(false)
   let logoutError = $state<string | null>(null)
   let menuEl: HTMLElement | undefined
 
@@ -120,6 +123,16 @@
         <button class="row" role="menuitem" onclick={() => ((showAuthenticator = true), (open = false))}>
           Authenticator app{#if authState.hasTOTP}<span class="on-tag">&nbsp;· on</span>{/if}
         </button>
+        <!-- #1250: directly under Authenticator app, per the design's own
+             account-menu composition call -- two rows, not a merged one,
+             each opening its own overlay. Always present, even when this
+             deployment can't offer a passkey right now (no publicUrl, an
+             IP, http) -- the design forbids the row silently vanishing;
+             PasskeysOverlay itself says why. Count tag only when > 0,
+             same convention as Authenticator app's "· on" above. -->
+        <button class="row" role="menuitem" onclick={() => ((showPasskeys = true), (open = false))}>
+          Passkeys{#if authState.passkeyCount > 0}<span class="on-tag">&nbsp;· {authState.passkeyCount}</span>{/if}
+        </button>
       {:else}
         <p class="row-note">
           Authenticator app — not offered. This account signs in through single sign-on; your
@@ -148,6 +161,7 @@
 
 <AboutOverlay bind:open={showAbout} />
 <AuthenticatorOverlay bind:open={showAuthenticator} />
+<PasskeysOverlay bind:open={showPasskeys} />
 
 <style>
   .account {
