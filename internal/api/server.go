@@ -828,6 +828,19 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
 		{http.MethodPost, "/api/auth/users/{id}/reset-password", s.handleAuthResetUserPassword},
 
+		// Authenticator-app second factor (#1249): enrol/confirm/remove
+		// are the account owner's own three steps, login/factor is the
+		// second half of a login handleAuthLogin stopped short of a
+		// session for, and the users/{id}/totp route is the Users
+		// group's admin-clear path for a lost phone. See auth.go's own
+		// "#1249" section, right after handleAuthResetUserPassword, for
+		// all five handlers.
+		{http.MethodPost, "/api/auth/totp/enrol", s.handleTOTPEnrol},
+		{http.MethodPost, "/api/auth/totp/confirm", s.handleTOTPConfirm},
+		{http.MethodDelete, "/api/auth/totp", s.handleTOTPDelete},
+		{http.MethodPost, "/api/auth/login/factor", s.handleAuthLoginFactor},
+		{http.MethodDelete, "/api/auth/users/{id}/totp", s.handleTOTPAdminClear},
+
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/
 		// handleTokensList/handleTokensRevoke). The tokens themselves
