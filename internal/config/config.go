@@ -2154,7 +2154,7 @@ explains when to reach for them.
   -recover-admin-account    set a new password for the admin account
   -generate-recovery-keys   mint the recovery keys those commands ask for
   -transfer-admin <user>    move admin to another account
-  -clear-second-factor <user>  clear a lost authenticator-app factor
+  -clear-second-factor <user>  clear a lost second factor (authenticator app, passkeys)
   -backup                   write every store to one encrypted file
   -restore                  read a backup back onto disk
   -migrate-data             move the data directory between a bind mount and a volume
