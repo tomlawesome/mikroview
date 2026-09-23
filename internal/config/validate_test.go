@@ -384,6 +384,30 @@ func TestPublicURLInsecureScheme(t *testing.T) {
 	}
 }
 
+// TestPublicURLNonHTTPSchemeAlsoWarns pins the agreement between this
+// check and NewRelyingParty in internal/api, which is where the two
+// were briefly out of step: that side treats every non-https scheme as
+// insecure and switches passkeys off, so a scheme this check stayed
+// silent about would leave the operator with no warning and no
+// passkeys -- the silent failure the design rules out. CFG-0102's
+// wording names http because that is the realistic typo; the condition
+// deliberately covers more than its wording.
+func TestPublicURLNonHTTPSchemeAlsoWarns(t *testing.T) {
+	for _, raw := range []string{
+		"ftp://mikroview.home.lan:8080",
+		"ws://mikroview.home.lan:8080",
+	} {
+		c := validCfg()
+		c.PublicURL = raw
+		r := c.Validate()
+
+		if p := has(r.Warnings, "CFG-0102"); p == nil {
+			t.Errorf("%s did not trip CFG-0102, so passkeys would switch off with nothing said: got %v",
+				raw, codes(r.Warnings))
+		}
+	}
+}
+
 func TestPublicURLHTTPLocalhostExempt(t *testing.T) {
 	c := validCfg()
 	c.PublicURL = "http://localhost:8080"
