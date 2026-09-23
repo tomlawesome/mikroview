@@ -28,7 +28,7 @@
 // and is not disturbed) and leaves nothing behind but its syslog batch
 // and a viewer account it deletes again.
 
-import { session, feedSyslog, check, responsive, done, launchBrowser } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -183,6 +183,9 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
+// #1335: a fresh account holds no second factor at all, so the forced-
+// enrolment door sits between the password step and the app itself.
+await enrolFactorAndSignIn(viewerPage)
 await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
 const viewerNames = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))

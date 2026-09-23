@@ -15,7 +15,7 @@
 //    window.confirm() dialog, and a stray click actually disarms it;
 //  - a freshly let-in account can actually sign in and reach the app.
 
-import { session, check, done, goTo, launchBrowser, grantClipboard } from './live-browser.mjs'
+import { session, check, done, goTo, launchBrowser, grantClipboard, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -180,9 +180,12 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-const signedIn = await viewerPage
-  .waitForSelector('#main-content', { timeout: 15000 })
-  .then(() => true, () => false)
+// #1335: this account holds no second factor yet, so signing in for real
+// means clearing the forced-enrolment door too -- not just the password
+// step. enrolFactorAndSignIn only resolves once the door is cleared and
+// #main-content is up, so a rejection here is a genuine failure to sign
+// in, not a shortcut around the assertion below.
+const signedIn = await enrolFactorAndSignIn(viewerPage).then(() => true, () => false)
 check(signedIn, 'the freshly let-in viewer account can actually sign in')
 await browser.close()
 
