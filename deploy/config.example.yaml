@@ -536,6 +536,14 @@ store:
 #   recoveryKeysPath: /var/lib/mikroview/recovery.json
 #   recoveryPepperPath: /var/lib/mikroview/recovery-pepper
 
+# Optional, and needed only for passkeys (issue #1250): the address
+# people actually reach MikroView on. WebAuthn refuses to bind a passkey
+# to a bare IP address, so an install with no hostname -- the default --
+# keeps working exactly as it does today, it just can't offer passkeys.
+# Never falls back to oidc.publicBaseUrl below even when the two would
+# match -- see docs/configuration.md's "Public URL" section.
+# publicUrl: "https://mikroview.example.com:8443"
+
 # TLS is on by default and needs no configuration to work -- MikroView
 # generates its own local CA + certificate on first start, already
 # persisted to /var/lib/mikroview/tls by default. Only uncomment this
