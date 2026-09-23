@@ -132,6 +132,7 @@ func TestRouterBackupsListNonAdminForbidden(t *testing.T) {
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("viewer login status = %d", loginResp.StatusCode)
 	}
+	totpEnrolAndConfirm(t, client, ts) // #1253: needed before /api/router-backups below
 
 	r, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {

@@ -34,6 +34,7 @@ func TestSetupStatusOpenToViewer(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/setup/status below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/setup/status")
 	if err != nil {
@@ -147,8 +148,19 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 	if n := len(s.Setup.Marks()); n != 0 {
 		t.Errorf("%d marks recorded from refused requests, want 0", n)
 	}
-	if n := len(s.Audit.Query(audit.Query{}).Entries); n != 0 {
-		t.Errorf("%d audit entries written for refused requests, want 0", n)
+	// Scoped to setup.go's own two mark actions, not the whole log: #1253
+	// makes setUpAdmin enrol the admin a confirmed factor before this
+	// test body runs a single request, which legitimately writes its own
+	// unrelated account.totp_enabled entry ahead of the refused calls
+	// below.
+	var markEntries int
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "setup.step_skipped" || e.Action == "setup.step_forced" {
+			markEntries++
+		}
+	}
+	if markEntries != 0 {
+		t.Errorf("%d setup-mark audit entries written for refused requests, want 0", markEntries)
 	}
 }
 
@@ -374,6 +386,10 @@ func TestSetupAddressAdminOnly(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	// Enrolled so the 403 below actually proves the admin-only gate,
+	// rather than being masked by #1253's door refusing a still-factor-
+	// less viewer for an unrelated reason.
+	totpEnrolAndConfirm(t, viewerClient, ts)
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
 	defer resp.Body.Close()
@@ -495,6 +511,10 @@ func TestSetupBackupTransportAdminOnly(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	// Enrolled so the 403 below actually proves the admin-only gate,
+	// rather than being masked by #1253's door refusing a still-factor-
+	// less viewer for an unrelated reason.
+	totpEnrolAndConfirm(t, viewerClient, ts)
 
 	resp := putJSON(t, viewerClient, ts.URL+"/api/setup/backup-transport", setupBackupTransportRequest{Transport: "https"})
 	defer resp.Body.Close()

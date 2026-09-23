@@ -166,6 +166,7 @@ func TestDroplistWriteRoutesAreAdminOnly(t *testing.T) {
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, user, ts) // #1253: needed before /api/droplist below
 
 	if resp, err := user.Get(ts.URL + "/api/droplist"); err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,6 +115,99 @@ func totpEnrolAndConfirm(t *testing.T, client *http.Client, ts *httptest.Server)
 	return secret, out.RecoveryCodes, counter
 }
 
+// totpFixtureFactors remembers, per server and account, what a fixture
+// confirmed via the real enrol+confirm routes (totpEnrolAndConfirm) -- so
+// a later, wholly independent plain-password login for that same account
+// (loggedInClient in authz_matrix_test.go, or TestAuthorizationMatrixIsEnforced's
+// own repeated re-logins) can finish #1249's second login step itself,
+// rather than stalling on the pending-login response every confirmed
+// factor now produces once #1253 requires one. Keyed by the server's own
+// URL (ts.URL, and loggedInClient's equivalent "base" parameter -- the
+// same string, since every call site passes one straight through from the
+// other), which disambiguates fixtures the same way each test's own
+// httptest.Server already does.
+var (
+	totpFixtureFactorsMu sync.Mutex
+	totpFixtureFactors   = map[string]map[string]*totpFixtureFactor{}
+)
+
+// totpFixtureFactor's recoveryCodes -- confirm's own one-time codes,
+// popped one per completed re-login -- are the primary way
+// totpFixtureCode finishes a pending login, not a live TOTP code: two
+// re-logins for the same account inside one 30-second wall-clock window
+// (routine for an in-process test) would otherwise need two *different*
+// valid TOTP codes from the same 30-second step, which VerifyTOTP's
+// window can never produce -- only the recovery path sidesteps the clock
+// altogether. secret/lastCounter stay as a fallback for the rare test
+// that burns through all ten.
+type totpFixtureFactor struct {
+	secret        []byte
+	recoveryCodes []string
+	lastCounter   uint64
+}
+
+// rememberTOTPFactor records secret/recoveryCodes/counter
+// (totpEnrolAndConfirm's own return values) for username on the server at
+// base.
+func rememberTOTPFactor(base, username string, secret []byte, recoveryCodes []string, counter uint64) {
+	totpFixtureFactorsMu.Lock()
+	defer totpFixtureFactorsMu.Unlock()
+	if totpFixtureFactors[base] == nil {
+		totpFixtureFactors[base] = map[string]*totpFixtureFactor{}
+	}
+	totpFixtureFactors[base][username] = &totpFixtureFactor{
+		secret:        secret,
+		recoveryCodes: append([]string(nil), recoveryCodes...),
+		lastCounter:   counter,
+	}
+}
+
+// enrolAndRememberFactor drives totpEnrolAndConfirm for client (already
+// signed in as username on ts, holding no factor yet) and records the
+// result via rememberTOTPFactor -- the shared helpers that need admin (or
+// any other named fixture account) to hold a factor before it can pass
+// #1253's forced-enrolment door use this instead of a bare
+// totpEnrolAndConfirm, precisely so a later loggedInClient re-login as
+// that same account still works.
+func enrolAndRememberFactor(t *testing.T, client *http.Client, ts *httptest.Server, username string) {
+	t.Helper()
+	secret, codes, counter := totpEnrolAndConfirm(t, client, ts)
+	rememberTOTPFactor(ts.URL, username, secret, codes, counter)
+}
+
+// totpFixtureCode returns a not-yet-used code for username's remembered
+// factor on the server at base, suitable for completing exactly one
+// pending login via POST /api/auth/login/factor -- see
+// totpFixtureFactor's own doc comment for why this is a recovery code,
+// not a freshly generated TOTP one, whenever a recovery code remains.
+func totpFixtureCode(base, username string) (string, bool) {
+	totpFixtureFactorsMu.Lock()
+	defer totpFixtureFactorsMu.Unlock()
+	perServer := totpFixtureFactors[base]
+	if perServer == nil {
+		return "", false
+	}
+	f := perServer[username]
+	if f == nil {
+		return "", false
+	}
+	if len(f.recoveryCodes) > 0 {
+		code := f.recoveryCodes[0]
+		f.recoveryCodes = f.recoveryCodes[1:]
+		return code, true
+	}
+	// Recovery codes exhausted -- ten fixture re-logins for one account
+	// in a single test would be unusual. Fall back to a live TOTP code,
+	// which only works if "now" hasn't already been out-advanced by a
+	// previous fallback use of this same branch.
+	counter := totpCounterNow(time.Now())
+	if counter <= f.lastCounter {
+		counter = f.lastCounter + 1
+	}
+	f.lastCounter = counter
+	return auth.GenerateTOTPCode(f.secret, counter), true
+}
+
 // startTOTPLogin posts the password step for an account that holds an
 // active factor and asserts the shape #1249 requires -- no session,
 // {"secondFactor":["totp"]} -- returning the client for the caller to
@@ -157,6 +251,24 @@ func findAuditEntry(t *testing.T, admin *http.Client, ts *httptest.Server, actio
 	return audit.Entry{}
 }
 
+// findAuditEntryForTarget is findAuditEntry narrowed to one target -- #1253
+// makes registerAdmin (entities_test.go) itself enrol and confirm a TOTP
+// factor for the admin so it can pass the forced-enrolment door, which
+// means totpTestServer's admin now emits its own "account.totp_enabled"
+// entry ahead of whatever bilbo does in the test body. findAuditEntry's
+// plain first-match would find that one instead.
+func findAuditEntryForTarget(t *testing.T, admin *http.Client, ts *httptest.Server, action, target string) audit.Entry {
+	t.Helper()
+	res := fetchAudit(t, admin, ts)
+	for _, e := range res.Entries {
+		if e.Action == action && e.Target == target {
+			return e
+		}
+	}
+	t.Fatalf("no %s audit entry for %q was recorded", action, target)
+	return audit.Entry{}
+}
+
 // TestTOTPEnrolConfirmLoginFactorAndDelete is the happy path end to end:
 // enrol, confirm (which hands back ten recovery codes and does not sign
 // the enrolling browser out), a fresh browser stopping at the password
@@ -178,7 +290,7 @@ func TestTOTPEnrolConfirmLoginFactorAndDelete(t *testing.T) {
 	if sess := sessionOf(t, bilbo, ts); !sess.Authenticated {
 		t.Fatal("confirming TOTP should not have signed this browser out")
 	}
-	entry := findAuditEntry(t, admin, ts, "account.totp_enabled")
+	entry := findAuditEntryForTarget(t, admin, ts, "account.totp_enabled", totpBilboUsername)
 	if entry.Actor != totpBilboUsername || entry.Target != totpBilboUsername {
 		t.Errorf("account.totp_enabled entry = %+v, want actor/target %q", entry, totpBilboUsername)
 	}
@@ -648,16 +760,26 @@ func TestTOTPDeleteWrongPassword(t *testing.T) {
 func TestTheFactorIsVisibleToTheFrontend(t *testing.T) {
 	s, ts, admin := totpTestServer(t)
 
-	// Before anything is enrolled, both surfaces say no.
-	if got := totpSessionHasTOTP(t, admin, ts); got {
+	// admin needs a confirmed factor of its own before #1253's
+	// forced-enrolment door lets it reach GET /api/auth/users at all
+	// (totpTestServer already arranges this via registerAdmin) -- so the
+	// account proving "never enrolled still reads as false" below has to
+	// be someone other than admin. carol, freshly created and never
+	// touched, plays that part; bilbo plays the "just enrolled" one.
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "carol", Password: totpBilboPassword, Role: "user"}).Body.Close()
+
+	// Before anything is enrolled, both surfaces say no -- read off
+	// bilbo's own session (exempt from the door) rather than admin's,
+	// since admin's own factor is now a precondition, not a subject.
+	bilbo := totpSignInWithoutAFactor(t, ts, totpBilboUsername, totpBilboPassword)
+	if got := totpSessionHasTOTP(t, bilbo, ts); got {
 		t.Error("the session reports a factor before one was enrolled")
 	}
 	if got := totpListedHasTOTP(t, admin, ts, totpBilboUsername); got {
 		t.Error("the user list reports a factor for bilbo before one was enrolled")
 	}
 
-	// bilbo signs in and enrols.
-	bilbo := totpSignInWithoutAFactor(t, ts, totpBilboUsername, totpBilboPassword)
+	// bilbo enrols.
 	totpEnrolAndConfirm(t, bilbo, ts)
 
 	if got := totpSessionHasTOTP(t, bilbo, ts); !got {
@@ -666,10 +788,10 @@ func TestTheFactorIsVisibleToTheFrontend(t *testing.T) {
 	if got := totpListedHasTOTP(t, admin, ts, totpBilboUsername); !got {
 		t.Error("the admin user list does not report bilbo's factor -- the pill and the clear button both key off this")
 	}
-	// The admin has no factor of their own; a list that reported true
-	// for everyone would pass the assertion above without meaning it.
-	if got := totpListedHasTOTP(t, admin, ts, "admin"); got {
-		t.Error("the user list reports a factor for the admin, who never enrolled one")
+	// carol never enrolled a factor; a list that reported true for
+	// everyone would pass the assertion above without meaning it.
+	if got := totpListedHasTOTP(t, admin, ts, "carol"); got {
+		t.Error("the user list reports a factor for carol, who never enrolled one")
 	}
 
 	// Clearing it puts both surfaces back.

@@ -3,9 +3,11 @@
 package api
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -611,6 +613,17 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	user := loggedInClient(t, ts.URL, "operator", "password456")
 	admin := loggedInClient(t, ts.URL, "admin", "password123")
 
+	// #1253: all three are local accounts, so the forced-enrolment door
+	// refuses every route below but the four enrolment ones until each
+	// holds a confirmed factor. Enrolled on the first session above,
+	// while it's still the one and only session for that account --
+	// remembered (enrolAndRememberFactor) so the throwaway re-logins the
+	// logout row drives further down (loggedInClient) can complete
+	// #1249's second step themselves.
+	enrolAndRememberFactor(t, viewer, ts, "watcher")
+	enrolAndRememberFactor(t, user, ts, "operator")
+	enrolAndRememberFactor(t, admin, ts, "admin")
+
 	for _, r := range authzMatrix {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
 			// Skip the first-run endpoint: an account now exists, so it
@@ -696,13 +709,40 @@ func doRouteRequest(t *testing.T, c *http.Client, base string, r routeExpectatio
 
 // loggedInClient returns a client holding a live session cookie for the
 // given credentials.
+//
+// #1249 (and #1253's forced-enrolment door, which is what makes every
+// account this package tests hold a factor sooner or later) means the
+// password step alone no longer guarantees that: an account with a
+// confirmed factor gets back {"secondFactor":[...]} and a pending-login
+// cookie instead of a session. When that happens here, the fixture's own
+// remembered secret (rememberTOTPFactor, set by whatever enrolled it --
+// enrolAndRememberFactor, or this test's own setup) completes the second
+// step, so every caller of this helper still gets what its name promises.
 func loggedInClient(t *testing.T, base, username, password string) *http.Client {
 	t.Helper()
 	c := &http.Client{Jar: mustCookieJar(t)}
 	resp := postJSON(t, c, base+"/api/auth/login", credentialsRequest{Username: username, Password: password})
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		t.Fatalf("login as %q failed with %d", username, resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if _, pending := out["secondFactor"]; pending {
+		code, ok := totpFixtureCode(base, username)
+		if !ok {
+			t.Fatalf("login as %q stopped at the pending-factor step, but no fixture-enrolled secret is on record for it", username)
+		}
+		factorResp := postJSON(t, c, base+"/api/auth/login/factor", loginFactorRequest{Code: code})
+		defer factorResp.Body.Close()
+		if factorResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(factorResp.Body)
+			t.Fatalf("completing the factor step for %q failed with %d: %s", username, factorResp.StatusCode, body)
+		}
 	}
 	return c
 }

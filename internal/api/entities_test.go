@@ -40,7 +40,11 @@ func deleteJSON(t *testing.T, client *http.Client, url string, body any) *http.R
 // registerAdmin registers the first (always-admin) account against s and
 // returns a client whose cookie jar carries that session -- the shared
 // setup every admin-gated entities test below needs, mirroring
-// TestAdminCanCreateAdditionalUsers' own setup in auth_test.go.
+// TestAdminCanCreateAdditionalUsers' own setup in auth_test.go. Also
+// clears the forced-enrolment door (#1253) via totpEnrolAndConfirm
+// (totp_test.go): a local account with no active second factor can reach
+// nothing but the four enrolment routes, so every other admin-gated route
+// this helper exists for needs that cleared first.
 func registerAdmin(t *testing.T, ts *httptest.Server) *http.Client {
 	t.Helper()
 	client := &http.Client{Jar: mustCookieJar(t)}
@@ -49,6 +53,7 @@ func registerAdmin(t *testing.T, ts *httptest.Server) *http.Client {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("registering the admin account failed: %d", resp.StatusCode)
 	}
+	enrolAndRememberFactor(t, client, ts, "admin")
 	return client
 }
 
@@ -232,9 +237,11 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/entities below
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password789"}).Body.Close()
+	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/entities below
 
 	getResp, err := viewerClient.Get(ts.URL + "/api/entities")
 	if err != nil {

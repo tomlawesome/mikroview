@@ -231,6 +231,7 @@ func TestUpgradeReadableByViewerWritableByAdminOnly(t *testing.T) {
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "viewer"}).Body.Close()
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/upgrade below
 
 	if got := getUpgrade(t, viewerClient, ts.URL); got.Previous != "v0.4.0" {
 		t.Errorf("a viewer's GET served previous = %q, want v0.4.0", got.Previous)
