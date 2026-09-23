@@ -23,10 +23,11 @@
   // fourth batch) is that the rain never crosses the centred elements.
   let {
     // Which centre is carved out of the layer: the door's form stack,
-    // or the attach beat's taller command card.
+    // the attach beat's taller command card, or the enrolment door's
+    // wider staged walk (#1336, round 61).
     mask = 'door',
   }: {
-    mask?: 'door' | 'attach'
+    mask?: 'door' | 'attach' | 'enrol'
   } = $props()
 </script>
 
@@ -38,7 +39,7 @@
      one block at the layer's origin (#645, owner report 2026-08-30).
      Chromium let the same markup through, so no Chromium-driven check
      can see this class of breakage. -->
-<div class="fullfall" class:door={mask === 'door'} class:attach={mask === 'attach'} aria-hidden="true">
+<div class="fullfall" class:door={mask === 'door'} class:attach={mask === 'attach'} class:enrol={mask === 'enrol'} aria-hidden="true">
   <i></i>
   <i></i>
   <i class="r"></i>
@@ -101,6 +102,14 @@
   .fullfall.attach {
     -webkit-mask: radial-gradient(ellipse 520px 460px at 50% 50%, transparent 62%, black 78%);
     mask: radial-gradient(ellipse 520px 460px at 50% 50%, transparent 62%, black 78%);
+  }
+
+  /* The enrolment door's own ellipse, two-keys.html's verbatim: its
+     stack is wider (560px) and its prove/codes stages taller than the
+     login door's form. */
+  .fullfall.enrol {
+    -webkit-mask: radial-gradient(ellipse 560px 440px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 560px 440px at 50% 52%, transparent 62%, black 78%);
   }
 
   .fullfall i {

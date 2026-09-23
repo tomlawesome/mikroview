@@ -84,6 +84,7 @@ beforeEach(() => {
   authState.justSignedOut = false
   authState.signedInSince = ''
   authState.mustChangePassword = false
+  authState.mustEnrolSecondFactor = false
   authState.hasTOTP = false
   authState.passkeyCount = 0
   authState.passkeyStatus = 'unset'
@@ -1074,5 +1075,104 @@ describe('AuthState and a forced password change (#1251)', () => {
 
     expect(authState.state).toBe('unauthenticated')
     expect(authState.mustChangePassword).toBe(false)
+  })
+})
+
+
+// #1336 (#1253's door): a local account with no second factor holds a
+// real session that may reach nothing but the four enrolment routes.
+// Unlike 'pending-factor', this state comes straight from
+// GET /api/auth/session -- the flag is computed from the account, not
+// the session -- so a plain check() (app boot, page reload
+// mid-enrolment) lands on the door and stays there until a factor is
+// proven.
+describe('AuthState and the forced-enrolment door (#1336)', () => {
+  const cases: {
+    name: string
+    mustEnrolSecondFactor: boolean | undefined
+    want: string
+  }[] = [
+    { name: 'the account holds no second factor', mustEnrolSecondFactor: true, want: 'must-enrol-factor' },
+    { name: 'the account holds a factor', mustEnrolSecondFactor: false, want: 'authenticated' },
+    {
+      name: 'an older server does not report the flag at all',
+      mustEnrolSecondFactor: undefined,
+      want: 'authenticated',
+    },
+  ]
+
+  for (const c of cases) {
+    it(`lands in ${c.want} when ${c.name}`, async () => {
+      vi.mocked(fetchAuthSession).mockResolvedValue(
+        session({
+          authenticated: true,
+          username: 'meredith',
+          role: 'viewer',
+          mustEnrolSecondFactor: c.mustEnrolSecondFactor,
+        }),
+      )
+
+      await authState.check()
+
+      expect(authState.state).toBe(c.want)
+      expect(authState.mustEnrolSecondFactor).toBe(c.mustEnrolSecondFactor ?? false)
+    })
+  }
+
+  it('a page reload mid-enrolment lands back on the door, not the login form', async () => {
+    // The state a reload starts from is 'loading' with the flag long
+    // gone from memory -- everything the door needs must come from the
+    // session response alone.
+    authState.state = 'loading'
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'meredith', role: 'viewer', mustEnrolSecondFactor: true }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('must-enrol-factor')
+  })
+
+  it('an outstanding password change outranks the door, matching requireAuth\'s own gate order', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({
+        authenticated: true,
+        username: 'meredith',
+        role: 'viewer',
+        mustChangePassword: true,
+        mustEnrolSecondFactor: true,
+      }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('must-change-password')
+    // Both flags are still mirrored -- the door is what comes next once
+    // the password is set.
+    expect(authState.mustEnrolSecondFactor).toBe(true)
+  })
+
+  it('opens the app once a re-check reports the factor is held', async () => {
+    authState.state = 'must-enrol-factor'
+    authState.mustEnrolSecondFactor = true
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'meredith', role: 'viewer', mustEnrolSecondFactor: false }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('authenticated')
+    expect(authState.mustEnrolSecondFactor).toBe(false)
+  })
+
+  it('drops the flag when a mid-enrolment request comes back 401', () => {
+    authState.state = 'must-enrol-factor'
+    authState.mustEnrolSecondFactor = true
+
+    authState.handleUnauthorized()
+
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.mustEnrolSecondFactor).toBe(false)
+    expect(pageReload.now).toHaveBeenCalled()
   })
 })

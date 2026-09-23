@@ -503,6 +503,12 @@ export interface AuthSession {
   // server, which is read as false -- the safe direction, since a server
   // that does not know about the flag has no route to enforce it either.
   mustChangePassword?: boolean
+  // True while #1253's forced enrolment is still outstanding (#1336): a
+  // local account with no active second factor, whose session may reach
+  // nothing but the four enrolment routes until it holds one. Absent on
+  // an older server, read as false -- same reasoning as
+  // mustChangePassword above.
+  mustEnrolSecondFactor?: boolean
   ssoAvailable: boolean
   // This session's own start (#677's sessions row: "signed in 4 d") --
   // when this login happened, not when the account was created. Absent
