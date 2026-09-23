@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 61 — two keys (forced enrolment, staged)</title>
+<style>
+  /* Round 61 · #1336. The same ratified door, opened out into a short
+     staged walk: a mono thread under the wordmark names the whole of
+     what stands between you and the app — choose · prove it · keep the
+     codes · enter — so being stuck reads as being three small steps
+     deep, not locked out. The choice itself is two keys side by side. */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --now: #e8b05a;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; overflow: hidden; }
+  .beat { flex: 1; display: grid; place-items: center; position: relative; padding: 20px; }
+  .stack { text-align: center; width: 100%; max-width: 560px; position: relative; z-index: 2; animation: rise 0.3s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+
+  .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out; margin-bottom: 16px;
+  }
+  .wm em { font-style: normal; color: var(--accent); }
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    -webkit-mask: radial-gradient(ellipse 560px 440px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 560px 440px at 50% 52%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+
+  /* The thread: the walk's whole shape, in the app's caption voice. */
+  .thread {
+    font: 11px var(--mono); color: var(--ink-3); letter-spacing: 0.06em;
+    margin-bottom: 26px;
+  }
+  .thread .sep { padding: 0 7px; opacity: 0.6; }
+  .thread .on { color: var(--ink); border-bottom: 1px solid var(--accent); padding-bottom: 1px; }
+
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 8px; }
+  .subtitle { font-size: 13px; color: var(--ink-2); margin-bottom: 20px; max-width: 440px; margin-left: auto; margin-right: auto; }
+
+  .state { display: none; }
+  body[data-scene="first"] .state.s-first,
+  body[data-scene="totp"] .state.s-totp,
+  body[data-scene="passkey"] .state.s-passkey,
+  body[data-scene="codes"] .state.s-codes,
+  body[data-scene="no-passkey"] .state.s-no-passkey { display: block; }
+  .thr { display: none; }
+  body[data-scene="first"] .thr-choose,
+  body[data-scene="no-passkey"] .thr-choose,
+  body[data-scene="totp"] .thr-prove,
+  body[data-scene="passkey"] .thr-prove,
+  body[data-scene="codes"] .thr-codes { display: block; }
+
+  /* The two keys: side by side, whole card the control. */
+  .keys { display: flex; gap: 14px; justify-content: center; align-items: stretch; }
+  a.key, span.key {
+    flex: 1 1 0; max-width: 250px; display: flex; flex-direction: column; gap: 8px;
+    padding: 18px 16px 16px; border: 1px solid var(--hair-2); border-radius: 12px;
+    text-decoration: none; text-align: center; background: rgba(15, 20, 34, 0.35);
+  }
+  a.key:hover, a.key:focus-visible { border-color: var(--accent); outline: none; }
+  a.key:focus-visible { box-shadow: 0 0 0 2px rgba(157, 184, 232, 0.35); }
+  .glyph { height: 44px; display: grid; place-items: center; }
+  .glyph .codeface { font: 600 21px var(--mono); letter-spacing: 0.18em; color: var(--accent); }
+  .glyph svg { width: 34px; height: 34px; stroke: var(--accent); fill: none; stroke-width: 1.6; stroke-linecap: round; }
+  .key .cname { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .key .cdesc { font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+  .key .go { margin-top: auto; font: 10.5px var(--mono); color: var(--ink-3); letter-spacing: 0.06em; padding-top: 8px; }
+  a.key:hover .go { color: var(--accent); }
+  span.key { border-color: var(--hair); background: transparent; }
+  span.key .cname, span.key .cdesc, span.key .glyph .codeface { color: var(--ink-3); }
+  span.key .glyph svg { stroke: var(--ink-3); opacity: 0.6; }
+
+  .noexit { margin-top: 20px; font: 10.5px/1.6 var(--mono); color: var(--ink-3); letter-spacing: 0.02em; }
+
+  /* Stage two: the proving ground — what you scan on the left, what
+     you type on the right, one hairline between. */
+  .prove { display: flex; gap: 26px; align-items: center; justify-content: center; text-align: left; }
+  .prove .half { flex: 0 1 250px; }
+  .prove .divide { align-self: stretch; width: 1px; background: var(--hair); }
+  .qr { width: 120px; height: 120px; border-radius: 6px; background: #fff; padding: 7px; margin-bottom: 10px; }
+  .qr svg { display: block; width: 100%; height: 100%; }
+  .seclabel { font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.08em; }
+  .secret { font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; color: var(--ink); margin-top: 3px; max-width: 230px; }
+  .cred input {
+    display: block; width: 100%; padding: 7px 4px; margin-top: 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .aside { font-size: 11.5px; color: var(--ink-3); margin-top: 12px; line-height: 1.5; }
+  .enter {
+    margin-top: 16px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover, .enter:focus-visible { border-color: var(--accent); outline: none; }
+  .link-btn {
+    display: inline-block; margin-top: 12px; font-size: 12px; color: var(--ink-3);
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  .link-btn:hover, .link-btn:focus-visible { color: var(--ink-2); outline: none; }
+
+  .codesblock {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px;
+    padding: 12px 18px; border: 1px solid var(--hair); border-radius: 6px;
+    background: var(--raised); text-align: left; width: fit-content; margin: 0 auto 10px;
+  }
+  .rc { font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.03em; color: var(--ink); user-select: all; }
+  .copy {
+    background: transparent; border: 1px solid var(--hair); color: var(--ink-2);
+    border-radius: 5px; padding: 5px 12px; font-size: 11.5px; cursor: pointer;
+  }
+  .copy:hover, .copy:focus-visible { color: var(--ink); border-color: var(--hair-2); outline: none; }
+
+  .mock-strip {
+    position: fixed; left: 12px; bottom: 10px; z-index: 20;
+    font: 10px var(--mono); color: var(--ink-3); letter-spacing: 0.03em;
+  }
+  .mock-strip a { color: var(--ink-3); text-decoration: none; padding: 2px 3px; }
+  .mock-strip a:hover, .mock-strip a:focus-visible { color: var(--ink-2); outline: none; }
+  body[data-scene="first"] .mock-strip a[href="#first"],
+  body[data-scene="totp"] .mock-strip a[href="#totp"],
+  body[data-scene="passkey"] .mock-strip a[href="#passkey"],
+  body[data-scene="codes"] .mock-strip a[href="#codes"],
+  body[data-scene="no-passkey"] .mock-strip a[href="#no-passkey"] { color: var(--accent); }
+
+  @media (max-width: 620px) {
+    .keys { flex-direction: column; align-items: center; }
+    a.key, span.key { width: 100%; max-width: 300px; }
+    .prove { flex-direction: column; gap: 16px; text-align: center; }
+    .prove .divide { display: none; }
+    .prove .half { flex: none; width: 100%; max-width: 280px; }
+    .qr { margin: 0 auto 10px; }
+    .secret { margin-left: auto; margin-right: auto; }
+    .thread { font-size: 10px; }
+    .thread .sep { padding: 0 4px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .stack, .wm { animation: none !important; }
+    .fullfall i { animation: none; transform: translateY(var(--y, 40vh)); }
+  }
+</style>
+</head>
+<body data-scene="first">
+
+<main class="door">
+  <div class="beat">
+    <div class="fullfall" aria-hidden="true">
+      <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5; --y: 62vh"></i>
+      <i style="left: 9%; animation-delay: 3.1s; opacity: 0.3; --y: 18vh"></i>
+      <i class="r" style="left: 15%; animation-delay: 1.6s; opacity: 0.55; --y: 44vh"></i>
+      <i style="left: 21%; animation-delay: 4.4s; opacity: 0.4; --y: 9vh"></i>
+      <i style="left: 26%; animation-delay: 2.2s; opacity: 0.65; --y: 71vh"></i>
+      <i class="v" style="left: 33%; animation-delay: 5.0s; opacity: 0.45; --y: 30vh"></i>
+      <i style="left: 38%; animation-delay: 0.9s; opacity: 0.3; --y: 83vh"></i>
+      <i class="r" style="left: 45%; animation-delay: 3.7s; opacity: 0.4; --y: 12vh"></i>
+      <i style="left: 51%; animation-delay: 1.2s; opacity: 0.6; --y: 55vh"></i>
+      <i style="left: 57%; animation-delay: 4.8s; opacity: 0.35; --y: 26vh"></i>
+      <i style="left: 63%; animation-delay: 2.7s; opacity: 0.5; --y: 66vh"></i>
+      <i class="v" style="left: 69%; animation-delay: 0.5s; opacity: 0.4; --y: 38vh"></i>
+      <i class="r" style="left: 75%; animation-delay: 3.4s; opacity: 0.6; --y: 90vh"></i>
+      <i style="left: 81%; animation-delay: 1.9s; opacity: 0.35; --y: 21vh"></i>
+      <i style="left: 86%; animation-delay: 5.3s; opacity: 0.55; --y: 74vh"></i>
+      <i class="r" style="left: 91%; animation-delay: 2.4s; opacity: 0.35; --y: 48vh"></i>
+      <i style="left: 96%; animation-delay: 4.1s; opacity: 0.5; --y: 15vh"></i>
+    </div>
+
+    <div class="stack">
+      <div class="wm">MIKRO<em>VIEW</em></div>
+
+      <div class="thread" aria-label="Steps: choose, prove it, keep the codes, enter">
+        <div class="thr thr-choose"><span class="on">choose</span><span class="sep">·</span>prove it<span class="sep">·</span>keep the codes<span class="sep">·</span>enter</div>
+        <div class="thr thr-prove">choose<span class="sep">·</span><span class="on">prove it</span><span class="sep">·</span>keep the codes<span class="sep">·</span>enter</div>
+        <div class="thr thr-codes">choose<span class="sep">·</span>prove it<span class="sep">·</span><span class="on">keep the codes</span><span class="sep">·</span>enter</div>
+      </div>
+
+      <!-- ============ first seen: the two keys ============ -->
+      <section class="state s-first" aria-label="Add a second step: choose a kind">
+        <h1>Add a second step</h1>
+        <p class="subtitle">Your password was right. Signing in here needs a second
+          step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
+          key, prove it works, and you&rsquo;re in.</p>
+        <div class="keys">
+          <a class="key" href="#totp">
+            <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
+            <span class="cname">Authenticator app</span>
+            <span class="cdesc">a code from an app on your phone &mdash; Google
+              Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
+              IP addresses included.</span>
+            <span class="go">set it up &#9656;</span>
+          </a>
+          <a class="key" href="#passkey">
+            <span class="glyph" aria-hidden="true">
+              <svg viewBox="0 0 34 34">
+                <path d="M17 30c-3-4-5-8-5-13a5 5 0 0 1 10 0c0 3 .6 6 2 9"/>
+                <path d="M9 22c-1.3-2.3-2-4.6-2-7a10 10 0 0 1 17-7"/>
+                <path d="M28 13c.6 1.2 1 2.6 1 4 0 2.5-.3 5-1 7"/>
+              </svg>
+            </span>
+            <span class="cname">Passkey</span>
+            <span class="cdesc">your fingerprint, face or device PIN &mdash; the
+              browser holds the key, nothing to install.</span>
+            <span class="go">set it up &#9656;</span>
+          </a>
+        </div>
+        <p class="noexit">no skipping this one &mdash; every account here needs a
+          second step before the door opens.</p>
+      </section>
+
+      <!-- ============ authenticator, mid-enrolment ============ -->
+      <section class="state s-totp" aria-label="Authenticator app: scan and confirm">
+        <h1>Prove it works</h1>
+        <p class="subtitle">Scan this with your authenticator app, or type the
+          secret in by hand &mdash; then enter the code it shows.</p>
+        <div class="prove">
+          <div class="half">
+            <div class="qr" role="img" aria-label="QR code for the authenticator secret">
+              <svg viewBox="0 0 29 29" data-qr></svg>
+            </div>
+            <div class="seclabel">Secret</div>
+            <div class="secret">GQ4T MNZV G5UW K2LN MFRG YZLB OR2W CZ3F</div>
+          </div>
+          <div class="divide" aria-hidden="true"></div>
+          <form class="half cred" onsubmit="return false" aria-label="Confirm the authenticator app">
+            <label class="seclabel" for="tk-code">Code from the app</label>
+            <input id="tk-code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+            <p class="aside">Confirming turns this on and signs out everywhere
+              else this account is currently signed in. You&rsquo;ll stay signed
+              in here.</p>
+            <button class="enter" type="button" onclick="location.hash='codes'">Confirm</button>
+          </form>
+        </div>
+        <a class="link-btn" href="#passkey">Use a passkey instead</a>
+      </section>
+
+      <!-- ============ passkey, mid-enrolment ============ -->
+      <section class="state s-passkey" aria-label="Passkey: name it, then the browser asks">
+        <h1>Prove it works</h1>
+        <p class="subtitle">Give your passkey a name &mdash; something that will
+          remind you which device it&rsquo;s on. Your browser asks for the
+          fingerprint, face or PIN itself.</p>
+        <form class="cred" onsubmit="return false" aria-label="Add a passkey"
+              style="max-width: 260px; margin: 0 auto; text-align: left">
+          <label class="seclabel" for="tk-name">Name</label>
+          <input id="tk-name" type="text" placeholder="this laptop">
+          <p class="aside">Adding it turns this on and signs out everywhere else
+            this account is currently signed in. You&rsquo;ll stay signed in here.</p>
+          <div style="text-align: center">
+            <button class="enter" type="button" onclick="location.hash='codes'">Add passkey</button>
+          </div>
+        </form>
+        <a class="link-btn" href="#totp">Use an authenticator app instead</a>
+      </section>
+
+      <!-- ============ the recovery codes ============ -->
+      <section class="state s-codes" aria-label="Recovery codes, shown once">
+        <h1>Keep the codes</h1>
+        <p class="subtitle">Ten recovery codes &mdash; each works once, in place of
+          your second step, if you lose it. Save them somewhere safe now: this is
+          the only time they are shown.</p>
+        <div class="codesblock">
+          <span class="rc">p2xk-9qfw</span><span class="rc">j6nm-4rvt</span>
+          <span class="rc">w8cd-1lsz</span><span class="rc">m3hg-7ypb</span>
+          <span class="rc">q9vr-5kdn</span><span class="rc">t4bj-8wmf</span>
+          <span class="rc">x1sl-6czh</span><span class="rc">d7pn-3qgy</span>
+          <span class="rc">f5wt-2jrk</span><span class="rc">b8mz-9xvc</span>
+        </div>
+        <button class="copy" type="button">Copy all</button>
+        <p class="aside">Your ten recovery codes cover your authenticator app and
+          your passkeys alike.</p>
+        <button class="enter" type="button">I have saved these</button>
+      </section>
+
+      <!-- ============ passkeys unavailable here ============ -->
+      <section class="state s-no-passkey" aria-label="Add a second step: passkeys unavailable at this address">
+        <h1>Add a second step</h1>
+        <p class="subtitle">Your password was right. Signing in here needs a second
+          step as well, and this account doesn&rsquo;t have one yet &mdash; pick a
+          key, prove it works, and you&rsquo;re in.</p>
+        <div class="keys">
+          <a class="key" href="#totp">
+            <span class="glyph" aria-hidden="true"><span class="codeface">428 116</span></span>
+            <span class="cname">Authenticator app</span>
+            <span class="cdesc">a code from an app on your phone &mdash; Google
+              Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
+              IP addresses included.</span>
+            <span class="go">set it up &#9656;</span>
+          </a>
+          <span class="key" aria-disabled="true">
+            <span class="glyph" aria-hidden="true">
+              <svg viewBox="0 0 34 34">
+                <path d="M17 30c-3-4-5-8-5-13a5 5 0 0 1 10 0c0 3 .6 6 2 9"/>
+                <path d="M9 22c-1.3-2.3-2-4.6-2-7a10 10 0 0 1 17-7"/>
+                <path d="M28 13c.6 1.2 1 2.6 1 4 0 2.5-.3 5-1 7"/>
+              </svg>
+            </span>
+            <span class="cname">Passkey</span>
+            <span class="cdesc">passkeys need a web address, and you&rsquo;re viewing
+              MikroView at 192.168.88.10 &mdash; your authenticator app works
+              everywhere.</span>
+          </span>
+        </div>
+        <p class="noexit">no skipping this one &mdash; every account here needs a
+          second step before the door opens.</p>
+      </section>
+    </div>
+  </div>
+</main>
+
+<nav class="mock-strip" aria-label="Mockup scenes (review navigation, not product)">
+  scenes&nbsp;
+  <a href="#first">first</a> ·
+  <a href="#totp">authenticator</a> ·
+  <a href="#passkey">passkey</a> ·
+  <a href="#codes">codes</a> ·
+  <a href="#no-passkey">no passkey</a>
+</nav>
+
+<script>
+  const scenes = ['first', 'totp', 'passkey', 'codes', 'no-passkey'];
+  function apply() {
+    const h = location.hash.replace('#', '');
+    document.body.dataset.scene = scenes.includes(h) ? h : 'first';
+  }
+  addEventListener('hashchange', apply);
+  apply();
+
+  for (const svg of document.querySelectorAll('[data-qr]')) {
+    let seed = 42;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    let out = '';
+    const finder = (x, y) =>
+      `<rect x="${x}" y="${y}" width="7" height="7" fill="#000"/>` +
+      `<rect x="${x + 1}" y="${y + 1}" width="5" height="5" fill="#fff"/>` +
+      `<rect x="${x + 2}" y="${y + 2}" width="3" height="3" fill="#000"/>`;
+    out += finder(0, 0) + finder(22, 0) + finder(0, 22);
+    for (let y = 0; y < 29; y++)
+      for (let x = 0; x < 29; x++) {
+        const inF = (x < 9 && y < 9) || (x > 19 && y < 9) || (x < 9 && y > 19);
+        if (!inF && rnd() > 0.52) out += `<rect x="${x}" y="${y}" width="1" height="1" fill="#000"/>`;
+      }
+    svg.innerHTML = out;
+  }
+</script>
+</body>
+</html>
