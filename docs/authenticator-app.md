@@ -16,14 +16,12 @@ provider already owns.
 Open the account menu (click your username, bottom of the rail) and
 choose **Authenticator app**.
 
-> Screenshot: the account menu open, with "Authenticator app" showing
-> among the other rows (no "· on" tag yet, since nothing is set up).
+![The account menu open, with "Authenticator app" showing among the other rows -- no "· on" tag yet, since nothing is set up](screenshots/authenticator-menu-dark.png)
 
 Press **Set up authenticator app**. MikroView shows a QR code and, next
 to it, the same secret written out as text.
 
-> Screenshot: the enrolment screen — the QR code on the left, the text
-> secret on the right, and the code box beneath them.
+![The enrolment screen -- the QR code on the left, the text secret on the right, and the code box beneath them](screenshots/authenticator-enrol-dark.png)
 
 Scan the QR code with your app, or, if scanning doesn't work, type the
 secret in by hand — it's shown for exactly that reason, not only as a
@@ -45,8 +43,7 @@ noticing.
 
 Right after confirming, MikroView shows ten recovery codes.
 
-> Screenshot: the recovery-codes screen — ten codes in two columns, the
-> **Copy all** button, and **I have saved these**.
+![The recovery-codes screen -- ten codes in two columns, the Copy all button, and I have saved these](screenshots/authenticator-recovery-codes-dark.png)
 
 **This is the only time they're shown.** Each works once, in place of a
 code from your app, if your phone is lost, out of battery, or just not
@@ -67,8 +64,7 @@ Sign in with your username and password as usual. Once your password
 checks out, MikroView asks for a second code instead of taking you
 straight in.
 
-> Screenshot: the "Enter your code" screen at login, with the code box
-> and the "Use a recovery code instead" link beneath it.
+![The "Enter your code" screen at login, with the code box and the Use a recovery code instead link beneath it](screenshots/authenticator-login-code-dark.png)
 
 Type the current code from your app and continue. Get it wrong (or let
 it expire) too many times and you're rate-limited the same way a wrong
