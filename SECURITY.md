@@ -185,11 +185,26 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   cross-site requests regardless of `fetch`/CORS rules, so origin
   checking is what actually stops a malicious page from opening a live
   connection using a signed-in visitor's session.
-- **Two independent second factors are available on any local account,
-  and neither is ever offered on an SSO one** -- an identity provider
-  already owns that step, and the account menu says so rather than just
-  hiding the option. **An authenticator app (TOTP, issue #1249)** shows a
-  QR code and the same secret as text beside it, always, not only when
+- **A second factor is mandatory on every local account; a local
+  password alone is never enough, and neither kind of factor is ever
+  offered on an SSO one** (owner ruling, 2026-09-18, #1253: "every local
+  account -- sso handles its own auth, we just respect it") -- an
+  identity provider already owns that step for an SSO account, and the
+  account menu says so rather than just hiding the option. This is a
+  standing invariant, checked in the authentication middleware on every
+  request, not a one-off migration: **a signed-in session for a local
+  account with no active second factor may reach nothing but enrolling
+  one** -- `POST /api/auth/totp/enrol`/`confirm`, or the passkey
+  `register/begin`/`finish` pair -- the same forced-door shape the
+  admin-reset-password gate ("An admin resets somebody else's password"
+  below) uses. It catches an account however it ended up without a
+  factor: never enrolled, cleared by an admin or the
+  `-clear-second-factor` CLI, or hand-edited into existence. An SSO-only
+  account (`HasLocalPassword` false) is never sent through this door --
+  it has no local password for a factor to protect, and its identity
+  provider does its own authentication. **An authenticator app (TOTP,
+  issue #1249)** shows a QR code and the same secret as text beside it,
+  always, not only when
   the scanner fails -- confirming it with one live code is what
   activates the factor (RFC 6238, SHA-1, 6-digit codes, 30 s step, ±1
   step tolerance). **A passkey (WebAuthn, issue #1250)** is registered
@@ -524,14 +539,18 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   the provider cannot answer, SSO cannot let anybody in — that one
   account is the whole break-glass path (owner ruling, 2026-09-18, #1252).
 
-  So the admin keeps its local password when it is connected to SSO, and
-  keeps it permanently. `auth.Store.LinkOIDCIdentity` holds that as an
-  invariant rather than the handlers arranging it, the same way the
-  destructive conversion below is an invariant: a rule kept at the call
-  sites is one forgetful caller away from being lost. **Every other role
-  still loses its local password on linking**, for the reason in the
-  bullet above — the admin's exception buys a way back into the
-  deployment, which an ordinary account's would not.
+  So the admin keeps its local password *and* its local second factor
+  when it is connected to SSO, and keeps both permanently — an
+  identity-provider outage costs the admin an ordinary local sign-in
+  (username, password, second factor: the break-glass path) rather than
+  a rescue. `auth.Store.LinkOIDCIdentity` holds that as an invariant
+  rather than the handlers arranging it, the same way the destructive
+  conversion below is an invariant: a rule kept at the call sites is one
+  forgetful caller away from being lost. **Every other role loses both
+  its local password and its local second factor on linking, in the same
+  operation**, for the reason in the bullet above — the admin's
+  exception buys a way back into the deployment, which an ordinary
+  account's would not.
 
   First run follows from it: MikroView always creates a local admin,
   with a username and a password, and never offers SSO as an
