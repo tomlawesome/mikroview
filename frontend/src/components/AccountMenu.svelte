@@ -16,6 +16,7 @@
   import { versionState } from '../lib/version.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
+  import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
   import UptimeBadge from './UptimeBadge.svelte'
 
   let open = $state(false)
@@ -105,6 +106,20 @@
         <button class="row" role="menuitem" onclick={() => ((authState.showChangePassword = true), (open = false))}>
           Change password
         </button>
+        <!-- #1249: gated on the same hasLocalPassword an SSO-only account
+             lacks, since a factor guards a password that account no
+             longer has -- the admin keeps both after linking (#1252), so
+             it keeps this row too. Unlike Change password's silent
+             absence, the issue asks this one to say so in words rather
+             than just vanish -- see the else branch below. -->
+        <button class="row" role="menuitem" onclick={() => ((authState.showAuthenticator = true), (open = false))}>
+          Authenticator app{#if authState.hasTOTP}<span class="on-tag">&nbsp;· on</span>{/if}
+        </button>
+      {:else}
+        <p class="row-note">
+          Authenticator app — not offered. This account signs in through single sign-on; your
+          identity provider is what verifies you.
+        </p>
       {/if}
       <!-- Offered while there is something to connect: a password to
            convert, and no identity attached yet. The admin keeps its
@@ -127,6 +142,7 @@
 </div>
 
 <AboutOverlay bind:open={showAbout} />
+<AuthenticatorOverlay />
 
 <style>
   .account {
@@ -246,6 +262,22 @@
     height: 1px;
     background: var(--border);
     margin: 5px 4px;
+  }
+
+  .on-tag {
+    color: var(--accept);
+  }
+
+  /* The one non-interactive line this menu carries besides the logout
+     error (#548's grammar again: a fact said in words, not a disabled
+     control standing in for one). Same padding as a .row so it lines up
+     with the rows around it despite not being one. */
+  .row-note {
+    margin: 0;
+    padding: 7px 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--fg-dim);
   }
 
   .err {

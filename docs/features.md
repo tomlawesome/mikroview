@@ -61,10 +61,12 @@
   [docs/configuration.md](configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~201KB of JavaScript over the wire (~667KB before compression). CI
-  gates the bundle at 230KB gzipped — the measured reading plus ~15%,
-  re-derived after the v0.4.0 interface reshape shipped (see
-  [docs/decisions/ui-framework.md](decisions/ui-framework.md)).
+  ~230KB of JavaScript over the wire (~781KB before compression). CI
+  gates the bundle at 265KB gzipped — the measured reading plus ~15%,
+  re-derived after #1249 added the `qrcode` package for TOTP
+  enrolment's QR code (see
+  [docs/decisions/ui-framework.md](decisions/ui-framework.md) for the
+  gate's own history).
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See
   [docs/configuration.md](configuration.md)'s "Logging" section.
