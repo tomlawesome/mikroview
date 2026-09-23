@@ -3214,18 +3214,24 @@ auth:
   tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
-- **`storePath`** — where accounts are persisted, as a small JSON file (usernames + Argon2id password hashes,
-  never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
+- **`storePath`** — where accounts are persisted, as a small JSON file (usernames, Argon2id password hashes and
+  hashed recovery codes, never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
   the Dockerfile creates and owns -- no configuration needed for the
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
   the decision (and any accounts) to survive container recreation, not
   just process restarts -- see `deploy/docker-compose.yml`.
 
-  **Persists with or without `history.keyFile` (#853 rule 6).** Accounts
-  hold only usernames and Argon2id hashes, never a plaintext password, so
-  this file keeps persisting in plain JSON with no key configured, the
-  same as every MikroView release before #853 -- the choice screen above
-  does not reappear on restart. Most other file-backed stores are
+  **Persists with or without `history.keyFile` (#853 rule 6).** Almost
+  everything an account holds is a one-way hash, never a plaintext
+  password, so this file keeps persisting in plain JSON with no key
+  configured, the same as every MikroView release before #853 -- the
+  choice screen above does not reappear on restart. The one field this
+  doesn't cover is the
+  [authenticator-app secret](authenticator-app.md), which has to stay
+  reversible to verify a code and so sits in this same file in the
+  clear whenever no key is mounted -- see
+  [SECURITY.md](../SECURITY.md#data-handling) for why. Most other
+  file-backed stores are
   memory-only without a key; see
   [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853).
   With a key mounted, this file is encrypted the same way the event
@@ -3467,6 +3473,15 @@ instead. There is exactly one admin, and moving that role is a
 command-line step (see below) — so nobody who gets
 hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
+
+A row also carries an **authenticator app** tag once that person has
+turned one on, and, beside it, a **clear authenticator app** button for
+when their phone is lost and they still have their password -- never on
+your own row, since that would let a signed-in admin remove their own
+second step with nothing to stop them. See
+[docs/authenticator-app.md](authenticator-app.md) for setting one up and
+every way to recover from a lost phone, including the console command
+for an admin locked out of their own.
 
 ### Connecting your account to SSO
 
