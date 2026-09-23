@@ -1579,9 +1579,11 @@ func TestDefinitionsListOpenToViewer(t *testing.T) {
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/definitions below
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/definitions below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/definitions")
 	if err != nil {

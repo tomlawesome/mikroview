@@ -1055,7 +1055,7 @@ func unmatchablePasswordHash() (string, error) {
 
 // LinkOIDCIdentity attaches (issuer, subject) to an existing account,
 // converting it to SSO-only in the same operation -- unless the account
-// is the admin, which keeps its password.
+// is the admin, which keeps its password and its second factor.
 //
 // **For every role but admin, linking is destructive and one-way.** The
 // account's local password is replaced with a fresh unmatchable hash
@@ -1066,14 +1066,31 @@ func unmatchablePasswordHash() (string, error) {
 // surface on an account that has supposedly moved past it, which
 // defeats the point of linking.
 //
-// **The admin keeps its local password, permanently** (owner,
-// 2026-09-18, #1252: "the admin must always be able to sign in, even
-// with the identity provider down"). mikroview holds exactly one admin
-// and never authenticates to the provider on its own behalf, so a
-// provider that cannot answer means nobody gets in at all -- the one
-// account that can end that outage is worth the attack surface the
-// paragraph above refuses everybody else. For the admin, SSO is an
-// additional way in rather than a replacement.
+// The same call also clears every local second factor -- TOTPSecret,
+// TOTPConfirmedAt, TOTPLastCounter, RecoveryCodes and Passkeys, the same
+// fields ClearAllSecondFactors (passkeys.go) zeroes for the CLI's
+// "I've lost everything" path, inlined here rather than called out to
+// because this write already holds s.mu and ClearAllSecondFactors takes
+// its own lock. This closes the gap #1249 shipped and #1253 (note
+// 22375) caught: leaving those fields untouched left a non-admin
+// holding a factor their SSO sign-in never asks for and which
+// DELETE /api/auth/totp -- password-gated -- could no longer reach,
+// since the password was already gone. Unconditional, not the
+// factor-remaining check ClearTOTP/ClearPasskeys make for a caller
+// removing one factor at a time: linking removes both local credentials
+// at once, so there is nothing left standing for either to guard.
+//
+// **The admin keeps its local password and its local second factor,
+// permanently** (owner, 2026-09-18, #1252: "the admin must always be
+// able to sign in, even with the identity provider down"). mikroview
+// holds exactly one admin and never authenticates to the provider on
+// its own behalf, so a provider that cannot answer means nobody gets in
+// at all -- the one account that can end that outage is worth the
+// attack surface the paragraph above refuses everybody else. For the
+// admin, SSO is an additional way in rather than a replacement, and
+// stripping its factor here would leave it unable to satisfy the
+// forced-enrolment door (requireAuth, internal/api) the moment its
+// linked session ends and it has to sign in locally again.
 //
 // Both halves live here, inside the store, rather than in the API
 // handler that calls it. A convention at the call site is one forgetful
@@ -1082,9 +1099,9 @@ func unmatchablePasswordHash() (string, error) {
 // second caller.
 //
 // A role change afterwards does not re-run this: an admin demoted to
-// user keeps the password it had, and -transfer-admin's own rules
-// (main.go) decide what the new admin holds. Linking is the event this
-// method describes, not a standing property of the role.
+// user keeps the password and factor it had, and -transfer-admin's own
+// rules (main.go) decide what the new admin holds. Linking is the event
+// this method describes, not a standing property of the role.
 //
 // Idempotent for the same user. Fails with ErrOIDCIdentityTaken if that
 // identity is already linked to a *different* account -- which is what
@@ -1130,6 +1147,11 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	prevIssuer, prevSubject := u.OIDCIssuer, u.OIDCSubject
 	prevHash, prevHasLocalPassword := u.PasswordHash, u.HasLocalPassword
 	prevPasswordChangedAt := u.PasswordChangedAt
+	prevTOTPSecret := u.TOTPSecret
+	prevTOTPConfirmedAt := u.TOTPConfirmedAt
+	prevTOTPLastCounter := u.TOTPLastCounter
+	prevRecoveryCodes := u.RecoveryCodes
+	prevPasskeys := u.Passkeys
 	_, hadIndexEntry := s.oidcIndex[key]
 
 	u.OIDCIssuer = issuer
@@ -1137,6 +1159,14 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	if u.Role != RoleAdmin {
 		u.PasswordHash = unmatchable
 		u.HasLocalPassword = false
+		// See the doc comment above: every non-admin loses both local
+		// credentials on linking, not just the password. Left alone,
+		// these fields are exactly the gap note 22375 on #1253 recorded.
+		u.TOTPSecret = ""
+		u.TOTPConfirmedAt = time.Time{}
+		u.TOTPLastCounter = 0
+		u.RecoveryCodes = nil
+		u.Passkeys = nil
 	}
 	// Invalidates every session issued before this point, including in
 	// another process -- the account's credentials just changed
@@ -1159,6 +1189,11 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 		u.OIDCIssuer, u.OIDCSubject = prevIssuer, prevSubject
 		u.PasswordHash, u.HasLocalPassword = prevHash, prevHasLocalPassword
 		u.PasswordChangedAt = prevPasswordChangedAt
+		u.TOTPSecret = prevTOTPSecret
+		u.TOTPConfirmedAt = prevTOTPConfirmedAt
+		u.TOTPLastCounter = prevTOTPLastCounter
+		u.RecoveryCodes = prevRecoveryCodes
+		u.Passkeys = prevPasskeys
 		if hadIndexEntry {
 			s.oidcIndex[key] = userID
 		} else {

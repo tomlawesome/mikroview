@@ -227,6 +227,7 @@ func TestHandleWSClosesOnAccountDeletion(t *testing.T) {
 	}
 
 	viewerClient := loggedInClient(t, ts.URL, "viewer", "password456")
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/ws below
 	viewerSessionID := sessionIDFromJar(t, viewerClient, ts.URL)
 
 	conn := dialWSAs(t, ts, viewerSessionID)

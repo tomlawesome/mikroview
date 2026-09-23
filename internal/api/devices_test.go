@@ -423,6 +423,7 @@ func TestDeviceRegisterRequiresAdmin(t *testing.T) {
 	viewer := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewer, ts.URL+"/api/auth/login",
 		credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, viewer, ts) // #1253: needed before /api/devices/.../registration below
 
 	resp := postJSON(t, viewer, ts.URL+"/api/devices/hap-ax3/registration",
 		deviceRegisterRequest{Name: "hap-ax3"})
