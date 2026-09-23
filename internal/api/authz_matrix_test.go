@@ -129,6 +129,11 @@ var authzMatrix = []routeExpectation{
 		"the provider redirects the browser here; protected by state/nonce/PKCE, not by a session"},
 	{http.MethodPost, "/api/auth/register", accessPublic,
 		"first-run only -- auth.Store.Register refuses once any account exists"},
+	{http.MethodPost, "/api/auth/login/factor", accessPublic,
+		"#1249's second login step, reached with the short-lived pending-login cookie handleAuthLogin sets in " +
+			"place of a session when the account holds an active factor -- like /api/auth/login itself, this has to " +
+			"work before a session exists. Its own rate limiting (the same LoginLimiter buckets as the password " +
+			"step) is what stands in for a session here, same as state/nonce/PKCE do for the OIDC callback above"},
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
@@ -414,11 +419,29 @@ var authzMatrix = []routeExpectation{
 		"destructively wipes every expectation definition -- the most dangerous single endpoint in this feature, and the one row in this whole surface the owner's #653 ruling considered keeping admin-only for that reason. It was widened to user tier anyway, on the view that the confirm:true body this handler requires is the real safeguard against an accidental call, not the role gate -- a safeguard user and admin are equally bound by"},
 	{http.MethodPost, "/api/auth/oidc/link", accessViewer,
 		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a caller can only ever affect themselves, at any tier including viewer"},
+	{http.MethodPost, "/api/auth/totp/enrol", accessViewer,
+		"starts enrolling an authenticator app on the caller's OWN account (#1249) -- same reasoning as " +
+			"/api/auth/password and /api/auth/oidc/link above: the target is always the session's own account, so " +
+			"even the lowest tier must be able to reach for a second factor of its own. Refused separately, inside " +
+			"the handler, for an SSO-only caller (409) -- that is not this row's concern, since it still gets past " +
+			"the gate"},
+	{http.MethodPost, "/api/auth/totp/confirm", accessViewer,
+		"finishes the enrolment the row above started, same tier and same reasoning -- it still only ever acts on " +
+			"the caller's own account"},
+	{http.MethodDelete, "/api/auth/totp", accessViewer,
+		"turns the caller's OWN factor off, gated by their own password inside the handler -- same tier as the two " +
+			"rows above for the same reason; the password check is the real protection, not the role"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
 	{http.MethodGet, "/api/auth/users", accessAdmin,
 		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only. #653 added a viewer role beneath that non-admin space and left this row exactly where it was -- account creation and the account list are the owner-level items #653's tiers deliberately keep out of user's reach too"},
 	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
 		"removes an account and revokes its sessions and API tokens"},
+	{http.MethodDelete, "/api/auth/users/{id}/totp", accessAdmin,
+		"clears ANOTHER user's authenticator-app factor from the Users group (#1249) -- admin-only for the same " +
+			"reason account deletion and password reset are: this removes a credential guard on somebody else's " +
+			"account, so a user or viewer able to do it to a colleague could use it to make that account easier to " +
+			"take over. The caller's own account is refused inside the handler (409, which this matrix reads as " +
+			"allowed, the same convention the reset-password row below uses), not here"},
 	{http.MethodPost, "/api/auth/users/{id}/reset-password", accessAdmin,
 		"mints a one-time code that stands in for another account's password for 24 hours (#1251), kills that " +
 			"account's old password and every session it holds. Admin-only for the same reason account creation and " +
@@ -798,12 +821,20 @@ func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 // half-authenticated session can touch has to be written down here as
 // well as done in the middleware.
 var resetCodeSessionOpenPaths = map[string]bool{
-	changePasswordPath:        true,
-	"/api/healthz":            true,
-	"/api/auth/session":       true,
-	"/api/auth/register":      true,
-	"/api/auth/login":         true,
-	"/api/auth/logout":        true,
+	changePasswordPath:   true,
+	"/api/healthz":       true,
+	"/api/auth/session":  true,
+	"/api/auth/register": true,
+	"/api/auth/login":    true,
+	"/api/auth/logout":   true,
+	// #1249's second login step is on exemptPaths for the same reason
+	// /api/auth/login is -- it completes a login, so it has to work
+	// before (and regardless of) any session, including one carrying
+	// this flag. A reset-code session holds no pending-login cookie
+	// anyway, so this handler's own check refuses it on the merits a
+	// moment later; the point here is only that requireAuth lets the
+	// request through to find that out.
+	"/api/auth/login/factor":  true,
 	"/api/auth/oidc/login":    true,
 	"/api/auth/oidc/callback": true,
 }
