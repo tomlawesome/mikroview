@@ -21,6 +21,11 @@
 
   let open = $state(false)
   let showAbout = $state(false)
+  // Local, like showAbout above -- not authState (#1332). The deck keeps
+  // several cards mounted, each with its own AccountMenu and its own
+  // copy of AuthenticatorOverlay; a flag shared through authState opened
+  // every copy of the dialog at once instead of just this menu's.
+  let showAuthenticator = $state(false)
   let logoutError = $state<string | null>(null)
   let menuEl: HTMLElement | undefined
 
@@ -112,7 +117,7 @@
              it keeps this row too. Unlike Change password's silent
              absence, the issue asks this one to say so in words rather
              than just vanish -- see the else branch below. -->
-        <button class="row" role="menuitem" onclick={() => ((authState.showAuthenticator = true), (open = false))}>
+        <button class="row" role="menuitem" onclick={() => ((showAuthenticator = true), (open = false))}>
           Authenticator app{#if authState.hasTOTP}<span class="on-tag">&nbsp;· on</span>{/if}
         </button>
       {:else}
@@ -142,7 +147,7 @@
 </div>
 
 <AboutOverlay bind:open={showAbout} />
-<AuthenticatorOverlay />
+<AuthenticatorOverlay bind:open={showAuthenticator} />
 
 <style>
   .account {

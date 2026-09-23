@@ -35,23 +35,20 @@ import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
 beforeEach(() => {
   cleanup()
   vi.resetAllMocks()
-  authState.showAuthenticator = false
   authState.hasTOTP = false
 })
 
 describe('the status screen', () => {
   it('offers to set one up when the account has none', async () => {
-    authState.showAuthenticator = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
 
     expect(screen.getByRole('button', { name: /set up authenticator app/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /turn off/i })).toBeNull()
   })
 
   it('offers to turn it off when the account already has one', async () => {
-    authState.showAuthenticator = true
     authState.hasTOTP = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
 
     expect(screen.getByRole('button', { name: /turn off/i })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /set up authenticator app/i })).toBeNull()
@@ -63,8 +60,7 @@ describe('enrol shows the QR and the secret as text beside it, always (#1249)', 
     vi.mocked(enrolTOTP).mockResolvedValue({
       uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
     })
-    authState.showAuthenticator = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
 
@@ -76,8 +72,7 @@ describe('enrol shows the QR and the secret as text beside it, always (#1249)', 
 
   it('shows the enrol error and stays on the status screen when it fails', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue('the server could not do that (500)')
-    authState.showAuthenticator = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
 
@@ -91,8 +86,7 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
     vi.mocked(enrolTOTP).mockResolvedValue({
       uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
     })
-    authState.showAuthenticator = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
     await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
     await screen.findByTestId('totp-secret')
   }
@@ -145,10 +139,10 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
     await screen.findByTestId('recovery-codes')
 
     await fireEvent.keyDown(window, { key: 'Escape' })
-    expect(authState.showAuthenticator).toBe(true)
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
 
     await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
-    expect(authState.showAuthenticator).toBe(false)
+    expect(screen.queryByRole('dialog', { name: /authenticator app/i })).toBeNull()
   })
 
   it('closes and clears state once "I have saved these" is clicked', async () => {
@@ -160,16 +154,15 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
 
-    expect(authState.showAuthenticator).toBe(false)
+    expect(screen.queryByRole('dialog', { name: /authenticator app/i })).toBeNull()
   })
 })
 
 describe('turning it off needs the password', () => {
   it('is refused server-side and shown inline, leaving hasTOTP untouched', async () => {
     vi.mocked(disableTOTP).mockResolvedValue('wrong password')
-    authState.showAuthenticator = true
     authState.hasTOTP = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
     await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
@@ -182,9 +175,8 @@ describe('turning it off needs the password', () => {
 
   it('turns it off and flips authState.hasTOTP on the right password', async () => {
     vi.mocked(disableTOTP).mockResolvedValue(null)
-    authState.showAuthenticator = true
     authState.hasTOTP = true
-    render(AuthenticatorOverlay)
+    render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
     await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'correct-horse' } })
