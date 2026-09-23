@@ -30,6 +30,7 @@
   import HostDossier from './components/HostDossier.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
+  import AuthEnrolFactor from './components/AuthEnrolFactor.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   // The journey (#646): choreography over the shell below, not a page of
   // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
@@ -330,6 +331,14 @@
        (#1249) -- both are sessions that can reach one route and nothing
        else, so every scene below would be a wall of 403s. -->
   <AuthLogin />
+{:else if authState.state === 'must-enrol-factor'}
+  <!-- #1336: the forced-enrolment door (round 61's ratified "two
+       keys") -- the same kind of one-route session as the two above
+       (only the four enrolment routes answer), but its own component
+       rather than another AuthLogin field swap: the ratified design is
+       the door opened out into a short staged walk, not a field
+       change. -->
+  <AuthEnrolFactor />
 {:else}
   <!-- First in tab order: rendered ahead of BottomBar and every scene's
        own bar, so a keyboard user reaches it before any navigation
