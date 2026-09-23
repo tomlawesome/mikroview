@@ -101,6 +101,10 @@ var exemptPaths = map[string]bool{
 	// cookie, never a session, so it has to work before one exists, same
 	// reasoning as /api/auth/login itself.
 	"/api/auth/login/factor": true,
+	// POST /api/auth/login/factor/begin (#1250) is the passkey half's own
+	// "begin" step, reached with the identical pending-login cookie --
+	// same reasoning as /api/auth/login/factor directly above.
+	"/api/auth/login/factor/begin": true,
 }
 
 // bootstrapExemptPaths lists the (smaller) set of routes reachable
@@ -575,6 +579,13 @@ type sessionResponse struct {
 	// answer only the request that started them, so a page reload would
 	// otherwise forget the factor exists.
 	HasTOTP bool `json:"hasTOTP"`
+	// Passkeys reports the caller's own passkey count and this
+	// deployment's availability (#1250) -- the Account menu's second
+	// "Passkeys · N" row needs both: the count for its badge, and
+	// status/origin (set only when ready) to explain an unavailable
+	// deployment instead of just hiding the row, which the design
+	// forbids. nil (omitted) while unauthenticated, same as HasTOTP.
+	Passkeys *sessionPasskeysInfo `json:"passkeys,omitempty"`
 	// MustChangePassword is true while this session may reach nothing
 	// but POST /api/auth/password -- an admin reset the account and it
 	// signed in with the one-time code (#1251). The frontend draws the
@@ -597,6 +608,32 @@ type sessionResponse struct {
 	SignedInSince string `json:"signedInSince,omitempty"`
 }
 
+// sessionPasskeysInfo is GET /api/auth/session's passkeys object -- see
+// sessionResponse.Passkeys' doc comment.
+type sessionPasskeysInfo struct {
+	Count  int           `json:"count"`
+	Status PasskeyStatus `json:"status"`
+	// Origin is set only when Status is PasskeyStatusReady -- see
+	// RelyingParty.Origin's own doc comment in webauthn.go.
+	Origin string `json:"origin,omitempty"`
+}
+
+// passkeysSessionInfo builds userID's sessionPasskeysInfo. s.RelyingParty
+// is nil on a Server built without one (an older test, or a deployment
+// path that never wires one up), which reads the same as
+// PasskeyStatusUnset -- the same nil-means-disabled convention every
+// other optional Server field on this struct already follows.
+func (s *Server) passkeysSessionInfo(userID string) *sessionPasskeysInfo {
+	info := &sessionPasskeysInfo{Count: s.Auth.PasskeyCount(userID), Status: PasskeyStatusUnset}
+	if s.RelyingParty != nil {
+		info.Status = s.RelyingParty.Status
+		if s.RelyingParty.Status == PasskeyStatusReady {
+			info.Origin = s.RelyingParty.Origin
+		}
+	}
+	return info
+}
+
 // handleAuthSession always returns 200 -- it reports state, it doesn't
 // gate access (requireAuth exempts it for exactly this reason). The
 // frontend calls this once on load to decide whether to render the
@@ -615,6 +652,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp.SSOConnected = user.OIDCSubject != ""
 		resp.MustChangePassword = user.MustChangePassword
 		resp.HasTOTP = user.HasActiveTOTP()
+		resp.Passkeys = s.passkeysSessionInfo(user.ID)
 		// sessionUser already validated the cookie once (that is how
 		// user was resolved); re-reading it here just for IssuedAt
 		// rather than widening sessionUser's own signature, which
@@ -658,6 +696,11 @@ var authErrorMessages = map[error]string{
 	// one is a lockout waiting to happen.
 	auth.ErrTOTPAlreadyActive: "this account already has an authenticator app -- remove it before enrolling another",
 	auth.ErrNoPendingTOTP:     "no authenticator app enrolment is waiting to be confirmed -- start enrolling again",
+	// #1250: the three passkey-store refusals a client can plausibly
+	// trigger through the ordinary registration/rename/delete routes.
+	auth.ErrPasskeyDuplicate:    "this passkey is already registered to this account",
+	auth.ErrPasskeyLimitReached: auth.ErrPasskeyLimitReached.Error(), // already phrased for an end user
+	auth.ErrPasskeyNotFound:     "no such passkey on this account",
 }
 
 // writeAuthError translates err into a safe, user-facing message via
@@ -800,15 +843,42 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	// session. What it gets instead is a short-lived pending-login
 	// cookie naming the account, and the frontend is told which second
 	// factor to ask for next. The real login only happens in
-	// handleAuthLoginFactor below, once that code (or a recovery code)
-	// checks out too.
-	if user.HasActiveTOTP() {
+	// handleAuthLoginFactor below, once that code/assertion (or a
+	// recovery code) checks out too.
+	//
+	// Widened from HasActiveTOTP to HasSecondFactor by #1250: an account
+	// may now hold a passkey instead of, or alongside, an authenticator
+	// app. The factor list is built with passkey first (per the design),
+	// and only ever names a kind that is *currently usable* -- totp when
+	// active, passkey only when at least one of the account's passkeys
+	// isn't stale for this server's current RPID and the relying party is
+	// actually ready. An account whose only factor is stale passkeys
+	// still gets the pending cookie (so a recovery code can still
+	// complete the login below) but an empty secondFactor list, per the
+	// design's own "the password still never creates a session" rule --
+	// #1249's shipped `{"secondFactor":["totp"]}` shape for a TOTP-only
+	// account is unchanged, since passkeyOrigin is only ever added to the
+	// response when a passkey is actually listed.
+	if user.HasSecondFactor() {
+		factors := []string{}
+		passkeyOrigin := ""
+		if s.passkeysReady() && len(s.nonStalePasskeys(user.Passkeys)) > 0 {
+			factors = append(factors, "passkey")
+			passkeyOrigin = s.RelyingParty.Origin
+		}
+		if user.HasActiveTOTP() {
+			factors = append(factors, "totp")
+		}
 		if err := s.setPendingLoginCookie(w, user.ID, now); err != nil {
 			authLog.Error(fmt.Sprintf("sealing pending-login cookie for %s: %v", user.Username, err))
 			http.Error(w, "unable to complete sign-in", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"secondFactor": []string{"totp"}})
+		resp := map[string]any{"secondFactor": factors}
+		if passkeyOrigin != "" {
+			resp["passkeyOrigin"] = passkeyOrigin
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -826,19 +896,27 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 type loginFactorRequest struct {
 	Code string `json:"code"`
+	// Assertion is #1250's passkey branch: the raw JSON
+	// PublicKeyCredential.toJSON() a navigator.credentials.get() call
+	// produced. Mutually exclusive with Code in practice (the frontend
+	// only ever sends one), and handleAuthLoginFactor branches on
+	// whichever is present -- see its own doc comment.
+	Assertion json.RawMessage `json:"assertion,omitempty"`
 }
 
 // handleAuthLoginFactor completes a login that handleAuthLogin stopped
 // short of a session for (#1249): the pending-login cookie names the
 // account whose password already checked out, and this checks one more
-// credential against it -- a live TOTP code, or, since a phone can be
-// lost too, one of the account's ten recovery codes, burned the moment
-// it works.
+// credential against it -- a live TOTP code, a passkey assertion (#1250,
+// against the SessionData POST /api/auth/login/factor/begin sealed), or,
+// since either can be lost too, one of the account's ten recovery codes,
+// burned the moment it works.
 //
 // Rate-limited on the exact same LoginLimiter buckets handleAuthLogin
 // itself reserves against (ip: and user:, keyed the same way) -- a wrong
-// code here is exactly as good a brute-force move as a wrong password
-// there, so the two have to share one budget, not each get their own.
+// code or a failed assertion here is exactly as good a brute-force move
+// as a wrong password there, so all of them have to share one budget,
+// not each get their own.
 func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 	var req loginFactorRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
@@ -859,13 +937,15 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Widened from HasActiveTOTP to HasSecondFactor by #1250 -- see
+	// handleAuthLogin's own widening for the full reasoning. The account
+	// was deleted, or every second factor it held (authenticator app and
+	// passkeys alike) was cleared -- by an admin, the CLI recovery tool,
+	// or the account owner themselves -- in the window between the
+	// password step and this one. Either way there is nothing left this
+	// cookie can complete.
 	user, ok := s.Auth.Get(st.UserID)
-	if !ok || !user.HasActiveTOTP() {
-		// The account was deleted, or its factor was cleared -- by an
-		// admin (DELETE /api/auth/users/{id}/totp below) or the CLI
-		// recovery tool -- in the window between the password step and
-		// this one. Either way there is nothing left this cookie can
-		// complete.
+	if !ok || !user.HasSecondFactor() {
 		s.clearPendingLoginCookie(w)
 		writeUnauthorized(w, "sign in again")
 		return
@@ -880,6 +960,17 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 	if !s.LoginLimiter.Reserve(userKey, now) {
 		s.LoginLimiter.Release(ipKey, now)
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+
+	// #1250: the body shape decides the branch -- an assertion is
+	// checked by verifyPasskeyAssertion (passkey.go), which writes its
+	// own refusal and leaves the reservations above claimed on failure,
+	// exactly like a wrong TOTP code does below.
+	if len(req.Assertion) > 0 {
+		if s.verifyPasskeyAssertion(w, r, user, req.Assertion, now) {
+			s.completeLoginFactor(w, user, ipKey, userKey, now)
+		}
 		return
 	}
 
@@ -1221,6 +1312,11 @@ type userSummary struct {
 	// shows as a pill and what decides whether the clear button is
 	// worth offering on that row.
 	HasTOTP bool `json:"hasTOTP"`
+	// PasskeyCount is this account's registered passkey count (#1250),
+	// the admin list's passkey pill and clear-button counterpart to
+	// HasTOTP above. Read from the store's PasskeyCount, not from this
+	// row's own copy -- see handleAuthListUsers' doc comment for why.
+	PasskeyCount int `json:"passkeyCount"`
 }
 
 // handleAuthListUsers backs the admin-facing account list.
@@ -1254,6 +1350,12 @@ func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
 			// so calling it on one of these copies answers false for
 			// every account, including the ones that do hold a factor.
 			HasTOTP: s.Auth.HasActiveTOTP(u.ID),
+			// Same trap, same fix, for passkeys (#1250): List blanks
+			// Passkeys wholesale, so len(u.Passkeys) here would always
+			// read zero -- see auth.Store.PasskeyCount's own doc comment,
+			// which names this exact mistake shipping once already for
+			// HasActiveTOTP.
+			PasskeyCount: s.Auth.PasskeyCount(u.ID),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1505,7 +1607,19 @@ type totpConfirmResponse struct {
 	// auth.Store.GenerateRecoveryCodes. Nothing on this account can show
 	// them again; losing this response before saving it means removing
 	// the factor and enrolling again.
+	//
+	// nil (JSON null) when AlreadyIssued is true -- #1250's "mint if
+	// absent, never re-mint" rule (see the design's "Recovery codes are
+	// shared" section): a passkey-first account confirming TOTP as a
+	// second factor must not have its existing codes silently replaced,
+	// which would invalidate any copy already written down.
 	RecoveryCodes []string `json:"recoveryCodes"`
+	// AlreadyIssued is true when this account already held recovery
+	// codes (minted by an earlier passkey registration) before this
+	// confirm call -- AuthenticatorOverlay reads it to skip its `codes`
+	// step with a one-line note that the existing codes still stand,
+	// rather than implying new ones were just issued.
+	AlreadyIssued bool `json:"alreadyIssued,omitempty"`
 }
 
 // handleTOTPConfirm activates the pending secret handleTOTPEnrol stored,
@@ -1558,27 +1672,41 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	codes, err := s.Auth.GenerateRecoveryCodes(user.ID, now)
-	if err != nil {
-		// The factor is active at this point regardless -- ConfirmTOTP
-		// already committed. Logged rather than swallowed (R6), and told
-		// to the caller plainly rather than reported as a clean success:
-		// they are about to be shown nothing to fall back on if the app
-		// is ever lost. Recovering from here is DELETE /api/auth/totp
-		// followed by enrolling again, same as any other abandoned
-		// enrolment.
-		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
-		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
-		return
+	// Mint-if-absent, never re-mint (#1250's "Recovery codes are shared"
+	// rule): current was read before ConfirmTOTP above, and ConfirmTOTP
+	// never touches RecoveryCodes, so it still reflects whether this
+	// account already holds a set -- from an earlier passkey
+	// registration, in the one order that can reach this branch.
+	var codes []string
+	alreadyIssued := len(current.RecoveryCodes) > 0
+	detail := "authenticator app confirmed"
+	if alreadyIssued {
+		detail += "; existing recovery codes unchanged"
+	} else {
+		var err error
+		codes, err = s.Auth.GenerateRecoveryCodes(user.ID, now)
+		if err != nil {
+			// The factor is active at this point regardless -- ConfirmTOTP
+			// already committed. Logged rather than swallowed (R6), and
+			// told to the caller plainly rather than reported as a clean
+			// success: they are about to be shown nothing to fall back on
+			// if the app is ever lost. Recovering from here is
+			// DELETE /api/auth/totp followed by enrolling again, same as
+			// any other abandoned enrolment.
+			authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
+			http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
+			return
+		}
+		detail += "; recovery codes issued"
 	}
 
 	s.Sessions.RevokeAllForUser(user.ID)
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
 
-	s.Audit.Record(user.Username, "account.totp_enabled", user.Username, "authenticator app confirmed; recovery codes issued")
+	s.Audit.Record(user.Username, "account.totp_enabled", user.Username, detail)
 
-	writeJSON(w, http.StatusOK, totpConfirmResponse{Enabled: true, RecoveryCodes: codes})
+	writeJSON(w, http.StatusOK, totpConfirmResponse{Enabled: true, RecoveryCodes: codes, AlreadyIssued: alreadyIssued})
 }
 
 type totpDeleteRequest struct {
