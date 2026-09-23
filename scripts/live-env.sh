@@ -429,19 +429,28 @@ EOF
   # 30-second counter, dynamic truncation, six digits -- the same thing
   # internal/auth/totp.go does, checked against GenerateTOTPCode for
   # matching secrets and counters rather than assumed compatible.
-  totp_code="$(python3 -c '
+  # Prints the counter alongside the code, because confirming enrolment
+  # spends that counter: VerifyTOTP's replay guard refuses it ever after,
+  # so the first scenario to sign in has to know not to try it. The
+  # counter is left in $MV_DIR for live-browser.mjs to read (see
+  # freshTotpCode there).
+  totp_pair="$(python3 -c '
 import base64, hmac, hashlib, struct, sys, time
 secret = sys.argv[1]
 raw = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
-mac = hmac.new(raw, struct.pack(">Q", int(time.time()) // 30), hashlib.sha1).digest()
+counter = int(time.time()) // 30
+mac = hmac.new(raw, struct.pack(">Q", counter), hashlib.sha1).digest()
 o = mac[-1] & 0x0F
-print("%06d" % ((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 1000000))
+print(counter, "%06d" % ((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 1000000))
 ' "$totp_secret")"
+  totp_counter="${totp_pair%% *}"
+  totp_code="${totp_pair##* }"
 
   curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
     -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
     -d "{\"code\":\"$totp_code\"}" \
     "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm" >/dev/null
+  echo "$totp_counter" > "$MV_DIR/totp-last-counter"
 
   echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
   # The same instance under the name passkeys need (#1250). A WebAuthn
