@@ -2624,29 +2624,32 @@ func runTransferAdmin(args []string) int {
 }
 
 // runClearSecondFactor backs `-clear-second-factor <username>` -- the way
-// back in for an admin whose phone (or other device holding their
-// authenticator app) is lost, mirroring what -recover-admin-account is
-// for a lost password (issue #1249).
+// back in for an admin who has lost every second factor on the account
+// (phone holding the authenticator app, passkeys, or both), mirroring
+// what -recover-admin-account is for a lost password (issue #1249,
+// widened to passkeys by #1250). It is the "I lost everything" command:
+// one recovery-key-gated clear of whatever the account has, not a
+// per-factor tool, so there is no passkey-only variant of it.
 //
-// No web route can do this job. handleTOTPDelete requires the caller's
-// current password, which is exactly what a session that also lost its
-// second factor cannot always be assumed to have handy, and
-// handleTOTPAdminClear -- the admin's own "clear someone else's factor"
-// button in the Users group -- explicitly refuses the caller's own
-// account (mikroview holds exactly one admin, so that refusal is also
-// what keeps the admin account out of that route entirely). Between
-// them there is no route back in for an admin locked out of their own
-// factor, which is what this command is for.
+// No web route can do this job. handleTOTPDelete and the passkey delete
+// route require the caller's current password, which is exactly what a
+// session that also lost its second factor cannot always be assumed to
+// have handy, and handleTOTPAdminClear -- the admin's own "clear someone
+// else's factor" button in the Users group -- explicitly refuses the
+// caller's own account (mikroview holds exactly one admin, so that
+// refusal is also what keeps the admin account out of that route
+// entirely). Between them there is no route back in for an admin locked
+// out of their own factors, which is what this command is for.
 //
 // Unlike -recover-admin-account, this is not limited to the admin
-// account. A lost authenticator is not a privilege escalation the way a
-// lost admin password is -- clearing an ordinary user's factor grants
+// account. Losing a second factor is not a privilege escalation the way
+// a lost admin password is -- clearing an ordinary user's factors grants
 // nothing beyond what their password already does -- so there is no
 // equivalent reason to narrow the target, and narrowing it would leave
-// every non-admin user with a lost phone and no way back in at all
-// (handleTOTPAdminClear needs the admin to still be signed in to use
-// it; a user locked out of their own account has no session to reach it
-// from).
+// every non-admin user with a lost phone or passkey and no way back in
+// at all (handleTOTPAdminClear needs the admin to still be signed in to
+// use it; a user locked out of their own account has no session to reach
+// it from).
 //
 // Follows -recover-admin-account's shape in every other respect: CLI
 // only, host access plus a recovery key, every use rotates the keys
@@ -2664,7 +2667,7 @@ func runClearSecondFactor(args []string) int {
 	// numbered list: there is no small, well-known set of accounts to
 	// offer a choice from here (transfer only ever chooses among the
 	// handful of accounts that could plausibly become admin), and an
-	// operator reaching for this command already knows whose phone is
+	// operator reaching for this command already knows whose factors are
 	// lost. Exit code 2 for a usage mistake, matching -backup, -restore
 	// and -migrate-data -- distinct from 1, which is everything that got
 	// as far as actually trying and failed.
@@ -2726,21 +2729,46 @@ func runClearSecondFactor(args []string) int {
 	// rotated keys -- proceeds exactly as it would if there had been
 	// something to clear.
 	//
+	// #1250: an account can hold an authenticator app, passkeys, both or
+	// neither, so there are four honest shapes for outcome rather than
+	// two -- read off user, the pre-clear record ByUsername returned
+	// above (unlike List, it does not blank Passkeys, so this is real
+	// state, not a zeroed copy). ClearAllSecondFactors clears both kinds
+	// and the shared recovery codes in one write regardless of which
+	// kind was actually present, so a "nothing to clear" account never
+	// reaches the store call at all -- there is nothing for it to do.
+	//
 	// outcome is what actually happened, in prose -- built once and
 	// reused across the terminal message and every log line below it, so
 	// the "nothing was there" case reads honestly everywhere instead of
 	// only on stdout. Written as a past-tense clause with no leading
 	// subject, so it composes into "<outcome>, but ..." and "<outcome>,
 	// recovery keys rotated" without repeating itself.
+	hadTOTP := user.HasActiveTOTP()
+	hadPasskeys := len(user.Passkeys) > 0
+
 	var outcome string
-	if user.HasActiveTOTP() {
-		if err := store.ClearTOTP(user.ID); err != nil {
+	switch {
+	case hadTOTP && hadPasskeys:
+		if err := store.ClearAllSecondFactors(user.ID); err != nil {
+			logger.Error(fmt.Sprintf("clearing the factors failed, no keys were consumed: %v", err))
+			return 1
+		}
+		outcome = fmt.Sprintf("authenticator-app factor and passkeys for %s cleared, along with their recovery codes", logging.Printable(user.Username))
+	case hadTOTP:
+		if err := store.ClearAllSecondFactors(user.ID); err != nil {
 			logger.Error(fmt.Sprintf("clearing the factor failed, no keys were consumed: %v", err))
 			return 1
 		}
 		outcome = fmt.Sprintf("authenticator-app factor for %s cleared, along with its recovery codes", logging.Printable(user.Username))
-	} else {
-		outcome = fmt.Sprintf("%s had no active authenticator-app factor -- nothing to clear", logging.Printable(user.Username))
+	case hadPasskeys:
+		if err := store.ClearAllSecondFactors(user.ID); err != nil {
+			logger.Error(fmt.Sprintf("clearing the passkeys failed, no keys were consumed: %v", err))
+			return 1
+		}
+		outcome = fmt.Sprintf("passkeys for %s cleared, along with their recovery codes", logging.Printable(user.Username))
+	default:
+		outcome = fmt.Sprintf("%s had no active second factor -- nothing to clear", logging.Printable(user.Username))
 	}
 	fmt.Println(outcome + ".")
 
