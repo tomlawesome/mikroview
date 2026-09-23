@@ -185,56 +185,127 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   cross-site requests regardless of `fetch`/CORS rules, so origin
   checking is what actually stops a malicious page from opening a live
   connection using a signed-in visitor's session.
-- **An authenticator-app (TOTP) second factor is available on any local
-  account, and is never offered on an SSO one** -- an identity provider
+- **Two independent second factors are available on any local account,
+  and neither is ever offered on an SSO one** -- an identity provider
   already owns that step, and the account menu says so rather than just
-  hiding the option. Turning it on (issue #1249) shows a QR code and the
-  same secret as text beside it, always, not only when the scanner fails
-  -- confirming it with one live code is what activates the factor
-  (RFC 6238, SHA-1, 6-digit codes, 30 s step, ±1 step tolerance) and also
-  issues ten recovery codes, shown once, and ends every other session
-  the account is currently signed into. From then on, a correct password
+  hiding the option. **An authenticator app (TOTP, issue #1249)** shows a
+  QR code and the same secret as text beside it, always, not only when
+  the scanner fails -- confirming it with one live code is what
+  activates the factor (RFC 6238, SHA-1, 6-digit codes, 30 s step, ±1
+  step tolerance). **A passkey (WebAuthn, issue #1250)** is registered
+  through the browser's own platform or security-key prompt instead of a
+  code; see "Passkeys are bound to a configured web address" below for
+  what that needs and how it can go stale. Confirming the authenticator
+  app always ends every other session the account is currently signed
+  into; registering a passkey does the same only when it's the account's
+  first second factor of either kind -- adding a second or third passkey
+  afterward doesn't sign anything else out. Either way, the first factor
+  to activate on an account also issues ten recovery codes, shown once
+  (see "Recovery codes are shared between both factors" below). From
+  then on, a correct password
   on that account does **not** create a session: `POST /api/auth/login`
   instead sets a short-lived (5-minute) `pending` cookie naming the
   account, sealed the same way the OIDC flow cookie is (AES-256-GCM,
   authenticated, key generated once and held only in memory), and
-  `POST /api/auth/login/factor` -- a live code, or a recovery code, spent
-  the moment it works -- is what actually signs in. Both steps are
+  `POST /api/auth/login/factor` -- a TOTP code, a WebAuthn assertion, or
+  a recovery code, spent the moment it works -- is what actually signs
+  in. A passkey assertion goes through its own begin/finish pair
+  (`POST /api/auth/login/factor/begin`, then the same `.../factor` route
+  with an `assertion` body instead of a `code`), sealed into a second,
+  independently-keyed cookie so a registration ceremony's session data
+  can never be replayed to finish a login or vice versa. Every step is
   rate-limited on the same per-IP and per-username buckets, so a wrong
-  code at the second step costs exactly what a wrong password does at
-  the first. See [docs/authenticator-app.md](docs/authenticator-app.md)
-  for the operator walkthrough.
-- **The secret is stored in the clear, because verifying a code means
-  recomputing it.** A TOTP code is checked by recomputing HMAC-SHA1 over
-  the shared secret and comparing, not by comparing against a stored
-  hash the way a password is -- there is no one-way form that still lets
-  the server verify a code, so `TOTPSecret` sits in the accounts file
-  (`auth.storePath`) as plain text, one more field behind the same file
-  permissions as the rest of that file. See "Data handling" below for
-  when that file is itself encrypted. **Recovery codes are different:
-  they get the same Argon2id hashing a password does**, never stored in
-  clear, and each is single-use -- spending one at the second login step
-  marks it as burned so it cannot be presented again.
+  code or a failed passkey prompt at the second step costs exactly what
+  a wrong password does at the first. See
+  [docs/authenticator-app.md](docs/authenticator-app.md) for the
+  operator walkthrough of both.
+- **Passkeys are bound to a configured web address, and go stale if it
+  changes.** WebAuthn ties every passkey to the domain name the browser
+  saw when it was created, and refuses outright to create one for a bare
+  IP address -- so passkeys stay unavailable until an admin sets the
+  top-level `publicUrl` config key (env `MIKROVIEW_PUBLIC_URL`) to the
+  https address the deployment is actually reached on. Getting this
+  wrong is warn-and-degrade, never a startup failure: an absolute URL is
+  required or the setting is ignored (`CFG-0100`), an IP-literal host or
+  a non-`localhost` `http` scheme both leave passkeys unavailable
+  (`CFG-0101`, `CFG-0102`) rather than refusing to boot, and a path,
+  query or fragment on the value is stripped with a warning rather than
+  breaking anything (`CFG-0103`). Each stored passkey records the
+  relying-party ID it was registered under; if `publicUrl` later changes,
+  a passkey registered under the old value is *stale* -- excluded from
+  login, shown in the account menu with which address it was made for,
+  and still removable. Nothing breaks silently: an account whose only
+  passkeys are all stale gets an empty second-factor list at login, so
+  the password still never creates a session on its own, and the sign-in
+  screen falls back to a recovery code with an explanation. See
+  [docs/configuration.md](docs/configuration.md#public-url-publicurl-optional-for-passkeys)
+  for the config reference.
+- **A passkey login is refused, not just logged, on a signature-counter
+  regression -- unless the authenticator is one that never reports a
+  counter at all.** Every WebAuthn assertion carries a signature counter
+  the authenticator is supposed to keep advancing; go-webauthn flags a
+  `CloneWarning` when a presented count looks like a regression against
+  what's stored, which is exactly what a cloned credential would look
+  like. MikroView refuses the login (401, audited as
+  `account.passkey_clone_suspected`) and leaves the stored count
+  untouched whenever that warning fires. It deliberately does **not**
+  treat a `0 -> 0` assertion as a regression: many platform authenticators
+  (Touch ID, Windows Hello) never report a counter at all, and would be
+  falsely flagged as clones on every single login if a flat "did it go
+  backwards" check were used instead.
+- **The TOTP secret is stored in the clear, because verifying a code
+  means recomputing it; a passkey's public key is stored openly for the
+  same reason a public key always can be.** A TOTP code is checked by
+  recomputing HMAC-SHA1 over the shared secret and comparing, not by
+  comparing against a stored hash the way a password is -- there is no
+  one-way form that still lets the server verify a code, so `TOTPSecret`
+  sits in the accounts file (`auth.storePath`) as plain text, one more
+  field behind the same file permissions as the rest of that file. A
+  passkey's stored public key is not comparably sensitive: WebAuthn never
+  gives the relying party the matching private key in the first place,
+  so nothing about storing the public half in the clear weakens the
+  credential. See "Data handling" below for when the accounts file is
+  itself encrypted. **Recovery codes are different again: they get the
+  same Argon2id hashing a password does**, never stored in clear, and
+  each is single-use -- spending one at the second login step marks it as
+  burned so it cannot be presented again.
+- **Recovery codes are shared between both factors, minted once.**
+  Whichever factor activates first -- confirming the authenticator app,
+  or finishing a passkey registration -- mints the one set of ten;
+  activating the other kind afterward never mints a second set, and the
+  account is told its existing codes still stand. Codes are cleared only
+  when an account's last second factor of either kind is removed --
+  self-service, an admin clearing one user's factor, or the CLI clearing
+  everything at once -- never merely because one of two active factors
+  was removed. This is deliberate: codes minted for a passkey must
+  survive removing a *different* passkey, or an authenticator app that
+  isn't the account's last factor standing, and must not survive the
+  account actually going back to password-only.
 - **A factor is removed three ways, each guarded differently.** The
   account's own owner turns it off with their current password
-  (`DELETE /api/auth/totp`, rate-limited on the same bucket as any other
-  password re-check in the account menu). An admin can clear another
-  user's factor from the people group in Settings
-  (`DELETE /api/auth/users/{id}/totp`, admin-only, audited as
-  `user.totp_cleared`) -- **never on the admin's own account**, the same
-  division drawn for resetting somebody else's password below: MikroView
-  holds exactly one admin, so refusing this route on the caller's own row
-  is also what keeps the admin account out of it entirely. The remaining
-  case -- an admin who has lost the phone and has no session to reach
-  that button from -- has no web route at all:
+  (`DELETE /api/auth/totp` for the authenticator app,
+  `DELETE /api/auth/passkeys/{id}` for one passkey at a time -- both
+  rate-limited on the same bucket as any other password re-check in the
+  account menu). An admin can clear another user's factor from the
+  people group in Settings (`DELETE /api/auth/users/{id}/totp`,
+  `DELETE /api/auth/users/{id}/passkeys`, admin-only, audited as
+  `user.totp_cleared` / `user.passkeys_cleared`) -- **never on the
+  admin's own account**, the same division drawn for resetting somebody
+  else's password below: MikroView holds exactly one admin, so refusing
+  this route on the caller's own row is also what keeps the admin
+  account out of it entirely. The remaining case -- an admin who has
+  lost the phone or every passkey and has no session to reach that
+  button from -- has no web route at all:
   `mikroview -clear-second-factor <username>` at the console, gated the
   same way `-recover-admin-account` is (host access plus a recovery key)
   and rotating the recovery keys on every use, same as that command.
-  Unlike admin-account recovery, it is not limited to the admin account:
-  clearing an ordinary user's factor grants nothing beyond what their
-  password already does, so there is no reason to narrow the target, and
-  narrowing it would leave any non-admin user with a lost phone and no
-  way back in at all.
+  It clears both kinds of factor and the shared recovery codes in one
+  go, whichever of them the account actually had. Unlike admin-account
+  recovery, it is not limited to the admin account: clearing an ordinary
+  user's factors grants nothing beyond what their password already does,
+  so there is no reason to narrow the target, and narrowing it would
+  leave any non-admin user with a lost phone or lost passkeys and no way
+  back in at all.
 - **Account recovery is a CLI command, deliberately outside the web
   UI/API entirely, and requires a recovery key on top of host access**:
   `mikroview -recover-admin-account` (prompts for a recovery key, then
