@@ -765,3 +765,186 @@ func TestRoleAtLeastStacksTheThreeTiers(t *testing.T) {
 		}
 	}
 }
+
+// setTOTPForTest sets userID's TOTPSecret/TOTPConfirmedAt/TOTPLastCounter
+// directly and persists them. #1249's split ownership means the store
+// (this package) only holds these fields; the store methods that
+// actually enroll and confirm a factor from a real code live in
+// totp.go, owned separately. This stands in for that enrollment step so
+// the store-level tests here -- which only need "these fields are on
+// the user and survive persistence", not RFC 6238 itself -- don't have
+// to wait on it.
+func setTOTPForTest(t *testing.T, s *Store, userID, secret string, confirmedAt time.Time, counter int64) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[userID]
+	if !ok {
+		t.Fatalf("setTOTPForTest: no such user %q", userID)
+	}
+	u.TOTPSecret = secret
+	u.TOTPConfirmedAt = confirmedAt
+	u.TOTPLastCounter = counter
+	if err := s.tryPersistLocked(); err != nil {
+		t.Fatalf("setTOTPForTest: persisting fixture: %v", err)
+	}
+}
+
+// TestUnconfirmedTOTPSecretIsNotAnActiveFactor pins the distinction the
+// design calls out explicitly: a secret generated mid-setup (e.g. to
+// show a QR code) and never confirmed must not count as an active
+// factor, on either the User predicate or the store-level one login and
+// the admin UI use.
+func TestUnconfirmedTOTPSecretIsNotAnActiveFactor(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.Register("admin", "password123", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if u.HasActiveTOTP() {
+		t.Error("a freshly registered user claims an active TOTP factor")
+	}
+	if s.HasActiveTOTP(u.ID) {
+		t.Error("Store.HasActiveTOTP is true before any secret exists")
+	}
+
+	// A secret with no confirmation -- mid-setup, or an abandoned one.
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", time.Time{}, 0)
+	got, ok := s.Get(u.ID)
+	if !ok {
+		t.Fatal("expected the user to still exist")
+	}
+	if got.HasActiveTOTP() {
+		t.Error("an unconfirmed secret counts as an active factor")
+	}
+	if s.HasActiveTOTP(u.ID) {
+		t.Error("Store.HasActiveTOTP is true for an unconfirmed secret")
+	}
+
+	// Confirming it is what activates it.
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", now, 5)
+	if !s.HasActiveTOTP(u.ID) {
+		t.Error("Store.HasActiveTOTP is false for a confirmed secret")
+	}
+}
+
+// TestHasActiveTOTPUnknownUserIsFalse: the predicate answers a yes/no
+// gating question, not a lookup, so an unknown ID gets the same false
+// answer a real account with no factor would give rather than a panic
+// or a distinguishable zero value.
+func TestHasActiveTOTPUnknownUserIsFalse(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.HasActiveTOTP("no-such-user") {
+		t.Error("HasActiveTOTP is true for a user that does not exist")
+	}
+}
+
+// TestClearTOTPRemovesEveryPart is the "disable 2FA" path: it must leave
+// nothing behind that a stale recovery code could still redeem, or that
+// a later re-enrollment could accidentally inherit (the old counter, in
+// particular, would let a replay-guard check pass against a fresh
+// secret's early codes).
+func TestClearTOTPRemovesEveryPart(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.Register("admin", "password123", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", now, 7)
+	codes, err := s.GenerateRecoveryCodes(u.ID, now)
+	if err != nil {
+		t.Fatalf("GenerateRecoveryCodes: %v", err)
+	}
+	if !s.HasActiveTOTP(u.ID) {
+		t.Fatal("test setup: expected an active factor before clearing it")
+	}
+
+	if err := s.ClearTOTP(u.ID); err != nil {
+		t.Fatalf("ClearTOTP: %v", err)
+	}
+
+	got, ok := s.Get(u.ID)
+	if !ok {
+		t.Fatal("expected the user to still exist after ClearTOTP")
+	}
+	if got.TOTPSecret != "" {
+		t.Error("ClearTOTP left the secret behind")
+	}
+	if !got.TOTPConfirmedAt.IsZero() {
+		t.Error("ClearTOTP left the confirmation timestamp behind")
+	}
+	if got.TOTPLastCounter != 0 {
+		t.Error("ClearTOTP left the replay counter behind")
+	}
+	if len(got.RecoveryCodes) != 0 {
+		t.Error("ClearTOTP left recovery codes behind")
+	}
+	if s.HasActiveTOTP(u.ID) {
+		t.Error("HasActiveTOTP is still true after ClearTOTP")
+	}
+	// A code from before the clear must not still work afterward.
+	if ok, err := s.BurnRecoveryCode(u.ID, codes[0], now); err != nil || ok {
+		t.Errorf("a pre-clear recovery code still worked after ClearTOTP: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestClearTOTPUnknownUserReturnsNotFound(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearTOTP("no-such-user"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("ClearTOTP on an unknown user = %v, want %v", err, ErrUserNotFound)
+	}
+}
+
+// TestClearTOTPLeavesStateWhenPersistFails follows the same
+// restore-on-failure contract every other credential-changing method in
+// this package documents (SetPassword, IssueResetCode, ...): a clear
+// that cannot be durably saved must not be reported as done, and must
+// not leave the in-memory state ahead of what's on disk.
+func TestClearTOTPLeavesStateWhenPersistFails(t *testing.T) {
+	// Budget covers exactly Register (1) and setTOTPForTest's fixture
+	// write (1); GenerateRecoveryCodes and ClearTOTP each get their own
+	// budget set just before they run, below.
+	budget := &saveBudgetBackend{left: 2}
+	s, err := OpenWithBackend(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.Register("admin", "password123", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", now, 3)
+
+	budget.left = 1
+	if _, err := s.GenerateRecoveryCodes(u.ID, now); err != nil {
+		t.Fatalf("GenerateRecoveryCodes: %v", err)
+	}
+	budget.left = 0
+
+	if err := s.ClearTOTP(u.ID); err == nil {
+		t.Fatal("ClearTOTP against a backend that cannot save = nil error, want one")
+	}
+	got, ok := s.Get(u.ID)
+	if !ok {
+		t.Fatal("expected the user to still exist")
+	}
+	if got.TOTPSecret == "" || got.TOTPConfirmedAt.IsZero() || len(got.RecoveryCodes) == 0 {
+		t.Error("ClearTOTP's in-memory state changed even though the write failed")
+	}
+}
