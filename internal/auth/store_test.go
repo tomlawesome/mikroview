@@ -767,14 +767,13 @@ func TestRoleAtLeastStacksTheThreeTiers(t *testing.T) {
 }
 
 // setTOTPForTest sets userID's TOTPSecret/TOTPConfirmedAt/TOTPLastCounter
-// directly and persists them. #1249's split ownership means the store
-// (this package) only holds these fields; the store methods that
-// actually enroll and confirm a factor from a real code live in
-// totp.go, owned separately. This stands in for that enrollment step so
-// the store-level tests here -- which only need "these fields are on
-// the user and survive persistence", not RFC 6238 itself -- don't have
-// to wait on it.
-func setTOTPForTest(t *testing.T, s *Store, userID, secret string, confirmedAt time.Time, counter int64) {
+// directly and persists them. SetPendingTOTPSecret and ConfirmTOTP are
+// the real way in, and the tests for those use them; this exists for
+// the fixture states they deliberately refuse to produce -- an
+// unconfirmed secret carrying a counter, or a confirmed factor set up
+// in one step -- which the tests below need as a starting point rather
+// than as the thing under test.
+func setTOTPForTest(t *testing.T, s *Store, userID, secret string, confirmedAt time.Time, counter uint64) {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -947,4 +946,296 @@ func TestClearTOTPLeavesStateWhenPersistFails(t *testing.T) {
 	if got.TOTPSecret == "" || got.TOTPConfirmedAt.IsZero() || len(got.RecoveryCodes) == 0 {
 		t.Error("ClearTOTP's in-memory state changed even though the write failed")
 	}
+}
+
+// TestEnrolThenConfirmActivatesTheFactor walks the two store writes the
+// enrolment routes make, in order, and pins the thing that separates
+// them: the secret exists after the first call but must not gate a
+// sign-in until the second.
+func TestEnrolThenConfirmActivatesTheFactor(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	u, err := s.Register("admin", "password123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetPendingTOTPSecret(u.ID, "JBSWY3DPEHPK3PXP"); err != nil {
+		t.Fatalf("SetPendingTOTPSecret: %v", err)
+	}
+	got, ok := s.Get(u.ID)
+	if !ok {
+		t.Fatal("expected the user to still exist")
+	}
+	if got.TOTPSecret != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("TOTPSecret = %q after enrolment, want the pending secret", got.TOTPSecret)
+	}
+	if s.HasActiveTOTP(u.ID) {
+		t.Error("a pending, unconfirmed secret counts as an active factor -- it must not gate a sign-in")
+	}
+
+	if err := s.ConfirmTOTP(u.ID, now, 57); err != nil {
+		t.Fatalf("ConfirmTOTP: %v", err)
+	}
+	if !s.HasActiveTOTP(u.ID) {
+		t.Error("the factor is not active after ConfirmTOTP")
+	}
+	got, _ = s.Get(u.ID)
+	if !got.TOTPConfirmedAt.Equal(now) {
+		t.Errorf("TOTPConfirmedAt = %v, want %v", got.TOTPConfirmedAt, now)
+	}
+	if got.TOTPLastCounter != 57 {
+		t.Errorf("TOTPLastCounter = %d after confirming, want the counter that proved the enrolment (57)", got.TOTPLastCounter)
+	}
+}
+
+// TestSetPendingTOTPSecretRefusesToReplaceAnActiveFactor covers the
+// lockout ErrTOTPAlreadyActive exists to prevent: if enrolling again
+// overwrote a live secret, abandoning that enrolment would leave
+// HasActiveTOTP true against a secret no authenticator app holds.
+func TestSetPendingTOTPSecretRefusesToReplaceAnActiveFactor(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	u, err := s.Register("admin", "password123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", now, 9)
+
+	if err := s.SetPendingTOTPSecret(u.ID, "MZXW6YTBOI======"); !errors.Is(err, ErrTOTPAlreadyActive) {
+		t.Errorf("enrolling over an active factor = %v, want %v", err, ErrTOTPAlreadyActive)
+	}
+	got, _ := s.Get(u.ID)
+	if got.TOTPSecret != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("the live secret was replaced anyway: %q", got.TOTPSecret)
+	}
+	if got.TOTPLastCounter != 9 {
+		t.Errorf("TOTPLastCounter = %d, want the live factor's 9 left alone", got.TOTPLastCounter)
+	}
+}
+
+// TestSetPendingTOTPSecretResetsTheReplayCounter covers the abandoned
+// enrolment: a counter left over from an earlier secret would refuse
+// the new one's early codes, which reads as an authenticator app that
+// simply does not work.
+func TestSetPendingTOTPSecretResetsTheReplayCounter(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	u, err := s.Register("admin", "password123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An enrolment that got a secret and a counter but was never
+	// confirmed -- so it is replaceable, unlike the test above.
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", time.Time{}, 12345)
+
+	if err := s.SetPendingTOTPSecret(u.ID, "MZXW6YTBOI======"); err != nil {
+		t.Fatalf("SetPendingTOTPSecret over an abandoned enrolment: %v", err)
+	}
+	got, _ := s.Get(u.ID)
+	if got.TOTPSecret != "MZXW6YTBOI======" {
+		t.Errorf("TOTPSecret = %q, want the new pending secret", got.TOTPSecret)
+	}
+	if got.TOTPLastCounter != 0 {
+		t.Errorf("TOTPLastCounter = %d, want 0 -- the old secret's counter must not carry over", got.TOTPLastCounter)
+	}
+}
+
+// TestConfirmTOTPNeedsSomethingPending pins both halves of
+// ErrNoPendingTOTP: nothing started, and already finished.
+func TestConfirmTOTPNeedsSomethingPending(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	u, err := s.Register("admin", "password123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ConfirmTOTP(u.ID, now, 1); !errors.Is(err, ErrNoPendingTOTP) {
+		t.Errorf("confirming with no enrolment = %v, want %v", err, ErrNoPendingTOTP)
+	}
+
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", now, 40)
+	if err := s.ConfirmTOTP(u.ID, now.Add(time.Hour), 1); !errors.Is(err, ErrNoPendingTOTP) {
+		t.Errorf("confirming an already-confirmed factor = %v, want %v", err, ErrNoPendingTOTP)
+	}
+	got, _ := s.Get(u.ID)
+	if got.TOTPLastCounter != 40 {
+		t.Errorf("TOTPLastCounter = %d, want the confirmed factor's 40 -- a rejected confirm must not wind the guard back", got.TOTPLastCounter)
+	}
+	if !got.TOTPConfirmedAt.Equal(now) {
+		t.Error("a rejected confirm moved TOTPConfirmedAt")
+	}
+}
+
+// TestRecordTOTPCounterOnlyMovesForward is the replay guard's own
+// contract. Winding the counter back is the one outcome the method
+// exists to prevent, so a stale value is a no-op and not an error:
+// nothing has gone wrong, another request for the same account simply
+// got there first.
+func TestRecordTOTPCounterOnlyMovesForward(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	u, err := s.Register("admin", "password123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setTOTPForTest(t, s, u.ID, "JBSWY3DPEHPK3PXP", now, 100)
+
+	if err := s.RecordTOTPCounter(u.ID, 101); err != nil {
+		t.Fatalf("RecordTOTPCounter forward: %v", err)
+	}
+	if got, _ := s.Get(u.ID); got.TOTPLastCounter != 101 {
+		t.Errorf("TOTPLastCounter = %d after advancing, want 101", got.TOTPLastCounter)
+	}
+
+	for _, stale := range []uint64{101, 100, 0} {
+		if err := s.RecordTOTPCounter(u.ID, stale); err != nil {
+			t.Errorf("RecordTOTPCounter(%d) = %v, want no error -- a stale counter is a no-op", stale, err)
+		}
+		if got, _ := s.Get(u.ID); got.TOTPLastCounter != 101 {
+			t.Fatalf("RecordTOTPCounter(%d) wound the replay guard back to %d", stale, got.TOTPLastCounter)
+		}
+	}
+}
+
+// TestTheEnrolmentCodeCannotAlsoSignYouIn is the seam between this
+// package's two halves: totp.go verifies a code, the store remembers
+// which counter was spent. It is written with real generated codes
+// rather than fixture counters because the failure it guards against --
+// the code someone typed to finish enrolment still working as their
+// first sign-in -- only appears when both halves are wired together.
+func TestTheEnrolmentCodeCannotAlsoSignYouIn(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	u, err := s.Register("admin", "password123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secret, err := GenerateTOTPSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := EncodeTOTPSecret(secret)
+	if err := s.SetPendingTOTPSecret(u.ID, encoded); err != nil {
+		t.Fatal(err)
+	}
+
+	// Enrolment: the user reads a code off their app and confirms.
+	stored, _ := s.Get(u.ID)
+	code := GenerateTOTPCode(secret, totpCounter(now, totpStep))
+	matched, ok := VerifyTOTP(stored.TOTPSecret, code, now, stored.TOTPLastCounter)
+	if !ok {
+		t.Fatal("the enrolment code did not verify against the pending secret")
+	}
+	if err := s.ConfirmTOTP(u.ID, now, matched); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sign-in, moments later, with the same code still on screen.
+	stored, _ = s.Get(u.ID)
+	if _, ok := VerifyTOTP(stored.TOTPSecret, code, now, stored.TOTPLastCounter); ok {
+		t.Error("the code used to enrol was accepted again at sign-in")
+	}
+
+	// The next window's code still works, and spending it advances the
+	// guard -- the point of the counter is to move on, not to wedge.
+	later := now.Add(totpStep)
+	next := GenerateTOTPCode(secret, totpCounter(later, totpStep))
+	matched, ok = VerifyTOTP(stored.TOTPSecret, next, later, stored.TOTPLastCounter)
+	if !ok {
+		t.Fatal("the next window's code was refused, so the account is wedged")
+	}
+	if err := s.RecordTOTPCounter(u.ID, matched); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = s.Get(u.ID)
+	if _, ok := VerifyTOTP(stored.TOTPSecret, next, later, stored.TOTPLastCounter); ok {
+		t.Error("the sign-in code was accepted a second time")
+	}
+}
+
+// TestTOTPWritesLeaveStateWhenPersistFails holds the three new writes
+// to the same restore-on-failure contract as ClearTOTP above: a change
+// that cannot be durably saved is not reported as done, and does not
+// leave memory ahead of disk.
+func TestTOTPWritesLeaveStateWhenPersistFails(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	newStore := func(t *testing.T) (*Store, *saveBudgetBackend, string) {
+		t.Helper()
+		// Budget covers Register (1); each case sets its own budget
+		// before the write it is testing.
+		budget := &saveBudgetBackend{left: 1}
+		s, err := OpenWithBackend(budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := s.Register("admin", "password123", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s, budget, u.ID
+	}
+
+	t.Run("SetPendingTOTPSecret", func(t *testing.T) {
+		s, budget, id := newStore(t)
+		budget.left = 0
+		if err := s.SetPendingTOTPSecret(id, "JBSWY3DPEHPK3PXP"); err == nil {
+			t.Fatal("SetPendingTOTPSecret against a backend that cannot save = nil error, want one")
+		}
+		if got, _ := s.Get(id); got.TOTPSecret != "" {
+			t.Errorf("TOTPSecret = %q in memory even though the write failed", got.TOTPSecret)
+		}
+	})
+
+	t.Run("ConfirmTOTP", func(t *testing.T) {
+		s, budget, id := newStore(t)
+		budget.left = 1
+		if err := s.SetPendingTOTPSecret(id, "JBSWY3DPEHPK3PXP"); err != nil {
+			t.Fatal(err)
+		}
+		budget.left = 0
+		if err := s.ConfirmTOTP(id, now, 5); err == nil {
+			t.Fatal("ConfirmTOTP against a backend that cannot save = nil error, want one")
+		}
+		if s.HasActiveTOTP(id) {
+			t.Error("the factor reads as active even though the confirmation could not be saved")
+		}
+		if got, _ := s.Get(id); got.TOTPLastCounter != 0 {
+			t.Errorf("TOTPLastCounter = %d after a failed confirm, want 0", got.TOTPLastCounter)
+		}
+	})
+
+	t.Run("RecordTOTPCounter", func(t *testing.T) {
+		s, budget, id := newStore(t)
+		budget.left = 1
+		setTOTPForTest(t, s, id, "JBSWY3DPEHPK3PXP", now, 30)
+		budget.left = 0
+		if err := s.RecordTOTPCounter(id, 31); err == nil {
+			t.Fatal("RecordTOTPCounter against a backend that cannot save = nil error, want one")
+		}
+		if got, _ := s.Get(id); got.TOTPLastCounter != 30 {
+			t.Errorf("TOTPLastCounter = %d after a failed write, want the stored 30", got.TOTPLastCounter)
+		}
+	})
 }
