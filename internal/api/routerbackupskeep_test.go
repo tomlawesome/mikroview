@@ -66,6 +66,7 @@ func TestKeepControlsAreAdminOnly(t *testing.T) {
 
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, user, ts) // #1253: needed before the keep routes below
 
 	body := routerBackupKeepRequest{Comment: "before the 7.16 upgrade"}
 	for _, send := range []struct {

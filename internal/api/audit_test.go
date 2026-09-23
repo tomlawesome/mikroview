@@ -79,6 +79,7 @@ func TestAuditRequiresAdminNotJustAnyUser(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/audit below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/audit")
 	if err != nil {
