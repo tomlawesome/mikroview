@@ -1210,24 +1210,48 @@ type Backup struct {
 }
 
 type Config struct {
-	Listen         Listen         `yaml:"listen"`
-	UI             UI             `yaml:"ui"`
-	Store          Store          `yaml:"store"`
-	Log            Log            `yaml:"log"`
-	GeoIP          GeoIP          `yaml:"geoip"`
-	Reputation     Reputation     `yaml:"reputation"`
-	Flags          Flags          `yaml:"flags"`
-	Auth           Auth           `yaml:"auth"`
-	Entities       Entities       `yaml:"entities"`
-	Coverage       Coverage       `yaml:"coverage"`
-	Hosts          Hosts          `yaml:"hosts"`
-	Seen           Seen           `yaml:"seen"`
-	Baseline       Baseline       `yaml:"baseline"`
-	Audit          Audit          `yaml:"audit"`
-	Setup          Setup          `yaml:"setup"`
-	Watchlist      Watchlist      `yaml:"watchlist"`
-	Notify         Notify         `yaml:"notify"`
-	TLS            TLS            `yaml:"tls"`
+	Listen     Listen     `yaml:"listen"`
+	UI         UI         `yaml:"ui"`
+	Store      Store      `yaml:"store"`
+	Log        Log        `yaml:"log"`
+	GeoIP      GeoIP      `yaml:"geoip"`
+	Reputation Reputation `yaml:"reputation"`
+	Flags      Flags      `yaml:"flags"`
+	Auth       Auth       `yaml:"auth"`
+	Entities   Entities   `yaml:"entities"`
+	Coverage   Coverage   `yaml:"coverage"`
+	Hosts      Hosts      `yaml:"hosts"`
+	Seen       Seen       `yaml:"seen"`
+	Baseline   Baseline   `yaml:"baseline"`
+	Audit      Audit      `yaml:"audit"`
+	Setup      Setup      `yaml:"setup"`
+	Watchlist  Watchlist  `yaml:"watchlist"`
+	Notify     Notify     `yaml:"notify"`
+	TLS        TLS        `yaml:"tls"`
+	// PublicURL is the address people actually reach MikroView on, e.g.
+	// "https://mikroview.home.lan:8443" (issue #1250, passkeys as a
+	// second factor -- docs/plans/passkeys-second-factor.md). WebAuthn
+	// binds a passkey to the domain the browser saw at registration
+	// time and refuses outright to create one for a bare IP address, so
+	// this is the one place MikroView learns what that domain is --
+	// deliberately never inferred from a request's Host header, the
+	// same redirect_uri-confusion reasoning OIDC.PublicBaseURL's own
+	// doc comment gives.
+	//
+	// Never reused as, or backfilled from, oidc.publicBaseUrl below,
+	// even though the two usually hold the same value: changing one for
+	// its own reason (rotating an OIDC redirect, moving where passkeys
+	// are registered) must never silently move the other. validate.go
+	// only warns when oidc.publicBaseUrl is set and this isn't (see
+	// CFG-0104) -- it never sets this on the operator's behalf.
+	//
+	// Left empty -- the default -- MikroView starts and runs exactly as
+	// it always has; passkeys are simply unavailable. Validation here is
+	// warn-and-degrade, never fatal, same stance every other optional
+	// integration in this file takes: a monitor that refuses to start
+	// has cost the operator all visibility, which is worse than one
+	// login method staying off. See CFG-0100 through CFG-0103.
+	PublicURL      string         `yaml:"publicUrl"`
 	OIDC           OIDC           `yaml:"oidc"`
 	Postgres       Postgres       `yaml:"postgres"`
 	Devices        []Device       `yaml:"devices"`
@@ -1948,6 +1972,13 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
 		cfg.TLS.StorePath = v
+	}
+	// MIKROVIEW_PUBLIC_URL, not MV_PUBLIC_URL as issue #1250 first
+	// proposed -- every env var in this codebase is MIKROVIEW_*, so the
+	// issue's name loses to the convention (see the ratified design,
+	// docs/plans/passkeys-second-factor.md).
+	if v := os.Getenv("MIKROVIEW_PUBLIC_URL"); v != "" {
+		cfg.PublicURL = v
 	}
 	if v := os.Getenv("MIKROVIEW_OIDC_ISSUER_URL"); v != "" {
 		cfg.OIDC.IssuerURL = v

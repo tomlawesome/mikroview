@@ -1237,6 +1237,61 @@ engine:
   decommissionCleanWindow: 6h
 ```
 
+#### CFG-0100
+
+`publicUrl` does not parse as an absolute URL -- a scheme and a host are
+both required. Treated as though it were never set: passkeys are
+unavailable, the same as if the key were absent. See [Public
+URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"
+```
+
+#### CFG-0101
+
+`publicUrl`'s host is an IP address. WebAuthn refuses outright to bind a
+passkey to one -- this is a browser rule, not a MikroView choice.
+Passkeys are unavailable; everything else about the deployment is
+unaffected. See [Public URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # a hostname, not an IP address
+```
+
+#### CFG-0102
+
+`publicUrl`'s scheme is `http` and the host is not `localhost`. Browsers
+only offer passkeys over https. Passkeys are unavailable; everything
+else is unaffected. See [Public
+URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # https, not http
+```
+
+#### CFG-0103
+
+`publicUrl` carries a path, query or fragment. Only the origin (scheme,
+host, port) matters to WebAuthn, so MikroView strips the rest and keeps
+going -- unlike CFG-0100 through CFG-0102, this one does not cost you
+passkeys.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # scheme, host and port only
+```
+
+#### CFG-0104
+
+`oidc.publicBaseUrl` is set but `publicUrl` is not. The two usually name
+the same address, but MikroView never copies one into the other -- see
+[Public URL](#public-url-publicurl-optional-for-passkeys) for why --
+so this is only a nudge to set it yourself if that is what you meant.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ
+```
+
 ## Logging
 
 MikroView's own server output (not event data -- see `store.retention`
@@ -4249,6 +4304,37 @@ verification for that specific upstream (reasonable here, since you
 configured that upstream address yourself) or trusting MikroView's
 local CA explicitly (more correct, and what `/ca.crt` is for).
 
+## Public URL (`publicUrl`, optional, for passkeys)
+
+The address people actually reach MikroView on, e.g.
+`https://mikroview.home.lan:8443` (issue #1250, passkeys as a second
+factor). WebAuthn binds a passkey to the domain the browser saw when it
+was created, and refuses outright to create one for a bare IP address --
+this is the one place MikroView learns what that domain is, since it
+never infers it from a request's `Host` header (the same
+`redirect_uri`-confusion reasoning `oidc.publicBaseUrl` above is guarded
+against).
+
+```yaml
+publicUrl: "https://mikroview.home.lan:8443"
+```
+
+Left unset -- the default -- MikroView starts and runs exactly as it
+always has; passkeys are simply unavailable. Every problem here is a
+warning, never a startup refusal: a security monitor that will not boot
+has cost you all visibility, which is worse than one login method
+staying off. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
+above for exactly what each one catches and what happens as a result.
+
+**Not `oidc.publicBaseUrl`, and no fallback between them.** The two
+usually hold the same address, but changing one for its own reason --
+rotating an OIDC redirect, moving where passkeys are registered -- must
+never silently move the other, so MikroView never reuses one to fill in
+the other. If `oidc.publicBaseUrl` is set and this isn't, CFG-0104 says
+so; it does not set it for you.
+
+`MIKROVIEW_PUBLIC_URL` overrides it from the environment.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -4327,6 +4413,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
 | `MIKROVIEW_TLS_HOSTS` | `tls.hosts` (comma-separated) |
 | `MIKROVIEW_TLS_STORE_PATH` | `tls.storePath` |
+| `MIKROVIEW_PUBLIC_URL` | `publicUrl` (see [Public URL](#public-url-publicurl-optional-for-passkeys)) -- not `MV_PUBLIC_URL`, the name issue #1250 first proposed; every env var in this codebase is `MIKROVIEW_*` |
 | `MIKROVIEW_OIDC_ISSUER_URL` | `oidc.issuerUrl` (see [Single sign-on](#single-sign-on-oidcsso)) |
 | `MIKROVIEW_OIDC_CLIENT_ID` | `oidc.clientId` |
 | `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
