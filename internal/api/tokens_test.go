@@ -12,7 +12,11 @@ import (
 
 // setUpAdmin registers the first (admin) account on s and returns a
 // cookie-jar client already logged in as that admin -- shared setup for
-// every token-management test below.
+// every token-management test below. Also clears the forced-enrolment
+// door (#1253) by driving the real enrol+confirm routes
+// (totpEnrolAndConfirm), since a local account with no active second
+// factor can reach nothing but those routes -- every token route this
+// helper exists for included.
 func setUpAdmin(t *testing.T, ts *httptest.Server) *http.Client {
 	t.Helper()
 	client := &http.Client{Jar: mustCookieJar(t)}
@@ -21,6 +25,7 @@ func setUpAdmin(t *testing.T, ts *httptest.Server) *http.Client {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected registering the admin to succeed, got %d", resp.StatusCode)
 	}
+	enrolAndRememberFactor(t, client, ts, "admin")
 	return client
 }
 
@@ -34,6 +39,7 @@ func TestTokensCreateRequiresAdmin(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/tokens below
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"})
 	defer resp.Body.Close()
@@ -66,6 +72,7 @@ func TestTokensListAdminOnly(t *testing.T) {
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "editor", Password: "password456"}).Body.Close()
+	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/tokens below
 
 	resp, err := userClient.Get(ts.URL + "/api/tokens")
 	if err != nil {

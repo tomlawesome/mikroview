@@ -193,6 +193,7 @@ func TestPreferencesAreIsolatedPerUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := loggedInClient(t, ts.URL, "operator", "password456")
+	totpEnrolAndConfirm(t, other, ts) // #1253: needed before /api/me/preferences below
 
 	putJSON(t, admin, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"who": "admin"},
@@ -241,6 +242,7 @@ func TestDeletingUserRemovesPreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := loggedInClient(t, ts.URL, "operator", "password456")
+	totpEnrolAndConfirm(t, other, ts) // #1253: needed before /api/me/preferences below
 	putJSON(t, other, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"who": "operator"},
 	}).Body.Close()
