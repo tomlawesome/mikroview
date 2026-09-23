@@ -377,6 +377,7 @@ listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirec
 $TLS_BLOCK
 $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
+publicUrl: "$MV_SCHEME://localhost:$HTTP_PORT"
 $DEVICES_BLOCK
 EOF
   # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset
@@ -401,6 +402,16 @@ EOF
     "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/register" >/dev/null
 
   echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
+  # The same instance under the name passkeys need (#1250). A WebAuthn
+  # credential is bound to the publicUrl the relying party was built
+  # from, and NewRelyingParty (internal/api/webauthn.go) refuses an IP
+  # literal outright -- PasskeyStatusIP -- so MV_URL's 127.0.0.1 form
+  # cannot register one however the browser reaches it. "localhost" is
+  # the one hostname a browser treats as a secure context over plain
+  # http, which is what makes passkeys testable here without TLS.
+  # MV_URL stays as it is: every other scenario is happier on the
+  # literal address than on a name that may resolve to ::1 first.
+  echo "export MV_PUBLIC_URL=$MV_SCHEME://localhost:$HTTP_PORT"
   echo "export MV_USER=$MV_USER"
   echo "export MV_PASS=$MV_PASS"
   echo "export MV_DIR=$MV_DIR"
