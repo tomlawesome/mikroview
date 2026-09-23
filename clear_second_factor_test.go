@@ -123,6 +123,90 @@ func seedUserWithActiveTOTP(t *testing.T, store *auth.Store, username string) *a
 	return fresh
 }
 
+// seedUserWithPasskey creates an ordinary account carrying one
+// registered passkey and its ten recovery codes, mirroring
+// seedUserWithActiveTOTP's shape for the other factor kind. AddPasskey
+// is the store-layer half of registration (internal/api's
+// FinishRegistration drives the rest, wave 2), so a minimal but
+// well-formed Passkey is what a real ceremony would have produced --
+// the credential ID and public key content don't matter here, only that
+// the account ends up holding one. Recovery codes are minted the same
+// way a real first-factor activation mints them (design doc's "mint
+// when a factor activation finds RecoveryCodes empty"), so this is a
+// realistic passkey-only account, not merely a passkey with no codes.
+func seedUserWithPasskey(t *testing.T, store *auth.Store, username string) *auth.User {
+	t.Helper()
+	now := time.Now()
+	u, err := store.CreateUser(username, "correct horse battery staple", auth.RoleUser, now)
+	if err != nil {
+		t.Fatalf("CreateUser(%q): %v", username, err)
+	}
+	if _, err := store.AddPasskey(u.ID, auth.Passkey{
+		ID:        []byte(username + "-cred"),
+		PublicKey: []byte("fake-cose-public-key"),
+		RPID:      "mikroview.example",
+		Name:      "Test Passkey",
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("AddPasskey: %v", err)
+	}
+	if _, err := store.GenerateRecoveryCodes(u.ID, now); err != nil {
+		t.Fatalf("GenerateRecoveryCodes: %v", err)
+	}
+	fresh, ok := store.ByUsername(username)
+	if !ok {
+		t.Fatalf("seeded user %q vanished", username)
+	}
+	if len(fresh.Passkeys) != 1 || len(fresh.RecoveryCodes) == 0 {
+		t.Fatalf("test setup: %q does not have a passkey with recovery codes, got passkeys=%d codes=%d",
+			username, len(fresh.Passkeys), len(fresh.RecoveryCodes))
+	}
+	return fresh
+}
+
+// seedUserWithBothFactors creates an account carrying both a confirmed
+// authenticator-app factor and a passkey, sharing one set of recovery
+// codes -- the "mint once" rule (design doc): whichever factor confirms
+// first mints the codes, and the second factor's activation must not
+// mint a second set. TOTP is confirmed first here, matching
+// seedUserWithActiveTOTP's ordering, then the passkey is added onto the
+// same account without generating a second batch of codes.
+func seedUserWithBothFactors(t *testing.T, store *auth.Store, username string) *auth.User {
+	t.Helper()
+	now := time.Now()
+	u, err := store.CreateUser(username, "correct horse battery staple", auth.RoleUser, now)
+	if err != nil {
+		t.Fatalf("CreateUser(%q): %v", username, err)
+	}
+	if err := store.SetPendingTOTPSecret(u.ID, "JBSWY3DPEHPK3PXP"); err != nil {
+		t.Fatalf("SetPendingTOTPSecret: %v", err)
+	}
+	if err := store.ConfirmTOTP(u.ID, now, 1); err != nil {
+		t.Fatalf("ConfirmTOTP: %v", err)
+	}
+	if _, err := store.AddPasskey(u.ID, auth.Passkey{
+		ID:        []byte(username + "-cred"),
+		PublicKey: []byte("fake-cose-public-key"),
+		RPID:      "mikroview.example",
+		Name:      "Test Passkey",
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("AddPasskey: %v", err)
+	}
+	if _, err := store.GenerateRecoveryCodes(u.ID, now); err != nil {
+		t.Fatalf("GenerateRecoveryCodes: %v", err)
+	}
+	fresh, ok := store.ByUsername(username)
+	if !ok {
+		t.Fatalf("seeded user %q vanished", username)
+	}
+	if !fresh.HasActiveTOTP() || len(fresh.Passkeys) != 1 || len(fresh.RecoveryCodes) == 0 {
+		t.Fatalf("test setup: %q does not hold both factors with recovery codes, got HasActiveTOTP=%t passkeys=%d codes=%d",
+			username, fresh.HasActiveTOTP(), len(fresh.Passkeys), len(fresh.RecoveryCodes))
+	}
+	return fresh
+}
+
 // withStdin feeds input to readRecoveryKey and confirmSaved, both of
 // which read from os.Stdin. A pipe rather than a terminal, same as
 // TestReadRecoveryKeyStillReadsFromAPipe in recovery_prompt_test.go --
@@ -285,5 +369,84 @@ func TestClearSecondFactorReportsNoFactorHonestly(t *testing.T) {
 	// never having proven the key.
 	if _, err := f.openRecovery(t).Redeem(f.keys[0]); err == nil {
 		t.Error("the recovery key still redeems even though verifying it is what let this command run")
+	}
+}
+
+// #1250: an account holding both an authenticator app and a passkey
+// must lose both, and their single shared set of recovery codes, in
+// the one ClearAllSecondFactors write -- a partial clear (say, TOTP
+// gone but the passkey still standing) would leave the operator
+// believing the account is open when a factor they never touched still
+// gates the next login. The reported outcome names both kinds, since
+// an operator running this has no way to know in advance which shape
+// their account is in.
+func TestClearSecondFactorCorrectKeyClearsBothFactorsAndRecoveryCodes(t *testing.T) {
+	f := newClearFactorFixture(t)
+	seedUserWithBothFactors(t, f.store, "bilbo")
+
+	withStdin(t, f.keys[0]+"\nsaved\n")
+	code, out := runClearSecondFactorCapture(t, []string{"bilbo"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "authenticator-app factor and passkeys") {
+		t.Errorf("output does not report both factor kinds as cleared:\n%s", out)
+	}
+
+	fresh, ok := f.store.ByUsername("bilbo")
+	if !ok {
+		t.Fatal("the account vanished")
+	}
+	if fresh.HasActiveTOTP() {
+		t.Error("the authenticator-app factor is still active after a correctly-keyed clear")
+	}
+	if len(fresh.Passkeys) != 0 {
+		t.Errorf("passkeys were not cleared: %d remain, want 0", len(fresh.Passkeys))
+	}
+	if len(fresh.RecoveryCodes) != 0 {
+		t.Errorf("recovery codes were not cleared: %d remain, want 0", len(fresh.RecoveryCodes))
+	}
+
+	if _, err := f.openRecovery(t).Redeem(f.keys[0]); err == nil {
+		t.Error("the spent recovery key still redeems after being used")
+	}
+}
+
+// #1250: an account that only ever enrolled a passkey -- never an
+// authenticator app -- must still be reached by this command. Before
+// #1250, HasActiveTOTP() was the only thing runClearSecondFactor asked,
+// so a passkey-only account would have been reported as "nothing to
+// clear" while its passkey (and the recovery codes it shares no TOTP
+// factor to keep alive) stayed active -- exactly the silent-leftover
+// failure the design calls out.
+func TestClearSecondFactorCorrectKeyClearsPasskeyOnlyAccount(t *testing.T) {
+	f := newClearFactorFixture(t)
+	seedUserWithPasskey(t, f.store, "bilbo")
+
+	withStdin(t, f.keys[0]+"\nsaved\n")
+	code, out := runClearSecondFactorCapture(t, []string{"bilbo"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "passkeys") {
+		t.Errorf("output does not report the passkeys as cleared:\n%s", out)
+	}
+	if strings.Contains(out, "authenticator-app") {
+		t.Errorf("output claims an authenticator-app factor was involved on a passkey-only account:\n%s", out)
+	}
+
+	fresh, ok := f.store.ByUsername("bilbo")
+	if !ok {
+		t.Fatal("the account vanished")
+	}
+	if len(fresh.Passkeys) != 0 {
+		t.Errorf("passkeys were not cleared: %d remain, want 0", len(fresh.Passkeys))
+	}
+	if len(fresh.RecoveryCodes) != 0 {
+		t.Errorf("recovery codes were not cleared: %d remain, want 0", len(fresh.RecoveryCodes))
+	}
+
+	if _, err := f.openRecovery(t).Redeem(f.keys[0]); err == nil {
+		t.Error("the spent recovery key still redeems after being used")
 	}
 }
