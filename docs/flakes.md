@@ -110,6 +110,8 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 55a84437 (dev) · pipeline 864, gate:scenarios 2/4, job 9998 · three `FAIL`s of the shape `activity_spike's rendered line matches the state its own API data describes -- got "Baselines established (69 sources)", want "... (80 sources)"` (also low_slow_scan 69/80, off_hours_activity 68/80): the page's line was read while the feed was still adding sources, so the API answered later than the render did; pipeline 865, same commit, passed the shard.
 
+- 2026-09-23 · 17542c5e (feature/m19-second-factor, remote gate `MV_GATE_WAIT=1 make live-check-remote`, chromium, 4 shards) · three `FAIL`s of the same shape, this time counting up rather than settled: `activity_spike ... got "Learning -- nearest source 2 of 5 samples (0 of 63 sources ready)", want "... (0 of 80 sources ready)"` (also low_slow_scan 0/62, off_hours_activity 0/62). Same cause as the sighting above -- the rendered line was read while the feed was still adding sources -- so the shortfall is 62/63 of 80 rather than a wrong number. Not re-run at this commit: the same suite's previous full run, unsharded on the workstation the evening before, did not fail this scenario, and the four other failures in this run are all the forced-enrolment door and unrelated to it. Second sighting.
+
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
