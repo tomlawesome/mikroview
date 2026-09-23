@@ -62,6 +62,7 @@ vi.mock('../lib/api', () => ({
   createUser: vi.fn(),
   deleteUser: vi.fn(),
   resetUserPassword: vi.fn(),
+  clearUserTOTP: vi.fn(),
   fetchTokens: vi.fn(async () => [
     { id: 't1', name: 'rb5009-ingest', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-01T00:00:00Z', lastUsedAt: '2026-08-24T14:02:00Z' },
   ]),
@@ -636,6 +637,73 @@ describe('The settings shelf (#633)', () => {
 
     expect(screen.queryByRole('button', { name: 'reset password' })).toBeNull()
     expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+  })
+
+  // #1249: the pill is shown only when true, the same convention the sso
+  // pill just above it already uses -- an SSO account never carries this
+  // one either way, since it is never offered a factor.
+  it('shows a pill for a person with a factor, and none for a person without', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('authenticator app')).toBeTruthy()
+    // tom's row carries no pill -- only one person has a factor here.
+    expect(screen.getAllByText('authenticator app')).toHaveLength(1)
+  })
+
+  // #1249's lost-phone path: arm-then-confirm like reset password and
+  // remove beside it, and only offered when there is a factor to clear.
+  it('clear authenticator app arms before it acts, and only appears when there is one to clear', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers, clearUserTOTP } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+    ])
+    vi.mocked(clearUserTOTP).mockResolvedValue(null)
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+    expect(clearUserTOTP).not.toHaveBeenCalled()
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+    )
+    await settle()
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
+  })
+
+  // No admin row ever offers this: the console-only branch replaces
+  // every per-row verb for role === 'admin', same as reset password and
+  // remove beside it (there is only ever one admin).
+  it('offers no clear-factor verb on the admin row, even when the admin has a factor', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    // kai stays in the list (unrelated to what this test checks) so a
+    // later test relying on the default two-person list is not starved
+    // of a non-admin row by this mock's leftover mockResolvedValue --
+    // vi.clearAllMocks() (this file's beforeEach) clears call history,
+    // not a previously-set resolved value.
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByRole('button', { name: 'clear authenticator app' })).toBeNull()
+    expect(screen.getByText('console-only')).toBeTruthy()
   })
 
   it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {

@@ -4,13 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserSummary } from './types'
 
 vi.mock('./api', () => ({
+  clearUserTOTP: vi.fn(),
   createUser: vi.fn(),
   deleteUser: vi.fn(),
   fetchUsers: vi.fn(),
   resetUserPassword: vi.fn(),
 }))
 
-import { createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
+import { clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
 import { usersState } from './users.svelte'
 
 function user(overrides: Partial<UserSummary> = {}): UserSummary {
@@ -128,6 +129,32 @@ describe('UsersState.resetPassword', () => {
     const result = await usersState.resetPassword('id-1')
 
     expect(result).toBe('this account signs in through your identity provider')
+    expect(fetchUsers).not.toHaveBeenCalled()
+  })
+})
+
+// #1249's lost-phone path for the admin. Refreshed rather than patched
+// locally (see clearFactor's own doc comment): the row's hasTOTP pill has
+// to reflect what the server now says, not an assumption baked in here.
+describe('UsersState.clearFactor', () => {
+  it('clears the factor and refreshes the list', async () => {
+    vi.mocked(clearUserTOTP).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockResolvedValue([user({ hasTOTP: false })])
+
+    const result = await usersState.clearFactor('id-1')
+
+    expect(result).toBeNull()
+    expect(clearUserTOTP).toHaveBeenCalledWith('id-1')
+    expect(fetchUsers).toHaveBeenCalled()
+    expect(usersState.list[0].hasTOTP).toBe(false)
+  })
+
+  it('surfaces a refusal and does not refresh', async () => {
+    vi.mocked(clearUserTOTP).mockResolvedValue('cannot clear your own factor here')
+
+    const result = await usersState.clearFactor('id-1')
+
+    expect(result).toBe('cannot clear your own factor here')
     expect(fetchUsers).not.toHaveBeenCalled()
   })
 })

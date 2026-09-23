@@ -17,6 +17,12 @@
   // nothing else, so a half-drawn app would be an app of failed
   // requests. Same door, same beat, one field swapped.
   const settingNewPassword = $derived(authState.state === 'must-change-password')
+
+  // #1249's second step: the password was right, but the account holds
+  // a factor -- authState.login() already left this in 'pending-factor'
+  // rather than 'authenticated', with the server's own pending cookie
+  // carrying the login the rest of the way.
+  const enteringCode = $derived(authState.state === 'pending-factor')
 </script>
 
 {#if settingNewPassword}
@@ -26,6 +32,14 @@
     submitLabel="Set password"
     passwordOnly
     onsubmit={(_username, password) => authState.setNewPassword(password)}
+  />
+{:else if enteringCode}
+  <AuthScreen
+    title="Enter your code"
+    subtitle="Your password was right. Enter the current code from your authenticator app to finish signing in."
+    submitLabel="Continue"
+    factorOnly
+    onSubmitFactor={(code) => authState.submitFactor(code)}
   />
 {:else}
   <!-- No title: on the door the framed wordmark is the title, and the

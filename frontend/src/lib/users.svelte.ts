@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
+import { clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
 import type { PasswordResetCode, UserSummary } from './types'
 
 // Admin-only account management (issue #133) -- its own small state
@@ -39,6 +39,19 @@ class UsersState {
     if (typeof result === 'string') return result
     await this.refresh()
     return result
+  }
+
+  // clearFactor is the admin's side of a lost phone (#1249) -- turns
+  // someone else's authenticator app off with no password of theirs.
+  // Refreshed rather than patched locally: unlike remove/resetPassword
+  // above, this is the one row field EngineRoom's people group reads
+  // straight off the list (user.hasTOTP), so the row has to see the
+  // server's new answer, not an assumption that the call did what it said.
+  async clearFactor(id: string): Promise<string | null> {
+    const err = await clearUserTOTP(id)
+    if (err) return err
+    await this.refresh()
+    return null
   }
 
   async remove(id: string): Promise<string | null> {
