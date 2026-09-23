@@ -118,11 +118,22 @@ function clearSessionState() {
 // GET /api/auth/session has no way to tell "pending" from "signed out"
 // apart, and a page reload mid-step is meant to fall back to asking for
 // the password again rather than resurrecting this state from nothing.
+// 'must-enrol-factor' is #1253's door (#1336, round 61): a real session
+// on a local account with no second factor, which may reach nothing but
+// the four enrolment routes (internal/api/auth.go's
+// secondFactorEnrolPaths). Unlike 'pending-factor' it IS set by
+// apply()/check(), straight from the server's own mustEnrolSecondFactor
+// on GET /api/auth/session -- the flag is computed from the account,
+// not the session, so a page reload mid-enrolment lands back on this
+// door rather than falling out of it. 'must-change-password' wins when
+// both hold, matching requireAuth's own gate order: a session owing
+// both is sent to set a password first.
 export type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"
   | "must-change-password"
+  | "must-enrol-factor"
   | "pending-factor"
   | "authenticated";
 
@@ -198,6 +209,9 @@ class AuthState {
   // one question it asks today ("are we signed in?") without learning
   // about the reset flow.
   mustChangePassword = $state(false);
+  // Mirrors sessionResponse.mustEnrolSecondFactor (#1336), kept beside
+  // `state` for the same reason mustChangePassword above is.
+  mustEnrolSecondFactor = $state(false);
   // #677's sessions row ("this device ... signed in 4 d") -- this
   // session's own IssuedAt, RFC3339, from sessionResponse.signedInSince.
   // Empty while unauthenticated or against an older server.
@@ -297,9 +311,14 @@ class AuthState {
       this.state = "setup-required";
     } else if (session.authenticated) {
       this.mustChangePassword = session.mustChangePassword ?? false;
+      this.mustEnrolSecondFactor = session.mustEnrolSecondFactor ?? false;
+      // The password change comes first when both are owed, matching
+      // requireAuth's gate order (see AuthViewState's own comment).
       this.state = this.mustChangePassword
         ? "must-change-password"
-        : "authenticated";
+        : this.mustEnrolSecondFactor
+          ? "must-enrol-factor"
+          : "authenticated";
       this.username = session.username ?? "";
       this.role = (session.role as "admin" | "user" | "viewer") ?? "";
       // Absent on an older server: treated as "has one", which only
@@ -332,6 +351,7 @@ class AuthState {
       this.hasLocalPassword = true;
       this.ssoConnected = false;
       this.mustChangePassword = false;
+      this.mustEnrolSecondFactor = false;
       this.signedInSince = "";
       this.hasTOTP = false;
       this.passkeyCount = 0;
@@ -427,6 +447,7 @@ class AuthState {
     this.username = "";
     this.role = "";
     this.mustChangePassword = false;
+    this.mustEnrolSecondFactor = false;
     this.pendingSecondFactor = [];
     this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
@@ -453,11 +474,16 @@ class AuthState {
   // burst of 401s from several in-flight polls reloading more than
   // once.
   handleUnauthorized() {
-    if (this.state === "authenticated" || this.state === "must-change-password") {
+    if (
+      this.state === "authenticated" ||
+      this.state === "must-change-password" ||
+      this.state === "must-enrol-factor"
+    ) {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
       this.mustChangePassword = false;
+      this.mustEnrolSecondFactor = false;
       clearSessionState();
       pageReload.now();
     }
