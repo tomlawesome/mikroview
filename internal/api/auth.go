@@ -568,6 +568,13 @@ type sessionResponse struct {
 	// answers "is there anything left to connect". The frontend uses
 	// both to decide whether to offer "Connect SSO".
 	SSOConnected bool `json:"ssoConnected"`
+	// HasTOTP is true once this account holds a confirmed
+	// authenticator-app factor (#1249). The Account menu needs it to
+	// know which of two things to offer -- enrol, or turn it off -- and
+	// there is no other way for it to find out: the enrolment routes
+	// answer only the request that started them, so a page reload would
+	// otherwise forget the factor exists.
+	HasTOTP bool `json:"hasTOTP"`
 	// MustChangePassword is true while this session may reach nothing
 	// but POST /api/auth/password -- an admin reset the account and it
 	// signed in with the one-time code (#1251). The frontend draws the
@@ -607,6 +614,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp.HasLocalPassword = user.LocalPassword()
 		resp.SSOConnected = user.OIDCSubject != ""
 		resp.MustChangePassword = user.MustChangePassword
+		resp.HasTOTP = user.HasActiveTOTP()
 		// sessionUser already validated the cookie once (that is how
 		// user was resolved); re-reading it here just for IssuedAt
 		// rather than widening sessionUser's own signature, which
@@ -1208,6 +1216,11 @@ type userSummary struct {
 	LastLogin        time.Time `json:"lastLogin,omitzero"`
 	HasLocalPassword bool      `json:"hasLocalPassword"`
 	SSO              bool      `json:"sso"`
+	// HasTOTP is true once this account holds a confirmed
+	// authenticator-app factor (#1249), which is what the admin list
+	// shows as a pill and what decides whether the clear button is
+	// worth offering on that row.
+	HasTOTP bool `json:"hasTOTP"`
 }
 
 // handleAuthListUsers backs the admin-facing account list.
@@ -1234,6 +1247,13 @@ func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
 			LastLogin:        u.LastLogin,
 			HasLocalPassword: u.LocalPassword(),
 			SSO:              u.OIDCIssuer != "",
+			// Asked of the store rather than of u, deliberately. List
+			// blanks TOTPSecret on the copies it hands back (it is the
+			// live shared secret, the one field here worth more than a
+			// hash), and User.HasActiveTOTP tests that very field --
+			// so calling it on one of these copies answers false for
+			// every account, including the ones that do hold a factor.
+			HasTOTP: s.Auth.HasActiveTOTP(u.ID),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -631,3 +631,104 @@ func TestTOTPDeleteWrongPassword(t *testing.T) {
 		t.Error("the factor must survive a wrong-password attempt to remove it")
 	}
 }
+
+// TestTheFactorIsVisibleToTheFrontend covers the seam between the
+// routes and the Svelte side: both the Account menu and the admin user
+// list decide what to draw from a `hasTOTP` field, and neither has any
+// other way to learn a factor exists -- the enrolment routes answer
+// only the request that started them, so a page reload would otherwise
+// forget it.
+//
+// The user-list half is the one worth pinning. Store.List blanks
+// TOTPSecret on the copies it returns, and User.HasActiveTOTP tests
+// that very field, so the obvious implementation (calling
+// u.HasActiveTOTP() on a list entry) answers false for every account
+// including the ones that do hold a factor -- a wrong answer that looks
+// entirely reasonable in the diff.
+func TestTheFactorIsVisibleToTheFrontend(t *testing.T) {
+	s, ts, admin := totpTestServer(t)
+
+	// Before anything is enrolled, both surfaces say no.
+	if got := totpSessionHasTOTP(t, admin, ts); got {
+		t.Error("the session reports a factor before one was enrolled")
+	}
+	if got := totpListedHasTOTP(t, admin, ts, totpBilboUsername); got {
+		t.Error("the user list reports a factor for bilbo before one was enrolled")
+	}
+
+	// bilbo signs in and enrols.
+	bilbo := totpSignInWithoutAFactor(t, ts, totpBilboUsername, totpBilboPassword)
+	totpEnrolAndConfirm(t, bilbo, ts)
+
+	if got := totpSessionHasTOTP(t, bilbo, ts); !got {
+		t.Error("bilbo's own session does not report the factor they just enrolled")
+	}
+	if got := totpListedHasTOTP(t, admin, ts, totpBilboUsername); !got {
+		t.Error("the admin user list does not report bilbo's factor -- the pill and the clear button both key off this")
+	}
+	// The admin has no factor of their own; a list that reported true
+	// for everyone would pass the assertion above without meaning it.
+	if got := totpListedHasTOTP(t, admin, ts, "admin"); got {
+		t.Error("the user list reports a factor for the admin, who never enrolled one")
+	}
+
+	// Clearing it puts both surfaces back.
+	if err := s.Auth.ClearTOTP(totpBilboID(t, s)); err != nil {
+		t.Fatal(err)
+	}
+	if got := totpListedHasTOTP(t, admin, ts, totpBilboUsername); got {
+		t.Error("the user list still reports a factor after it was cleared")
+	}
+}
+
+// totpSessionHasTOTP reads hasTOTP off GET /api/auth/session.
+func totpSessionHasTOTP(t *testing.T, client *http.Client, ts *httptest.Server) bool {
+	t.Helper()
+	resp, err := client.Get(ts.URL + "/api/auth/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body sessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.HasTOTP
+}
+
+// totpListedHasTOTP reads hasTOTP off the named account's row in
+// GET /api/auth/users, failing the test if the row is not there.
+func totpListedHasTOTP(t *testing.T, admin *http.Client, ts *httptest.Server, username string) bool {
+	t.Helper()
+	resp, err := admin.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out []userSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range out {
+		if u.Username == username {
+			return u.HasTOTP
+		}
+	}
+	t.Fatalf("no row for %q in the user list", username)
+	return false
+}
+
+// totpSignInWithoutAFactor does the ordinary one-step password login,
+// for an account that has no factor yet -- startTOTPLogin above is its
+// opposite number, asserting the two-step shape for one that does.
+func totpSignInWithoutAFactor(t *testing.T, ts *httptest.Server, username, password string) *http.Client {
+	t.Helper()
+	client := &http.Client{Jar: mustCookieJar(t)}
+	resp := postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: username, Password: password})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("signing %s in returned %d: %s", username, resp.StatusCode, body)
+	}
+	return client
+}
