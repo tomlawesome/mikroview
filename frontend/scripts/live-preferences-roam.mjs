@@ -15,7 +15,7 @@
 // nothing here has executed against a real server. node --check only.
 // The integrator should run this once the backend lands.
 
-import { session, check, done, goTo, openAccountMenu } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, completeSecondFactor, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const ADMIN_USER = process.env.MV_USER
 const ADMIN_PASS = process.env.MV_PASS
@@ -73,11 +73,21 @@ async function signOut(p) {
   await p.waitForSelector('.screen', { timeout: 10000 })
 }
 
-async function signInHere(p, username, password) {
+// enrol: true for the peer account, created moments ago through the
+// people door and holding no factor at all (#1335 pattern A) -- false
+// (the default) for the admin session() already signed in once, whose
+// factor from `scripts/live-env.sh up` just needs completing again
+// (pattern B).
+async function signInHere(p, username, password, { enrol = false } = {}) {
   await p.fill('input[autocomplete="username"]', username)
   await p.fill('input[autocomplete="current-password"]', password)
   await p.click('button[type="submit"]')
-  await p.waitForSelector('#main-content', { timeout: 15000 })
+  if (enrol) {
+    await enrolFactorAndSignIn(p)
+  } else {
+    await completeSecondFactor(p)
+    await p.waitForSelector('#main-content', { timeout: 15000 })
+  }
 }
 
 async function savedPresetNames(p) {
@@ -95,7 +105,7 @@ async function savedPresetNames(p) {
 await signOut(page)
 check(true, 'user A signs out')
 
-await signInHere(page, PEER_USER, PEER_PASS)
+await signInHere(page, PEER_USER, PEER_PASS, { enrol: true })
 check(true, 'user B signs in, on the same tab user A just used')
 
 const peerPresets = await savedPresetNames(page)

@@ -775,7 +775,16 @@ export async function completeFactorOverApi(request, urlBase = URL_BASE) {
 // Waits for whichever of the two outcomes the password produced, so a
 // server without the door costs nothing here rather than a fixed
 // timeout: either the app is already up, or the code box is.
-async function completeSecondFactor(page) {
+//
+// Exported for #1335's pattern B: a scenario that signs the admin in
+// with its own page.fill calls, in a page session() did not create (a
+// second browser context, or a hand-rolled signInHere()), stops at
+// exactly the step session() would otherwise finish for it. The admin
+// already holds an active factor from `scripts/live-env.sh up`, so this
+// is always the completing-an-existing-factor half, keyed to
+// MV_TOTP_SECRET like every other call here -- never the enrolling half,
+// which is enrolFactorAndSignIn below.
+export async function completeSecondFactor(page) {
   const codeBox = 'input[autocomplete="one-time-code"]'
   // Which of the two outcomes the password produced is decided by which
   // wait wins, not by asking afterwards. page.isVisible() answers from
@@ -852,6 +861,66 @@ async function completeSecondFactor(page) {
         'the enrolled factor have drifted apart; re-run `eval "$(scripts/live-env.sh up)"`',
     )
   }
+}
+
+/**
+ * enrolFactorAndSignIn finishes signing in an account that has just been
+ * created through the people list and holds no second factor at all --
+ * #1335's pattern A. Call it right after filling and submitting that
+ * account's own sign-in form: an account with no factor gets a real
+ * session cookie immediately (handleAuthLogin only withholds one for an
+ * account that already has a factor to check), so the forced-enrolment
+ * door is now the only thing standing between that page and #main-content,
+ * restricting it to the four routes AuthEnrolFactor.svelte itself drives.
+ *
+ * Drives those same routes directly with page.request rather than
+ * clicking through the screen -- the same reasoning completeFactorOverApi
+ * uses for the login half. There is no MV_TOTP_SECRET for an account
+ * this helper just found out exists: POST /api/auth/totp/enrol mints a
+ * fresh secret server-side and hands it back, and that response is the
+ * only place it exists, so it is threaded straight into freshTotpCode as
+ * a plain local value rather than read from the admin's env var.
+ *
+ * Not retried, for the reason freshTotpCode's own comment gives: a
+ * refused code is a spent login attempt against the same five-per-five-
+ * minutes budget every other sign-in shares.
+ */
+export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
+  const call = (path, data) =>
+    page.request.fetch(`${urlBase}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      ...(data ? { data } : {}),
+    })
+
+  // The click that submitted the password form only starts that
+  // request; calling the enrol route before the browser has actually
+  // received and stored its Set-Cookie races the login itself; and
+  // page.request shares the page's own cookie jar, not the login
+  // fetch's promise, so nothing else here would surface that race. Wait
+  // for the one screen an account with no factor can possibly land on
+  // (AuthEnrolFactor.svelte's own top-level element) so the session
+  // cookie is certainly already set by the time the fetch below sends it.
+  await page.waitForSelector('main.door', { timeout: 15000 })
+
+  const enrolRes = await call('/api/auth/totp/enrol')
+  if (enrolRes.status() !== 200) {
+    throw new Error(`POST /api/auth/totp/enrol answered ${enrolRes.status()} -- cannot enrol a factor for this account`)
+  }
+  const { secret } = await enrolRes.json()
+
+  const confirmRes = await call('/api/auth/totp/confirm', { code: await freshTotpCode(secret) })
+  if (confirmRes.status() !== 200) {
+    throw new Error(`POST /api/auth/totp/confirm answered ${confirmRes.status()} -- the fresh code was refused`)
+  }
+
+  // The two fetches above changed the session's own state, not anything
+  // the already-rendered page knows about -- AuthEnrolFactor's own
+  // enter() re-checks the session the same way after a click; a reload
+  // does the same thing here without needing a signed-in instance of the
+  // Svelte app to drive by hand.
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForSelector('#main-content', { timeout: 15000 })
 }
 
 export async function session({
