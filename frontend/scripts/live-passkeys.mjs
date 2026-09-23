@@ -38,6 +38,22 @@ const PASS = process.env.MV_PASS
 
 const { page } = await session()
 
+// page.isVisible() answers from the DOM as it stands right now and does
+// no waiting at all. For anything that appears in response to a click
+// that is a race, and it is one this scenario lost twice against a UI
+// that was working correctly: the check reported FAIL and the very next
+// line clicked the same element successfully, because click() auto-waits
+// and isVisible() does not. Every visibility assertion here goes through
+// this instead.
+async function visible(selector, timeoutMs = 10000) {
+  try {
+    await page.locator(selector).first().waitFor({ state: 'visible', timeout: timeoutMs })
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function api(method, path, body) {
   const res = await page.request.fetch(`${process.env.MV_URL}${path}`, {
     method,
@@ -89,11 +105,11 @@ await cdp.send('WebAuthn.addVirtualAuthenticator', {
 
 await openAccountMenu(page)
 check(
-  await page.isVisible('.account .menu button.row:text-is("Passkeys")'),
+  await visible('.account .menu button.row:text-is("Passkeys")'),
   'the account menu offers Passkeys, with no count tag before anything is added',
 )
 await page.click('.account .menu button.row:text-is("Passkeys")')
-check(await page.isVisible('[aria-label="Passkeys"]'), 'the Passkeys dialog opens')
+check(await visible('[aria-label="Passkeys"]'), 'the Passkeys dialog opens')
 
 // Fail here with a diagnosis rather than an uncaught timeout if this
 // deployment never reached PasskeyStatusReady -- the dialog's
@@ -116,7 +132,7 @@ if (!becameReady) {
 }
 await page.click('button:has-text("Add passkey")')
 check(
-  await page.isVisible('input[placeholder="this laptop"]'),
+  await visible('input[placeholder="this laptop"]'),
   'adding asks for a name before the browser prompt fires',
 )
 await page.fill('input[placeholder="this laptop"]', 'live-check authenticator')
@@ -133,11 +149,11 @@ await page.waitForSelector('[data-testid="recovery-codes"]', { timeout: 10000 })
 const codeCount = await page.locator('[data-testid="recovery-codes"] .rc').count()
 check(codeCount === 10, `ten recovery codes are minted for the account's first factor (saw ${codeCount})`)
 await page.click('button:has-text("I have saved these")')
-check(!(await page.isVisible('[aria-label="Passkeys"]')), 'saving the codes closes the dialog')
+check(!(await visible('[aria-label="Passkeys"]')), 'saving the codes closes the dialog')
 
 await openAccountMenu(page)
 check(
-  await page.isVisible('.account .menu button.row:has-text("Passkeys · 1")'),
+  await visible('.account .menu button.row:has-text("Passkeys · 1")'),
   'the account menu shows the new passkey immediately, with no reload',
 )
 await page.keyboard.press('Escape')
@@ -158,7 +174,7 @@ await page.click('button[type="submit"]')
 // asks for the second step instead, passkey first since it is the only
 // factor this account has.
 check(
-  await page.isVisible('button:has-text("Use your passkey")'),
+  await visible('button:has-text("Use your passkey")'),
   'the second step offers "Use your passkey" for an account whose only factor is one',
 )
 await page.click('button:has-text("Use your passkey")')
@@ -167,11 +183,11 @@ await page.click('button:has-text("Use your passkey")')
 // -> check()) rather than reloading, so the shell itself is the
 // signal -- the same marker session() itself waits on after signing in.
 await page.waitForSelector('#main-content', { timeout: 15000 })
-check(await page.isVisible(`.account button.chip:has-text("${USER}")`), 'the passkey completes sign-in as the same account')
+check(await visible(`.account button.chip:has-text("${USER}")`), 'the passkey completes sign-in as the same account')
 
 await openAccountMenu(page)
 check(
-  await page.isVisible('.account .menu button.row:has-text("Passkeys · 1")'),
+  await visible('.account .menu button.row:has-text("Passkeys · 1")'),
   'the account menu still reflects the passkey after signing back in with it',
 )
 
@@ -183,17 +199,17 @@ check(
 // restores the password it changed.
 
 await page.click('.account .menu button.row:has-text("Passkeys · 1")')
-check(await page.isVisible('[aria-label="Passkeys"]'), 'the Passkeys dialog reopens to remove it')
+check(await visible('[aria-label="Passkeys"]'), 'the Passkeys dialog reopens to remove it')
 await page.click('.pk-remove')
-check(await page.isVisible('input[type="password"]'), 'removing asks for the password')
+check(await visible('input[type="password"]'), 'removing asks for the password')
 await page.fill('input[type="password"]', PASS)
 await page.click('button:has-text("Remove passkey")')
-check(await page.isVisible('text=Add a passkey'), 'the list is empty again after removing it')
+check(await visible('text=Add a passkey'), 'the list is empty again after removing it')
 await page.keyboard.press('Escape')
 
 await openAccountMenu(page)
 check(
-  await page.isVisible('.account .menu button.row:text-is("Passkeys")'),
+  await visible('.account .menu button.row:text-is("Passkeys")'),
   'the account menu drops the count tag once the passkey is gone',
 )
 await page.keyboard.press('Escape')
