@@ -15,9 +15,10 @@ vi.mock('../lib/api', () => ({
   logout: vi.fn(),
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
+  submitLoginFactor: vi.fn(),
 }))
 
-import { fetchAuthSession, login, setNewPasswordAfterReset } from '../lib/api'
+import { fetchAuthSession, login, setNewPasswordAfterReset, submitLoginFactor } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import AuthLogin from './AuthLogin.svelte'
 
@@ -196,5 +197,91 @@ describe('AuthLogin after a one-time code sign-in', () => {
 
     expect(setNewPasswordAfterReset).toHaveBeenCalledWith('new-password-placeholder')
     expect(authState.state).toBe('authenticated')
+  })
+})
+
+// #1249's second step: a right password on an account holding a factor
+// lands here (authState.state === 'pending-factor') instead of opening
+// the app -- login() itself is exercised in auth.svelte.test.ts; this is
+// what AuthLogin actually draws for that state and wires the code box to.
+describe('AuthLogin at the pending-factor step', () => {
+  beforeEach(() => {
+    authState.state = 'pending-factor'
+  })
+
+  it('shows the code box, with no account field and no SSO way round it', () => {
+    authState.ssoAvailable = true
+
+    render(AuthLogin)
+
+    expect(screen.getByText('Enter your code')).toBeTruthy()
+    expect(screen.queryByLabelText('account')).toBeNull()
+    expect(screen.getByLabelText('code')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+  })
+
+  it('submits the code to authState.submitFactor and opens the app on success', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('123456')
+    expect(authState.state).toBe('authenticated')
+  })
+
+  it('shows the server refusal on a wrong code without opening the app', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '000000' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(await screen.findByText('invalid code')).toBeTruthy()
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // The recovery-code toggle only relabels the field -- same box, same
+  // call, so this pins that it never changes what field name/shape is
+  // submitted.
+  it('the "use a recovery code" toggle relabels the field without changing what is submitted', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    expect(screen.queryByLabelText('recovery code')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: /use a recovery code instead/i }))
+    expect(screen.getByLabelText('recovery code')).toBeTruthy()
+
+    await fireEvent.input(screen.getByLabelText('recovery code'), { target: { value: 'a1b2-c3d4-e5f6-g7h8' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
+  })
+
+  it('answers an empty code in its own error line, without calling the server', async () => {
+    render(AuthLogin)
+
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(await screen.findByText('Enter the code from your app.')).toBeTruthy()
+    expect(submitLoginFactor).not.toHaveBeenCalled()
   })
 })

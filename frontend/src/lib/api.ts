@@ -54,6 +54,7 @@ import type {
   SetupStatus,
   Suggestion,
   SuggestionStatus,
+  TotpEnrollment,
   TuneLoggingAnalyseRequest,
   TuneLoggingAnalyseResponse,
   TuneLoggingRenderRequest,
@@ -833,12 +834,84 @@ export async function register(username: string, password: string): Promise<stri
   return (await res.text()) || `register: ${res.status}`
 }
 
-export async function login(username: string, password: string): Promise<string | null> {
-  const res = await postJSON('/api/auth/login', { username, password })
-  if (res.ok) return null
-  return (await res.text()) || `login: ${res.status}`
+// A correct password on an account holding an active second factor
+// (#1249) does not sign the caller in: handleAuthLogin sets a short-lived
+// pending cookie instead of a session and answers with the methods still
+// owed, never a 4xx -- the password itself was right. login() below
+// tells that apart from a plain failure by reading the body only once
+// the request has already succeeded.
+export interface LoginPendingFactor {
+  secondFactor: string[]
 }
 
+export async function login(username: string, password: string): Promise<LoginPendingFactor | string | null> {
+  const res = await postJSON('/api/auth/login', { username, password })
+  if (!res.ok) return (await res.text()) || `login: ${res.status}`
+  // Ordinary success carries no body -- res.json() would throw on the
+  // empty string, which the catch below reads as "nothing pending",
+  // same as an older server that predates this field entirely.
+  const body = await res.json().catch(() => null)
+  if (body && Array.isArray(body.secondFactor) && body.secondFactor.length > 0) {
+    return { secondFactor: body.secondFactor }
+  }
+  return null
+}
+
+// submitLoginFactor is the second step (#1249): POST /api/auth/login/factor,
+// carried by the pending cookie login() above triggered rather than any
+// session -- there isn't one yet. A recovery code is accepted in the same
+// box; the server tells the two apart, not this call.
+export async function submitLoginFactor(code: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/login/factor', { code })
+  if (res.ok) return null
+  return (await res.text()) || `submitLoginFactor: ${res.status}`
+}
+
+// enrolTOTP mints a pending secret and returns the otpauth:// URI to draw
+// (#1249). Not active until confirmTOTP below verifies a code against
+// it -- calling this again before confirming replaces the pending secret,
+// which is what lets AuthenticatorOverlay's "scan didn't work, try again"
+// just call it a second time rather than needing a dedicated retry route.
+export async function enrolTOTP(): Promise<TotpEnrollment | string> {
+  const res = await postJSON('/api/auth/totp/enrol')
+  if (res.ok) return res.json()
+  return (await res.text()) || `enrolTOTP: ${res.status}`
+}
+
+// confirmTOTP activates the pending secret and returns the ten recovery
+// codes -- the one and only time they exist in clear anywhere (#1249).
+// Also ends every other session for this account server-side, the same
+// "if you thought someone else had it, this ends their access too"
+// guarantee changePassword already gives.
+export async function confirmTOTP(code: string): Promise<string[] | string> {
+  const res = await postJSON('/api/auth/totp/confirm', { code })
+  if (res.ok) {
+    const body = await res.json()
+    return body.recoveryCodes ?? []
+  }
+  return (await res.text()) || `confirmTOTP: ${res.status}`
+}
+
+// disableTOTP is the user's own way to turn a factor off, password-gated
+// like changePassword -- there is deliberately no web route that can do
+// this without it (#1249's "no web route clears your own factor without
+// the password"); a lost phone goes through the CLI recovery path instead.
+export async function disableTOTP(password: string): Promise<string | null> {
+  const res = await deleteJSON('/api/auth/totp', { password })
+  if (res.ok) return null
+  return (await res.text()) || `disableTOTP: ${res.status}`
+}
+
+// clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
+// /api/auth/users/{id}/totp turns someone else's factor off with no
+// password, audited server-side. Refused on the admin's own id -- see
+// EngineRoom's people group, which never renders the button on that row
+// in the first place.
+export async function clearUserTOTP(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/totp`)
+  if (res.ok) return null
+  return (await res.text()) || `clearUserTOTP: ${res.status}`
+}
 
 // Change the signed-in account's own password (#294 item 4). Returns
 // error text on failure, like every other mutating wrapper here.

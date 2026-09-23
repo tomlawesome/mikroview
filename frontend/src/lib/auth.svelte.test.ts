@@ -13,6 +13,7 @@ vi.mock('./api', () => ({
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
+  submitLoginFactor: vi.fn(),
   fetchPersistence: vi.fn(),
   // #1283: preferences.svelte.ts (imported transitively through
   // clearSessionState's preferencesState.reset(), and through apply()'s
@@ -30,6 +31,7 @@ import {
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
+  submitLoginFactor,
   fetchPersistence,
   fetchMyPreferences,
   saveMyPreferences,
@@ -72,6 +74,7 @@ beforeEach(() => {
   authState.justSignedOut = false
   authState.signedInSince = ''
   authState.mustChangePassword = false
+  authState.hasTOTP = false
   window.history.replaceState(null, '', '/')
   // jsdom cannot navigate; the reload tests below assert on this spy.
   sessionStorage.clear()
@@ -98,6 +101,21 @@ describe('AuthState.check', () => {
     expect(authState.username).toBe('tom')
     expect(authState.role).toBe('admin')
     expect(authState.ssoAvailable).toBe(true)
+  })
+
+  // #1249: absent on an older server, read as false -- there is nothing
+  // to be wrong about, since a server that predates the field cannot
+  // have activated a factor either.
+  it('carries hasTOTP through, defaulting to false when the server omits it', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin', hasTOTP: true }),
+    )
+    await authState.check()
+    expect(authState.hasTOTP).toBe(true)
+
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
+    await authState.check()
+    expect(authState.hasTOTP).toBe(false)
   })
 
   // #677's sessions row ("this device ... signed in 4 d") reads this.
@@ -216,6 +234,56 @@ describe('AuthState.login', () => {
     expect(result).toBe('invalid username or password')
     expect(fetchAuthSession).not.toHaveBeenCalled()
     expect(authState.state).toBe('loading')
+  })
+
+  // #1249: a correct password on an account holding a factor lands here
+  // instead of re-checking the session -- there isn't one yet, only the
+  // pending cookie the server set.
+  it('moves to pending-factor without re-checking when the account holds a factor', async () => {
+    vi.mocked(login).mockResolvedValue({ secondFactor: ['totp'] })
+
+    const result = await authState.login('tom', 'hunter2')
+
+    expect(result).toBeNull()
+    expect(authState.state).toBe('pending-factor')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuthState.submitFactor', () => {
+  it('re-checks the session and returns null on success', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'user', hasTOTP: true }),
+    )
+
+    const result = await authState.submitFactor('123456')
+
+    expect(result).toBeNull()
+    expect(submitLoginFactor).toHaveBeenCalledWith('123456')
+    expect(fetchAuthSession).toHaveBeenCalled()
+    expect(authState.state).toBe('authenticated')
+    expect(authState.hasTOTP).toBe(true)
+  })
+
+  it('returns the error and does not re-check on a wrong code', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
+
+    const result = await authState.submitFactor('000000')
+
+    expect(result).toBe('invalid code')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // A recovery code goes through the same box and the same call -- the
+  // server is what tells the two apart, not this method.
+  it('accepts a recovery code through the same call', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'user' }))
+
+    await authState.submitFactor('a1b2-c3d4-e5f6-g7h8')
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
   })
 })
 

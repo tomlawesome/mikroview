@@ -51,6 +51,15 @@
     // field comes with it, since a password typed once and never used
     // again until the next sign-in is the worst case for a typo.
     passwordOnly = false,
+    // #1249's second step: the account and password fields are both gone
+    // -- login() already carried them, and correct -- leaving one box for
+    // a code from the app (or a recovery code; the server tells them
+    // apart, this box doesn't). onSubmitFactor is a distinct prop rather
+    // than reusing onsubmit(username, password) with the code smuggled
+    // into one of those slots: a call whose two positional arguments no
+    // longer mean what they say is a trap for whoever edits this next.
+    factorOnly = false,
+    onSubmitFactor,
   }: {
     title?: string
     subtitle?: string
@@ -68,15 +77,23 @@
     enterLabel?: string
     reverseBeat?: boolean
     passwordOnly?: boolean
+    factorOnly?: boolean
+    onSubmitFactor?: (code: string) => Promise<string | null>
   } = $props()
 
   // A password-only door always confirms; every other one does as its
-  // caller asks.
-  const needsConfirm = $derived(confirmPassword || passwordOnly)
+  // caller asks. factorOnly needs neither field this drives.
+  const needsConfirm = $derived((confirmPassword || passwordOnly) && !factorOnly)
 
   let username = $state('')
   let password = $state('')
   let passwordConfirm = $state('')
+  let code = $state('')
+  // #1249: the code box doubles as the recovery-code box (the server
+  // tells them apart), but a recovery code is not six digits, so the
+  // numeric keypad hint and the placeholder both need to stop lying once
+  // this is toggled.
+  let useRecoveryCode = $state(false)
   let error = $state<string | null>(null)
   let submitting = $state(false)
   // Requires clicking through to a separate warning screen rather than
@@ -87,6 +104,18 @@
   async function handleSubmit(e: Event) {
     e.preventDefault()
     error = null
+
+    if (factorOnly) {
+      if (!code) {
+        error = useRecoveryCode ? 'Enter a recovery code.' : 'Enter the code from your app.'
+        return
+      }
+      submitting = true
+      const result = await onSubmitFactor?.(code)
+      submitting = false
+      if (result) error = result
+      return
+    }
 
     // #1187: the form carries novalidate, so an empty field is answered
     // here rather than by the browser's own bubble -- that bubble was
@@ -168,35 +197,54 @@
             <p class="subtitle">{subtitle}</p>
           {/if}
 
-          <!-- "account" / "password" is the ratified scene's own copy
-               (round 15 amended its "passphrase"; "account" stood), and
-               it sits inside the field as the mockup draws it (owner,
-               2026-08-30). The <label> stays for assistive tech,
-               visually hidden -- the placeholder is presentation, not
-               the accessible name. -->
-          {#if !passwordOnly}
+          {#if factorOnly}
+            <!-- #1249: one box, doing double duty as the TOTP code and
+                 the recovery-code field -- the server is what tells them
+                 apart. The toggle below only changes what this field
+                 asks for and how it is typed, never which request goes
+                 out. -->
             <label>
-              <span class="sr-only">account</span>
-              <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
+              <span class="sr-only">{useRecoveryCode ? 'recovery code' : 'code'}</span>
+              <input
+                type="text"
+                inputmode={useRecoveryCode ? 'text' : 'numeric'}
+                autocomplete="one-time-code"
+                placeholder={useRecoveryCode ? 'recovery code' : '6-digit code'}
+                bind:value={code}
+                required
+              />
             </label>
-          {/if}
+          {:else}
+            <!-- "account" / "password" is the ratified scene's own copy
+                 (round 15 amended its "passphrase"; "account" stood), and
+                 it sits inside the field as the mockup draws it (owner,
+                 2026-08-30). The <label> stays for assistive tech,
+                 visually hidden -- the placeholder is presentation, not
+                 the accessible name. -->
+            {#if !passwordOnly}
+              <label>
+                <span class="sr-only">account</span>
+                <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
+              </label>
+            {/if}
 
-          <label>
-            <span class="sr-only">{passwordOnly ? 'new password' : 'password'}</span>
-            <input
-              type="password"
-              autocomplete={needsConfirm ? 'new-password' : 'current-password'}
-              placeholder={passwordOnly ? 'new password' : 'password'}
-              bind:value={password}
-              required
-            />
-          </label>
-
-          {#if needsConfirm}
             <label>
-              <span class="sr-only">confirm password</span>
-              <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />
+              <span class="sr-only">{passwordOnly ? 'new password' : 'password'}</span>
+              <input
+                type="password"
+                autocomplete={needsConfirm ? 'new-password' : 'current-password'}
+                placeholder={passwordOnly ? 'new password' : 'password'}
+                bind:value={password}
+                required
+              />
             </label>
+
+            {#if needsConfirm}
+              <label>
+                <span class="sr-only">confirm password</span>
+                <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />
+              </label>
+            {/if}
           {/if}
 
           {#if error}
@@ -204,6 +252,12 @@
           {/if}
 
           <button type="submit" class="submit-btn" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+
+          {#if factorOnly}
+            <button type="button" class="link-btn" onclick={() => (useRecoveryCode = !useRecoveryCode)}>
+              {useRecoveryCode ? 'Use your authenticator app instead' : 'Use a recovery code instead'}
+            </button>
+          {/if}
 
           {#if ssoAvailable}
             <div class="divider"><span>or</span></div>
@@ -469,6 +523,23 @@
   .sso-link:hover {
     color: var(--fg);
     border-color: var(--fg-muted);
+  }
+
+  /* Lower weight than .sso-link on purpose: that one leaves the SPA
+     entirely, this one only relabels the field above it. */
+  .link-btn {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    color: var(--fg-dim);
+    font-size: 12px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    padding: 2px;
+  }
+
+  .link-btn:hover {
+    color: var(--fg-muted);
   }
 
 </style>
