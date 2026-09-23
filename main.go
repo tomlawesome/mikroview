@@ -1822,6 +1822,32 @@ func main() {
 		}
 	}
 
+	// Passkeys (#1250). NewRelyingParty turns the validated publicUrl
+	// setting into either a usable WebAuthn relying party or the reason
+	// there isn't one; internal/config has already warned the operator
+	// about the setting itself (CFG-0100..CFG-0103), so an unusable
+	// value is not a startup failure here -- passkeys simply report why
+	// they are off, which is the design's "MikroView always boots"
+	// stance. An error return is a different thing: it means
+	// webauthn.New rejected a configuration this code believed was
+	// well-formed, which is a bug rather than a bad setting, and
+	// booting past it would ship a deployment whose passkeys are
+	// missing with nothing said.
+	passkeyLog := logging.New("passkeys")
+	relyingParty, err := api.NewRelyingParty(cfg.PublicURL)
+	if err != nil {
+		passkeyLog.Error(fmt.Sprintf("building the WebAuthn relying party from publicUrl: %v", err))
+		os.Exit(1)
+	}
+	switch relyingParty.Status {
+	case api.PasskeyStatusReady:
+		passkeyLog.Info(fmt.Sprintf("passkeys on for %s (relying party %q)", relyingParty.Origin, relyingParty.RPID))
+	default:
+		// Said once, at boot, because the alternative is an operator
+		// discovering it from an empty panel in the account menu.
+		passkeyLog.Info(fmt.Sprintf("passkeys off: %s -- set publicUrl to the https address people reach MikroView on", relyingParty.Status))
+	}
+
 	srv := &api.Server{
 		Store:                   st,
 		History:                 hist,
@@ -1885,6 +1911,7 @@ func main() {
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
+		RelyingParty:          relyingParty,
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
