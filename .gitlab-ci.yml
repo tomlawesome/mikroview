@@ -72,7 +72,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -213,6 +213,13 @@ workflow:
   - ".gitignore"
   - ".gitleaksignore"
   - "renovate.json"
+  # cosign.pub is the public half of the release signing key (#1309). It
+  # has no source extension, so without this line it matches neither list
+  # and the guard refuses the pipeline -- which is what happened on
+  # !1089's first run. It belongs here rather than in .docs_only_paths: a
+  # change to it changes what a released digest verifies against, so it
+  # must never be paired with a README edit and read as documentation.
+  - "cosign.pub"
 
 # .dev_or_mr, plus the three-rule ladder described above. Everything
 # .dev_or_mr does is unchanged and comes first: schedules and the
@@ -221,7 +228,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: *code_paths
@@ -244,7 +251,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -668,7 +675,7 @@ test:build-checks:
       when: never
     # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
     # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -1212,6 +1219,8 @@ gate:scripts:
     - scripts/dockerignore.test.sh
     - scripts/gitignore.test.sh
     - scripts/install.test.sh
+    - scripts/ensure-cosign.test.sh
+    - scripts/sign-release-digest.test.sh
   artifacts:
     when: always
     paths:
@@ -1921,6 +1930,75 @@ record:upgrade-fixture:
     # know that it has not, and a spare dump costs kilobytes, while a
     # missing one costs a hand step nobody will remember.
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
+
+# The GitLab half of #1309's second signature. GitHub Actions already signs
+# the release image keylessly the moment it publishes it (.github/workflows
+# /docker.yml, the release job's "Sign the release" step, Fulcio/OIDC).
+# This job adds an independent, key-based signature from a private key that
+# exists only on this dedicated, protected `mikroview-signing` runner's
+# host, mounted read-only into its jobs -- so compromising GitHub's OIDC
+# issuer alone is not enough to forge both signatures over the same digest.
+# Same runner-is-the-key-fence reasoning as orbit's `sign_evidence`
+# (orbit/docs/releasing.md): this GitLab is CE, which has no protected
+# environments or environment-scoped variables, so a CI/CD variable would
+# be readable by every job in a protected-branch pipeline.
+#
+# Waits for GHCR to have the image GitHub Actions publishes (same tag
+# pipeline, same 45-minute budget as record:upgrade-fixture above), then
+# resolves and signs its digest. All the logic is in the script -- unit
+# tested in scripts/sign-release-digest.test.sh against stubbed
+# docker/cosign, never the network -- so this job only installs what it
+# needs and calls it.
+sign:release-digest:
+  stage: sync
+  tags: [mikroview-signing]
+  # No daemon and no dind, the same shape orbit's sign_evidence job uses:
+  # `docker manifest inspect`, `docker buildx imagetools inspect` and
+  # `docker login` are all registry operations the CLI performs itself over
+  # HTTPS, and cosign talks to the registry directly too. Verified against a
+  # real GHCR tag with DOCKER_HOST pointed at a socket that does not exist
+  # (2026-09-22). So this job needs no Docker socket mounted into it, which
+  # matters: the signing runner is the better-protected half of the pair,
+  # and handing it daemon access to earn a digest lookup would be a poor
+  # trade. Setting DOCKER_HOST here at all was misleading and is gone.
+  image: docker:29-cli
+  # Waits on GHCR, not on this pipeline's own lint/test/security -- same
+  # reasoning as record:upgrade-fixture's needs: [].
+  needs: []
+  # A cancelled signing run leaves a published release with only one of
+  # its two signatures and nothing to show why -- never cut mid-write.
+  interruptible: false
+  timeout: 1h
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+    # The exercise path (#1309). A v* tag on this project *is* a release --
+    # the mirror job pushes it to GitHub and GitHub's docker workflow
+    # publishes from it -- so there is no throwaway tag that exercises
+    # signing without also cutting a release. Instead the job can be started
+    # by hand against an already-published tag, the same web/API-plus-
+    # variable shape CHR_EXERCISE and CHR_WATCH use, and SIGN_EXERCISE is on
+    # their `never` lists above so triggering it does not re-run all of dev
+    # (#951).
+    #
+    # Owner decision, 2026-09-22: exercise it by signing v0.6.0's digest for
+    # real rather than dry-running, so the GHCR write and the signature push
+    # are proved too, not just the key mount and the digest lookup. Signing
+    # an already-published release adds a valid second signature to it; it
+    # changes nothing about what that release contains.
+    #
+    # Run it from the web UI on a protected branch -- the signing runner
+    # refuses unprotected refs -- with SIGN_EXERCISE=true and
+    # SIGN_TAG=v0.6.0.
+    - if: '$SIGN_EXERCISE == "true" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
+  script:
+    # bash because the script is `#!/usr/bin/env bash` and Alpine ships
+    # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
+    # checksum verification inside it.
+    - apk add --no-cache bash coreutils curl >/dev/null
+    # SIGN_TAG only when exercising by hand; a tag pipeline has no SIGN_TAG
+    # and signs its own CI_COMMIT_TAG. If neither is set the script refuses
+    # rather than sign something it guessed.
+    - bash scripts/sign-release-digest.sh "${SIGN_TAG:-$CI_COMMIT_TAG}"
 
 # record:upgrade-fixture above is allow_failure (a slow build or a GHCR
 # blip must not redden a tag already cut -- see its own header), so it
