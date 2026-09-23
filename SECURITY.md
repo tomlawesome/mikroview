@@ -185,6 +185,56 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   cross-site requests regardless of `fetch`/CORS rules, so origin
   checking is what actually stops a malicious page from opening a live
   connection using a signed-in visitor's session.
+- **An authenticator-app (TOTP) second factor is available on any local
+  account, and is never offered on an SSO one** -- an identity provider
+  already owns that step, and the account menu says so rather than just
+  hiding the option. Turning it on (issue #1249) shows a QR code and the
+  same secret as text beside it, always, not only when the scanner fails
+  -- confirming it with one live code is what activates the factor
+  (RFC 6238, SHA-1, 6-digit codes, 30 s step, ±1 step tolerance) and also
+  issues ten recovery codes, shown once, and ends every other session
+  the account is currently signed into. From then on, a correct password
+  on that account does **not** create a session: `POST /api/auth/login`
+  instead sets a short-lived (5-minute) `pending` cookie naming the
+  account, sealed the same way the OIDC flow cookie is (AES-256-GCM,
+  authenticated, key generated once and held only in memory), and
+  `POST /api/auth/login/factor` -- a live code, or a recovery code, spent
+  the moment it works -- is what actually signs in. Both steps are
+  rate-limited on the same per-IP and per-username buckets, so a wrong
+  code at the second step costs exactly what a wrong password does at
+  the first. See [docs/authenticator-app.md](docs/authenticator-app.md)
+  for the operator walkthrough.
+- **The secret is stored in the clear, because verifying a code means
+  recomputing it.** A TOTP code is checked by recomputing HMAC-SHA1 over
+  the shared secret and comparing, not by comparing against a stored
+  hash the way a password is -- there is no one-way form that still lets
+  the server verify a code, so `TOTPSecret` sits in the accounts file
+  (`auth.storePath`) as plain text, one more field behind the same file
+  permissions as the rest of that file. See "Data handling" below for
+  when that file is itself encrypted. **Recovery codes are different:
+  they get the same Argon2id hashing a password does**, never stored in
+  clear, and each is single-use -- spending one at the second login step
+  marks it as burned so it cannot be presented again.
+- **A factor is removed three ways, each guarded differently.** The
+  account's own owner turns it off with their current password
+  (`DELETE /api/auth/totp`, rate-limited on the same bucket as any other
+  password re-check in the account menu). An admin can clear another
+  user's factor from the people group in Settings
+  (`DELETE /api/auth/users/{id}/totp`, admin-only, audited as
+  `user.totp_cleared`) -- **never on the admin's own account**, the same
+  division drawn for resetting somebody else's password below: MikroView
+  holds exactly one admin, so refusing this route on the caller's own row
+  is also what keeps the admin account out of it entirely. The remaining
+  case -- an admin who has lost the phone and has no session to reach
+  that button from -- has no web route at all:
+  `mikroview -clear-second-factor <username>` at the console, gated the
+  same way `-recover-admin-account` is (host access plus a recovery key)
+  and rotating the recovery keys on every use, same as that command.
+  Unlike admin-account recovery, it is not limited to the admin account:
+  clearing an ordinary user's factor grants nothing beyond what their
+  password already does, so there is no reason to narrow the target, and
+  narrowing it would leave any non-admin user with a lost phone and no
+  way back in at all.
 - **Account recovery is a CLI command, deliberately outside the web
   UI/API entirely, and requires a recovery key on top of host access**:
   `mikroview -recover-admin-account` (prompts for a recovery key, then
@@ -562,6 +612,17 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   before #853, and are sealed like everything else once a key is
   mounted.
 
+  **The accounts file's one departure from "only one-way hashes" is the
+  authenticator-app secret** (#1249): `TOTPSecret` has to stay
+  reversible, since checking a code means recomputing it rather than
+  comparing a hash -- see "Authentication" above. It rides along on the
+  same exemption as the hashes beside it, for the same practical reason
+  (a memory-only accounts file would forget every account on a restart),
+  not because it is itself safe to disclose: with no `history.keyFile`
+  mounted, an account's TOTP secret sits in that file in the clear, same
+  as its username. Recovery codes are not this exception -- they are
+  hashed exactly like a password, alongside it in the same file.
+
   This is a significant change from earlier releases: before #853, none
   of the above needed any configuration to survive a process restart.
   From this build, with no `history.keyFile` mounted, flags, entities,
@@ -576,14 +637,18 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
   With a key, the flags file contains the IP addresses that triggered a
   flag and a short human-readable description (encrypted); the accounts
-  file contains usernames and Argon2id password hashes, never plaintext
-  passwords (encrypted); the tokens file contains token names and
-  SHA-256 hashes, never the raw bearer values (encrypted); the rule-usage
-  and MAC-registry files contain labels/addresses and timestamps only
-  (encrypted). Without a key, the accounts, tokens and recovery-key
-  files hold that same content in plain JSON instead -- still no
-  passwords, raw tokens or usable recovery keys, only usernames, roles,
-  token names and hashes. None of these survive *container recreation*
+  file contains usernames, Argon2id password hashes and hashed recovery
+  codes, never plaintext passwords, plus (for an account with the
+  authenticator-app factor on) its TOTP secret, which is not hashed for
+  the reason given under "Authentication" above (encrypted); the tokens
+  file contains token names and SHA-256 hashes, never the raw bearer
+  values (encrypted); the rule-usage and MAC-registry files contain
+  labels/addresses and timestamps only (encrypted). Without a key, the
+  accounts, tokens and recovery-key files hold that same content in
+  plain JSON instead -- still no passwords, raw tokens or usable
+  recovery keys, only usernames, roles, token names, hashes, and, for an
+  account with the authenticator-app factor on, that one plaintext
+  secret. None of these survive *container recreation*
   (as opposed to a simple restart) unless you mount a volume over
   `/var/lib/mikroview`, whichever persistence mode is in effect.
 
