@@ -167,11 +167,14 @@ type User struct {
 	TOTPConfirmedAt time.Time `json:"totpConfirmedAt,omitzero"`
 	// TOTPLastCounter is the RFC 6238 30-second time-step counter of the
 	// most recently accepted code, so that code (or an earlier one still
-	// inside the verification window) cannot be replayed. Written by
-	// whatever in totp.go accepts a code; this field only stores it, the
-	// same replay-guard role a reset code's single-use hash fills for
-	// that credential.
-	TOTPLastCounter int64 `json:"totpLastCounter,omitzero"`
+	// inside the verification window) cannot be replayed. Unsigned, and
+	// the same width VerifyTOTP takes and returns, so the value moves
+	// between the verifier and this field without a conversion at each
+	// call site -- a signed round trip is where a replay guard quietly
+	// stops guarding. Advanced only through RecordTOTPCounter, which is
+	// the same replay-guard role a reset code's single-use hash fills
+	// for that credential.
+	TOTPLastCounter uint64 `json:"totpLastCounter,omitzero"`
 	// RecoveryCodes are the ten single-use fallback codes for signing in
 	// without the authenticator app -- hashed with HashPassword, the same
 	// Argon2id treatment a password gets, never stored in clear. See
@@ -259,6 +262,20 @@ var (
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
 	ErrOIDCIdentityTaken = errors.New("auth: this SSO identity is already linked to a different account")
+	// ErrTOTPAlreadyActive is returned by SetPendingTOTPSecret when the
+	// account already holds a confirmed factor. Enrolling again would
+	// silently replace a factor its owner is still using -- and if they
+	// abandoned the new enrolment halfway, HasActiveTOTP would keep
+	// answering true against a secret their authenticator app no longer
+	// holds, locking them out of their own account. Turning a factor off
+	// is its own deliberate step (the password-gated route, or
+	// ClearTOTP), never a side effect of starting a new one.
+	ErrTOTPAlreadyActive = errors.New("auth: this account already has an authenticator app -- remove it before enrolling another")
+	// ErrNoPendingTOTP is returned by ConfirmTOTP when there is no
+	// unconfirmed secret to confirm: either enrolment never started, or
+	// it already finished. Confirming is what activates a factor, so
+	// there is nothing safe to do with a code that arrives without one.
+	ErrNoPendingTOTP = errors.New("auth: no authenticator-app enrolment is waiting to be confirmed")
 	// ErrPasswordTooShort is returned by createLocked/SetPassword for a
 	// password under minPasswordLength -- LoginLimiter meaningfully
 	// slows brute-forcing a weak password but doesn't prevent it, so
@@ -1318,6 +1335,147 @@ func (s *Store) HasActiveTOTP(userID string) bool {
 	defer s.mu.RUnlock()
 	u, ok := s.byID[userID]
 	return ok && u.HasActiveTOTP()
+}
+
+// SetPendingTOTPSecret stores a freshly generated, not-yet-confirmed
+// secret for userID, replacing any earlier enrolment that was started
+// and abandoned. The factor is not active afterwards: ConfirmTOTP is
+// what activates it, so an enrolment interrupted at the QR code leaves
+// the account signing in exactly as it did before.
+//
+// Refuses with ErrTOTPAlreadyActive when a confirmed factor is already
+// in place -- see that error for why replacing one silently is a
+// lockout waiting to happen.
+//
+// The replay counter is reset alongside the secret. A counter is only
+// meaningful against the secret it was accepted for: carried over to a
+// new secret it would refuse that secret's early codes for as long as
+// the old factor had been in use, which reads to the person enrolling
+// as an authenticator app that simply does not work.
+func (s *Store) SetPendingTOTPSecret(userID, encodedSecret string) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if u.HasActiveTOTP() {
+		return ErrTOTPAlreadyActive
+	}
+
+	prevSecret := u.TOTPSecret
+	prevCounter := u.TOTPLastCounter
+
+	u.TOTPSecret = encodedSecret
+	u.TOTPLastCounter = 0
+	if err := s.tryPersistLocked(); err != nil {
+		// An enrolment that only exists in memory must not be reported
+		// as started: the caller is about to show a QR code the user
+		// scans into their phone, and a restart before the next good
+		// write would leave the store with no secret to confirm that
+		// app's codes against.
+		u.TOTPSecret = prevSecret
+		u.TOTPLastCounter = prevCounter
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
+// ConfirmTOTP activates the pending secret for userID, recording when
+// its owner proved they could produce a code from it and the counter of
+// the code that proved it. Passing the matching counter rather than
+// starting the guard at zero closes the obvious replay: the code just
+// used to enrol must not also work as the first sign-in.
+//
+// Returns ErrNoPendingTOTP when there is nothing unconfirmed to
+// activate, which covers both "enrolment never started" and "already
+// confirmed" -- neither is a state where accepting a code should change
+// anything.
+//
+// Verifying the code is the caller's job (VerifyTOTP in totp.go); this
+// only records the outcome. The recovery codes that accompany a
+// confirmed factor are minted separately, by GenerateRecoveryCodes.
+func (s *Store) ConfirmTOTP(userID string, confirmedAt time.Time, matchedCounter uint64) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if u.TOTPSecret == "" || !u.TOTPConfirmedAt.IsZero() {
+		return ErrNoPendingTOTP
+	}
+
+	prevConfirmedAt := u.TOTPConfirmedAt
+	prevCounter := u.TOTPLastCounter
+
+	u.TOTPConfirmedAt = confirmedAt
+	u.TOTPLastCounter = matchedCounter
+	if err := s.tryPersistLocked(); err != nil {
+		// A confirmation that only exists in memory must not be
+		// reported as done: the caller is about to tell its user the
+		// factor is on and hand them recovery codes, and a restart
+		// would drop the account back to password-only underneath that
+		// claim.
+		u.TOTPConfirmedAt = prevConfirmedAt
+		u.TOTPLastCounter = prevCounter
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
+// RecordTOTPCounter advances userID's replay guard to the counter of a
+// code just accepted at sign-in. The caller reads User.TOTPLastCounter,
+// passes it to VerifyTOTP, and hands the matched counter back here;
+// without this call the guard never moves and every code stays usable
+// for its whole window.
+//
+// The counter only ever moves forward. A value at or below the stored
+// one is a no-op rather than an error: it means some other request for
+// the same account already recorded this code or a later one, and
+// writing it back would undo their guard -- the one outcome this method
+// exists to prevent. There is no failure for the caller to handle,
+// because nothing has gone wrong.
+func (s *Store) RecordTOTPCounter(userID string, matchedCounter uint64) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if matchedCounter <= u.TOTPLastCounter {
+		return nil
+	}
+
+	prevCounter := u.TOTPLastCounter
+	u.TOTPLastCounter = matchedCounter
+	if err := s.tryPersistLocked(); err != nil {
+		// A guard that only advanced in memory must not be reported as
+		// advanced: the caller has already let this sign-in through, and
+		// a restart before the next good write would make the same code
+		// live again for whoever else presented it.
+		u.TOTPLastCounter = prevCounter
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
 }
 
 // ClearTOTP removes userID's authenticator-app factor entirely: the
