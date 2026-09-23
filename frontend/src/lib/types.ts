@@ -514,6 +514,21 @@ export interface AuthSession {
   // activated one either. Drives AccountMenu's "Authenticator app · on"
   // and which screen its overlay opens on.
   hasTOTP?: boolean
+  // #1250: this account's passkeys, and whether this deployment can use
+  // them at all. `status` mirrors the server's own availability check
+  // (`publicUrl` unset/an IP/http -- see docs/plans/passkeys-second-
+  // factor.md), computed once at boot rather than per-account, so it is
+  // the same for every session. `origin` is present only when `status`
+  // is `ready` -- PasskeysOverlay compares it against `location.origin`
+  // to catch a capable browser sitting at the wrong address. Absent on
+  // an older server, read as no passkeys and `unset` -- the safe
+  // direction, since a server that predates the feature has no route to
+  // register one either.
+  passkeys?: {
+    count: number
+    status: 'ready' | 'unset' | 'ip' | 'insecure'
+    origin?: string
+  }
 }
 
 // Mirrors internal/api's userSummary. Deliberately not the server's
@@ -534,6 +549,10 @@ export interface UserSummary {
   // sso-and-totp case; the clear button simply never has anything to
   // clear there.
   hasTOTP?: boolean
+  // How many passkeys this account holds (#1250). Absent on an older
+  // server, read as 0 -- same reasoning as hasTOTP above. Never nonzero
+  // for an SSO account, same reasoning too.
+  passkeyCount?: number
 }
 
 // Mirrors internal/api/auth.go's totp enrol response (#1249): the
@@ -542,6 +561,23 @@ export interface UserSummary {
 // param, extracted client-side rather than sent twice.
 export interface TotpEnrollment {
   uri: string
+}
+
+// Mirrors internal/api/passkey.go's row shape for GET /api/auth/passkeys
+// (#1250) -- one per registered credential, feeding PasskeysOverlay's
+// list step. `id` is the credential ID, base64url per the design (the
+// same encoding WebAuthn's own JSON helpers use, so it never needs
+// decoding client-side). `stale` is true when this passkey's stored RPID
+// no longer matches the deployment's current one (see the design's
+// "publicUrl changes" section) -- excluded from login, still deletable.
+export interface PasskeySummary {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt?: string
+  transports: string[]
+  stale: boolean
+  rpId: string
 }
 
 // Mirrors internal/api/auth.go's resetPasswordResponse -- the response

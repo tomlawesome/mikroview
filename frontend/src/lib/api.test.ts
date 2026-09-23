@@ -2,24 +2,32 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  beginPasskeyLogin,
+  beginPasskeyRegistration,
   buildQuery,
   clearAllFlags,
+  clearUserPasskeys,
   clearUserTOTP,
   confirmTOTP,
   deleteDroplistEntry,
+  disablePasskey,
   disableTOTP,
   enrolTOTP,
   fetchAuditLog,
   fetchEventsWindow,
+  fetchPasskeys,
   fetchSetupCommands,
+  finishPasskeyRegistration,
   login,
   mintDroplistKey,
+  renamePasskey,
   replayDefinition,
   revokeDroplistKey,
   saveSetupBackupTransport,
   setFlagVerdict,
   setRouterBackupComment,
   submitLoginFactor,
+  submitPasskeyLoginAssertion,
 } from './api'
 import { emptyFilters } from './types'
 
@@ -498,6 +506,33 @@ describe('login: telling a pending second factor apart from success (#1249)', ()
     const result = await login('tom', 'wrong')
     expect(result).toBe('invalid username or password')
   })
+
+  // #1250: an account whose only factor is a stale passkey answers with
+  // an *empty* secondFactor array, not an absent field -- the password
+  // still must not be read as a completed sign-in. A length check here
+  // used to treat this the same as the no-body case above.
+  it('is still pending, not a success, when the server lists no usable factor at all', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => '', json: async () => ({ secondFactor: [] }) })),
+    )
+    const result = await login('tom', 'hunter2')
+    expect(result).toEqual({ secondFactor: [], passkeyOrigin: undefined })
+  })
+
+  it('carries passkeyOrigin through when the server sends one', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => ({ secondFactor: ['passkey', 'totp'], passkeyOrigin: 'https://mikroview.example.org' }),
+      })),
+    )
+    const result = await login('tom', 'hunter2')
+    expect(result).toEqual({ secondFactor: ['passkey', 'totp'], passkeyOrigin: 'https://mikroview.example.org' })
+  })
 })
 
 describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
@@ -515,7 +550,18 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     const codes = Array.from({ length: 10 }, (_, i) => `code-${i}`)
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ recoveryCodes: codes }) })))
     const result = await confirmTOTP('123456')
-    expect(result).toEqual(codes)
+    expect(result).toEqual({ recoveryCodes: codes, alreadyIssued: false })
+  })
+
+  // #1250: recovery codes are shared with passkeys and minted once --
+  // TOTP confirm no longer always returns a fresh set.
+  it('confirmTOTP reports alreadyIssued with no codes when a passkey already minted them', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ recoveryCodes: null, alreadyIssued: true }) })),
+    )
+    const result = await confirmTOTP('123456')
+    expect(result).toEqual({ recoveryCodes: null, alreadyIssued: true })
   })
 
   it('confirmTOTP returns the server refusal as a string on a wrong code', async () => {
@@ -566,6 +612,92 @@ describe('submitLoginFactor and clearUserTOTP (#1249)', () => {
     expect(result).toBeNull()
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/users/u-42/totp')
+    expect(init?.method).toBe('DELETE')
+    expect(init?.body).toBeUndefined()
+  })
+})
+
+describe('the passkey calls (#1250)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('fetchPasskeys GETs the list', async () => {
+    const rows = [{ id: 'c1', name: 'laptop', createdAt: '2026-01-01T00:00:00Z', transports: [], stale: false, rpId: 'mikroview.example.org' }]
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => rows })))
+    const result = await fetchPasskeys()
+    expect(result).toEqual(rows)
+  })
+
+  it('beginPasskeyRegistration posts an empty body and returns the library\'s own creation options', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ publicKey: { challenge: 'c' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await beginPasskeyRegistration()
+    expect(result).toEqual({ publicKey: { challenge: 'c' } })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/passkeys/register/begin')
+    expect(init?.method).toBe('POST')
+  })
+
+  it('finishPasskeyRegistration posts the credential JSON and the name together', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ passkey: { id: 'c1' }, recoveryCodes: null }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await finishPasskeyRegistration({ id: 'c1', response: {} }, 'my key')
+    expect(result).toEqual({ passkey: { id: 'c1' }, recoveryCodes: null })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/passkeys/register/finish')
+    expect(JSON.parse(init?.body as string)).toEqual({ credential: { id: 'c1', response: {} }, name: 'my key' })
+  })
+
+  it('renamePasskey PATCHes the name to the credential\'s own URL', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await renamePasskey('c1', 'work laptop')
+    expect(result).toBeNull()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/passkeys/c1')
+    expect(init?.method).toBe('PATCH')
+    expect(JSON.parse(init?.body as string)).toEqual({ name: 'work laptop' })
+  })
+
+  it('disablePasskey DELETEs with the password in the body', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await disablePasskey('c1', 'hunter2')
+    expect(result).toBeNull()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/passkeys/c1')
+    expect(init?.method).toBe('DELETE')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  it('beginPasskeyLogin/submitPasskeyLoginAssertion share the login/factor route shapes with submitLoginFactor', async () => {
+    const beginMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ publicKey: { challenge: 'c' } }) }))
+    vi.stubGlobal('fetch', beginMock)
+    const begin = await beginPasskeyLogin()
+    expect(begin).toEqual({ publicKey: { challenge: 'c' } })
+    expect(beginMock.mock.calls[0][0]).toBe('/api/auth/login/factor/begin')
+
+    const assertMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', assertMock)
+    const result = await submitPasskeyLoginAssertion({ id: 'c1' })
+    expect(result).toBeNull()
+    const [url, init] = assertMock.mock.calls[0]
+    expect(url).toBe('/api/auth/login/factor')
+    expect(JSON.parse(init?.body as string)).toEqual({ assertion: { id: 'c1' } })
+  })
+
+  it('clearUserPasskeys sends no body, identifying the target by URL', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await clearUserPasskeys('u-42')
+    expect(result).toBeNull()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/users/u-42/passkeys')
     expect(init?.method).toBe('DELETE')
     expect(init?.body).toBeUndefined()
   })

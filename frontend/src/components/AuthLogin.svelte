@@ -40,6 +40,7 @@
     submitLabel="Continue"
     factorOnly
     onSubmitFactor={(code) => authState.submitFactor(code)}
+    onLoginWithPasskey={() => authState.loginWithPasskey()}
   />
 {:else}
   <!-- No title: on the door the framed wordmark is the title, and the

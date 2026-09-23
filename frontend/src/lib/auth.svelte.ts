@@ -9,6 +9,7 @@ import {
   signOutEverywhere,
   submitLoginFactor,
 } from "./api";
+import { loginWithPasskey as runPasskeyLogin } from "./passkeys.svelte";
 import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
 import { watchlistState } from "./watchlist.svelte";
@@ -163,6 +164,26 @@ class AuthState {
   // flipped straight after a successful confirm/disable rather than
   // waiting on a full re-check() for something the caller already knows.
   hasTOTP = $state(false);
+  // #1250: this account's passkeys, mirroring sessionResponse.passkeys.
+  // count/status feed AccountMenu's "Passkeys · N" row and
+  // PasskeysOverlay's unavailable copy; origin is set only while status
+  // is 'ready', compared against location.origin (see
+  // lib/passkeys.svelte.ts's passkeysUsableAt) to catch a capable
+  // browser sitting at the wrong address.
+  passkeyCount = $state(0);
+  passkeyStatus = $state<"ready" | "unset" | "ip" | "insecure">("unset");
+  passkeyOrigin = $state<string | undefined>(undefined);
+  // Set by login() below when the account holds at least one usable
+  // factor of either kind -- which kinds are still owed for *this*
+  // pending login, passkey first (server order, see the design). Empty
+  // is itself meaningful (#1250): an account whose only factor is a
+  // stale passkey still never signs in on the password alone, and
+  // AuthScreen falls back to asking for a recovery code with that said
+  // in words. pendingPasskeyOrigin is set iff 'passkey' is listed --
+  // this pending login's own origin, which may differ from an older
+  // stale passkey's if the deployment's address changed since.
+  pendingSecondFactor = $state<string[]>([]);
+  pendingPasskeyOrigin = $state<string | undefined>(undefined);
   // Set after a successful link (the callback redirects with
   // ?ssoLinked=1), so the UI can confirm what just happened rather than
   // leaving the person to notice their password stopped working.
@@ -288,6 +309,9 @@ class AuthState {
       this.ssoConnected = session.ssoConnected ?? false;
       this.signedInSince = session.signedInSince ?? "";
       this.hasTOTP = session.hasTOTP ?? false;
+      this.passkeyCount = session.passkeys?.count ?? 0;
+      this.passkeyStatus = session.passkeys?.status ?? "unset";
+      this.passkeyOrigin = session.passkeys?.origin;
       // #1283: the one place preferences load from the server, rather
       // than each of the nine modules reading localStorage at import
       // time. Gated on the real 'authenticated' view, not
@@ -310,6 +334,9 @@ class AuthState {
       this.mustChangePassword = false;
       this.signedInSince = "";
       this.hasTOTP = false;
+      this.passkeyCount = 0;
+      this.passkeyStatus = "unset";
+      this.passkeyOrigin = undefined;
     }
   }
 
@@ -335,6 +362,8 @@ class AuthState {
     const result = await login(username, password);
     if (typeof result === "string") return result;
     if (result) {
+      this.pendingSecondFactor = result.secondFactor;
+      this.pendingPasskeyOrigin = result.passkeyOrigin;
       this.state = "pending-factor";
       return null;
     }
@@ -349,6 +378,18 @@ class AuthState {
   // login() does, since this is what actually signs the caller in.
   async submitFactor(code: string): Promise<string | null> {
     const err = await submitLoginFactor(code);
+    if (err) return err;
+    await this.check();
+    return null;
+  }
+
+  // loginWithPasskey is the passkey alternative to submitFactor above,
+  // for the same pending cookie -- lib/passkeys.svelte.ts carries the
+  // actual ceremony (begin -> browser prompt -> finish); this just wires
+  // its result into the same re-check() every other successful step here
+  // already does.
+  async loginWithPasskey(): Promise<string | null> {
+    const err = await runPasskeyLogin();
     if (err) return err;
     await this.check();
     return null;
@@ -386,6 +427,8 @@ class AuthState {
     this.username = "";
     this.role = "";
     this.mustChangePassword = false;
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
     clearSessionState();
     if (err) return err;

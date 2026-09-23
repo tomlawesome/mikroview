@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserSummary } from './types'
 
 vi.mock('./api', () => ({
+  clearUserPasskeys: vi.fn(),
   clearUserTOTP: vi.fn(),
   createUser: vi.fn(),
   deleteUser: vi.fn(),
@@ -11,7 +12,7 @@ vi.mock('./api', () => ({
   resetUserPassword: vi.fn(),
 }))
 
-import { clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
+import { clearUserPasskeys, clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
 import { usersState } from './users.svelte'
 
 function user(overrides: Partial<UserSummary> = {}): UserSummary {
@@ -155,6 +156,31 @@ describe('UsersState.clearFactor', () => {
     const result = await usersState.clearFactor('id-1')
 
     expect(result).toBe('cannot clear your own factor here')
+    expect(fetchUsers).not.toHaveBeenCalled()
+  })
+})
+
+// #1250's own lost-device path for the admin, mirroring clearFactor
+// above but through the separate passkeys route.
+describe('UsersState.clearPasskeys', () => {
+  it('clears the passkeys and refreshes the list', async () => {
+    vi.mocked(clearUserPasskeys).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockResolvedValue([user({ passkeyCount: 0 })])
+
+    const result = await usersState.clearPasskeys('id-1')
+
+    expect(result).toBeNull()
+    expect(clearUserPasskeys).toHaveBeenCalledWith('id-1')
+    expect(fetchUsers).toHaveBeenCalled()
+    expect(usersState.list[0].passkeyCount).toBe(0)
+  })
+
+  it('surfaces a refusal and does not refresh', async () => {
+    vi.mocked(clearUserPasskeys).mockResolvedValue('cannot clear your own passkeys here')
+
+    const result = await usersState.clearPasskeys('id-1')
+
+    expect(result).toBe('cannot clear your own passkeys here')
     expect(fetchUsers).not.toHaveBeenCalled()
   })
 })
