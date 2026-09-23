@@ -6,6 +6,17 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## security:gosec: killed mid-scan, exit 137, no findings written
+
+- 2026-09-22 · 9b17fa39 (fix/chr-log-changed-paths) · pipeline 1461, job 19810
+  · `ERROR: Job failed: exit code 137` after 409s, with gosec still logging
+  `Checking package: main` and no `gosec.sarif` produced (`No files to
+  upload`). 137 is SIGKILL, so the scan was killed rather than finding
+  anything. The branch changes a CI path list and a shell test, which a Go
+  scan cannot reach. Retried on the same commit as job 19842: passed in 293s.
+  The runner host was also running the CHR exercise (pipeline 1451) and two
+  other pipelines around that time. First sighting.
+
 ## live-topography-tunnels: the fit chip does not restore the frame after a wheel zoom
 
 - 2026-09-22 · dd33e04a (dev) · local WebKit run in the live-check image, the

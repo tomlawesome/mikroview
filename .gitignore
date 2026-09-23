@@ -46,3 +46,7 @@
 # and gitleaks would flag every one -- see docs/upgrades.md, "How this
 # is tested". Never committed.
 /.upgrade-fixtures/
+
+# The checksum-verified cosign the signing job installs (#1309,
+# scripts/ensure-cosign.sh). A downloaded binary, never committed.
+.mv-cosign/

@@ -297,18 +297,45 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   to smuggle in code.
 
 - **Integrity is verified before the artefact runs, not by the artefact
-  itself.** Published images are signed with keyless Sigstore/cosign and
-  carry SLSA build provenance and an SBOM, all bound to the image
-  *digest* rather than a tag (a tag is a mutable pointer; signing one
-  would let it later point at different content and still verify):
+  itself.** Published images are signed with Sigstore/cosign and carry
+  SLSA build provenance and an SBOM, all bound to the image *digest*
+  rather than a tag (a tag is a mutable pointer; signing one would let it
+  later point at different content and still verify).
+
+  **A release carries two independent signatures, and both must verify.**
+  One is made automatically by the GitLab tag pipeline with a key held on
+  its own runner; the other is made keyless on GitHub, by hand, only after
+  the first has been checked. Two signatures from the same place would be
+  one signature — whoever drives the first drives the second — so the
+  second is a separate custody on two separate hosts. **Treat a digest as
+  good only if both verify. If either is missing, do not trust it**, and
+  do not fall back to the one that is present: a release missing the
+  key-based signature is a release that did not come from the tag
+  pipeline, which is exactly the case the second signature exists to
+  catch.
+
+  `cosign.pub` is the public half of the key-based signature, committed at
+  the root of this repository. Take it from the tag you are verifying, not
+  from the default branch.
 
   ```sh
+  # 1. the key-based signature, made by the GitLab tag pipeline
+  cosign verify --key cosign.pub \
+    ghcr.io/tomlawesome/mikroview@sha256:...
+
+  # 2. the keyless countersignature, started by hand on GitHub
   cosign verify ghcr.io/tomlawesome/mikroview@sha256:... \
     --certificate-identity-regexp '^https://github.com/tomlawesome/mikroview/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+  # 3. provenance and SBOM
   gh attestation verify oci://ghcr.io/tomlawesome/mikroview@sha256:... \
     --repo tomlawesome/mikroview
   ```
+
+  **Preview images carry the keyless signature only** (step 2). The second
+  custody is for releases: a preview is not something to trust, it is
+  something to test.
 
   **Releases are rebuilt, and re-earn what rebuilding costs.** A
   `v<x.y.z>` binary has to be built from the release, so `main` cannot
