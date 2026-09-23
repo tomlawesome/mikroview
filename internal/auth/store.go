@@ -142,11 +142,55 @@ type User struct {
 	// the flag has to survive the login that redeems the code, outlive
 	// a restart (sessions do not), and be cleared in exactly one place.
 	MustChangePassword bool `json:"mustChangePassword,omitempty"`
+	// TOTPSecret is the shared secret behind the authenticator-app second
+	// factor (#1249), stored in the clear -- unlike a password or a
+	// recovery code, it has to be reversible: verifying a 30-second code
+	// means recomputing HMAC-SHA1 over it, not comparing a hash. It gets
+	// no separate at-rest mechanism of its own (no second file, no
+	// encryption layer): this store already persists the whole document
+	// as one JSON file behind normal file permissions, and TOTPSecret is
+	// just one more field in it, same as OIDCIssuer or Username.
+	//
+	// RFC 6238 code verification (reading this field, generating it,
+	// confirming it) lives in totp.go, not here -- this package only
+	// stores the secret and the replay counter below.
+	//
+	// A non-empty secret alone is not an active factor: see
+	// TOTPConfirmedAt and HasActiveTOTP.
+	TOTPSecret string `json:"totpSecret,omitempty"`
+	// TOTPConfirmedAt is when the account owner proved they could produce
+	// a valid code from TOTPSecret, which is what activates the factor.
+	// Zero means a secret exists but was never confirmed -- e.g. a QR
+	// code was shown mid-setup and the flow was abandoned -- and
+	// HasActiveTOTP is false until this is set, so an abandoned setup
+	// never gates a login the way a real second factor does.
+	TOTPConfirmedAt time.Time `json:"totpConfirmedAt,omitzero"`
+	// TOTPLastCounter is the RFC 6238 30-second time-step counter of the
+	// most recently accepted code, so that code (or an earlier one still
+	// inside the verification window) cannot be replayed. Written by
+	// whatever in totp.go accepts a code; this field only stores it, the
+	// same replay-guard role a reset code's single-use hash fills for
+	// that credential.
+	TOTPLastCounter int64 `json:"totpLastCounter,omitzero"`
+	// RecoveryCodes are the ten single-use fallback codes for signing in
+	// without the authenticator app -- hashed with HashPassword, the same
+	// Argon2id treatment a password gets, never stored in clear. See
+	// GenerateRecoveryCodes and BurnRecoveryCode in recoverycodes.go.
+	RecoveryCodes []RecoveryCode `json:"recoveryCodes,omitempty"`
 }
 
 // LocalPassword reports whether this account has a real, user-chosen
 // password that may be reset.
 func (u *User) LocalPassword() bool { return u.HasLocalPassword }
+
+// HasActiveTOTP reports whether u's authenticator-app factor is
+// confirmed and therefore active. A secret alone is not enough: a
+// generated-but-never-confirmed secret (TOTPSecret set, TOTPConfirmedAt
+// zero) is mid-setup, not something that should ever gate a sign-in --
+// see TOTPConfirmedAt's doc comment.
+func (u *User) HasActiveTOTP() bool {
+	return u.TOTPSecret != "" && !u.TOTPConfirmedAt.IsZero()
+}
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
 // delimited string concatenation, so there's no theoretical risk of one
@@ -1261,6 +1305,66 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	return nil
 }
 
+// HasActiveTOTP reports whether userID holds a confirmed authenticator-
+// app second factor -- both login (does this sign-in need a code?) and
+// the admin UI (does this account have 2FA on?) need the answer, and
+// "has a secret" is not the same question as "has an active factor" --
+// see User.HasActiveTOTP. An unknown user answers false rather than
+// erroring: this is a yes/no gate, not a lookup, and the false answer is
+// the same one a real account with no factor would give.
+func (s *Store) HasActiveTOTP(userID string) bool {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	u, ok := s.byID[userID]
+	return ok && u.HasActiveTOTP()
+}
+
+// ClearTOTP removes userID's authenticator-app factor entirely: the
+// secret, its confirmation, the replay counter, and every recovery
+// code, all in the one write. The four are cleared together rather than
+// leaving a caller to remember all four fields, because a partial clear
+// is worse than none -- a leftover recovery code would still get someone
+// past a login that believes it turned 2FA off, and a leftover secret or
+// counter would let a disable-then-re-enable cycle inherit state from
+// the factor that was supposedly removed.
+func (s *Store) ClearTOTP(userID string) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+
+	prevSecret := u.TOTPSecret
+	prevConfirmedAt := u.TOTPConfirmedAt
+	prevCounter := u.TOTPLastCounter
+	prevCodes := u.RecoveryCodes
+
+	u.TOTPSecret = ""
+	u.TOTPConfirmedAt = time.Time{}
+	u.TOTPLastCounter = 0
+	u.RecoveryCodes = nil
+	if err := s.tryPersistLocked(); err != nil {
+		// A clear that only exists in memory must not be reported as
+		// done: the caller tells its operator 2FA is off, and a restart
+		// before the next good write would silently bring back the old
+		// secret, counter and recovery codes underneath that claim.
+		u.TOTPSecret = prevSecret
+		u.TOTPConfirmedAt = prevConfirmedAt
+		u.TOTPLastCounter = prevCounter
+		u.RecoveryCodes = prevCodes
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
 // List returns every user (without password hashes), sorted by
 // username -- used by the CLI recovery tool (`-list-users`) and the
 // admin-facing user list.
@@ -1277,6 +1381,13 @@ func (s *Store) List() []User {
 		// admin-facing API. Blanked for the same reason the password
 		// hash is, so neither can be serialized by accident.
 		cp.ResetCodeHash = ""
+		// TOTPSecret is worse than a verifier hash if it leaked -- it's
+		// the actual shared secret, good for minting valid codes
+		// indefinitely, not just checking one. RecoveryCodes are hashes
+		// only, same category as ResetCodeHash above. Neither belongs in
+		// an admin-facing account list.
+		cp.TOTPSecret = ""
+		cp.RecoveryCodes = nil
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
