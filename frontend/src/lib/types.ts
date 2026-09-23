@@ -508,6 +508,12 @@ export interface AuthSession {
   // when this login happened, not when the account was created. Absent
   // while unauthenticated, and on an older server that predates it.
   signedInSince?: string
+  // Whether this account has an active authenticator-app factor (#1249).
+  // Absent on an older server, read as false -- there is nothing to be
+  // wrong about, since a server that predates the feature cannot have
+  // activated one either. Drives AccountMenu's "Authenticator app · on"
+  // and which screen its overlay opens on.
+  hasTOTP?: boolean
 }
 
 // Mirrors internal/api's userSummary. Deliberately not the server's
@@ -521,6 +527,21 @@ export interface UserSummary {
   lastLogin?: string
   hasLocalPassword: boolean
   sso: boolean
+  // Whether this account has an active authenticator-app factor (#1249).
+  // Absent on an older server, read as false, same reasoning as
+  // AuthSession.hasTOTP above. Never true for an SSO account -- the
+  // server never lets one enrol -- so EngineRoom needs no separate
+  // sso-and-totp case; the clear button simply never has anything to
+  // clear there.
+  hasTOTP?: boolean
+}
+
+// Mirrors internal/api/auth.go's totp enrol response (#1249): the
+// otpauth:// URI AuthenticatorOverlay both draws as a QR code and shows
+// as text beside it -- the secret lives in the URI's own `secret` query
+// param, extracted client-side rather than sent twice.
+export interface TotpEnrollment {
+  uri: string
 }
 
 // Mirrors internal/api/auth.go's resetPasswordResponse -- the response

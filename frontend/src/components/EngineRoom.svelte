@@ -693,6 +693,12 @@
   // open. Cleared on close: this is the one place it exists in clear,
   // and it has no second use.
   let issuedReset = $state<PasswordResetCode | null>(null)
+  // #1249's lost-phone path: the admin's own clear button, armed the
+  // same way reset/remove/revoke are. No password is asked here -- the
+  // admin is standing in for one the account owner no longer has -- so
+  // the arm-then-confirm click is the only guard against a stray one.
+  let armedClearFactor = $state<string | null>(null)
+  let clearingFactor = $state<string | null>(null)
 
   // Your own row leads the list, then everyone else's, matching the
   // drawing's "your account, then everyone else's" -- the server has no
@@ -767,6 +773,25 @@
     issuedReset = result
   }
 
+  function onClearFactorClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedClearFactor === id) {
+      armedClearFactor = null
+      clearPersonFactor(id)
+      return
+    }
+    disarmAll()
+    armedClearFactor = id
+  }
+
+  async function clearPersonFactor(id: string) {
+    personError = null
+    clearingFactor = id
+    const err = await usersState.clearFactor(id)
+    clearingFactor = null
+    if (err) personError = err
+  }
+
   // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all
   // bubble is the other example): a click anywhere that isn't the armed
   // button itself disarms it, so an armed revoke/remove can't be
@@ -775,6 +800,7 @@
     armedRevoke = null
     armedRemove = null
     armedReset = null
+    armedClearFactor = null
   }
 </script>
 
@@ -1544,6 +1570,11 @@
               {#if user.role === 'user'}<span class="pr">can change things</span>{/if}
               {#if user.role === 'viewer'}<span class="pr look">can only look</span>{/if}
               {#if user.sso}<span class="pr">sso</span>{/if}
+              <!-- #1249: shown only when true, same convention as the sso
+                   pill just above -- an SSO account never carries this
+                   (it is never offered a factor), so there is no case
+                   where the two pills disagree about the same row. -->
+              {#if user.hasTOTP}<span class="pr">authenticator app</span>{/if}
               <span class="pf">
                 {user.username === authState.username ? 'this is you · ' : ''}{user.lastLogin
                   ? `signed in ${formatRelative(user.lastLogin, appState.now)}`
@@ -1572,6 +1603,31 @@
                       confirm — their password stops working now
                     {:else}
                       reset password
+                    {/if}
+                  </button>
+                {/if}
+                <!-- #1249: the admin's own end of a lost-phone report --
+                     only offered when there is a factor to clear, and
+                     never on this account's own row (see the
+                     role === 'admin' branch above, which this account's
+                     row always takes). No password prompt: the admin is
+                     standing in for a password the account owner no
+                     longer has access to prove, the same reasoning reset
+                     password above already applies. -->
+                {#if user.hasTOTP}
+                  <button
+                    type="button"
+                    class="olink quiet"
+                    class:armed={armedClearFactor === user.id}
+                    disabled={clearingFactor === user.id}
+                    onclick={(e) => onClearFactorClick(e, user.id)}
+                  >
+                    {#if clearingFactor === user.id}
+                      clearing…
+                    {:else if armedClearFactor === user.id}
+                      confirm — turns their authenticator app off
+                    {:else}
+                      clear authenticator app
                     {/if}
                   </button>
                 {/if}

@@ -7,6 +7,7 @@ import {
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
+  submitLoginFactor,
 } from "./api";
 import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
@@ -108,11 +109,20 @@ function clearSessionState() {
 // rather than a flag on 'authenticated' because the app is not open in
 // it -- every other request would 403 -- so App.svelte must draw the
 // door's set-a-new-password form and nothing else.
+// 'pending-factor' is the same shape for #1249's second step: the
+// password was right, but the server set a pending cookie rather than a
+// session (see login() below) and everything but
+// POST /api/auth/login/factor still 403s. Set by login() alone, straight
+// from its own response -- never by apply()/check(), since a bare
+// GET /api/auth/session has no way to tell "pending" from "signed out"
+// apart, and a page reload mid-step is meant to fall back to asking for
+// the password again rather than resurrecting this state from nothing.
 export type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"
   | "must-change-password"
+  | "pending-factor"
   | "authenticated";
 
 class AuthState {
@@ -147,6 +157,17 @@ class AuthState {
   // account action reached from the menu.
   showChangePassword = $state(false);
   showSSOLink = $state(false);
+  // Drives AuthenticatorOverlay -- the enrol/confirm/recovery-codes flow,
+  // and the turn-off form once a factor is already active (#1249). Same
+  // kind of thing as the two flags above: an account action reached from
+  // the menu.
+  showAuthenticator = $state(false);
+  // Whether this account has an active authenticator-app factor.
+  // Mirrors sessionResponse.hasTOTP -- set here, read by AccountMenu to
+  // decide what its row says and which screen the overlay opens on, and
+  // flipped straight after a successful confirm/disable rather than
+  // waiting on a full re-check() for something the caller already knows.
+  hasTOTP = $state(false);
   // Set after a successful link (the callback redirects with
   // ?ssoLinked=1), so the UI can confirm what just happened rather than
   // leaving the person to notice their password stopped working.
@@ -271,6 +292,7 @@ class AuthState {
       this.hasLocalPassword = session.hasLocalPassword ?? true;
       this.ssoConnected = session.ssoConnected ?? false;
       this.signedInSince = session.signedInSince ?? "";
+      this.hasTOTP = session.hasTOTP ?? false;
       // #1283: the one place preferences load from the server, rather
       // than each of the nine modules reading localStorage at import
       // time. Gated on the real 'authenticated' view, not
@@ -292,6 +314,7 @@ class AuthState {
       this.ssoConnected = false;
       this.mustChangePassword = false;
       this.signedInSince = "";
+      this.hasTOTP = false;
     }
   }
 
@@ -306,8 +329,31 @@ class AuthState {
   }
 
 
+  // A right password on an account holding a factor (#1249) does not
+  // sign the caller in -- login() answers with the methods still owed
+  // instead of an error, told apart from failure by its own return shape
+  // (see LoginPendingFactor). That lands here as 'pending-factor' rather
+  // than a re-check(): the server issued a pending cookie, not a session,
+  // and GET /api/auth/session has no field that would tell "pending"
+  // apart from "signed out" if this asked it right now.
   async login(username: string, password: string): Promise<string | null> {
-    const err = await login(username, password);
+    const result = await login(username, password);
+    if (typeof result === "string") return result;
+    if (result) {
+      this.state = "pending-factor";
+      return null;
+    }
+    await this.check();
+    return null;
+  }
+
+  // submitFactor is the second step: the pending cookie login() above
+  // left behind carries this request, whichever of a TOTP code or a
+  // recovery code AuthLogin's box held -- the server is what tells them
+  // apart, not this call. Success re-checks the session the same way
+  // login() does, since this is what actually signs the caller in.
+  async submitFactor(code: string): Promise<string | null> {
+    const err = await submitLoginFactor(code);
     if (err) return err;
     await this.check();
     return null;

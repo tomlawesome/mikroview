@@ -52,6 +52,8 @@ beforeEach(() => {
   authState.hasLocalPassword = true
   authState.ssoConnected = false
   authState.ssoAvailable = false
+  authState.hasTOTP = false
+  authState.showAuthenticator = false
 })
 
 // #1252: the admin keeps its password after connecting to SSO, so
@@ -78,6 +80,57 @@ describe('the single sign-on row (#1252)', () => {
     expect(screen.queryByRole('menuitem', { name: /use single sign-on/i })).toBeNull()
     // The password is still there, so changing it still is too.
     expect(screen.getByRole('menuitem', { name: /change password/i })).toBeTruthy()
+  })
+})
+
+// #1249: the Authenticator app row shares hasLocalPassword's gate with
+// Change password, since a factor guards a password an SSO-only account
+// no longer has -- but unlike that row, this one is asked to say so in
+// words rather than simply vanish.
+describe('the Authenticator app row (#1249)', () => {
+  it('is offered, with no "on" tag, while the account has a password and no factor', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = false
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /authenticator app/i })
+    expect(row).toBeTruthy()
+    expect(row.textContent?.trim()).toBe('Authenticator app')
+  })
+
+  it('carries an "on" tag once the account has a factor', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = true
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /authenticator app/i })
+    expect(row.textContent?.replace(/\s+/g, ' ').trim()).toBe('Authenticator app · on')
+  })
+
+  it('is replaced by an explanatory line, not simply absent, for an SSO-only account', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = false
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /authenticator app/i })).toBeNull()
+    expect(screen.getByText(/authenticator app.*not offered/i)).toBeTruthy()
+    expect(screen.getByText(/single sign-on/i)).toBeTruthy()
+  })
+
+  it('opens AuthenticatorOverlay on click', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(authState.showAuthenticator).toBe(false)
+    await fireEvent.click(screen.getByRole('menuitem', { name: /authenticator app/i }))
+    expect(authState.showAuthenticator).toBe(true)
   })
 })
 
