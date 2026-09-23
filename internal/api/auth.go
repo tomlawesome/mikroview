@@ -29,6 +29,34 @@ const sessionCookieName = "mikroview_session"
 // cannot drift apart silently.
 const changePasswordPath = "/api/auth/password"
 
+// secondFactorEnrolPaths are the routes a session may still reach while
+// stuck at the forced-enrolment door (#1253) -- every step of enrolling
+// either kind of second factor, and nothing else. Named once here, the
+// same reasoning as changePasswordPath above, so requireAuth's gate and
+// this list cannot drift apart silently.
+//
+// Four routes, not two, because #1250 gave an account two different
+// factors to choose between: the authenticator-app pair
+// (enrol generates the secret and shows the QR code, confirm activates
+// it once the owner proves they can produce a code) and the passkey
+// pair (register/begin starts the WebAuthn ceremony, register/finish
+// completes it). Either pair alone satisfies the door -- see
+// requireAuth's check, which asks HasSecondFactor, not "has TOTP". Both
+// handlers mint recovery codes themselves on success (handleTOTPConfirm,
+// handleAuthPasskeysRegisterFinish), so no separate route is needed for
+// that.
+//
+// Deliberately excludes DELETE /api/auth/totp and the passkey
+// rename/delete routes: there is nothing yet enrolled for those to act
+// on while this gate holds, and admitting them would be surface this
+// door has no reason to open.
+var secondFactorEnrolPaths = map[string]bool{
+	"/api/auth/totp/enrol":               true,
+	"/api/auth/totp/confirm":             true,
+	"/api/auth/passkeys/register/begin":  true,
+	"/api/auth/passkeys/register/finish": true,
+}
+
 // cookieMaxAge is how long the browser itself remembers the cookie --
 // deliberately longer than Auth.SessionTTL (the server-side idle
 // timeout, which slides forward on use): the cookie value doesn't
@@ -346,6 +374,39 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			http.Error(w, "an administrator reset this account -- set a new password before going any further", http.StatusForbidden)
 			return
 		}
+		// The forced-enrolment door (#1253): a second factor is mandatory
+		// on every local account (owner, 2026-09-18, "58 every local
+		// account - sso handles its own auth, we just respect it"), and
+		// this is where that's enforced -- at the door, on every request,
+		// not as a one-off migration. Any local account that reaches
+		// sign-in without one is sent to enrolment and can reach nothing
+		// else, whatever left it in that state: never enrolled, cleared
+		// by an admin (ClearAllSecondFactors/-clear-second-factor), or
+		// hand-edited into existence. The same shape
+		// MustChangePassword's gate above uses -- checked here rather
+		// than per-handler, an allowlist rather than a denylist, so a
+		// forgotten new route defaults to blocked, not open.
+		//
+		// LocalPassword() -- HasLocalPassword -- is the SSO-only escape:
+		// an account provisioned or linked away to SSO (LinkOIDCIdentity)
+		// has no local password for a factor to protect, and its
+		// identity provider does its own authentication. An admin that
+		// has linked SSO keeps both its password and its factor (see
+		// LinkOIDCIdentity), so it still satisfies this and is never
+		// caught by it on that account alone.
+		//
+		// Checked after MustChangePassword deliberately: a session
+		// holding a reset code has no credential only its owner knows
+		// yet, so it is sent to set one first: MustChangePassword's own
+		// check above already returned by the time this runs for that
+		// session. Once the password is set, MustChangePassword clears
+		// and the very next request lands here instead if a factor is
+		// still missing -- the two doors run in sequence, never both
+		// open at once.
+		if user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
+			http.Error(w, "this account has no second factor -- enrol one before going any further", http.StatusForbidden)
+			return
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
 	})
 }
@@ -597,6 +658,21 @@ type sessionResponse struct {
 	// would keep a person locked out of an account that is no longer
 	// flagged.
 	MustChangePassword bool `json:"mustChangePassword"`
+	// MustEnrolSecondFactor is true while this session may reach nothing
+	// but the enrolment routes on secondFactorEnrolPaths (#1253) -- a
+	// local account (HasLocalPassword) with no active second factor,
+	// whatever left it in that state. The frontend draws the forced
+	// enrolment screen and nothing else while it holds, the same way it
+	// already does for MustChangePassword above -- see requireAuth's
+	// matching gate in this file for the enforcement this only reports.
+	//
+	// Computed the same way MustChangePassword is, from the account
+	// rather than the session, for the same reason: clearing it can
+	// happen without this process's session ever changing (enrolling via
+	// a different tab, or -- for the "no factor left" case -- the CLI's
+	// `-clear-second-factor` never applies here, since that always
+	// produces exactly the state this flags).
+	MustEnrolSecondFactor bool `json:"mustEnrolSecondFactor"`
 	// SSOAvailable tells the frontend whether to render the "Sign in
 	// with SSO" link at all -- true whenever s.OIDC is configured,
 	// regardless of the other fields above.
@@ -651,6 +727,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp.HasLocalPassword = user.LocalPassword()
 		resp.SSOConnected = user.OIDCSubject != ""
 		resp.MustChangePassword = user.MustChangePassword
+		resp.MustEnrolSecondFactor = user.LocalPassword() && !user.HasSecondFactor()
 		resp.HasTOTP = user.HasActiveTOTP()
 		resp.Passkeys = s.passkeysSessionInfo(user.ID)
 		// sessionUser already validated the cookie once (that is how
