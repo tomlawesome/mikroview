@@ -24,6 +24,15 @@ vi.mock('./api', () => ({
   saveMyPreferences: vi.fn(),
 }))
 
+// #1250: authState.loginWithPasskey() delegates the actual ceremony to
+// lib/passkeys.svelte.ts -- mocked here for the same reason every other
+// api.ts-adjacent call this file stubs is: this file exercises AuthState's
+// own wiring, never the browser boundary underneath it (that boundary has
+// its own test file, lib/passkeys.svelte.test.ts).
+vi.mock('./passkeys.svelte', () => ({
+  loginWithPasskey: vi.fn(),
+}))
+
 import {
   fetchAuthSession,
   login,
@@ -36,6 +45,7 @@ import {
   fetchMyPreferences,
   saveMyPreferences,
 } from './api'
+import { loginWithPasskey } from './passkeys.svelte'
 import { authState, pageReload } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
@@ -75,6 +85,11 @@ beforeEach(() => {
   authState.signedInSince = ''
   authState.mustChangePassword = false
   authState.hasTOTP = false
+  authState.passkeyCount = 0
+  authState.passkeyStatus = 'unset'
+  authState.passkeyOrigin = undefined
+  authState.pendingSecondFactor = []
+  authState.pendingPasskeyOrigin = undefined
   window.history.replaceState(null, '', '/')
   // jsdom cannot navigate; the reload tests below assert on this spy.
   sessionStorage.clear()
@@ -116,6 +131,29 @@ describe('AuthState.check', () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
     await authState.check()
     expect(authState.hasTOTP).toBe(false)
+  })
+
+  // #1250: mirrors the session's own passkeys summary, same "absent on
+  // an older server reads as none of them" reasoning as hasTOTP above.
+  it('carries the passkeys summary through, defaulting to none/unset when the server omits it', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({
+        authenticated: true,
+        username: 'tom',
+        role: 'admin',
+        passkeys: { count: 2, status: 'ready', origin: 'https://mikroview.example.org' },
+      }),
+    )
+    await authState.check()
+    expect(authState.passkeyCount).toBe(2)
+    expect(authState.passkeyStatus).toBe('ready')
+    expect(authState.passkeyOrigin).toBe('https://mikroview.example.org')
+
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
+    await authState.check()
+    expect(authState.passkeyCount).toBe(0)
+    expect(authState.passkeyStatus).toBe('unset')
+    expect(authState.passkeyOrigin).toBeUndefined()
   })
 
   // #677's sessions row ("this device ... signed in 4 d") reads this.
@@ -246,6 +284,58 @@ describe('AuthState.login', () => {
 
     expect(result).toBeNull()
     expect(authState.state).toBe('pending-factor')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // #1250: carries the pending login's own factor list and passkey
+  // origin -- AuthScreen reads these directly to decide which of the
+  // three ways in to offer.
+  it('carries the pending secondFactor list and passkeyOrigin through', async () => {
+    vi.mocked(login).mockResolvedValue({
+      secondFactor: ['passkey', 'totp'],
+      passkeyOrigin: 'https://mikroview.example.org',
+    })
+
+    await authState.login('tom', 'hunter2')
+
+    expect(authState.pendingSecondFactor).toEqual(['passkey', 'totp'])
+    expect(authState.pendingPasskeyOrigin).toBe('https://mikroview.example.org')
+  })
+
+  // #1250: an empty list is still pending -- an account whose only
+  // factor is a stale passkey never signs in on the password alone.
+  it('moves to pending-factor on an empty secondFactor list too', async () => {
+    vi.mocked(login).mockResolvedValue({ secondFactor: [] })
+
+    const result = await authState.login('tom', 'hunter2')
+
+    expect(result).toBeNull()
+    expect(authState.state).toBe('pending-factor')
+    expect(authState.pendingSecondFactor).toEqual([])
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuthState.loginWithPasskey', () => {
+  it('re-checks the session and returns null on success', async () => {
+    vi.mocked(loginWithPasskey).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'user' }),
+    )
+
+    const result = await authState.loginWithPasskey()
+
+    expect(result).toBeNull()
+    expect(fetchAuthSession).toHaveBeenCalled()
+    expect(authState.state).toBe('authenticated')
+  })
+
+  it('returns the error and does not re-check on a refused ceremony', async () => {
+    vi.mocked(loginWithPasskey).mockResolvedValue("that passkey couldn't be verified")
+
+    const result = await authState.loginWithPasskey()
+
+    expect(result).toBe("that passkey couldn't be verified")
     expect(fetchAuthSession).not.toHaveBeenCalled()
   })
 })

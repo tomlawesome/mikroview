@@ -53,6 +53,7 @@ beforeEach(() => {
   authState.ssoConnected = false
   authState.ssoAvailable = false
   authState.hasTOTP = false
+  authState.passkeyCount = 0
 })
 
 // #1252: the admin keeps its password after connecting to SSO, so
@@ -130,6 +131,56 @@ describe('the Authenticator app row (#1249)', () => {
     expect(screen.queryByRole('dialog', { name: /authenticator app/i })).toBeNull()
     await fireEvent.click(screen.getByRole('menuitem', { name: /authenticator app/i }))
     expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+})
+
+// #1250: directly under Authenticator app, per the design's account-menu
+// composition call -- two rows, not a merged one, each with its own
+// count tag and its own overlay. Always present, even with no passkeys
+// and even when this deployment can't offer one right now -- the design
+// forbids the row silently vanishing (PasskeysOverlay itself says why).
+describe('the Passkeys row (#1250)', () => {
+  it('is offered, with no count tag, while the account has none', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.passkeyCount = 0
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /^passkeys/i })
+    expect(row).toBeTruthy()
+    expect(row.textContent?.trim()).toBe('Passkeys')
+  })
+
+  it('carries a count tag once the account has passkeys', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.passkeyCount = 2
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /^passkeys/i })
+    expect(row.textContent?.replace(/\s+/g, ' ').trim()).toBe('Passkeys · 2')
+  })
+
+  it('is absent for an SSO-only account, same gate as Authenticator app', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = false
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /^passkeys/i })).toBeNull()
+  })
+
+  it('opens PasskeysOverlay on click', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('dialog', { name: /^passkeys$/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /^passkeys/i }))
+    expect(screen.getByRole('dialog', { name: /^passkeys$/i })).toBeTruthy()
   })
 })
 

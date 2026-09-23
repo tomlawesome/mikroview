@@ -63,6 +63,7 @@ vi.mock('../lib/api', () => ({
   deleteUser: vi.fn(),
   resetUserPassword: vi.fn(),
   clearUserTOTP: vi.fn(),
+  clearUserPasskeys: vi.fn(),
   fetchTokens: vi.fn(async () => [
     { id: 't1', name: 'rb5009-ingest', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-01T00:00:00Z', lastUsedAt: '2026-08-24T14:02:00Z' },
   ]),
@@ -703,6 +704,61 @@ describe('The settings shelf (#633)', () => {
     await settle()
 
     expect(screen.queryByRole('button', { name: 'clear authenticator app' })).toBeNull()
+    expect(screen.getByText('console-only')).toBeTruthy()
+  })
+
+  // #1250's own pill and clear button, mirroring the authenticator app
+  // pair immediately above -- same convention (shown only when nonzero),
+  // its own admin verb rather than folded into clearFactor above (an
+  // account can hold either factor, or both, and EngineRoom offers each
+  // its own button).
+  it('shows a passkeys pill with the count for a person who has any, none for a person without', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 2 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('passkeys · 2')).toBeTruthy()
+  })
+
+  it('clear passkeys arms before it acts, and only appears when there is one to clear', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers, clearUserPasskeys } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 1 },
+    ])
+    vi.mocked(clearUserPasskeys).mockResolvedValue(null)
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear passkeys' }))
+    await settle()
+    expect(clearUserPasskeys).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys' }))
+    await settle()
+    expect(clearUserPasskeys).toHaveBeenCalledWith('u2')
+  })
+
+  it('offers no clear-passkeys verb on the admin row, even when the admin has passkeys', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 3 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByRole('button', { name: 'clear passkeys' })).toBeNull()
     expect(screen.getByText('console-only')).toBeTruthy()
   })
 
