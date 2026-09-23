@@ -25,7 +25,15 @@
   let submitting = $state(false)
 
   // The admin is the deployment's way in when the provider is down, and
-  // the only account that keeps its password through a link.
+  // the only account that keeps its password through a link -- and, since
+  // #1253, its second factor with it. Every other role loses both, in the
+  // same store write (auth.Store.LinkOIDCIdentity).
+  //
+  // Derived from the role this session already carries rather than asked
+  // of the server, because this warning is shown *before* the link
+  // starts: handleOIDCLinkStart's response arrives only once the person
+  // has already confirmed, which is too late to tell them what they are
+  // agreeing to.
   const keepsPassword = $derived(authState.isAdmin)
 
   function close() {
@@ -89,21 +97,23 @@
 
         {#if keepsPassword}
           <div class="kept">
-            <strong>Your MikroView password stays.</strong>
+            <strong>Your MikroView password and second step stay.</strong>
             <p>
               You're the MikroView admin, so SSO becomes an extra way in rather than
-              a replacement: the password is what still lets you in on the day your
-              identity provider can't be reached. Everyone else's password is
-              deleted when they connect.
+              a replacement: your password and your authenticator app or passkey are
+              what still let you in on the day your identity provider can't be
+              reached. Everyone else loses both when they connect.
             </p>
           </div>
         {:else}
           <div class="warning">
-            <strong>Your MikroView password will be deleted.</strong>
+            <strong>Your MikroView password and second step will be deleted.</strong>
             <p>
-              This can't be undone from MikroView. After connecting, signing in goes
-              through your identity provider only — and if you ever lose access to it,
-              MikroView can't recover this account for you.
+              Both go: the password, and the authenticator app or passkeys you use
+              for the second step. This can't be undone from MikroView. After
+              connecting, signing in goes through your identity provider only — and
+              if you ever lose access to it, MikroView can't recover this account
+              for you.
             </p>
           </div>
         {/if}
@@ -129,7 +139,7 @@
           {:else if keepsPassword}
             Connect SSO and keep my password
           {:else}
-            Delete my password and connect SSO
+            Delete my password and second step, and connect SSO
           {/if}
         </button>
       </div>
