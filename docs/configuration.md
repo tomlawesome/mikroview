@@ -3547,19 +3547,20 @@ to it: open the account menu at the bottom of the rail (click your
 username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
-**Unless you are the admin, this deletes your MikroView password, and
-can't be undone from MikroView.** After connecting:
+**Unless you are the admin, this deletes your MikroView password and
+second factor, and can't be undone from MikroView.** After connecting:
 
 - You sign in through your identity provider only.
 - If you lose access to that provider, MikroView can't recover the
   account for you.
 
-**The admin is the exception: it keeps its password.** MikroView holds
-exactly one admin, and a provider outage with no password anywhere locks
-everybody out rather than one person — so for that account SSO is an
-extra way in rather than a replacement, and the dialog says so instead
-of warning about a deletion that does not happen. See [SSO is additive:
-keep a local admin](#sso-is-additive-keep-a-local-admin).
+**The admin is the exception: it keeps its password and its second
+factor.** MikroView holds exactly one admin, and a provider outage with
+no local way in locks everybody out rather than one person — so for
+that account SSO is an extra way in rather than a replacement, and the
+dialog says so instead of warning about a deletion that does not
+happen. See [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin).
 
 - You stay signed in on the browser you did it from. Anywhere else
   you're signed in gets signed out.
@@ -3900,12 +3901,23 @@ oidc:
 
 ### SSO is additive: keep a local admin
 
-**Your admin account keeps its MikroView password, whether or not you
-connect it to SSO.** That password is the way back in on the day your
-identity provider is down, misconfigured after an upgrade, or has lost
-the admin's directory entry. MikroView never signs in to your provider
-on its own behalf, so if the provider cannot answer, SSO cannot let
-anybody in.
+**Your admin account keeps its MikroView password and its second
+factor, whether or not you connect it to SSO.** That password-and-factor
+pair is the way back in on the day your identity provider is down,
+misconfigured after an upgrade, or has lost the admin's directory entry.
+MikroView never signs in to your provider on its own behalf, so if the
+provider cannot answer, SSO cannot let anybody in.
+
+**A second factor is required on every local account, not just the
+admin's.** Once you've set a local password, MikroView won't let a
+signed-in session go anywhere except enrolling a second factor (an
+authenticator app or a passkey) until one is active — see
+[docs/authenticator-app.md](authenticator-app.md). This applies whether the
+account is brand new or has existed for a while: an account that somehow
+reaches sign-in without a factor is sent straight to enrolment and can't
+reach anything else until it has one. The one account this never applies
+to is one that signs in through SSO only — your identity provider
+already handles that step.
 
 What this means in practice:
 
@@ -3921,14 +3933,15 @@ What this means in practice:
   account has been created and that the OIDC settings go in the config
   file; add them, restart, and connect the account from the account
   menu whenever you like.
-- **Connecting the admin to SSO keeps its password.** Afterwards you
-  can sign in either way: through your provider normally, with the
-  password when the provider is unreachable.
-- **Everybody else loses their password when they connect.** A user or
-  viewer who connects their account signs in through your provider from
-  then on, and MikroView cannot recover that account for them. That is
-  unchanged, and it costs the deployment nothing — the admin still has
-  a password.
+- **Connecting the admin to SSO keeps its password and its second
+  factor.** Afterwards you can sign in either way: through your provider
+  normally, or the break-glass path — username, password, and second
+  factor — when the provider is unreachable.
+- **Everybody else loses both their password and their second factor
+  when they connect.** A user or viewer who connects their account
+  signs in through your provider from then on, and MikroView cannot
+  recover that account for them. That is unchanged, and it costs the
+  deployment nothing — the admin still has a password and a factor.
 - **A MikroView username can't be an email address.** Identity
   providers send an email as the username, so keeping local names clear
   of them means the two can never be the same name and MikroView never
