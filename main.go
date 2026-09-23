@@ -591,6 +591,18 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
 		os.Exit(runTransferAdmin(os.Args[2:]))
 	}
+	// -clear-second-factor: the way back in for an admin who has lost the
+	// device holding their authenticator app (#1249). No web route clears
+	// a user's own factor without their password -- the account-owner
+	// DELETE route re-checks the password, and the admin-facing clear
+	// route in the Users group explicitly refuses the caller's own
+	// account, for the same reason a self-service "forgot my password"
+	// web form does not exist either. This is the CLI equivalent of
+	// -recover-admin-account for that lockout: host access plus a
+	// recovery key, same as every other command in this block.
+	if len(os.Args) > 1 && os.Args[1] == "-clear-second-factor" {
+		os.Exit(runClearSecondFactor(os.Args[2:]))
+	}
 
 	configLog := logging.New("config")
 	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
@@ -2608,6 +2620,144 @@ func runTransferAdmin(args []string) int {
 		return 1
 	}
 	logger.Info(fmt.Sprintf("admin transferred from %s to %s", logging.Printable(from.Username), logging.Printable(to.Username)))
+	return 0
+}
+
+// runClearSecondFactor backs `-clear-second-factor <username>` -- the way
+// back in for an admin whose phone (or other device holding their
+// authenticator app) is lost, mirroring what -recover-admin-account is
+// for a lost password (issue #1249).
+//
+// No web route can do this job. handleTOTPDelete requires the caller's
+// current password, which is exactly what a session that also lost its
+// second factor cannot always be assumed to have handy, and
+// handleTOTPAdminClear -- the admin's own "clear someone else's factor"
+// button in the Users group -- explicitly refuses the caller's own
+// account (mikroview holds exactly one admin, so that refusal is also
+// what keeps the admin account out of that route entirely). Between
+// them there is no route back in for an admin locked out of their own
+// factor, which is what this command is for.
+//
+// Unlike -recover-admin-account, this is not limited to the admin
+// account. A lost authenticator is not a privilege escalation the way a
+// lost admin password is -- clearing an ordinary user's factor grants
+// nothing beyond what their password already does -- so there is no
+// equivalent reason to narrow the target, and narrowing it would leave
+// every non-admin user with a lost phone and no way back in at all
+// (handleTOTPAdminClear needs the admin to still be signed in to use
+// it; a user locked out of their own account has no session to reach it
+// from).
+//
+// Follows -recover-admin-account's shape in every other respect: CLI
+// only, host access plus a recovery key, every use rotates the keys
+// (openRecoveryStoreForCLI/Redeem/Commit), and stdout is refused as the
+// container's main process before anything runs, because that stream is
+// where the rotated keys are about to be printed.
+func runClearSecondFactor(args []string) int {
+	logger := logging.New("clear-second-factor")
+	if err := refuseIfContainerMainProcess("-clear-second-factor"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// The username is required, unlike -transfer-admin's optional
+	// numbered list: there is no small, well-known set of accounts to
+	// offer a choice from here (transfer only ever chooses among the
+	// handful of accounts that could plausibly become admin), and an
+	// operator reaching for this command already knows whose phone is
+	// lost. Exit code 2 for a usage mistake, matching -backup, -restore
+	// and -migrate-data -- distinct from 1, which is everything that got
+	// as far as actually trying and failed.
+	target, ok := firstNonFlag(args)
+	if !ok {
+		logger.Error("usage: mikroview -clear-second-factor <username>")
+		return 2
+	}
+
+	recovery, closeStorage, err := openRecoveryStoreForCLI()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeStorage()
+	store, closeAuth, err := openAuthStoreForCLI("-clear-second-factor")
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeAuth()
+
+	// The key is asked for before the username is looked up -- the same
+	// ordering -transfer-admin had to be fixed into (#267): resolving the
+	// account first would let anyone able to run the binary learn
+	// whether a given username exists before proving they hold a key.
+	key, err := readRecoveryKey()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// Redeem verifies the key and prepares a replacement set without
+	// persisting the rotation -- Commit below does that, once the
+	// operator confirms they captured the new keys. So an unknown
+	// username below costs nothing: the previous keys stay valid because
+	// Commit never runs.
+	fresh, err := recovery.Redeem(key)
+	if err != nil {
+		// One message for a wrong key and for a corrupt store: the
+		// difference is only useful to someone probing.
+		logger.Error(err.Error())
+		return 1
+	}
+
+	user, ok := store.ByUsername(target)
+	if !ok {
+		logger.Error(fmt.Sprintf("no such account: %s -- nothing was changed, and your recovery keys are unchanged",
+			logging.Printable(target)))
+		return 1
+	}
+
+	// A factor that is already off, or was never carried past enrolment,
+	// is reported rather than treated as a failure the operator has to
+	// interpret. Whoever is running this because their phone is lost has
+	// no way to know in advance which case they are in, and finding out
+	// here is not a mistake on their part. The key was already redeemed
+	// above, so the rest of this command -- printing and confirming the
+	// rotated keys -- proceeds exactly as it would if there had been
+	// something to clear.
+	//
+	// outcome is what actually happened, in prose -- built once and
+	// reused across the terminal message and every log line below it, so
+	// the "nothing was there" case reads honestly everywhere instead of
+	// only on stdout. Written as a past-tense clause with no leading
+	// subject, so it composes into "<outcome>, but ..." and "<outcome>,
+	// recovery keys rotated" without repeating itself.
+	var outcome string
+	if user.HasActiveTOTP() {
+		if err := store.ClearTOTP(user.ID); err != nil {
+			logger.Error(fmt.Sprintf("clearing the factor failed, no keys were consumed: %v", err))
+			return 1
+		}
+		outcome = fmt.Sprintf("authenticator-app factor for %s cleared, along with its recovery codes", logging.Printable(user.Username))
+	} else {
+		outcome = fmt.Sprintf("%s had no active authenticator-app factor -- nothing to clear", logging.Printable(user.Username))
+	}
+	fmt.Println(outcome + ".")
+
+	// Past this point the outcome above already stands, cleared or not.
+	// Every remaining failure leaves the previous keys valid and says
+	// so -- rotating into a set the operator never captured is the one
+	// outcome worse than not rotating at all.
+	printRecoveryKeys(fresh)
+	if !confirmSaved() {
+		logger.Warn(fmt.Sprintf("%s, but the new keys were not confirmed -- your previous recovery keys remain valid", outcome))
+		return 1
+	}
+	if err := recovery.Commit(); err != nil {
+		logger.Warn(fmt.Sprintf("%s, but storing the new keys failed: %v -- your previous recovery keys remain valid", outcome, err))
+		return 1
+	}
+	logger.Info(fmt.Sprintf("%s, recovery keys rotated", outcome))
 	return 0
 }
 

@@ -109,7 +109,7 @@ func TestEveryKeyPrintingCommandChecksBeforeDoingWork(t *testing.T) {
 	}
 	body := string(src)
 
-	for _, fn := range []string{"runGenerateRecoveryKeys", "runTransferAdmin", "runRecoverAdminAccount"} {
+	for _, fn := range []string{"runGenerateRecoveryKeys", "runTransferAdmin", "runRecoverAdminAccount", "runClearSecondFactor"} {
 		start := strings.Index(body, "func "+fn+"(")
 		if start < 0 {
 			t.Fatalf("%s not found", fn)
