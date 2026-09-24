@@ -160,9 +160,10 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
 }
 
 // extra merges into the request init -- #1283's preferences flush is the
-// one caller that needs it, passing { keepalive: true } so a write fired
-// from a pagehide handler survives the page already being torn down
-// (the same guarantee sendBeacon gives, without giving up PUT/JSON).
+// caller that needs it (now via patchJSON below, since that flush is a
+// PATCH), passing { keepalive: true } so a write fired from a pagehide
+// handler survives the page already being torn down (the same guarantee
+// sendBeacon gives, without giving up PUT/JSON).
 async function putJSON(url: string, body: unknown = {}, extra: RequestInit = {}): Promise<Response> {
   return send(url, {
     method: 'PUT',
@@ -172,14 +173,17 @@ async function putJSON(url: string, body: unknown = {}, extra: RequestInit = {})
   })
 }
 
-// PATCH, for the one route that edits a single field of something the
-// server already holds (a kept backup's comment, #1126). Same CSRF
-// header as its neighbours, for the same reason.
-async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
+// PATCH, for a route that edits part of something the server already
+// holds (a kept backup's comment, #1126; the caller's changed
+// preference keys, #1283) rather than the whole thing. extra is putJSON's
+// own { keepalive: true } escape hatch, needed here too since
+// lib/preferences.svelte.ts's pagehide flush now goes through PATCH.
+async function patchJSON(url: string, body: unknown = {}, extra: RequestInit = {}): Promise<Response> {
   return send(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
+    ...extra,
   })
 }
 
@@ -1066,11 +1070,14 @@ export async function fetchMyPreferences(): Promise<PreferencesRecord> {
   return res.json()
 }
 
-// Replaces the whole record. keepalive lets lib/preferences.svelte.ts's
-// pagehide flush outlive the page unload that triggers it (see putJSON's
-// own comment on `extra`).
+// Merges record.prefs's keys into the stored record -- record.prefs
+// holds only the keys that changed since the last successful save
+// (lib/preferences.svelte.ts's flush()), not the caller's whole record,
+// so two tabs saving different keys don't race each other off the
+// server (#1283). keepalive lets the pagehide flush outlive the page
+// unload that triggers it (see putJSON's own comment on `extra`).
 export async function saveMyPreferences(record: PreferencesRecord, opts: { keepalive?: boolean } = {}): Promise<string | null> {
-  const res = await putJSON('/api/me/preferences', record, opts.keepalive ? { keepalive: true } : {})
+  const res = await patchJSON('/api/me/preferences', record, opts.keepalive ? { keepalive: true } : {})
   if (res.ok) return null
   return await serverSaid(res)
 }

@@ -91,6 +91,36 @@ describe('preferencesState.ensureLoaded', () => {
     // same thing as "the server record is genuinely empty".
     expect(localStorage.getItem('mikroview-colorway')).toBe('pulse')
   })
+
+  it('never flushes a change made against a failed load -- the server keeps whatever else it had', async () => {
+    vi.mocked(fetchMyPreferences).mockRejectedValue(new Error('network down'))
+    await preferencesState.ensureLoaded()
+
+    preferencesState.set('colorway', 'pulse')
+    await preferencesState.flush()
+
+    // Nothing sent at all: there was never a real baseline to save
+    // against, so this session's one changed key must not go out and
+    // risk standing in for -- or racing against -- whatever the server
+    // actually holds for every other key.
+    expect(saveMyPreferences).not.toHaveBeenCalled()
+  })
+
+  it('retries the load on the next ensureLoaded(), and then sends the change made while it was failing', async () => {
+    vi.mocked(fetchMyPreferences).mockRejectedValueOnce(new Error('network down'))
+    await preferencesState.ensureLoaded()
+    preferencesState.set('colorway', 'pulse')
+
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { retention: 30 } })
+    await preferencesState.ensureLoaded()
+
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(2)
+    // The retry's own record is kept, and the pending local change rides
+    // along on top of it rather than being lost.
+    expect(preferencesState.get('retention')).toBe(30)
+    expect(preferencesState.get('colorway')).toBe('pulse')
+    expect(saveMyPreferences).toHaveBeenCalledWith({ version: 1, prefs: { colorway: 'pulse' } }, {})
+  })
 })
 
 describe('preferencesState.get/set', () => {
@@ -142,6 +172,21 @@ describe('preferencesState debounce and flush', () => {
     await preferencesState.flush()
 
     expect(saveMyPreferences).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends only the key changed since the last successful save, not the whole record', async () => {
+    preferencesState.set('colorway', 'pulse')
+    await preferencesState.flush()
+    expect(saveMyPreferences).toHaveBeenCalledWith({ version: 1, prefs: { colorway: 'pulse' } }, {})
+
+    preferencesState.set('groupMode', true)
+    await preferencesState.flush()
+
+    // A second, unrelated change must not re-send colorway -- only
+    // groupMode changed since the last successful flush (#1283's "save
+    // only what changed" ruling; two tabs each saving a different key
+    // must not stomp on each other on the server).
+    expect(saveMyPreferences).toHaveBeenLastCalledWith({ version: 1, prefs: { groupMode: true } }, {})
   })
 
   it('flush() is a no-op when nothing changed since the last flush', async () => {
@@ -241,7 +286,7 @@ describe('preferencesState migration from localStorage', () => {
     // Not one of the nine, but still mikroview*-prefixed -- the sweep is
     // blanket, not itemised.
     localStorage.setItem('mikroview-something-future', '1')
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {}, userId: 'user-1' })
 
     await preferencesState.ensureLoaded()
 
@@ -272,7 +317,7 @@ describe('preferencesState migration from localStorage', () => {
   it('treats a stored "null" retention as no limit, and "0" groupMode as off', async () => {
     localStorage.setItem('mikroview-max-age-seconds', 'null')
     localStorage.setItem('mikroview:group', '0')
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {}, userId: 'user-1' })
 
     await preferencesState.ensureLoaded()
 
@@ -282,7 +327,7 @@ describe('preferencesState migration from localStorage', () => {
 
   it('keeps the legacy keys and still applies the migrated values in memory when the PUT fails', async () => {
     localStorage.setItem('mikroview-colorway', 'pulse')
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {}, userId: 'user-1' })
     vi.mocked(saveMyPreferences).mockResolvedValue('the server could not do that (500)')
 
     await preferencesState.ensureLoaded()
@@ -295,12 +340,46 @@ describe('preferencesState migration from localStorage', () => {
     sessionStorage.setItem('mikroview-wizard-history-key', 'a-key')
     sessionStorage.setItem('mikroview.justSignedOut', '1')
     localStorage.setItem('mikroview-colorway', 'pulse')
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {}, userId: 'user-1' })
 
     await preferencesState.ensureLoaded()
 
     expect(sessionStorage.getItem('mikroview-wizard-history-key')).toBe('a-key')
     expect(sessionStorage.getItem('mikroview.justSignedOut')).toBe('1')
     sessionStorage.clear()
+  })
+
+  // #1283 round 2: on a shared browser, a v0.6.0 install's leftover keys
+  // must reach the first account that signs in after the upgrade -- and
+  // only that account, even if its own upload never made it and the
+  // keys are still sitting there when a second, different account signs
+  // in next.
+  it('binds the legacy keys to the first account, and refuses to migrate them into a second, different account', async () => {
+    localStorage.setItem('mikroview-colorway', 'pulse')
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {}, userId: 'user-a' })
+    vi.mocked(saveMyPreferences).mockResolvedValue('the server could not do that (500)')
+
+    // user-a signs in: the upload fails, so the legacy key is left in
+    // place, but user-a is now the keys' owner.
+    await preferencesState.ensureLoaded()
+    expect(preferencesState.get('colorway')).toBe('pulse')
+    expect(localStorage.getItem('mikroview-colorway')).toBe('pulse')
+
+    // user-a signs out; user-b signs in on the same browser. The server
+    // record for user-b is empty too (a genuinely new account), and the
+    // legacy key is still sitting in localStorage -- but it belongs to
+    // user-a, not user-b.
+    preferencesState.reset()
+    vi.mocked(saveMyPreferences).mockClear()
+    vi.mocked(saveMyPreferences).mockResolvedValue(null)
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {}, userId: 'user-b' })
+
+    await preferencesState.ensureLoaded()
+
+    expect(saveMyPreferences).not.toHaveBeenCalled()
+    expect(preferencesState.get('colorway')).toBeUndefined()
+    // Still there, untouched, in case user-a signs back in and its own
+    // retry can still claim it.
+    expect(localStorage.getItem('mikroview-colorway')).toBe('pulse')
   })
 })

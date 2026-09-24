@@ -262,11 +262,11 @@ var authzMatrix = []routeExpectation{
 		"reads the caller's own preferences record (#1283) -- same reasoning as /api/auth/password above: it acts " +
 			"only on the session's own account, there is no id in the request that could point it at someone else's, " +
 			"and even the lowest tier must be able to see its own presets, widgets and layout"},
-	{http.MethodPut, "/api/me/preferences", accessViewer,
-		"replaces the caller's own preferences record wholesale (#1283) -- same tier and same reasoning as the GET " +
-			"beside it and as /api/auth/password: a viewer changing their own accent colour or column widths is not " +
-			"an operational decision about what mikroview is watching, it is a personal setting following them to " +
-			"whichever browser they sign into"},
+	{http.MethodPatch, "/api/me/preferences", accessViewer,
+		"merges changed keys into the caller's own preferences record (#1283) -- same tier and same reasoning as " +
+			"the GET beside it and as /api/auth/password: a viewer changing their own accent colour or column " +
+			"widths is not an operational decision about what mikroview is watching, it is a personal setting " +
+			"following them to whichever browser they sign into"},
 	{http.MethodGet, "/api/third-party-notices", accessViewer,
 		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
 	{http.MethodGet, "/api/stats", accessViewer, "core read"},
