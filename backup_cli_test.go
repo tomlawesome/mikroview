@@ -523,6 +523,61 @@ func TestRestoreLeavesTheMarkerWhenRollbackCannotFullyRecover(t *testing.T) {
 	}
 }
 
+// TestRestoreLeavesTheMarkerWhenTheVaultBundleFailsAfterStoresLand pins
+// the ordering fix to #1293's marker: the vault bundle and retained
+// corpus are written after every plain store, but outside rollback's
+// coverage (see the comment above the marker-removal line in runRestore),
+// so a failure writing either of them must still leave the marker in
+// place. Before the fix, the marker was removed as soon as the store loop
+// finished -- right before the vault write -- so a crash here booted
+// clean on a data directory whose stores had landed but whose vault
+// bundle had not.
+//
+// The vault store here carries a malicious entry name ("../escape") that
+// vaultPath refuses, so runRestore fails on the vault step specifically,
+// after the auth store has already been written.
+func TestRestoreLeavesTheMarkerWhenTheVaultBundleFailsAfterStoresLand(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+	vaultDir := filepath.Join(dir, "vault")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+	t.Setenv("MIKROVIEW_BACKUP_VAULT_DIR", vaultDir)
+
+	badBundle, err := json.Marshal(vaultBundle{Files: map[string][]byte{"../escape": []byte("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"auth":         []byte(`{"users":[]}`),
+		vaultStoreName: badBundle,
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 1 {
+		t.Fatalf("runRestore(--force) = %d, want 1 (the vault bundle entry escapes vaultDir)", code)
+	}
+
+	// The auth store landed -- the failure is specifically in the vault
+	// step, after the stores.
+	if _, err := os.Stat(authPath); err != nil {
+		t.Errorf("auth store after the failed restore: stat = %v, want it written", err)
+	}
+
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("restore marker at %s after the vault bundle failed: stat = %v, want it left in place "+
+			"-- stores and schema landed but the vault bundle did not, so the data directory is "+
+			"silently incomplete", markerPath, err)
+	}
+}
+
 // TestRestoreWithoutForceAdvisesCopyingTheDataDirectoryFirst pins #1293's
 // third requirement: the refusal an operator sees without --force must
 // say to copy the data directory first if they want a way back, since

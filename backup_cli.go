@@ -907,16 +907,14 @@ func runRestore(args []string) int {
 	}
 
 	// Every store and, if the backup carried one, schema.json have now
-	// landed together -- the mixture #1293 is about can no longer happen,
-	// so the marker's job is done. The vault bundle and retained corpus
-	// below are not stores in that sense (see their own comments) and
-	// were already outside rollback's coverage above, so the marker does
-	// not need to wait for them.
-	if err := os.Remove(restoreMarker); err != nil && !os.IsNotExist(err) {
-		logger.Error(fmt.Sprintf("restore finished but the marker at %s could not be removed: %v -- "+
-			"startup will refuse to run until it is deleted by hand", restoreMarker, err))
-		return 1
-	}
+	// landed together -- the mixture #1293 is about can no longer happen.
+	// The marker itself stays down, though: the vault bundle and retained
+	// corpus below are not stores in that sense (see their own comments)
+	// and fall outside rollback's coverage, so a failure writing either
+	// of them still leaves this data directory silently incomplete. The
+	// marker is what catches that on the next boot, so it is only
+	// removed once those writes have landed too, at the very end of this
+	// function.
 
 	if vaultBundleToRestore != nil {
 		if err := writeVaultBundle(vaultDir, *vaultBundleToRestore); err != nil {
@@ -964,6 +962,19 @@ func runRestore(args []string) int {
 			return 1
 		}
 		logger.Info(fmt.Sprintf("restored %d retained event(s) into %s", len(retainedEvents), dir))
+	}
+
+	// Everything the backup carried -- stores, schema.json, the vault
+	// bundle and the retained corpus -- is now on disk, so the marker's
+	// job is done: a crash from here on has nothing left to finish.
+	// Removed last on purpose, so a crash or error partway through the
+	// vault bundle or retained-corpus writes above leaves the marker in
+	// place and the next boot refuses to start on a silently incomplete
+	// restore, the same way an in-loop failure does via rollback.
+	if err := os.Remove(restoreMarker); err != nil && !os.IsNotExist(err) {
+		logger.Error(fmt.Sprintf("restore finished but the marker at %s could not be removed: %v -- "+
+			"startup will refuse to run until it is deleted by hand", restoreMarker, err))
+		return 1
 	}
 
 	logger.Info(fmt.Sprintf("restored %d store(s) from %s (created %s by %s)",
