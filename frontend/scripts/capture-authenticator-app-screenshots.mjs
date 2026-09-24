@@ -16,8 +16,11 @@
 //  - docs/screenshots/authenticator-enrol-dark.png: the enrolment
 //    screen -- QR code, the text secret beside it, the code box beneath.
 //  - docs/screenshots/authenticator-recovery-codes-dark.png: the ten
-//    recovery codes, Copy all, I have saved these -- see the update
-//    note: not currently reachable, left uncaptured here.
+//    recovery codes, Copy all, I have saved these -- since 3e08bb76 this
+//    is AuthEnrolFactor.svelte's 'codes' stage at the forced-enrolment
+//    door, not AuthenticatorOverlay's own (see the update note below),
+//    so it's captured from a separate, freshly created no-factor account
+//    driven straight through that door, not from this script's admin.
 //  - docs/screenshots/authenticator-login-code-dark.png: "Enter your
 //    code" at a second sign-in, with the "Use a recovery code instead"
 //    link.
@@ -99,9 +102,11 @@
 //    'codes'. The recovery-codes screenshot's own fresh mint is only
 //    ever shown to an account's first-ever factor, and that is now
 //    always enrolled through the door, never through this modal -- so
-//    docs/screenshots/authenticator-recovery-codes-dark.png cannot be
-//    honestly recaptured from this script as it stands. Left as
-//    committed; flagged rather than faked.
+//    docs/screenshots/authenticator-recovery-codes-dark.png is instead
+//    captured from a separate, freshly created no-factor account driven
+//    straight through the door (see "The recovery codes, at the
+//    forced-enrolment door" below), before this admin's own TOTP factor
+//    is touched at all.
 //  - The passkey is removed again (via the API, self-service, this
 //    account's own password) before the final sign-out/sign-in capture,
 //    so the login screen still shows a plain code box rather than
@@ -206,6 +211,69 @@ await completeSecondFactor(page)
 await page.waitForSelector('#main-content', { timeout: 15000 })
 await page.waitForTimeout(1000)
 
+// --- The recovery codes, at the forced-enrolment door -----------------------
+//
+// Since 3e08bb76 (every local account needs a second factor, no
+// exceptions), the only place an account's first-ever recovery codes are
+// ever shown is AuthEnrolFactor.svelte's 'codes' stage, reached by
+// signing in with *no* factor enrolled yet -- never AuthenticatorOverlay's
+// own 'codes' step below (see step 2's own comment), which this admin
+// account (already holding a factor by the time live-env.sh hands it
+// back) can no longer reach. So this needs its own account with nothing
+// enrolled, created fresh here (POST /api/auth/users, the same admin-only
+// route Settings -> people uses) and driven through the door in its own
+// browser context, entirely apart from the admin flow the rest of this
+// script drives. Done before the throwaway-passkey work below so the
+// two never share a context or a `page`.
+{
+  const doorUser = `door-capture-${crypto.randomBytes(4).toString('hex')}`
+  const doorPass = crypto.randomBytes(12).toString('base64url')
+  const createRes = await page.request.fetch(`${NAV_URL}/api/auth/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    data: { username: doorUser, password: doorPass, role: 'user' },
+  })
+  if (!createRes.ok()) {
+    console.error(`POST /api/auth/users answered ${createRes.status()} -- cannot create the door-capture account`)
+    process.exit(1)
+  }
+
+  const doorContext = await browser.newContext({
+    viewport: { width: 1600, height: 900 },
+    colorScheme: 'dark',
+    ignoreHTTPSErrors: true,
+  })
+  const door = await doorContext.newPage()
+  await door.goto(NAV_URL, { waitUntil: 'networkidle' })
+  await door.fill('input[autocomplete="username"]', doorUser)
+  await door.fill('input[autocomplete="current-password"]', doorPass)
+  await door.click('button[type="submit"]')
+  // main.door is AuthEnrolFactor's own top-level element -- the only
+  // screen an account with no factor can land on (requireAuth's
+  // secondFactorEnrolPaths refuses everything else).
+  await door.waitForSelector('main.door', { timeout: 15000 })
+  await door.click('button.key:has-text("Authenticator app")')
+  await door.waitForSelector('[data-testid="totp-secret"]', { timeout: 10000 })
+  // groupSecret() (AuthEnrolFactor.svelte) renders the secret in space-
+  // separated groups of four, for reading while typing it in by hand --
+  // stripped back out before decoding.
+  const doorSecretText = (await door.locator('[data-testid="totp-secret"]').textContent())?.trim() ?? ''
+  const doorSecret = doorSecretText.replace(/\s+/g, '')
+  if (!doorSecret) {
+    console.error('could not read the TOTP secret off the door’s enrolment stage')
+    process.exit(1)
+  }
+  await door.fill('#enrol-code', totpCode(doorSecret))
+  await door.click('form[aria-label="Confirm the authenticator app"] button.enter')
+  await door.waitForSelector('[data-testid="recovery-codes"]', { timeout: 10000 })
+  await door.waitForTimeout(300)
+  await door.screenshot({ path: path.join(outDir, 'authenticator-recovery-codes-dark.png') })
+  console.log('captured authenticator-recovery-codes-dark.png')
+  await door.click('button.enter:text-is("I have saved these")')
+  await door.waitForSelector('#main-content', { timeout: 15000 })
+  await doorContext.close()
+}
+
 // --- Register a throwaway passkey -----------------------------------------
 //
 // See the update note above: turning off the admin's only factor now
@@ -286,16 +354,17 @@ if (!secret) {
   process.exit(1)
 }
 
-// --- 2. The recovery codes, shown exactly once -- not reachable here -----
+// --- 2. Confirm the admin's own TOTP again -- codes already captured -----
 //
 // See the update note above: the throwaway passkey that keeps this
 // session alive also means the account's recovery codes were never
 // wiped, so confirming below always lands on 'on-done' ("already
-// issued"), never 'codes'. Confirmed anyway (rather than skipped),
+// issued"), never 'codes') -- the actual recovery-codes screenshot was
+// already taken from the door, above, by an account for which this is
+// genuinely the first factor. Confirmed anyway (rather than skipped),
 // since step 3's sign-in needs the factor actually turned back on; the
 // 'codes' branch is kept as a fallback in case that assumption ever
-// stops holding, so the screenshot gets taken the moment it becomes
-// possible again rather than silently staying stale.
+// stops holding.
 
 await modal().locator('input[autocomplete="one-time-code"]').fill(totpCode(secret))
 await modal().locator('.actions button.confirm:text-is("Confirm")').click()
@@ -315,7 +384,7 @@ if ((await modal().locator('[data-testid="recovery-codes"]').count()) > 0) {
   await modal().locator('.actions button.confirm:text-is("I have saved these")').click()
 } else {
   console.log(
-    "docs/screenshots/authenticator-recovery-codes-dark.png: not recaptured -- 'codes' step unreachable from this modal post-3e08bb76, see this file's header comment",
+    "authenticator-recovery-codes-dark.png already captured from the door above -- 'codes' step unreachable from this modal post-3e08bb76, see this file's header comment",
   )
   await modal().locator('.actions button.confirm:text-is("Close")').click()
 }
