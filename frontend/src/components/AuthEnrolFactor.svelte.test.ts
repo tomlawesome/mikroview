@@ -6,20 +6,27 @@ import { render, screen, fireEvent } from '@testing-library/svelte'
 // Same approach as AuthLogin.svelte.test.ts: mock lib/api.ts (never
 // auth.svelte.ts itself), so these tests exercise the real AuthState
 // transitions and the door's real markup with only the network faked.
-vi.mock('../lib/api', () => ({
-  fetchAuthSession: vi.fn(),
-  login: vi.fn(),
-  logout: vi.fn(),
-  register: vi.fn(),
-  setNewPasswordAfterReset: vi.fn(),
-  signOutEverywhere: vi.fn(),
-  submitLoginFactor: vi.fn(),
-  enrolTOTP: vi.fn(),
-  confirmTOTP: vi.fn(),
-  fetchPersistence: vi.fn(),
-  fetchMyPreferences: vi.fn(),
-  saveMyPreferences: vi.fn(),
-}))
+// Spreads the real module (importOriginal) rather than a bare object
+// literal so ApiError stays the real class -- the door catches it with
+// `instanceof ApiError` to route a 401 through authState.handleUnauthorized().
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>()
+  return {
+    ...actual,
+    fetchAuthSession: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    register: vi.fn(),
+    setNewPasswordAfterReset: vi.fn(),
+    signOutEverywhere: vi.fn(),
+    submitLoginFactor: vi.fn(),
+    enrolTOTP: vi.fn(),
+    confirmTOTP: vi.fn(),
+    fetchPersistence: vi.fn(),
+    fetchMyPreferences: vi.fn(),
+    saveMyPreferences: vi.fn(),
+  }
+})
 
 // The passkey ceremony is a browser boundary jsdom cannot cross --
 // mocked whole, the same way auth.svelte.test.ts already stubs
@@ -36,9 +43,17 @@ vi.mock('../lib/qrcode', () => ({
   qrCode: () => {},
 }))
 
-import { confirmTOTP, enrolTOTP, fetchAuthSession, fetchMyPreferences, saveMyPreferences } from '../lib/api'
+import {
+  ApiError,
+  confirmTOTP,
+  enrolTOTP,
+  fetchAuthSession,
+  fetchMyPreferences,
+  saveMyPreferences,
+  type PasskeyRegistrationFinish,
+} from '../lib/api'
 import { registerPasskey } from '../lib/passkeys.svelte'
-import { authState } from '../lib/auth.svelte'
+import { authState, pageReload } from '../lib/auth.svelte'
 import { preferencesState } from '../lib/preferences.svelte'
 import AuthEnrolFactor from './AuthEnrolFactor.svelte'
 
@@ -57,6 +72,9 @@ const TEN_CODES = [
 
 beforeEach(() => {
   vi.resetAllMocks()
+  // handleUnauthorized() reloads the page (jsdom has no real navigation) --
+  // stubbed the same way auth.svelte.test.ts and App.svelte.test.ts do.
+  vi.spyOn(pageReload, 'now').mockImplementation(() => {})
   authState.state = 'must-enrol-factor'
   authState.mustEnrolSecondFactor = true
   authState.username = 'meredith'
@@ -174,6 +192,49 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     expect(fetchAuthSession).not.toHaveBeenCalled()
   })
 
+  // This door has no cancel, skip or sign-out -- a 401 from any of its
+  // three network calls (most often a second device finishing enrolment
+  // first, which ends every other session on the account) has to leave
+  // through the same door an ordinary session expiry does, rather than
+  // stranding the caller on an error line with nothing else on screen.
+  describe('a session that died mid-enrolment (401) leaves through the ordinary door', () => {
+    it('from choosing the authenticator app', async () => {
+      vi.mocked(enrolTOTP).mockRejectedValue(new ApiError('sign in first', 401))
+      render(AuthEnrolFactor)
+
+      await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+
+      await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    })
+
+    it('from confirming the code', async () => {
+      vi.mocked(enrolTOTP).mockResolvedValue({
+        uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
+      })
+      vi.mocked(confirmTOTP).mockRejectedValue(new ApiError('sign in first', 401))
+      render(AuthEnrolFactor)
+      await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+      await screen.findByLabelText('Code from the app')
+      await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+
+      await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+      await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    })
+
+    it('from adding a passkey', async () => {
+      vi.mocked(registerPasskey).mockRejectedValue(new ApiError('sign in first', 401))
+      render(AuthEnrolFactor)
+      await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
+      await screen.findByLabelText('Name')
+      await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+
+      await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+
+      await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    })
+  })
+
   // A click on "Use a passkey instead" while confirm() is still in
   // flight would move the stage before that request's result lands --
   // the stray result (success or "invalid code") would then apply to
@@ -206,7 +267,7 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
   // addPasskey() (the passkey-stage submit) is not, and its own switch
   // link must not be clickable while it is in flight.
   it('disables the switch-to-authenticator-app link while adding a passkey', async () => {
-    let resolveRegister: (v: { passkey: unknown; recoveryCodes: string[] | null }) => void
+    let resolveRegister: (v: PasskeyRegistrationFinish) => void
     vi.mocked(registerPasskey).mockReturnValue(
       new Promise((resolve) => {
         resolveRegister = resolve

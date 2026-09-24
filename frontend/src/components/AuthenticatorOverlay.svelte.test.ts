@@ -9,11 +9,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 
-vi.mock('../lib/api', () => ({
-  confirmTOTP: vi.fn(),
-  disableTOTP: vi.fn(),
-  enrolTOTP: vi.fn(),
-}))
+// Spreads the real module (importOriginal) rather than a bare object
+// literal so ApiError stays the real class -- this overlay catches it
+// with `instanceof ApiError` to route a 401 through
+// authState.handleUnauthorized().
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>()
+  return {
+    ...actual,
+    confirmTOTP: vi.fn(),
+    disableTOTP: vi.fn(),
+    enrolTOTP: vi.fn(),
+  }
+})
 
 // jsdom has no real canvas backend -- QRCode.toCanvas would either throw
 // or silently draw nothing. This overlay's own contract is "the secret
@@ -28,14 +36,48 @@ vi.mock('../lib/clipboard', () => ({
   copyToClipboard: vi.fn(async () => true),
 }))
 
-import { confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
-import { authState } from '../lib/auth.svelte'
+import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+import { authState, pageReload } from '../lib/auth.svelte'
 import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
 
 beforeEach(() => {
   cleanup()
   vi.resetAllMocks()
+  // handleUnauthorized() reloads the page (jsdom has no real navigation).
+  vi.spyOn(pageReload, 'now').mockImplementation(() => {})
   authState.hasTOTP = false
+})
+
+// A 401 from either of this overlay's own calls means the session behind
+// its header X/Escape/backdrop is already gone (see enrolTOTP's own
+// comment in lib/api.ts) -- routed the same way AuthEnrolFactor's forced-
+// enrolment door routes it, rather than shown as plain error text.
+describe('a session that died mid-request (401) is routed to sign-in', () => {
+  it('from starting enrolment', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(enrolTOTP).mockRejectedValue(new ApiError('sign in first', 401))
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+  })
+
+  it('from confirming the code', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
+    })
+    vi.mocked(confirmTOTP).mockRejectedValue(new ApiError('sign in first', 401))
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await screen.findByTestId('totp-secret')
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+  })
 })
 
 describe('the status screen', () => {

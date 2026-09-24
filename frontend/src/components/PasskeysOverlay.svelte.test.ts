@@ -9,11 +9,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 
-vi.mock('../lib/api', () => ({
-  fetchPasskeys: vi.fn(),
-  renamePasskey: vi.fn(),
-  disablePasskey: vi.fn(),
-}))
+// Spreads the real module (importOriginal) rather than a bare object
+// literal so ApiError stays the real class -- this overlay catches it
+// with `instanceof ApiError` to route a 401 through
+// authState.handleUnauthorized().
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>()
+  return {
+    ...actual,
+    fetchPasskeys: vi.fn(),
+    renamePasskey: vi.fn(),
+    disablePasskey: vi.fn(),
+  }
+})
 
 // The browser ceremony itself (navigator.credentials.create) is
 // lib/passkeys.svelte.ts's own job, covered by its own test file --
@@ -27,9 +35,9 @@ vi.mock('../lib/clipboard', () => ({
   copyToClipboard: vi.fn(async () => true),
 }))
 
-import { disablePasskey, fetchPasskeys, renamePasskey } from '../lib/api'
+import { ApiError, disablePasskey, fetchPasskeys, renamePasskey } from '../lib/api'
 import { registerPasskey } from '../lib/passkeys.svelte'
-import { authState } from '../lib/auth.svelte'
+import { authState, pageReload } from '../lib/auth.svelte'
 import type { PasskeySummary } from '../lib/types'
 import PasskeysOverlay from './PasskeysOverlay.svelte'
 
@@ -49,10 +57,31 @@ function row(overrides: Partial<PasskeySummary> = {}): PasskeySummary {
 beforeEach(() => {
   cleanup()
   vi.resetAllMocks()
+  // handleUnauthorized() reloads the page (jsdom has no real navigation).
+  vi.spyOn(pageReload, 'now').mockImplementation(() => {})
   vi.mocked(fetchPasskeys).mockResolvedValue([])
   authState.passkeyCount = 0
   authState.passkeyStatus = 'ready'
   authState.passkeyOrigin = location.origin
+})
+
+// A 401 from registerPasskey means the session behind this overlay's own
+// header X/Escape/backdrop is already gone (see beginPasskeyRegistration's
+// comment in lib/api.ts) -- routed the same way AuthEnrolFactor's forced-
+// enrolment door routes it, rather than shown as plain error text.
+describe('a session that died mid-request (401) is routed to sign-in', () => {
+  it('from adding a passkey', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(registerPasskey).mockRejectedValue(new ApiError('sign in first', 401))
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText(/add a passkey/i)
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+  })
 })
 
 describe('the four unavailable copy blocks', () => {

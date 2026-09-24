@@ -17,7 +17,7 @@
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
   import { authState } from '../lib/auth.svelte'
-  import { confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+  import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { trapFocus } from '../lib/focusTrap'
   import { qrCode } from '../lib/qrcode'
@@ -92,39 +92,64 @@
   async function startEnrol() {
     error = null
     busy = true
-    const result = await enrolTOTP()
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // enrolTOTP throws rather than returning text on a 401 -- the same
+    // session-death case AuthEnrolFactor's own forced-enrolment door
+    // guards against (see enrolTOTP's comment in lib/api.ts). Routed the
+    // same way here: this overlay's own header X/Escape/backdrop would
+    // otherwise offer a way out that doesn't actually work, since the
+    // session behind it is already gone.
+    try {
+      const result = await enrolTOTP()
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      uri = result.uri
+      secret = secretFromUri(result.uri)
+      code = ''
+      step = 'enrolling'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    uri = result.uri
-    secret = secretFromUri(result.uri)
-    code = ''
-    step = 'enrolling'
   }
 
   async function confirm() {
     error = null
     busy = true
-    const result = await confirmTOTP(code)
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // Same reasoning as startEnrol above.
+    try {
+      const result = await confirmTOTP(code)
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      authState.hasTOTP = true
+      // #1250: recovery codes are shared with passkeys and minted once, by
+      // whichever factor activates first. A passkey already on this
+      // account means confirmTOTP just turned the factor on with nothing
+      // new to show -- the codes step exists nowhere to skip to, only the
+      // one-line note that the ones already issued still cover this too.
+      if (result.alreadyIssued) {
+        step = 'on-done'
+        return
+      }
+      recoveryCodes = result.recoveryCodes ?? []
+      step = 'codes'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    authState.hasTOTP = true
-    // #1250: recovery codes are shared with passkeys and minted once, by
-    // whichever factor activates first. A passkey already on this
-    // account means confirmTOTP just turned the factor on with nothing
-    // new to show -- the codes step exists nowhere to skip to, only the
-    // one-line note that the ones already issued still cover this too.
-    if (result.alreadyIssued) {
-      step = 'on-done'
-      return
-    }
-    recoveryCodes = result.recoveryCodes ?? []
-    step = 'codes'
   }
 
   async function copyCodes() {

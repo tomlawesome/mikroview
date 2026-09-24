@@ -564,10 +564,30 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     expect(result).toEqual({ recoveryCodes: null, alreadyIssued: true })
   })
 
+  // The server answers a wrong code with 400 (internal/api's
+  // handleTOTPConfirm), never 401 -- 401 there is reserved for "this
+  // session no longer exists", checked separately below.
   it('confirmTOTP returns the server refusal as a string on a wrong code', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'wrong code' })))
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 400, text: async () => 'wrong code' })))
     const result = await confirmTOTP('000000')
     expect(result).toBe('wrong code')
+  })
+
+  // Every one of the four forced-enrolment routes (enrolTOTP,
+  // confirmTOTP, beginPasskeyRegistration, finishPasskeyRegistration)
+  // needs an existing session before it does anything else, so a 401
+  // from any of them can only mean that session died -- thrown, so the
+  // forced-enrolment door (which has no cancel/skip/sign-out of its own)
+  // can send it through authState.handleUnauthorized() instead of
+  // showing it as plain text with nothing else on screen.
+  it('confirmTOTP throws on a 401, rather than returning it as text', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(confirmTOTP('123456')).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+  })
+
+  it('enrolTOTP throws on a 401, rather than returning it as text', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(enrolTOTP()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
   })
 
   it('disableTOTP posts the password and returns null on success', async () => {
@@ -651,6 +671,21 @@ describe('the passkey calls (#1250)', () => {
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('/api/auth/passkeys/register/finish')
     expect(JSON.parse(init?.body as string)).toEqual({ credential: { id: 'c1', response: {} }, name: 'my key' })
+  })
+
+  // Same reasoning as confirmTOTP/enrolTOTP above -- these are two of
+  // the same four forced-enrolment routes.
+  it('beginPasskeyRegistration throws on a 401, rather than returning it as text', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(beginPasskeyRegistration()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+  })
+
+  it('finishPasskeyRegistration throws on a 401, rather than returning it as text', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(finishPasskeyRegistration({ id: 'c1', response: {} }, 'my key')).rejects.toMatchObject({
+      status: 401,
+      message: 'sign in first',
+    })
   })
 
   it('renamePasskey PATCHes the name to the credential\'s own URL', async () => {
