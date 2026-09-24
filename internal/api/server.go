@@ -262,7 +262,7 @@ type Server struct {
 	// change, replacing what used to live in the browser's localStorage.
 	// Always non-nil (internal/prefs.Open("") returns a usable, empty,
 	// unpersisted store), same always-usable convention as Droplist
-	// above. GET/PUT /api/me/preferences (preferences.go) are the only
+	// above. GET/PATCH /api/me/preferences (preferences.go) are the only
 	// routes that touch it; handleAuthDeleteUser clears a user's record
 	// when the account itself is deleted.
 	Prefs *prefs.Store
@@ -736,7 +736,7 @@ func (s *Server) apiRoutes() []route {
 		// session's own account, with no id in the request that could
 		// point it at someone else's.
 		{http.MethodGet, "/api/me/preferences", s.handlePreferencesGet},
-		{http.MethodPut, "/api/me/preferences", s.handlePreferencesPut},
+		{http.MethodPatch, "/api/me/preferences", s.handlePreferencesPatch},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 

@@ -173,7 +173,7 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 	// record goes -- every scenario in a shard signs in as the same
 	// harness admin, and a sibling's altitude choice must not be the
 	// next scenario's starting point.
-	if err := s.Prefs.Put(keeper.ID, json.RawMessage(`{"altitudeStop":"street"}`)); err != nil {
+	if err := s.Prefs.Merge(keeper.ID, json.RawMessage(`{"altitudeStop":"street"}`)); err != nil {
 		t.Fatal(err)
 	}
 	rawToken, _, err := s.Tokens.Create("kept token", auth.TokenKindIngest, "core", keeper, time.Now())

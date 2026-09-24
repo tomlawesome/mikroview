@@ -9,7 +9,7 @@
 // JSON persistence via internal/persist, synchronous and error-returning
 // on write (tryPersistLocked) rather than write-behind -- there is no hot
 // path here to protect from a disk wait the way internal/decommission's
-// RecordTraffic is, and PUT /api/me/preferences returning 204 should mean
+// RecordTraffic is, and PATCH /api/me/preferences returning 204 should mean
 // the record is actually durable, not merely queued.
 //
 // This package never looks inside a record. What a "preference" is
@@ -125,21 +125,50 @@ func (s *Store) Get(userID string) (json.RawMessage, bool) {
 	return append(json.RawMessage(nil), raw...), true
 }
 
-// Put replaces userID's whole record with prefs, which must already be
-// a validated JSON object -- this package stores it opaquely and does
-// not re-check its shape.
+// Merge applies patch's keys into userID's stored record -- creating one
+// if userID has none yet -- and persists the result, all under one lock
+// acquisition. That single acquisition is the point: two callers saving
+// different keys around the same time (two browser tabs, #1283's own
+// "must both survive" ruling) each do a read-modify-write of the shared
+// record, and only serialising the two under this store's lock (rather
+// than each doing its own Get then a hypothetical whole-record replace)
+// stops the second from clobbering the first's key with a record that
+// was already stale by the time it was built.
+//
+// patch must already be a validated JSON object -- this package stores
+// each of its keys opaquely and does not re-check their shape, only
+// looking at a key's name to decide whether to keep or overwrite it.
 //
 // The error is the persistence failure, if any. On failure the previous
 // value (or its absence) is restored before returning, so a caller told
 // "this failed" never has a stale in-memory copy suggesting it half
 // worked -- the same restore-on-error contract internal/droplist's Add
 // and Remove follow.
-func (s *Store) Put(userID string, prefsDoc json.RawMessage) error {
+func (s *Store) Merge(userID string, patch json.RawMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var patchFields map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &patchFields); err != nil {
+		return fmt.Errorf("decoding preferences patch: %w", err)
+	}
+
 	prev, existed := s.records[userID]
-	s.records[userID] = append(json.RawMessage(nil), prefsDoc...)
+	merged := make(map[string]json.RawMessage)
+	if existed {
+		if err := json.Unmarshal(prev, &merged); err != nil {
+			return fmt.Errorf("decoding stored preferences for %q: %w", userID, err)
+		}
+	}
+	for k, v := range patchFields {
+		merged[k] = v
+	}
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("encoding merged preferences: %w", err)
+	}
+
+	s.records[userID] = data
 	if err := s.tryPersistLocked(); err != nil {
 		if existed {
 			s.records[userID] = prev
