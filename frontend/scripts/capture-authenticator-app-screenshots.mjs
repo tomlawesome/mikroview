@@ -51,11 +51,37 @@
 //   scripts/live-env.sh syslog 50   # a little background traffic, not required
 //   cd frontend && node scripts/capture-authenticator-app-screenshots.mjs
 //   scripts/live-env.sh down   (from the repo root)
+//
+// Since #1253/m19 (second factors, every local account), live-env.sh's
+// own `up` step now enrols a factor for this admin before handing back
+// -- requireAuth's forced-enrolment door refuses an account without one
+// everything but the four enrolment routes, and without that this
+// script's own plain-password login would never reach #main-content.
+// completeSecondFactor (live-browser.mjs) finishes that login step with
+// MV_TOTP_SECRET, the same helper every live-*.mjs scenario's session()
+// already uses.
+//
+// That earlier factor also means the account-menu screenshot's own
+// "no '· on' tag yet" state -- true the moment nothing is enrolled --
+// is no longer the account's starting point: it already holds one.
+// There is no way back to a browsable, un-enrolled local account either
+// (the door refuses that combination outright, and the CLI's own
+// `-clear-second-factor` lands the same account back in the door, not
+// in the ordinary app -- see sessionResponse.MustEnrolSecondFactor's own
+// comment in internal/api/auth.go). The closest honest equivalent is a
+// real admin turning their own factor off first, self-service, with
+// their own password, through this exact dialog (AuthenticatorOverlay's
+// 'turning-off' step) -- AccountMenu's row only ever reads the current
+// hasTOTP flag, so the render that follows is pixel-identical to a
+// never-enrolled account's. Doing that before capturing the menu, then
+// enrolling fresh right after for the rest of this script, is what
+// makes that screenshot a real state rather than a faked one.
 
 import { chromium } from 'playwright'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import crypto from 'crypto'
+import { completeSecondFactor } from './live-browser.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
@@ -136,8 +162,29 @@ await page.goto(URL_BASE, { waitUntil: 'networkidle' })
 await page.fill('input[autocomplete="username"]', USER)
 await page.fill('input[autocomplete="current-password"]', PASS)
 await page.click('button[type="submit"]')
+// live-env.sh's admin already holds a factor by the time this runs (see
+// the header comment) -- plain password submit lands on the code box,
+// not #main-content, until this finishes the second step with
+// MV_TOTP_SECRET.
+await completeSecondFactor(page)
 await page.waitForSelector('#main-content', { timeout: 15000 })
 await page.waitForTimeout(1000)
+
+// --- 0. Turn off the factor live-env.sh enrolled -------------------------
+//
+// Reaches the "nothing set up" state honestly: self-service, this
+// account's own password, the same "Turn off" this account could always
+// reach from the menu (see the header comment for why there is no other
+// way back to it post-#1253).
+
+await page.click(`${ACTIVE} .account button.chip`)
+await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
+await page.click(`${ACTIVE} .account .menu button.row:text-is("Authenticator app")`)
+await modal().locator('.actions button.danger:text-is("Turn off")').click()
+await modal().locator('input[autocomplete="current-password"]').fill(PASS)
+await modal().locator('.actions button.danger:text-is("Turn off authenticator app")').click()
+await modal().locator('.actions button.confirm:text-is("Close")').click()
+await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 })
 
 // --- 1. The account menu open: "Authenticator app", no "· on" tag yet ----
 

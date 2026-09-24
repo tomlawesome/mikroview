@@ -48,6 +48,7 @@ import { fileURLToPath } from 'url'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
+import { completeSecondFactor } from './live-browser.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
@@ -114,6 +115,11 @@ async function signedInPage(scheme) {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
+  // Every local account now needs a second factor (#1253); live-env.sh
+  // enrols one for the admin and exports MV_TOTP_SECRET, and this
+  // finishes the login the same way live-browser.mjs's own session()
+  // does, rather than reinventing that step here.
+  await completeSecondFactor(page)
   await page.waitForSelector('#main-content', { timeout: 15000 })
   // Settings is one of the deck's own cards since #647 (round 23), reached via the roll rail rather than the
   // account chip's menu (#616's deck retired the rail, but #647 moved Settings and Entities off the menu and onto
