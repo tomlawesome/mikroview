@@ -1753,31 +1753,31 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mint-if-absent, never re-mint (#1250's "Recovery codes are shared"
-	// rule): current was read before ConfirmTOTP above, and ConfirmTOTP
-	// never touches RecoveryCodes, so it still reflects whether this
-	// account already holds a set -- from an earlier passkey
-	// registration, in the one order that can reach this branch.
-	var codes []string
-	alreadyIssued := len(current.RecoveryCodes) > 0
+	// Mint-if-absent, atomically under the store's lock (#1250's
+	// "Recovery codes are shared" rule): a snapshot taken before this
+	// call and a separate unconditional GenerateRecoveryCodes left a
+	// window where two concurrent first enrolments (a passkey
+	// registration racing this confirm, or two tabs confirming TOTP at
+	// once) both saw no codes yet and both minted, the second silently
+	// replacing what the first had already shown. See
+	// GenerateRecoveryCodesIfAbsent's doc comment (recoverycodes.go).
+	codes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(user.ID, now)
+	if err != nil {
+		// The factor is active at this point regardless -- ConfirmTOTP
+		// already committed. Logged rather than swallowed (R6), and
+		// told to the caller plainly rather than reported as a clean
+		// success: they are about to be shown nothing to fall back on
+		// if the app is ever lost. Recovering from here is
+		// DELETE /api/auth/totp followed by enrolling again, same as
+		// any other abandoned enrolment.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
+		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
+		return
+	}
 	detail := "authenticator app confirmed"
 	if alreadyIssued {
 		detail += "; existing recovery codes unchanged"
 	} else {
-		var err error
-		codes, err = s.Auth.GenerateRecoveryCodes(user.ID, now)
-		if err != nil {
-			// The factor is active at this point regardless -- ConfirmTOTP
-			// already committed. Logged rather than swallowed (R6), and
-			// told to the caller plainly rather than reported as a clean
-			// success: they are about to be shown nothing to fall back on
-			// if the app is ever lost. Recovering from here is
-			// DELETE /api/auth/totp followed by enrolling again, same as
-			// any other abandoned enrolment.
-			authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
-			http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
-			return
-		}
 		detail += "; recovery codes issued"
 	}
 

@@ -352,6 +352,14 @@ type passkeyRegisterFinishResponse struct {
 	// "Recovery codes are shared" section. No omitempty: the frontend
 	// contract is exactly `recoveryCodes: [...]|null`, not an absent key.
 	RecoveryCodes []string `json:"recoveryCodes"`
+	// AlreadyIssued is true when this account already held recovery
+	// codes (minted by an earlier TOTP confirmation or another passkey
+	// registration) before this one -- mirrors totpConfirmResponse's
+	// field of the same name and meaning (auth.go): the frontend reads
+	// it to skip implying new codes were just issued. A mint failure is
+	// answered as its own error, not a 200 (see the handler below), so
+	// null here means only "already issued", never "minting failed".
+	AlreadyIssued bool `json:"alreadyIssued,omitempty"`
 }
 
 // handleAuthPasskeysRegisterFinish completes a registration ceremony
@@ -433,17 +441,27 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Mint-if-absent, never re-mint -- see the design's "Recovery codes
-	// are shared" section, and handleTOTPConfirm's identical rule just
-	// above it in auth.go.
-	var recoveryCodes []string
-	if len(current.RecoveryCodes) == 0 {
-		codes, err := s.Auth.GenerateRecoveryCodes(current.ID, now)
-		if err != nil {
-			authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, err))
-		} else {
-			recoveryCodes = codes
-		}
+	// Mint-if-absent, atomically under the store's lock -- never re-mint,
+	// and never let two concurrent first-registrations (this route
+	// racing itself, or racing handleTOTPConfirm) both see "no codes
+	// yet" and both mint, silently replacing whichever set the loser
+	// already showed its user. See GenerateRecoveryCodesIfAbsent's doc
+	// comment (recoverycodes.go) and handleTOTPConfirm's identical use
+	// of it in auth.go.
+	recoveryCodes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(current.ID, now)
+	if err != nil {
+		// The passkey is already added at this point -- AddPasskey above
+		// committed. A mint failure must not be answered like "already
+		// issued" (null recoveryCodes, 200): the frontend reads null as
+		// exactly that, and here nothing was ever issued for this
+		// account to fall back on. Told to the caller plainly instead,
+		// the same shape handleTOTPConfirm's identical failure takes --
+		// including leaving session rotation and the audit record for a
+		// retry that gets past this, rather than reporting a factor
+		// change with no way back in as a clean success.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, err))
+		http.Error(w, "the passkey is now active, but recovery codes could not be generated -- remove it and register again from account settings", http.StatusInternalServerError)
+		return
 	}
 
 	if wasFirstFactor {
@@ -461,6 +479,7 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, passkeyRegisterFinishResponse{
 		Passkey:       toPasskeySummary(stored, s.RelyingParty.RPID),
 		RecoveryCodes: recoveryCodes,
+		AlreadyIssued: alreadyIssued,
 	})
 }
 
