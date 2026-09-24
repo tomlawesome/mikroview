@@ -687,6 +687,48 @@ func TestListBlanksPasskeysAndPasskeyCountReadsTheLiveData(t *testing.T) {
 	}
 }
 
+// TestAnyPasskeysExist is main.go's start-up check (passkeyStartupRefusal)
+// own data source: false on a fresh store, false for an account with a
+// TOTP factor but no passkey, true the moment any account anywhere
+// holds one -- and unaffected by DeletePasskey taking that account back
+// to zero while a second account still holds one of its own.
+func TestAnyPasskeysExist(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AnyPasskeysExist() {
+		t.Error("a fresh store reports a passkey that doesn't exist")
+	}
+
+	admin, err := s.Register("admin", "password123", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	setTOTPForTest(t, s, admin.ID, "JBSWY3DPEHPK3PXP", time.Now(), 1)
+	if s.AnyPasskeysExist() {
+		t.Error("an account with a TOTP factor but no passkey reports one existing")
+	}
+
+	other, err := s.CreateUser("bilbo", "password123", RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddPasskey(other.ID, testPasskey(1, "")); err != nil {
+		t.Fatal(err)
+	}
+	if !s.AnyPasskeysExist() {
+		t.Error("an account holding a passkey must make AnyPasskeysExist true")
+	}
+
+	if _, err := s.DeletePasskey(other.ID, []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if s.AnyPasskeysExist() {
+		t.Error("AnyPasskeysExist should go false again once the only passkey is removed")
+	}
+}
+
 // TestPasskeyWritesLeaveStateWhenPersistFails is this slice's version of
 // TestTOTPWritesLeaveStateWhenPersistFails: every write in passkeys.go
 // follows the restore-on-persist-failure contract, checked here with a

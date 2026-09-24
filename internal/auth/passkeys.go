@@ -566,3 +566,23 @@ func (s *Store) PasskeyCount(userID string) int {
 	}
 	return len(u.Passkeys)
 }
+
+// AnyPasskeysExist reports whether any account on this store holds at
+// least one passkey -- main.go's start-up check for the owner's ruling
+// that a deployment whose publicUrl cannot support WebAuthn (RelyingParty
+// Status not ready: unset, ip, or insecure -- webauthn.go's own
+// PasskeyStatus doc comments name each) must refuse to start once any
+// account has a passkey registered against it, rather than silently
+// booting with those credentials unable to ever complete a login. An
+// install with none, on any status, starts as before.
+func (s *Store) AnyPasskeysExist() bool {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, u := range s.byID {
+		if len(u.Passkeys) > 0 {
+			return true
+		}
+	}
+	return false
+}
