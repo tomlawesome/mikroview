@@ -1497,13 +1497,29 @@ security:gosec:
   # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.1)
   # gosec cannot load a single package -- and in SARIF mode it says
   # nothing about why: exit 1, an empty results array, one second of
-  # runtime. `auto` lets Go fetch the go.mod toolchain instead; `go
-  # version` prints which one actually ran so the next mismatch is
-  # readable in the log rather than reconstructed from the timing.
+  # runtime. The fix installs the exact go.mod toolchain over the
+  # image's own, the same tarball-and-cache dance test:build-checks and
+  # security:licence-policy already do -- see go_toolchain_cache_entry
+  # above -- rather than paying for a fresh download from go.dev on
+  # every MR and dev pipeline. `auto` stays set as a safety net: if the
+  # cache is ever stale (go.mod bumped past what the tarball below
+  # names), Go still fetches the right one itself instead of failing the
+  # way GOTOOLCHAIN=local would. `go version` prints which one actually
+  # ran so the next mismatch is readable in the log rather than
+  # reconstructed from the timing.
   variables:
     GOTOOLCHAIN: auto
+  cache:
+    - *go_toolchain_cache_entry
   script:
-    - go version
+    # This image is Alpine (gosec's own base), with tar but no curl --
+    # the one line the other two jobs' node:26-bookworm image does not
+    # need.
+    - apk add --no-cache curl
+    - mkdir -p .go-toolchain-cache
+    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - export PATH="/usr/local/go/bin:$PATH" && go version
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
     when: always
@@ -1937,13 +1953,17 @@ record:upgrade-fixture:
     # missing one costs a hand step nobody will remember.
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
 
-# The GitLab half of #1309's second signature. GitHub Actions already signs
-# the release image keylessly the moment it publishes it (.github/workflows
-# /docker.yml, the release job's "Sign the release" step, Fulcio/OIDC).
-# This job adds an independent, key-based signature from a private key that
-# exists only on this dedicated, protected `mikroview-signing` runner's
-# host, mounted read-only into its jobs -- so compromising GitHub's OIDC
-# issuer alone is not enough to forge both signatures over the same digest.
+# The GitLab half of #1309's two signatures, and the automatic one: this
+# job runs on every v* tag pipeline and adds a key-based signature from a
+# private key that exists only on this dedicated, protected
+# `mikroview-signing` runner's host, mounted read-only into its jobs. The
+# second, keyless (Sigstore/OIDC) signature is GitHub's, added by
+# .github/workflows/countersign.yml -- deliberately manual, started by
+# the owner by hand after it verifies this key-based signature against
+# the committed cosign.pub (docs/release-signing.md). Requiring the
+# owner's own GitHub login for that half is the point: compromising
+# GitHub's OIDC issuer alone is not enough to forge both signatures over
+# the same digest.
 # Same runner-is-the-key-fence reasoning as orbit's `sign_evidence`
 # (orbit/docs/releasing.md): this GitLab is CE, which has no protected
 # environments or environment-scoped variables, so a CI/CD variable would

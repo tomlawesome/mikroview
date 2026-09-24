@@ -262,10 +262,20 @@ func (s *Store) RenamePasskey(userID string, credID []byte, name string) (Passke
 		return Passkey{}, ErrPasskeyNotFound
 	}
 
-	prevName := u.Passkeys[idx].Name
-	u.Passkeys[idx].Name = normalisePasskeyName(name, idx+1)
+	// A fresh backing array, not an in-place field write on
+	// u.Passkeys[idx]: Get hands out a shallow *User copy that shares
+	// this slice's backing array without holding the lock while the
+	// caller reads it, so mutating an element in place races that read.
+	// See DeletePasskey's own comment for the same reasoning; here the
+	// element count doesn't change, only its contents, so every element
+	// is copied across including the one being renamed.
+	prevPasskeys := u.Passkeys
+	kept := make([]Passkey, len(u.Passkeys))
+	copy(kept, u.Passkeys)
+	kept[idx].Name = normalisePasskeyName(name, idx+1)
+	u.Passkeys = kept
 	if err := s.tryPersistLocked(); err != nil {
-		u.Passkeys[idx].Name = prevName
+		u.Passkeys = prevPasskeys
 		return Passkey{}, fmt.Errorf("saving accounts: %w", err)
 	}
 	return u.Passkeys[idx], nil
@@ -371,24 +381,87 @@ func (s *Store) RecordPasskeyAssertion(userID string, credID []byte, signCount u
 		return ErrPasskeyNotFound
 	}
 
-	prevSignCount := u.Passkeys[idx].SignCount
-	prevLastUsedAt := u.Passkeys[idx].LastUsedAt
-
-	if signCount > u.Passkeys[idx].SignCount {
-		u.Passkeys[idx].SignCount = signCount
+	// A fresh backing array, not in-place field writes on
+	// u.Passkeys[idx]: Get hands out a shallow *User copy that shares
+	// this slice's backing array without holding the lock while the
+	// caller reads it, so mutating an element in place races that read
+	// (see RenamePasskey's identical comment, and DeletePasskey's for
+	// the element-count-changes case this mirrors).
+	prevPasskeys := u.Passkeys
+	kept := make([]Passkey, len(u.Passkeys))
+	copy(kept, u.Passkeys)
+	if signCount > kept[idx].SignCount {
+		kept[idx].SignCount = signCount
 	}
-	u.Passkeys[idx].LastUsedAt = now
+	kept[idx].LastUsedAt = now
+	u.Passkeys = kept
 	if err := s.tryPersistLocked(); err != nil {
 		// A guard/timestamp that only advanced in memory must not be
 		// reported as advanced -- same reasoning RecordTOTPCounter's
 		// restore-on-failure comment gives: a restart before the next
 		// good write would make an already-used counter value live
 		// again for whoever else presented it.
-		u.Passkeys[idx].SignCount = prevSignCount
-		u.Passkeys[idx].LastUsedAt = prevLastUsedAt
+		u.Passkeys = prevPasskeys
 		return fmt.Errorf("saving accounts: %w", err)
 	}
 	return nil
+}
+
+// RecordPasskeyAssertionIfFresh is RecordPasskeyAssertion's login-path
+// sibling: the same forward-only SignCount and LastUsedAt update, but
+// under the same lock acquisition it also decides whether the login is
+// accepted, closing a race the two-step version left open.
+// handleAuthLoginFactor's passkey branch (passkey.go) used to call
+// go-webauthn's ValidateLogin (whose CloneWarning is what would normally
+// catch a replayed assertion) and then RecordPasskeyAssertion as two
+// separate steps; two concurrent submissions of the same assertion both
+// cleared CloneWarning against the same not-yet-advanced stored count
+// and both won a session -- the passkey shape of #1249's TOTP race (see
+// VerifyAndRecordTOTP, store.go).
+//
+// accepted is false when signCount is not fresh: nonzero and at or
+// below what's already stored. Zero is exempt, the same exemption
+// RecordPasskeyAssertion's own doc comment explains -- an authenticator
+// that always reports 0 must not be locked out after its first login,
+// so its logins carry no counter-based replay protection here, same as
+// before this method existed.
+func (s *Store) RecordPasskeyAssertionIfFresh(userID string, credID []byte, signCount uint32, now time.Time) (accepted bool, err error) {
+	if !s.Persisted() {
+		return false, ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return false, ErrUserNotFound
+	}
+
+	idx := findPasskeyIndex(u, credID)
+	if idx == -1 {
+		return false, ErrPasskeyNotFound
+	}
+
+	stored := u.Passkeys[idx].SignCount
+	if signCount != 0 && signCount <= stored {
+		return false, nil
+	}
+
+	prevPasskeys := u.Passkeys
+	kept := make([]Passkey, len(u.Passkeys))
+	copy(kept, u.Passkeys)
+	if signCount > stored {
+		kept[idx].SignCount = signCount
+	}
+	kept[idx].LastUsedAt = now
+	u.Passkeys = kept
+	if err := s.tryPersistLocked(); err != nil {
+		u.Passkeys = prevPasskeys
+		return true, fmt.Errorf("saving accounts: %w", err)
+	}
+	return true, nil
 }
 
 // ClearPasskeys removes every passkey on userID's account in one write
@@ -492,4 +565,24 @@ func (s *Store) PasskeyCount(userID string) int {
 		return 0
 	}
 	return len(u.Passkeys)
+}
+
+// AnyPasskeysExist reports whether any account on this store holds at
+// least one passkey -- main.go's start-up check for the owner's ruling
+// that a deployment whose publicUrl cannot support WebAuthn (RelyingParty
+// Status not ready: unset, ip, or insecure -- webauthn.go's own
+// PasskeyStatus doc comments name each) must refuse to start once any
+// account has a passkey registered against it, rather than silently
+// booting with those credentials unable to ever complete a login. An
+// install with none, on any status, starts as before.
+func (s *Store) AnyPasskeysExist() bool {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, u := range s.byID {
+		if len(u.Passkeys) > 0 {
+			return true
+		}
+	}
+	return false
 }

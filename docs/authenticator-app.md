@@ -1,31 +1,34 @@
 # Setting up a second factor: authenticator app and passkeys
 
-A second step at sign-in, on top of your password. MikroView offers
-two independent kinds:
+A second step at sign-in, on top of your password — and, for every
+local account, required, not optional: MikroView won't let a signed-in
+session go anywhere else until one is active (see
+[docs/configuration.md](configuration.md#sso-is-additive-keep-a-local-admin)
+for how this fits with single sign-on). MikroView offers two independent
+kinds:
 
 - **An authenticator app** — a 6-digit code from an app on your phone
   (Google Authenticator, 1Password, Bitwarden, or similar).
 - **A passkey** — your device's own fingerprint, face or screen-lock
   PIN, or a physical security key. No code to type or app to open.
 
-You can turn on either one, or both — the account menu lists them as
-two separate rows, and each works on its own. Someone who only has
-your password can't sign in without one of them too. If you're not
-sure which to pick: a passkey is quicker day to day and nothing to
-type, but it needs MikroView to have a proper web address configured
-first (see "Passkeys need a web address" below); the authenticator app
-works anywhere, including a bare IP address, at the cost of typing a
-code each time.
+Set up either one, or both — the account menu lists them as two
+separate rows, and each works on its own. Someone who only has your
+password can't sign in without one of them too. If you're not sure
+which to pick: a passkey is quicker day to day and nothing to type, but
+it needs MikroView to have a proper web address configured first (see
+"Passkeys need a web address" below); the authenticator app works
+anywhere, including a bare IP address, at the cost of typing a code
+each time.
 
 **Recovery codes are shared between the two.** Whichever one you set
 up first mints one set of ten codes, and that same set backs both —
 see "Save your recovery codes" below.
 
-**Single sign-on accounts don't get either option.** If you sign in
-through SSO, your identity provider is what verifies you, and the
-account menu says so instead of offering to set one up — turning on a
-MikroView-side second step would be securing a login your identity
-provider already owns.
+**Single sign-on accounts don't need either.** If you sign in through
+SSO, your identity provider is what verifies you, and the account menu
+says so instead of asking you to set one up — a MikroView-side second
+step would be securing a login your identity provider already owns.
 
 ## Authenticator app
 
@@ -56,6 +59,19 @@ Confirming always signs out every other browser or device this account
 is currently signed into, whether or not you already have a passkey
 set up. You stay signed in here. If that's unexpected — somewhere else
 you didn't recognise was signed in — that's worth noticing.
+
+### Turning it off
+
+Open the account menu, choose **Authenticator app**, then **Turn
+off** — this asks for your password first. If you still have a passkey
+set up, that's it: you're back to signing in with whichever one is
+left.
+
+**If the authenticator app was your only second factor, turning it off
+signs you out at once, and MikroView asks you to set one up again —
+app or passkey, your choice — the next time you sign in.** A local
+account is never left without a second factor for more than that one
+moment.
 
 ## Passkeys
 
@@ -102,7 +118,10 @@ password needed — it's cosmetic), or remove one (this asks for your
 password first, the same guard as turning off the authenticator app).
 Removing a passkey doesn't touch your recovery codes unless it was your
 very last second factor of either kind — see "Save your recovery
-codes" below.
+codes" below. Removing your very last one has the same effect turning
+off your only authenticator app does (see "Turning it off" above):
+you're signed out at once and asked to set one up again the next time
+you sign in.
 
 ### If your web address changes
 

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -432,6 +435,77 @@ func TestPasskeyCloneWarningRefusesRegressedSignCount(t *testing.T) {
 	}
 }
 
+// TestConcurrentPasskeyAssertionSubmissionsOnlyOneWins is the passkey
+// side of TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins
+// (totp_test.go): go-webauthn's ValidateLogin/CloneWarning check and
+// RecordPasskeyAssertion used to run as two separate steps, so two
+// concurrent submissions of the literal same signed assertion both
+// cleared CloneWarning against the same not-yet-advanced stored sign
+// count and both won a session. store.go's RecordPasskeyAssertionIfFresh
+// closes that under one lock acquisition -- asserted here by firing the
+// same assertion body at the server many times in parallel (run with
+// -race) and requiring exactly one success.
+func TestConcurrentPasskeyAssertionSubmissionsOnlyOneWins(t *testing.T) {
+	t.Run("counting authenticator", func(t *testing.T) { concurrentPasskeyAssertionSubmissions(t, 5) })
+	// Most platform passkeys always report zero, so the sign count can't
+	// tell a replay apart: the spent challenge has to.
+	t.Run("zero-reporting authenticator", func(t *testing.T) { concurrentPasskeyAssertionSubmissions(t, 0) })
+}
+
+func concurrentPasskeyAssertionSubmissions(t *testing.T, signCount uint32) {
+	s, ts, _ := passkeyTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "security key")
+	fake.SignCount = signCount
+
+	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+	assertion := passkeyLoginFactorBegin(t, pending, ts)
+	credential, err := fake.AssertionResponse(assertion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(loginFactorRequest{Assertion: json.RawMessage(credential)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	var successes int32
+	errs := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login/factor", bytes.NewReader(body))
+			if err != nil {
+				errs <- err
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(csrfHeaderName, csrfHeaderValue)
+			resp, err := pending.Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				atomic.AddInt32(&successes, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	if successes != 1 {
+		t.Errorf("%d of %d concurrent submissions of the same assertion succeeded, want exactly 1", successes, attempts)
+	}
+}
+
 // TestPasskeyZeroReportingAuthenticatorSignsInFine proves the flip side
 // of the clone-warning test above: a platform authenticator that always
 // reports a sign count of zero (the common passkey case) must never be
@@ -618,6 +692,91 @@ func TestPasskeyDeleteWrongPassword(t *testing.T) {
 	}
 	if len(u.Passkeys) != 1 {
 		t.Error("the passkey must survive a wrong-password delete attempt")
+	}
+}
+
+// TestPasskeyDeleteLeavingNoFactorSignsOutEverySession is the passkey
+// side of the owner's ruling that a user may remove their only second
+// factor: doing so must not leave any session -- any device, the caller
+// included -- signed in past a requirement the account no longer
+// satisfies. Mirrors totp_test.go's
+// TestTOTPDeleteLeavingNoFactorSignsOutEverySession exactly, for the
+// other kind of factor.
+func TestPasskeyDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	deviceA := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	fake, out := registerPasskey(t, deviceA, ts, s.RelyingParty, "only key")
+
+	// Not loggedInClient: bilbo's only factor is a passkey, which that
+	// helper cannot complete on its own (it only knows how to finish a
+	// TOTP/recovery-code pending step) -- driven by hand instead, the
+	// same three calls startPasskeyLogin/passkeyLoginFactorBegin/
+	// submitPasskeyAssertion give every other passkey-login test here.
+	deviceB := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+	assertion := passkeyLoginFactorBegin(t, deviceB, ts)
+	factorResp := submitPasskeyAssertion(t, deviceB, ts, fake, assertion)
+	factorResp.Body.Close()
+	if factorResp.StatusCode != http.StatusOK {
+		t.Fatalf("deviceB's passkey login/factor returned %d", factorResp.StatusCode)
+	}
+
+	resp := deleteJSON(t, deviceA, ts.URL+"/api/auth/passkeys/"+out.Passkey.ID, passkeyDeleteRequest{Password: passkeyBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var deleted map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted["removed"] != true || deleted["signedOut"] != true {
+		t.Errorf("delete response = %v, want removed=true signedOut=true", deleted)
+	}
+
+	for name, client := range map[string]*http.Client{"deviceA (the caller)": deviceA, "deviceB": deviceB} {
+		r, err := client.Get(ts.URL + "/api/flags")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s's session got %d once the account lost its only factor, want 401", name, r.StatusCode)
+		}
+	}
+}
+
+// TestPasskeyDeleteLeavingAFactorStandingDoesNotSignOut is
+// TestPasskeyDeleteLeavingNoFactorSignsOutEverySession's negative case:
+// removing one of two passkeys (or a passkey while an authenticator app
+// still stands) keeps every session, and signedOut is false.
+func TestPasskeyDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	client := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	_, first := registerPasskey(t, client, ts, s.RelyingParty, "first key")
+	registerPasskey(t, client, ts, s.RelyingParty, "second key")
+
+	resp := deleteJSON(t, client, ts.URL+"/api/auth/passkeys/"+first.Passkey.ID, passkeyDeleteRequest{Password: passkeyBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var deleted map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted["signedOut"] != false {
+		t.Errorf("delete response = %v, want signedOut=false (the second key still stands)", deleted)
+	}
+
+	r, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Errorf("the session got %d after removing one of two passkeys, want 200", r.StatusCode)
 	}
 }
 

@@ -8,13 +8,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // failingSaveBackend lets Open succeed (nothing stored yet) but fails
-// every Save -- for the R6-style case proving Put/Delete return the
+// every Save -- for the R6-style case proving Merge/Delete return the
 // persistence error rather than reporting a change as durably stored
 // when it wasn't. Mirrors internal/settings' own test fixture of the
 // same name.
@@ -39,21 +41,28 @@ func TestFirstRunHasNoRecord(t *testing.T) {
 	}
 }
 
-func TestPutThenGetRoundTrips(t *testing.T) {
+func TestMergeThenGetRoundTrips(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "preferences.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := json.RawMessage(`{"colorway":"teal","altitudeStop":3}`)
-	if err := s.Put("user-1", want); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"teal","altitudeStop":3}`)); err != nil {
+		t.Fatalf("Merge: %v", err)
 	}
 	got, ok := s.Get("user-1")
 	if !ok {
-		t.Fatal("Get reported no record right after Put")
+		t.Fatal("Get reported no record right after Merge")
 	}
-	if string(got) != string(want) {
-		t.Errorf("Get = %s, want %s", got, want)
+	// Compared as decoded values, not raw bytes -- Merge re-encodes the
+	// record from a map, and Go's map iteration order (hence
+	// json.Marshal's key order) is not the order the patch was written
+	// in.
+	var gotFields map[string]any
+	if err := json.Unmarshal(got, &gotFields); err != nil {
+		t.Fatal(err)
+	}
+	if gotFields["colorway"] != "teal" || gotFields["altitudeStop"] != float64(3) {
+		t.Errorf("Get = %s, want colorway=teal, altitudeStop=3", got)
 	}
 }
 
@@ -64,8 +73,8 @@ func TestResetDropsEveryRecordAndPersistsThat(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"user-1", "user-2"} {
-		if err := s.Put(id, json.RawMessage(`{"colorway":"teal"}`)); err != nil {
-			t.Fatalf("Put %s: %v", id, err)
+		if err := s.Merge(id, json.RawMessage(`{"colorway":"teal"}`)); err != nil {
+			t.Fatalf("Merge %s: %v", id, err)
 		}
 	}
 	if err := s.Reset(); err != nil {
@@ -87,20 +96,54 @@ func TestResetDropsEveryRecordAndPersistsThat(t *testing.T) {
 	}
 }
 
-func TestPutReplacesTheWholeRecord(t *testing.T) {
+// TestMergeKeepsKeysNotInThePatch is the "two tabs" case Merge exists
+// for: a second save naming a different key must not discard the first
+// save's key, the way a whole-record replace would.
+func TestMergeKeepsKeysNotInThePatch(t *testing.T) {
 	s, err := Open("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"a":1,"b":2}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"a":1,"b":2}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"c":3}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"c":3}`)); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := s.Get("user-1")
-	if !ok || string(got) != `{"c":3}` {
-		t.Errorf("Get after a second Put = (%s, %v), want (\"{\\\"c\\\":3}\", true) -- a PUT replaces, it doesn't merge", got, ok)
+	if !ok {
+		t.Fatal("Get reported no record after two Merges")
+	}
+	// Decoded, not compared as raw bytes -- see TestMergeThenGetRoundTrips
+	// on why key order in the re-encoded record isn't stable.
+	var gotFields map[string]any
+	if err := json.Unmarshal(got, &gotFields); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"a": float64(1), "b": float64(2), "c": float64(3)}
+	for k, v := range want {
+		if gotFields[k] != v {
+			t.Errorf("Get after a second Merge = %s, missing or wrong %q -- Merge keeps keys the second save never mentioned", got, k)
+		}
+	}
+}
+
+// TestMergeOverwritesAKeyItRepeats proves Merge is a merge, not a
+// no-clobber union: naming the same key again still updates it.
+func TestMergeOverwritesAKeyItRepeats(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"teal"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"mono"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := s.Get("user-1")
+	if !ok || string(got) != `{"colorway":"mono"}` {
+		t.Errorf("Get after re-merging the same key = (%s, %v), want ({\"colorway\":\"mono\"}, true)", got, ok)
 	}
 }
 
@@ -109,10 +152,10 @@ func TestOneUsersRecordDoesNotLeakToAnother(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-a", json.RawMessage(`{"who":"a"}`)); err != nil {
+	if err := s.Merge("user-a", json.RawMessage(`{"who":"a"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-b", json.RawMessage(`{"who":"b"}`)); err != nil {
+	if err := s.Merge("user-b", json.RawMessage(`{"who":"b"}`)); err != nil {
 		t.Fatal(err)
 	}
 	gotA, _ := s.Get("user-a")
@@ -130,7 +173,7 @@ func TestDeleteRemovesTheRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"a":1}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"a":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Delete("user-1"); err != nil {
@@ -159,10 +202,10 @@ func TestStoreSurvivesAReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"metricsView":"table"}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"metricsView":"table"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-2", json.RawMessage(`{"groupRepeats":true}`)); err != nil {
+	if err := s.Merge("user-2", json.RawMessage(`{"groupRepeats":true}`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,16 +233,16 @@ func TestUnparseableDocumentRefusesToOpen(t *testing.T) {
 	}
 }
 
-func TestPutReportsAPersistFailure(t *testing.T) {
+func TestMergeReportsAPersistFailure(t *testing.T) {
 	s, err := OpenWithBackend(failingSaveBackend{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"a":1}`)); err == nil {
-		t.Fatal("Put against a failing backend was reported as succeeding")
+	if err := s.Merge("user-1", json.RawMessage(`{"a":1}`)); err == nil {
+		t.Fatal("Merge against a failing backend was reported as succeeding")
 	}
 	if _, ok := s.Get("user-1"); ok {
-		t.Error("a refused Put was stored anyway")
+		t.Error("a refused Merge was stored anyway")
 	}
 }
 
@@ -214,7 +257,7 @@ func TestDeleteReportsAPersistFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"a":1}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"a":1}`)); err != nil {
 		t.Fatal(err)
 	}
 	s.backend = failingSaveBackend{}
@@ -232,10 +275,73 @@ func TestNoBackendStillApplies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("user-1", json.RawMessage(`{"a":1}`)); err != nil {
-		t.Fatalf("Put with no backend: %v", err)
+	if err := s.Merge("user-1", json.RawMessage(`{"a":1}`)); err != nil {
+		t.Fatalf("Merge with no backend: %v", err)
 	}
 	if got, ok := s.Get("user-1"); !ok || string(got) != `{"a":1}` {
 		t.Errorf("Get = (%s, %v), want ({\"a\":1}, true)", got, ok)
+	}
+}
+
+// TestMergeRefusesGrowingARecordPastTheCap: each patch is well under
+// the API's 64 KiB body cap, but nothing bounded the merged record, so
+// one account could grow the shared document without limit. The
+// refusing Merge must leave the record exactly as it was.
+func TestMergeRefusesGrowingARecordPastTheCap(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "preferences.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := strings.Repeat("x", 60*1024)
+	var before json.RawMessage
+	var refusedAt int
+	for i := 0; i < 10; i++ {
+		patch := json.RawMessage(`{"pad` + strconv.Itoa(i) + `":"` + chunk + `"}`)
+		err := s.Merge("user-1", patch)
+		if err == nil {
+			before, _ = s.Get("user-1")
+			continue
+		}
+		if !errors.Is(err, ErrRecordTooLarge) {
+			t.Fatalf("Merge %d: err = %v, want ErrRecordTooLarge", i, err)
+		}
+		refusedAt = i
+		break
+	}
+	if refusedAt == 0 {
+		t.Fatal("ten 60 KiB patches were all accepted: the record is unbounded")
+	}
+	after, ok := s.Get("user-1")
+	if !ok || string(after) != string(before) {
+		t.Errorf("a refused Merge changed the stored record")
+	}
+	if len(after) > MaxRecordBytes {
+		t.Errorf("stored record is %d bytes, over the %d cap", len(after), MaxRecordBytes)
+	}
+}
+
+// TestRecordAlreadyOverTheCapStillLoads: an upgrade must not lock
+// anyone out of their preferences. A document written before the cap
+// existed still opens and reads back; only growing it is refused, and a
+// patch that shrinks it is still accepted.
+func TestRecordAlreadyOverTheCapStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	big := `{"records":{"user-1":{"pad":"` + strings.Repeat("x", MaxRecordBytes+1024) + `","colorway":"teal"}}}`
+	if err := os.WriteFile(path, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("a record over the cap must still open: %v", err)
+	}
+	got, ok := s.Get("user-1")
+	if !ok || !strings.Contains(string(got), `"colorway":"teal"`) {
+		t.Fatalf("the over-cap record did not read back: %s", got)
+	}
+	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"ochre"}`)); !errors.Is(err, ErrRecordTooLarge) {
+		t.Errorf("a patch keeping it over the cap: err = %v, want ErrRecordTooLarge", err)
+	}
+	if err := s.Merge("user-1", json.RawMessage(`{"pad":null}`)); err != nil {
+		t.Errorf("a patch shrinking it under the cap must be accepted: %v", err)
 	}
 }

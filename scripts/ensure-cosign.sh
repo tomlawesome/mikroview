@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 #
 # Puts a pinned cosign on PATH and prints its path. The one place the pin
-# lives, shared by the signing job (scripts/sign-release.sh) and anything
+# lives, shared by the signing job (scripts/sign-release-digest.sh) and anything
 # that verifies, so the two can never drift onto different releases (#1309).
 #
 # Why a downloaded binary rather than an image or an action. The GitLab
