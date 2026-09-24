@@ -3,12 +3,14 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -348,6 +350,168 @@ func TestTOTPEnrolConfirmLoginFactorAndDelete(t *testing.T) {
 	plain := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
 	if sess := sessionOf(t, plain, ts); !sess.Authenticated {
 		t.Error("expected a plain password login to work once the factor was removed")
+	}
+}
+
+// TestTOTPDeleteLeavingNoFactorSignsOutEverySession is the owner's
+// ruling that a user may remove their only second factor, with a
+// condition: doing so must not leave any session -- any device, this
+// one included -- signed in past a requirement the account no longer
+// satisfies. Two devices are signed in; the deletion is made from one of
+// them, and both are checked dead afterward, unlike logout-all
+// (TestLogoutAllEndsEverySessionButTheCallers, auth_test.go), which
+// deliberately reissues the caller a fresh session -- this route does
+// not, because the caller's own session is exactly the one that is now
+// missing a requirement.
+func TestTOTPDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
+	s, ts, _ := totpTestServer(t)
+	deviceA := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+	enrolAndRememberFactor(t, deviceA, ts, totpBilboUsername)
+	deviceB := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+
+	resp := deleteJSON(t, deviceA, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: totpBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out["disabled"] != true || out["signedOut"] != true {
+		t.Errorf("delete response = %v, want disabled=true signedOut=true", out)
+	}
+	if s.Auth.HasActiveTOTP(totpBilboID(t, s)) {
+		t.Error("expected the factor to be gone")
+	}
+
+	for name, client := range map[string]*http.Client{"deviceA (the caller)": deviceA, "deviceB": deviceB} {
+		r, err := client.Get(ts.URL + "/api/flags")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s's session got %d once the account lost its only factor, want 401", name, r.StatusCode)
+		}
+	}
+}
+
+// TestTOTPDeleteLeavingAFactorStandingDoesNotSignOut is
+// TestTOTPDeleteLeavingNoFactorSignsOutEverySession's negative case: an
+// account that still has a passkey after its authenticator app is
+// removed keeps its sessions and gets signedOut=false, because
+// HasSecondFactor is still true.
+func TestTOTPDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
+	s, ts, _ := totpTestServer(t)
+	rp, err := NewRelyingParty("https://passkeys.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.RelyingParty = rp
+
+	client := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+	registerPasskey(t, client, ts, rp, "a spare key")
+
+	// Not enrolAndRememberFactor: the passkey just registered already
+	// minted the account's recovery codes (mint-if-absent), so
+	// confirming TOTP here takes the AlreadyIssued branch and hands back
+	// no fresh codes -- enrolAndRememberFactor's own helper asserts
+	// exactly ten, which does not hold in this order.
+	enrolled := totpEnrol(t, client, ts)
+	secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := totpCounterNow(time.Now())
+	code := auth.GenerateTOTPCode(secret, counter)
+	confirmResp := postJSON(t, client, ts.URL+"/api/auth/totp/confirm", totpConfirmRequest{Code: code})
+	confirmResp.Body.Close()
+	if confirmResp.StatusCode != http.StatusOK {
+		t.Fatalf("confirm returned %d", confirmResp.StatusCode)
+	}
+
+	resp := deleteJSON(t, client, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: totpBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out["signedOut"] != false {
+		t.Errorf("delete response = %v, want signedOut=false (the passkey still stands)", out)
+	}
+
+	r, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Errorf("the session got %d after removing one of two factors, want 200", r.StatusCode)
+	}
+}
+
+// TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins reproduces the race
+// checking a TOTP code (auth.VerifyTOTP) and recording its counter
+// (RecordTOTPCounter) as two separate calls left open: two concurrent
+// submissions of the same code both verified against the same
+// not-yet-advanced counter and both won a session. Run with -race, and
+// fired many times in parallel to be meaningful rather than lucky --
+// the finding that motivated this test reproduced 8 of 15 runs with the
+// two-call version. store.go's VerifyAndRecordTOTP does both under one
+// lock acquisition now, which is what this asserts: exactly one of the
+// concurrent submissions succeeds.
+func TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins(t *testing.T) {
+	_, ts, _ := totpTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+	secret, _, counter := totpEnrolAndConfirm(t, bilbo, ts)
+
+	pending := startTOTPLogin(t, ts, totpBilboUsername, totpBilboPassword)
+	code := auth.GenerateTOTPCode(secret, counter+1)
+	body, err := json.Marshal(loginFactorRequest{Code: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	var successes int32
+	errs := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login/factor", bytes.NewReader(body))
+			if err != nil {
+				errs <- err
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(csrfHeaderName, csrfHeaderValue)
+			resp, err := pending.Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				atomic.AddInt32(&successes, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	if successes != 1 {
+		t.Errorf("%d of %d concurrent submissions of the same code succeeded, want exactly 1", successes, attempts)
 	}
 }
 

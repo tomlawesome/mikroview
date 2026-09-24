@@ -536,6 +536,32 @@ func reportListenerFailure(log *slog.Logger, err error, failed *atomic.Bool, sto
 	stop()
 }
 
+// passkeyStartupRefusal is the owner's ruling on booting with passkeys
+// that publicUrl cannot support: status is the RelyingParty's own
+// PasskeyStatus (api.PasskeyStatusReady never reaches this -- main's own
+// switch only calls this from the non-ready branches), and
+// anyPasskeysExist is authStore.AnyPasskeysExist() (internal/auth).
+// Returns the message to log before os.Exit(1), or "" to boot normally
+// -- an install that has never registered a passkey is unaffected by
+// whatever publicUrl says, on any status.
+//
+// A pure function rather than inlined in main so the four combinations
+// (three non-ready statuses x passkeys-exist or not) are each one direct
+// call in main_test.go, without driving the whole of main() -- including
+// the both-remedies wording, since a caller who only sees "passkeys are
+// off" from the log line above this has no way to know a CLI command is
+// the way out for accounts already holding one.
+func passkeyStartupRefusal(status api.PasskeyStatus, anyPasskeysExist bool) string {
+	if status == api.PasskeyStatusReady || !anyPasskeysExist {
+		return ""
+	}
+	return fmt.Sprintf(
+		"passkeys are off (%s) but at least one account already holds a passkey -- "+
+			"set publicUrl in the configuration to the https address people reach MikroView on, "+
+			"or run `mikroview -clear-second-factor <username>` for each affected account to remove them",
+		status)
+}
+
 func main() {
 	// -version: prints the build-time-stamped commit SHA (see the
 	// `version` var above) and exits -- no config load, no network,
@@ -1846,6 +1872,25 @@ func main() {
 		// Said once, at boot, because the alternative is an operator
 		// discovering it from an empty panel in the account menu.
 		passkeyLog.Info(fmt.Sprintf("passkeys off: %s -- set publicUrl to the https address people reach MikroView on", relyingParty.Status))
+
+		// Owner ruling: booting past this point with a passkey already
+		// registered would be worse than saying nothing -- that account
+		// has a credential sitting in its account menu that can never
+		// complete a login while publicUrl stays in this state (see
+		// nonStalePasskeys/PasskeyStatus's own doc comments for why), and
+		// nothing else would ever tell its owner that. Refused here,
+		// naming both ways out, rather than left for someone to discover
+		// as an unexplained sign-in failure.
+		//
+		// Only reachable from ordinary server start-up: -clear-second-
+		// factor (runClearSecondFactor, above) os.Exits before this
+		// function is even entered, and never constructs a RelyingParty
+		// itself, so the command this message points an operator at is
+		// never caught by the refusal it exists to resolve.
+		if msg := passkeyStartupRefusal(relyingParty.Status, authStore.AnyPasskeysExist()); msg != "" {
+			passkeyLog.Error(msg)
+			os.Exit(1)
+		}
 	}
 
 	srv := &api.Server{
