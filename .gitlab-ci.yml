@@ -1265,8 +1265,8 @@ gate:scripts:
 #
 # resource_group still serialises this against any other promotion MR
 # measuring at the same time -- two at once would each see the other's
-# CPU as noise in its own numbers, and a second `hold` would simply
-# refuse while the first is active.
+# CPU as noise in its own numbers, and a second `hold` would queue
+# behind the first anyway.
 #
 # Timeout arithmetic, corrected 2026-09-06 from the job's first four runs
 # on the runner rather than from workstation figures: npm ci measured 11,
@@ -1276,14 +1276,20 @@ gate:scripts:
 # took 38s unseeded, and will be longer now it renders 3000 events.
 #
 # The drain cap sets the bound, not npm ci. Worst case is roughly 60s
-# npm ci + 60s hold + 600s drain + 180s probe, about 16 minutes, so the
-# 25 stands -- 1.6x worst case, not the 11x a 134s run makes it look.
+# npm ci + 60s hold + 600s drain + 180s probe, about 16 minutes.
+#
+# Plus the queue, since 2026-09-24: `hold` now waits for any other hold
+# on the host rather than failing, and the orbit-base-image Node compile
+# takes one for about forty minutes (orbit#1106). The host caps any hold
+# at an hour, and `hold` queues for up to 65 minutes (QH_QUEUE_MAX_S), so
+# 16 + 65 is about 81 minutes: 90m. A run that does not queue still takes
+# its usual few minutes; the limit only matters when it does.
 perf:promotion:
   stage: gate
   tags: [big]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: *git_safe
-  # The #1038 ladder, target-branch guard and all: a 25-minute job that
+  # The #1038 ladder, target-branch guard and all: a job that
   # holds the whole host quiet is the one most worth not running for a
   # prose change. In practice it will almost always run anyway, because a
   # promotion merge request is diffed against the preview tip and so
@@ -1296,7 +1302,7 @@ perf:promotion:
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
   resource_group: perf-promotion
-  timeout: 25m
+  timeout: 90m
   # #1104: the hold stops the runner picking up *new* jobs; it cannot
   # stop the scenario shards this pipeline already started, and they run
   # for ten minutes on the same box. Twice (pipelines 899 and 914) the
