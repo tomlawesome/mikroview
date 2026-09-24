@@ -29,7 +29,7 @@ func deviceTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 	s.Devices = device.NewRegistry(nil)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	return s, ts, admin
 }
 
@@ -150,7 +150,7 @@ func TestDeviceDeleteClearsItAndRefusesAConfiguredOne(t *testing.T) {
 	s2.Devices = device.NewRegistry([]config.Device{{ID: "core", SourceIP: "192.168.1.1"}})
 	ts2 := httptest.NewServer(s2.Routes())
 	t.Cleanup(ts2.Close)
-	admin2 := setUpAdmin(t, ts2)
+	admin2 := setUpAdmin(t, s2, ts2)
 
 	refused := deleteNoBody(t, admin2, ts2.URL+"/api/devices/core")
 	defer refused.Body.Close()
@@ -415,7 +415,7 @@ func TestDeviceRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
 // TestDeviceRegisterRequiresAdmin: same tier as every other
 // device-identity write in this file.
 func TestDeviceRegisterRequiresAdmin(t *testing.T) {
-	_, ts, admin := deviceTestServer(t)
+	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
@@ -423,7 +423,7 @@ func TestDeviceRegisterRequiresAdmin(t *testing.T) {
 	viewer := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewer, ts.URL+"/api/auth/login",
 		credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, viewer, ts) // #1253: needed before /api/devices/.../registration below
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/devices/.../registration below
 
 	resp := postJSON(t, viewer, ts.URL+"/api/devices/hap-ax3/registration",
 		deviceRegisterRequest{Name: "hap-ax3"})

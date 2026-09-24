@@ -40,7 +40,7 @@ func resetTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client, str
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: "bilbo", Password: resetOldPassword, Role: "user"}).Body.Close()
 

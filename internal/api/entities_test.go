@@ -37,26 +37,6 @@ func deleteJSON(t *testing.T, client *http.Client, url string, body any) *http.R
 	return resp
 }
 
-// registerAdmin registers the first (always-admin) account against s and
-// returns a client whose cookie jar carries that session -- the shared
-// setup every admin-gated entities test below needs, mirroring
-// TestAdminCanCreateAdditionalUsers' own setup in auth_test.go. Also
-// clears the forced-enrolment door (#1253) via totpEnrolAndConfirm
-// (totp_test.go): a local account with no active second factor can reach
-// nothing but the four enrolment routes, so every other admin-gated route
-// this helper exists for needs that cleared first.
-func registerAdmin(t *testing.T, ts *httptest.Server) *http.Client {
-	t.Helper()
-	client := &http.Client{Jar: mustCookieJar(t)}
-	resp := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("registering the admin account failed: %d", resp.StatusCode)
-	}
-	enrolAndRememberFactor(t, client, ts, "admin")
-	return client
-}
-
 // TestEntitiesRequireAdminWithoutASession proves entities management
 // follows callerIsAdmin's strict rule, not callerIsAdminOrOpen's --
 // unlike detector settings, GET/POST/DELETE /api/entities stay forbidden
@@ -83,7 +63,7 @@ func TestAdminCanListCreateAndDeleteEntities(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	// Empty to start.
 	listResp, err := client.Get(ts.URL + "/api/entities")
@@ -162,7 +142,7 @@ func TestPostEntitiesUpsertsInPlace(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	first := postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeRule, Key: "r13", Label: "first"})
 	if first.StatusCode != http.StatusCreated {
@@ -199,7 +179,7 @@ func TestPostEntitiesRejectsMissingKey(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: ""})
 	defer resp.Body.Close()
@@ -212,7 +192,7 @@ func TestDeleteEntitiesUnknownReturnsNotFound(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	resp := deleteJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "nonexistent"})
 	defer resp.Body.Close()
@@ -231,17 +211,17 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := registerAdmin(t, ts)
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password456", Role: "viewer"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password789", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/entities below
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/entities below
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password789"}).Body.Close()
-	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/entities below
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/entities below
 
 	getResp, err := viewerClient.Get(ts.URL + "/api/entities")
 	if err != nil {
@@ -309,7 +289,7 @@ func TestEntityUpsertAndDeleteRestampBufferedEventNames(t *testing.T) {
 
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	buffered := func() store.Event {
 		t.Helper()

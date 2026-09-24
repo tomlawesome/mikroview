@@ -78,7 +78,7 @@ func TestRouterBackupTextReadsTheRedactedCopy(t *testing.T) {
 	ids := generationIDs(t, s.Vault)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/" + ids[0] + "/text")
 	if err != nil {
@@ -114,7 +114,7 @@ func TestRouterBackupDiffReportsOnlyWhatChanged(t *testing.T) {
 	ids := generationIDs(t, s.Vault)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/diff?from=" + ids[0] + "&to=" + ids[1])
 	if err != nil {
@@ -161,7 +161,7 @@ func TestRouterBackupDiffNeedsBothGenerations(t *testing.T) {
 	ids := generationIDs(t, s.Vault)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/diff?from=" + ids[0])
 	if err != nil {
@@ -204,7 +204,7 @@ func TestTextAndDiffRefuseALockedVault(t *testing.T) {
 	s.Vault = vaultWithTwoExports(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	ids := generationIDs(t, s.Vault)
 
 	if got := textStatus(t, admin, ts, ids[0]); got != http.StatusOK {

@@ -65,7 +65,7 @@ func TestUpgradeServesTheCrossing(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	got := getUpgrade(t, setUpAdmin(t, ts), ts.URL)
+	got := getUpgrade(t, setUpAdmin(t, s, ts), ts.URL)
 	if got.Previous != "v0.4.0" || got.Current != "v0.5.0" {
 		t.Errorf("served %q -> %q, want v0.4.0 -> v0.5.0", got.Previous, got.Current)
 	}
@@ -84,7 +84,7 @@ func TestUpgradeIsSilentOnAFreshInstall(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	got := getUpgrade(t, setUpAdmin(t, ts), ts.URL)
+	got := getUpgrade(t, setUpAdmin(t, s, ts), ts.URL)
 	if got.Previous != "" {
 		t.Errorf("previous = %q on an instance that has never crossed a version, want empty", got.Previous)
 	}
@@ -115,7 +115,7 @@ func TestUpgradeRouterCountReflectsTheSetupLedger(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	got := getUpgrade(t, adminClient, ts.URL).Routers
 	if got.Total != 3 {
 		t.Errorf("total = %d, want the three declared and discovered routers", got.Total)
@@ -144,7 +144,7 @@ func TestUpgradeAcknowledgePersistsAndAudits(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	resp := postJSON(t, adminClient, ts.URL+"/api/upgrade/acknowledge", struct{}{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -183,7 +183,7 @@ func TestUpgradeAcknowledgeWithNothingToAcknowledgeIsAConflict(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	resp := postJSON(t, adminClient, ts.URL+"/api/upgrade/acknowledge", struct{}{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -227,11 +227,11 @@ func TestUpgradeReadableByViewerWritableByAdminOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "viewer"}).Body.Close()
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/upgrade below
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/upgrade below
 
 	if got := getUpgrade(t, viewerClient, ts.URL); got.Previous != "v0.4.0" {
 		t.Errorf("a viewer's GET served previous = %q, want v0.4.0", got.Previous)
