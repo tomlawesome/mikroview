@@ -575,8 +575,20 @@ func (s *Server) handleAuthPasskeyDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Owner ruling: a user may remove their only second factor -- see
+	// handleTOTPDelete's identical block (auth.go) for the full
+	// reasoning. Deleting the account's last passkey, with no
+	// authenticator-app factor standing in behind it, gets the same
+	// treatment: every session revoked at once, signedOut told to the
+	// caller.
+	signedOut := false
+	if updated, ok := s.Auth.Get(user.ID); ok && !updated.HasSecondFactor() {
+		s.Sessions.RevokeAllForUser(user.ID)
+		signedOut = true
+	}
+
 	s.Audit.Record(user.Username, "account.passkey_removed", user.Username, "name="+removed.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"removed": true})
+	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "signedOut": signedOut})
 }
 
 // ---- POST /api/auth/login/factor/begin ----

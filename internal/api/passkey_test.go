@@ -688,6 +688,91 @@ func TestPasskeyDeleteWrongPassword(t *testing.T) {
 	}
 }
 
+// TestPasskeyDeleteLeavingNoFactorSignsOutEverySession is the passkey
+// side of the owner's ruling that a user may remove their only second
+// factor: doing so must not leave any session -- any device, the caller
+// included -- signed in past a requirement the account no longer
+// satisfies. Mirrors totp_test.go's
+// TestTOTPDeleteLeavingNoFactorSignsOutEverySession exactly, for the
+// other kind of factor.
+func TestPasskeyDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	deviceA := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	fake, out := registerPasskey(t, deviceA, ts, s.RelyingParty, "only key")
+
+	// Not loggedInClient: bilbo's only factor is a passkey, which that
+	// helper cannot complete on its own (it only knows how to finish a
+	// TOTP/recovery-code pending step) -- driven by hand instead, the
+	// same three calls startPasskeyLogin/passkeyLoginFactorBegin/
+	// submitPasskeyAssertion give every other passkey-login test here.
+	deviceB := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+	assertion := passkeyLoginFactorBegin(t, deviceB, ts)
+	factorResp := submitPasskeyAssertion(t, deviceB, ts, fake, assertion)
+	factorResp.Body.Close()
+	if factorResp.StatusCode != http.StatusOK {
+		t.Fatalf("deviceB's passkey login/factor returned %d", factorResp.StatusCode)
+	}
+
+	resp := deleteJSON(t, deviceA, ts.URL+"/api/auth/passkeys/"+out.Passkey.ID, passkeyDeleteRequest{Password: passkeyBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var deleted map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted["removed"] != true || deleted["signedOut"] != true {
+		t.Errorf("delete response = %v, want removed=true signedOut=true", deleted)
+	}
+
+	for name, client := range map[string]*http.Client{"deviceA (the caller)": deviceA, "deviceB": deviceB} {
+		r, err := client.Get(ts.URL + "/api/flags")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s's session got %d once the account lost its only factor, want 401", name, r.StatusCode)
+		}
+	}
+}
+
+// TestPasskeyDeleteLeavingAFactorStandingDoesNotSignOut is
+// TestPasskeyDeleteLeavingNoFactorSignsOutEverySession's negative case:
+// removing one of two passkeys (or a passkey while an authenticator app
+// still stands) keeps every session, and signedOut is false.
+func TestPasskeyDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	client := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	_, first := registerPasskey(t, client, ts, s.RelyingParty, "first key")
+	registerPasskey(t, client, ts, s.RelyingParty, "second key")
+
+	resp := deleteJSON(t, client, ts.URL+"/api/auth/passkeys/"+first.Passkey.ID, passkeyDeleteRequest{Password: passkeyBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var deleted map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted["signedOut"] != false {
+		t.Errorf("delete response = %v, want signedOut=false (the second key still stands)", deleted)
+	}
+
+	r, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Errorf("the session got %d after removing one of two passkeys, want 200", r.StatusCode)
+	}
+}
+
 // TestPasskeyRenameIsCosmeticNoPassword proves PATCH needs no password
 // (RenamePasskey's own doc comment) and actually changes the stored
 // name.

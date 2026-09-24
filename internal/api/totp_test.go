@@ -353,6 +353,109 @@ func TestTOTPEnrolConfirmLoginFactorAndDelete(t *testing.T) {
 	}
 }
 
+// TestTOTPDeleteLeavingNoFactorSignsOutEverySession is the owner's
+// ruling that a user may remove their only second factor, with a
+// condition: doing so must not leave any session -- any device, this
+// one included -- signed in past a requirement the account no longer
+// satisfies. Two devices are signed in; the deletion is made from one of
+// them, and both are checked dead afterward, unlike logout-all
+// (TestLogoutAllEndsEverySessionButTheCallers, auth_test.go), which
+// deliberately reissues the caller a fresh session -- this route does
+// not, because the caller's own session is exactly the one that is now
+// missing a requirement.
+func TestTOTPDeleteLeavingNoFactorSignsOutEverySession(t *testing.T) {
+	s, ts, _ := totpTestServer(t)
+	deviceA := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+	enrolAndRememberFactor(t, deviceA, ts, totpBilboUsername)
+	deviceB := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+
+	resp := deleteJSON(t, deviceA, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: totpBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out["disabled"] != true || out["signedOut"] != true {
+		t.Errorf("delete response = %v, want disabled=true signedOut=true", out)
+	}
+	if s.Auth.HasActiveTOTP(totpBilboID(t, s)) {
+		t.Error("expected the factor to be gone")
+	}
+
+	for name, client := range map[string]*http.Client{"deviceA (the caller)": deviceA, "deviceB": deviceB} {
+		r, err := client.Get(ts.URL + "/api/flags")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s's session got %d once the account lost its only factor, want 401", name, r.StatusCode)
+		}
+	}
+}
+
+// TestTOTPDeleteLeavingAFactorStandingDoesNotSignOut is
+// TestTOTPDeleteLeavingNoFactorSignsOutEverySession's negative case: an
+// account that still has a passkey after its authenticator app is
+// removed keeps its sessions and gets signedOut=false, because
+// HasSecondFactor is still true.
+func TestTOTPDeleteLeavingAFactorStandingDoesNotSignOut(t *testing.T) {
+	s, ts, _ := totpTestServer(t)
+	rp, err := NewRelyingParty("https://passkeys.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.RelyingParty = rp
+
+	client := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+	registerPasskey(t, client, ts, rp, "a spare key")
+
+	// Not enrolAndRememberFactor: the passkey just registered already
+	// minted the account's recovery codes (mint-if-absent), so
+	// confirming TOTP here takes the AlreadyIssued branch and hands back
+	// no fresh codes -- enrolAndRememberFactor's own helper asserts
+	// exactly ten, which does not hold in this order.
+	enrolled := totpEnrol(t, client, ts)
+	secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := totpCounterNow(time.Now())
+	code := auth.GenerateTOTPCode(secret, counter)
+	confirmResp := postJSON(t, client, ts.URL+"/api/auth/totp/confirm", totpConfirmRequest{Code: code})
+	confirmResp.Body.Close()
+	if confirmResp.StatusCode != http.StatusOK {
+		t.Fatalf("confirm returned %d", confirmResp.StatusCode)
+	}
+
+	resp := deleteJSON(t, client, ts.URL+"/api/auth/totp", totpDeleteRequest{Password: totpBilboPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete returned %d: %s", resp.StatusCode, body)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out["signedOut"] != false {
+		t.Errorf("delete response = %v, want signedOut=false (the passkey still stands)", out)
+	}
+
+	r, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Errorf("the session got %d after removing one of two factors, want 200", r.StatusCode)
+	}
+}
+
 // TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins reproduces the race
 // checking a TOTP code (auth.VerifyTOTP) and recording its counter
 // (RecordTOTPCounter) as two separate calls left open: two concurrent
