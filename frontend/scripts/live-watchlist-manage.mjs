@@ -206,13 +206,21 @@ const permitAllBtn = openDrawer().getByRole('button', { name: /permit all/ })
 if (await permitAllBtn.count()) {
   await permitAllBtn.click()
   // permit all only shows while unpermitted.length > 0 (Watchlist.svelte) --
-  // its own success takes that to 0, so this button leaves the DOM, which
-  // shifts "fence now" left in the same button row right as the next click
-  // is attempted. Under Firefox that lands mid-shift often enough to report
-  // "not stable" / "outside of the viewport" / "detached" for the full 30s
-  // (#1315). Wait for the drawer's own settled signal -- this button
-  // actually gone -- rather than a sleep, so "fence now" is clicked only
-  // once the row has stopped moving.
+  // its own success takes that to 0, so this button leaves the DOM and
+  // "fence now" shifts left in the same button row. Clicked mid-shift, the
+  // first attempt is "not stable", and that is what #1301 was. Playwright's
+  // second attempt forces scrollIntoView({ block: 'end' })
+  // (_retryPointerAction in playwright-core) on the button, which sits in
+  // the top half of the docket card: the deck scrolls by more than half a
+  // card, its mandatory scroll-snap settles on the card *above* ("outside
+  // of the viewport"), Deck.svelte's IntersectionObserver takes that card
+  // as the view, Docket.svelte unmounts Watchlist ("detached from the
+  // DOM"), and no "fence now" exists again for the rest of the 30 s.
+  // Reproduced 2026-09-24: without this wait, 2 of 5 runs; with it, 0 of 6.
+  // So this wait is the fix, not a nicety -- wait for the drawer's own
+  // settled signal (this button actually gone) so the first attempt is
+  // the one that lands. A person's click never scrolls, so the app is
+  // not at fault (#1301).
   await permitAllBtn.waitFor({ state: 'detached', timeout: 5000 })
 }
 
