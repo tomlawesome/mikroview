@@ -174,6 +174,67 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     expect(fetchAuthSession).not.toHaveBeenCalled()
   })
 
+  // A click on "Use a passkey instead" while confirm() is still in
+  // flight would move the stage before that request's result lands --
+  // the stray result (success or "invalid code") would then apply to
+  // the wrong stage. The choose-stage keys already guard against this
+  // with disabled={busy}; the switch-method links need the same guard.
+  it('disables the switch-to-passkey link while confirming the authenticator code', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
+    })
+    let resolveConfirm: (v: { recoveryCodes: string[]; alreadyIssued: boolean }) => void
+    vi.mocked(confirmTOTP).mockReturnValue(
+      new Promise((resolve) => {
+        resolveConfirm = resolve
+      }),
+    )
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+    await screen.findByLabelText('Code from the app')
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    expect(screen.getByRole('button', { name: /use a passkey instead/i })).toHaveProperty('disabled', true)
+
+    resolveConfirm!({ recoveryCodes: TEN_CODES, alreadyIssued: false })
+    await screen.findByTestId('recovery-codes')
+  })
+
+  // Same guard, the other direction: choosePasskey is synchronous, but
+  // addPasskey() (the passkey-stage submit) is not, and its own switch
+  // link must not be clickable while it is in flight.
+  it('disables the switch-to-authenticator-app link while adding a passkey', async () => {
+    let resolveRegister: (v: { passkey: unknown; recoveryCodes: string[] | null }) => void
+    vi.mocked(registerPasskey).mockReturnValue(
+      new Promise((resolve) => {
+        resolveRegister = resolve
+      }),
+    )
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
+    await screen.findByLabelText('Name')
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+
+    expect(screen.getByRole('button', { name: /use an authenticator app instead/i })).toHaveProperty('disabled', true)
+
+    resolveRegister!({
+      passkey: {
+        id: 'cred-1',
+        name: 'this laptop',
+        createdAt: '2026-09-23T10:00:00Z',
+        transports: [],
+        stale: false,
+        rpId: 'view.brandt.example',
+      },
+      recoveryCodes: TEN_CODES,
+    })
+    await screen.findByTestId('recovery-codes')
+  })
+
   it('walks the passkey through naming and the ceremony to the codes', async () => {
     vi.mocked(registerPasskey).mockResolvedValue({
       passkey: {
