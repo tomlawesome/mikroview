@@ -734,6 +734,12 @@ func (s *Server) verifyPasskeyAssertion(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 
+	// One sign-in per ceremony, whatever the authenticator's counter says.
+	if !passkeyAssertChallenges.claim(session.Challenge, session.Expires, now) {
+		writeUnauthorized(w, "that passkey couldn't be verified -- use another way in")
+		return false
+	}
+
 	// Accepted and recorded in one call, under the store's lock, so two
 	// concurrent submissions of the same assertion can't both clear
 	// CloneWarning against the same not-yet-advanced counter -- see
