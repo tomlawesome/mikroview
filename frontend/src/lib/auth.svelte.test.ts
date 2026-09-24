@@ -351,7 +351,7 @@ describe('AuthState.loginWithPasskey', () => {
     authState.state = 'pending-factor'
     authState.pendingSecondFactor = ['passkey']
     authState.pendingPasskeyOrigin = location.origin
-    vi.mocked(loginWithPasskey).mockResolvedValue('sign in again')
+    vi.mocked(loginWithPasskey).mockResolvedValue('sign in again\n')
 
     const result = await authState.loginWithPasskey()
 
@@ -409,7 +409,9 @@ describe('AuthState.submitFactor', () => {
   it('falls back to the password form on a pending-login timeout, instead of an inline error', async () => {
     authState.state = 'pending-factor'
     authState.pendingSecondFactor = ['totp']
-    vi.mocked(submitLoginFactor).mockResolvedValue('sign in again')
+    // The body exactly as the server sends it: Go's http.Error ends it
+    // with a newline.
+    vi.mocked(submitLoginFactor).mockResolvedValue('sign in again\n')
 
     const result = await authState.submitFactor('123456')
 
@@ -430,6 +432,18 @@ describe('AuthState.submitFactor', () => {
     const result = await authState.submitFactor('000000')
 
     expect(result).toBe('invalid code')
+    expect(authState.state).toBe('pending-factor')
+    expect(authState.signInTimedOut).toBe(false)
+  })
+
+  // The timed-out note belongs to the attempt that timed out: signing in
+  // again takes it away, rather than leaving it beside a fresh code box.
+  it('drops the timed-out note once the next sign-in starts', async () => {
+    authState.signInTimedOut = true
+    vi.mocked(login).mockResolvedValue({ secondFactor: ['totp'] } as never)
+
+    await authState.login('admin', 'right-password')
+
     expect(authState.state).toBe('pending-factor')
     expect(authState.signInTimedOut).toBe(false)
   })
