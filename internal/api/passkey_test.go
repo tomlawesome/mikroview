@@ -446,10 +446,17 @@ func TestPasskeyCloneWarningRefusesRegressedSignCount(t *testing.T) {
 // same assertion body at the server many times in parallel (run with
 // -race) and requiring exactly one success.
 func TestConcurrentPasskeyAssertionSubmissionsOnlyOneWins(t *testing.T) {
+	t.Run("counting authenticator", func(t *testing.T) { concurrentPasskeyAssertionSubmissions(t, 5) })
+	// Most platform passkeys always report zero, so the sign count can't
+	// tell a replay apart: the spent challenge has to.
+	t.Run("zero-reporting authenticator", func(t *testing.T) { concurrentPasskeyAssertionSubmissions(t, 0) })
+}
+
+func concurrentPasskeyAssertionSubmissions(t *testing.T, signCount uint32) {
 	s, ts, _ := passkeyTestServer(t)
 	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
 	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "security key")
-	fake.SignCount = 5 // nonzero: TestPasskeyZeroReportingAuthenticatorSignsInFine covers the exempt case.
+	fake.SignCount = signCount
 
 	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
 	assertion := passkeyLoginFactorBegin(t, pending, ts)
