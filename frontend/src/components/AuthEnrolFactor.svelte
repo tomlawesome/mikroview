@@ -262,7 +262,13 @@
             </form>
           </div>
           {#if passkeyUsable}
-            <button class="link-btn" type="button" onclick={choosePasskey}>Use a passkey instead</button>
+            <!-- Disabled while confirm() is in flight, same as the
+                 choose-stage keys above -- otherwise a stale confirm
+                 result can land after the click has already moved the
+                 stage to 'passkey'. -->
+            <button class="link-btn" type="button" onclick={choosePasskey} disabled={busy}>
+              Use a passkey instead
+            </button>
           {/if}
         </section>
       {:else if stage === 'passkey'}
@@ -283,7 +289,12 @@
               </button>
             </div>
           </form>
-          <button class="link-btn" type="button" onclick={chooseTOTP}>Use an authenticator app instead</button>
+          <!-- Same reason as the passkey link above: chooseTOTP awaits
+               enrolTOTP(), so a second click before that settles must
+               not be possible. -->
+          <button class="link-btn" type="button" onclick={chooseTOTP} disabled={busy}>
+            Use an authenticator app instead
+          </button>
         </section>
       {:else}
         <section class="state" aria-label="Recovery codes, shown once">
