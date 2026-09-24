@@ -99,7 +99,7 @@ class PreferencesState {
     }
     let prefs = record.prefs ?? {}
     if (Object.keys(prefs).length === 0) {
-      const migrated = migrateLegacyLocalPreferences()
+      const migrated = migrateLegacyLocalPreferences(record.userId)
       if (migrated) {
         prefs = migrated
         try {
@@ -236,6 +236,30 @@ const LEGACY_KEYS = {
   deckOrder: 'mikroview-deck-order',
 } as const
 
+// Records which account's sign-in first attempted the migration below,
+// on a shared browser where a v0.6.0 install left the nine legacy keys
+// behind for whoever signs in next (#1283 round 2): without this, a
+// second account signing in after the first account's migration failed
+// -- or even after it succeeded but before its own clear ran -- could
+// see the same "server record empty, legacy keys present" state and
+// walk off with the first account's presets. This key is itself
+// mikroview*-prefixed, so clearLegacyLocalPreferences()'s blanket sweep
+// removes it along with everything else once a migration actually lands.
+const MIGRATION_OWNER_KEY = 'mikroview-prefs-migration-owner'
+
+function migrationOwner(): string | undefined {
+  return readRaw(MIGRATION_OWNER_KEY)
+}
+
+function claimMigrationFor(userID: string): void {
+  try {
+    localStorage.setItem(MIGRATION_OWNER_KEY, userID)
+  } catch {
+    // storage unavailable -- nothing to claim, and migrateLegacyLocalPreferences
+    // already returned null for the same reason before reaching here.
+  }
+}
+
 function readRaw(key: string): string | undefined {
   try {
     return localStorage.getItem(key) ?? undefined
@@ -265,10 +289,19 @@ function readJSON(key: string): unknown {
  * this only has to reshape raw storage values into the record's key
  * names, not validate them.
  *
+ * Bound to userID, the account this load() is running for (its own
+ * server-assigned id, off the GET response): the first account to reach
+ * here with legacy keys present claims them (claimMigrationFor), and
+ * only that same account's own later retries may still use them. Any
+ * other account finds the keys present but MIGRATION_OWNER_KEY already
+ * naming someone else, and leaves them alone -- a shared browser must
+ * not hand the first operator's presets to the next one who signs in.
+ *
  * Returns null when nothing legacy is present at all (a fresh install,
- * or a browser that has already migrated and had its keys cleared).
+ * or a browser that has already migrated and had its keys cleared), or
+ * when this account isn't the one the keys are bound to.
  */
-function migrateLegacyLocalPreferences(): Record<string, unknown> | null {
+function migrateLegacyLocalPreferences(userID: string | undefined): Record<string, unknown> | null {
   let anyPresent: boolean
   try {
     anyPresent = Object.values(LEGACY_KEYS).some((k) => localStorage.getItem(k) != null)
@@ -276,6 +309,14 @@ function migrateLegacyLocalPreferences(): Record<string, unknown> | null {
     return null
   }
   if (!anyPresent) return null
+
+  // No id to bind to (shouldn't happen -- the server always sets it) is
+  // treated the same as "claimed by someone else": safer to leave the
+  // keys alone than to guess who they belong to.
+  if (!userID) return null
+  const owner = migrationOwner()
+  if (owner !== undefined && owner !== userID) return null
+  claimMigrationFor(userID)
 
   const prefs: Record<string, unknown> = {}
 

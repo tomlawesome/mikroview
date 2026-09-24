@@ -266,6 +266,50 @@ func TestPreferencesAreIsolatedPerUser(t *testing.T) {
 	}
 }
 
+// TestPreferencesGetReturnsCallersOwnUserID pins the id GET hands back
+// as the caller's own, and distinct from another account's -- the
+// frontend's legacy-localStorage migration binds itself to whichever
+// account this id names first, so a stale or shared id here would let
+// that migration land on the wrong account.
+func TestPreferencesGetReturnsCallersOwnUserID(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	admin := registerAdmin(t, s, ts)
+	operator, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := loggedInClient(t, ts.URL, "operator", "password456")
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/me/preferences below
+
+	adminResp, err := admin.Get(ts.URL + "/api/me/preferences")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminResp.Body.Close()
+	var adminDoc preferencesDocument
+	json.NewDecoder(adminResp.Body).Decode(&adminDoc)
+
+	otherResp, err := other.Get(ts.URL + "/api/me/preferences")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherResp.Body.Close()
+	var otherDoc preferencesDocument
+	json.NewDecoder(otherResp.Body).Decode(&otherDoc)
+
+	if adminDoc.UserID == "" || otherDoc.UserID == "" {
+		t.Fatalf("userId was empty: admin=%q operator=%q", adminDoc.UserID, otherDoc.UserID)
+	}
+	if adminDoc.UserID == otherDoc.UserID {
+		t.Error("admin and operator got the same userId")
+	}
+	if otherDoc.UserID != operator.ID {
+		t.Errorf("operator's own userId = %q, want %q", otherDoc.UserID, operator.ID)
+	}
+}
+
 // TestDeletingUserRemovesPreferences is #1283's own ruling: a
 // preferences record is cleared when the account is deleted, not left
 // behind under an id nothing will ever sign in as again.

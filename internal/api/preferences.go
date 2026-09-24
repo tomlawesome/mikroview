@@ -20,9 +20,18 @@ const preferencesSchemaVersion = 1
 // a schema version alongside the caller's own opaque preferences
 // object. This package never looks inside Prefs -- see internal/prefs's
 // own doc comment for why that is deliberate.
+//
+// UserID is set only on the way out, by handlePreferencesGet: the
+// frontend's one-time legacy-localStorage migration binds itself to
+// whichever account first sees an empty record after the upgrade (a
+// shared browser must not hand those old keys to a second account that
+// later signs in on it), and needs this id to tell that account apart
+// from any other. A PATCH body never carries one; nothing here reads it
+// back in.
 type preferencesDocument struct {
 	Version int             `json:"version"`
 	Prefs   json.RawMessage `json:"prefs"`
+	UserID  string          `json:"userId,omitempty"`
 }
 
 // emptyPrefsObject is what GET answers for a user with no stored
@@ -47,7 +56,7 @@ func (s *Server) handlePreferencesGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	doc := preferencesDocument{Version: preferencesSchemaVersion, Prefs: emptyPrefsObject}
+	doc := preferencesDocument{Version: preferencesSchemaVersion, Prefs: emptyPrefsObject, UserID: user.ID}
 	if raw, ok := s.Prefs.Get(user.ID); ok {
 		doc.Prefs = raw
 	}

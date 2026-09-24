@@ -20,7 +20,7 @@ import (
 // that test for why this shape (populate a real store, back up, unpack
 // the envelope directly, restore into a different directory, reopen and
 // check) is what actually catches a store missing from backedUpStores,
-// rather than just exercising Store.Put/Get in isolation.
+// rather than just exercising Store.Merge/Get in isolation.
 func TestBackupRestoreRoundTripCarriesPrefs(t *testing.T) {
 	srcDir := t.TempDir()
 	prefsPath := filepath.Join(srcDir, "preferences.json")
@@ -29,8 +29,8 @@ func TestBackupRestoreRoundTripCarriesPrefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prefs.Open: %v", err)
 	}
-	if err := ps.Put("user-1", json.RawMessage(`{"colorway":"teal"}`)); err != nil {
-		t.Fatalf("prefs Put: %v", err)
+	if err := ps.Merge("user-1", json.RawMessage(`{"colorway":"teal"}`)); err != nil {
+		t.Fatalf("prefs Merge: %v", err)
 	}
 
 	t.Setenv("MIKROVIEW_CONFIG", "")
