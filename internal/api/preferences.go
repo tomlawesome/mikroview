@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// preferencesSchemaVersion is the only version PUT /api/me/preferences
+// preferencesSchemaVersion is the only version PATCH /api/me/preferences
 // currently accepts. It exists so a future, incompatible reshaping of
 // the document has something to bump and refuse the old shape against,
 // the same reason every other versioned document in this codebase
@@ -16,7 +16,7 @@ import (
 // ever needed one.
 const preferencesSchemaVersion = 1
 
-// preferencesDocument is the wire shape both GET and PUT use (#1283):
+// preferencesDocument is the wire shape both GET and PATCH use (#1283):
 // a schema version alongside the caller's own opaque preferences
 // object. This package never looks inside Prefs -- see internal/prefs's
 // own doc comment for why that is deliberate.
@@ -54,7 +54,14 @@ func (s *Server) handlePreferencesGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// handlePreferencesPut replaces the caller's whole preferences record.
+// handlePreferencesPatch merges the caller's changed preference keys
+// into their stored record (internal/prefs's Store.Merge, under the
+// store's own lock), rather than replacing it -- #1283's own "save only
+// what changed" ruling. A whole-record replace meant two browser tabs
+// each saving a different key around the same time raced: whichever
+// PUT landed second discarded the other tab's key even though nothing
+// about it had changed. prefs here is the changed keys only, not the
+// caller's whole record.
 //
 // The body is capped at maxJSONBodyBytes the same way every other JSON
 // body on this API is (decodeJSONBody), version must be exactly
@@ -63,7 +70,7 @@ func (s *Server) handlePreferencesGet(w http.ResponseWriter, r *http.Request) {
 // there is nothing here for a caller to be forbidden from doing (see the
 // route comment in server.go), so every failure this handler can
 // produce is the caller's mistake, never a permission question.
-func (s *Server) handlePreferencesPut(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePreferencesPatch(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.sessionUser(r, time.Now())
 	if !ok {
 		writeUnauthorized(w, "sign in first")
@@ -94,7 +101,7 @@ func (s *Server) handlePreferencesPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Prefs.Put(user.ID, req.Prefs); err != nil {
+	if err := s.Prefs.Merge(user.ID, req.Prefs); err != nil {
 		apiLog.Error("saving preferences for " + user.ID + ": " + err.Error())
 		http.Error(w, "preferences could not be saved", http.StatusInternalServerError)
 		return

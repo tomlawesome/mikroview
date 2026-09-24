@@ -7,7 +7,7 @@
 // sign in the previous operator's saved filters and top-talker widgets
 // (the two keys that carry account content), and every layout choice
 // besides. This module is the one thing that talks to
-// GET/PUT /api/me/preferences; the nine modules above keep their own
+// GET/PATCH /api/me/preferences; the nine modules above keep their own
 // shape and public API, but read/write their slice of the shared record
 // through get()/set() below instead of localStorage.
 //
@@ -27,7 +27,11 @@ class PreferencesState {
   private prefs: Record<string, unknown> = {}
   private loaded = false
   private loading: Promise<void> | null = null
-  private dirty = false
+  // Keys changed (via set()) since the last successful flush -- what a
+  // save actually sends, so two tabs saving different keys around the
+  // same time both survive on the server (#1283's "save only what
+  // changed" ruling; the server's merge side is prefs.Store.Merge).
+  private changedKeys = new Set<string>()
   private timer: ReturnType<typeof setTimeout> | undefined
   // One entry per preference module -- registered at each module's own
   // import time (its `new XState()` singleton), long before sign-in has
@@ -103,10 +107,11 @@ class PreferencesState {
 
   /** Every module's one write path. Updates the in-memory record at
    * once (a caller reading get() straight back sees its own write) and
-   * schedules a debounced PUT of the whole record. */
+   * schedules a debounced PATCH of the keys changed since the last
+   * flush. */
   set(key: string, value: unknown): void {
     this.prefs = { ...this.prefs, [key]: value }
-    this.dirty = true
+    this.changedKeys.add(key)
     if (this.timer) clearTimeout(this.timer)
     this.timer = setTimeout(() => {
       void this.flush()
@@ -123,10 +128,16 @@ class PreferencesState {
       clearTimeout(this.timer)
       this.timer = undefined
     }
-    if (!this.dirty) return
-    this.dirty = false
+    if (this.changedKeys.size === 0) return
+    // Cleared before sending, not after -- matching every other
+    // storage-write catch below: best effort, applied optimistically,
+    // not retried forever if the server refuses it.
+    const keys = [...this.changedKeys]
+    this.changedKeys.clear()
+    const patch: Record<string, unknown> = {}
+    for (const key of keys) patch[key] = this.prefs[key]
     try {
-      await saveMyPreferences({ version: VERSION, prefs: this.prefs }, opts)
+      await saveMyPreferences({ version: VERSION, prefs: patch }, opts)
     } catch {
       // Best effort, matching every other storage-write catch in this
       // codebase -- the change still applies to this session in memory,
@@ -145,7 +156,7 @@ class PreferencesState {
     this.prefs = { ...prefs }
     this.loaded = true
     this.loading = null
-    this.dirty = false
+    this.changedKeys.clear()
     for (const [key, hydrate] of this.hydrators) hydrate(this.prefs[key])
   }
 
@@ -163,7 +174,7 @@ class PreferencesState {
     this.prefs = {}
     this.loaded = false
     this.loading = null
-    this.dirty = false
+    this.changedKeys.clear()
   }
 }
 
