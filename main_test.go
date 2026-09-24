@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -168,6 +169,45 @@ func TestVersionBootMessageTrimsWhitespaceFromPersistedMarker(t *testing.T) {
 	want := "version abc1234"
 	if got != want {
 		t.Errorf("versionBootMessage with a trailing newline in the persisted marker = %q, want %q", got, want)
+	}
+}
+
+// TestPasskeyStartupRefusal covers all four combinations
+// passkeyStartupRefusal decides between: each non-ready PasskeyStatus
+// with and without an existing passkey, plus PasskeyStatusReady (which
+// must never refuse, however anyPasskeysExist answers -- a ready
+// relying party is exactly the case that needs no rescuing). A refusal
+// must name both ways out: publicUrl and `-clear-second-factor`.
+func TestPasskeyStartupRefusal(t *testing.T) {
+	cases := []struct {
+		name             string
+		status           api.PasskeyStatus
+		anyPasskeysExist bool
+		wantRefusal      bool
+	}{
+		{"ready, none registered", api.PasskeyStatusReady, false, false},
+		{"ready, some registered", api.PasskeyStatusReady, true, false},
+		{"unset, none registered", api.PasskeyStatusUnset, false, false},
+		{"unset, some registered", api.PasskeyStatusUnset, true, true},
+		{"ip, none registered", api.PasskeyStatusIP, false, false},
+		{"ip, some registered", api.PasskeyStatusIP, true, true},
+		{"insecure, none registered", api.PasskeyStatusInsecure, false, false},
+		{"insecure, some registered", api.PasskeyStatusInsecure, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := passkeyStartupRefusal(c.status, c.anyPasskeysExist)
+			if c.wantRefusal {
+				if got == "" {
+					t.Fatal("wanted a refusal message, got none")
+				}
+				if !strings.Contains(got, "publicUrl") || !strings.Contains(got, "-clear-second-factor") {
+					t.Errorf("refusal message = %q, want it to name both publicUrl and -clear-second-factor", got)
+				}
+			} else if got != "" {
+				t.Errorf("wanted no refusal, got %q", got)
+			}
+		})
 	}
 }
 
