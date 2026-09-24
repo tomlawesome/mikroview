@@ -29,12 +29,12 @@ func TestSetupStatusOpenToViewer(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/setup/status below
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/setup/status below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/setup/status")
 	if err != nil {
@@ -67,7 +67,7 @@ func TestSetupMarkRecordsLedgerAndAudit(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{
 		Step: 2, Outcome: "forced", Note: "no router has opened a syslog connection",
@@ -123,7 +123,7 @@ func TestSetupMarkRejectsNonsense(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	for _, tc := range []struct {
 		name string
@@ -174,7 +174,7 @@ func TestSetupMarkAcceptsTheSixthStep(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: 6, Outcome: "skipped"})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -196,7 +196,7 @@ func TestSetupMarkRangeMessageMatchesMaxStep(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: setup.MaxStep + 1, Outcome: "skipped"})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -222,7 +222,7 @@ func TestSetupMarkRejectsWitnessedOutcome(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/setup/mark", setupMarkRequest{Step: 1, Outcome: "witnessed"})
 	defer resp.Body.Close()
@@ -248,7 +248,7 @@ func TestSetupStatusWitnessesLiveEvidence(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	got := getSetupStatus(t, adminClient, ts.URL)
 
 	if len(got.Witnesses) != 1 {
@@ -277,7 +277,7 @@ func TestSetupStatusSyslogWitnessNeedsRealEvidenceNotJustAConnection(t *testing.
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	got := getSetupStatus(t, adminClient, ts.URL)
 	for _, w := range got.Witnesses {
 		if w.Step == 2 {
@@ -332,7 +332,7 @@ func TestSetupStatusWitnessOutlivesTheStoreThatSawIt(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Setup = before
 	ts := httptest.NewServer(s.Routes())
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	// One read with the router still "connected", so the witness is
 	// actually written before the process it lives in goes away.
 	getSetupStatus(t, adminClient, ts.URL)
@@ -348,7 +348,7 @@ func TestSetupStatusWitnessOutlivesTheStoreThatSawIt(t *testing.T) {
 	s2.Setup = after
 	ts2 := httptest.NewServer(s2.Routes())
 	defer ts2.Close()
-	adminClient2 := setUpAdmin(t, ts2)
+	adminClient2 := setUpAdmin(t, s2, ts2)
 
 	got := getSetupStatus(t, adminClient2, ts2.URL)
 	if len(got.Sources) != 0 {
@@ -381,7 +381,7 @@ func TestSetupAddressAdminOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
@@ -426,7 +426,7 @@ func TestSetupAddressRejectsMalformed(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	for _, bad := range []string{"", "10.0.40.5\nput another command here", "not a valid host", "10.0.40.5 8443"} {
 		resp := postJSON(t, adminClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: bad})
@@ -454,7 +454,7 @@ func TestSetupAddressPersistsAndSurvivesReload(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Setup = before
 	ts := httptest.NewServer(s.Routes())
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/setup/address", setupAddressRequest{Address: "10.0.40.5:8443"})
 	defer resp.Body.Close()
@@ -506,7 +506,7 @@ func TestSetupBackupTransportAdminOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
@@ -573,7 +573,7 @@ func TestSetupBackupTransportPersistsAndSurvivesReload(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Setup = before
 	ts := httptest.NewServer(s.Routes())
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	if got := getSetupStatus(t, adminClient, ts.URL); got.Instance.BackupTransport != setup.BackupTransportSFTP {
 		t.Errorf("Instance.BackupTransport before any choice = %q, want sftp", got.Instance.BackupTransport)

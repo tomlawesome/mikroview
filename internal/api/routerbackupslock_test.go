@@ -26,7 +26,7 @@ func vaultLockFixture(t *testing.T) (*Server, *httptest.Server, *http.Client, st
 	s.Vault = vaultWithOnePush(t)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	gens := s.Vault.Generations("rb5009")
 	if len(gens) != 1 {
@@ -65,12 +65,12 @@ func lockStatus(t *testing.T, client *http.Client, ts *httptest.Server) vaultLoc
 }
 
 func TestVaultLockControlsAreAdminOnly(t *testing.T) {
-	_, ts, admin, _ := vaultLockFixture(t)
+	s, ts, admin, _ := vaultLockFixture(t)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, user, ts) // #1253: needed before the vault-lock controls below
+	seedFactor(t, s, ts, "operator") // #1253: needed before the vault-lock controls below
 
 	// Every control, removal included: taking the passphrase off is the
 	// most destructive of the four, so it is the last one that should be
@@ -568,7 +568,7 @@ func TestAUserRoleAccountCannotDropTheAdminsVaultUnlock(t *testing.T) {
 
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, user, ts) // #1253: needed before /api/auth/password and /api/auth/logout-all below
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/auth/password and /api/auth/logout-all below
 
 	changed := postJSON(t, user, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password456", NewPassword: "password789"})
 	changed.Body.Close()

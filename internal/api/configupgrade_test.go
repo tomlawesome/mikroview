@@ -22,12 +22,12 @@ func TestConfigUpgradeAdminOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/config/upgrade below
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/config/upgrade below
 
 	viewerResp, err := viewerClient.Get(ts.URL + "/api/config/upgrade")
 	if err != nil {

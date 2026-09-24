@@ -159,7 +159,7 @@ func TestHandleWSClosesOnLogout(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 	sessionID := sessionIDFromJar(t, client, ts.URL)
 
 	conn := dialWSAs(t, ts, sessionID)
@@ -188,7 +188,7 @@ func TestHandleWSClosesOnPasswordChange(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	other := loggedInClient(t, ts.URL, "admin", "password123")
 	otherSessionID := sessionIDFromJar(t, other, ts.URL)
 
@@ -217,7 +217,7 @@ func TestHandleWSClosesOnAccountDeletion(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{
 		Username: "viewer", Password: "password456", Role: "user",
 	}).Body.Close()
@@ -227,7 +227,7 @@ func TestHandleWSClosesOnAccountDeletion(t *testing.T) {
 	}
 
 	viewerClient := loggedInClient(t, ts.URL, "viewer", "password456")
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/ws below
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/ws below
 	viewerSessionID := sessionIDFromJar(t, viewerClient, ts.URL)
 
 	conn := dialWSAs(t, ts, viewerSessionID)
@@ -261,7 +261,7 @@ func TestHandleWSStaysOpenForAValidSession(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 	sessionID := sessionIDFromJar(t, client, ts.URL)
 
 	conn := dialWSAs(t, ts, sessionID)

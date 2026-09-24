@@ -37,7 +37,7 @@ func TestRouterBackupsListReportsDisabledWithNoKey(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {
@@ -73,7 +73,7 @@ func TestRouterBackupsListReportsKeyUnreadable(t *testing.T) {
 	s.SetupInstance.BackupKeyUnreadable = true
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {
@@ -98,7 +98,7 @@ func TestRouterBackupsListReportsTheDropBoxPort(t *testing.T) {
 	s.SetupInstance.BackupPort = ":47022"
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {
@@ -118,7 +118,7 @@ func TestRouterBackupsListNonAdminForbidden(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", map[string]string{"username": "viewer1", "password": "password123", "role": "viewer"})
 	resp.Body.Close()
@@ -132,7 +132,7 @@ func TestRouterBackupsListNonAdminForbidden(t *testing.T) {
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("viewer login status = %d", loginResp.StatusCode)
 	}
-	totpEnrolAndConfirm(t, client, ts) // #1253: needed before /api/router-backups below
+	seedFactor(t, s, ts, "viewer1") // #1253: needed before /api/router-backups below
 
 	r, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {
@@ -149,7 +149,7 @@ func TestRouterBackupsListReportsGenerationsAndMissed(t *testing.T) {
 	s.Vault = vaultWithOnePush(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {
@@ -184,7 +184,7 @@ func TestRouterBackupDownloadRoundTripsAndAudits(t *testing.T) {
 	s.Vault = vaultWithOnePush(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	listResp, err := client.Get(ts.URL + "/api/router-backups")
 	if err != nil {
@@ -230,7 +230,7 @@ func TestRouterBackupDownloadUnknownGenerationIs404(t *testing.T) {
 	s.Vault = vaultWithOnePush(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/no-such-generation/backup")
 	if err != nil {
@@ -247,7 +247,7 @@ func TestRouterBackupDownloadRejectsUnknownKind(t *testing.T) {
 	s.Vault = vaultWithOnePush(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/router-backups/rb5009/x/config")
 	if err != nil {
@@ -269,7 +269,7 @@ func TestRouterBackupsListCarriesTheLowSpaceFlag(t *testing.T) {
 	s.Vault = vault
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	lowSpace := func() bool {
 		t.Helper()
@@ -333,7 +333,7 @@ func TestRouterBackupsListUnaffectedByAFailedSpaceProbe(t *testing.T) {
 	s.Vault = vault
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	lowSpace := func() bool {
 		t.Helper()
