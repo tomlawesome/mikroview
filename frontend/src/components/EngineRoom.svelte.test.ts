@@ -684,6 +684,35 @@ describe('The settings shelf (#633)', () => {
     expect(clearUserTOTP).toHaveBeenCalledWith('u2')
   })
 
+  // usersState.clearFactor() refreshes the list on success -- if that
+  // refresh (fetchUsers) itself throws, the button must not be left
+  // reading "clearing…" for the rest of the session.
+  it('clears the "clearing…" state even when the post-clear refresh fails', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers, clearUserTOTP } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValueOnce([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+    ])
+    vi.mocked(clearUserTOTP).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+    )
+    await settle()
+
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
+    expect(screen.queryByText('clearing…')).toBeNull()
+    expect(screen.getByRole('button', { name: 'clear authenticator app' })).toBeTruthy()
+    expect(screen.getByText(/could not refresh the list/i)).toBeTruthy()
+  })
+
   // No admin row ever offers this: the console-only branch replaces
   // every per-row verb for role === 'admin', same as reset password and
   // remove beside it (there is only ever one admin).
