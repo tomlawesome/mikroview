@@ -4335,10 +4335,25 @@ publicUrl: "https://mikroview.home.lan:8443"
 ```
 
 Left unset -- the default -- MikroView starts and runs exactly as it
-always has; passkeys are simply unavailable. Every problem here is a
-warning, never a startup refusal: a security monitor that will not boot
+always has; passkeys are simply unavailable. Most problems here are a
+warning, not a startup refusal: a security monitor that will not boot
 has cost you all visibility, which is worse than one login method
-staying off. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
+staying off. The one exception is an install where an account already
+holds a passkey: if `publicUrl` is unset, an IP address, or anything
+other than `https://` (aside from `http://localhost`), MikroView
+refuses to start rather than boot with that passkey silently unable to
+sign anyone in, since the account would otherwise lose its second
+factor without warning. It logs:
+
+```
+passkeys are off (<status>) but at least one account already holds a
+passkey -- set publicUrl in the configuration to the https address
+people reach MikroView on, or run `mikroview -clear-second-factor
+<username>` for each affected account to remove them
+```
+
+An install where nobody has registered a passkey yet still only gets
+the warning. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
 above for exactly what each one catches and what happens as a result.
 
 **Not `oidc.publicBaseUrl`, and no fallback between them.** The two

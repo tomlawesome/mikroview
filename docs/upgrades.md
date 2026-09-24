@@ -177,6 +177,15 @@ out of their own factor uses `mikroview -clear-second-factor
 own factor from the web interface. Both are covered in full under "If
 you lose access to your second factor" in docs/authenticator-app.md.
 
+**If an account already holds a passkey:** MikroView now refuses to
+start unless `publicUrl` is set to an `https://` address it reaches
+(or `http://localhost`) — booting anyway would leave that passkey
+unable to sign anyone in, silently. Set `publicUrl` in the
+configuration, or run `mikroview -clear-second-factor <username>` for
+each affected account, then start again. An install where nobody has
+registered a passkey is unaffected. See "Public URL" in
+docs/configuration.md.
+
 ## What happens at start
 
 1. MikroView reads the schema version its data was last written by.
