@@ -22,7 +22,7 @@
   // menu (#1332 is that menu's own open defect; nothing here reaches
   // into it).
   import { authState } from '../lib/auth.svelte'
-  import { enrolTOTP, confirmTOTP } from '../lib/api'
+  import { ApiError, enrolTOTP, confirmTOTP } from '../lib/api'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { copyToClipboard } from '../lib/clipboard'
   import { qrCode } from '../lib/qrcode'
@@ -75,16 +75,33 @@
   async function chooseTOTP() {
     error = null
     busy = true
-    const result = await enrolTOTP()
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // enrolTOTP throws instead of returning text on a 401 -- this door
+    // has no cancel, skip or sign-out, so a session that died mid-
+    // enrolment (most often: a second device finished enrolling first,
+    // which ends every other session on the account) has to leave
+    // through the same door everyone else's expired session does,
+    // rather than stranding this one on an error line with no way past
+    // it. See enrolTOTP's own comment for why a 401 here is never
+    // anything else.
+    try {
+      const result = await enrolTOTP()
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      uri = result.uri
+      secret = secretFromUri(result.uri)
+      code = ''
+      stage = 'totp'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    uri = result.uri
-    secret = secretFromUri(result.uri)
-    code = ''
-    stage = 'totp'
   }
 
   function choosePasskey() {
@@ -106,44 +123,66 @@
     if (!code) return
     error = null
     busy = true
-    const result = await confirmTOTP(code)
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // Same reasoning as chooseTOTP above -- confirmTOTP throws on a 401.
+    try {
+      const result = await confirmTOTP(code)
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      authState.hasTOTP = true
+      // Codes are minted once, by whichever factor activates first
+      // (#1250). On this door that is almost always now -- but an account
+      // whose factor was cleared after its codes were issued gets
+      // alreadyIssued instead, with nothing new to show. The design draws
+      // no scene for that, so the door simply opens.
+      if (result.alreadyIssued) {
+        await enter()
+        return
+      }
+      recoveryCodes = result.recoveryCodes ?? []
+      stage = 'codes'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    authState.hasTOTP = true
-    // Codes are minted once, by whichever factor activates first
-    // (#1250). On this door that is almost always now -- but an account
-    // whose factor was cleared after its codes were issued gets
-    // alreadyIssued instead, with nothing new to show. The design draws
-    // no scene for that, so the door simply opens.
-    if (result.alreadyIssued) {
-      await enter()
-      return
-    }
-    recoveryCodes = result.recoveryCodes ?? []
-    stage = 'codes'
   }
 
   async function addPasskey(e: Event) {
     e.preventDefault()
     error = null
     busy = true
-    const result = await registerPasskey(name.trim())
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // Same reasoning as chooseTOTP above -- registerPasskey forwards
+    // beginPasskeyRegistration/finishPasskeyRegistration's own 401 throw
+    // unchanged.
+    try {
+      const result = await registerPasskey(name.trim())
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      authState.passkeyCount += 1
+      if (result.recoveryCodes) {
+        recoveryCodes = result.recoveryCodes
+        stage = 'codes'
+        return
+      }
+      // Same already-issued case as confirm() above.
+      await enter()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    authState.passkeyCount += 1
-    if (result.recoveryCodes) {
-      recoveryCodes = result.recoveryCodes
-      stage = 'codes'
-      return
-    }
-    // Same already-issued case as confirm() above.
-    await enter()
   }
 
   async function copyCodes() {

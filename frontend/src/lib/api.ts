@@ -911,9 +911,19 @@ export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<s
 // it -- calling this again before confirming replaces the pending secret,
 // which is what lets AuthenticatorOverlay's "scan didn't work, try again"
 // just call it a second time rather than needing a dedicated retry route.
+// A 401 here is never "wrong credentials" -- unlike login/submitLoginFactor
+// above, every one of the four forced-enrolment routes (this one and the
+// other three below) requires an already-authenticated session before it
+// does anything else, so a 401 can only mean that session is gone (most
+// often: a second device finished enrolling first, which ends every other
+// session on the account). Thrown, not returned as text, so the forced-
+// enrolment door -- which otherwise has no way out at all -- can send that
+// case to authState.handleUnauthorized() instead of stranding the caller
+// on an error line with nothing else on screen.
 export async function enrolTOTP(): Promise<TotpEnrollment | string> {
   const res = await postJSON('/api/auth/totp/enrol')
   if (res.ok) return res.json()
+  if (res.status === 401) throw new ApiError((await res.text()) || `enrolTOTP: ${res.status}`, res.status)
   return (await res.text()) || `enrolTOTP: ${res.status}`
 }
 
@@ -938,6 +948,9 @@ export async function confirmTOTP(code: string): Promise<TotpConfirmResult | str
     const body = await res.json()
     return { recoveryCodes: body.recoveryCodes ?? null, alreadyIssued: body.alreadyIssued ?? false }
   }
+  // See enrolTOTP's own comment: a wrong code answers 400, never 401, so
+  // a 401 here always means the session died, not a bad code.
+  if (res.status === 401) throw new ApiError((await res.text()) || `confirmTOTP: ${res.status}`, res.status)
   return (await res.text()) || `confirmTOTP: ${res.status}`
 }
 
@@ -978,6 +991,12 @@ export async function fetchPasskeys(): Promise<PasskeySummary[] | string> {
 export async function beginPasskeyRegistration(): Promise<PasskeyCeremonyBegin | string> {
   const res = await postJSON('/api/auth/passkeys/register/begin')
   if (res.ok) return res.json()
+  // Same reasoning as enrolTOTP's own comment: this is one of the four
+  // forced-enrolment routes, all of which need an existing session, so a
+  // 401 here means that session is gone, not a ceremony refusal.
+  if (res.status === 401) {
+    throw new ApiError((await res.text()) || `beginPasskeyRegistration: ${res.status}`, res.status)
+  }
   return (await res.text()) || `beginPasskeyRegistration: ${res.status}`
 }
 
@@ -996,6 +1015,10 @@ export async function finishPasskeyRegistration(
 ): Promise<PasskeyRegistrationFinish | string> {
   const res = await postJSON('/api/auth/passkeys/register/finish', { credential, name })
   if (res.ok) return res.json()
+  // Same reasoning as beginPasskeyRegistration's own comment.
+  if (res.status === 401) {
+    throw new ApiError((await res.text()) || `finishPasskeyRegistration: ${res.status}`, res.status)
+  }
   return (await res.text()) || `finishPasskeyRegistration: ${res.status}`
 }
 

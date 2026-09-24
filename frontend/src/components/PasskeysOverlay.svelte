@@ -20,7 +20,7 @@
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'
   import { registerPasskey } from '../lib/passkeys.svelte'
-  import { fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
+  import { ApiError, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
   import { appState } from '../lib/state.svelte'
   import { formatDayMonth, formatRelative } from '../lib/format'
   import type { PasskeySummary } from '../lib/types'
@@ -127,19 +127,35 @@
   async function submitAdd() {
     addError = null
     addBusy = true
-    const result = await registerPasskey(newName.trim())
-    addBusy = false
-    if (typeof result === 'string') {
-      addError = result
-      return
-    }
-    passkeys = [...passkeys, result.passkey]
-    authState.passkeyCount += 1
-    if (result.recoveryCodes) {
-      recoveryCodes = result.recoveryCodes
-      step = 'codes'
-    } else {
-      step = 'added-done'
+    // registerPasskey forwards beginPasskeyRegistration/
+    // finishPasskeyRegistration's own 401 throw unchanged -- the same
+    // session-death case AuthEnrolFactor's own forced-enrolment door
+    // guards against (see beginPasskeyRegistration's comment in
+    // lib/api.ts). Routed the same way here: this overlay's own header
+    // X/Escape/backdrop would otherwise offer a way out that doesn't
+    // actually work, since the session behind it is already gone.
+    try {
+      const result = await registerPasskey(newName.trim())
+      if (typeof result === 'string') {
+        addError = result
+        return
+      }
+      passkeys = [...passkeys, result.passkey]
+      authState.passkeyCount += 1
+      if (result.recoveryCodes) {
+        recoveryCodes = result.recoveryCodes
+        step = 'codes'
+      } else {
+        step = 'added-done'
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      addBusy = false
     }
   }
 
