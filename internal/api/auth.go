@@ -403,7 +403,18 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// and the very next request lands here instead if a factor is
 		// still missing -- the two doors run in sequence, never both
 		// open at once.
-		if user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
+		//
+		// The !user.MustChangePassword guard is what actually makes
+		// that sequencing hold: MustChangePassword's own gate above lets
+		// exactly one path through while it's set -- changePasswordPath
+		// -- and that path is not in secondFactorEnrolPaths (see its own
+		// doc comment: nothing is enrolled yet for those routes to act
+		// on). Without this guard, a reset-code account with no second
+		// factor would fall through to this gate on its one admitted
+		// path and be refused that too -- 403 on the only route that
+		// could ever get it out of MustChangePassword, a deadlock no
+		// request from that account could ever escape.
+		if !user.MustChangePassword && user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
 			http.Error(w, "this account has no second factor -- enrol one before going any further", http.StatusForbidden)
 			return
 		}

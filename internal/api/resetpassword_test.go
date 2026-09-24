@@ -333,6 +333,73 @@ func TestForcedChangeTakesOnlyTheNewPasswordAndOpensTheApp(t *testing.T) {
 	loggedInClient(t, ts.URL, "bilbo", resetNewPassword)
 }
 
+// TestForcedChangeThenForcedEnrolmentBothComplete is the deadlock the
+// second-factor gate could cause before requireAuth's !user.
+// MustChangePassword guard was added: an admin-reset account that has
+// never enrolled a second factor must be able to clear both doors in
+// sequence -- change its password first, then enrol -- and never get
+// stuck at either. Deliberately does not pre-enrol bilbo the way
+// TestForcedChangeTakesOnlyTheNewPasswordAndOpensTheApp does; that
+// test's own comment explains why it has to (the second-factor door
+// would otherwise 403 the forced change itself), which is exactly the
+// bug this test exists to catch a regression of.
+func TestForcedChangeThenForcedEnrolmentBothComplete(t *testing.T) {
+	_, ts, admin, id := resetTestServer(t)
+
+	out := resetPassword(t, admin, ts, id)
+	client := loggedInClient(t, ts.URL, "bilbo", out.Code)
+
+	// Blocked before the change, same as the enrolled case.
+	blocked, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked.Body.Close()
+	if blocked.StatusCode != http.StatusForbidden {
+		t.Errorf("a flagged session got %d from /api/flags, want 403", blocked.StatusCode)
+	}
+
+	// The change itself must succeed: this is exactly the request the
+	// deadlock refused -- no second factor yet, and changePasswordPath
+	// was not on the second-factor gate's own allowlist.
+	resp := postJSON(t, client, ts.URL+"/api/auth/password",
+		changePasswordRequest{NewPassword: resetNewPassword})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("the forced change returned %d: %s", resp.StatusCode, body)
+	}
+
+	sess := sessionOf(t, client, ts)
+	if !sess.Authenticated || sess.MustChangePassword {
+		t.Errorf("after the change: authenticated=%v mustChangePassword=%v, want true/false",
+			sess.Authenticated, sess.MustChangePassword)
+	}
+
+	// The password door is clear, but the enrolment door now holds --
+	// the app itself is still unreachable until a factor is enrolled.
+	stillBlocked, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stillBlocked.Body.Close()
+	if stillBlocked.StatusCode != http.StatusForbidden {
+		t.Errorf("a session with no second factor got %d from /api/flags, want 403", stillBlocked.StatusCode)
+	}
+
+	// Enrolling clears the second door.
+	enrolAndRememberFactor(t, client, ts, "bilbo")
+
+	open, err := client.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	open.Body.Close()
+	if open.StatusCode != http.StatusOK {
+		t.Errorf("a fully enrolled session got %d from /api/flags, want 200", open.StatusCode)
+	}
+}
+
 // TestResetCodeNeverReachesTheAuditLogOrServerLogs is the one rule with
 // no acceptable failure mode: the code exists in clear in exactly one
 // place, the response to the admin's own request.
