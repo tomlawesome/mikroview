@@ -703,13 +703,22 @@ func (s *Server) verifyPasskeyAssertion(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 
-	if err := s.Auth.RecordPasskeyAssertion(user.ID, cred.ID, cred.Authenticator.SignCount, now); err != nil {
-		// Same stance handleAuthLoginFactor's own RecordTOTPCounter call
-		// takes: the assertion just verified is genuine regardless of
-		// whether the replay guard's advance persisted, so this is logged
-		// rather than turned into a refusal of a login that already
-		// earned one.
+	// Accepted and recorded in one call, under the store's lock, so two
+	// concurrent submissions of the same assertion can't both clear
+	// CloneWarning against the same not-yet-advanced counter -- see
+	// RecordPasskeyAssertionIfFresh's doc comment (passkeys.go).
+	accepted, err := s.Auth.RecordPasskeyAssertionIfFresh(user.ID, cred.ID, cred.Authenticator.SignCount, now)
+	if err != nil {
+		// Same stance handleAuthLoginFactor's own TOTP branch takes: a
+		// persistence failure on an otherwise-accepted assertion is
+		// logged, not turned into a refusal of a login that already
+		// earned one (accepted stays true in that case -- see the
+		// method's doc comment).
 		authLog.Warn(fmt.Sprintf("recording passkey assertion for %s: %v", user.Username, err))
+	}
+	if !accepted {
+		writeUnauthorized(w, "that passkey couldn't be verified -- use another way in")
+		return false
 	}
 
 	s.clearPasskeyAssertCookie(w)

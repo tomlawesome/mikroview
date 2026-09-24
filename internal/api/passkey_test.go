@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -429,6 +432,70 @@ func TestPasskeyCloneWarningRefusesRegressedSignCount(t *testing.T) {
 	entry := findAuditEntry(t, admin, ts, "account.passkey_clone_suspected")
 	if entry.Target != passkeyBilboUsername {
 		t.Errorf("account.passkey_clone_suspected entry target = %q, want %q", entry.Target, passkeyBilboUsername)
+	}
+}
+
+// TestConcurrentPasskeyAssertionSubmissionsOnlyOneWins is the passkey
+// side of TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins
+// (totp_test.go): go-webauthn's ValidateLogin/CloneWarning check and
+// RecordPasskeyAssertion used to run as two separate steps, so two
+// concurrent submissions of the literal same signed assertion both
+// cleared CloneWarning against the same not-yet-advanced stored sign
+// count and both won a session. store.go's RecordPasskeyAssertionIfFresh
+// closes that under one lock acquisition -- asserted here by firing the
+// same assertion body at the server many times in parallel (run with
+// -race) and requiring exactly one success.
+func TestConcurrentPasskeyAssertionSubmissionsOnlyOneWins(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "security key")
+	fake.SignCount = 5 // nonzero: TestPasskeyZeroReportingAuthenticatorSignsInFine covers the exempt case.
+
+	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+	assertion := passkeyLoginFactorBegin(t, pending, ts)
+	credential, err := fake.AssertionResponse(assertion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(loginFactorRequest{Assertion: json.RawMessage(credential)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	var successes int32
+	errs := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login/factor", bytes.NewReader(body))
+			if err != nil {
+				errs <- err
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(csrfHeaderName, csrfHeaderValue)
+			resp, err := pending.Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				atomic.AddInt32(&successes, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	if successes != 1 {
+		t.Errorf("%d of %d concurrent submissions of the same assertion succeeded, want exactly 1", successes, attempts)
 	}
 }
 

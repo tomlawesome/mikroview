@@ -3,12 +3,14 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -348,6 +350,65 @@ func TestTOTPEnrolConfirmLoginFactorAndDelete(t *testing.T) {
 	plain := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
 	if sess := sessionOf(t, plain, ts); !sess.Authenticated {
 		t.Error("expected a plain password login to work once the factor was removed")
+	}
+}
+
+// TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins reproduces the race
+// checking a TOTP code (auth.VerifyTOTP) and recording its counter
+// (RecordTOTPCounter) as two separate calls left open: two concurrent
+// submissions of the same code both verified against the same
+// not-yet-advanced counter and both won a session. Run with -race, and
+// fired many times in parallel to be meaningful rather than lucky --
+// the finding that motivated this test reproduced 8 of 15 runs with the
+// two-call version. store.go's VerifyAndRecordTOTP does both under one
+// lock acquisition now, which is what this asserts: exactly one of the
+// concurrent submissions succeeds.
+func TestConcurrentTOTPLoginFactorSubmissionsOnlyOneWins(t *testing.T) {
+	_, ts, _ := totpTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, totpBilboUsername, totpBilboPassword)
+	secret, _, counter := totpEnrolAndConfirm(t, bilbo, ts)
+
+	pending := startTOTPLogin(t, ts, totpBilboUsername, totpBilboPassword)
+	code := auth.GenerateTOTPCode(secret, counter+1)
+	body, err := json.Marshal(loginFactorRequest{Code: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	var successes int32
+	errs := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login/factor", bytes.NewReader(body))
+			if err != nil {
+				errs <- err
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(csrfHeaderName, csrfHeaderValue)
+			resp, err := pending.Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				atomic.AddInt32(&successes, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+
+	if successes != 1 {
+		t.Errorf("%d of %d concurrent submissions of the same code succeeded, want exactly 1", successes, attempts)
 	}
 }
 
