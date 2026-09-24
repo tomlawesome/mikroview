@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-only
 #
-# Mints the second signature over a release image (#1309): a cosign
-# key-based signature from a private key that exists only on this
-# dedicated, protected `mikroview-signing` runner's host, independent of
-# GitHub Actions' own keyless (Fulcio/OIDC) signature over the same digest
-# (.github/workflows/docker.yml, the release job's "Sign the release"
-# step). Two signatures from two unrelated trust roots: compromising
-# GitHub's OIDC issuer alone is not enough to forge both.
+# Mints the first of two signatures over a release image (#1309): a
+# cosign key-based signature from a private key that exists only on this
+# dedicated, protected `mikroview-signing` runner's host. The second is
+# GitHub's keyless (Sigstore/OIDC) signature over the same digest, added
+# by .github/workflows/countersign.yml -- deliberately not automatic: the
+# owner starts it by hand, after it has verified this key-based signature
+# against the committed cosign.pub (see docs/release-signing.md). Two
+# signatures from two unrelated trust roots, one of them requiring the
+# owner's own GitHub login: compromising GitHub's OIDC issuer alone is not
+# enough to forge both.
 #
 # The image is published by GitHub Actions, not this pipeline, so this
 # script waits for it to appear on GHCR before it can resolve anything to
