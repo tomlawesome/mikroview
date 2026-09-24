@@ -4,7 +4,9 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -210,6 +212,71 @@ func TestRenamePasskeyUnknownCredentialReturnsNotFound(t *testing.T) {
 // halves of #1250's clear-conditional rule -- the exact pair of tests a
 // careless "always clear" or "never clear" implementation would still
 // pass one of.
+// TestConcurrentGetDuringRenameAndAssertionIsRaceFree proves Get's
+// shallow *User copy (store.go) is safe to read concurrently with
+// RenamePasskey and RecordPasskeyAssertion, which both write into the
+// same account's Passkeys slice. Before both were changed to replace
+// the whole slice wholesale rather than writing a field on
+// u.Passkeys[idx] in place, -race caught a reader here touching a
+// Passkey field through the copy's shared backing array at the same
+// moment one of these wrote it. Run with -race -- the detector itself
+// is the assertion; nothing this function checks by value would catch
+// a regression on its own.
+func TestConcurrentGetDuringRenameAndAssertionIsRaceFree(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.Register("admin", "password123", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddPasskey(u.ID, testPasskey(1, "original")); err != nil {
+		t.Fatal(err)
+	}
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if got, ok := s.Get(u.ID); ok && len(got.Passkeys) > 0 {
+				_ = got.Passkeys[0].Name
+				_ = got.Passkeys[0].SignCount
+			}
+		}
+	}()
+
+	var writers sync.WaitGroup
+	writers.Add(2)
+	go func() {
+		defer writers.Done()
+		for i := 0; i < 200; i++ {
+			if _, err := s.RenamePasskey(u.ID, []byte{1}, fmt.Sprintf("name-%d", i)); err != nil {
+				t.Errorf("RenamePasskey: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer writers.Done()
+		for i := 0; i < 200; i++ {
+			if err := s.RecordPasskeyAssertion(u.ID, []byte{1}, uint32(i+1), time.Now()); err != nil {
+				t.Errorf("RecordPasskeyAssertion: %v", err)
+				return
+			}
+		}
+	}()
+	writers.Wait()
+	close(stop)
+	<-readerDone
+}
+
 func TestDeletePasskeyKeepsRecoveryCodesWhileAnotherFactorRemains(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {
