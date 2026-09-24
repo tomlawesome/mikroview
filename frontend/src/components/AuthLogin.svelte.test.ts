@@ -328,6 +328,36 @@ describe('AuthLogin at the pending-factor step', () => {
   })
 })
 
+// The wording has to follow what this account's pending login actually
+// listed -- a passkey-only account has no authenticator app to be told to
+// open. Companion to the 'Enter your code' assertion above, which pins the
+// app-only wording unchanged.
+describe('AuthLogin at the pending-factor step, wording per factor (#1250 follow-up)', () => {
+  beforeEach(() => {
+    authState.state = 'pending-factor'
+  })
+
+  it('says nothing about an authenticator app for a passkey-only account', () => {
+    authState.pendingSecondFactor = ['passkey']
+    authState.pendingPasskeyOrigin = location.origin
+
+    render(AuthLogin)
+
+    expect(screen.getByText('Use your passkey')).toBeTruthy()
+    expect(screen.getByText(/use your passkey to finish signing in/i)).toBeTruthy()
+    expect(screen.queryByText(/authenticator app/i)).toBeNull()
+  })
+
+  it('offers both wordings when the account holds a passkey and an authenticator app', () => {
+    authState.pendingSecondFactor = ['passkey', 'totp']
+    authState.pendingPasskeyOrigin = location.origin
+
+    render(AuthLogin)
+
+    expect(screen.getByText(/use your passkey, or enter the current code from your authenticator app/i)).toBeTruthy()
+  })
+})
+
 // #1250: the passkey half of the same pending-factor step -- driven by
 // authState.pendingSecondFactor/pendingPasskeyOrigin, both set by
 // login() itself (see auth.svelte.test.ts for that wiring).
