@@ -212,20 +212,41 @@
     if (!removingId) return
     removeError = null
     removeBusy = true
-    const err = await disablePasskey(removingId, removePassword)
-    removeBusy = false
-    if (err) {
-      removeError = err
-      return
+    try {
+      const result = await disablePasskey(removingId, removePassword)
+      if (typeof result === 'string') {
+        removeError = result
+        return
+      }
+      // #1253: this was the account's last second factor -- the server
+      // already ended every session on it, this browser's included.
+      // signOutAfterFactorRemoved() is logout()'s own local half, not a
+      // repeat of a server call that would only 401 against a session
+      // already gone; the ordinary return-to-list below never runs for
+      // this case, since there is no session left to show that list in.
+      if (result.signedOut) {
+        await authState.signOutAfterFactorRemoved()
+        return
+      }
+      passkeys = passkeys.filter((p) => p.id !== removingId)
+      authState.passkeyCount = Math.max(0, authState.passkeyCount - 1)
+      removingId = null
+      removePassword = ''
+      step = 'list'
+    } finally {
+      removeBusy = false
     }
-    passkeys = passkeys.filter((p) => p.id !== removingId)
-    authState.passkeyCount = Math.max(0, authState.passkeyCount - 1)
-    removingId = null
-    removePassword = ''
-    step = 'list'
   }
 
   const removingRow = $derived(passkeys.find((p) => p.id === removingId))
+  // #1253: removing this passkey leaves the account with no second
+  // factor at all iff it is the only passkey left and there is no
+  // authenticator app either. Drives the 'removing' step's wording --
+  // the three true outcomes (still another passkey, still the
+  // authenticator app, or signed out now) rather than the previous
+  // "if it was the only one" hedge that never said what actually happens.
+  const otherPasskeysRemain = $derived(passkeys.length > 1)
+  const isLastFactor = $derived(passkeys.length <= 1 && !authState.hasTOTP)
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -389,7 +410,14 @@
         <div class="body">
           <div class="warning">
             <strong>This removes "{removingRow?.name ?? 'this passkey'}".</strong>
-            <p>You'll need another way to sign in if it was the only one.</p>
+            {#if isLastFactor}
+              <p>This is the only second step this account has -- removing it signs you out
+                now, and you'll set up a second step again the next time you sign in.</p>
+            {:else if otherPasskeysRemain}
+              <p>Your other passkeys will still be asked for at sign-in.</p>
+            {:else}
+              <p>Your authenticator app will still be asked for at sign-in.</p>
+            {/if}
           </div>
           <label>
             Password

@@ -45,6 +45,14 @@
   let busy = $state(false)
   let codesCopied = $state(false)
 
+  // #1253: turning the authenticator app off leaves this account with no
+  // second factor at all iff it has no passkeys either -- the only other
+  // kind there is. Drives the 'turning-off' warning's wording: signing
+  // out is the true, owner-ruled consequence of that case, not "password
+  // alone", and the ordinary case (a passkey still stands) must not
+  // claim the opposite either.
+  const totpIsLastFactor = $derived(authState.passkeyCount === 0)
+
   // The secret lives in the URI's own query string -- extracted here
   // rather than asked for separately, so there is exactly one value the
   // server hands over and one place a mistake in reading it could hide.
@@ -165,15 +173,28 @@
   async function turnOff() {
     error = null
     busy = true
-    const err = await disableTOTP(password)
-    busy = false
-    if (err) {
-      error = err
-      return
+    try {
+      const result = await disableTOTP(password)
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      // #1253: this was the account's last second factor -- the server
+      // already ended every session on it, this browser's included.
+      // signOutAfterFactorRemoved() is logout()'s own local half, not a
+      // repeat of a server call that would only 401 against a session
+      // already gone; the 'off-done' screen below never shows for this
+      // case, since there is no session left to show it in.
+      if (result.signedOut) {
+        await authState.signOutAfterFactorRemoved()
+        return
+      }
+      authState.hasTOTP = false
+      password = ''
+      step = 'off-done'
+    } finally {
+      busy = false
     }
-    authState.hasTOTP = false
-    password = ''
-    step = 'off-done'
   }
 </script>
 
@@ -299,7 +320,12 @@
         <div class="body">
           <div class="warning">
             <strong>This removes the second step at sign-in.</strong>
-            <p>Your password alone will sign you in again after this.</p>
+            {#if totpIsLastFactor}
+              <p>This is the only second step this account has -- turning it off signs you out
+                now, and you'll set up a second step again the next time you sign in.</p>
+            {:else}
+              <p>Your passkey will still be asked for at sign-in.</p>
+            {/if}
           </div>
           <label>
             Password
@@ -319,7 +345,12 @@
 
       {#if step === 'off-done'}
         <div class="body">
-          <p>Authenticator app turned off. Signing in now needs only your password.</p>
+          <p>Authenticator app turned off.</p>
+          <!-- Only reachable when disableTOTP answered signedOut: false
+               (turnOff() above sends signedOut: true straight to sign-in
+               instead) -- so this account always still has a passkey
+               here, and it is safe to say so. -->
+          <p class="muted">Your passkey still protects sign-in.</p>
         </div>
         <div class="actions">
           <button type="button" class="confirm" onclick={close}>Close</button>
