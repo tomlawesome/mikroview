@@ -14,6 +14,10 @@ vi.mock('./api', () => ({
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
   submitLoginFactor: vi.fn(),
+  // The one non-function export this module reaches for -- kept as the
+  // real literal (rather than importOriginal's whole module) since
+  // everything else here is deliberately a bare vi.fn() stub.
+  PENDING_LOGIN_EXPIRED: 'sign in again',
   fetchPersistence: vi.fn(),
   // #1283: preferences.svelte.ts (imported transitively through
   // clearSessionState's preferencesState.reset(), and through apply()'s
@@ -81,6 +85,7 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.signInTimedOut = false
   authState.justSignedOut = false
   authState.signedInSince = ''
   authState.mustChangePassword = false
@@ -339,6 +344,24 @@ describe('AuthState.loginWithPasskey', () => {
     expect(result).toBe("that passkey couldn't be verified")
     expect(fetchAuthSession).not.toHaveBeenCalled()
   })
+
+  // The 5-minute pending-login cookie can outlive the passkey prompt too
+  // -- same fallback as submitFactor's own case below.
+  it('falls back to the password form on a pending-login timeout, instead of an inline error', async () => {
+    authState.state = 'pending-factor'
+    authState.pendingSecondFactor = ['passkey']
+    authState.pendingPasskeyOrigin = location.origin
+    vi.mocked(loginWithPasskey).mockResolvedValue('sign in again')
+
+    const result = await authState.loginWithPasskey()
+
+    expect(result).toBeNull()
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.signInTimedOut).toBe(true)
+    expect(authState.pendingSecondFactor).toEqual([])
+    expect(authState.pendingPasskeyOrigin).toBeUndefined()
+  })
 })
 
 describe('AuthState.submitFactor', () => {
@@ -375,6 +398,40 @@ describe('AuthState.submitFactor', () => {
     await authState.submitFactor('a1b2-c3d4-e5f6-g7h8')
 
     expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
+  })
+
+  // #1249's pending-login cookie lasts 5 minutes -- past that, the
+  // server answers every one of code/recovery/passkey with the same
+  // "sign in again" 401 (handleAuthLoginFactor), which is not an
+  // ordinary wrong code for the box to show inline: there is no session
+  // left for any code to complete. This falls back to the password form
+  // instead of leaving the code box up with nothing that can ever work.
+  it('falls back to the password form on a pending-login timeout, instead of an inline error', async () => {
+    authState.state = 'pending-factor'
+    authState.pendingSecondFactor = ['totp']
+    vi.mocked(submitLoginFactor).mockResolvedValue('sign in again')
+
+    const result = await authState.submitFactor('123456')
+
+    expect(result).toBeNull()
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.signInTimedOut).toBe(true)
+    expect(authState.pendingSecondFactor).toEqual([])
+  })
+
+  // "invalid code" is a different 401 from the very same route -- an
+  // ordinary wrong guess, not an expired cookie -- and must stay on the
+  // code box exactly as it did before.
+  it('does not bounce to the password form on an ordinary wrong code', async () => {
+    authState.state = 'pending-factor'
+    vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
+
+    const result = await authState.submitFactor('000000')
+
+    expect(result).toBe('invalid code')
+    expect(authState.state).toBe('pending-factor')
+    expect(authState.signInTimedOut).toBe(false)
   })
 })
 

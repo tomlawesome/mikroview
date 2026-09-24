@@ -881,6 +881,16 @@ export async function submitLoginFactor(code: string): Promise<string | null> {
   return (await res.text()) || `submitLoginFactor: ${res.status}`
 }
 
+// The literal refusal text handleAuthLoginFactor and its passkey-begin
+// counterpart (internal/api/auth.go, passkey.go) answer with once the
+// 5-minute pending-login cookie has already expired or was never sent --
+// exported so authState can tell that apart from an ordinary wrong code
+// or a refused passkey assertion (both 401 too, from the same route,
+// with no other distinguishing signal) and bounce back to the password
+// form instead of leaving the code box up with no session left to
+// complete.
+export const PENDING_LOGIN_EXPIRED = 'sign in again'
+
 // beginPasskeyLogin/submitPasskeyLoginAssertion are the passkey half of
 // the same second step (#1250), carried by the same pending cookie as
 // submitLoginFactor above -- the two are alternatives, not a sequence.
