@@ -185,6 +185,49 @@ describe('adding a passkey', () => {
   })
 })
 
+// Closing mid-ceremony doesn't cancel it, it only unmounts the view -- a
+// registerPasskey() that turns out to mint fresh recovery codes would
+// then have nowhere left open to show them, lost for good on reload.
+describe('closing is blocked while a request is in flight', () => {
+  async function openAddingWithPendingRegister() {
+    let resolveRegister: (v: { passkey: PasskeySummary; recoveryCodes: string[] | null }) => void
+    vi.mocked(registerPasskey).mockReturnValue(
+      new Promise((resolve) => {
+        resolveRegister = resolve
+      }),
+    )
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText(/add a passkey/i)
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByText(/waiting for your browser/i)
+    return (v: { passkey: PasskeySummary; recoveryCodes: string[] | null }) => resolveRegister(v)
+  }
+
+  it('Escape does not close the dialog while registerPasskey() is pending', async () => {
+    await openAddingWithPendingRegister()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.getByRole('dialog', { name: /passkeys/i })).toBeTruthy()
+  })
+
+  it('the backdrop click does not close the dialog while registerPasskey() is pending', async () => {
+    await openAddingWithPendingRegister()
+
+    await fireEvent.click(document.querySelector('.backdrop')!)
+
+    expect(screen.getByRole('dialog', { name: /passkeys/i })).toBeTruthy()
+  })
+
+  it('the header close button is disabled while registerPasskey() is pending', async () => {
+    await openAddingWithPendingRegister()
+
+    expect(screen.getByRole('button', { name: /^close$/i })).toHaveProperty('disabled', true)
+  })
+})
+
 describe('removing a passkey', () => {
   it('is refused server-side and shown inline, leaving the row in place', async () => {
     vi.mocked(fetchPasskeys).mockResolvedValue([row()])

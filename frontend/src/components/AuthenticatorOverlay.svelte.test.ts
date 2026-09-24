@@ -177,6 +177,53 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
   })
 })
 
+// Closing mid-confirm doesn't cancel the request, it only unmounts the
+// view -- a confirm that turns out to mint fresh recovery codes would
+// then have nowhere left open to show them, lost for good on reload.
+// The 'codes' screen itself already has no way out; this is the window
+// just before it, while confirm() is still in flight.
+describe('closing is blocked while a request is in flight', () => {
+  async function reachEnrollingWithPendingConfirm() {
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
+    })
+    let resolveConfirm: (v: { recoveryCodes: string[]; alreadyIssued: boolean }) => void
+    vi.mocked(confirmTOTP).mockReturnValue(
+      new Promise((resolve) => {
+        resolveConfirm = resolve
+      }),
+    )
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await screen.findByTestId('totp-secret')
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+    return (result: { recoveryCodes: string[]; alreadyIssued: boolean }) => resolveConfirm(result)
+  }
+
+  it('Escape does not close the dialog while confirm() is pending', async () => {
+    await reachEnrollingWithPendingConfirm()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+
+  it('the backdrop click does not close the dialog while confirm() is pending', async () => {
+    await reachEnrollingWithPendingConfirm()
+
+    await fireEvent.click(document.querySelector('.backdrop')!)
+
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+
+  it('the header close button is disabled while confirm() is pending', async () => {
+    await reachEnrollingWithPendingConfirm()
+
+    expect(screen.getByRole('button', { name: /^close$/i })).toHaveProperty('disabled', true)
+  })
+})
+
 describe('turning it off needs the password', () => {
   it('is refused server-side and shown inline, leaving hasTOTP untouched', async () => {
     vi.mocked(disableTOTP).mockResolvedValue('wrong password')

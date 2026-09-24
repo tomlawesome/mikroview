@@ -71,18 +71,22 @@
   // Reachable from the header X, Escape and the backdrop -- everywhere
   // except the 'codes' step, which those three are not wired to at all
   // (see the markup below): the ten codes exist in clear nowhere else,
-  // so leaving is only ever the explicit "I have saved these".
+  // so leaving is only ever the explicit "I have saved these". Also
+  // blocked while busy: closing mid-confirm doesn't cancel the request,
+  // it only unmounts the view -- so a confirm that turns out to have
+  // minted fresh recovery codes would land on a step nothing is left
+  // open to show, and a reload after that loses them for good.
   function close() {
     open = false
     resetFields()
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && step !== 'codes') close()
+    if (e.key === 'Escape' && step !== 'codes' && !busy) close()
   }
 
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget && step !== 'codes') close()
+    if (e.target === e.currentTarget && step !== 'codes' && !busy) close()
   }
 
   async function startEnrol() {
@@ -156,7 +160,7 @@
       <div class="modal-header">
         <span class="title">Authenticator app</span>
         {#if step !== 'codes'}
-          <button type="button" class="close" onclick={close} aria-label="Close">✕</button>
+          <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
 
@@ -176,7 +180,7 @@
           {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
-          <button type="button" class="cancel" onclick={close}>Close</button>
+          <button type="button" class="cancel" onclick={close} disabled={busy}>Close</button>
           {#if authState.hasTOTP}
             <button type="button" class="danger" onclick={() => ((step = 'turning-off'), (error = null))}>
               Turn off
