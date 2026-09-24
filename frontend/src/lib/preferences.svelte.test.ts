@@ -144,6 +144,21 @@ describe('preferencesState debounce and flush', () => {
     expect(saveMyPreferences).toHaveBeenCalledTimes(1)
   })
 
+  it('sends only the key changed since the last successful save, not the whole record', async () => {
+    preferencesState.set('colorway', 'pulse')
+    await preferencesState.flush()
+    expect(saveMyPreferences).toHaveBeenCalledWith({ version: 1, prefs: { colorway: 'pulse' } }, {})
+
+    preferencesState.set('groupMode', true)
+    await preferencesState.flush()
+
+    // A second, unrelated change must not re-send colorway -- only
+    // groupMode changed since the last successful flush (#1283's "save
+    // only what changed" ruling; two tabs each saving a different key
+    // must not stomp on each other on the server).
+    expect(saveMyPreferences).toHaveBeenLastCalledWith({ version: 1, prefs: { groupMode: true } }, {})
+  })
+
   it('flush() is a no-op when nothing changed since the last flush', async () => {
     await preferencesState.flush()
     expect(saveMyPreferences).not.toHaveBeenCalled()
