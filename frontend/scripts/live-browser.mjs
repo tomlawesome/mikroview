@@ -80,6 +80,14 @@ if (!(BROWSER_NAME in ENGINES)) {
  * missing system libraries, ...) is rethrown as Playwright reported it,
  * because guessing a friendlier message for a failure this function
  * does not understand risks hiding what actually went wrong.
+ *
+ * After a successful launch, prints one line naming the engine as the
+ * launched browser itself reports it (browserType().name() and
+ * version()) alongside the MV_BROWSER setting that chose it (#1306) --
+ * not the setting alone, since a shard that launched the wrong engine
+ * would otherwise look identical to a real one in the log. A mismatch
+ * between the two is a broken run, not a note: it throws rather than
+ * printing and carrying on.
  */
 export async function launchBrowser() {
   try {
@@ -100,7 +108,17 @@ export async function launchBrowser() {
     // Firefox activates the same worker over the same certificate with
     // no equivalent flag at all.
     const args = BROWSER_NAME === 'chromium' ? ['--ignore-certificate-errors'] : []
-    return await ENGINES[BROWSER_NAME].launch({ args })
+    const launched = await ENGINES[BROWSER_NAME].launch({ args })
+    const reportedName = launched.browserType().name()
+    if (reportedName !== BROWSER_NAME) {
+      await launched.close()
+      throw new Error(
+        `launched browser reports engine ${JSON.stringify(reportedName)}, but MV_BROWSER=${JSON.stringify(BROWSER_NAME)} -- ` +
+          `a run under one engine that actually launched another proves nothing`,
+      )
+    }
+    console.log(`engine: ${reportedName} ${launched.version()} (MV_BROWSER=${BROWSER_NAME})`)
+    return launched
   } catch (e) {
     const message = String(e?.message ?? e)
     if (/Executable doesn't exist/.test(message)) {
