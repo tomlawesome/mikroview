@@ -980,15 +980,16 @@ export async function session({
     ...(mocksApi ? { serviceWorkers: 'block' } : {}),
   })
   const consoleErrors = []
-  // Set only while completeSecondFactor is retrying a refused code (see
-  // its own comment): a refused authenticator code is a 401 the browser
-  // logs as a console error, and it is this harness's own sign-in
-  // making it, not the app misbehaving. Without this, every scenario
-  // that follows another inside one 30-second window fails "no console
-  // errors" for a login that then succeeded.
-  let signingIn = false
+  // completeSecondFactor's own comment ("Deliberately not retried") is
+  // why nothing here needs to blanket-ignore console errors during
+  // sign-in any more: freshTotpCode already guarantees the code it
+  // submits is unspent, so there is no doomed-retry 401 for this window
+  // to hide. A console error during sign-in now is exactly as real a
+  // fault as one anywhere else, so it is recorded like any other -- the
+  // four named filters below are the only exceptions, and each is a
+  // specific, understood message from the browser engine itself, not
+  // from the app.
   const record = (text) => {
-    if (signingIn) return
     if (isUntrustedCertServiceWorkerError(text)) return
     if (isNavigationCancelledFetch(text)) return
     if (isScreenshotStyleRefusal(text)) return
@@ -1004,12 +1005,7 @@ export async function session({
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
-  signingIn = true
-  try {
-    await completeSecondFactor(page)
-  } finally {
-    signingIn = false
-  }
+  await completeSecondFactor(page)
   // #main-content is the one marker present on every signed-in view
   // (App.svelte wraps all of them in it) -- unlike the old `input.rule`
   // wait, it does not assume which view is the landing page.
