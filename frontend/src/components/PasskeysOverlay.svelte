@@ -97,18 +97,25 @@
 
   // Reachable everywhere except the 'codes' step, matching
   // AuthenticatorOverlay: the ten codes exist in clear nowhere else, so
-  // leaving is only ever the explicit acknowledgement.
+  // leaving is only ever the explicit acknowledgement. Also blocked
+  // while a request is in flight (addBusy/removeBusy), for the same
+  // reason: closing mid-request only unmounts the view, it doesn't
+  // cancel it -- an add that turns out to mint fresh recovery codes
+  // would land on a step nothing is left open to show, lost for good on
+  // the next reload.
+  const busy = $derived(addBusy || removeBusy)
+
   function close() {
     open = false
     resetFields()
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && step !== 'codes') close()
+    if (e.key === 'Escape' && step !== 'codes' && !busy) close()
   }
 
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget && step !== 'codes') close()
+    if (e.target === e.currentTarget && step !== 'codes' && !busy) close()
   }
 
   function startAdding() {
@@ -213,7 +220,7 @@
       <div class="modal-header">
         <span class="title">Passkeys</span>
         {#if step !== 'codes'}
-          <button type="button" class="close" onclick={close} aria-label="Close">✕</button>
+          <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
 
