@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -32,6 +33,21 @@ import (
 )
 
 var prefsLog = logging.New("prefs")
+
+// MaxRecordBytes caps one user's merged record. Every real key the
+// frontend stores (presets, topTalkers, colorway, altitudeStop, columns,
+// groupMode, retention, metrics, deckOrder) is a scalar, a short array
+// or a few hundred bytes per saved preset or widget, so a heavy user's
+// whole record is a few KiB and 256 KiB leaves room for hundreds of
+// presets. Without a cap, any signed-in account could grow the shared
+// document without limit, one in-cap PATCH at a time, and every other
+// account's read and write then waits on rewriting it. Bytes alone are
+// enough: key count and nesting depth are both paid for in bytes.
+const MaxRecordBytes = 256 * 1024
+
+// ErrRecordTooLarge is what Merge returns when the merged record would
+// exceed MaxRecordBytes; the stored record is left as it was.
+var ErrRecordTooLarge = errors.New("prefs: the merged preferences record would exceed the size cap")
 
 // document is the on-disk shape: every user's record in one file, keyed
 // by user id -- the same whole-document-keyed-by-id shape
@@ -166,6 +182,13 @@ func (s *Store) Merge(userID string, patch json.RawMessage) error {
 	data, err := json.Marshal(merged)
 	if err != nil {
 		return fmt.Errorf("encoding merged preferences: %w", err)
+	}
+	// Checked on the merged result, not the patch: a record already at
+	// the cap can still be shrunk by a patch that replaces its largest
+	// key, and one loaded from disk over the cap (an older document)
+	// still reads back -- only growth past the cap is refused.
+	if len(data) > MaxRecordBytes {
+		return fmt.Errorf("%w (%d bytes, cap %d)", ErrRecordTooLarge, len(data), MaxRecordBytes)
 	}
 
 	s.records[userID] = data

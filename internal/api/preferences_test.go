@@ -5,13 +5,16 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/prefs"
 )
 
 // TestPreferencesGetWithNoRecordReturnsEmptyPrefs is #1283's documented
@@ -349,5 +352,51 @@ func TestDeletingUserRemovesPreferences(t *testing.T) {
 
 	if _, ok := s.Prefs.Get(operator.ID); ok {
 		t.Error("the deleted user's preferences record is still stored")
+	}
+}
+
+// TestPreferencesPatchRefusesGrowingTheRecordPastTheCap: every body here
+// is under the 64 KiB cap, so only the record-size bound in
+// prefs.Store.Merge can stop the record growing without limit. Refused
+// with a 413 that names the cap, and the previously stored keys survive.
+func TestPreferencesPatchRefusesGrowingTheRecordPastTheCap(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := registerAdmin(t, s, ts)
+
+	chunk := strings.Repeat("x", 60*1024)
+	var status int
+	var body string
+	for i := 0; i < 10 && status != http.StatusRequestEntityTooLarge; i++ {
+		resp := patchJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
+			"version": 1,
+			"prefs":   map[string]any{"pad" + strconv.Itoa(i): chunk},
+		})
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		status, body = resp.StatusCode, string(b)
+	}
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("ten 60 KiB patches never got a 413; last status = %d", status)
+	}
+	if !strings.Contains(body, "256 KiB") {
+		t.Errorf("413 body = %q, want it to name the cap", body)
+	}
+
+	resp, err := client.Get(ts.URL + "/api/me/preferences")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got preferencesDocument
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got.Prefs, []byte(`"pad0"`)) {
+		t.Error("the keys accepted before the refusal were lost")
+	}
+	if len(got.Prefs) > prefs.MaxRecordBytes {
+		t.Errorf("stored record is %d bytes, over the cap", len(got.Prefs))
 	}
 }

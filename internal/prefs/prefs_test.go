@@ -8,6 +8,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/persist"
@@ -278,5 +280,68 @@ func TestNoBackendStillApplies(t *testing.T) {
 	}
 	if got, ok := s.Get("user-1"); !ok || string(got) != `{"a":1}` {
 		t.Errorf("Get = (%s, %v), want ({\"a\":1}, true)", got, ok)
+	}
+}
+
+// TestMergeRefusesGrowingARecordPastTheCap: each patch is well under
+// the API's 64 KiB body cap, but nothing bounded the merged record, so
+// one account could grow the shared document without limit. The
+// refusing Merge must leave the record exactly as it was.
+func TestMergeRefusesGrowingARecordPastTheCap(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "preferences.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := strings.Repeat("x", 60*1024)
+	var before json.RawMessage
+	var refusedAt int
+	for i := 0; i < 10; i++ {
+		patch := json.RawMessage(`{"pad` + strconv.Itoa(i) + `":"` + chunk + `"}`)
+		err := s.Merge("user-1", patch)
+		if err == nil {
+			before, _ = s.Get("user-1")
+			continue
+		}
+		if !errors.Is(err, ErrRecordTooLarge) {
+			t.Fatalf("Merge %d: err = %v, want ErrRecordTooLarge", i, err)
+		}
+		refusedAt = i
+		break
+	}
+	if refusedAt == 0 {
+		t.Fatal("ten 60 KiB patches were all accepted: the record is unbounded")
+	}
+	after, ok := s.Get("user-1")
+	if !ok || string(after) != string(before) {
+		t.Errorf("a refused Merge changed the stored record")
+	}
+	if len(after) > MaxRecordBytes {
+		t.Errorf("stored record is %d bytes, over the %d cap", len(after), MaxRecordBytes)
+	}
+}
+
+// TestRecordAlreadyOverTheCapStillLoads: an upgrade must not lock
+// anyone out of their preferences. A document written before the cap
+// existed still opens and reads back; only growing it is refused, and a
+// patch that shrinks it is still accepted.
+func TestRecordAlreadyOverTheCapStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preferences.json")
+	big := `{"records":{"user-1":{"pad":"` + strings.Repeat("x", MaxRecordBytes+1024) + `","colorway":"teal"}}}`
+	if err := os.WriteFile(path, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("a record over the cap must still open: %v", err)
+	}
+	got, ok := s.Get("user-1")
+	if !ok || !strings.Contains(string(got), `"colorway":"teal"`) {
+		t.Fatalf("the over-cap record did not read back: %s", got)
+	}
+	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"ochre"}`)); !errors.Is(err, ErrRecordTooLarge) {
+		t.Errorf("a patch keeping it over the cap: err = %v, want ErrRecordTooLarge", err)
+	}
+	if err := s.Merge("user-1", json.RawMessage(`{"pad":null}`)); err != nil {
+		t.Errorf("a patch shrinking it under the cap must be accepted: %v", err)
 	}
 }

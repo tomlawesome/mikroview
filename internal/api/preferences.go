@@ -4,8 +4,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/prefs"
 )
 
 // preferencesSchemaVersion is the only version PATCH /api/me/preferences
@@ -75,10 +79,12 @@ func (s *Server) handlePreferencesGet(w http.ResponseWriter, r *http.Request) {
 // The body is capped at maxJSONBodyBytes the same way every other JSON
 // body on this API is (decodeJSONBody), version must be exactly
 // preferencesSchemaVersion, and prefs must decode as a JSON object --
-// not an array, string, number or null. Anything outside that is a 400;
-// there is nothing here for a caller to be forbidden from doing (see the
-// route comment in server.go), so every failure this handler can
-// produce is the caller's mistake, never a permission question.
+// not an array, string, number or null. Anything outside that is a 400,
+// and a patch that would grow the stored record past
+// prefs.MaxRecordBytes is a 413; there is nothing here for a caller to
+// be forbidden from doing (see the route comment in server.go), so
+// every failure this handler can produce is the caller's mistake, never
+// a permission question.
 func (s *Server) handlePreferencesPatch(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.sessionUser(r, time.Now())
 	if !ok {
@@ -111,6 +117,10 @@ func (s *Server) handlePreferencesPatch(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := s.Prefs.Merge(user.ID, req.Prefs); err != nil {
+		if errors.Is(err, prefs.ErrRecordTooLarge) {
+			http.Error(w, fmt.Sprintf("preferences record would exceed %d KiB; nothing was saved", prefs.MaxRecordBytes/1024), http.StatusRequestEntityTooLarge)
+			return
+		}
 		apiLog.Error("saving preferences for " + user.ID + ": " + err.Error())
 		http.Error(w, "preferences could not be saved", http.StatusInternalServerError)
 		return
