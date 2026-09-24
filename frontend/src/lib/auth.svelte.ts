@@ -486,6 +486,28 @@ class AuthState {
     return null;
   }
 
+  // #1253: called by AuthenticatorOverlay/PasskeysOverlay when
+  // disableTOTP/disablePasskey answers signedOut -- removing the
+  // account's last second factor, which the server already turned into
+  // signing the caller out everywhere, this browser's session included.
+  // logout()'s own local half, minus its network call: that call would
+  // only 401 against a session the server has already revoked, and the
+  // removal itself is the action being confirmed here, not a second one.
+  async signOutAfterFactorRemoved(): Promise<void> {
+    await preferencesState.flush();
+    this.state = "unauthenticated";
+    this.username = "";
+    this.role = "";
+    this.mustChangePassword = false;
+    this.mustEnrolSecondFactor = false;
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
+    this.justSignedOut = true;
+    clearSessionState();
+    sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
+    pageReload.now();
+  }
+
   // signOutEverywhere is #677's sessions row action. Unlike logout()
   // above, the caller stays signed in on this tab -- the server issues
   // a fresh session in the same response (see handleAuthLogoutAll) --

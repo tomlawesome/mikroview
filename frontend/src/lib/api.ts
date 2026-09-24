@@ -964,14 +964,29 @@ export async function confirmTOTP(code: string): Promise<TotpConfirmResult | str
   return (await res.text()) || `confirmTOTP: ${res.status}`
 }
 
+// #1253's ruling: an account may remove its own last second factor --
+// the server signs the caller out immediately when that leaves none
+// (every session on the account revoked, this browser's included), and
+// says so back rather than answering exactly as it would have for an
+// ordinary removal that leaves another factor standing. Absent (an
+// older server, or the ordinary case) reads as false -- the safe
+// direction to be wrong in, since it only means AuthenticatorOverlay/
+// PasskeysOverlay show the ordinary "turned off" screen for a session
+// that in fact no longer exists, which the next request 401s out of
+// anyway rather than silently misrepresenting anything.
+export interface DisableFactorResult {
+  signedOut: boolean
+}
+
 // disableTOTP is the user's own way to turn a factor off, password-gated
 // like changePassword -- there is deliberately no web route that can do
 // this without it (#1249's "no web route clears your own factor without
 // the password"); a lost phone goes through the CLI recovery path instead.
-export async function disableTOTP(password: string): Promise<string | null> {
+export async function disableTOTP(password: string): Promise<DisableFactorResult | string> {
   const res = await deleteJSON('/api/auth/totp', { password })
-  if (res.ok) return null
-  return (await res.text()) || `disableTOTP: ${res.status}`
+  if (!res.ok) return (await res.text()) || `disableTOTP: ${res.status}`
+  const body = await res.json().catch(() => null)
+  return { signedOut: body?.signedOut === true }
 }
 
 // clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
@@ -1040,11 +1055,15 @@ export async function renamePasskey(id: string, name: string): Promise<string | 
 
 // disablePasskey is the user's own way to remove one passkey,
 // password-gated like disableTOTP -- there is deliberately no web route
-// that can do this without it.
-export async function disablePasskey(id: string, password: string): Promise<string | null> {
+// that can do this without it. Same #1253 signedOut contract as
+// disableTOTP's own comment describes -- removing an account's last
+// passkey with no authenticator app left standing signs the caller out
+// immediately too.
+export async function disablePasskey(id: string, password: string): Promise<DisableFactorResult | string> {
   const res = await deleteJSON(`/api/auth/passkeys/${encodeURIComponent(id)}`, { password })
-  if (res.ok) return null
-  return (await res.text()) || `disablePasskey: ${res.status}`
+  if (!res.ok) return (await res.text()) || `disablePasskey: ${res.status}`
+  const body = await res.json().catch(() => null)
+  return { signedOut: body?.signedOut === true }
 }
 
 // clearUserPasskeys is the admin's side of a lost device (#1250): DELETE

@@ -281,9 +281,10 @@ describe('turning it off needs the password', () => {
     expect(authState.hasTOTP).toBe(true)
   })
 
-  it('turns it off and flips authState.hasTOTP on the right password', async () => {
-    vi.mocked(disableTOTP).mockResolvedValue(null)
+  it('turns it off and flips authState.hasTOTP on the right password, when a passkey still stands', async () => {
+    vi.mocked(disableTOTP).mockResolvedValue({ signedOut: false })
     authState.hasTOTP = true
+    authState.passkeyCount = 1
     render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
@@ -293,5 +294,47 @@ describe('turning it off needs the password', () => {
     expect(disableTOTP).toHaveBeenCalledWith('correct-horse')
     expect(authState.hasTOTP).toBe(false)
     expect(await screen.findByText(/turned off/i)).toBeTruthy()
+    expect(screen.getByText(/your passkey still protects sign-in/i)).toBeTruthy()
+  })
+
+  // #1253's own ruling: a passkey-less account may still turn off its
+  // authenticator app -- that just costs it the account's last second
+  // factor, which the server answers by signing the caller out
+  // everywhere rather than leaving a half-protected session up.
+  it('warns before removing the account\'s only second factor, not "password alone"', async () => {
+    authState.hasTOTP = true
+    authState.passkeyCount = 0
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+
+    expect(screen.getByText(/signs you out now/i)).toBeTruthy()
+    expect(screen.queryByText(/password alone/i)).toBeNull()
+  })
+
+  it('does not claim "password alone" when a passkey will still stand', async () => {
+    authState.hasTOTP = true
+    authState.passkeyCount = 1
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+
+    expect(screen.getByText(/your passkey will still be asked for/i)).toBeTruthy()
+    expect(screen.queryByText(/password alone/i)).toBeNull()
+  })
+
+  it('signs out through authState the way logout does, rather than showing "turned off", when this was the last factor', async () => {
+    vi.mocked(disableTOTP).mockResolvedValue({ signedOut: true })
+    authState.hasTOTP = true
+    authState.passkeyCount = 0
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'correct-horse' } })
+    await fireEvent.click(screen.getByRole('button', { name: /turn off authenticator app/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    expect(authState.state).toBe('unauthenticated')
+    expect(screen.queryByText(/turned off\.$/i)).toBeNull()
   })
 })

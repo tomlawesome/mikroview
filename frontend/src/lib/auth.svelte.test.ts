@@ -503,6 +503,43 @@ describe('AuthState.logout', () => {
   })
 })
 
+// #1253: AuthenticatorOverlay/PasskeysOverlay call this when
+// disableTOTP/disablePasskey answers signedOut -- the server has
+// already revoked every session on the account (removing its last
+// second factor), so unlike logout() above this makes no server call of
+// its own.
+describe('AuthState.signOutAfterFactorRemoved', () => {
+  it('clears identity and reloads without calling the server logout route', async () => {
+    authState.state = 'authenticated'
+    authState.username = 'tom'
+    authState.role = 'user'
+    authState.hasTOTP = true
+
+    await authState.signOutAfterFactorRemoved()
+
+    expect(logout).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.username).toBe('')
+    expect(authState.role).toBe('')
+    expect(pageReload.now).toHaveBeenCalled()
+    // Plays the door's way-out beat, the same as an ordinary logout()
+    // -- this is the caller's own action ending their session, not a
+    // forced expiry (handleUnauthorized deliberately leaves this alone).
+    expect(authState.justSignedOut).toBe(true)
+  })
+
+  it('flushes any pending preference write first, the same as logout()', async () => {
+    authState.state = 'authenticated'
+    preferencesState.seedForTest({})
+    preferencesState.set('colorway', 'nebula')
+    vi.mocked(saveMyPreferences).mockResolvedValue(null)
+
+    await authState.signOutAfterFactorRemoved()
+
+    expect(saveMyPreferences).toHaveBeenCalled()
+  })
+})
+
 describe('AuthState.signOutEverywhere', () => {
   it('calls the endpoint and re-checks the session, unlike logout it does not drop to unauthenticated', async () => {
     authState.state = 'authenticated'
