@@ -17,22 +17,6 @@ testing-and-ci skill (owner, 2026-09-08).
   The runner host was also running the CHR exercise (pipeline 1451) and two
   other pipelines around that time. First sighting.
 
-## live-topography-tunnels: the fit chip does not restore the frame after a wheel zoom
-
-- 2026-09-22 · dd33e04a (dev) · local WebKit run in the live-check image, the
-  first full WebKit run of the suite · `FAIL and the fit chip brings the whole
-  map back again` at `live-topography-tunnels.mjs:306`. The neighbouring check
-  restoring after a pan passed and named the frame, so only the restore after a
-  *wheel* zoom failed. Filed as #1323 on this single sighting, against the rule
-  that one sighting is a flake record rather than an issue; the issue was closed
-  once it would not reproduce.
-
-  Chased the same day on the same slice and engine, alone on an idle
-  workstation so nothing competed for it. It passed both at dd33e04a itself --
-  the commit it failed on -- and on top of the #1322 stroke-linejoin fix, in
-  both cases reporting `got 0 0 1400 720, want 0 0 1400 720`. So it is neither
-  deterministic nor something #1322 cured. First sighting.
-
 ## live-watchers-editor: the cloned shipped watcher's row has no open drawer
 
 - 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox, first deliberate Firefox run of this shard · `FAIL the copy is already expanded, ready to be edited` at `live-watchers-editor.mjs:344` -- the sibling check 66 lines below the 2026-09-21 sighting's, same clone, same drawer-not-open shape. Every check before it passed. The immediately following Firefox run of the same shard on the same commit passed this scenario, and two Chromium runs of it passed, so the engine is not the cause. Second sighting.
