@@ -74,12 +74,12 @@ func TestAuditRequiresAdminNotJustAnyUser(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := registerAdmin(t, ts)
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/audit below
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/audit below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/audit")
 	if err != nil {
@@ -98,7 +98,7 @@ func TestCreateUserRecordsAuditEntry(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
@@ -126,7 +126,7 @@ func TestEntityUpsertAndDeleteRecordAuditEntries(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 
 	postJSON(t, admin, ts.URL+"/api/entities", entityRequest{
 		Type: entities.TypeHost, Key: "192.168.1.50", Label: "mail relay",
@@ -180,7 +180,7 @@ func TestTokenCreateAndRevokeRecordAuditEntries(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 
 	createResp := postJSON(t, admin, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"})
 	var created tokenResponse
@@ -229,7 +229,7 @@ func TestClearAllDoesNotRecordAPerFlagAuditEntry(t *testing.T) {
 	s.Flags.Add("port_scan", "1.2.3.5", "d2", time.Now())
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 
 	postFlagsAction(t, admin, ts.URL+"/api/flags/clear-all")
 
@@ -258,7 +258,7 @@ func TestShippedDefinitionUpdateRecordsAuditEntry(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 
 	resp := putJSON(t, admin, ts.URL+"/api/definitions/port_scan", updateDefinitionRequest{Enabled: boolPtr(false)})
 	resp.Body.Close()

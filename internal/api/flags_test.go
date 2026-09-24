@@ -410,19 +410,17 @@ func TestHandleFlagsClearAllAvailableToUserNotViewer(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before POST /api/auth/users below
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/flags/clear-all below
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/flags/clear-all below
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/flags/clear-all below
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/flags/clear-all below
 
 	viewerReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
 	viewerReq.Header.Set(csrfHeaderName, csrfHeaderValue)
@@ -463,19 +461,17 @@ func TestHandleFlagsWritesRefuseViewer(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before POST /api/auth/users below
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/flags/... below
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/flags/... below
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/flags/... below
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/flags/... below
 
 	// Viewer: refused both.
 	viewerVerdictResp := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictChecked})
@@ -557,9 +553,7 @@ func TestHandleFlagsClearAllIsAuditLoggedOnce(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before /api/flags/clear-all below
+	adminClient := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/flags/clear-all", nil)
 	resp.Body.Close()
@@ -585,9 +579,7 @@ func TestHandleFlagsClearAllOnEmptyStoreSkipsAudit(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before /api/flags/clear-all below
+	adminClient := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/flags/clear-all", nil)
 	resp.Body.Close()
@@ -681,7 +673,7 @@ func TestHandleFlagsVerdictIsAuditLogged(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, client, ts) // #1253: needed before /api/flags/... below
+	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 
 	resp := postJSON(t, client, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictExpected})
 	resp.Body.Close()
@@ -773,7 +765,7 @@ func TestHandleFlagNoteEditsAJudgedFlag(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, client, ts) // #1253: needed before /api/flags/... below
+	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 	postJSON(t, client, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: "first go"}).Body.Close()
 
 	resp := putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "second go, better words"})
@@ -812,7 +804,7 @@ func TestHandleFlagNoteRefusals(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, client, ts) // #1253: needed before /api/flags/... below
+	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 
 	unjudged := putJSON(t, client, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "no verdict yet"})
 	unjudged.Body.Close()
@@ -845,7 +837,7 @@ func TestFlagNoteAuditRecordsTheEventNeverTheText(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, client, ts) // #1253: needed before /api/flags/... below
+	seedFactor(t, s, ts, "tom") // #1253: needed before /api/flags/... below
 
 	const secret = "the operator's own words"
 	postJSON(t, client, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: secret}).Body.Close()
@@ -889,15 +881,13 @@ func TestHandleFlagNoteRefusesViewer(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before POST /api/auth/users and /api/flags/... below
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/flags/"+id+"/verdict", verdictRequest{Verdict: flags.VerdictChecked, Note: "admin's own"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/flags/.../note below
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/flags/.../note below
 
 	resp := putJSON(t, viewerClient, ts.URL+"/api/flags/"+id+"/note", noteRequest{Note: "viewer's edit"})
 	resp.Body.Close()
@@ -1056,9 +1046,7 @@ func TestHandleExpectationForgetIsAuditLogged(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before /api/flags/expectations below
+	adminClient := registerAdmin(t, s, ts)
 
 	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
 	req.Header.Set(csrfHeaderName, csrfHeaderValue)
@@ -1095,15 +1083,13 @@ func TestHandleExpectationsViewerReadsButCannotForget(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	totpEnrolAndConfirm(t, adminClient, ts) // #1253: needed before POST /api/auth/users below
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/flags/expectations below
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/flags/expectations below
 
 	listResp, err := viewerClient.Get(ts.URL + "/api/flags/expectations")
 	if err != nil {
@@ -1130,7 +1116,7 @@ func TestHandleExpectationsViewerReadsButCannotForget(t *testing.T) {
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/flags/expectations below
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/flags/expectations below
 
 	userDelete, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/expectations/"+id, nil)
 	userDelete.Header.Set(csrfHeaderName, csrfHeaderValue)

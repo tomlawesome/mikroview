@@ -1552,7 +1552,7 @@ func TestBearerTokenCannotReachDefinitions(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
 	resp := bearerGet(t, ts.URL+"/api/definitions", raw)
@@ -1573,17 +1573,17 @@ func TestDefinitionsListOpenToViewer(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
-	totpEnrolAndConfirm(t, userClient, ts) // #1253: needed before /api/definitions below
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/definitions below
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
-	totpEnrolAndConfirm(t, viewerClient, ts) // #1253: needed before /api/definitions below
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/definitions below
 
 	resp, err := viewerClient.Get(ts.URL + "/api/definitions")
 	if err != nil {
