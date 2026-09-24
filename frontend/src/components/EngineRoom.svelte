@@ -790,9 +790,20 @@
   async function clearPersonFactor(id: string) {
     personError = null
     clearingFactor = id
-    const err = await usersState.clearFactor(id)
-    clearingFactor = null
-    if (err) personError = err
+    // finally, not a plain assignment after the await: usersState.clearFactor
+    // refreshes the list on success, and that fetchUsers() call can itself
+    // throw (a dropped connection, say) -- without finally the button would
+    // be stuck reading "clearing…" for the rest of the session. The catch
+    // is what stops that throw becoming an unhandled rejection: the clear
+    // itself still went through server-side, only the list refresh failed.
+    try {
+      const err = await usersState.clearFactor(id)
+      if (err) personError = err
+    } catch {
+      personError = 'Turned it off, but could not refresh the list. Reload to see the change.'
+    } finally {
+      clearingFactor = null
+    }
   }
 
   function onClearPasskeysClick(e: MouseEvent, id: string) {
@@ -809,9 +820,16 @@
   async function clearPersonPasskeys(id: string) {
     personError = null
     clearingPasskeys = id
-    const err = await usersState.clearPasskeys(id)
-    clearingPasskeys = null
-    if (err) personError = err
+    // Same reasoning as clearPersonFactor above: the refresh inside
+    // usersState.clearPasskeys can itself throw.
+    try {
+      const err = await usersState.clearPasskeys(id)
+      if (err) personError = err
+    } catch {
+      personError = 'Removed them, but could not refresh the list. Reload to see the change.'
+    } finally {
+      clearingPasskeys = null
+    }
   }
 
   // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all

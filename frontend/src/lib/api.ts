@@ -885,6 +885,16 @@ export async function submitLoginFactor(code: string): Promise<string | null> {
   return (await res.text()) || `submitLoginFactor: ${res.status}`
 }
 
+// The literal refusal text handleAuthLoginFactor and its passkey-begin
+// counterpart (internal/api/auth.go, passkey.go) answer with once the
+// 5-minute pending-login cookie has already expired or was never sent --
+// exported so authState can tell that apart from an ordinary wrong code
+// or a refused passkey assertion (both 401 too, from the same route,
+// with no other distinguishing signal) and bounce back to the password
+// form instead of leaving the code box up with no session left to
+// complete.
+export const PENDING_LOGIN_EXPIRED = 'sign in again'
+
 // beginPasskeyLogin/submitPasskeyLoginAssertion are the passkey half of
 // the same second step (#1250), carried by the same pending cookie as
 // submitLoginFactor above -- the two are alternatives, not a sequence.
@@ -915,9 +925,19 @@ export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<s
 // it -- calling this again before confirming replaces the pending secret,
 // which is what lets AuthenticatorOverlay's "scan didn't work, try again"
 // just call it a second time rather than needing a dedicated retry route.
+// A 401 here is never "wrong credentials" -- unlike login/submitLoginFactor
+// above, every one of the four forced-enrolment routes (this one and the
+// other three below) requires an already-authenticated session before it
+// does anything else, so a 401 can only mean that session is gone (most
+// often: a second device finished enrolling first, which ends every other
+// session on the account). Thrown, not returned as text, so the forced-
+// enrolment door -- which otherwise has no way out at all -- can send that
+// case to authState.handleUnauthorized() instead of stranding the caller
+// on an error line with nothing else on screen.
 export async function enrolTOTP(): Promise<TotpEnrollment | string> {
   const res = await postJSON('/api/auth/totp/enrol')
   if (res.ok) return res.json()
+  if (res.status === 401) throw new ApiError((await res.text()) || `enrolTOTP: ${res.status}`, res.status)
   return (await res.text()) || `enrolTOTP: ${res.status}`
 }
 
@@ -942,17 +962,35 @@ export async function confirmTOTP(code: string): Promise<TotpConfirmResult | str
     const body = await res.json()
     return { recoveryCodes: body.recoveryCodes ?? null, alreadyIssued: body.alreadyIssued ?? false }
   }
+  // See enrolTOTP's own comment: a wrong code answers 400, never 401, so
+  // a 401 here always means the session died, not a bad code.
+  if (res.status === 401) throw new ApiError((await res.text()) || `confirmTOTP: ${res.status}`, res.status)
   return (await res.text()) || `confirmTOTP: ${res.status}`
+}
+
+// #1253's ruling: an account may remove its own last second factor --
+// the server signs the caller out immediately when that leaves none
+// (every session on the account revoked, this browser's included), and
+// says so back rather than answering exactly as it would have for an
+// ordinary removal that leaves another factor standing. Absent (an
+// older server, or the ordinary case) reads as false -- the safe
+// direction to be wrong in, since it only means AuthenticatorOverlay/
+// PasskeysOverlay show the ordinary "turned off" screen for a session
+// that in fact no longer exists, which the next request 401s out of
+// anyway rather than silently misrepresenting anything.
+export interface DisableFactorResult {
+  signedOut: boolean
 }
 
 // disableTOTP is the user's own way to turn a factor off, password-gated
 // like changePassword -- there is deliberately no web route that can do
 // this without it (#1249's "no web route clears your own factor without
 // the password"); a lost phone goes through the CLI recovery path instead.
-export async function disableTOTP(password: string): Promise<string | null> {
+export async function disableTOTP(password: string): Promise<DisableFactorResult | string> {
   const res = await deleteJSON('/api/auth/totp', { password })
-  if (res.ok) return null
-  return (await res.text()) || `disableTOTP: ${res.status}`
+  if (!res.ok) return (await res.text()) || `disableTOTP: ${res.status}`
+  const body = await res.json().catch(() => null)
+  return { signedOut: body?.signedOut === true }
 }
 
 // clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
@@ -982,6 +1020,12 @@ export async function fetchPasskeys(): Promise<PasskeySummary[] | string> {
 export async function beginPasskeyRegistration(): Promise<PasskeyCeremonyBegin | string> {
   const res = await postJSON('/api/auth/passkeys/register/begin')
   if (res.ok) return res.json()
+  // Same reasoning as enrolTOTP's own comment: this is one of the four
+  // forced-enrolment routes, all of which need an existing session, so a
+  // 401 here means that session is gone, not a ceremony refusal.
+  if (res.status === 401) {
+    throw new ApiError((await res.text()) || `beginPasskeyRegistration: ${res.status}`, res.status)
+  }
   return (await res.text()) || `beginPasskeyRegistration: ${res.status}`
 }
 
@@ -1000,6 +1044,10 @@ export async function finishPasskeyRegistration(
 ): Promise<PasskeyRegistrationFinish | string> {
   const res = await postJSON('/api/auth/passkeys/register/finish', { credential, name })
   if (res.ok) return res.json()
+  // Same reasoning as beginPasskeyRegistration's own comment.
+  if (res.status === 401) {
+    throw new ApiError((await res.text()) || `finishPasskeyRegistration: ${res.status}`, res.status)
+  }
   return (await res.text()) || `finishPasskeyRegistration: ${res.status}`
 }
 
@@ -1011,11 +1059,15 @@ export async function renamePasskey(id: string, name: string): Promise<string | 
 
 // disablePasskey is the user's own way to remove one passkey,
 // password-gated like disableTOTP -- there is deliberately no web route
-// that can do this without it.
-export async function disablePasskey(id: string, password: string): Promise<string | null> {
+// that can do this without it. Same #1253 signedOut contract as
+// disableTOTP's own comment describes -- removing an account's last
+// passkey with no authenticator app left standing signs the caller out
+// immediately too.
+export async function disablePasskey(id: string, password: string): Promise<DisableFactorResult | string> {
   const res = await deleteJSON(`/api/auth/passkeys/${encodeURIComponent(id)}`, { password })
-  if (res.ok) return null
-  return (await res.text()) || `disablePasskey: ${res.status}`
+  if (!res.ok) return (await res.text()) || `disablePasskey: ${res.status}`
+  const body = await res.json().catch(() => null)
+  return { signedOut: body?.signedOut === true }
 }
 
 // clearUserPasskeys is the admin's side of a lost device (#1250): DELETE
