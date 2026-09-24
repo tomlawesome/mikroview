@@ -389,6 +389,7 @@ class AuthState {
   // and GET /api/auth/session has no field that would tell "pending"
   // apart from "signed out" if this asked it right now.
   async login(username: string, password: string): Promise<string | null> {
+    this.signInTimedOut = false;
     const result = await login(username, password);
     if (typeof result === "string") return result;
     if (result) {
@@ -435,7 +436,8 @@ class AuthState {
   // the caller (submitFactor/loginWithPasskey) should itself return, so
   // each stays a one-line `if (err) return ...`.
   private pendingFactorFailed(err: string): string | null {
-    if (err !== PENDING_LOGIN_EXPIRED) return err;
+    // Trimmed: the server's http.Error ends the text with a newline.
+    if (err.trim() !== PENDING_LOGIN_EXPIRED) return err;
     this.state = "unauthenticated";
     this.pendingSecondFactor = [];
     this.pendingPasskeyOrigin = undefined;
