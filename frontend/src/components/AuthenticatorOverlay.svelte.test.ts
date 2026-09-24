@@ -9,11 +9,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 
-vi.mock('../lib/api', () => ({
-  confirmTOTP: vi.fn(),
-  disableTOTP: vi.fn(),
-  enrolTOTP: vi.fn(),
-}))
+// Spreads the real module (importOriginal) rather than a bare object
+// literal so ApiError stays the real class -- this overlay catches it
+// with `instanceof ApiError` to route a 401 through
+// authState.handleUnauthorized().
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>()
+  return {
+    ...actual,
+    confirmTOTP: vi.fn(),
+    disableTOTP: vi.fn(),
+    enrolTOTP: vi.fn(),
+  }
+})
 
 // jsdom has no real canvas backend -- QRCode.toCanvas would either throw
 // or silently draw nothing. This overlay's own contract is "the secret
@@ -28,14 +36,48 @@ vi.mock('../lib/clipboard', () => ({
   copyToClipboard: vi.fn(async () => true),
 }))
 
-import { confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
-import { authState } from '../lib/auth.svelte'
+import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+import { authState, pageReload } from '../lib/auth.svelte'
 import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
 
 beforeEach(() => {
   cleanup()
   vi.resetAllMocks()
+  // handleUnauthorized() reloads the page (jsdom has no real navigation).
+  vi.spyOn(pageReload, 'now').mockImplementation(() => {})
   authState.hasTOTP = false
+})
+
+// A 401 from either of this overlay's own calls means the session behind
+// its header X/Escape/backdrop is already gone (see enrolTOTP's own
+// comment in lib/api.ts) -- routed the same way AuthEnrolFactor's forced-
+// enrolment door routes it, rather than shown as plain error text.
+describe('a session that died mid-request (401) is routed to sign-in', () => {
+  it('from starting enrolment', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(enrolTOTP).mockRejectedValue(new ApiError('sign in first', 401))
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+  })
+
+  it('from confirming the code', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
+    })
+    vi.mocked(confirmTOTP).mockRejectedValue(new ApiError('sign in first', 401))
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await screen.findByTestId('totp-secret')
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+  })
 })
 
 describe('the status screen', () => {
@@ -177,6 +219,53 @@ describe('confirm activates it and shows the ten recovery codes once', () => {
   })
 })
 
+// Closing mid-confirm doesn't cancel the request, it only unmounts the
+// view -- a confirm that turns out to mint fresh recovery codes would
+// then have nowhere left open to show them, lost for good on reload.
+// The 'codes' screen itself already has no way out; this is the window
+// just before it, while confirm() is still in flight.
+describe('closing is blocked while a request is in flight', () => {
+  async function reachEnrollingWithPendingConfirm() {
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
+    })
+    let resolveConfirm: (v: { recoveryCodes: string[]; alreadyIssued: boolean }) => void
+    vi.mocked(confirmTOTP).mockReturnValue(
+      new Promise((resolve) => {
+        resolveConfirm = resolve
+      }),
+    )
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await screen.findByTestId('totp-secret')
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+    return (result: { recoveryCodes: string[]; alreadyIssued: boolean }) => resolveConfirm(result)
+  }
+
+  it('Escape does not close the dialog while confirm() is pending', async () => {
+    await reachEnrollingWithPendingConfirm()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+
+  it('the backdrop click does not close the dialog while confirm() is pending', async () => {
+    await reachEnrollingWithPendingConfirm()
+
+    await fireEvent.click(document.querySelector('.backdrop')!)
+
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+
+  it('the header close button is disabled while confirm() is pending', async () => {
+    await reachEnrollingWithPendingConfirm()
+
+    expect(screen.getByRole('button', { name: /^close$/i })).toHaveProperty('disabled', true)
+  })
+})
+
 describe('turning it off needs the password', () => {
   it('is refused server-side and shown inline, leaving hasTOTP untouched', async () => {
     vi.mocked(disableTOTP).mockResolvedValue('wrong password')
@@ -192,9 +281,10 @@ describe('turning it off needs the password', () => {
     expect(authState.hasTOTP).toBe(true)
   })
 
-  it('turns it off and flips authState.hasTOTP on the right password', async () => {
-    vi.mocked(disableTOTP).mockResolvedValue(null)
+  it('turns it off and flips authState.hasTOTP on the right password, when a passkey still stands', async () => {
+    vi.mocked(disableTOTP).mockResolvedValue({ signedOut: false })
     authState.hasTOTP = true
+    authState.passkeyCount = 1
     render(AuthenticatorOverlay, { open: true })
 
     await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
@@ -204,5 +294,47 @@ describe('turning it off needs the password', () => {
     expect(disableTOTP).toHaveBeenCalledWith('correct-horse')
     expect(authState.hasTOTP).toBe(false)
     expect(await screen.findByText(/turned off/i)).toBeTruthy()
+    expect(screen.getByText(/your passkey still protects sign-in/i)).toBeTruthy()
+  })
+
+  // #1253's own ruling: a passkey-less account may still turn off its
+  // authenticator app -- that just costs it the account's last second
+  // factor, which the server answers by signing the caller out
+  // everywhere rather than leaving a half-protected session up.
+  it('warns before removing the account\'s only second factor, not "password alone"', async () => {
+    authState.hasTOTP = true
+    authState.passkeyCount = 0
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+
+    expect(screen.getByText(/signs you out now/i)).toBeTruthy()
+    expect(screen.queryByText(/password alone/i)).toBeNull()
+  })
+
+  it('does not claim "password alone" when a passkey will still stand', async () => {
+    authState.hasTOTP = true
+    authState.passkeyCount = 1
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+
+    expect(screen.getByText(/your passkey will still be asked for/i)).toBeTruthy()
+    expect(screen.queryByText(/password alone/i)).toBeNull()
+  })
+
+  it('signs out through authState the way logout does, rather than showing "turned off", when this was the last factor', async () => {
+    vi.mocked(disableTOTP).mockResolvedValue({ signedOut: true })
+    authState.hasTOTP = true
+    authState.passkeyCount = 0
+    render(AuthenticatorOverlay, { open: true })
+
+    await fireEvent.click(screen.getByRole('button', { name: /turn off/i }))
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'correct-horse' } })
+    await fireEvent.click(screen.getByRole('button', { name: /turn off authenticator app/i }))
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    expect(authState.state).toBe('unauthenticated')
+    expect(screen.queryByText(/turned off\.$/i)).toBeNull()
   })
 })

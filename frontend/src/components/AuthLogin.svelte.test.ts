@@ -16,6 +16,8 @@ vi.mock('../lib/api', () => ({
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   submitLoginFactor: vi.fn(),
+  // The one non-function export this module reaches for.
+  PENDING_LOGIN_EXPIRED: 'sign in again',
   // #1250: authState.loginWithPasskey() runs the real
   // lib/passkeys.svelte.ts ceremony (its own test file covers that code
   // in isolation) -- only the network boundary underneath it is faked
@@ -63,6 +65,7 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.signInTimedOut = false
   authState.justSignedOut = false
   authState.mustChangePassword = false
   authState.pendingSecondFactor = []
@@ -325,6 +328,54 @@ describe('AuthLogin at the pending-factor step', () => {
 
     expect(await screen.findByText('Enter the code from your app.')).toBeTruthy()
     expect(submitLoginFactor).not.toHaveBeenCalled()
+  })
+
+  // The 5-minute pending-login cookie can expire while this box is still
+  // up -- the code box has no timeout of its own to notice that, so
+  // without this fix it would just keep answering "invalid code" to
+  // whatever is typed. A real session-death instead falls back to the
+  // ordinary password form, with a word for why.
+  it('falls back to the password form, with a timeout notice, when the pending login has expired', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue('sign in again')
+
+    render(AuthLogin)
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(await screen.findByText(/your sign-in timed out/i)).toBeTruthy()
+    expect(screen.getByLabelText('account')).toBeTruthy()
+    expect(screen.getByLabelText('password')).toBeTruthy()
+    expect(screen.queryByLabelText('code')).toBeNull()
+  })
+})
+
+// The wording has to follow what this account's pending login actually
+// listed -- a passkey-only account has no authenticator app to be told to
+// open. Companion to the 'Enter your code' assertion above, which pins the
+// app-only wording unchanged.
+describe('AuthLogin at the pending-factor step, wording per factor (#1250 follow-up)', () => {
+  beforeEach(() => {
+    authState.state = 'pending-factor'
+  })
+
+  it('says nothing about an authenticator app for a passkey-only account', () => {
+    authState.pendingSecondFactor = ['passkey']
+    authState.pendingPasskeyOrigin = location.origin
+
+    render(AuthLogin)
+
+    expect(screen.getByText('Use your passkey')).toBeTruthy()
+    expect(screen.getByText(/use your passkey to finish signing in/i)).toBeTruthy()
+    expect(screen.queryByText(/authenticator app/i)).toBeNull()
+  })
+
+  it('offers both wordings when the account holds a passkey and an authenticator app', () => {
+    authState.pendingSecondFactor = ['passkey', 'totp']
+    authState.pendingPasskeyOrigin = location.origin
+
+    render(AuthLogin)
+
+    expect(screen.getByText(/use your passkey, or enter the current code from your authenticator app/i)).toBeTruthy()
   })
 })
 

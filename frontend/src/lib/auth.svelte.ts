@@ -4,6 +4,7 @@ import {
   fetchAuthSession,
   login,
   logout,
+  PENDING_LOGIN_EXPIRED,
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
@@ -204,6 +205,15 @@ class AuthState {
   // deliberately a fixed message chosen from the opaque error code,
   // never the raw code or any provider-supplied text.
   ssoError = $state<string | null>(null);
+  // Set by submitFactor()/loginWithPasskey() below on api.ts's
+  // PENDING_LOGIN_EXPIRED -- the 5-minute pending-login cookie outlived
+  // whoever was filling in the code box, recovery code or passkey
+  // prompt. The pending-factor screen has no timeout of its own to
+  // notice this, so without it the code box just sits there answering
+  // "invalid code" forever to whatever is typed once the cookie is
+  // already gone; AuthScreen reads this the same way it reads ssoError,
+  // as a banner on the password form this falls back to.
+  signInTimedOut = $state(false);
   // Mirrors sessionResponse.mustChangePassword. Kept beside `state`
   // rather than replacing it so the rest of the app can keep asking the
   // one question it asks today ("are we signed in?") without learning
@@ -398,7 +408,7 @@ class AuthState {
   // login() does, since this is what actually signs the caller in.
   async submitFactor(code: string): Promise<string | null> {
     const err = await submitLoginFactor(code);
-    if (err) return err;
+    if (err) return this.pendingFactorFailed(err);
     await this.check();
     return null;
   }
@@ -410,8 +420,26 @@ class AuthState {
   // already does.
   async loginWithPasskey(): Promise<string | null> {
     const err = await runPasskeyLogin();
-    if (err) return err;
+    if (err) return this.pendingFactorFailed(err);
     await this.check();
+    return null;
+  }
+
+  // Shared by submitFactor/loginWithPasskey above: both answer 401 with
+  // the exact same PENDING_LOGIN_EXPIRED text once the pending-login
+  // cookie has already expired -- the one case here that isn't an
+  // ordinary wrong code/assertion for AuthScreen's factorOnly box to
+  // show inline. That case instead falls back to the password form the
+  // same way an unauthenticated visitor sees it, with a word for why
+  // rather than a code box nothing can ever satisfy again. Returns what
+  // the caller (submitFactor/loginWithPasskey) should itself return, so
+  // each stays a one-line `if (err) return ...`.
+  private pendingFactorFailed(err: string): string | null {
+    if (err !== PENDING_LOGIN_EXPIRED) return err;
+    this.state = "unauthenticated";
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
+    this.signInTimedOut = true;
     return null;
   }
 
@@ -456,6 +484,28 @@ class AuthState {
     sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
     pageReload.now();
     return null;
+  }
+
+  // #1253: called by AuthenticatorOverlay/PasskeysOverlay when
+  // disableTOTP/disablePasskey answers signedOut -- removing the
+  // account's last second factor, which the server already turned into
+  // signing the caller out everywhere, this browser's session included.
+  // logout()'s own local half, minus its network call: that call would
+  // only 401 against a session the server has already revoked, and the
+  // removal itself is the action being confirmed here, not a second one.
+  async signOutAfterFactorRemoved(): Promise<void> {
+    await preferencesState.flush();
+    this.state = "unauthenticated";
+    this.username = "";
+    this.role = "";
+    this.mustChangePassword = false;
+    this.mustEnrolSecondFactor = false;
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
+    this.justSignedOut = true;
+    clearSessionState();
+    sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
+    pageReload.now();
   }
 
   // signOutEverywhere is #677's sessions row action. Unlike logout()

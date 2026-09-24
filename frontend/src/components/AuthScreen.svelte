@@ -234,6 +234,15 @@
         {#if authState.ssoError}
           <p class="error">{authState.ssoError}</p>
         {/if}
+        {#if authState.signInTimedOut}
+          <!-- #1249's pending-factor step falling back here on
+               PENDING_LOGIN_EXPIRED (see AuthState.pendingFactorFailed) --
+               the code box's own session died of old age, not a wrong
+               code, so the word for it lives beside ssoError's, on the
+               form this falls back to rather than in the code box that
+               is gone by the time this shows. -->
+          <p class="error">Your sign-in timed out -- enter your password again.</p>
+        {/if}
 
         <form class="form-body" onsubmit={handleSubmit} novalidate>
           <!-- No heading on the door itself: the framed wordmark is the
