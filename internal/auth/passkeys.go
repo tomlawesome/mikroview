@@ -262,10 +262,20 @@ func (s *Store) RenamePasskey(userID string, credID []byte, name string) (Passke
 		return Passkey{}, ErrPasskeyNotFound
 	}
 
-	prevName := u.Passkeys[idx].Name
-	u.Passkeys[idx].Name = normalisePasskeyName(name, idx+1)
+	// A fresh backing array, not an in-place field write on
+	// u.Passkeys[idx]: Get hands out a shallow *User copy that shares
+	// this slice's backing array without holding the lock while the
+	// caller reads it, so mutating an element in place races that read.
+	// See DeletePasskey's own comment for the same reasoning; here the
+	// element count doesn't change, only its contents, so every element
+	// is copied across including the one being renamed.
+	prevPasskeys := u.Passkeys
+	kept := make([]Passkey, len(u.Passkeys))
+	copy(kept, u.Passkeys)
+	kept[idx].Name = normalisePasskeyName(name, idx+1)
+	u.Passkeys = kept
 	if err := s.tryPersistLocked(); err != nil {
-		u.Passkeys[idx].Name = prevName
+		u.Passkeys = prevPasskeys
 		return Passkey{}, fmt.Errorf("saving accounts: %w", err)
 	}
 	return u.Passkeys[idx], nil
@@ -371,21 +381,27 @@ func (s *Store) RecordPasskeyAssertion(userID string, credID []byte, signCount u
 		return ErrPasskeyNotFound
 	}
 
-	prevSignCount := u.Passkeys[idx].SignCount
-	prevLastUsedAt := u.Passkeys[idx].LastUsedAt
-
-	if signCount > u.Passkeys[idx].SignCount {
-		u.Passkeys[idx].SignCount = signCount
+	// A fresh backing array, not in-place field writes on
+	// u.Passkeys[idx]: Get hands out a shallow *User copy that shares
+	// this slice's backing array without holding the lock while the
+	// caller reads it, so mutating an element in place races that read
+	// (see RenamePasskey's identical comment, and DeletePasskey's for
+	// the element-count-changes case this mirrors).
+	prevPasskeys := u.Passkeys
+	kept := make([]Passkey, len(u.Passkeys))
+	copy(kept, u.Passkeys)
+	if signCount > kept[idx].SignCount {
+		kept[idx].SignCount = signCount
 	}
-	u.Passkeys[idx].LastUsedAt = now
+	kept[idx].LastUsedAt = now
+	u.Passkeys = kept
 	if err := s.tryPersistLocked(); err != nil {
 		// A guard/timestamp that only advanced in memory must not be
 		// reported as advanced -- same reasoning RecordTOTPCounter's
 		// restore-on-failure comment gives: a restart before the next
 		// good write would make an already-used counter value live
 		// again for whoever else presented it.
-		u.Passkeys[idx].SignCount = prevSignCount
-		u.Passkeys[idx].LastUsedAt = prevLastUsedAt
+		u.Passkeys = prevPasskeys
 		return fmt.Errorf("saving accounts: %w", err)
 	}
 	return nil
