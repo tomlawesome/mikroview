@@ -8,15 +8,16 @@
 // capture-engine-room-screenshots.mjs, which it borrows its login
 // mechanics from.
 //
-// Produces the four screenshots docs/authenticator-app.md's own
-// `> Screenshot: ...` placeholders ask for (#1249's page):
+// Produces three of docs/authenticator-app.md's own `> Screenshot: ...`
+// placeholders (#1249's page); see the update note below for why the
+// fourth, the account-menu "nothing set up yet" shot, is no longer one
+// of them:
 //
-//  - docs/screenshots/authenticator-menu-dark.png: the account menu
-//    open, "Authenticator app" among the other rows, no "· on" tag yet.
 //  - docs/screenshots/authenticator-enrol-dark.png: the enrolment
 //    screen -- QR code, the text secret beside it, the code box beneath.
 //  - docs/screenshots/authenticator-recovery-codes-dark.png: the ten
-//    recovery codes, Copy all, I have saved these.
+//    recovery codes, Copy all, I have saved these -- see the update
+//    note: not currently reachable, left uncaptured here.
 //  - docs/screenshots/authenticator-login-code-dark.png: "Enter your
 //    code" at a second sign-in, with the "Use a recovery code instead"
 //    link.
@@ -68,14 +69,43 @@
 // (the door refuses that combination outright, and the CLI's own
 // `-clear-second-factor` lands the same account back in the door, not
 // in the ordinary app -- see sessionResponse.MustEnrolSecondFactor's own
-// comment in internal/api/auth.go). The closest honest equivalent is a
-// real admin turning their own factor off first, self-service, with
-// their own password, through this exact dialog (AuthenticatorOverlay's
-// 'turning-off' step) -- AccountMenu's row only ever reads the current
-// hasTOTP flag, so the render that follows is pixel-identical to a
-// never-enrolled account's. Doing that before capturing the menu, then
-// enrolling fresh right after for the rest of this script, is what
-// makes that screenshot a real state rather than a faked one.
+// comment in internal/api/auth.go).
+//
+// Update, 3e08bb76 (owner ruling: removing an account's last second
+// factor is now allowed, and answers truthfully -- every session on the
+// account, this one included, is revoked at once instead of the client
+// quietly trusting a stale "still signed in" belief). That closed the
+// gap the previous version of this comment described: turning off the
+// admin's only factor no longer leaves a browsable, un-enrolled session
+// to screenshot at all -- the very next render is the forced-enrolment
+// door (AuthEnrolFactor.svelte), a different component from the one
+// docs/authenticator-app.md's account-menu flow depicts. So:
+//
+//  - The account-menu "no factor yet" screenshot is no longer reachable
+//    from a signed-in session and is not recaptured here (it also isn't
+//    stale -- AccountMenu.svelte hasn't changed).
+//  - A throwaway passkey is registered first (below) purely so the
+//    admin's TOTP factor is never the *last* one when it's turned off --
+//    ClearTOTP then keeps the account signed in with the ordinary
+//    'off-done' screen (internal/auth/passkeys_test.go's
+//    TestClearTOTPKeepsRecoveryCodesWhileAPasskeyRemains pins exactly
+//    this), which is what lets the rest of this script reach
+//    AuthenticatorOverlay's modal at all, same as before 3e08bb76.
+//  - That same test's sibling, TestClearTOTPWithNoPasskeysStillClearsRecoveryCodes,
+//    is the other edge: recovery codes are only wiped -- and so only
+//    freshly re-minted on the next enrolment -- when TOTP really was the
+//    last factor. With a passkey standing in, the codes survive, so
+//    re-confirming TOTP here lands on 'on-done' ("already issued"), not
+//    'codes'. The recovery-codes screenshot's own fresh mint is only
+//    ever shown to an account's first-ever factor, and that is now
+//    always enrolled through the door, never through this modal -- so
+//    docs/screenshots/authenticator-recovery-codes-dark.png cannot be
+//    honestly recaptured from this script as it stands. Left as
+//    committed; flagged rather than faked.
+//  - The passkey is removed again (via the API, self-service, this
+//    account's own password) before the final sign-out/sign-in capture,
+//    so the login screen still shows a plain code box rather than
+//    offering "Use your passkey" first.
 
 import { chromium } from 'playwright'
 import { fileURLToPath } from 'url'
@@ -91,6 +121,12 @@ if (!URL_BASE || !USER || !PASS) {
   console.error('MV_URL/MV_USER/MV_PASS unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
 }
+// The throwaway passkey below (see the update note above) is bound to
+// the origin the relying party was built from -- publicUrl's exact
+// origin, not MV_URL's 127.0.0.1 literal, which WebAuthn refuses as an
+// RP ID outright. live-passkeys.mjs hits the same requirement and
+// swaps to it the same way.
+const NAV_URL = process.env.MV_PUBLIC_URL || URL_BASE
 
 const outDir = path.join(REPO, 'docs', 'screenshots')
 
@@ -158,7 +194,7 @@ const context = await browser.newContext({
 })
 const page = await context.newPage()
 
-await page.goto(URL_BASE, { waitUntil: 'networkidle' })
+await page.goto(NAV_URL, { waitUntil: 'networkidle' })
 await page.fill('input[autocomplete="username"]', USER)
 await page.fill('input[autocomplete="current-password"]', PASS)
 await page.click('button[type="submit"]')
@@ -170,12 +206,51 @@ await completeSecondFactor(page)
 await page.waitForSelector('#main-content', { timeout: 15000 })
 await page.waitForTimeout(1000)
 
+// --- Register a throwaway passkey -----------------------------------------
+//
+// See the update note above: turning off the admin's only factor now
+// signs the session out instead of leaving it browsable. Adding a
+// second factor first means the ClearTOTP below is never clearing the
+// account's *last* one, so the session survives it the way the next
+// step depends on. CDP's WebAuthn domain (Chromium only) stands in for
+// a real platform authenticator, the same virtual-authenticator pattern
+// live-passkeys.mjs uses for its own live-check scenario.
+
+{
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('WebAuthn.enable')
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  })
+  await page.click(`${ACTIVE} .account button.chip`)
+  await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
+  await page.click(`${ACTIVE} .account .menu button.row:text-is("Passkeys")`)
+  await modal().locator('button:has-text("Add passkey")').waitFor({ timeout: 10000 })
+  await modal().locator('button:has-text("Add passkey")').click()
+  await modal().locator('input[placeholder="this laptop"]').fill('capture-script throwaway')
+  await modal().locator('button:has-text("Continue")').click()
+  // The admin's TOTP factor (live-env.sh's own) already minted recovery
+  // codes, so registering a second factor always takes the "already
+  // issued" branch -- nothing here is one of the four screenshots.
+  await modal().locator('text=Your recovery codes were already issued').waitFor({ timeout: 10000 })
+  await modal().locator('button:has-text("Close")').click()
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 })
+}
+
 // --- 0. Turn off the factor live-env.sh enrolled -------------------------
 //
-// Reaches the "nothing set up" state honestly: self-service, this
-// account's own password, the same "Turn off" this account could always
-// reach from the menu (see the header comment for why there is no other
-// way back to it post-#1253).
+// With the throwaway passkey standing in, this is no longer the
+// account's last factor, so it reaches the ordinary 'off-done' screen
+// and stays signed in -- the update note above covers why that stopped
+// being true of the bare account post-3e08bb76.
 
 await page.click(`${ACTIVE} .account button.chip`)
 await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
@@ -186,16 +261,16 @@ await modal().locator('.actions button.danger:text-is("Turn off authenticator ap
 await modal().locator('.actions button.confirm:text-is("Close")').click()
 await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 })
 
-// --- 1. The account menu open: "Authenticator app", no "· on" tag yet ----
+// --- 1. The enrolment screen: QR code, text secret, code box -------------
+//
+// The account-menu "nothing set up yet" screenshot (previously captured
+// here) is skipped -- see the update note above: with the throwaway
+// passkey present the menu now reads "Passkeys · 1", not the bare row
+// the docs depict, and that image isn't stale (AccountMenu.svelte
+// hasn't changed) so nothing needs it recaptured.
 
 await page.click(`${ACTIVE} .account button.chip`)
 await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
-await page.waitForTimeout(300)
-await page.screenshot({ path: path.join(outDir, 'authenticator-menu-dark.png') })
-console.log('captured authenticator-menu-dark.png')
-
-// --- 2. The enrolment screen: QR code, text secret, code box -------------
-
 await page.click(`${ACTIVE} .account .menu button.row:text-is("Authenticator app")`)
 await modal().locator('.actions button.confirm:text-is("Set up authenticator app")').click()
 await modal().locator('[data-testid="totp-secret"]').waitFor({ timeout: 10000 })
@@ -211,26 +286,63 @@ if (!secret) {
   process.exit(1)
 }
 
-// --- 3. The recovery codes, shown exactly once ----------------------------
+// --- 2. The recovery codes, shown exactly once -- not reachable here -----
+//
+// See the update note above: the throwaway passkey that keeps this
+// session alive also means the account's recovery codes were never
+// wiped, so confirming below always lands on 'on-done' ("already
+// issued"), never 'codes'. Confirmed anyway (rather than skipped),
+// since step 3's sign-in needs the factor actually turned back on; the
+// 'codes' branch is kept as a fallback in case that assumption ever
+// stops holding, so the screenshot gets taken the moment it becomes
+// possible again rather than silently staying stale.
 
 await modal().locator('input[autocomplete="one-time-code"]').fill(totpCode(secret))
 await modal().locator('.actions button.confirm:text-is("Confirm")').click()
 await Promise.race([
   modal().locator('[data-testid="recovery-codes"]').waitFor({ timeout: 10000 }),
+  modal().locator('text=Authenticator app turned on').waitFor({ timeout: 10000 }),
   modal().locator('.error').waitFor({ timeout: 10000 }),
 ])
 if ((await modal().locator('.error').count()) > 0) {
   console.error(`confirming the TOTP code failed: ${await modal().locator('.error').textContent()}`)
   process.exit(1)
 }
-await page.waitForTimeout(300)
-await page.screenshot({ path: path.join(outDir, 'authenticator-recovery-codes-dark.png') })
-console.log('captured authenticator-recovery-codes-dark.png')
-
-await modal().locator('.actions button.confirm:text-is("I have saved these")').click()
+if ((await modal().locator('[data-testid="recovery-codes"]').count()) > 0) {
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: path.join(outDir, 'authenticator-recovery-codes-dark.png') })
+  console.log('captured authenticator-recovery-codes-dark.png')
+  await modal().locator('.actions button.confirm:text-is("I have saved these")').click()
+} else {
+  console.log(
+    "docs/screenshots/authenticator-recovery-codes-dark.png: not recaptured -- 'codes' step unreachable from this modal post-3e08bb76, see this file's header comment",
+  )
+  await modal().locator('.actions button.confirm:text-is("Close")').click()
+}
 await page.waitForSelector('.modal', { state: 'detached', timeout: 5000 })
 
-// --- 4. Signing back in: "Enter your code" --------------------------------
+// --- Remove the throwaway passkey ------------------------------------------
+//
+// So the sign-in below shows the plain code box the docs depict, not
+// "Use your passkey" (AuthLogin offers whichever the address can use
+// first, since 390098af) -- self-service, this account's own password,
+// the same DELETE live-passkeys.mjs's own housekeeping block uses.
+
+{
+  const list = await page.request.fetch(`${NAV_URL}/api/auth/passkeys`, {
+    headers: { 'X-Requested-With': 'mikroview' },
+  })
+  const passkeys = list.ok() ? await list.json() : []
+  for (const pk of passkeys ?? []) {
+    await page.request.fetch(`${NAV_URL}/api/auth/passkeys/${encodeURIComponent(pk.id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      data: { password: PASS },
+    })
+  }
+}
+
+// --- 3. Signing back in: "Enter your code" --------------------------------
 
 await page.click(`${ACTIVE} .account button.chip`)
 await page.waitForSelector(`${ACTIVE} .account .menu`, { timeout: 5000 })
