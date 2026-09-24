@@ -96,7 +96,6 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-watchlist-manage: the fenced button never reads "learn again"
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
-- 2026-09-11 · c3bcb56f (dev, after !1031) · pipeline 996, gate:scenarios 4/4 · `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs:208`: Playwright reported the button "outside of the viewport" then "detached from the DOM" on every retry, so the drawer replaced the button's node under the click. Pipeline 997 ran the same commit as !1032's MR pipeline and passed. Same button as the sighting above, one check earlier. Job retried (11971).
 
 ## live-viewer-surfaces: goTo("Flags") times out waiting for the docket card
 
@@ -132,30 +131,6 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-account-menu: the foot has no uptime segment
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
-
-## live-watchlist-manage: the drawer's "fence now" button never becomes stable
-
-- 2026-09-19 · 53b935f4 (fix/v060-audit, local `make live-check`) · 102 scenarios, this one the only failure · `waiting for locator('.wt-drawer').getByRole('button', { name: /fence now/ })` → "waiting for element to be visible, enabled and stable" three times, then the 30 s timeout. Run alone at the same commit on a fresh instance: PASS. The suite's previous run at the parent commit passed this scenario; the three other failures in that run were a real ordering fault (routers left behind by earlier scenarios) and are fixed, so this one is on its own. First sighting.
-
-- 2026-09-20 · dd84ce3b (fix/v060-audit, !1069) · pipeline 1305, gate:scenarios 4/4 (job 17145) · same `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs`: "element is not stable", then "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed docs and two Go error strings, no frontend file. Retried as job 17159. With the 2026-09-11 sighting above (same button, same TimeoutError, filed under the "learn again" heading before this one existed) this is the third: #1301.
-
-- 2026-09-20 · f3d79bce (fix/v060-audit, !1069) · pipeline 1309, gate:scenarios 4/4 (job 17233) · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed a shell script and a CI comment, no frontend file. Fourth sighting, on #1301. Retried as a job retry.
-
-- 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", then "detached from the DOM" on every retry, 30s. First sighting under Firefox, so the engine is not the cause. Fifth sighting, on #1301.
-- 2026-09-20 · dd0607a5 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · one shard of four · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", "outside of the viewport", then "detached from the DOM" on every retry, 30s; the other 106 scenarios passed. The commit changed docs/flakes.md only. Sixth sighting, on #1301.
-
-- 2026-09-20 · 6341af40 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable" on every retry, 30s. The commits since the sixth sighting touch LiveTable, the changelog, two screenshots and one other scenario script. Seventh sighting, on #1301.
-
-- 2026-09-22 · every sighting above predates the fix. `d3f51622` (#1315,
-  2026-09-20 21:41 +0100) added the settle #1301's body asks for -- wait for
-  `permit all` to leave the DOM before clicking `fence now`
-  (`live-watchlist-manage.mjs:205-217`). The seventh sighting, `6341af40`, is
-  15:11 the same day, six hours earlier, and is not a descendant of it. The
-  issue's other candidate cause is ruled out too: all three each-blocks on the
-  path are keyed (`Watchlist.svelte:1525`, `:1683`, `:1690`), so a poll never
-  destroys the button's node. Shard 4/4 run twice on post-fix code, 25/25
-  reporting and 0 failed both times. Heading kept rather than deleted: two runs
-  do not clear an intermittent fault, and an eighth sighting belongs here.
 
 ## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
 
