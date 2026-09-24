@@ -1051,13 +1051,17 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if matched, ok := auth.VerifyTOTP(user.TOTPSecret, req.Code, now, user.TOTPLastCounter); ok {
-		if err := s.Auth.RecordTOTPCounter(user.ID, matched); err != nil {
+	// Verified and recorded in one call, under the store's lock, so two
+	// concurrent submissions of the same code can't both check against
+	// the same not-yet-advanced counter -- see VerifyAndRecordTOTP's doc
+	// comment (store.go).
+	if matched, err := s.Auth.VerifyAndRecordTOTP(user.ID, req.Code, now); matched {
+		if err != nil {
 			// The replay guard failing to advance doesn't undo the fact
 			// that a correct, unreplayed code was just presented -- it
 			// only means this exact code could be presented again inside
 			// its own window if persistence keeps failing, the same
-			// degraded-but-not-locked-out stance RecordTOTPCounter's own
+			// degraded-but-not-locked-out stance VerifyAndRecordTOTP's own
 			// doc comment describes. Worth knowing about, not worth
 			// refusing a legitimate sign-in over.
 			authLog.Warn(fmt.Sprintf("advancing TOTP replay counter for %s: %v", user.Username, err))

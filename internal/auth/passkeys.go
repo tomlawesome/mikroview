@@ -391,6 +391,63 @@ func (s *Store) RecordPasskeyAssertion(userID string, credID []byte, signCount u
 	return nil
 }
 
+// RecordPasskeyAssertionIfFresh is RecordPasskeyAssertion's login-path
+// sibling: the same forward-only SignCount and LastUsedAt update, but
+// under the same lock acquisition it also decides whether the login is
+// accepted, closing a race the two-step version left open.
+// handleAuthLoginFactor's passkey branch (passkey.go) used to call
+// go-webauthn's ValidateLogin (whose CloneWarning is what would normally
+// catch a replayed assertion) and then RecordPasskeyAssertion as two
+// separate steps; two concurrent submissions of the same assertion both
+// cleared CloneWarning against the same not-yet-advanced stored count
+// and both won a session -- the passkey shape of #1249's TOTP race (see
+// VerifyAndRecordTOTP, store.go).
+//
+// accepted is false when signCount is not fresh: nonzero and at or
+// below what's already stored. Zero is exempt, the same exemption
+// RecordPasskeyAssertion's own doc comment explains -- an authenticator
+// that always reports 0 must not be locked out after its first login,
+// so its logins carry no counter-based replay protection here, same as
+// before this method existed.
+func (s *Store) RecordPasskeyAssertionIfFresh(userID string, credID []byte, signCount uint32, now time.Time) (accepted bool, err error) {
+	if !s.Persisted() {
+		return false, ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return false, ErrUserNotFound
+	}
+
+	idx := findPasskeyIndex(u, credID)
+	if idx == -1 {
+		return false, ErrPasskeyNotFound
+	}
+
+	stored := u.Passkeys[idx].SignCount
+	if signCount != 0 && signCount <= stored {
+		return false, nil
+	}
+
+	prevPasskeys := u.Passkeys
+	kept := make([]Passkey, len(u.Passkeys))
+	copy(kept, u.Passkeys)
+	if signCount > stored {
+		kept[idx].SignCount = signCount
+	}
+	kept[idx].LastUsedAt = now
+	u.Passkeys = kept
+	if err := s.tryPersistLocked(); err != nil {
+		u.Passkeys = prevPasskeys
+		return true, fmt.Errorf("saving accounts: %w", err)
+	}
+	return true, nil
+}
+
 // ClearPasskeys removes every passkey on userID's account in one write
 // -- the admin-clear counterpart to DeletePasskey, mirroring
 // handleTOTPAdminClear's shape (internal/api, wave 2). Same conditional
