@@ -356,6 +356,7 @@ describe('AuthLogin at the pending-factor step', () => {
 describe('AuthLogin at the pending-factor step, wording per factor (#1250 follow-up)', () => {
   beforeEach(() => {
     authState.state = 'pending-factor'
+    stubPasskeyCapableBrowser()
   })
 
   it('says nothing about an authenticator app for a passkey-only account', () => {
@@ -364,7 +365,7 @@ describe('AuthLogin at the pending-factor step, wording per factor (#1250 follow
 
     render(AuthLogin)
 
-    expect(screen.getByText('Use your passkey')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Use your passkey' })).toBeTruthy()
     expect(screen.getByText(/use your passkey to finish signing in/i)).toBeTruthy()
     expect(screen.queryByText(/authenticator app/i)).toBeNull()
   })
@@ -376,6 +377,17 @@ describe('AuthLogin at the pending-factor step, wording per factor (#1250 follow
     render(AuthLogin)
 
     expect(screen.getByText(/use your passkey, or enter the current code from your authenticator app/i)).toBeTruthy()
+  })
+  // A passkey made for another address cannot be used here, and the
+  // screen offers a recovery code instead: the words say the same.
+  it('does not ask for a passkey this address cannot use', () => {
+    authState.pendingSecondFactor = ['passkey']
+    authState.pendingPasskeyOrigin = 'https://elsewhere.example'
+
+    render(AuthLogin)
+
+    expect(screen.queryByRole('heading', { name: 'Use your passkey' })).toBeNull()
+    expect(screen.getByText(/enter one of your recovery codes to finish signing in/i)).toBeTruthy()
   })
 })
 
