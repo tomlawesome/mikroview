@@ -403,7 +403,18 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// and the very next request lands here instead if a factor is
 		// still missing -- the two doors run in sequence, never both
 		// open at once.
-		if user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
+		//
+		// The !user.MustChangePassword guard is what actually makes
+		// that sequencing hold: MustChangePassword's own gate above lets
+		// exactly one path through while it's set -- changePasswordPath
+		// -- and that path is not in secondFactorEnrolPaths (see its own
+		// doc comment: nothing is enrolled yet for those routes to act
+		// on). Without this guard, a reset-code account with no second
+		// factor would fall through to this gate on its one admitted
+		// path and be refused that too -- 403 on the only route that
+		// could ever get it out of MustChangePassword, a deadlock no
+		// request from that account could ever escape.
+		if !user.MustChangePassword && user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
 			http.Error(w, "this account has no second factor -- enrol one before going any further", http.StatusForbidden)
 			return
 		}
@@ -1051,13 +1062,17 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if matched, ok := auth.VerifyTOTP(user.TOTPSecret, req.Code, now, user.TOTPLastCounter); ok {
-		if err := s.Auth.RecordTOTPCounter(user.ID, matched); err != nil {
+	// Verified and recorded in one call, under the store's lock, so two
+	// concurrent submissions of the same code can't both check against
+	// the same not-yet-advanced counter -- see VerifyAndRecordTOTP's doc
+	// comment (store.go).
+	if matched, err := s.Auth.VerifyAndRecordTOTP(user.ID, req.Code, now); matched {
+		if err != nil {
 			// The replay guard failing to advance doesn't undo the fact
 			// that a correct, unreplayed code was just presented -- it
 			// only means this exact code could be presented again inside
 			// its own window if persistence keeps failing, the same
-			// degraded-but-not-locked-out stance RecordTOTPCounter's own
+			// degraded-but-not-locked-out stance VerifyAndRecordTOTP's own
 			// doc comment describes. Worth knowing about, not worth
 			// refusing a legitimate sign-in over.
 			authLog.Warn(fmt.Sprintf("advancing TOTP replay counter for %s: %v", user.Username, err))
@@ -1749,31 +1764,31 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mint-if-absent, never re-mint (#1250's "Recovery codes are shared"
-	// rule): current was read before ConfirmTOTP above, and ConfirmTOTP
-	// never touches RecoveryCodes, so it still reflects whether this
-	// account already holds a set -- from an earlier passkey
-	// registration, in the one order that can reach this branch.
-	var codes []string
-	alreadyIssued := len(current.RecoveryCodes) > 0
+	// Mint-if-absent, atomically under the store's lock (#1250's
+	// "Recovery codes are shared" rule): a snapshot taken before this
+	// call and a separate unconditional GenerateRecoveryCodes left a
+	// window where two concurrent first enrolments (a passkey
+	// registration racing this confirm, or two tabs confirming TOTP at
+	// once) both saw no codes yet and both minted, the second silently
+	// replacing what the first had already shown. See
+	// GenerateRecoveryCodesIfAbsent's doc comment (recoverycodes.go).
+	codes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(user.ID, now)
+	if err != nil {
+		// The factor is active at this point regardless -- ConfirmTOTP
+		// already committed. Logged rather than swallowed (R6), and
+		// told to the caller plainly rather than reported as a clean
+		// success: they are about to be shown nothing to fall back on
+		// if the app is ever lost. Recovering from here is
+		// DELETE /api/auth/totp followed by enrolling again, same as
+		// any other abandoned enrolment.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
+		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
+		return
+	}
 	detail := "authenticator app confirmed"
 	if alreadyIssued {
 		detail += "; existing recovery codes unchanged"
 	} else {
-		var err error
-		codes, err = s.Auth.GenerateRecoveryCodes(user.ID, now)
-		if err != nil {
-			// The factor is active at this point regardless -- ConfirmTOTP
-			// already committed. Logged rather than swallowed (R6), and
-			// told to the caller plainly rather than reported as a clean
-			// success: they are about to be shown nothing to fall back on
-			// if the app is ever lost. Recovering from here is
-			// DELETE /api/auth/totp followed by enrolling again, same as
-			// any other abandoned enrolment.
-			authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
-			http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
-			return
-		}
 		detail += "; recovery codes issued"
 	}
 
@@ -1832,8 +1847,22 @@ func (s *Server) handleTOTPDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Owner ruling: a user may remove their only second factor. When
+	// doing so leaves the account with none, every session on it --
+	// this one included -- is revoked at once, so the very next request
+	// (this one's own response is still sent normally) goes through
+	// requireAuth's forced-enrolment door instead of riding an existing
+	// cookie past a requirement the account no longer satisfies.
+	// signedOut tells the caller that happened -- the frontend's warning
+	// and sign-out screen reads it.
+	signedOut := false
+	if updated, ok := s.Auth.Get(user.ID); ok && !updated.HasSecondFactor() {
+		s.Sessions.RevokeAllForUser(user.ID)
+		signedOut = true
+	}
+
 	s.Audit.Record(user.Username, "account.totp_disabled", user.Username, "removed by account owner")
-	writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
+	writeJSON(w, http.StatusOK, map[string]any{"disabled": true, "signedOut": signedOut})
 }
 
 // handleTOTPAdminClear lets an admin remove another user's authenticator-

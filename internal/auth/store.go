@@ -534,15 +534,34 @@ func (s *Store) reloadIfStale() {
 		}
 	}
 
+	// Captured before the unlocked disk read below, and compared against
+	// again once the write lock is held: the only safe way to detect a
+	// concurrent in-process write (persistLocked/tryPersistLocked) that
+	// landed while this call was reading without the lock. persist.
+	// FileBackend's version is a content hash (contentVersion's own
+	// comment), not a counter, so there is no "newer than" to compare --
+	// only "changed since I last looked". A version that moved at all
+	// between here and the write-lock check below means some other
+	// caller's write is now the authoritative state, and applying a
+	// snapshot read before it would silently revert that write -- the
+	// concurrent-passkey-login race this was found chasing: two
+	// RecordPasskeyAssertionIfFresh calls (passkeys.go) serialize
+	// correctly under s.mu on their own, but a reloadIfStale racing
+	// between them used to reinstall the pre-write SignCount anyway,
+	// letting a replayed assertion through a second time. The old
+	// re-check here (`if snap.Version == s.version { return }`) only
+	// caught the case where the two happened to match again; it let a
+	// merely *different* s.version -- exactly what a concurrent write
+	// produces -- fall through and overwrite it regardless.
+	s.mu.RLock()
+	beforeLoad := s.version
+	s.mu.RUnlock()
+
 	snap, err := s.backend.Load(ctx)
 	if err != nil || !snap.Exists {
 		return
 	}
-
-	s.mu.RLock()
-	stale := snap.Version != s.version
-	s.mu.RUnlock()
-	if !stale {
+	if snap.Version == beforeLoad {
 		return
 	}
 
@@ -553,10 +572,7 @@ func (s *Store) reloadIfStale() {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Re-checked under the write lock: another goroutine may have
-	// reloaded (or this store's own persistLocked may have run) while
-	// this call was reading without holding it.
-	if snap.Version == s.version {
+	if s.version != beforeLoad {
 		return
 	}
 	s.applyLoaded(file, snap.Version)
@@ -1545,6 +1561,52 @@ func (s *Store) RecordTOTPCounter(userID string, matchedCounter uint64) error {
 		return fmt.Errorf("saving accounts: %w", err)
 	}
 	return nil
+}
+
+// VerifyAndRecordTOTP checks code against userID's active TOTP secret
+// and, only when it matches, advances the replay counter -- both under
+// the same lock acquisition. Login (handleAuthLoginFactor, auth.go) is
+// the caller this exists for: checking with VerifyTOTP and recording
+// with RecordTOTPCounter as two separate calls left a window where two
+// concurrent submissions of the same code both verified against the
+// same not-yet-advanced counter and both won a session (reproduced 8 of
+// 15 runs). Doing both under one lock closes it -- whichever request
+// gets the lock second sees the first request's already-advanced
+// counter, so VerifyTOTP itself (its own doc comment: "any candidate
+// counter <= lastUsedCounter is skipped even when its code is correct")
+// refuses the replay.
+//
+// ok reports whether code matched; err is only ever a persistence
+// failure on a match, reported the same degraded-but-not-locked-out way
+// RecordTOTPCounter's own doc comment describes -- the code that just
+// matched earned the login regardless of whether the counter's advance
+// made it to disk.
+func (s *Store) VerifyAndRecordTOTP(userID, code string, now time.Time) (ok bool, err error) {
+	if !s.Persisted() {
+		return false, ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, found := s.byID[userID]
+	if !found {
+		return false, ErrUserNotFound
+	}
+
+	matched, matchedOK := VerifyTOTP(u.TOTPSecret, code, now, u.TOTPLastCounter)
+	if !matchedOK {
+		return false, nil
+	}
+
+	prevCounter := u.TOTPLastCounter
+	u.TOTPLastCounter = matched
+	if err := s.tryPersistLocked(); err != nil {
+		u.TOTPLastCounter = prevCounter
+		return true, fmt.Errorf("saving accounts: %w", err)
+	}
+	return true, nil
 }
 
 // ClearTOTP removes userID's authenticator-app factor entirely: the

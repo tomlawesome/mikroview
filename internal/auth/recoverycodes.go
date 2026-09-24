@@ -149,6 +149,71 @@ func (s *Store) GenerateRecoveryCodes(userID string, now time.Time) ([]string, e
 	return clear, nil
 }
 
+// GenerateRecoveryCodesIfAbsent is GenerateRecoveryCodes' mint-if-absent
+// sibling, for the two callers (handleTOTPConfirm and
+// handleAuthPasskeysRegisterFinish, internal/api) that must never
+// replace a set an earlier first-factor confirmation already minted and
+// showed its user -- see the package comment's "Recovery codes are
+// shared" note. Checking len(u.RecoveryCodes) on a snapshot taken before
+// the call and then calling GenerateRecoveryCodes unconditionally (what
+// both callers used to do) left a window where two concurrent first
+// enrolments -- two browser tabs, or a TOTP confirm racing a passkey
+// registration -- both saw no codes yet and both minted, the second
+// silently invalidating whatever the first had just shown. Checking and
+// minting under the same lock closes it.
+//
+// alreadyIssued is true, and codes nil, when the account already held a
+// set by the time the lock was acquired -- including one minted by a
+// concurrent call to this same method that got there first. codes is
+// the freshly minted set, in clear, exactly once, only when
+// alreadyIssued is false.
+//
+// Ten codes are still hashed unconditionally before the lock is taken,
+// the same trade GenerateRecoveryCodes makes and for the same reason
+// (its own comment on HashPassword's cost) -- here that work is simply
+// thrown away, uncommitted, on the alreadyIssued path.
+func (s *Store) GenerateRecoveryCodesIfAbsent(userID string, now time.Time) (codes []string, alreadyIssued bool, err error) {
+	if !s.Persisted() {
+		return nil, false, ErrNotPersisted
+	}
+
+	clear := make([]string, recoveryCodeCount)
+	hashed := make([]RecoveryCode, recoveryCodeCount)
+	for i := range hashed {
+		code := newRecoveryCode()
+		hash, err := HashPassword(code)
+		if err != nil {
+			return nil, false, err
+		}
+		clear[i] = FormatRecoveryCode(code)
+		hashed[i] = RecoveryCode{Hash: hash}
+	}
+
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return nil, false, ErrUserNotFound
+	}
+
+	if len(u.RecoveryCodes) > 0 {
+		return nil, true, nil
+	}
+
+	u.RecoveryCodes = hashed
+	if err := s.tryPersistLocked(); err != nil {
+		// See GenerateRecoveryCodes' identical restore-on-failure
+		// comment: a set that only exists in memory must not be
+		// reported as issued.
+		u.RecoveryCodes = nil
+		return nil, false, fmt.Errorf("saving accounts: %w", err)
+	}
+	return clear, false, nil
+}
+
 // BurnRecoveryCode verifies code against userID's unused recovery codes
 // and, on a match, marks that one used so it cannot be redeemed again.
 //
