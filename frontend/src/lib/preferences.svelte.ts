@@ -26,6 +26,13 @@ type Hydrator = (value: unknown) => void
 class PreferencesState {
   private prefs: Record<string, unknown> = {}
   private loaded = false
+  // True only once a fetchMyPreferences() has actually succeeded --
+  // `loaded` above flips on a fallback too (see load()'s catch), so it
+  // alone can't tell a real baseline from "sign-in couldn't reach the
+  // server, defaults are standing in for this session". flush() below
+  // refuses to send anything until this is true, and ensureLoaded()
+  // keeps retrying the fetch until it is.
+  private loadSucceeded = false
   private loading: Promise<void> | null = null
   // Keys changed (via set()) since the last successful flush -- what a
   // save actually sends, so two tabs saving different keys around the
@@ -51,11 +58,18 @@ class PreferencesState {
    * call while already loaded, or while a first call is still in
    * flight, is a no-op/joins the same promise -- check() can run more
    * than once per session (e.g. #677's sessions row) and must not
-   * re-fetch or re-run the migration each time. */
+   * re-fetch or re-run the migration each time. If the previous attempt
+   * failed, though, this one tries the fetch again rather than standing
+   * by the earlier failure forever -- #677's periodic re-check is what
+   * actually drives that retry in the running app. */
   async ensureLoaded(): Promise<void> {
-    if (this.loaded) return
+    if (this.loadSucceeded) return
     if (!this.loading) this.loading = this.load()
-    await this.loading
+    try {
+      await this.loading
+    } finally {
+      this.loading = null
+    }
   }
 
   private async load(): Promise<void> {
@@ -64,14 +78,23 @@ class PreferencesState {
       record = await fetchMyPreferences()
     } catch {
       // Unreachable API: fall back to defaults for this session rather
-      // than blocking sign-in on it. Deliberately skips migration below
-      // -- with no honest answer for "is the server record empty",
-      // upload-then-delete could throw away the only copy of a
-      // browser's presets against a record that turns out not to have
-      // been empty at all.
-      this.prefs = {}
-      this.loaded = true
-      for (const [key, hydrate] of this.hydrators) hydrate(undefined)
+      // than blocking sign-in on it, but loadSucceeded stays false --
+      // flush() (below) then refuses to send anything, and the next
+      // ensureLoaded() retries the fetch, rather than either wiping the
+      // rest of the record with a save built from these defaults or
+      // caching this one failure forever. `this.loaded` itself is only
+      // set (and the hydrators only run) the first time through, so a
+      // later failed retry doesn't re-clear whatever this session has
+      // built up meanwhile. Migration is skipped here for the same
+      // reason it always was: with no honest answer for "is the server
+      // record empty", upload-then-delete could throw away the only
+      // copy of a browser's presets against a record that turns out not
+      // to have been empty at all.
+      if (!this.loaded) {
+        this.prefs = {}
+        this.loaded = true
+        for (const [key, hydrate] of this.hydrators) hydrate(undefined)
+      }
       return
     }
     let prefs = record.prefs ?? {}
@@ -96,9 +119,18 @@ class PreferencesState {
         }
       }
     }
+    // Any key already changed locally (set() calls made while a prior
+    // attempt was still failing) takes priority over what the server
+    // just returned -- it hasn't reached the server yet, and this being
+    // the first successful load must not silently drop it.
+    for (const key of this.changedKeys) prefs[key] = this.prefs[key]
     this.prefs = prefs
     this.loaded = true
+    this.loadSucceeded = true
     for (const [key, hydrate] of this.hydrators) hydrate(this.prefs[key])
+    // Now that there is a real baseline, send anything that was only
+    // sitting in memory because flush() was refusing to run without one.
+    if (this.changedKeys.size > 0) void this.flush()
   }
 
   get<T>(key: string): T | undefined {
@@ -122,13 +154,17 @@ class PreferencesState {
    * called on sign-out (before the server call that ends the session,
    * see auth.svelte.ts's logout()) and from the pagehide handler below,
    * both places where waiting another 500ms may mean never. A no-op
-   * when nothing has changed since the last flush. */
+   * when nothing has changed since the last flush, and also a no-op
+   * before ensureLoaded() has ever actually succeeded -- a change made
+   * during a fallback session (load() unreachable) is kept in memory
+   * and sent once a retry lands (see load()'s success path), not sent
+   * blind against a baseline this session never actually saw. */
   async flush(opts: { keepalive?: boolean } = {}): Promise<void> {
     if (this.timer) {
       clearTimeout(this.timer)
       this.timer = undefined
     }
-    if (this.changedKeys.size === 0) return
+    if (!this.loadSucceeded || this.changedKeys.size === 0) return
     // Cleared before sending, not after -- matching every other
     // storage-write catch below: best effort, applied optimistically,
     // not retried forever if the server refuses it.
@@ -155,6 +191,7 @@ class PreferencesState {
   seedForTest(prefs: Record<string, unknown>): void {
     this.prefs = { ...prefs }
     this.loaded = true
+    this.loadSucceeded = true
     this.loading = null
     this.changedKeys.clear()
     for (const [key, hydrate] of this.hydrators) hydrate(this.prefs[key])
@@ -173,6 +210,7 @@ class PreferencesState {
     }
     this.prefs = {}
     this.loaded = false
+    this.loadSucceeded = false
     this.loading = null
     this.changedKeys.clear()
   }

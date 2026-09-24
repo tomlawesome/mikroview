@@ -91,6 +91,36 @@ describe('preferencesState.ensureLoaded', () => {
     // same thing as "the server record is genuinely empty".
     expect(localStorage.getItem('mikroview-colorway')).toBe('pulse')
   })
+
+  it('never flushes a change made against a failed load -- the server keeps whatever else it had', async () => {
+    vi.mocked(fetchMyPreferences).mockRejectedValue(new Error('network down'))
+    await preferencesState.ensureLoaded()
+
+    preferencesState.set('colorway', 'pulse')
+    await preferencesState.flush()
+
+    // Nothing sent at all: there was never a real baseline to save
+    // against, so this session's one changed key must not go out and
+    // risk standing in for -- or racing against -- whatever the server
+    // actually holds for every other key.
+    expect(saveMyPreferences).not.toHaveBeenCalled()
+  })
+
+  it('retries the load on the next ensureLoaded(), and then sends the change made while it was failing', async () => {
+    vi.mocked(fetchMyPreferences).mockRejectedValueOnce(new Error('network down'))
+    await preferencesState.ensureLoaded()
+    preferencesState.set('colorway', 'pulse')
+
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { retention: 30 } })
+    await preferencesState.ensureLoaded()
+
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(2)
+    // The retry's own record is kept, and the pending local change rides
+    // along on top of it rather than being lost.
+    expect(preferencesState.get('retention')).toBe(30)
+    expect(preferencesState.get('colorway')).toBe('pulse')
+    expect(saveMyPreferences).toHaveBeenCalledWith({ version: 1, prefs: { colorway: 'pulse' } }, {})
+  })
 })
 
 describe('preferencesState.get/set', () => {
