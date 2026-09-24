@@ -172,19 +172,19 @@ check(
 // Saved through the app's own store rather than the `save this filter
 // as…` row, which opens a window.prompt() a scenario cannot type into.
 // The store is the per-user record on the server since #1283 (key
-// `presets`), so the seed is a PUT of that record, read back by the
-// reload below the same way a fresh sign-in would read it.
+// `presets`), so the seed is a PATCH carrying only that key, read back
+// by the reload below the same way a fresh sign-in would read it.
+// PATCH merges (prefs.Store.Merge), so no other key here is touched --
+// `null` doesn't clear it, it would be stored as the literal value
+// `null`, so "no presets" is seeded the same way the app itself writes
+// it when the last saved filter is removed: an empty array (see
+// presets.svelte.ts's remove()).
 const putPresets = (page, presets) =>
   page.evaluate(async (presets) => {
-    const res = await fetch('/api/me/preferences', { cache: 'no-store' })
-    const body = res.ok ? await res.json() : { version: 1, prefs: {} }
-    const prefs = { ...(body.prefs ?? {}) }
-    if (presets === null) delete prefs.presets
-    else prefs.presets = presets
     const put = await fetch('/api/me/preferences', {
-      method: 'PUT',
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-      body: JSON.stringify({ version: 1, prefs }),
+      body: JSON.stringify({ version: 1, prefs: { presets: presets === null ? [] : presets } }),
     })
     return put.status
   }, presets)

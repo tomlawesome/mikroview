@@ -17,7 +17,7 @@
   // SSOLinkOverlay and ResetCodeOverlay: the account actions look like
   // siblings.
   import { authState } from '../lib/auth.svelte'
-  import { confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
+  import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { trapFocus } from '../lib/focusTrap'
   import { qrCode } from '../lib/qrcode'
@@ -45,6 +45,14 @@
   let busy = $state(false)
   let codesCopied = $state(false)
 
+  // #1253: turning the authenticator app off leaves this account with no
+  // second factor at all iff it has no passkeys either -- the only other
+  // kind there is. Drives the 'turning-off' warning's wording: signing
+  // out is the true, owner-ruled consequence of that case, not "password
+  // alone", and the ordinary case (a passkey still stands) must not
+  // claim the opposite either.
+  const totpIsLastFactor = $derived(authState.passkeyCount === 0)
+
   // The secret lives in the URI's own query string -- extracted here
   // rather than asked for separately, so there is exactly one value the
   // server hands over and one place a mistake in reading it could hide.
@@ -71,56 +79,85 @@
   // Reachable from the header X, Escape and the backdrop -- everywhere
   // except the 'codes' step, which those three are not wired to at all
   // (see the markup below): the ten codes exist in clear nowhere else,
-  // so leaving is only ever the explicit "I have saved these".
+  // so leaving is only ever the explicit "I have saved these". Also
+  // blocked while busy: closing mid-confirm doesn't cancel the request,
+  // it only unmounts the view -- so a confirm that turns out to have
+  // minted fresh recovery codes would land on a step nothing is left
+  // open to show, and a reload after that loses them for good.
   function close() {
     open = false
     resetFields()
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && step !== 'codes') close()
+    if (e.key === 'Escape' && step !== 'codes' && !busy) close()
   }
 
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget && step !== 'codes') close()
+    if (e.target === e.currentTarget && step !== 'codes' && !busy) close()
   }
 
   async function startEnrol() {
     error = null
     busy = true
-    const result = await enrolTOTP()
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // enrolTOTP throws rather than returning text on a 401 -- the same
+    // session-death case AuthEnrolFactor's own forced-enrolment door
+    // guards against (see enrolTOTP's comment in lib/api.ts). Routed the
+    // same way here: this overlay's own header X/Escape/backdrop would
+    // otherwise offer a way out that doesn't actually work, since the
+    // session behind it is already gone.
+    try {
+      const result = await enrolTOTP()
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      uri = result.uri
+      secret = secretFromUri(result.uri)
+      code = ''
+      step = 'enrolling'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    uri = result.uri
-    secret = secretFromUri(result.uri)
-    code = ''
-    step = 'enrolling'
   }
 
   async function confirm() {
     error = null
     busy = true
-    const result = await confirmTOTP(code)
-    busy = false
-    if (typeof result === 'string') {
-      error = result
-      return
+    // Same reasoning as startEnrol above.
+    try {
+      const result = await confirmTOTP(code)
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      authState.hasTOTP = true
+      // #1250: recovery codes are shared with passkeys and minted once, by
+      // whichever factor activates first. A passkey already on this
+      // account means confirmTOTP just turned the factor on with nothing
+      // new to show -- the codes step exists nowhere to skip to, only the
+      // one-line note that the ones already issued still cover this too.
+      if (result.alreadyIssued) {
+        step = 'on-done'
+        return
+      }
+      recoveryCodes = result.recoveryCodes ?? []
+      step = 'codes'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      throw err
+    } finally {
+      busy = false
     }
-    authState.hasTOTP = true
-    // #1250: recovery codes are shared with passkeys and minted once, by
-    // whichever factor activates first. A passkey already on this
-    // account means confirmTOTP just turned the factor on with nothing
-    // new to show -- the codes step exists nowhere to skip to, only the
-    // one-line note that the ones already issued still cover this too.
-    if (result.alreadyIssued) {
-      step = 'on-done'
-      return
-    }
-    recoveryCodes = result.recoveryCodes ?? []
-    step = 'codes'
   }
 
   async function copyCodes() {
@@ -136,15 +173,28 @@
   async function turnOff() {
     error = null
     busy = true
-    const err = await disableTOTP(password)
-    busy = false
-    if (err) {
-      error = err
-      return
+    try {
+      const result = await disableTOTP(password)
+      if (typeof result === 'string') {
+        error = result
+        return
+      }
+      // #1253: this was the account's last second factor -- the server
+      // already ended every session on it, this browser's included.
+      // signOutAfterFactorRemoved() is logout()'s own local half, not a
+      // repeat of a server call that would only 401 against a session
+      // already gone; the 'off-done' screen below never shows for this
+      // case, since there is no session left to show it in.
+      if (result.signedOut) {
+        await authState.signOutAfterFactorRemoved()
+        return
+      }
+      authState.hasTOTP = false
+      password = ''
+      step = 'off-done'
+    } finally {
+      busy = false
     }
-    authState.hasTOTP = false
-    password = ''
-    step = 'off-done'
   }
 </script>
 
@@ -156,7 +206,7 @@
       <div class="modal-header">
         <span class="title">Authenticator app</span>
         {#if step !== 'codes'}
-          <button type="button" class="close" onclick={close} aria-label="Close">✕</button>
+          <button type="button" class="close" onclick={close} disabled={busy} aria-label="Close">✕</button>
         {/if}
       </div>
 
@@ -176,7 +226,7 @@
           {#if error}<p class="error">{error}</p>{/if}
         </div>
         <div class="actions">
-          <button type="button" class="cancel" onclick={close}>Close</button>
+          <button type="button" class="cancel" onclick={close} disabled={busy}>Close</button>
           {#if authState.hasTOTP}
             <button type="button" class="danger" onclick={() => ((step = 'turning-off'), (error = null))}>
               Turn off
@@ -270,7 +320,12 @@
         <div class="body">
           <div class="warning">
             <strong>This removes the second step at sign-in.</strong>
-            <p>Your password alone will sign you in again after this.</p>
+            {#if totpIsLastFactor}
+              <p>This is the only second step this account has -- turning it off signs you out
+                now, and you'll set up a second step again the next time you sign in.</p>
+            {:else}
+              <p>Your passkey will still be asked for at sign-in.</p>
+            {/if}
           </div>
           <label>
             Password
@@ -290,7 +345,12 @@
 
       {#if step === 'off-done'}
         <div class="body">
-          <p>Authenticator app turned off. Signing in now needs only your password.</p>
+          <p>Authenticator app turned off.</p>
+          <!-- Only reachable when disableTOTP answered signedOut: false
+               (turnOff() above sends signedOut: true straight to sign-in
+               instead) -- so this account always still has a passkey
+               here, and it is safe to say so. -->
+          <p class="muted">Your passkey still protects sign-in.</p>
         </div>
         <div class="actions">
           <button type="button" class="confirm" onclick={close}>Close</button>

@@ -2,6 +2,7 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import { authState } from '../lib/auth.svelte'
   import AuthScreen from './AuthScreen.svelte'
+  import { passkeysUsableAt } from '../lib/passkeys.svelte'
 
   // The way out (#645, round 5): a sign-out plays the door's beat in
   // reverse before the ordinary entrance. authState.consumeJustSignedOut()
@@ -23,6 +24,28 @@
   // rather than 'authenticated', with the server's own pending cookie
   // carrying the login the rest of the way.
   const enteringCode = $derived(authState.state === 'pending-factor')
+
+  // The wording here has to follow what login() actually told us this
+  // account holds (authState.pendingSecondFactor), not assume an
+  // authenticator app -- a passkey-only account was being told to open
+  // an app it doesn't have. AuthScreen's own factorOnly rendering already
+  // picks the right control per entry (passkey button / code box /
+  // recovery note); this only has to agree with it in words -- so a
+  // passkey counts only where AuthScreen would offer its button.
+  const hasPasskeyFactor = $derived(
+    authState.pendingSecondFactor.includes('passkey') && passkeysUsableAt(authState.pendingPasskeyOrigin),
+  )
+  const hasTotpFactor = $derived(authState.pendingSecondFactor.includes('totp'))
+  const factorTitle = $derived(hasPasskeyFactor && !hasTotpFactor ? 'Use your passkey' : 'Enter your code')
+  const factorSubtitle = $derived(
+    hasPasskeyFactor && hasTotpFactor
+      ? "Your password was right. Use your passkey, or enter the current code from your authenticator app, to finish signing in."
+      : hasPasskeyFactor
+        ? 'Your password was right. Use your passkey to finish signing in.'
+        : hasTotpFactor
+          ? "Your password was right. Enter the current code from your authenticator app to finish signing in."
+          : 'Your password was right. Enter one of your recovery codes to finish signing in.',
+  )
 </script>
 
 {#if settingNewPassword}
@@ -35,8 +58,8 @@
   />
 {:else if enteringCode}
   <AuthScreen
-    title="Enter your code"
-    subtitle="Your password was right. Enter the current code from your authenticator app to finish signing in."
+    title={factorTitle}
+    subtitle={factorSubtitle}
     submitLabel="Continue"
     factorOnly
     onSubmitFactor={(code) => authState.submitFactor(code)}

@@ -148,6 +148,44 @@ not exist yet. A router that never enrolled is not swept along with it —
 there is no evidence anyone confirmed it, so it still has the Register
 step to walk.
 
+## Upgrading to 0.6.1: every local account needs a second factor
+
+0.6.1 makes a second factor mandatory on every local account — the
+admin's and everyone else's — not just something you could choose to
+turn on. SSO-only accounts are unaffected: your identity provider
+already does this job for them. See
+[docs/authenticator-app.md](authenticator-app.md) for how the two kinds
+work.
+
+**What you'll see:** the first time each local account signs in after
+the upgrade, MikroView stops it at a "set up your second factor" screen
+and won't let it go anywhere else until one is active. An account that
+already had a factor before the upgrade sees nothing different — this
+only affects an account with none. You'll need either an authenticator
+app on a phone (Google Authenticator, 1Password, Bitwarden, or similar)
+or a device that can hold a passkey (a fingerprint, face or screen-lock
+PIN, or a physical security key).
+
+**If someone gets stuck partway through:** the ten recovery codes
+MikroView shows the moment the first factor is confirmed are the normal
+way back in if a phone or passkey later goes missing — see "Save your
+recovery codes" in docs/authenticator-app.md. Short of that, an admin
+can clear a stuck user's factor from Settings → **people** → their row
+(they don't need that user's password to do it), and an admin locked
+out of their own factor uses `mikroview -clear-second-factor
+<username>` at the console instead, since the admin can't clear their
+own factor from the web interface. Both are covered in full under "If
+you lose access to your second factor" in docs/authenticator-app.md.
+
+**If an account already holds a passkey:** MikroView now refuses to
+start unless `publicUrl` is set to an `https://` address it reaches
+(or `http://localhost`) — booting anyway would leave that passkey
+unable to sign anyone in, silently. Set `publicUrl` in the
+configuration, or run `mikroview -clear-second-factor <username>` for
+each affected account, then start again. An install where nobody has
+registered a passkey is unaffected. See "Public URL" in
+docs/configuration.md.
+
 ## What happens at start
 
 1. MikroView reads the schema version its data was last written by.

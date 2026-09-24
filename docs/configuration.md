@@ -1569,10 +1569,18 @@ account on the server, read on sign-in and written on change. Signing
 out and signing in as someone else on the same browser shows that
 person's own settings, not the last one's, and a user's settings follow
 them to any browser they sign into. The record is cleared when the
-account itself is deleted. See `GET`/`PUT /api/me/preferences` in the
+account itself is deleted. See `GET`/`PATCH /api/me/preferences` in the
 [API reference](#api-reference); this package never interprets what is
 inside a record, so the frontend modules that own each key are the
 source of truth for its shape.
+
+`PATCH` merges rather than replaces: only the keys present in the
+request body are changed, so two browser tabs saving different keys
+around the same time can't clobber one another's. A key is left alone
+by leaving it out of the body; it is cleared by sending it with a JSON
+`null` value, which is stored as-is (not removed from the record) --
+the frontend module that owns that key then falls back to its own
+default the same way it does for a key that was never set.
 
 ```yaml
 prefs:
@@ -4335,10 +4343,25 @@ publicUrl: "https://mikroview.home.lan:8443"
 ```
 
 Left unset -- the default -- MikroView starts and runs exactly as it
-always has; passkeys are simply unavailable. Every problem here is a
-warning, never a startup refusal: a security monitor that will not boot
+always has; passkeys are simply unavailable. Most problems here are a
+warning, not a startup refusal: a security monitor that will not boot
 has cost you all visibility, which is worse than one login method
-staying off. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
+staying off. The one exception is an install where an account already
+holds a passkey: if `publicUrl` is unset, an IP address, or anything
+other than `https://` (aside from `http://localhost`), MikroView
+refuses to start rather than boot with that passkey silently unable to
+sign anyone in, since the account would otherwise lose its second
+factor without warning. It logs:
+
+```
+passkeys are off (<status>) but at least one account already holds a
+passkey -- set publicUrl in the configuration to the https address
+people reach MikroView on, or run `mikroview -clear-second-factor
+<username>` for each affected account to remove them
+```
+
+An install where nobody has registered a passkey yet still only gets
+the warning. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
 above for exactly what each one catches and what happens as a result.
 
 **Not `oidc.publicBaseUrl`, and no fallback between them.** The two
@@ -4783,7 +4806,7 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/me/preferences` | open to any signed-in user, not admin-gated: the caller's own preferences record (#1283), as `{"version": 1, "prefs": {...}}`. A user with no stored record yet gets `{"version": 1, "prefs": {}}`, not a 404 -- see [Preferences](#preferences-settings-live-on-the-server-per-user-1283) |
-| `PUT /api/me/preferences` | open to any signed-in user, not admin-gated: replaces the caller's whole preferences record with the given `{"version": 1, "prefs": {...}}`. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap |
+| `PATCH /api/me/preferences` | open to any signed-in user, not admin-gated: merges the given `{"version": 1, "prefs": {...}}` into the caller's stored record -- only the keys present in `prefs` are changed, everything else stored is left alone; a key is cleared by sending it as `null`, which is stored as-is rather than removed. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap; 413 if the merged record would exceed 256 KiB per user, in which case nothing is saved (a record already over that size, from an older install, still loads and still reads back -- only growth is refused) |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |

@@ -352,6 +352,14 @@ type passkeyRegisterFinishResponse struct {
 	// "Recovery codes are shared" section. No omitempty: the frontend
 	// contract is exactly `recoveryCodes: [...]|null`, not an absent key.
 	RecoveryCodes []string `json:"recoveryCodes"`
+	// AlreadyIssued is true when this account already held recovery
+	// codes (minted by an earlier TOTP confirmation or another passkey
+	// registration) before this one -- mirrors totpConfirmResponse's
+	// field of the same name and meaning (auth.go): the frontend reads
+	// it to skip implying new codes were just issued. A mint failure is
+	// answered as its own error, not a 200 (see the handler below), so
+	// null here means only "already issued", never "minting failed".
+	AlreadyIssued bool `json:"alreadyIssued,omitempty"`
 }
 
 // handleAuthPasskeysRegisterFinish completes a registration ceremony
@@ -433,17 +441,27 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Mint-if-absent, never re-mint -- see the design's "Recovery codes
-	// are shared" section, and handleTOTPConfirm's identical rule just
-	// above it in auth.go.
-	var recoveryCodes []string
-	if len(current.RecoveryCodes) == 0 {
-		codes, err := s.Auth.GenerateRecoveryCodes(current.ID, now)
-		if err != nil {
-			authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, err))
-		} else {
-			recoveryCodes = codes
-		}
+	// Mint-if-absent, atomically under the store's lock -- never re-mint,
+	// and never let two concurrent first-registrations (this route
+	// racing itself, or racing handleTOTPConfirm) both see "no codes
+	// yet" and both mint, silently replacing whichever set the loser
+	// already showed its user. See GenerateRecoveryCodesIfAbsent's doc
+	// comment (recoverycodes.go) and handleTOTPConfirm's identical use
+	// of it in auth.go.
+	recoveryCodes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(current.ID, now)
+	if err != nil {
+		// The passkey is already added at this point -- AddPasskey above
+		// committed. A mint failure must not be answered like "already
+		// issued" (null recoveryCodes, 200): the frontend reads null as
+		// exactly that, and here nothing was ever issued for this
+		// account to fall back on. Told to the caller plainly instead,
+		// the same shape handleTOTPConfirm's identical failure takes --
+		// including leaving session rotation and the audit record for a
+		// retry that gets past this, rather than reporting a factor
+		// change with no way back in as a clean success.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, err))
+		http.Error(w, "the passkey is now active, but recovery codes could not be generated -- remove it and register again from account settings", http.StatusInternalServerError)
+		return
 	}
 
 	if wasFirstFactor {
@@ -461,6 +479,7 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, passkeyRegisterFinishResponse{
 		Passkey:       toPasskeySummary(stored, s.RelyingParty.RPID),
 		RecoveryCodes: recoveryCodes,
+		AlreadyIssued: alreadyIssued,
 	})
 }
 
@@ -556,8 +575,20 @@ func (s *Server) handleAuthPasskeyDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Owner ruling: a user may remove their only second factor -- see
+	// handleTOTPDelete's identical block (auth.go) for the full
+	// reasoning. Deleting the account's last passkey, with no
+	// authenticator-app factor standing in behind it, gets the same
+	// treatment: every session revoked at once, signedOut told to the
+	// caller.
+	signedOut := false
+	if updated, ok := s.Auth.Get(user.ID); ok && !updated.HasSecondFactor() {
+		s.Sessions.RevokeAllForUser(user.ID)
+		signedOut = true
+	}
+
 	s.Audit.Record(user.Username, "account.passkey_removed", user.Username, "name="+removed.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"removed": true})
+	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "signedOut": signedOut})
 }
 
 // ---- POST /api/auth/login/factor/begin ----
@@ -703,13 +734,28 @@ func (s *Server) verifyPasskeyAssertion(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 
-	if err := s.Auth.RecordPasskeyAssertion(user.ID, cred.ID, cred.Authenticator.SignCount, now); err != nil {
-		// Same stance handleAuthLoginFactor's own RecordTOTPCounter call
-		// takes: the assertion just verified is genuine regardless of
-		// whether the replay guard's advance persisted, so this is logged
-		// rather than turned into a refusal of a login that already
-		// earned one.
+	// One sign-in per ceremony, whatever the authenticator's counter says.
+	if !passkeyAssertChallenges.claim(session.Challenge, session.Expires, now) {
+		writeUnauthorized(w, "that passkey couldn't be verified -- use another way in")
+		return false
+	}
+
+	// Accepted and recorded in one call, under the store's lock, so two
+	// concurrent submissions of the same assertion can't both clear
+	// CloneWarning against the same not-yet-advanced counter -- see
+	// RecordPasskeyAssertionIfFresh's doc comment (passkeys.go).
+	accepted, err := s.Auth.RecordPasskeyAssertionIfFresh(user.ID, cred.ID, cred.Authenticator.SignCount, now)
+	if err != nil {
+		// Same stance handleAuthLoginFactor's own TOTP branch takes: a
+		// persistence failure on an otherwise-accepted assertion is
+		// logged, not turned into a refusal of a login that already
+		// earned one (accepted stays true in that case -- see the
+		// method's doc comment).
 		authLog.Warn(fmt.Sprintf("recording passkey assertion for %s: %v", user.Username, err))
+	}
+	if !accepted {
+		writeUnauthorized(w, "that passkey couldn't be verified -- use another way in")
+		return false
 	}
 
 	s.clearPasskeyAssertCookie(w)

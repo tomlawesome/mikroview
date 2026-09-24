@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
+	"time"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )
@@ -204,6 +206,43 @@ var (
 	passkeyRegisterSessionCodec = newWebAuthnSessionCodec()
 	passkeyAssertSessionCodec   = newWebAuthnSessionCodec()
 )
+
+// spentChallenges remembers the challenge of every passkey sign-in that
+// completed, until its ceremony would have expired anyway. The ceremony
+// itself rides in a sealed cookie, so without this the server keeps
+// nothing saying it was used, and an authenticator that always reports a
+// sign count of zero (most platform passkeys) gives the counter nothing
+// to catch a replay with: the same assertion could open a second session.
+type spentChallenges struct {
+	mu   sync.Mutex
+	seen map[string]time.Time // challenge -> when it can be forgotten
+}
+
+// claim reports whether challenge is being used for the first time, and
+// marks it used. Expired entries are dropped on the way, so the map only
+// ever holds the ceremonies of the last few minutes.
+func (c *spentChallenges) claim(challenge string, expires, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen == nil {
+		c.seen = make(map[string]time.Time)
+	}
+	for k, until := range c.seen {
+		if !now.Before(until) {
+			delete(c.seen, k)
+		}
+	}
+	if _, used := c.seen[challenge]; used {
+		return false
+	}
+	if expires.Before(now.Add(passkeyCeremonyCookieMaxAge)) {
+		expires = now.Add(passkeyCeremonyCookieMaxAge)
+	}
+	c.seen[challenge] = expires
+	return true
+}
+
+var passkeyAssertChallenges = &spentChallenges{}
 
 // encode seals sd for the cookie value. The caller writes the result behind Max-Age (5
 // minutes per the design), which bounds how long a browser holds onto it; encode/decode
