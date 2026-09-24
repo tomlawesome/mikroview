@@ -23,6 +23,20 @@
 // The comparison is by eye today, deliberately: automating
 // mockup-vs-built fidelity is #587, and is blocked on #588.
 //
+// #1249 (this branch) gave the people door an "authenticator app" pill
+// and a "clear authenticator app" button, both conditional on
+// user.hasTOTP (EngineRoom.svelte) -- so a jenny with no factor set up
+// shows neither, and a screenshot taken that way would be freshly
+// captured but still not depict what it went stale over. The block
+// below signs jenny in and drives a real enrolment through the API
+// directly (enrol -> compute a code -> confirm), the same RFC 6238 port
+// capture-authenticator-app-screenshots.mjs carries at length in its
+// own header -- see that file for why it's a port rather than a call
+// into the Go binary or a third-party library. Done through the API,
+// not the browser, because nothing here needs to screenshot enrolling;
+// only the end state (jenny has a factor) has to be real before the
+// people-door shot is taken.
+//
 // Usage:
 //   eval "$(scripts/live-env.sh up)"
 //   scripts/live-env.sh syslog 200
@@ -33,6 +47,7 @@ import { chromium } from 'playwright'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import fs from 'fs'
+import crypto from 'crypto'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
@@ -41,6 +56,31 @@ const PASS = process.env.MV_PASS
 if (!URL_BASE || !USER || !PASS) {
   console.error('MV_URL/MV_USER/MV_PASS unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
+}
+
+// totpCode is the same RFC 6238/4226 port capture-authenticator-app-
+// screenshots.mjs carries (see that file's header): 30s step, 6 digits,
+// HMAC-SHA1 dynamic truncation over a base32-decoded secret.
+function base32Decode(input) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = ''
+  for (const ch of input.toUpperCase().replace(/=+$/, '')) {
+    const val = alphabet.indexOf(ch)
+    if (val === -1) throw new Error(`totp: invalid base32 character ${JSON.stringify(ch)}`)
+    bits += val.toString(2).padStart(5, '0')
+  }
+  const bytes = []
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2))
+  return Buffer.from(bytes)
+}
+function totpCode(base32Secret, atMs = Date.now()) {
+  const counter = Math.floor(atMs / 1000 / 30)
+  const counterBuf = Buffer.alloc(8)
+  counterBuf.writeBigUInt64BE(BigInt(counter))
+  const hmac = crypto.createHmac('sha1', base32Decode(base32Secret)).update(counterBuf).digest()
+  const offset = hmac[hmac.length - 1] & 0x0f
+  const code = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3]
+  return String(code % 1_000_000).padStart(6, '0')
 }
 
 const SHOTS = path.join(REPO, 'docs', 'screenshots')
@@ -114,6 +154,39 @@ async function signedInPage(scheme) {
     console.log(`created "${EXTRA_USER}" for the capture`)
   }
   await context.close()
+}
+
+// --- Give jenny an authenticator app, so the pill and the clear button
+//     have something real to show (see the header comment) -----------
+{
+  const jctx = await browser.newContext({ ignoreHTTPSErrors: true })
+  const jpage = await jctx.newPage()
+  const jsonHeaders = { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' }
+
+  const login = await jpage.request.fetch(`${URL_BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    data: { username: EXTRA_USER, password: EXTRA_PASS },
+  })
+  if (!login.ok()) throw new Error(`jenny could not sign in to enrol a factor (${login.status()})`)
+
+  const enrol = await jpage.request.fetch(`${URL_BASE}/api/auth/totp/enrol`, {
+    method: 'POST',
+    headers: jsonHeaders,
+  })
+  if (!enrol.ok()) throw new Error(`jenny's TOTP enrol failed (${enrol.status()})`)
+  const secret = new URL((await enrol.json()).uri).searchParams.get('secret')
+  if (!secret) throw new Error("jenny's enrol response carried no secret")
+
+  const confirm = await jpage.request.fetch(`${URL_BASE}/api/auth/totp/confirm`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    data: { code: totpCode(secret) },
+  })
+  if (!confirm.ok()) throw new Error(`jenny's TOTP confirm failed (${confirm.status()})`)
+  console.log(`gave "${EXTRA_USER}" an authenticator app for the capture`)
+
+  await jctx.close()
 }
 
 for (const scheme of ['light', 'dark']) {

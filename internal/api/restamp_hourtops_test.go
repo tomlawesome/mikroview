@@ -40,7 +40,7 @@ func TestHourTopsFollowsAHostRenameThroughTheRing(t *testing.T) {
 
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	thisMinute := func() store.HourTop {
 		t.Helper()

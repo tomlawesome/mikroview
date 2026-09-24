@@ -15,14 +15,49 @@ vi.mock('../lib/api', () => ({
   logout: vi.fn(),
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
+  submitLoginFactor: vi.fn(),
+  // #1250: authState.loginWithPasskey() runs the real
+  // lib/passkeys.svelte.ts ceremony (its own test file covers that code
+  // in isolation) -- only the network boundary underneath it is faked
+  // here, same as every other call this file already mocks.
+  beginPasskeyLogin: vi.fn(),
+  submitPasskeyLoginAssertion: vi.fn(),
 }))
 
-import { fetchAuthSession, login, setNewPasswordAfterReset } from '../lib/api'
+import {
+  beginPasskeyLogin,
+  fetchAuthSession,
+  login,
+  setNewPasswordAfterReset,
+  submitLoginFactor,
+  submitPasskeyLoginAssertion,
+} from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import AuthLogin from './AuthLogin.svelte'
 
+// The browser ceremony's own JSON helpers -- jsdom has neither by
+// default (lib/passkeys.svelte.test.ts pins that down). Stubbed here so
+// the "capable browser" tests below can reach the real button; the
+// "incapable browser" tests instead rely on jsdom's own absence of them.
+function stubPasskeyCapableBrowser() {
+  vi.stubGlobal(
+    'PublicKeyCredential',
+    class {
+      static parseCreationOptionsFromJSON(o: unknown) {
+        return o
+      }
+      static parseRequestOptionsFromJSON(o: unknown) {
+        return o
+      }
+    },
+  )
+  Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true })
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.unstubAllGlobals()
+  Object.defineProperty(window, 'isSecureContext', { value: undefined, configurable: true })
   authState.state = 'loading'
   authState.username = ''
   authState.role = ''
@@ -30,6 +65,8 @@ beforeEach(() => {
   authState.ssoError = null
   authState.justSignedOut = false
   authState.mustChangePassword = false
+  authState.pendingSecondFactor = []
+  authState.pendingPasskeyOrigin = undefined
 })
 
 async function fillAndSubmit(username: string, password: string) {
@@ -196,5 +233,192 @@ describe('AuthLogin after a one-time code sign-in', () => {
 
     expect(setNewPasswordAfterReset).toHaveBeenCalledWith('new-password-placeholder')
     expect(authState.state).toBe('authenticated')
+  })
+})
+
+// #1249's second step: a right password on an account holding a factor
+// lands here (authState.state === 'pending-factor') instead of opening
+// the app -- login() itself is exercised in auth.svelte.test.ts; this is
+// what AuthLogin actually draws for that state and wires the code box to.
+describe('AuthLogin at the pending-factor step', () => {
+  beforeEach(() => {
+    authState.state = 'pending-factor'
+    // These tests exercise the authenticator-app/recovery-code box, the
+    // same as before #1250 -- an account whose pending login lists no
+    // passkey at all (real logins now always set this, via login()).
+    // The passkey-specific screens get their own describe block below.
+    authState.pendingSecondFactor = ['totp']
+    authState.pendingPasskeyOrigin = undefined
+  })
+
+  it('shows the code box, with no account field and no SSO way round it', () => {
+    authState.ssoAvailable = true
+
+    render(AuthLogin)
+
+    expect(screen.getByText('Enter your code')).toBeTruthy()
+    expect(screen.queryByLabelText('account')).toBeNull()
+    expect(screen.getByLabelText('code')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+  })
+
+  it('submits the code to authState.submitFactor and opens the app on success', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('123456')
+    expect(authState.state).toBe('authenticated')
+  })
+
+  it('shows the server refusal on a wrong code without opening the app', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '000000' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(await screen.findByText('invalid code')).toBeTruthy()
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // The recovery-code toggle only relabels the field -- same box, same
+  // call, so this pins that it never changes what field name/shape is
+  // submitted.
+  it('the "use a recovery code" toggle relabels the field without changing what is submitted', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    expect(screen.queryByLabelText('recovery code')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: /use a recovery code instead/i }))
+    expect(screen.getByLabelText('recovery code')).toBeTruthy()
+
+    await fireEvent.input(screen.getByLabelText('recovery code'), { target: { value: 'a1b2-c3d4-e5f6-g7h8' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
+  })
+
+  it('answers an empty code in its own error line, without calling the server', async () => {
+    render(AuthLogin)
+
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(await screen.findByText('Enter the code from your app.')).toBeTruthy()
+    expect(submitLoginFactor).not.toHaveBeenCalled()
+  })
+})
+
+// #1250: the passkey half of the same pending-factor step -- driven by
+// authState.pendingSecondFactor/pendingPasskeyOrigin, both set by
+// login() itself (see auth.svelte.test.ts for that wiring).
+describe('AuthLogin at the pending-factor step offering a passkey (#1250)', () => {
+  beforeEach(() => {
+    authState.state = 'pending-factor'
+    authState.pendingSecondFactor = ['passkey', 'totp']
+    authState.pendingPasskeyOrigin = location.origin
+  })
+
+  it('leads with the passkey button when the browser is capable, with the other two as links below', () => {
+    stubPasskeyCapableBrowser()
+    render(AuthLogin)
+
+    expect(screen.getByRole('button', { name: /^use your passkey$/i })).toBeTruthy()
+    expect(screen.queryByLabelText('code')).toBeNull()
+    expect(screen.getByRole('button', { name: /use your authenticator app instead/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /use a recovery code instead/i })).toBeTruthy()
+  })
+
+  it('fires the ceremony only on the click, never on mount, and opens the app on success', async () => {
+    stubPasskeyCapableBrowser()
+    vi.mocked(beginPasskeyLogin).mockResolvedValue({ publicKey: { challenge: 'c' } })
+    const get = vi.fn(async () => ({ toJSON: () => ({ id: 'cred-1' }) }))
+    vi.stubGlobal('navigator', { credentials: { get } })
+    vi.mocked(submitPasskeyLoginAssertion).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+    expect(get).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: /^use your passkey$/i }))
+    // The real chain runs one hop deeper than a code submit (begin ->
+    // browser prompt -> submit assertion -> re-check the session), which
+    // needs more than the one microtask flush fireEvent.click already
+    // waits for.
+    await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
+
+    expect(get).toHaveBeenCalled()
+    expect(submitPasskeyLoginAssertion).toHaveBeenCalledWith({ id: 'cred-1' })
+  })
+
+  it('switching to "use a recovery code instead" is client-side only -- still the same pending login', async () => {
+    stubPasskeyCapableBrowser()
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+    await fireEvent.click(screen.getByRole('button', { name: /use a recovery code instead/i }))
+
+    expect(screen.getByLabelText('recovery code')).toBeTruthy()
+    await fireEvent.input(screen.getByLabelText('recovery code'), { target: { value: 'a1b2-c3d4-e5f6-g7h8' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
+    expect(beginPasskeyLogin).not.toHaveBeenCalled()
+    expect(authState.state).toBe('authenticated')
+  })
+
+  it('replaces the button with a link to the right address when this browser cannot use the passkey, but still offers the other ways in', () => {
+    // No stubPasskeyCapableBrowser() -- jsdom's own default (no
+    // PublicKeyCredential at all).
+    render(AuthLogin)
+
+    expect(screen.queryByRole('button', { name: /^use your passkey$/i })).toBeNull()
+    expect(screen.getByText(/your passkeys work at/i)).toBeTruthy()
+    expect(screen.getByLabelText('code')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /use a recovery code instead/i })).toBeTruthy()
+  })
+
+  it('shows the recovery-code explanation with nothing else offered when the account has no usable factor at all', () => {
+    authState.pendingSecondFactor = []
+    authState.pendingPasskeyOrigin = undefined
+    render(AuthLogin)
+
+    expect(screen.getByText(/made for a different web address/i)).toBeTruthy()
+    expect(screen.getByLabelText('recovery code')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /use your passkey/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /use your authenticator app instead/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /use a recovery code instead/i })).toBeNull()
   })
 })

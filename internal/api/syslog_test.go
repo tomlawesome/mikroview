@@ -26,16 +26,17 @@ func TestHandleSyslogLossClearAvailableToUserNotViewer(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/syslog/loss/clear below
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+	seedFactor(t, s, ts, "watcher") // #1253: needed before /api/syslog/loss/clear below
 
 	viewerReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/syslog/loss/clear", nil)
 	viewerReq.Header.Set(csrfHeaderName, csrfHeaderValue)
@@ -95,8 +96,7 @@ func TestHandleSyslogLossClearZeroesCountersAndAudits(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -51,7 +51,17 @@
 //    count elements and read text rather than asking whether a box is
 //    visible wherever the element may legitimately be zero-height.
 
-import { session, feedRaw, check, done, enrolDevice, goTo, launchBrowser, pushFrom } from './live-browser.mjs'
+import {
+  session,
+  feedRaw,
+  check,
+  done,
+  enrolDevice,
+  goTo,
+  launchBrowser,
+  pushFrom,
+  enrolFactorAndSignIn,
+} from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -599,6 +609,9 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
+// #1335: a fresh account holds no second factor at all, so the forced-
+// enrolment door sits between the password step and the app itself.
+await enrolFactorAndSignIn(viewerPage)
 await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
 const viewerLabels = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))

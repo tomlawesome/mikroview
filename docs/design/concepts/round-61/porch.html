@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 61 — the porch (forced enrolment, the account-menu overlays over the door)</title>
+<style>
+  /* Round 61 · #1336. The door stays exactly the ratified door; the
+     enrolment happens in the account menu's own overlays
+     (AuthenticatorOverlay / PasskeysOverlay), opened over it — chrome,
+     copy and controls verbatim, with every close path removed: no ✕,
+     no Escape, no backdrop click. Cancel steps back to the choice,
+     never out. The surface you will meet later under the account menu
+     is the one that enrols you now. */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --now: #e8b05a;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; overflow: hidden; }
+  .beat { flex: 1; display: grid; place-items: center; position: relative; padding: 20px; }
+  .stack { text-align: center; position: relative; z-index: 2; }
+  .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+  }
+  .wm em { font-style: normal; color: var(--accent); }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 40%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 40%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+
+  /* The wordmark sits above the beat's centre so the modal below it
+     never covers it: the door is still visibly the door. */
+  .door .beat { align-content: start; padding-top: 12vh; }
+
+  /* ---- the overlay, verbatim from AuthenticatorOverlay.svelte ---- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+    display: flex; align-items: center; justify-content: center; padding: 5vh 4vw; z-index: 50;
+  }
+  .modal {
+    width: 100%; max-width: 440px; background: var(--void);
+    border: 1px solid var(--hair); border-radius: 10px;
+    display: flex; flex-direction: column;
+    box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.5); overflow: hidden;
+    animation: rise 0.25s ease-out;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--hair); background: var(--raised);
+  }
+  .title { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .body { padding: 16px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; line-height: 1.55; }
+  .body p { margin: 0; }
+  .muted { color: var(--ink-2); font-size: 12px; }
+  .actions {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 12px 16px; border-top: 1px solid var(--hair); background: var(--raised);
+  }
+  .cancel {
+    background: transparent; border: 1px solid var(--hair); color: var(--ink-2);
+    border-radius: 5px; padding: 7px 14px; font-size: 13px; cursor: pointer; text-decoration: none;
+  }
+  .cancel:hover, .cancel:focus-visible { color: var(--ink); border-color: var(--ink-2); outline: none; }
+  .confirm {
+    background: var(--accent); border: 1px solid var(--accent); color: var(--void);
+    border-radius: 5px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none;
+  }
+  .confirm:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+  .enrol-row { display: flex; align-items: center; gap: 14px; }
+  .qr { flex: none; width: 88px; height: 88px; border-radius: 6px; background: #fff; padding: 5px; }
+  .qr svg { display: block; width: 100%; height: 100%; }
+  .secretcol { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .seclabel { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+  .secret { font-family: var(--mono); font-size: 13px; letter-spacing: 0.04em; word-break: break-all; user-select: all; }
+
+  .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-2); }
+  .modal input {
+    background: var(--void); border: 1px solid var(--hair); border-radius: 5px;
+    padding: 7px 9px; color: var(--ink); font-size: 13px; font-family: inherit;
+  }
+  .modal input:focus { outline: none; border-color: var(--accent); }
+
+  .codes {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;
+    padding: 10px 12px; border: 1px solid var(--hair); border-radius: 6px; background: var(--raised);
+  }
+  .rc { font-family: var(--mono); font-size: 13px; letter-spacing: 0.03em; user-select: all; }
+  .copyrow { display: flex; justify-content: center; }
+  .copy {
+    background: transparent; border: 1px solid var(--hair); color: var(--ink-2);
+    border-radius: 5px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+  }
+  .copy:hover, .copy:focus-visible { color: var(--ink); border-color: var(--ink-2); outline: none; }
+
+  /* The choice, drawn as this modal's own list rows — the same two rows
+     the account menu will show later, met here first. */
+  .pickrow {
+    display: block; padding: 11px 12px; border: 1px solid var(--hair); border-radius: 6px;
+    text-decoration: none; color: inherit;
+  }
+  .pickrow:hover, .pickrow:focus-visible { border-color: var(--accent); outline: none; }
+  .pickrow .cname { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+  .pickrow .cdesc { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  span.pickrow .cname, span.pickrow .cdesc { color: var(--ink-3); }
+
+  .noexit { font: 10.5px/1.6 var(--mono); color: var(--ink-3); letter-spacing: 0.02em; }
+
+  .scene { display: none; }
+  body[data-scene="first"] .sc-first,
+  body[data-scene="totp"] .sc-totp,
+  body[data-scene="passkey"] .sc-passkey,
+  body[data-scene="codes"] .sc-codes,
+  body[data-scene="no-passkey"] .sc-no-passkey { display: flex; }
+
+  .mock-strip {
+    position: fixed; left: 12px; bottom: 10px; z-index: 60;
+    font: 10px var(--mono); color: var(--ink-3); letter-spacing: 0.03em;
+  }
+  .mock-strip a { color: var(--ink-3); text-decoration: none; padding: 2px 3px; }
+  .mock-strip a:hover, .mock-strip a:focus-visible { color: var(--ink-2); outline: none; }
+  body[data-scene="first"] .mock-strip a[href="#first"],
+  body[data-scene="totp"] .mock-strip a[href="#totp"],
+  body[data-scene="passkey"] .mock-strip a[href="#passkey"],
+  body[data-scene="codes"] .mock-strip a[href="#codes"],
+  body[data-scene="no-passkey"] .mock-strip a[href="#no-passkey"] { color: var(--accent); }
+
+  @media (max-width: 460px) {
+    .enrol-row { flex-direction: column; align-items: flex-start; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .modal { animation: none !important; }
+    .fullfall i { animation: none; transform: translateY(var(--y, 40vh)); }
+  }
+</style>
+</head>
+<body data-scene="first">
+
+<!-- The ratified door, untouched, behind the porch. -->
+<main class="door" aria-hidden="true">
+  <div class="beat">
+    <div class="fullfall">
+      <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5; --y: 62vh"></i>
+      <i style="left: 9%; animation-delay: 3.1s; opacity: 0.3; --y: 18vh"></i>
+      <i class="r" style="left: 15%; animation-delay: 1.6s; opacity: 0.55; --y: 44vh"></i>
+      <i style="left: 21%; animation-delay: 4.4s; opacity: 0.4; --y: 9vh"></i>
+      <i style="left: 26%; animation-delay: 2.2s; opacity: 0.65; --y: 71vh"></i>
+      <i class="v" style="left: 33%; animation-delay: 5.0s; opacity: 0.45; --y: 30vh"></i>
+      <i style="left: 38%; animation-delay: 0.9s; opacity: 0.3; --y: 83vh"></i>
+      <i class="r" style="left: 45%; animation-delay: 3.7s; opacity: 0.4; --y: 12vh"></i>
+      <i style="left: 51%; animation-delay: 1.2s; opacity: 0.6; --y: 55vh"></i>
+      <i style="left: 57%; animation-delay: 4.8s; opacity: 0.35; --y: 26vh"></i>
+      <i style="left: 63%; animation-delay: 2.7s; opacity: 0.5; --y: 66vh"></i>
+      <i class="v" style="left: 69%; animation-delay: 0.5s; opacity: 0.4; --y: 38vh"></i>
+      <i class="r" style="left: 75%; animation-delay: 3.4s; opacity: 0.6; --y: 90vh"></i>
+      <i style="left: 81%; animation-delay: 1.9s; opacity: 0.35; --y: 21vh"></i>
+      <i style="left: 86%; animation-delay: 5.3s; opacity: 0.55; --y: 74vh"></i>
+      <i class="r" style="left: 91%; animation-delay: 2.4s; opacity: 0.35; --y: 48vh"></i>
+      <i style="left: 96%; animation-delay: 4.1s; opacity: 0.5; --y: 15vh"></i>
+    </div>
+    <div class="stack"><div class="wm">MIKRO<em>VIEW</em></div></div>
+  </div>
+</main>
+
+<!-- ============ first seen: the choice ============ -->
+<div class="backdrop scene sc-first">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Add a second step">
+    <div class="modal-header"><span class="title">Add a second step</span></div>
+    <div class="body">
+      <p>Your password was right. Signing in here needs a second step as well,
+        and this account doesn&rsquo;t have one yet &mdash; choose one, set it up,
+        and you&rsquo;re in.</p>
+      <a class="pickrow" href="#totp">
+        <span class="cname">Authenticator app</span>
+        <span class="cdesc">a code from an app on your phone &mdash; Google
+          Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
+          IP addresses included.</span>
+      </a>
+      <a class="pickrow" href="#passkey">
+        <span class="cname">Passkey</span>
+        <span class="cdesc">your fingerprint, face or device PIN &mdash; the
+          browser holds the key, nothing to install.</span>
+      </a>
+      <p class="noexit">no skipping this one &mdash; every account here needs a
+        second step before the door opens.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============ authenticator, mid-enrolment ============ -->
+<div class="backdrop scene sc-totp">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Authenticator app">
+    <div class="modal-header"><span class="title">Authenticator app</span></div>
+    <div class="body">
+      <p>Scan this with your authenticator app, or type the secret in by hand.</p>
+      <div class="enrol-row">
+        <div class="qr" role="img" aria-label="QR code for the authenticator secret">
+          <svg viewBox="0 0 29 29" data-qr></svg>
+        </div>
+        <div class="secretcol">
+          <span class="seclabel">Secret</span>
+          <p class="secret">GQ4T MNZV G5UW K2LN MFRG YZLB OR2W CZ3F</p>
+        </div>
+      </div>
+      <label>
+        Code from the app
+        <input type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+      </label>
+      <p class="muted">Confirming turns this on and signs out everywhere else this
+        account is currently signed in. You&rsquo;ll stay signed in here.</p>
+    </div>
+    <div class="actions">
+      <a class="cancel" href="#first">Back</a>
+      <a class="confirm" href="#codes">Confirm</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ passkey, mid-enrolment ============ -->
+<div class="backdrop scene sc-passkey">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Passkeys">
+    <div class="modal-header"><span class="title">Passkeys</span></div>
+    <div class="body">
+      <p>Give it a name &mdash; something that will remind you which device
+        it&rsquo;s on.</p>
+      <label>
+        Name
+        <input type="text" placeholder="this laptop">
+      </label>
+      <p class="muted">Your browser asks for the fingerprint, face or PIN itself,
+        as soon as you add it.</p>
+    </div>
+    <div class="actions">
+      <a class="cancel" href="#first">Back</a>
+      <a class="confirm" href="#codes">Add passkey</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ the recovery codes ============ -->
+<div class="backdrop scene sc-codes">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Recovery codes">
+    <div class="modal-header"><span class="title">Authenticator app</span></div>
+    <div class="body">
+      <p>Ten recovery codes &mdash; each works once, in place of a code from the
+        app, if you lose it. Save them somewhere safe now: this is the only time
+        they are shown.</p>
+      <div class="codes">
+        <span class="rc">p2xk-9qfw</span><span class="rc">j6nm-4rvt</span>
+        <span class="rc">w8cd-1lsz</span><span class="rc">m3hg-7ypb</span>
+        <span class="rc">q9vr-5kdn</span><span class="rc">t4bj-8wmf</span>
+        <span class="rc">x1sl-6czh</span><span class="rc">d7pn-3qgy</span>
+        <span class="rc">f5wt-2jrk</span><span class="rc">b8mz-9xvc</span>
+      </div>
+      <div class="copyrow"><button class="copy" type="button">Copy all</button></div>
+      <p class="muted">Your ten recovery codes cover your authenticator app and
+        your passkeys alike.</p>
+    </div>
+    <div class="actions">
+      <a class="confirm" href="#first">I have saved these</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ passkeys unavailable here ============ -->
+<div class="backdrop scene sc-no-passkey">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Add a second step">
+    <div class="modal-header"><span class="title">Add a second step</span></div>
+    <div class="body">
+      <p>Your password was right. Signing in here needs a second step as well,
+        and this account doesn&rsquo;t have one yet &mdash; choose one, set it up,
+        and you&rsquo;re in.</p>
+      <a class="pickrow" href="#totp">
+        <span class="cname">Authenticator app</span>
+        <span class="cdesc">a code from an app on your phone &mdash; Google
+          Authenticator, 1Password, Bitwarden, or similar. Works anywhere,
+          IP addresses included.</span>
+      </a>
+      <span class="pickrow" aria-disabled="true">
+        <span class="cname">Passkey</span>
+        <span class="cdesc">passkeys need a web address, and you&rsquo;re viewing
+          MikroView at 192.168.88.10 &mdash; your authenticator app works
+          everywhere.</span>
+      </span>
+      <p class="noexit">no skipping this one &mdash; every account here needs a
+        second step before the door opens.</p>
+    </div>
+  </div>
+</div>
+
+<nav class="mock-strip" aria-label="Mockup scenes (review navigation, not product)">
+  scenes&nbsp;
+  <a href="#first">first</a> ·
+  <a href="#totp">authenticator</a> ·
+  <a href="#passkey">passkey</a> ·
+  <a href="#codes">codes</a> ·
+  <a href="#no-passkey">no passkey</a>
+</nav>
+
+<script>
+  const scenes = ['first', 'totp', 'passkey', 'codes', 'no-passkey'];
+  function apply() {
+    const h = location.hash.replace('#', '');
+    document.body.dataset.scene = scenes.includes(h) ? h : 'first';
+  }
+  addEventListener('hashchange', apply);
+  apply();
+
+  for (const svg of document.querySelectorAll('[data-qr]')) {
+    let seed = 42;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    let out = '';
+    const finder = (x, y) =>
+      `<rect x="${x}" y="${y}" width="7" height="7" fill="#000"/>` +
+      `<rect x="${x + 1}" y="${y + 1}" width="5" height="5" fill="#fff"/>` +
+      `<rect x="${x + 2}" y="${y + 2}" width="3" height="3" fill="#000"/>`;
+    out += finder(0, 0) + finder(22, 0) + finder(0, 22);
+    for (let y = 0; y < 29; y++)
+      for (let x = 0; x < 29; x++) {
+        const inF = (x < 9 && y < 9) || (x > 19 && y < 9) || (x < 9 && y > 19);
+        if (!inF && rnd() > 0.52) out += `<rect x="${x}" y="${y}" width="1" height="1" fill="#000"/>`;
+      }
+    svg.innerHTML = out;
+  }
+</script>
+</body>
+</html>

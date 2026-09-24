@@ -4,13 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UserSummary } from './types'
 
 vi.mock('./api', () => ({
+  clearUserPasskeys: vi.fn(),
+  clearUserTOTP: vi.fn(),
   createUser: vi.fn(),
   deleteUser: vi.fn(),
   fetchUsers: vi.fn(),
   resetUserPassword: vi.fn(),
 }))
 
-import { createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
+import { clearUserPasskeys, clearUserTOTP, createUser, deleteUser, fetchUsers, resetUserPassword } from './api'
 import { usersState } from './users.svelte'
 
 function user(overrides: Partial<UserSummary> = {}): UserSummary {
@@ -128,6 +130,57 @@ describe('UsersState.resetPassword', () => {
     const result = await usersState.resetPassword('id-1')
 
     expect(result).toBe('this account signs in through your identity provider')
+    expect(fetchUsers).not.toHaveBeenCalled()
+  })
+})
+
+// #1249's lost-phone path for the admin. Refreshed rather than patched
+// locally (see clearFactor's own doc comment): the row's hasTOTP pill has
+// to reflect what the server now says, not an assumption baked in here.
+describe('UsersState.clearFactor', () => {
+  it('clears the factor and refreshes the list', async () => {
+    vi.mocked(clearUserTOTP).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockResolvedValue([user({ hasTOTP: false })])
+
+    const result = await usersState.clearFactor('id-1')
+
+    expect(result).toBeNull()
+    expect(clearUserTOTP).toHaveBeenCalledWith('id-1')
+    expect(fetchUsers).toHaveBeenCalled()
+    expect(usersState.list[0].hasTOTP).toBe(false)
+  })
+
+  it('surfaces a refusal and does not refresh', async () => {
+    vi.mocked(clearUserTOTP).mockResolvedValue('cannot clear your own factor here')
+
+    const result = await usersState.clearFactor('id-1')
+
+    expect(result).toBe('cannot clear your own factor here')
+    expect(fetchUsers).not.toHaveBeenCalled()
+  })
+})
+
+// #1250's own lost-device path for the admin, mirroring clearFactor
+// above but through the separate passkeys route.
+describe('UsersState.clearPasskeys', () => {
+  it('clears the passkeys and refreshes the list', async () => {
+    vi.mocked(clearUserPasskeys).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockResolvedValue([user({ passkeyCount: 0 })])
+
+    const result = await usersState.clearPasskeys('id-1')
+
+    expect(result).toBeNull()
+    expect(clearUserPasskeys).toHaveBeenCalledWith('id-1')
+    expect(fetchUsers).toHaveBeenCalled()
+    expect(usersState.list[0].passkeyCount).toBe(0)
+  })
+
+  it('surfaces a refusal and does not refresh', async () => {
+    vi.mocked(clearUserPasskeys).mockResolvedValue('cannot clear your own passkeys here')
+
+    const result = await usersState.clearPasskeys('id-1')
+
+    expect(result).toBe('cannot clear your own passkeys here')
     expect(fetchUsers).not.toHaveBeenCalled()
   })
 })

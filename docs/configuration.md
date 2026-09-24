@@ -1237,6 +1237,61 @@ engine:
   decommissionCleanWindow: 6h
 ```
 
+#### CFG-0100
+
+`publicUrl` does not parse as an absolute URL -- a scheme and a host are
+both required. Treated as though it were never set: passkeys are
+unavailable, the same as if the key were absent. See [Public
+URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"
+```
+
+#### CFG-0101
+
+`publicUrl`'s host is an IP address. WebAuthn refuses outright to bind a
+passkey to one -- this is a browser rule, not a MikroView choice.
+Passkeys are unavailable; everything else about the deployment is
+unaffected. See [Public URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # a hostname, not an IP address
+```
+
+#### CFG-0102
+
+`publicUrl`'s scheme is `http` and the host is not `localhost`. Browsers
+only offer passkeys over https. Passkeys are unavailable; everything
+else is unaffected. See [Public
+URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # https, not http
+```
+
+#### CFG-0103
+
+`publicUrl` carries a path, query or fragment. Only the origin (scheme,
+host, port) matters to WebAuthn, so MikroView strips the rest and keeps
+going -- unlike CFG-0100 through CFG-0102, this one does not cost you
+passkeys.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # scheme, host and port only
+```
+
+#### CFG-0104
+
+`oidc.publicBaseUrl` is set but `publicUrl` is not. The two usually name
+the same address, but MikroView never copies one into the other -- see
+[Public URL](#public-url-publicurl-optional-for-passkeys) for why --
+so this is only a nudge to set it yourself if that is what you meant.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ
+```
+
 ## Logging
 
 MikroView's own server output (not event data -- see `store.retention`
@@ -3214,18 +3269,24 @@ auth:
   tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
-- **`storePath`** — where accounts are persisted, as a small JSON file (usernames + Argon2id password hashes,
-  never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
+- **`storePath`** — where accounts are persisted, as a small JSON file (usernames, Argon2id password hashes and
+  hashed recovery codes, never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
   the Dockerfile creates and owns -- no configuration needed for the
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
   the decision (and any accounts) to survive container recreation, not
   just process restarts -- see `deploy/docker-compose.yml`.
 
-  **Persists with or without `history.keyFile` (#853 rule 6).** Accounts
-  hold only usernames and Argon2id hashes, never a plaintext password, so
-  this file keeps persisting in plain JSON with no key configured, the
-  same as every MikroView release before #853 -- the choice screen above
-  does not reappear on restart. Most other file-backed stores are
+  **Persists with or without `history.keyFile` (#853 rule 6).** Almost
+  everything an account holds is a one-way hash, never a plaintext
+  password, so this file keeps persisting in plain JSON with no key
+  configured, the same as every MikroView release before #853 -- the
+  choice screen above does not reappear on restart. The one field this
+  doesn't cover is the
+  [authenticator-app secret](authenticator-app.md), which has to stay
+  reversible to verify a code and so sits in this same file in the
+  clear whenever no key is mounted -- see
+  [SECURITY.md](../SECURITY.md#data-handling) for why. Most other
+  file-backed stores are
   memory-only without a key; see
   [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853).
   With a key mounted, this file is encrypted the same way the event
@@ -3468,6 +3529,17 @@ command-line step (see below) — so nobody who gets
 hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
 
+A row also carries an **authenticator app** tag once that person has
+turned one on, and a **passkeys** tag counting how many they have
+registered. Beside each sits a **clear authenticator app** or **clear
+passkeys** button, for when the phone or the key is lost and they still
+have their password -- never on your own row, since that would let a
+signed-in admin remove their own second step with nothing to stop them.
+Clearing one kind leaves the other standing. See
+[docs/authenticator-app.md](authenticator-app.md) for setting one up and
+every way to recover from a lost phone, including the console command
+for an admin locked out of their own.
+
 ### Connecting your account to SSO
 
 If your deployment has SSO set up, you can switch your own account over
@@ -3475,19 +3547,20 @@ to it: open the account menu at the bottom of the rail (click your
 username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
-**Unless you are the admin, this deletes your MikroView password, and
-can't be undone from MikroView.** After connecting:
+**Unless you are the admin, this deletes your MikroView password and
+second factor, and can't be undone from MikroView.** After connecting:
 
 - You sign in through your identity provider only.
 - If you lose access to that provider, MikroView can't recover the
   account for you.
 
-**The admin is the exception: it keeps its password.** MikroView holds
-exactly one admin, and a provider outage with no password anywhere locks
-everybody out rather than one person — so for that account SSO is an
-extra way in rather than a replacement, and the dialog says so instead
-of warning about a deletion that does not happen. See [SSO is additive:
-keep a local admin](#sso-is-additive-keep-a-local-admin).
+**The admin is the exception: it keeps its password and its second
+factor.** MikroView holds exactly one admin, and a provider outage with
+no local way in locks everybody out rather than one person — so for
+that account SSO is an extra way in rather than a replacement, and the
+dialog says so instead of warning about a deletion that does not
+happen. See [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin).
 
 - You stay signed in on the browser you did it from. Anywhere else
   you're signed in gets signed out.
@@ -3828,12 +3901,23 @@ oidc:
 
 ### SSO is additive: keep a local admin
 
-**Your admin account keeps its MikroView password, whether or not you
-connect it to SSO.** That password is the way back in on the day your
-identity provider is down, misconfigured after an upgrade, or has lost
-the admin's directory entry. MikroView never signs in to your provider
-on its own behalf, so if the provider cannot answer, SSO cannot let
-anybody in.
+**Your admin account keeps its MikroView password and its second
+factor, whether or not you connect it to SSO.** That password-and-factor
+pair is the way back in on the day your identity provider is down,
+misconfigured after an upgrade, or has lost the admin's directory entry.
+MikroView never signs in to your provider on its own behalf, so if the
+provider cannot answer, SSO cannot let anybody in.
+
+**A second factor is required on every local account, not just the
+admin's.** Once you've set a local password, MikroView won't let a
+signed-in session go anywhere except enrolling a second factor (an
+authenticator app or a passkey) until one is active — see
+[docs/authenticator-app.md](authenticator-app.md). This applies whether the
+account is brand new or has existed for a while: an account that somehow
+reaches sign-in without a factor is sent straight to enrolment and can't
+reach anything else until it has one. The one account this never applies
+to is one that signs in through SSO only — your identity provider
+already handles that step.
 
 What this means in practice:
 
@@ -3849,14 +3933,15 @@ What this means in practice:
   account has been created and that the OIDC settings go in the config
   file; add them, restart, and connect the account from the account
   menu whenever you like.
-- **Connecting the admin to SSO keeps its password.** Afterwards you
-  can sign in either way: through your provider normally, with the
-  password when the provider is unreachable.
-- **Everybody else loses their password when they connect.** A user or
-  viewer who connects their account signs in through your provider from
-  then on, and MikroView cannot recover that account for them. That is
-  unchanged, and it costs the deployment nothing — the admin still has
-  a password.
+- **Connecting the admin to SSO keeps its password and its second
+  factor.** Afterwards you can sign in either way: through your provider
+  normally, or the break-glass path — username, password, and second
+  factor — when the provider is unreachable.
+- **Everybody else loses both their password and their second factor
+  when they connect.** A user or viewer who connects their account
+  signs in through your provider from then on, and MikroView cannot
+  recover that account for them. That is unchanged, and it costs the
+  deployment nothing — the admin still has a password and a factor.
 - **A MikroView username can't be an email address.** Identity
   providers send an email as the username, so keeping local names clear
   of them means the two can never be the same name and MikroView never
@@ -4234,6 +4319,37 @@ verification for that specific upstream (reasonable here, since you
 configured that upstream address yourself) or trusting MikroView's
 local CA explicitly (more correct, and what `/ca.crt` is for).
 
+## Public URL (`publicUrl`, optional, for passkeys)
+
+The address people actually reach MikroView on, e.g.
+`https://mikroview.home.lan:8443` (issue #1250, passkeys as a second
+factor). WebAuthn binds a passkey to the domain the browser saw when it
+was created, and refuses outright to create one for a bare IP address --
+this is the one place MikroView learns what that domain is, since it
+never infers it from a request's `Host` header (the same
+`redirect_uri`-confusion reasoning `oidc.publicBaseUrl` above is guarded
+against).
+
+```yaml
+publicUrl: "https://mikroview.home.lan:8443"
+```
+
+Left unset -- the default -- MikroView starts and runs exactly as it
+always has; passkeys are simply unavailable. Every problem here is a
+warning, never a startup refusal: a security monitor that will not boot
+has cost you all visibility, which is worse than one login method
+staying off. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
+above for exactly what each one catches and what happens as a result.
+
+**Not `oidc.publicBaseUrl`, and no fallback between them.** The two
+usually hold the same address, but changing one for its own reason --
+rotating an OIDC redirect, moving where passkeys are registered -- must
+never silently move the other, so MikroView never reuses one to fill in
+the other. If `oidc.publicBaseUrl` is set and this isn't, CFG-0104 says
+so; it does not set it for you.
+
+`MIKROVIEW_PUBLIC_URL` overrides it from the environment.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -4312,6 +4428,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
 | `MIKROVIEW_TLS_HOSTS` | `tls.hosts` (comma-separated) |
 | `MIKROVIEW_TLS_STORE_PATH` | `tls.storePath` |
+| `MIKROVIEW_PUBLIC_URL` | `publicUrl` (see [Public URL](#public-url-publicurl-optional-for-passkeys)) -- not `MV_PUBLIC_URL`, the name issue #1250 first proposed; every env var in this codebase is `MIKROVIEW_*` |
 | `MIKROVIEW_OIDC_ISSUER_URL` | `oidc.issuerUrl` (see [Single sign-on](#single-sign-on-oidcsso)) |
 | `MIKROVIEW_OIDC_CLIENT_ID` | `oidc.clientId` |
 | `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
