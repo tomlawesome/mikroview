@@ -46,7 +46,7 @@ func passkeyTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: passkeyBilboUsername, Password: passkeyBilboPassword, Role: "user"}).Body.Close()
 	return s, ts, admin

@@ -41,7 +41,7 @@ func totpTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: totpBilboUsername, Password: totpBilboPassword, Role: "user"}).Body.Close()
 	return s, ts, admin
@@ -131,15 +131,17 @@ var (
 	totpFixtureFactors   = map[string]map[string]*totpFixtureFactor{}
 )
 
-// totpFixtureFactor's recoveryCodes -- confirm's own one-time codes,
-// popped one per completed re-login -- are the primary way
-// totpFixtureCode finishes a pending login, not a live TOTP code: two
-// re-logins for the same account inside one 30-second wall-clock window
-// (routine for an in-process test) would otherwise need two *different*
-// valid TOTP codes from the same 30-second step, which VerifyTOTP's
-// window can never produce -- only the recovery path sidesteps the clock
-// altogether. secret/lastCounter stay as a fallback for the rare test
-// that burns through all ten.
+// totpFixtureFactor holds both ways totpFixtureCode can finish a
+// pending login. A live TOTP code is preferred (#1338): the server
+// checks it with one HMAC, where a recovery code costs it an Argon2id
+// verify per unused code (BurnRecoveryCode checks every one, on
+// purpose) -- ten production-cost hashes per fixture re-login. But
+// VerifyTOTP's replay guard accepts each counter once and its window
+// reaches only totpFixtureWindow steps past "now", so a run of
+// re-logins for one account inside one 30-second step (routine for an
+// in-process test) soon runs out of fresh codes; recoveryCodes --
+// confirm's own one-time codes, popped one per use -- carry on from
+// there, sidestepping the clock altogether.
 type totpFixtureFactor struct {
 	secret        []byte
 	recoveryCodes []string
@@ -191,22 +193,33 @@ func totpFixtureCode(base, username string) (string, bool) {
 	if f == nil {
 		return "", false
 	}
+	now := totpCounterNow(time.Now())
+	counter := now
+	if counter <= f.lastCounter {
+		counter = f.lastCounter + 1
+	}
+	if counter <= now+totpFixtureWindow {
+		f.lastCounter = counter
+		return auth.GenerateTOTPCode(f.secret, counter), true
+	}
 	if len(f.recoveryCodes) > 0 {
 		code := f.recoveryCodes[0]
 		f.recoveryCodes = f.recoveryCodes[1:]
 		return code, true
 	}
-	// Recovery codes exhausted -- ten fixture re-logins for one account
-	// in a single test would be unusual. Fall back to a live TOTP code,
-	// which only works if "now" hasn't already been out-advanced by a
-	// previous fallback use of this same branch.
-	counter := totpCounterNow(time.Now())
-	if counter <= f.lastCounter {
-		counter = f.lastCounter + 1
-	}
+	// Both exhausted -- more than a dozen re-logins for one account
+	// inside one step would be unusual. Hand back the next TOTP code
+	// anyway so the failure is the server's own "invalid code", which
+	// says what happened, rather than a missing-fixture message.
 	f.lastCounter = counter
 	return auth.GenerateTOTPCode(f.secret, counter), true
 }
+
+// totpFixtureWindow mirrors internal/auth's unexported totpWindow: how
+// many steps past the current one VerifyTOTP still accepts. If auth
+// narrows it, the fixture's next-counter code is refused server-side and
+// the test fails loudly, which is the right way for this to go stale.
+const totpFixtureWindow = 1
 
 // startTOTPLogin posts the password step for an account that holds an
 // active factor and asserts the shape #1249 requires -- no session,

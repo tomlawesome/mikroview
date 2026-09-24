@@ -615,14 +615,15 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 
 	// #1253: all three are local accounts, so the forced-enrolment door
 	// refuses every route below but the four enrolment ones until each
-	// holds a confirmed factor. Enrolled on the first session above,
-	// while it's still the one and only session for that account --
-	// remembered (enrolAndRememberFactor) so the throwaway re-logins the
-	// logout row drives further down (loggedInClient) can complete
-	// #1249's second step themselves.
-	enrolAndRememberFactor(t, viewer, ts, "watcher")
-	enrolAndRememberFactor(t, user, ts, "operator")
-	enrolAndRememberFactor(t, admin, ts, "admin")
+	// holds a confirmed factor. Seeded through the store (seedFactor)
+	// rather than the routes -- the door itself is
+	// secondfactordoor_test.go's subject, and this matrix is about
+	// roles -- and remembered, so the throwaway re-logins the logout
+	// row drives further down (loggedInClient) can complete #1249's
+	// second step themselves.
+	seedFactor(t, s, ts, "watcher")
+	seedFactor(t, s, ts, "operator")
+	seedFactor(t, s, ts, "admin")
 
 	for _, r := range authzMatrix {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
@@ -922,7 +923,7 @@ func TestResetCodeSessionReachesNothingButTheChangePasswordRoute(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: "bilbo", Password: resetOldPassword, Role: "user"}).Body.Close()
 	var id string
