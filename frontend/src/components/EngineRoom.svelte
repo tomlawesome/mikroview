@@ -693,6 +693,15 @@
   // open. Cleared on close: this is the one place it exists in clear,
   // and it has no second use.
   let issuedReset = $state<PasswordResetCode | null>(null)
+  // #1249's lost-phone path: the admin's own clear button, armed the
+  // same way reset/remove/revoke are. No password is asked here -- the
+  // admin is standing in for one the account owner no longer has -- so
+  // the arm-then-confirm click is the only guard against a stray one.
+  let armedClearFactor = $state<string | null>(null)
+  let clearingFactor = $state<string | null>(null)
+  // #1250's mirror of the pair above, for the passkeys clear button.
+  let armedClearPasskeys = $state<string | null>(null)
+  let clearingPasskeys = $state<string | null>(null)
 
   // Your own row leads the list, then everyone else's, matching the
   // drawing's "your account, then everyone else's" -- the server has no
@@ -767,6 +776,44 @@
     issuedReset = result
   }
 
+  function onClearFactorClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedClearFactor === id) {
+      armedClearFactor = null
+      clearPersonFactor(id)
+      return
+    }
+    disarmAll()
+    armedClearFactor = id
+  }
+
+  async function clearPersonFactor(id: string) {
+    personError = null
+    clearingFactor = id
+    const err = await usersState.clearFactor(id)
+    clearingFactor = null
+    if (err) personError = err
+  }
+
+  function onClearPasskeysClick(e: MouseEvent, id: string) {
+    e.stopPropagation()
+    if (armedClearPasskeys === id) {
+      armedClearPasskeys = null
+      clearPersonPasskeys(id)
+      return
+    }
+    disarmAll()
+    armedClearPasskeys = id
+  }
+
+  async function clearPersonPasskeys(id: string) {
+    personError = null
+    clearingPasskeys = id
+    const err = await usersState.clearPasskeys(id)
+    clearingPasskeys = null
+    if (err) personError = err
+  }
+
   // Round 28's arm-then-confirm gesture (Docket.svelte's clear-all
   // bubble is the other example): a click anywhere that isn't the armed
   // button itself disarms it, so an armed revoke/remove can't be
@@ -775,6 +822,8 @@
     armedRevoke = null
     armedRemove = null
     armedReset = null
+    armedClearFactor = null
+    armedClearPasskeys = null
   }
 </script>
 
@@ -1544,6 +1593,15 @@
               {#if user.role === 'user'}<span class="pr">can change things</span>{/if}
               {#if user.role === 'viewer'}<span class="pr look">can only look</span>{/if}
               {#if user.sso}<span class="pr">sso</span>{/if}
+              <!-- #1249: shown only when true, same convention as the sso
+                   pill just above -- an SSO account never carries this
+                   (it is never offered a factor), so there is no case
+                   where the two pills disagree about the same row. -->
+              {#if user.hasTOTP}<span class="pr">authenticator app</span>{/if}
+              <!-- #1250: same convention as the two pills above -- shown
+                   only when nonzero, and never for an SSO account (the
+                   server never lets one register a passkey either). -->
+              {#if user.passkeyCount}<span class="pr">passkeys · {user.passkeyCount}</span>{/if}
               <span class="pf">
                 {user.username === authState.username ? 'this is you · ' : ''}{user.lastLogin
                   ? `signed in ${formatRelative(user.lastLogin, appState.now)}`
@@ -1572,6 +1630,52 @@
                       confirm — their password stops working now
                     {:else}
                       reset password
+                    {/if}
+                  </button>
+                {/if}
+                <!-- #1249: the admin's own end of a lost-phone report --
+                     only offered when there is a factor to clear, and
+                     never on this account's own row (see the
+                     role === 'admin' branch above, which this account's
+                     row always takes). No password prompt: the admin is
+                     standing in for a password the account owner no
+                     longer has access to prove, the same reasoning reset
+                     password above already applies. -->
+                {#if user.hasTOTP}
+                  <button
+                    type="button"
+                    class="olink quiet"
+                    class:armed={armedClearFactor === user.id}
+                    disabled={clearingFactor === user.id}
+                    onclick={(e) => onClearFactorClick(e, user.id)}
+                  >
+                    {#if clearingFactor === user.id}
+                      clearing…
+                    {:else if armedClearFactor === user.id}
+                      confirm — turns their authenticator app off
+                    {:else}
+                      clear authenticator app
+                    {/if}
+                  </button>
+                {/if}
+                <!-- #1250's own lost-device path, mirroring the
+                     authenticator app clear button just above --
+                     offered only when there is something to clear, never
+                     on this account's own row. -->
+                {#if user.passkeyCount}
+                  <button
+                    type="button"
+                    class="olink quiet"
+                    class:armed={armedClearPasskeys === user.id}
+                    disabled={clearingPasskeys === user.id}
+                    onclick={(e) => onClearPasskeysClick(e, user.id)}
+                  >
+                    {#if clearingPasskeys === user.id}
+                      clearing…
+                    {:else if armedClearPasskeys === user.id}
+                      confirm — removes their passkeys
+                    {:else}
+                      clear passkeys
                     {/if}
                   </button>
                 {/if}

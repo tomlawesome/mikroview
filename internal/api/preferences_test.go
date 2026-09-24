@@ -22,7 +22,7 @@ func TestPreferencesGetWithNoRecordReturnsEmptyPrefs(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	resp, err := client.Get(ts.URL + "/api/me/preferences")
 	if err != nil {
@@ -50,7 +50,7 @@ func TestPreferencesPutThenGetRoundTrips(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	put := putJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1,
@@ -89,7 +89,7 @@ func TestPreferencesPutReplacesTheWholeRecord(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	putJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"a": 1, "b": 2},
@@ -117,7 +117,7 @@ func TestPreferencesPutRefusesWrongVersion(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	resp := putJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 2, "prefs": map[string]any{},
@@ -132,7 +132,7 @@ func TestPreferencesPutRefusesNonObjectPrefs(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	for _, body := range []string{
 		`{"version":1,"prefs":"not an object"}`,
@@ -163,7 +163,7 @@ func TestPreferencesPutRefusesAnOversizedBody(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	huge := `{"version":1,"prefs":{"pad":"` + strings.Repeat("x", 70*1024) + `"}}`
 	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/me/preferences", bytes.NewReader([]byte(huge)))
@@ -188,11 +188,12 @@ func TestPreferencesAreIsolatedPerUser(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	if _, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	other := loggedInClient(t, ts.URL, "operator", "password456")
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/me/preferences below
 
 	putJSON(t, admin, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"who": "admin"},
@@ -234,13 +235,14 @@ func TestDeletingUserRemovesPreferences(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 
 	operator, err := s.Auth.CreateUser("operator", "password456", auth.RoleUser, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := loggedInClient(t, ts.URL, "operator", "password456")
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/me/preferences below
 	putJSON(t, other, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"who": "operator"},
 	}).Body.Close()

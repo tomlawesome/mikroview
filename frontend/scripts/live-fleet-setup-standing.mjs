@@ -30,7 +30,7 @@
 // to the address it was just enrolled at, since a push from anywhere
 // else is exactly what #1281 now refuses.
 
-import { session, check, done, enrolDevice, goTo, launchBrowser, pushFrom } from './live-browser.mjs'
+import { session, check, done, enrolDevice, goTo, launchBrowser, pushFrom, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 // PortOf(cfg.Listen.SyslogTLS) is what the instance's own wizard would
@@ -237,7 +237,7 @@ if (token) {
     await vp.fill('input[autocomplete="username"]', VIEWER_USER)
     await vp.fill('input[autocomplete="current-password"]', VIEWER_PASS)
     await vp.click('button[type="submit"]')
-    await vp.waitForSelector('#main-content', { timeout: 15000 })
+    await enrolFactorAndSignIn(vp)
     await goTo(vp, 'Fleet')
 
     const card = vp.locator('.fcard', { hasText: CURRENT_ID })

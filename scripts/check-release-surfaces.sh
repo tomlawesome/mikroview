@@ -166,6 +166,12 @@ screenshot_sources() {
       echo "frontend/src/components/Entities.svelte" ;;
     docs/screenshots/setup-wizard-send-logs.png)
       echo "frontend/src/components/SetupWizard.svelte frontend/src/lib/setupsteps.ts frontend/src/lib/wizard.svelte.ts" ;;
+    docs/screenshots/authenticator-menu-dark.png)
+      echo "frontend/src/components/AccountMenu.svelte" ;;
+    docs/screenshots/authenticator-enrol-dark.png|docs/screenshots/authenticator-recovery-codes-dark.png)
+      echo "frontend/src/components/AuthenticatorOverlay.svelte" ;;
+    docs/screenshots/authenticator-login-code-dark.png)
+      echo "frontend/src/components/AuthScreen.svelte frontend/src/components/AuthLogin.svelte" ;;
     *)
       return 1 ;;
   esac

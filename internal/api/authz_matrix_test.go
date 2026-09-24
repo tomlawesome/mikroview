@@ -3,9 +3,11 @@
 package api
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -129,6 +131,16 @@ var authzMatrix = []routeExpectation{
 		"the provider redirects the browser here; protected by state/nonce/PKCE, not by a session"},
 	{http.MethodPost, "/api/auth/register", accessPublic,
 		"first-run only -- auth.Store.Register refuses once any account exists"},
+	{http.MethodPost, "/api/auth/login/factor", accessPublic,
+		"#1249's second login step, reached with the short-lived pending-login cookie handleAuthLogin sets in " +
+			"place of a session when the account holds an active factor -- like /api/auth/login itself, this has to " +
+			"work before a session exists. Its own rate limiting (the same LoginLimiter buckets as the password " +
+			"step) is what stands in for a session here, same as state/nonce/PKCE do for the OIDC callback above"},
+	{http.MethodPost, "/api/auth/login/factor/begin", accessPublic,
+		"#1250's passkey half of the same second login step, reached with the identical pending-login cookie -- " +
+			"same reasoning as POST /api/auth/login/factor directly above: it has to work before a session exists, " +
+			"and its own LoginLimiter reservations (shared with the code path once the assertion is actually " +
+			"submitted to the route above) stand in for one"},
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
@@ -414,11 +426,49 @@ var authzMatrix = []routeExpectation{
 		"destructively wipes every expectation definition -- the most dangerous single endpoint in this feature, and the one row in this whole surface the owner's #653 ruling considered keeping admin-only for that reason. It was widened to user tier anyway, on the view that the confirm:true body this handler requires is the real safeguard against an accidental call, not the role gate -- a safeguard user and admin are equally bound by"},
 	{http.MethodPost, "/api/auth/oidc/link", accessViewer,
 		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a caller can only ever affect themselves, at any tier including viewer"},
+	{http.MethodPost, "/api/auth/totp/enrol", accessViewer,
+		"starts enrolling an authenticator app on the caller's OWN account (#1249) -- same reasoning as " +
+			"/api/auth/password and /api/auth/oidc/link above: the target is always the session's own account, so " +
+			"even the lowest tier must be able to reach for a second factor of its own. Refused separately, inside " +
+			"the handler, for an SSO-only caller (409) -- that is not this row's concern, since it still gets past " +
+			"the gate"},
+	{http.MethodPost, "/api/auth/totp/confirm", accessViewer,
+		"finishes the enrolment the row above started, same tier and same reasoning -- it still only ever acts on " +
+			"the caller's own account"},
+	{http.MethodDelete, "/api/auth/totp", accessViewer,
+		"turns the caller's OWN factor off, gated by their own password inside the handler -- same tier as the two " +
+			"rows above for the same reason; the password check is the real protection, not the role"},
+	{http.MethodGet, "/api/auth/passkeys", accessViewer,
+		"lists the caller's OWN passkeys (#1250) -- same reasoning as the TOTP rows above: the target is always " +
+			"the session's own account, so even the lowest tier must be able to see what can sign in as them"},
+	{http.MethodPost, "/api/auth/passkeys/register/begin", accessViewer,
+		"starts registering a passkey on the caller's OWN account -- same tier and reasoning as " +
+			"/api/auth/totp/enrol above. Refused separately, inside the handler, when the relying party isn't ready " +
+			"(503) -- that's not this row's concern, since it still gets past the gate"},
+	{http.MethodPost, "/api/auth/passkeys/register/finish", accessViewer,
+		"finishes the registration the row above started, same tier and same reasoning -- it still only ever acts " +
+			"on the caller's own account"},
+	{http.MethodPatch, "/api/auth/passkeys/{id}", accessViewer,
+		"renames one of the caller's OWN passkeys -- cosmetic, no password check (RenamePasskey's own doc " +
+			"comment), same tier as the rows above for the same reason"},
+	{http.MethodDelete, "/api/auth/passkeys/{id}", accessViewer,
+		"removes one of the caller's OWN passkeys, gated by their own password inside the handler -- same tier as " +
+			"DELETE /api/auth/totp above for the same reason: the password check is the real protection, not the role"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
 	{http.MethodGet, "/api/auth/users", accessAdmin,
 		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only. #653 added a viewer role beneath that non-admin space and left this row exactly where it was -- account creation and the account list are the owner-level items #653's tiers deliberately keep out of user's reach too"},
 	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
 		"removes an account and revokes its sessions and API tokens"},
+	{http.MethodDelete, "/api/auth/users/{id}/totp", accessAdmin,
+		"clears ANOTHER user's authenticator-app factor from the Users group (#1249) -- admin-only for the same " +
+			"reason account deletion and password reset are: this removes a credential guard on somebody else's " +
+			"account, so a user or viewer able to do it to a colleague could use it to make that account easier to " +
+			"take over. The caller's own account is refused inside the handler (409, which this matrix reads as " +
+			"allowed, the same convention the reset-password row below uses), not here"},
+	{http.MethodDelete, "/api/auth/users/{id}/passkeys", accessAdmin,
+		"clears ANOTHER user's passkeys from the Users group (#1250) -- same tier and same reasoning as " +
+			"DELETE /api/auth/users/{id}/totp directly above, including the caller's-own-account refusal living " +
+			"inside the handler (409, read as allowed here) rather than at this gate"},
 	{http.MethodPost, "/api/auth/users/{id}/reset-password", accessAdmin,
 		"mints a one-time code that stands in for another account's password for 24 hours (#1251), kills that " +
 			"account's old password and every session it holds. Admin-only for the same reason account creation and " +
@@ -563,6 +613,18 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 	user := loggedInClient(t, ts.URL, "operator", "password456")
 	admin := loggedInClient(t, ts.URL, "admin", "password123")
 
+	// #1253: all three are local accounts, so the forced-enrolment door
+	// refuses every route below but the four enrolment ones until each
+	// holds a confirmed factor. Seeded through the store (seedFactor)
+	// rather than the routes -- the door itself is
+	// secondfactordoor_test.go's subject, and this matrix is about
+	// roles -- and remembered, so the throwaway re-logins the logout
+	// row drives further down (loggedInClient) can complete #1249's
+	// second step themselves.
+	seedFactor(t, s, ts, "watcher")
+	seedFactor(t, s, ts, "operator")
+	seedFactor(t, s, ts, "admin")
+
 	for _, r := range authzMatrix {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
 			// Skip the first-run endpoint: an account now exists, so it
@@ -648,13 +710,40 @@ func doRouteRequest(t *testing.T, c *http.Client, base string, r routeExpectatio
 
 // loggedInClient returns a client holding a live session cookie for the
 // given credentials.
+//
+// #1249 (and #1253's forced-enrolment door, which is what makes every
+// account this package tests hold a factor sooner or later) means the
+// password step alone no longer guarantees that: an account with a
+// confirmed factor gets back {"secondFactor":[...]} and a pending-login
+// cookie instead of a session. When that happens here, the fixture's own
+// remembered secret (rememberTOTPFactor, set by whatever enrolled it --
+// enrolAndRememberFactor, or this test's own setup) completes the second
+// step, so every caller of this helper still gets what its name promises.
 func loggedInClient(t *testing.T, base, username, password string) *http.Client {
 	t.Helper()
 	c := &http.Client{Jar: mustCookieJar(t)}
 	resp := postJSON(t, c, base+"/api/auth/login", credentialsRequest{Username: username, Password: password})
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		t.Fatalf("login as %q failed with %d", username, resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if _, pending := out["secondFactor"]; pending {
+		code, ok := totpFixtureCode(base, username)
+		if !ok {
+			t.Fatalf("login as %q stopped at the pending-factor step, but no fixture-enrolled secret is on record for it", username)
+		}
+		factorResp := postJSON(t, c, base+"/api/auth/login/factor", loginFactorRequest{Code: code})
+		defer factorResp.Body.Close()
+		if factorResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(factorResp.Body)
+			t.Fatalf("completing the factor step for %q failed with %d: %s", username, factorResp.StatusCode, body)
+		}
 	}
 	return c
 }
@@ -798,14 +887,25 @@ func TestBearerMuxesServeOnlyTheirDeclaredRoutes(t *testing.T) {
 // half-authenticated session can touch has to be written down here as
 // well as done in the middleware.
 var resetCodeSessionOpenPaths = map[string]bool{
-	changePasswordPath:        true,
-	"/api/healthz":            true,
-	"/api/auth/session":       true,
-	"/api/auth/register":      true,
-	"/api/auth/login":         true,
-	"/api/auth/logout":        true,
-	"/api/auth/oidc/login":    true,
-	"/api/auth/oidc/callback": true,
+	changePasswordPath:   true,
+	"/api/healthz":       true,
+	"/api/auth/session":  true,
+	"/api/auth/register": true,
+	"/api/auth/login":    true,
+	"/api/auth/logout":   true,
+	// #1249's second login step is on exemptPaths for the same reason
+	// /api/auth/login is -- it completes a login, so it has to work
+	// before (and regardless of) any session, including one carrying
+	// this flag. A reset-code session holds no pending-login cookie
+	// anyway, so this handler's own check refuses it on the merits a
+	// moment later; the point here is only that requireAuth lets the
+	// request through to find that out.
+	"/api/auth/login/factor": true,
+	// #1250's passkey half of the same second login step, exempt for the
+	// identical reason -- see exemptPaths' own comment in auth.go.
+	"/api/auth/login/factor/begin": true,
+	"/api/auth/oidc/login":         true,
+	"/api/auth/oidc/callback":      true,
 }
 
 // TestResetCodeSessionReachesNothingButTheChangePasswordRoute walks the
@@ -823,7 +923,7 @@ func TestResetCodeSessionReachesNothingButTheChangePasswordRoute(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: "bilbo", Password: resetOldPassword, Role: "user"}).Body.Close()
 	var id string

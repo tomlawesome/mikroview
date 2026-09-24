@@ -40,7 +40,7 @@ func resetTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client, str
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
-	admin := registerAdmin(t, ts)
+	admin := registerAdmin(t, s, ts)
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: "bilbo", Password: resetOldPassword, Role: "user"}).Body.Close()
 
@@ -268,6 +268,23 @@ func TestSecondResetKillsTheFirstCodeOverHTTP(t *testing.T) {
 // cannot have, and comes out of it an ordinary session.
 func TestForcedChangeTakesOnlyTheNewPasswordAndOpensTheApp(t *testing.T) {
 	_, ts, admin, id := resetTestServer(t)
+	// #1253: a fresh account can reach nothing but the enrolment routes,
+	// so in real use bilbo would have enrolled a factor at first sign-in,
+	// long before an admin ever reset the password -- IssueResetCode
+	// doesn't touch it (only the password and every other session), so
+	// it carries over across the reset. Enrolled here, before the reset,
+	// to put bilbo in the state a real account reaching this flow would
+	// already be in; without it, the forced change below 403s at the
+	// second-factor door, which changePasswordPath's own MustChangePassword
+	// allowance does nothing about.
+	bilbo := loggedInClient(t, ts.URL, "bilbo", resetOldPassword)
+	// enrolAndRememberFactor, not a bare totpEnrolAndConfirm: the
+	// loggedInClient call two lines down signs bilbo in again with the
+	// reset code (Authenticate treats it as the password), which now
+	// also only reaches the pending-factor step -- the remembered secret
+	// is what lets that second loggedInClient call complete it.
+	enrolAndRememberFactor(t, bilbo, ts, "bilbo")
+
 	out := resetPassword(t, admin, ts, id)
 	client := loggedInClient(t, ts.URL, "bilbo", out.Code)
 

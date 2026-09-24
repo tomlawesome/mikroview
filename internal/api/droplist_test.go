@@ -40,7 +40,7 @@ func droplistTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) 
 	s.Droplist = ds
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	return s, ts, admin
 }
 
@@ -162,10 +162,11 @@ func TestDroplistAddUnknownFlagRefused(t *testing.T) {
 // kept here too since it is the one place a reviewer of this feature
 // alone would look for it.
 func TestDroplistWriteRoutesAreAdminOnly(t *testing.T) {
-	_, ts, admin := droplistTestServer(t)
+	s, ts, admin := droplistTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/droplist below
 
 	if resp, err := user.Get(ts.URL + "/api/droplist"); err != nil {
 		t.Fatal(err)

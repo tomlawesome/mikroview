@@ -62,6 +62,7 @@ import {
   goTo,
   unfoldStreamFilter,
   enrolDevice,
+  completeSecondFactor,
 } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
@@ -245,6 +246,7 @@ await other.goto(URL_BASE, { waitUntil: 'networkidle' })
 await other.fill('input[autocomplete="username"]', USER)
 await other.fill('input[autocomplete="current-password"]', PASS)
 await other.click('button[type="submit"]')
+await completeSecondFactor(other)
 await other.waitForSelector('#main-content', { timeout: 15000 })
 await dismissSetupWizard(other)
 await goTo(other, 'Stream')

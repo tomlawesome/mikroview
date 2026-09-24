@@ -470,7 +470,51 @@ func TestResetStateSurvivesAReopen(t *testing.T) {
 			restored = entry
 		}
 	}
-	for _, field := range []string{"resetCodeHash", "resetCodeExpiresAt", "mustChangePassword"} {
+	// #1249: the authenticator-app fields and recovery codes go through
+	// the same envelope (accounts.json, this store's one persisted
+	// document), so they belong in this round trip rather than a
+	// separate one that could drift from it.
+	totpSecret := "JBSWY3DPEHPK3PXP"
+	setTOTPForTest(t, s1, u.ID, totpSecret, now, 42)
+	recoveryCodes, err := s1.GenerateRecoveryCodes(u.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recoveryCodes) != recoveryCodeCount {
+		t.Fatalf("got %d recovery codes, want %d", len(recoveryCodes), recoveryCodeCount)
+	}
+	// Burn one before the reopen too, so the round trip also covers
+	// UsedAt -- a burned code must not come back to life on restore.
+	burnedCode := recoveryCodes[0]
+	if ok, err := s1.BurnRecoveryCode(u.ID, burnedCode, now); err != nil || !ok {
+		t.Fatalf("BurnRecoveryCode before reopen: ok=%v err=%v", ok, err)
+	}
+
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range recoveryCodes {
+		if strings.Contains(string(raw), NormaliseRecoveryCode(c)) {
+			t.Fatalf("recovery code %q was written to the accounts file in clear", c)
+		}
+	}
+	onDisk = struct {
+		Users []map[string]any `json:"users"`
+	}{}
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatal(err)
+	}
+	restored = nil
+	for _, entry := range onDisk.Users {
+		if entry["username"] == "bilbo" {
+			restored = entry
+		}
+	}
+	for _, field := range []string{
+		"resetCodeHash", "resetCodeExpiresAt", "mustChangePassword",
+		"totpSecret", "totpConfirmedAt", "totpLastCounter", "recoveryCodes",
+	} {
 		if _, ok := restored[field]; !ok {
 			t.Errorf("%q is missing from the persisted account, so it would not survive a backup/restore", field)
 		}
@@ -486,5 +530,37 @@ func TestResetStateSurvivesAReopen(t *testing.T) {
 	}
 	if !got.MustChangePassword {
 		t.Error("expected the forced-change flag to survive the reopen")
+	}
+
+	reopened, ok := s2.Get(u.ID)
+	if !ok {
+		t.Fatal("expected bilbo to still exist after the reopen")
+	}
+	if reopened.TOTPSecret != totpSecret {
+		t.Errorf("TOTPSecret = %q after reopen, want %q", reopened.TOTPSecret, totpSecret)
+	}
+	if !reopened.TOTPConfirmedAt.Equal(now) {
+		t.Errorf("TOTPConfirmedAt = %v after reopen, want %v", reopened.TOTPConfirmedAt, now)
+	}
+	if reopened.TOTPLastCounter != 42 {
+		t.Errorf("TOTPLastCounter = %d after reopen, want 42", reopened.TOTPLastCounter)
+	}
+	if !reopened.HasActiveTOTP() {
+		t.Error("expected the confirmed TOTP factor to still be active after reopen")
+	}
+	if len(reopened.RecoveryCodes) != recoveryCodeCount {
+		t.Fatalf("got %d recovery codes after reopen, want %d", len(reopened.RecoveryCodes), recoveryCodeCount)
+	}
+	if reopened.RecoveryCodes[0].UsedAt.IsZero() {
+		t.Error("the burned code's UsedAt did not survive the reopen")
+	}
+
+	// A burned code must stay burned, and an unused one must still work,
+	// on the reopened store just as they did before.
+	if ok, err := s2.BurnRecoveryCode(u.ID, burnedCode, now); err != nil || ok {
+		t.Errorf("the burned code worked again after reopen: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s2.BurnRecoveryCode(u.ID, recoveryCodes[1], now); err != nil || !ok {
+		t.Errorf("an unused code stopped working after reopen: ok=%v err=%v", ok, err)
 	}
 }

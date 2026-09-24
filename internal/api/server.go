@@ -356,6 +356,20 @@ type Server struct {
 	LoginLimiter *auth.LoginLimiter
 	SecureCookie bool
 
+	// RelyingParty is #1250's WebAuthn configuration (webauthn.go, wave 1
+	// slice C), computed once at boot from the validated `publicUrl`
+	// setting -- nil on a Server built without one (every pre-#1250 test,
+	// and any deployment path that never wires one up), which every
+	// passkey handler (passkey.go) treats the same as
+	// PasskeyStatusUnset: the same nil-means-disabled convention Vault/
+	// NetClass/Reputation already use elsewhere on this struct. Never nil
+	// once wired up in main.go, even when passkeys are unavailable --
+	// NewRelyingParty always returns a non-nil *RelyingParty, carrying
+	// *why* they're unavailable in its Status field, which is what lets
+	// GET /api/auth/session and the login response explain the reason
+	// instead of just omitting the feature.
+	RelyingParty *RelyingParty
+
 	// TrustedProxies/ClientIPHeader control how the login rate limiter
 	// attributes a request to a source address when mikroview sits behind
 	// a reverse proxy -- see clientip.go, and config.Listen's fields of
@@ -827,6 +841,36 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
 		{http.MethodPost, "/api/auth/users/{id}/reset-password", s.handleAuthResetUserPassword},
+
+		// Authenticator-app second factor (#1249): enrol/confirm/remove
+		// are the account owner's own three steps, login/factor is the
+		// second half of a login handleAuthLogin stopped short of a
+		// session for, and the users/{id}/totp route is the Users
+		// group's admin-clear path for a lost phone. See auth.go's own
+		// "#1249" section, right after handleAuthResetUserPassword, for
+		// all five handlers.
+		{http.MethodPost, "/api/auth/totp/enrol", s.handleTOTPEnrol},
+		{http.MethodPost, "/api/auth/totp/confirm", s.handleTOTPConfirm},
+		{http.MethodDelete, "/api/auth/totp", s.handleTOTPDelete},
+		{http.MethodPost, "/api/auth/login/factor", s.handleAuthLoginFactor},
+		{http.MethodDelete, "/api/auth/users/{id}/totp", s.handleTOTPAdminClear},
+
+		// Passkeys (#1250, wave 2 slice D) -- see passkey.go's own header
+		// comment for the shape of each handler. The list/register/
+		// rename/delete four are the account owner's own passkey
+		// management, login/factor/begin is the passkey half of #1249's
+		// second login step (its finish half shares POST
+		// /api/auth/login/factor with the TOTP code path, branching on
+		// the request body), and the users/{id}/passkeys route is the
+		// Users group's admin-clear path, mirroring users/{id}/totp
+		// above it.
+		{http.MethodGet, "/api/auth/passkeys", s.handleAuthPasskeysList},
+		{http.MethodPost, "/api/auth/passkeys/register/begin", s.handleAuthPasskeysRegisterBegin},
+		{http.MethodPost, "/api/auth/passkeys/register/finish", s.handleAuthPasskeysRegisterFinish},
+		{http.MethodPatch, "/api/auth/passkeys/{id}", s.handleAuthPasskeyRename},
+		{http.MethodDelete, "/api/auth/passkeys/{id}", s.handleAuthPasskeyDelete},
+		{http.MethodPost, "/api/auth/login/factor/begin", s.handleAuthLoginFactorBegin},
+		{http.MethodDelete, "/api/auth/users/{id}/passkeys", s.handleAuthPasskeysAdminClear},
 
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/

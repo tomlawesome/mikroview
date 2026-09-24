@@ -450,6 +450,10 @@ func TestOIDCLinkStartRefusesAnAlreadySSOOnlyAccount(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	// alice is a local admin, so the forced-enrolment door (#1253) blocks
+	// every route but the enrolment ones -- including POST
+	// /api/auth/users below -- until she holds a confirmed factor.
+	totpEnrolAndConfirm(t, client, ts)
 	// An ordinary user, because only a non-admin is left with no local
 	// password after a link (#1252): the admin keeps its own.
 	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
@@ -483,10 +487,12 @@ func TestOIDCLinkTargetsTheSessionAccountNotTheRequestBody(t *testing.T) {
 
 	admin := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users below
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
 	bobClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, bobClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "bob") // #1253: needed before POST /api/auth/oidc/link below
 
 	alice, _ := s.Auth.ByUsername("alice")
 	resp := postJSON(t, bobClient, ts.URL+"/api/auth/oidc/link", map[string]any{
@@ -579,6 +585,7 @@ func TestOIDCLinkCompletesAndRotatesTheSession(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/oidc/link inside doOIDCLinkFlow below
 	alice, _ := s.Auth.ByUsername("alice")
 
 	var before string
@@ -629,6 +636,7 @@ func TestOIDCLinkRefusesWhenTheSessionChangedMidFlow(t *testing.T) {
 
 	client := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users and /api/auth/oidc/link below
 	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
 	// Start the link as alice, then become bob on the same browser
@@ -675,6 +683,7 @@ func TestOIDCLinkRefusesAnIdentityAlreadyLinkedElsewhere(t *testing.T) {
 
 	admin := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	seedFactor(t, s, ts, "alice") // #1253: needed before POST /api/auth/users and /api/auth/oidc/link below
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
 
 	// alice links the identity first.
@@ -687,6 +696,7 @@ func TestOIDCLinkRefusesAnIdentityAlreadyLinkedElsewhere(t *testing.T) {
 	// bob tries to link the same provider identity.
 	bob := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, bob, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "bob") // #1253: needed before POST /api/auth/oidc/link inside doOIDCLinkFlow below
 	resp := doOIDCLinkFlow(t, ts, bob)
 	defer resp.Body.Close()
 

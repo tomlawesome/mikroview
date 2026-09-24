@@ -18,7 +18,7 @@
 // Rows go absent, never disabled, so every check below also proves that
 // grammar: no menu row renders greyed out for a tier that cannot use it.
 
-import { session, check, done, goTo, openAccountMenu, launchBrowser } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -118,7 +118,7 @@ async function signIn(username, password) {
   await p.fill('input[autocomplete="username"]', username)
   await p.fill('input[autocomplete="current-password"]', password)
   await p.click('button[type="submit"]')
-  await p.waitForSelector('#main-content', { timeout: 15000 })
+  await enrolFactorAndSignIn(p)
   return { browser, page: p }
 }
 

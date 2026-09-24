@@ -103,7 +103,7 @@ func TestBearerTokenCanQueryMatches(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
 	resp := bearerGet(t, ts.URL+"/api/matches?mac=aa:bb:cc:dd:ee:ff", raw)
@@ -306,7 +306,7 @@ func TestAllEntriesModeIsNotReachableWithoutAuth(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	setUpAdmin(t, ts) // an account now exists, so auth is active
+	setUpAdmin(t, s, ts) // an account now exists, so auth is active
 
 	resp, err := http.Get(ts.URL + "/api/matches?entries=all")
 	if err != nil {
@@ -328,7 +328,7 @@ func TestBearerTokenCanQueryAllEntries(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "matches-tab")
 
 	resp := bearerGet(t, ts.URL+"/api/matches?entries=all", raw)
@@ -343,7 +343,7 @@ func TestInvalidBearerTokenCannotQueryAllEntries(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	setUpAdmin(t, ts)
+	setUpAdmin(t, s, ts)
 
 	resp := bearerGet(t, ts.URL+"/api/matches?entries=all", "not-a-real-token")
 	defer resp.Body.Close()
