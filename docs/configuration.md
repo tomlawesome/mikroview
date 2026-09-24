@@ -1569,10 +1569,18 @@ account on the server, read on sign-in and written on change. Signing
 out and signing in as someone else on the same browser shows that
 person's own settings, not the last one's, and a user's settings follow
 them to any browser they sign into. The record is cleared when the
-account itself is deleted. See `GET`/`PUT /api/me/preferences` in the
+account itself is deleted. See `GET`/`PATCH /api/me/preferences` in the
 [API reference](#api-reference); this package never interprets what is
 inside a record, so the frontend modules that own each key are the
 source of truth for its shape.
+
+`PATCH` merges rather than replaces: only the keys present in the
+request body are changed, so two browser tabs saving different keys
+around the same time can't clobber one another's. A key is left alone
+by leaving it out of the body; it is cleared by sending it with a JSON
+`null` value, which is stored as-is (not removed from the record) --
+the frontend module that owns that key then falls back to its own
+default the same way it does for a key that was never set.
 
 ```yaml
 prefs:
@@ -4798,7 +4806,7 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
 | `GET /api/me/preferences` | open to any signed-in user, not admin-gated: the caller's own preferences record (#1283), as `{"version": 1, "prefs": {...}}`. A user with no stored record yet gets `{"version": 1, "prefs": {}}`, not a 404 -- see [Preferences](#preferences-settings-live-on-the-server-per-user-1283) |
-| `PUT /api/me/preferences` | open to any signed-in user, not admin-gated: replaces the caller's whole preferences record with the given `{"version": 1, "prefs": {...}}`. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap |
+| `PATCH /api/me/preferences` | open to any signed-in user, not admin-gated: merges the given `{"version": 1, "prefs": {...}}` into the caller's stored record -- only the keys present in `prefs` are changed, everything else stored is left alone; a key is cleared by sending it as `null`, which is stored as-is rather than removed. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
