@@ -91,7 +91,7 @@ function clearSessionState() {
   // answer lived in a module-level store rather than a component.
   configUpgradeState.reset();
   // #1283: the shared per-user preferences record (presets, top-talker
-  // widgets, colorway, and the rest of the nine modules that used to
+  // widgets, and the rest of the modules that used to
   // read/write localStorage directly). logout() below has already
   // flushed anything pending while the session was still good; this
   // just drops the in-memory copy so the next sign-in on this tab

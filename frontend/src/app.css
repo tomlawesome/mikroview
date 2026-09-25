@@ -11,7 +11,7 @@
      [data-void] re-declares the whole block on that subtree, so a scene
      that is always the void -- the door (#645): "the fall rains across
      the whole screen", ratified against the dark ground -- keeps these
-     exact tokens under every colorway. */
+     exact tokens fixed. */
   --bg: #06080e;
   --bg-elevated: #0f1422;
   --bg-hover: rgba(160, 185, 230, 0.08);
@@ -44,14 +44,11 @@
 
   /* The guided tour's ring (owner, 2026-09-13, #1215): "a bright colour,
      cyan maybe" -- a spotlight, not chrome, so it is fixed like --now
-     and --alarm rather than riding the active colorway. That matters
-     here specifically: the "frequency" colorway's own --accent
-     (#22d3ee below) is already a cyan close to the obvious pick, so a
-     ring sharing that hue would all but vanish under it. Pushed to full
-     saturation and near-maximum lightness -- well past any colorway's
-     accent -- and JourneyTour.svelte's own ring styling (full opacity,
-     a 2px border, an outer glow) carries the rest of the distinction so
-     it reads as a spotlight even beside "frequency". */
+     and --alarm rather than riding --accent. Pushed to full saturation
+     and near-maximum lightness, well past --accent's own value, and
+     JourneyTour.svelte's own ring styling (full opacity, a 2px border,
+     an outer glow) carries the rest of the distinction so it reads as a
+     spotlight rather than blending into the chrome. */
   --tour-ring: #22f3ff;
 
   --accept: #3ecf7e;
@@ -134,8 +131,8 @@
 
      Their own tokens rather than reuses of --drop/--reject: those name
      one packet's fate and are read as a verdict badge everywhere else,
-     while "refused" here is the pair of them as one meaning. Fixed
-     across colorways for the same reason the action badges are.
+     while "refused" here is the pair of them as one meaning. Fixed,
+     independent of --accent, for the same reason the action badges are.
 
      Validated with the dataviz six-checks validator, categorical,
      --pairs all, against this app's real surfaces rather than the
@@ -182,13 +179,13 @@
   --fall-drop: #e05252;
   --fall-other: #6b7280;
 
-  /* Nudged toward the active colorway's --accent (see the [data-colorway]
-     rules below) before being washed to a low-alpha row fill just below
-     -- so the row backgrounds actually feel different per colorway,
-     while the badge/text colors above stay perfectly constant (those
-     carry traffic-state meaning and must stay maximally recognizable).
-     Skipped for "unknown": it's meant to read as neutral/no-signal, and
-     tinting it would make it look like an intentional category. */
+  /* Nudged toward --accent before being washed to a low-alpha row fill
+     just below -- so the row backgrounds pick up a touch of the app's
+     accent, while the badge/text colors above stay perfectly constant
+     (those carry traffic-state meaning and must stay maximally
+     recognizable). Skipped for "unknown": it's meant to read as
+     neutral/no-signal, and tinting it would make it look like an
+     intentional category. */
   --accept-tinted: color-mix(in srgb, var(--accept) 85%, var(--accent) 15%);
   --drop-tinted: color-mix(in srgb, var(--drop) 85%, var(--accent) 15%);
   --reject-tinted: color-mix(in srgb, var(--reject) 85%, var(--accent) 15%);
@@ -218,8 +215,7 @@
 
   /* A soft accent wash for active/selected UI chrome (toggled buttons,
      the regex-search toggle, menu hover states) -- gives --accent more
-     surface area than just text/border color, so a colorway switch is
-     visible beyond a handful of small elements. */
+     surface area than just text/border color. */
   --accent-bg: color-mix(in srgb, var(--accent) 12%, transparent);
   --accent-bg-hover: color-mix(in srgb, var(--accent) 18%, transparent);
 
@@ -238,17 +234,6 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-
-/* ---------- colorways ----------
-   Each colorway only overrides --accent -- the neutrals and the
-   accept/drop/reject/log semantic colors stay constant across colorways
-   on purpose, since those carry traffic-state meaning and shouldn't
-   shift with a cosmetic preference. "signal" (blue) is the default and
-   needs no override, since it's what :root already defines. */
-[data-colorway='pulse'] { --accent: #f472b6; }
-[data-colorway='nebula'] { --accent: #a78bfa; }
-[data-colorway='frequency'] { --accent: #22d3ee; }
-[data-colorway='mono'] { --accent: #94a3b8; }
 
 * {
   box-sizing: border-box;
