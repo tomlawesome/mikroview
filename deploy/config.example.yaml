@@ -93,7 +93,8 @@ devices:
 # the same rule as every other file you mount in -- if it is not,
 # MikroView refuses to start with "permission denied":
 #   sudo chown 1000:1000 mikroview-history.key && chmod 600 mikroview-history.key
-# Turning enabled back off deletes what was already retained. See
+# Off (or this block missing) keeps what was already retained on disk
+# and just stops adding to it; MikroView warns where the files are. See
 # docs/configuration.md's "On-disk event history" section for what the
 # encryption does and doesn't protect against.
 # history:

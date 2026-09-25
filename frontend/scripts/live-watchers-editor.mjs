@@ -42,6 +42,16 @@ async function api(method, path_, body) {
   return { status: res.status(), body: parsed, text }
 }
 
+// The copy's row is drawn as soon as the list is re-read, but its drawer
+// opens only after a second request (the copy's schema) comes back, so
+// there is a moment -- tens of ms, longer under Firefox -- when the row is
+// on screen and still closed. Wait for the drawer rather than counting it
+// once the instant the row appears.
+async function drawerOpens(row) {
+  await row.locator('.drawer').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+  return (await row.locator('.drawer').count()) === 1
+}
+
 // --- a detector this bench can copy -------------------------------------
 //
 // Clone works on an operator-authored detector, whose structure is stored
@@ -274,7 +284,7 @@ const shippedCopyRow = page.locator('.bench li.row:has-text("Port scan (copy)")'
 await shippedCopyRow.waitFor({ state: 'visible', timeout: 15000 })
 check(true, 'pressing Clone on a shipped row produces the copy with no prompt in between')
 check(
-  (await shippedCopyRow.locator('.drawer').count()) === 1,
+  await drawerOpens(shippedCopyRow),
   'the copy opens into the conditions editor, ready to be changed',
 )
 check(
@@ -340,7 +350,7 @@ const copyRow = page.locator(`.bench li.row:has-text("${SEED_NAME} (copy)")`)
 await copyRow.waitFor({ state: 'visible', timeout: 15000 })
 check(true, 'pressing clone produces the copy with no prompt in between')
 check(
-  (await copyRow.locator('.drawer').count()) === 1,
+  await drawerOpens(copyRow),
   'the copy is already expanded, ready to be edited',
 )
 check(
