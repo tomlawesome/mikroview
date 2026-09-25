@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -82,16 +84,69 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"decommission", cfg.Engine.DecommissionStorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"setup", cfg.Setup.StorePath},
-		// The "N new settings are available" notice's per-version
-		// dismissal (#1218) -- small operator state, same reasoning as
-		// setup just above: a restore that dropped it would bring the
-		// notice back for a version already dealt with.
-		{"config_drift", cfg.ConfigDrift.StorePath},
 		{"settings", cfg.Store.SettingsStorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},
 		{"match_log", cfg.Watchlist.MatchLogPath},
 		{"droplist", cfg.Droplist.StorePath},
+		// Per-user preferences (#1283): a versioned JSON record per
+		// account -- presets and top-talker widgets carry account
+		// content that used to live only in the browser, so a restore
+		// missing this would silently reset every user back to the
+		// defaults their own module ships with.
+		{"prefs", cfg.Prefs.StorePath},
 	}
+}
+
+// retiredStore documents a backup store name a past release stopped
+// writing to backedUpStores, so a restore carrying one can explain why
+// it is being skipped instead of refusing the whole bundle as unknown.
+// Version is the release it stopped being written in.
+//
+// Every entry here must trace to a real, dated CHANGELOG.md "### Removed"
+// line, the same rule internal/config/unknown_keys.go's
+// removedOrRenamedKeys follows for config keys -- a guessed mapping
+// would tell an operator restoring old state the wrong thing about why
+// their data is missing.
+type retiredStore struct {
+	Version string
+	Why     string
+}
+
+// retiredStores is every backup store name backedUpStores has stopped
+// listing, keyed by name. runRestore skips these via retiredStoresIn
+// rather than refusing the backup outright the way an actually-unknown
+// store name does -- see the "unknown store" branch below -- so a
+// backup made before a store's retirement still restores everything
+// else it carries instead of becoming permanently unrestorable.
+var retiredStores = map[string]retiredStore{
+	"config_drift": {
+		Version: "v0.6.1",
+		Why: "the per-version dismissal state for the config-upgrade " +
+			"notice (#1218) was replaced by a plain close button, and its " +
+			"backend removed (#1277); nothing reads or writes this store " +
+			"any more.",
+	},
+}
+
+// retiredStoresIn deletes every retiredStores entry it finds in stores,
+// logging why each is being skipped rather than restored, and returns
+// their names (sorted, for a deterministic log order). Called before
+// the known-store loop in runRestore so a retired name is never also
+// reported as unknown.
+func retiredStoresIn(stores map[string]json.RawMessage, log *slog.Logger) []string {
+	var names []string
+	for name := range stores {
+		if _, ok := retiredStores[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		rs := retiredStores[name]
+		delete(stores, name)
+		log.Info(fmt.Sprintf("skipping store %q from this backup: retired in %s -- %s", name, rs.Version, rs.Why))
+	}
+	return names
 }
 
 // excludedFromBackup is every *Path field on config.Config that
@@ -634,6 +689,13 @@ func runRestore(args []string) int {
 	for _, s := range backedUpStores(cfg) {
 		known[s.Name] = s.Path
 	}
+	// Stores a past release retired (see retiredStores) are pulled out
+	// and logged here, before the known-store loop below could call them
+	// unknown -- the same pull-out-and-handle-first shape
+	// retainedEventsStore and schemaStoreName above already use, so a
+	// bundle made before a store's retirement still restores everything
+	// it still recognises instead of the whole backup being refused.
+	retiredStoresIn(env.Stores, logger)
 	// decoded holds the bytes each store will actually be written with --
 	// unwrapped up front, in the same fully-validated-before-anything-is-
 	// touched pass as the known-store checks below, so a corrupt
@@ -675,6 +737,8 @@ func runRestore(args []string) int {
 	}
 
 	vaultDir := backupVaultDirectory(cfg)
+	const forceAdvice = "Re-run with --force once you are sure -- copy the data directory " +
+		"somewhere safe first if you want a way back to what is on it now"
 	if !hasFlag(args, "--force") {
 		for name := range env.Stores {
 			if name == vaultStoreName {
@@ -682,14 +746,14 @@ func runRestore(args []string) int {
 			}
 			if _, err := os.Stat(known[name]); err == nil {
 				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
-					"state. Re-run with --force once you are sure", known[name], name))
+					"state. %s", known[name], name, forceAdvice))
 				return 1
 			}
 		}
 		if vaultBundleToRestore != nil {
 			if entries, err := os.ReadDir(vaultDir); err == nil && len(entries) > 0 {
 				logger.Error(fmt.Sprintf("%s already exists and is not empty (store %q) -- refusing to "+
-					"overwrite live state. Re-run with --force once you are sure", vaultDir, vaultStoreName))
+					"overwrite live state. %s", vaultDir, vaultStoreName, forceAdvice))
 				return 1
 			}
 		}
@@ -697,7 +761,7 @@ func runRestore(args []string) int {
 			dir := historyDirectory(cfg)
 			if held, err := retention.DaysHeld(dir); err == nil && len(held) > 0 {
 				logger.Error(fmt.Sprintf("%s already holds retained events -- refusing to overwrite live "+
-					"state. Re-run with --force once you are sure", dir))
+					"state. %s", dir, forceAdvice))
 				return 1
 			}
 		}
@@ -705,7 +769,7 @@ func runRestore(args []string) int {
 			// #nosec G703 -- this deployment's own data directory, from config, not from a request.
 			if _, err := os.Stat(schemaPath); err == nil {
 				logger.Error(fmt.Sprintf("%s already exists (store %q) -- refusing to overwrite live "+
-					"state. Re-run with --force once you are sure", schemaPath, schemaStoreName))
+					"state. %s", schemaPath, schemaStoreName, forceAdvice))
 				return 1
 			}
 		}
@@ -741,6 +805,22 @@ func runRestore(args []string) int {
 		}
 		return nil
 	}
+	// restoreMarkerName (storage_preflight.go) goes down before the first
+	// byte of any store or schema.json is touched, and startup refuses to
+	// run while it exists -- see checkNoRestoreInProgress. rollback below
+	// removes it again once every target it touched is confirmed back to
+	// its pre-restore state, since at that point there is no mixture left
+	// to warn a startup about; if rollback itself cannot fully put
+	// everything back, the marker is left in place on purpose.
+	restoreMarker := restoreMarkerPath(cfg)
+	markerBody := "A restore (mikroview -restore " + src + " --force) began overwriting this data " +
+		"directory and did not finish. If mikroview refused to start because of this file, re-run " +
+		"that same -restore command again, or replace this data directory with your own copy of it.\n"
+	if err := persist.WriteFileAtomic(restoreMarker, []byte(markerBody), 0o600); err != nil {
+		logger.Error(fmt.Sprintf("writing the restore marker at %s: %v -- nothing has been changed", restoreMarker, err))
+		return 1
+	}
+
 	// rollback puts every target already recorded in before back to what
 	// it held before this restore touched it -- persist.WriteFileAtomic
 	// for one that existed, os.Remove for one that did not -- then logs
@@ -766,6 +846,9 @@ func runRestore(args []string) int {
 		msg := cause + " -- the data directory has been returned to its pre-restore state"
 		if len(mixed) > 0 {
 			msg += "; could not be returned: " + strings.Join(mixed, "; ")
+		} else if err := os.Remove(restoreMarker); err != nil && !os.IsNotExist(err) {
+			msg += fmt.Sprintf("; the restore marker at %s could not be removed: %v -- startup will "+
+				"refuse to run until it is deleted by hand", restoreMarker, err)
 		}
 		logger.Error(msg)
 	}
@@ -822,6 +905,17 @@ func runRestore(args []string) int {
 			return 1
 		}
 	}
+
+	// Every store and, if the backup carried one, schema.json have now
+	// landed together -- the mixture #1293 is about can no longer happen.
+	// The marker itself stays down, though: the vault bundle and retained
+	// corpus below are not stores in that sense (see their own comments)
+	// and fall outside rollback's coverage, so a failure writing either
+	// of them still leaves this data directory silently incomplete. The
+	// marker is what catches that on the next boot, so it is only
+	// removed once those writes have landed too, at the very end of this
+	// function.
+
 	if vaultBundleToRestore != nil {
 		if err := writeVaultBundle(vaultDir, *vaultBundleToRestore); err != nil {
 			logger.Error(err.Error())
@@ -868,6 +962,19 @@ func runRestore(args []string) int {
 			return 1
 		}
 		logger.Info(fmt.Sprintf("restored %d retained event(s) into %s", len(retainedEvents), dir))
+	}
+
+	// Everything the backup carried -- stores, schema.json, the vault
+	// bundle and the retained corpus -- is now on disk, so the marker's
+	// job is done: a crash from here on has nothing left to finish.
+	// Removed last on purpose, so a crash or error partway through the
+	// vault bundle or retained-corpus writes above leaves the marker in
+	// place and the next boot refuses to start on a silently incomplete
+	// restore, the same way an in-loop failure does via rollback.
+	if err := os.Remove(restoreMarker); err != nil && !os.IsNotExist(err) {
+		logger.Error(fmt.Sprintf("restore finished but the marker at %s could not be removed: %v -- "+
+			"startup will refuse to run until it is deleted by hand", restoreMarker, err))
+		return 1
 	}
 
 	logger.Info(fmt.Sprintf("restored %d store(s) from %s (created %s by %s)",

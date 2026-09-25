@@ -47,8 +47,8 @@ seen: {storePath: $dir/seen-values.json}
 baseline: {storePath: $dir/baseline.json}
 audit: {storePath: $dir/audit.json}
 setup: {storePath: $dir/setup.json}
-configDrift: {storePath: $dir/config-drift.json}
 droplist: {storePath: $dir/droplist.json}
+prefs: {storePath: $dir/preferences.json}
 watchlist:
   matchLogPath: $dir/matchlog.jsonl
   suggestionsStorePath: $dir/suggestions.json

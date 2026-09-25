@@ -11,6 +11,14 @@
 /mikroview
 /deploy/config.yaml
 *.log
+# ...except the RouterOS verification transcripts (#894). The CHR exercise
+# commits each one beside the dialect row it proves
+# (scripts/routeros-chr-open-mr.sh), so they are tracked content, not a
+# stray: without this negation that job's `git add` refuses the path and the
+# nightly run fails after every part of its real work has succeeded (#1318).
+# A negation rather than a forced add, so every other tool agrees the file
+# is tracked.
+!/docs/routeros-verification-logs/*.log
 .DS_Store
 # Local agent settings stay out; project skills are shared -- they are
 # how the next person (or session) finds the live-check fixture.
@@ -38,3 +46,7 @@
 # and gitleaks would flag every one -- see docs/upgrades.md, "How this
 # is tested". Never committed.
 /.upgrade-fixtures/
+
+# The checksum-verified cosign the signing job installs (#1309,
+# scripts/ensure-cosign.sh). A downloaded binary, never committed.
+.mv-cosign/

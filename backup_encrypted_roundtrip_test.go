@@ -88,6 +88,10 @@ func TestBackupRestoreRoundTripCarriesAnEncryptedStore(t *testing.T) {
 	// restoring onto a new host that mounts the same key file.
 	dstDir := t.TempDir()
 	newFlagsPath := filepath.Join(dstDir, "flags.json")
+	// #1293: the restore marker lives beside the data directory
+	// (derived from Auth.StorePath), which must be writable even for a
+	// restore that never touches the auth store itself.
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", filepath.Join(dstDir, "users.json"))
 	t.Setenv("MIKROVIEW_FLAGS_STORE_PATH", newFlagsPath)
 
 	if code := runRestore([]string{backupPath}); code != 0 {

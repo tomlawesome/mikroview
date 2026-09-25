@@ -40,8 +40,12 @@ func ingestTestServer(t *testing.T, device string) (*httptest.Server, *Server, s
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	// registerAdmin also gives the account a confirmed factor and
+	// records it, so a later loggedInClient(t, ts.URL, "admin",
+	// "password123") (e.g. TestIngestPushIsReadableFromTheTableEndpoints)
+	// can reach the non-enrolment routes it needs and complete #1249's
+	// second step, not just this setup's own store lookups below.
+	registerAdmin(t, s, ts)
 	admin, ok := s.Auth.ByUsername("admin")
 	if !ok {
 		t.Fatal("the admin account was not created")
@@ -219,8 +223,9 @@ func TestIngestRouteRejectsASession(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	// #1253: without a factor the door's own 403 would mask the 404 this
+	// test exists to pin; registerAdmin's account holds one.
+	adminClient := registerAdmin(t, s, ts)
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/ingest/routeros", strings.NewReader(validARPPayload))
 	if err != nil {

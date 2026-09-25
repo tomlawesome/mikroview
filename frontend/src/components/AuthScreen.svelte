@@ -15,7 +15,9 @@
   // The mockups' storyboard strip for the way out is mockup-only
   // annotation (round 23/24) -- not built here; the way out is instead
   // the same beat in reverse (reverseBeat below), no strip.
+  import { untrack } from 'svelte'
   import { authState } from '../lib/auth.svelte'
+  import { passkeysUsableAt } from '../lib/passkeys.svelte'
   import Fullfall from './Fullfall.svelte'
 
   let {
@@ -51,6 +53,21 @@
     // field comes with it, since a password typed once and never used
     // again until the next sign-in is the worst case for a typo.
     passwordOnly = false,
+    // #1249's second step: the account and password fields are both gone
+    // -- login() already carried them, and correct -- leaving one box for
+    // a code from the app (or a recovery code; the server tells them
+    // apart, this box doesn't). onSubmitFactor is a distinct prop rather
+    // than reusing onsubmit(username, password) with the code smuggled
+    // into one of those slots: a call whose two positional arguments no
+    // longer mean what they say is a trap for whoever edits this next.
+    factorOnly = false,
+    onSubmitFactor,
+    // #1250: the passkey alternative to onSubmitFactor above, for the
+    // same pending login -- a distinct prop for the same reason
+    // onSubmitFactor already is one (see its own comment): the primary
+    // button in 'passkey' mode below fires this directly, with no code
+    // to carry.
+    onLoginWithPasskey,
   }: {
     title?: string
     subtitle?: string
@@ -68,15 +85,19 @@
     enterLabel?: string
     reverseBeat?: boolean
     passwordOnly?: boolean
+    factorOnly?: boolean
+    onSubmitFactor?: (code: string) => Promise<string | null>
+    onLoginWithPasskey?: () => Promise<string | null>
   } = $props()
 
   // A password-only door always confirms; every other one does as its
-  // caller asks.
-  const needsConfirm = $derived(confirmPassword || passwordOnly)
+  // caller asks. factorOnly needs neither field this drives.
+  const needsConfirm = $derived((confirmPassword || passwordOnly) && !factorOnly)
 
   let username = $state('')
   let password = $state('')
   let passwordConfirm = $state('')
+  let code = $state('')
   let error = $state<string | null>(null)
   let submitting = $state(false)
   // Requires clicking through to a separate warning screen rather than
@@ -84,9 +105,66 @@
   // CLI-reversible decision (see the plan's "informed choice, not
   // accidental click" requirement).
 
+  // #1250: the door's three ways past a pending login -- a passkey (the
+  // primary button, fired only by a click, never on mount: Safari
+  // requires a real user gesture for the prompt), the authenticator app
+  // (the existing code box), or a recovery code (the same box,
+  // relabelled). authState.pendingSecondFactor/pendingPasskeyOrigin are
+  // login()'s own answer for *this* pending login -- read directly here,
+  // the same way this component already reads authState.ssoError, rather
+  // than threading two more props through AuthLogin for values that
+  // never change once this screen is up.
+  const passkeyOffered = $derived(
+    factorOnly &&
+      authState.pendingSecondFactor.includes('passkey') &&
+      passkeysUsableAt(authState.pendingPasskeyOrigin),
+  )
+  const totpOffered = $derived(factorOnly && authState.pendingSecondFactor.includes('totp'))
+  // The design's empty-list case: an account whose only factor is a
+  // passkey made for a different address has nothing usable at all --
+  // said in words, not left for the operator to guess from an otherwise
+  // ordinary code box.
+  const noFactorUsable = $derived(factorOnly && authState.pendingSecondFactor.length === 0)
+  // A passkey listed for this login but this browser/address can't use
+  // it -- the design's other named case, with its own explanatory line
+  // and link rather than simply omitting the button.
+  const passkeyUnreachable = $derived(
+    factorOnly && authState.pendingSecondFactor.includes('passkey') && !passkeyOffered,
+  )
+
+  // untrack: this is a one-time initial pick, not a live subscription --
+  // once the operator has switched ways, a later re-render must not snap
+  // it back (see the comment above on why this is local state at all).
+  let factorWay = $state<'passkey' | 'totp' | 'recovery'>(
+    untrack(() => (passkeyOffered ? 'passkey' : totpOffered ? 'totp' : 'recovery')),
+  )
+
+  // firePasskey is the passkey mode's own action, wired to the "Use your
+  // passkey" button rather than the form's submit -- there is no field
+  // for it to carry, only the click itself.
+  async function firePasskey() {
+    error = null
+    submitting = true
+    const result = await onLoginWithPasskey?.()
+    submitting = false
+    if (result) error = result
+  }
+
   async function handleSubmit(e: Event) {
     e.preventDefault()
     error = null
+
+    if (factorOnly) {
+      if (!code) {
+        error = factorWay === 'recovery' ? 'Enter a recovery code.' : 'Enter the code from your app.'
+        return
+      }
+      submitting = true
+      const result = await onSubmitFactor?.(code)
+      submitting = false
+      if (result) error = result
+      return
+    }
 
     // #1187: the form carries novalidate, so an empty field is answered
     // here rather than by the browser's own bubble -- that bubble was
@@ -156,6 +234,15 @@
         {#if authState.ssoError}
           <p class="error">{authState.ssoError}</p>
         {/if}
+        {#if authState.signInTimedOut}
+          <!-- #1249's pending-factor step falling back here on
+               PENDING_LOGIN_EXPIRED (see AuthState.pendingFactorFailed) --
+               the code box's own session died of old age, not a wrong
+               code, so the word for it lives beside ssoError's, on the
+               form this falls back to rather than in the code box that
+               is gone by the time this shows. -->
+          <p class="error">Your sign-in timed out -- enter your password again.</p>
+        {/if}
 
         <form class="form-body" onsubmit={handleSubmit} novalidate>
           <!-- No heading on the door itself: the framed wordmark is the
@@ -168,42 +255,111 @@
             <p class="subtitle">{subtitle}</p>
           {/if}
 
-          <!-- "account" / "password" is the ratified scene's own copy
-               (round 15 amended its "passphrase"; "account" stood), and
-               it sits inside the field as the mockup draws it (owner,
-               2026-08-30). The <label> stays for assistive tech,
-               visually hidden -- the placeholder is presentation, not
-               the accessible name. -->
-          {#if !passwordOnly}
-            <label>
-              <span class="sr-only">account</span>
-              <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
-            </label>
-          {/if}
+          {#if factorOnly}
+            <!-- #1250: the design's two named cases where the ordinary
+                 code box is not the whole story -- said in words, above
+                 whichever control (the passkey button or the code/
+                 recovery box) is actually offered. -->
+            {#if noFactorUsable}
+              <p class="subtitle-note">
+                This account's passkeys were made for a different web address. Enter one of your
+                recovery codes to finish signing in.
+              </p>
+            {:else if passkeyUnreachable}
+              <p class="subtitle-note">
+                Your passkeys work at <a href={authState.pendingPasskeyOrigin}>{authState.pendingPasskeyOrigin}</a>
+                -- open MikroView there (you'll enter your password again), or use another way in
+                below.
+              </p>
+            {/if}
 
-          <label>
-            <span class="sr-only">{passwordOnly ? 'new password' : 'password'}</span>
-            <input
-              type="password"
-              autocomplete={needsConfirm ? 'new-password' : 'current-password'}
-              placeholder={passwordOnly ? 'new password' : 'password'}
-              bind:value={password}
-              required
-            />
-          </label>
+            {#if factorWay === 'passkey'}
+              <!-- Fired only by this click -- never on mount -- because
+                   Safari requires a real user gesture before it will show
+                   the platform prompt at all. -->
+              <button type="button" class="submit-btn" disabled={submitting} onclick={firePasskey}>
+                {submitting ? 'Waiting…' : 'Use your passkey'}
+              </button>
+            {:else}
+              <!-- #1249: one box, doing double duty as the TOTP code and
+                   the recovery-code field -- the server is what tells
+                   them apart. The links below only change what this
+                   field asks for and how it is typed, never which
+                   request goes out. -->
+              <label>
+                <span class="sr-only">{factorWay === 'recovery' ? 'recovery code' : 'code'}</span>
+                <input
+                  type="text"
+                  inputmode={factorWay === 'recovery' ? 'text' : 'numeric'}
+                  autocomplete="one-time-code"
+                  placeholder={factorWay === 'recovery' ? 'recovery code' : '6-digit code'}
+                  bind:value={code}
+                  required
+                />
+              </label>
+            {/if}
+          {:else}
+            <!-- "account" / "password" is the ratified scene's own copy
+                 (round 15 amended its "passphrase"; "account" stood), and
+                 it sits inside the field as the mockup draws it (owner,
+                 2026-08-30). The <label> stays for assistive tech,
+                 visually hidden -- the placeholder is presentation, not
+                 the accessible name. -->
+            {#if !passwordOnly}
+              <label>
+                <span class="sr-only">account</span>
+                <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
+              </label>
+            {/if}
 
-          {#if needsConfirm}
             <label>
-              <span class="sr-only">confirm password</span>
-              <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />
+              <span class="sr-only">{passwordOnly ? 'new password' : 'password'}</span>
+              <input
+                type="password"
+                autocomplete={needsConfirm ? 'new-password' : 'current-password'}
+                placeholder={passwordOnly ? 'new password' : 'password'}
+                bind:value={password}
+                required
+              />
             </label>
+
+            {#if needsConfirm}
+              <label>
+                <span class="sr-only">confirm password</span>
+                <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />
+              </label>
+            {/if}
           {/if}
 
           {#if error}
             <p class="error">{error}</p>
           {/if}
 
-          <button type="submit" class="submit-btn" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+          {#if !(factorOnly && factorWay === 'passkey')}
+            <button type="submit" class="submit-btn" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+          {/if}
+
+          {#if factorOnly && !noFactorUsable}
+            <!-- #1250: "switching between the three is client-side state
+                 only" (the design's own words) -- each link just moves
+                 factorWay, the pending cookie carries the login the rest
+                 of the way regardless of which one is picked. -->
+            {#if factorWay !== 'passkey' && passkeyOffered}
+              <button type="button" class="link-btn" onclick={() => (factorWay = 'passkey')}>
+                Use your passkey instead
+              </button>
+            {/if}
+            {#if factorWay !== 'totp' && totpOffered}
+              <button type="button" class="link-btn" onclick={() => (factorWay = 'totp')}>
+                Use your authenticator app instead
+              </button>
+            {/if}
+            {#if factorWay !== 'recovery'}
+              <button type="button" class="link-btn" onclick={() => (factorWay = 'recovery')}>
+                Use a recovery code instead
+              </button>
+            {/if}
+          {/if}
 
           {#if ssoAvailable}
             <div class="divider"><span>or</span></div>
@@ -355,6 +511,24 @@
     text-align: center;
   }
 
+  /* #1250: the two explanatory lines above the passkey control (a wrong
+     address, or an account with nothing usable at all) -- prose rather
+     than the centred single-sentence .subtitle above, so it wraps left-
+     aligned like an ordinary paragraph instead of a strip of centred
+     lines. */
+  .subtitle-note {
+    width: 100%;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--fg-dim);
+    text-align: left;
+  }
+
+  .subtitle-note a {
+    color: var(--accent);
+  }
+
   label {
     width: 100%;
     display: flex;
@@ -469,6 +643,23 @@
   .sso-link:hover {
     color: var(--fg);
     border-color: var(--fg-muted);
+  }
+
+  /* Lower weight than .sso-link on purpose: that one leaves the SPA
+     entirely, this one only relabels the field above it. */
+  .link-btn {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    color: var(--fg-dim);
+    font-size: 12px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    padding: 2px;
+  }
+
+  .link-btn:hover {
+    color: var(--fg-muted);
   }
 
 </style>

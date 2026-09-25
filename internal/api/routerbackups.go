@@ -75,14 +75,14 @@ type routerBackupsResponse struct {
 	// refused while this is true -- it is a warning that older
 	// generations are being cycled out sooner than usual.
 	LowSpace bool `json:"lowSpace"`
+	// Lock is the optional admin passphrase's state (#956), always
+	// present so the group can render "locked" without a second call.
+	Lock vaultLockStatusResponse `json:"lock"`
 	// Port is the SFTP drop box's own listening port (round 44's "arrive
 	// by" row), empty when backup.enabled is false -- the same
 	// SetupInstance.BackupPort the wizard's step 6 already reads, not a
 	// second copy of the configured value.
-	// Lock is the optional admin passphrase's state (#956), always
-	// present so the group can render "locked" without a second call.
-	Lock vaultLockStatusResponse `json:"lock"`
-	Port string                  `json:"port,omitempty"`
+	Port string `json:"port,omitempty"`
 }
 
 func toRouterBackupGeneration(g backupvault.Generation) routerBackupGeneration {

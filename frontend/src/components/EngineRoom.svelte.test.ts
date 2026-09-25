@@ -62,6 +62,8 @@ vi.mock('../lib/api', () => ({
   createUser: vi.fn(),
   deleteUser: vi.fn(),
   resetUserPassword: vi.fn(),
+  clearUserTOTP: vi.fn(),
+  clearUserPasskeys: vi.fn(),
   fetchTokens: vi.fn(async () => [
     { id: 't1', name: 'rb5009-ingest', kind: 'ingest', device: 'rb5009', createdAt: '2026-08-01T00:00:00Z', lastUsedAt: '2026-08-24T14:02:00Z' },
   ]),
@@ -135,7 +137,7 @@ import {
   fetchDroplist as fetchDroplistReal,
   fetchConfigUpgrade as fetchConfigUpgradeReal,
 } from '../lib/api'
-import type { Stats } from '../lib/types'
+import type { RouterBackupsResponse, Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
@@ -156,6 +158,22 @@ function stats(overrides: Partial<Stats> = {}): Stats {
     windowSeconds: 72 * 3600,
     connectedClients: 1,
     ...overrides,
+  }
+}
+
+// One router-backups answer naming a single router -- the whole of what
+// the out-of-order poll test below needs to tell two answers apart.
+function backupsWith(device: string): RouterBackupsResponse {
+  return {
+    enabled: true,
+    keyUnreadable: false,
+    routers: [
+      { device, generations: [{ id: 'g1', backupArrivedAt: '2026-09-01T00:00:00Z', backupBytes: 1024 }], intervalKnown: false, missed: 0 },
+    ],
+    totalGenerations: 1,
+    totalRouters: 1,
+    totalBytes: 1024,
+    lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
   }
 }
 
@@ -461,6 +479,55 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: 'copy for RouterOS' })).toBeTruthy()
   })
 
+  // v0.6.0 audit Lows, R9: a refused POST /api/setup/commands here used
+  // to leave "copy for RouterOS" doing nothing and saying nothing --
+  // indistinguishable from the click never registering. keyError is the
+  // same slot the panel already shows a refused mint or revoke through.
+  it('says so when copying the RouterOS lines fails, the same way the keys panel already shows a refusal', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchDevices, fetchSetupCommands } = await import('../lib/api')
+    vi.mocked(fetchDevices).mockResolvedValueOnce([
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        sourceIp: '203.0.113.5',
+        configured: true,
+        firstSeen: '2026-08-01T00:00:00Z',
+        lastSeen: '2026-09-01T00:00:00Z',
+        eventCount: 10,
+        status: 'live',
+        routerosVersion: '',
+      },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    const { createToken } = await import('../lib/api')
+    vi.mocked(createToken).mockResolvedValueOnce({
+      id: 't10',
+      name: 'rb5009-b',
+      kind: 'ingest',
+      device: 'rb5009',
+      createdAt: '2026-09-01T00:00:00Z',
+      value: 'mv1_ingestsecret',
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: '+ mint a key' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'ingest' }))
+    await settle()
+    await fireEvent.click(screen.getByRole('button', { name: 'mint it' }))
+    await settle()
+
+    vi.mocked(fetchSetupCommands).mockResolvedValueOnce('setup is locked while a restore is in progress')
+    await fireEvent.click(screen.getByRole('button', { name: 'copy for RouterOS' }))
+    await settle()
+
+    expect(screen.getByText('setup is locked while a restore is in progress')).toBeTruthy()
+    expect(screen.queryByText('copied for RouterOS')).toBeNull()
+  })
+
   it("revoke arms before it acts, and any other click disarms it", async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -571,6 +638,157 @@ describe('The settings shelf (#633)', () => {
 
     expect(screen.queryByRole('button', { name: 'reset password' })).toBeNull()
     expect(screen.getByRole('button', { name: 'remove' })).toBeTruthy()
+  })
+
+  // #1249: the pill is shown only when true, the same convention the sso
+  // pill just above it already uses -- an SSO account never carries this
+  // one either way, since it is never offered a factor.
+  it('shows a pill for a person with a factor, and none for a person without', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('authenticator app')).toBeTruthy()
+    // tom's row carries no pill -- only one person has a factor here.
+    expect(screen.getAllByText('authenticator app')).toHaveLength(1)
+  })
+
+  // #1249's lost-phone path: arm-then-confirm like reset password and
+  // remove beside it, and only offered when there is a factor to clear.
+  it('clear authenticator app arms before it acts, and only appears when there is one to clear', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers, clearUserTOTP } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+    ])
+    vi.mocked(clearUserTOTP).mockResolvedValue(null)
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+    expect(clearUserTOTP).not.toHaveBeenCalled()
+
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+    )
+    await settle()
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
+  })
+
+  // usersState.clearFactor() refreshes the list on success -- if that
+  // refresh (fetchUsers) itself throws, the button must not be left
+  // reading "clearing…" for the rest of the session.
+  it('clears the "clearing…" state even when the post-clear refresh fails', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers, clearUserTOTP } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValueOnce([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+    ])
+    vi.mocked(clearUserTOTP).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+    )
+    await settle()
+
+    expect(clearUserTOTP).toHaveBeenCalledWith('u2')
+    expect(screen.queryByText('clearing…')).toBeNull()
+    expect(screen.getByRole('button', { name: 'clear authenticator app' })).toBeTruthy()
+    expect(screen.getByText(/could not refresh the list/i)).toBeTruthy()
+  })
+
+  // No admin row ever offers this: the console-only branch replaces
+  // every per-row verb for role === 'admin', same as reset password and
+  // remove beside it (there is only ever one admin).
+  it('offers no clear-factor verb on the admin row, even when the admin has a factor', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    // kai stays in the list (unrelated to what this test checks) so a
+    // later test relying on the default two-person list is not starved
+    // of a non-admin row by this mock's leftover mockResolvedValue --
+    // vi.clearAllMocks() (this file's beforeEach) clears call history,
+    // not a previously-set resolved value.
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByRole('button', { name: 'clear authenticator app' })).toBeNull()
+    expect(screen.getByText('console-only')).toBeTruthy()
+  })
+
+  // #1250's own pill and clear button, mirroring the authenticator app
+  // pair immediately above -- same convention (shown only when nonzero),
+  // its own admin verb rather than folded into clearFactor above (an
+  // account can hold either factor, or both, and EngineRoom offers each
+  // its own button).
+  it('shows a passkeys pill with the count for a person who has any, none for a person without', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 2 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('passkeys · 2')).toBeTruthy()
+  })
+
+  it('clear passkeys arms before it acts, and only appears when there is one to clear', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers, clearUserPasskeys } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 1 },
+    ])
+    vi.mocked(clearUserPasskeys).mockResolvedValue(null)
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear passkeys' }))
+    await settle()
+    expect(clearUserPasskeys).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys' }))
+    await settle()
+    expect(clearUserPasskeys).toHaveBeenCalledWith('u2')
+  })
+
+  it('offers no clear-passkeys verb on the admin row, even when the admin has passkeys', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 3 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByRole('button', { name: 'clear passkeys' })).toBeNull()
+    expect(screen.getByText('console-only')).toBeTruthy()
   })
 
   it('only one verb is armed at a time: arming remove disarms an armed revoke', async () => {
@@ -1246,6 +1464,45 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     expect(within(backups as HTMLElement).getByText('rb5009')).toBeTruthy()
   })
 
+  // #1275: the 60s tick, `ask again` and the refresh a write asks for
+  // can all be in flight together, and nothing makes them answer in the
+  // order they were sent. The older answer carries the rows as they
+  // were before the newer request was even issued, so applying it puts
+  // the operator's just-kept row back to what it was -- and walks
+  // fetchedAt backwards, which is the stamp RouterBackups.svelte uses
+  // to decide its optimistic copy has been confirmed and can be
+  // dropped. The keep then reads on screen as one that did not happen.
+  it('ignores a router-backups poll that answers after a newer one (#1275)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: RouterBackupsResponse) => void)[] = []
+      const held = () => new Promise<RouterBackupsResponse>((resolve) => answer.push(resolve))
+      fetchRouterBackups.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      // The mount poll is out; the tick a minute later sends a second.
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The newer request answers first, then the older one comes back.
+      answer[1](backupsWith('rb-newer'))
+      await settle()
+      answer[0](backupsWith('rb-older'))
+      await settle()
+      await settle()
+
+      const backups = document.getElementById('bakg') as HTMLElement
+      expect(within(backups).getByText('rb-newer')).toBeTruthy()
+      expect(within(backups).queryByText('rb-older')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('"router backups" answers unknown, with a working ask again, when the server does not', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
@@ -1332,6 +1589,37 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     await settle()
 
     expect(fetchDroplist).toHaveBeenCalledWith('operator-saved.example:8443')
+  })
+
+  // FB12 (v0.6.0 audit): nothing exercised the case where this group
+  // mounts before the wizard has answered "what address can your router
+  // reach mikroview on?" -- wizardState.address only leaves '' once
+  // wizardState.refresh() resolves, which is driven by an effect
+  // elsewhere (SetupWizard.svelte's), not by this component. Today's
+  // behaviour: the fetch goes out with whatever is currently known, same
+  // as the saved-address test above -- there is no wait, and no crash.
+  // That matches saveAddress's own "an empty value renders its own
+  // no-command state server-side" reasoning (wizard.svelte.ts) rather
+  // than this component inventing a second way to say "not answered
+  // yet", so it is left as is: this test records the behaviour rather
+  // than changing it.
+  it('polls the drop list even before the wizard address is known, rather than waiting for it', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    expect(wizardState.address).toBe('')
+    fetchDroplist.mockResolvedValueOnce({
+      listName: 'mikroview-drops',
+      entries: [],
+      key: { present: false },
+      ownRangesKnown: false,
+      setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+    })
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    expect(fetchDroplist).toHaveBeenCalledWith('')
+    expect(document.getElementById('engineroom-droplist')).toBeTruthy()
   })
 
   it('"drop list" answers unknown, with a working ask again, when the server does not', async () => {

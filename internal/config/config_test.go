@@ -692,6 +692,93 @@ oidc:
 	}
 }
 
+func TestPublicURLDefaultsToEmpty(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "" {
+		t.Errorf("PublicURL = %q, want empty (unset by default -- see docs/plans/passkeys-second-factor.md)", cfg.PublicURL)
+	}
+}
+
+// TestPublicURLEnvVarOverridesDefault: MIKROVIEW_PUBLIC_URL, not
+// MV_PUBLIC_URL as issue #1250 first proposed -- the ratified design
+// overrides the issue text to match this codebase's MIKROVIEW_*
+// convention.
+func TestPublicURLEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_PUBLIC_URL", "https://mikroview.example.com:8443")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "https://mikroview.example.com:8443" {
+		t.Errorf("PublicURL = %q, want https://mikroview.example.com:8443", cfg.PublicURL)
+	}
+}
+
+// TestPublicURLIsNotSetFromMVPrefixedEnvVar pins the issue-text name
+// down as dead: setting MV_PUBLIC_URL (the issue's original proposal)
+// must do nothing, since only MIKROVIEW_PUBLIC_URL is read.
+func TestPublicURLIsNotSetFromMVPrefixedEnvVar(t *testing.T) {
+	t.Setenv("MV_PUBLIC_URL", "https://mikroview.example.com:8443")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "" {
+		t.Errorf("PublicURL = %q, want empty -- MV_PUBLIC_URL must not be read", cfg.PublicURL)
+	}
+}
+
+func TestPublicURLYAMLOverridesDefault(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+publicUrl: "https://mikroview.home.lan:8443"
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "https://mikroview.home.lan:8443" {
+		t.Errorf("PublicURL = %q, want https://mikroview.home.lan:8443", cfg.PublicURL)
+	}
+}
+
+// TestPublicURLNeverFallsBackToOIDCPublicBaseURL pins the design's
+// deliberate departure from the obvious shortcut: the two settings look
+// like duplicates but must never silently track each other, because
+// changing one for its own reason (rotating an OIDC redirect, moving
+// where passkeys are registered) must never silently move the other.
+func TestPublicURLNeverFallsBackToOIDCPublicBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+oidc:
+  issuerUrl: "https://idp.example"
+  clientId: "mikroview"
+  publicBaseUrl: "https://mikroview.example.com"
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "" {
+		t.Errorf("PublicURL = %q, want empty -- it must never be filled in from oidc.publicBaseUrl", cfg.PublicURL)
+	}
+}
+
 func TestDeviceMACStorePathEnvVarOverridesDefault(t *testing.T) {
 	t.Setenv("MIKROVIEW_DEVICE_MAC_STORE_PATH", "/data/mac-registry.json")
 

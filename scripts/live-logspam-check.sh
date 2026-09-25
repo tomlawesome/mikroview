@@ -20,6 +20,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
 . "$REPO/scripts/live-slot.sh"
+. "$REPO/scripts/live-web-dist.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -53,7 +54,7 @@ EOF
 # listener, not the UI.
 if [ ! -f web/dist/index.html ]; then
   ( cd frontend && npm run build >/dev/null 2>&1 )
-  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
+  mv_rebuild_web_dist
 fi
 # -buildvcs=false: throwaway binary, nothing reads its VCS stamp, and
 # stamping fails outright in a linked git worktree (#357).

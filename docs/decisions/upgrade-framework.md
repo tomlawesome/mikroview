@@ -112,6 +112,9 @@ browser; clears itself per router once routers report their setup.
   the old document in place. Dropped before it was built.
 - *Fixtures committed under `testdata/upgrade/`.* Hashes and keys trip
   the secrets scanner whether or not they are real.
+- *MikroView writing the operator's `config.yaml` itself, in any form.*
+  Ruled out in full in `config-yaml-ownership.md`; the paste block in
+  Settings ▸ Upgrade stays the permanent answer.
 
 ## Implementation
 

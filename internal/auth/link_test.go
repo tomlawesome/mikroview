@@ -235,3 +235,46 @@ func TestALinkedNonAdminIsNotLocallyRecoverable(t *testing.T) {
 		t.Error("a linked account still reports as locally recoverable")
 	}
 }
+
+// TestLinkOIDCIdentityLeavesThePasswordWorkingWhenPersistFails is the
+// v0.6.0 audit's R6 fix: a link that cannot be saved must not destroy
+// the account's local password or attach the identity in memory either,
+// or a restart before the next good write would silently un-link the
+// account while its old password (which linking replaced with an
+// unmatchable hash) has already stopped working for the operator.
+func TestLinkOIDCIdentityLeavesThePasswordWorkingWhenPersistFails(t *testing.T) {
+	// Register and CreateUser below each persist too (createLocked is
+	// R6-converted as well), so the fixture needs a backend that saves
+	// twice before failing, not one that fails outright. bob must be a
+	// non-admin: linking keeps the admin's password unconditionally
+	// (#1252), so only a non-admin actually exercises the rollback.
+	s, err := OpenWithBackend(&saveBudgetBackend{left: 2})
+	if err != nil {
+		t.Fatalf("OpenWithBackend: %v", err)
+	}
+	if _, err := s.Register("alice", "password123", time.Now()); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	u, err := s.CreateUser("bob", "password456", RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if err := s.LinkOIDCIdentity(u.ID, "https://idp.example", "subject-1", time.Now()); err == nil {
+		t.Fatal("LinkOIDCIdentity against a backend that cannot save = nil error, want one")
+	}
+
+	if _, err := s.Authenticate("bob", "password456", time.Now()); err != nil {
+		t.Errorf("expected the old password to still work after a failed persist, got %v", err)
+	}
+	if _, ok := s.ByOIDCIdentity("https://idp.example", "subject-1"); ok {
+		t.Error("the identity index still resolves an account whose link was never durably saved")
+	}
+	got, ok := s.ByUsername("bob")
+	if !ok {
+		t.Fatal("expected the account to still be there")
+	}
+	if !got.LocalPassword() {
+		t.Error("expected the account to still report as locally recoverable after a failed link")
+	}
+}

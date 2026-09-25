@@ -12,6 +12,10 @@ import { fireEvent } from '@testing-library/dom'
 // rendering it under jsdom never reaches for the network.
 vi.mock('../lib/api', () => ({
   fetchStatsTops: vi.fn(async () => []),
+  // metricsPref now writes through preferencesState (#1283), which
+  // talks to the backend through these two.
+  fetchMyPreferences: vi.fn().mockResolvedValue({ version: 1, prefs: {} }),
+  saveMyPreferences: vi.fn().mockResolvedValue(null),
 }))
 
 import { appState } from '../lib/state.svelte'
@@ -71,7 +75,6 @@ describe('Metrics', () => {
     flagsState.timeSeries = [{ time: minute(1), byType: { repeated_drops: 2 } }]
     metricsPref.view = 'seismograph'
     metricsPref.select(null)
-    localStorage.clear()
   })
 
   // The three-view switcher moved to the scene bar (#700), where round

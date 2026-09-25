@@ -169,6 +169,13 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A preference the account saved (#1283): the account stays, its
+	// record goes -- every scenario in a shard signs in as the same
+	// harness admin, and a sibling's altitude choice must not be the
+	// next scenario's starting point.
+	if err := s.Prefs.Merge(keeper.ID, json.RawMessage(`{"altitudeStop":"street"}`)); err != nil {
+		t.Fatal(err)
+	}
 	rawToken, _, err := s.Tokens.Create("kept token", auth.TokenKindIngest, "core", keeper, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -215,6 +222,10 @@ func TestTestResetClearsWhatItSaysAndKeepsTheRest(t *testing.T) {
 	// a reset.
 	if got := len(s.Definitions.List()); got == 0 {
 		t.Error("the shipped catalogue was not laid back down after the reset")
+	}
+
+	if _, ok := s.Prefs.Get(keeper.ID); ok {
+		t.Error("the account's preferences record survived -- a sibling scenario's layout would leak into the next one")
 	}
 
 	if _, ok := s.Auth.Get(keeper.ID); !ok {

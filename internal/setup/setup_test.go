@@ -110,11 +110,11 @@ func TestMarksReplaceRatherThanAccumulate(t *testing.T) {
 	s := New()
 	now := time.Now()
 
-	if _, ok := s.NoteMark(3, MarkSkipped, "tom", "no events yet", now); !ok {
-		t.Fatal("NoteMark refused a valid skip")
+	if _, ok, err := s.NoteMark(3, MarkSkipped, "tom", "no events yet", now); err != nil || !ok {
+		t.Fatalf("NoteMark refused a valid skip: ok=%v err=%v", ok, err)
 	}
-	if _, ok := s.NoteMark(3, MarkForced, "tom", "still no events", now.Add(time.Minute)); !ok {
-		t.Fatal("NoteMark refused a valid force")
+	if _, ok, err := s.NoteMark(3, MarkForced, "tom", "still no events", now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("NoteMark refused a valid force: ok=%v err=%v", ok, err)
 	}
 
 	marks := s.Marks()
@@ -133,8 +133,8 @@ func TestMarksAreOrderedByStep(t *testing.T) {
 	s := New()
 	now := time.Now()
 	for _, step := range []int{4, 1, 5, 2} {
-		if _, ok := s.NoteMark(step, MarkSkipped, "tom", "", now); !ok {
-			t.Fatalf("NoteMark refused step %d", step)
+		if _, ok, err := s.NoteMark(step, MarkSkipped, "tom", "", now); err != nil || !ok {
+			t.Fatalf("NoteMark refused step %d: ok=%v err=%v", step, ok, err)
 		}
 	}
 	var got []int
@@ -155,29 +155,29 @@ func TestMarksAreOrderedByStep(t *testing.T) {
 // TestMarksRefuseWhatTheyCannotDescribe. The step numbers and outcomes
 // are the ratified design's, not free text: a mark on step 9 describes
 // nothing, and neither the ledger nor the audit log should carry it.
-// TestMarkAcceptsTheWizardsSixthStep covers #1267: maxStep was still 5
+// TestMarkAcceptsTheWizardsSixthStep covers #1267: MaxStep was still 5
 // with a comment claiming "five steps, per the ratified design", but
 // round 45 (#394) added a sixth ("Back up the router") -- see
 // frontend/src/lib/setupsteps.ts's STEP_TITLES, the six-entry list this
 // package's step count must match. NoteMark refused any skip or force
-// decision on that sixth step until maxStep caught up.
+// decision on that sixth step until MaxStep caught up.
 func TestMarkAcceptsTheWizardsSixthStep(t *testing.T) {
 	s := New()
-	if _, ok := s.NoteMark(6, MarkSkipped, "tom", "", time.Now()); !ok {
-		t.Error("NoteMark refused step 6, but the wizard's setupsteps.ts records a sixth step")
+	if _, ok, err := s.NoteMark(6, MarkSkipped, "tom", "", time.Now()); err != nil || !ok {
+		t.Errorf("NoteMark refused step 6, but the wizard's setupsteps.ts records a sixth step: ok=%v err=%v", ok, err)
 	}
 }
 
 // TestMarkAcceptsTheWizardsSeventhStep is #1267 recurring: #1291 added
 // "Register this router" as RECORD_NUMBERS.register = 7 in
-// frontend/src/lib/setupsteps.ts and maxStep stayed at 6, so skipping
+// frontend/src/lib/setupsteps.ts and MaxStep stayed at 6, so skipping
 // that step 400s while the wizard advances anyway -- the operator sees
 // the step pass and the ledger never records the decision. Found by the
 // v0.6.0 audit (#1257).
 func TestMarkAcceptsTheWizardsSeventhStep(t *testing.T) {
 	s := New()
-	if _, ok := s.NoteMark(7, MarkSkipped, "tom", "", time.Now()); !ok {
-		t.Error("NoteMark refused step 7, but setupsteps.ts records the register step under it")
+	if _, ok, err := s.NoteMark(7, MarkSkipped, "tom", "", time.Now()); err != nil || !ok {
+		t.Errorf("NoteMark refused step 7, but setupsteps.ts records the register step under it: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -190,12 +190,12 @@ func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 		outcome MarkOutcome
 	}{
 		{"step zero", 0, MarkSkipped},
-		{"step past the last", maxStep + 1, MarkSkipped},
+		{"step past the last", MaxStep + 1, MarkSkipped},
 		{"outcome that is not a decision", 1, MarkOutcome("done")},
 		{"empty outcome", 1, MarkOutcome("")},
 	} {
-		if _, ok := s.NoteMark(tc.step, tc.outcome, "tom", "", now); ok {
-			t.Errorf("%s: NoteMark accepted step %d outcome %q", tc.name, tc.step, tc.outcome)
+		if _, ok, err := s.NoteMark(tc.step, tc.outcome, "tom", "", now); ok || err != nil {
+			t.Errorf("%s: NoteMark accepted step %d outcome %q (ok=%v err=%v)", tc.name, tc.step, tc.outcome, ok, err)
 		}
 	}
 	if n := len(s.Marks()); n != 0 {
@@ -209,9 +209,9 @@ func TestMarksRefuseWhatTheyCannotDescribe(t *testing.T) {
 func TestMarkNoteIsBounded(t *testing.T) {
 	s := New()
 	long := strings.Repeat("x", maxNote*3)
-	m, ok := s.NoteMark(1, MarkForced, "tom", long, time.Now())
-	if !ok {
-		t.Fatal("NoteMark refused a valid mark")
+	m, ok, err := s.NoteMark(1, MarkForced, "tom", long, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("NoteMark refused a valid mark: ok=%v err=%v", ok, err)
 	}
 	if len(m.Note) != maxNote {
 		t.Errorf("note length = %d, want it capped at %d", len(m.Note), maxNote)
@@ -225,17 +225,17 @@ func TestMarkNoteIsBounded(t *testing.T) {
 // absurdly long one must not reach the persisted document either way.
 func TestSetAddressRejectsEmptyAndOverlong(t *testing.T) {
 	s := New()
-	if s.SetAddress("") {
-		t.Error("SetAddress accepted an empty address")
+	if ok, err := s.SetAddress(""); ok || err != nil {
+		t.Errorf("SetAddress accepted an empty address (ok=%v err=%v)", ok, err)
 	}
-	if s.SetAddress(strings.Repeat("a", maxAddress+1)) {
-		t.Error("SetAddress accepted a value past maxAddress")
+	if ok, err := s.SetAddress(strings.Repeat("a", maxAddress+1)); ok || err != nil {
+		t.Errorf("SetAddress accepted a value past maxAddress (ok=%v err=%v)", ok, err)
 	}
 	if s.Address() != "" {
 		t.Errorf("Address() = %q, want empty -- both attempts above should have been refused", s.Address())
 	}
-	if !s.SetAddress(strings.Repeat("a", maxAddress)) {
-		t.Error("SetAddress refused a value exactly at maxAddress")
+	if ok, err := s.SetAddress(strings.Repeat("a", maxAddress)); err != nil || !ok {
+		t.Errorf("SetAddress refused a value exactly at maxAddress: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -250,15 +250,15 @@ func TestSetAddressRejectsEmptyAndOverlong(t *testing.T) {
 func TestSetBackupTransportRefusesAnythingElse(t *testing.T) {
 	s := New()
 	for _, bad := range []string{"", "SFTP", "ftp", "https ", "scp"} {
-		if s.SetBackupTransport(bad) {
-			t.Errorf("SetBackupTransport(%q) was accepted", bad)
+		if ok, err := s.SetBackupTransport(bad); ok || err != nil {
+			t.Errorf("SetBackupTransport(%q) was accepted (ok=%v err=%v)", bad, ok, err)
 		}
 	}
 	if got := s.BackupTransport(); got != BackupTransportSFTP {
 		t.Errorf("BackupTransport() = %q, want the sftp default -- every attempt above should have been refused", got)
 	}
-	if !s.SetBackupTransport(BackupTransportHTTPS) {
-		t.Fatal("SetBackupTransport refused https")
+	if ok, err := s.SetBackupTransport(BackupTransportHTTPS); err != nil || !ok {
+		t.Fatalf("SetBackupTransport refused https: ok=%v err=%v", ok, err)
 	}
 	if got := s.BackupTransport(); got != BackupTransportHTTPS {
 		t.Errorf("BackupTransport() = %q, want https", got)
@@ -306,8 +306,8 @@ func TestWitnessDoesNotDisturbMarks(t *testing.T) {
 	s := New()
 	now := time.Now()
 
-	if _, ok := s.NoteMark(2, MarkSkipped, "tom", "no router has opened a syslog connection", now); !ok {
-		t.Fatal("NoteMark refused a valid skip")
+	if _, ok, err := s.NoteMark(2, MarkSkipped, "tom", "no router has opened a syslog connection", now); err != nil || !ok {
+		t.Fatalf("NoteMark refused a valid skip: ok=%v err=%v", ok, err)
 	}
 	if _, ok := s.NoteWitnessed(2, "syslog connected from 192.0.2.1", now.Add(time.Minute)); !ok {
 		t.Fatal("NoteWitnessed refused a valid step")
@@ -324,8 +324,8 @@ func TestWitnessDoesNotDisturbMarks(t *testing.T) {
 
 	// The operator changes their mind after the witness exists -- the
 	// witness must still be there afterwards.
-	if _, ok := s.NoteMark(2, MarkForced, "tom", "still nothing", now.Add(2*time.Minute)); !ok {
-		t.Fatal("NoteMark refused a valid force")
+	if _, ok, err := s.NoteMark(2, MarkForced, "tom", "still nothing", now.Add(2*time.Minute)); err != nil || !ok {
+		t.Fatalf("NoteMark refused a valid force: ok=%v err=%v", ok, err)
 	}
 	if witnessed := s.Witnessed(); len(witnessed) != 1 {
 		t.Fatalf("Witnessed() after a later mark = %+v, want the witness to survive it", witnessed)

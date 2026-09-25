@@ -15,7 +15,7 @@
 // fail. It changes it back at the end regardless, and asserts that it
 // did.
 
-import { session, check, done, openAccountMenu, launchBrowser } from './live-browser.mjs'
+import { session, check, done, openAccountMenu, launchBrowser, completeFactorOverApi } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
@@ -41,6 +41,11 @@ const other = await otherCtx.newPage()
 await other.goto(URL_BASE, { waitUntil: 'networkidle' })
 const otherLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: PASS })
 check(otherLogin.status === 200, `a second browser signs in (${otherLogin.status})`)
+// #1253: the password alone no longer produces a session -- every local
+// account holds a second factor now, so this client is at the same
+// pending-factor step a browser would be, and has to finish it before
+// it holds the session the rest of this scenario is about.
+check(await completeFactorOverApi(other.request), 'the second browser completes its second factor')
 // GET /api/definitions is used below purely as an "is this session still
 // an authenticated admin" probe -- any admin-gated read would do, and
 // this is the one every other scenario in this directory already

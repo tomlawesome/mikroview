@@ -3,7 +3,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // deviceTestServer is an admin session against a server with a fresh,
@@ -26,7 +29,7 @@ func deviceTestServer(t *testing.T) (*Server, *httptest.Server, *http.Client) {
 	s.Devices = device.NewRegistry(nil)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	return s, ts, admin
 }
 
@@ -81,6 +84,45 @@ func TestDeviceCreateConflictsOnADuplicateID(t *testing.T) {
 	}
 }
 
+// unsavableBackend is a device registry backend whose every Save
+// fails, for the #1303 proof that a write the registry cannot keep is
+// reported to the operator rather than quietly applied in memory.
+type unsavableBackend struct{}
+
+func (unsavableBackend) Load(context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (unsavableBackend) Save(context.Context, []byte, int64) (int64, error) {
+	return 0, errors.New("disk full")
+}
+func (unsavableBackend) Close() error     { return nil }
+func (unsavableBackend) Describe() string { return "/var/lib/mikroview/secret-path/devices.json" }
+
+func TestDeviceCreateReportsAFailedSaveAndChangesNothing(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	reg, err := device.OpenRegistryWithBackend(unsavableBackend{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Devices = reg
+
+	resp := postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"})
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "nothing was changed") {
+		t.Errorf("body = %q, want the 'nothing was changed' sentence", body)
+	}
+	if strings.Contains(string(body), "secret-path") || strings.Contains(string(body), "disk full") {
+		t.Errorf("body = %q leaks the backend's path or error; that belongs in the log only", body)
+	}
+	if got := s.Devices.List(); len(got) != 0 {
+		t.Errorf("List() = %+v after a failed create, want empty", got)
+	}
+}
+
 func TestDeviceDeleteClearsItAndRefusesAConfiguredOne(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
@@ -108,7 +150,7 @@ func TestDeviceDeleteClearsItAndRefusesAConfiguredOne(t *testing.T) {
 	s2.Devices = device.NewRegistry([]config.Device{{ID: "core", SourceIP: "192.168.1.1"}})
 	ts2 := httptest.NewServer(s2.Routes())
 	t.Cleanup(ts2.Close)
-	admin2 := setUpAdmin(t, ts2)
+	admin2 := setUpAdmin(t, s2, ts2)
 
 	refused := deleteNoBody(t, admin2, ts2.URL+"/api/devices/core")
 	defer refused.Body.Close()
@@ -373,7 +415,7 @@ func TestDeviceRegisterRecordsIntentAndGrantsNoAddress(t *testing.T) {
 // TestDeviceRegisterRequiresAdmin: same tier as every other
 // device-identity write in this file.
 func TestDeviceRegisterRequiresAdmin(t *testing.T) {
-	_, ts, admin := deviceTestServer(t)
+	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
 	postJSON(t, admin, ts.URL+"/api/auth/users",
 		createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
@@ -381,6 +423,7 @@ func TestDeviceRegisterRequiresAdmin(t *testing.T) {
 	viewer := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewer, ts.URL+"/api/auth/login",
 		credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/devices/.../registration below
 
 	resp := postJSON(t, viewer, ts.URL+"/api/devices/hap-ax3/registration",
 		deviceRegisterRequest{Name: "hap-ax3"})

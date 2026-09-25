@@ -19,6 +19,13 @@
 // mikroview does not pin those to digests today and this script checks
 // the review record against reality, not a stricter policy this repo
 // does not implement.
+//
+// #1312: the Go toolchain is also pinned four separate times -- go.mod's
+// `go` directive, Dockerfile's `FROM golang:X-alpine`, live-check.Dockerfile's
+// `ARG GO_VERSION=X` and every `image: golang:X` in .gitlab-ci.yml -- and
+// nothing tied them together, so CI floated on a patch the shipped image
+// never saw. This script additionally fails when those four disagree,
+// independently of the policy-vs-reality check above.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -123,6 +130,61 @@ export function extractImagePins({ dockerfile, gitlabCi }) {
   return pins;
 }
 
+const GO_MOD_DIRECTIVE = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m;
+const DOCKERFILE_GOLANG_FROM = /^\s*FROM\s+golang:(\d+\.\d+(?:\.\d+)?)(?:-\S+)?/im;
+const GO_VERSION_ARG = /^\s*ARG\s+GO_VERSION=(\d+\.\d+(?:\.\d+)?)\s*$/m;
+const GITLAB_GOLANG_IMAGE = /image:\s*golang:(\d+\.\d+(?:\.\d+)?)\b/g;
+
+/**
+ * Reads the Go toolchain version named in each of the four places that
+ * name one (#1312): go.mod's `go` directive, the Dockerfile's golang
+ * base image, live-check.Dockerfile's checksummed-tarball ARG, and every
+ * `image: golang:X` in .gitlab-ci.yml. Returns a map from a short label
+ * to the version string found there -- one entry per `.gitlab-ci.yml`
+ * `image:` line found, distinctly labelled, so two differing CI jobs are
+ * both reported rather than one silently winning.
+ */
+export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, gitlabCi }) {
+  const pins = new Map();
+
+  if (goMod !== undefined) {
+    const match = GO_MOD_DIRECTIVE.exec(goMod.text);
+    if (match) pins.set(`${goMod.file} (go directive)`, match[1]);
+  }
+  if (dockerfile !== undefined) {
+    const match = DOCKERFILE_GOLANG_FROM.exec(dockerfile.text);
+    if (match) pins.set(`${dockerfile.file} (FROM golang)`, match[1]);
+  }
+  if (liveCheckDockerfile !== undefined) {
+    const match = GO_VERSION_ARG.exec(liveCheckDockerfile.text);
+    if (match) pins.set(`${liveCheckDockerfile.file} (GO_VERSION ARG)`, match[1]);
+  }
+  if (gitlabCi !== undefined) {
+    const lines = gitlabCi.text.split("\n");
+    lines.forEach((line, index) => {
+      GITLAB_GOLANG_IMAGE.lastIndex = 0;
+      const match = GITLAB_GOLANG_IMAGE.exec(line);
+      if (match) pins.set(`${gitlabCi.file}:${index + 1}`, match[1]);
+    });
+  }
+
+  return pins;
+}
+
+/**
+ * Fails when the Go versions collected by extractGoVersionPins disagree.
+ * Two-component versions (a floating `image: golang:1.27`) are treated
+ * as distinct from any three-component patch -- the whole point of
+ * #1312 is that a floating minor tag can silently resolve to a patch
+ * nothing else in the repository names.
+ */
+export function diffGoVersionPins(pins) {
+  const versions = new Set(pins.values());
+  if (versions.size <= 1) return [];
+  const detail = [...pins.entries()].map(([label, version]) => `${label}=${version}`).join(", ");
+  return [`Go toolchain versions disagree across the repository: ${detail}`];
+}
+
 function readIfExists(path) {
   try {
     return readFileSync(path, "utf8");
@@ -149,6 +211,7 @@ export function collectRepositoryPins(root = repositoryRoot) {
   const dockerfileText = readIfExists(join(root, "Dockerfile"));
   const liveCheckDockerfileText = readIfExists(join(root, "live-check.Dockerfile"));
   const gitlabCiText = readIfExists(join(root, ".gitlab-ci.yml"));
+  const goModText = readIfExists(join(root, "go.mod"));
 
   const imagePins = extractImagePins({
     dockerfile: dockerfileText === undefined ? undefined : { file: "Dockerfile", text: dockerfileText },
@@ -169,9 +232,18 @@ export function collectRepositoryPins(root = repositoryRoot) {
     }
   }
 
+  const goVersionPins = extractGoVersionPins({
+    goMod: goModText === undefined ? undefined : { file: "go.mod", text: goModText },
+    dockerfile: dockerfileText === undefined ? undefined : { file: "Dockerfile", text: dockerfileText },
+    liveCheckDockerfile:
+      liveCheckDockerfileText === undefined ? undefined : { file: "live-check.Dockerfile", text: liveCheckDockerfileText },
+    gitlabCi: gitlabCiText === undefined ? undefined : { file: ".gitlab-ci.yml", text: gitlabCiText },
+  });
+
   return {
     actionPins: extractActionPins(fileTexts),
     imagePins,
+    goVersionPins,
   };
 }
 
@@ -227,8 +299,8 @@ export function diffPolicy(policy, { actionPins, imagePins }) {
 function runCli() {
   const policyPath = process.argv[2] ?? "supply-chain/pins-policy.json";
   const policy = loadPolicy(policyPath);
-  const { actionPins, imagePins } = collectRepositoryPins();
-  const problems = diffPolicy(policy, { actionPins, imagePins });
+  const { actionPins, imagePins, goVersionPins } = collectRepositoryPins();
+  const problems = [...diffPolicy(policy, { actionPins, imagePins }), ...diffGoVersionPins(goVersionPins)];
   if (problems.length > 0) {
     process.stderr.write(
       `Supply-chain pins policy is out of date (${problems.length} problem(s)):\n` +
@@ -239,7 +311,8 @@ function runCli() {
   }
   process.stdout.write(
     `Supply-chain pins policy matches the repository: ${policy.ciActions.length} ci action(s), ` +
-      `${policy.containerImages.length} container image(s).\n`,
+      `${policy.containerImages.length} container image(s), Go toolchain agrees at ` +
+      `${[...new Set(goVersionPins.values())].join(", ")} across ${goVersionPins.size} location(s).\n`,
   );
 }
 

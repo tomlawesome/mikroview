@@ -161,6 +161,16 @@ func newestOpened(nights []watchlist.Night) time.Time {
 // enabled flag, the scope or anything else on the envelope, and it runs
 // on the evaluation path where a full convert-and-revalidate round trip
 // would be paid per match.
+//
+// Stays on the swallow-and-log persistLocked (v0.6.0 audit finding R6
+// left this one alone) rather than tryPersistLocked: every caller
+// (RecordWatchNight, FillWatchNights, TickWatchLiveness) is engine run
+// state written on the evaluation/tick path, not an operator action --
+// nobody is waiting on a success/failure answer, and a night or a silent
+// mark this process fails to save is simply re-derived (FillNights is
+// idempotent, and the next matching event runs RecordWatchNight's own
+// catch-up fill) rather than lost in a way an operator would need to be
+// told about.
 func (s *DefinitionsStore) updateNightsLocked(id string, mutate func(*watchlist.Entry) bool) bool {
 	raw, ok := s.raw[id]
 	if !ok {

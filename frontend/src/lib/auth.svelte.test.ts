@@ -13,7 +13,28 @@ vi.mock('./api', () => ({
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
+  submitLoginFactor: vi.fn(),
+  // The one non-function export this module reaches for -- kept as the
+  // real literal (rather than importOriginal's whole module) since
+  // everything else here is deliberately a bare vi.fn() stub.
+  PENDING_LOGIN_EXPIRED: 'sign in again',
   fetchPersistence: vi.fn(),
+  // #1283: preferences.svelte.ts (imported transitively through
+  // clearSessionState's preferencesState.reset(), and through apply()'s
+  // preferencesState.ensureLoaded()) talks to the backend only through
+  // these two -- mocked here for the same reason as every other api.ts
+  // call this file already stubs.
+  fetchMyPreferences: vi.fn(),
+  saveMyPreferences: vi.fn(),
+}))
+
+// #1250: authState.loginWithPasskey() delegates the actual ceremony to
+// lib/passkeys.svelte.ts -- mocked here for the same reason every other
+// api.ts-adjacent call this file stubs is: this file exercises AuthState's
+// own wiring, never the browser boundary underneath it (that boundary has
+// its own test file, lib/passkeys.svelte.test.ts).
+vi.mock('./passkeys.svelte', () => ({
+  loginWithPasskey: vi.fn(),
 }))
 
 import {
@@ -23,8 +44,12 @@ import {
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
+  submitLoginFactor,
   fetchPersistence,
+  fetchMyPreferences,
+  saveMyPreferences,
 } from './api'
+import { loginWithPasskey } from './passkeys.svelte'
 import { authState, pageReload } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
@@ -37,6 +62,7 @@ import { auditState } from './audit.svelte'
 import { persistenceState } from './persistence.svelte'
 import { configProblemsState } from './configProblems.svelte'
 import { configUpgradeState } from './configUpgrade.svelte'
+import { preferencesState } from './preferences.svelte'
 import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
@@ -59,13 +85,29 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.signInTimedOut = false
   authState.justSignedOut = false
   authState.signedInSince = ''
   authState.mustChangePassword = false
+  authState.mustEnrolSecondFactor = false
+  authState.hasTOTP = false
+  authState.passkeyCount = 0
+  authState.passkeyStatus = 'unset'
+  authState.passkeyOrigin = undefined
+  authState.pendingSecondFactor = []
+  authState.pendingPasskeyOrigin = undefined
   window.history.replaceState(null, '', '/')
   // jsdom cannot navigate; the reload tests below assert on this spy.
   sessionStorage.clear()
   vi.spyOn(pageReload, 'now').mockImplementation(() => {})
+  // preferencesState is a module-level singleton too (#1283) -- reset
+  // between tests for the same reason appState/flagsState/etc. already
+  // are, and give the two calls apply()/logout() make a safe default so
+  // a test that doesn't care about preferences at all isn't left with
+  // an unhandled rejection from an unmocked resolution.
+  preferencesState.reset()
+  vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+  vi.mocked(saveMyPreferences).mockResolvedValue(null)
 })
 
 describe('AuthState.check', () => {
@@ -80,6 +122,44 @@ describe('AuthState.check', () => {
     expect(authState.username).toBe('tom')
     expect(authState.role).toBe('admin')
     expect(authState.ssoAvailable).toBe(true)
+  })
+
+  // #1249: absent on an older server, read as false -- there is nothing
+  // to be wrong about, since a server that predates the field cannot
+  // have activated a factor either.
+  it('carries hasTOTP through, defaulting to false when the server omits it', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin', hasTOTP: true }),
+    )
+    await authState.check()
+    expect(authState.hasTOTP).toBe(true)
+
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
+    await authState.check()
+    expect(authState.hasTOTP).toBe(false)
+  })
+
+  // #1250: mirrors the session's own passkeys summary, same "absent on
+  // an older server reads as none of them" reasoning as hasTOTP above.
+  it('carries the passkeys summary through, defaulting to none/unset when the server omits it', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({
+        authenticated: true,
+        username: 'tom',
+        role: 'admin',
+        passkeys: { count: 2, status: 'ready', origin: 'https://mikroview.example.org' },
+      }),
+    )
+    await authState.check()
+    expect(authState.passkeyCount).toBe(2)
+    expect(authState.passkeyStatus).toBe('ready')
+    expect(authState.passkeyOrigin).toBe('https://mikroview.example.org')
+
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
+    await authState.check()
+    expect(authState.passkeyCount).toBe(0)
+    expect(authState.passkeyStatus).toBe('unset')
+    expect(authState.passkeyOrigin).toBeUndefined()
   })
 
   // #677's sessions row ("this device ... signed in 4 d") reads this.
@@ -136,6 +216,46 @@ describe('AuthState.check', () => {
   })
 })
 
+// #1283: preferences load from the server once, on the transition into
+// the real 'authenticated' view -- not on every check(), and not for a
+// forced password change, which cannot reach the app to use them.
+describe('AuthState wires preferencesState to sign-in (#1283)', () => {
+  it('loads preferences once the session is authenticated', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'admin' }),
+    )
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'pulse' } })
+
+    await authState.check()
+    await preferencesState.ensureLoaded()
+
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+    expect(preferencesState.get('colorway')).toBe('pulse')
+  })
+
+  it('does not load preferences for a forced password change -- that session cannot reach the app', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'bilbo', role: 'user', mustChangePassword: true }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('must-change-password')
+    expect(fetchMyPreferences).not.toHaveBeenCalled()
+  })
+
+  it('does not re-fetch on a second check() once already loaded', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'admin' }))
+
+    await authState.check()
+    await preferencesState.ensureLoaded()
+    await authState.check()
+    await preferencesState.ensureLoaded()
+
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('AuthState.login', () => {
   it('re-checks the session and returns null on success', async () => {
     vi.mocked(login).mockResolvedValue(null)
@@ -158,6 +278,174 @@ describe('AuthState.login', () => {
     expect(result).toBe('invalid username or password')
     expect(fetchAuthSession).not.toHaveBeenCalled()
     expect(authState.state).toBe('loading')
+  })
+
+  // #1249: a correct password on an account holding a factor lands here
+  // instead of re-checking the session -- there isn't one yet, only the
+  // pending cookie the server set.
+  it('moves to pending-factor without re-checking when the account holds a factor', async () => {
+    vi.mocked(login).mockResolvedValue({ secondFactor: ['totp'] })
+
+    const result = await authState.login('tom', 'hunter2')
+
+    expect(result).toBeNull()
+    expect(authState.state).toBe('pending-factor')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // #1250: carries the pending login's own factor list and passkey
+  // origin -- AuthScreen reads these directly to decide which of the
+  // three ways in to offer.
+  it('carries the pending secondFactor list and passkeyOrigin through', async () => {
+    vi.mocked(login).mockResolvedValue({
+      secondFactor: ['passkey', 'totp'],
+      passkeyOrigin: 'https://mikroview.example.org',
+    })
+
+    await authState.login('tom', 'hunter2')
+
+    expect(authState.pendingSecondFactor).toEqual(['passkey', 'totp'])
+    expect(authState.pendingPasskeyOrigin).toBe('https://mikroview.example.org')
+  })
+
+  // #1250: an empty list is still pending -- an account whose only
+  // factor is a stale passkey never signs in on the password alone.
+  it('moves to pending-factor on an empty secondFactor list too', async () => {
+    vi.mocked(login).mockResolvedValue({ secondFactor: [] })
+
+    const result = await authState.login('tom', 'hunter2')
+
+    expect(result).toBeNull()
+    expect(authState.state).toBe('pending-factor')
+    expect(authState.pendingSecondFactor).toEqual([])
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('AuthState.loginWithPasskey', () => {
+  it('re-checks the session and returns null on success', async () => {
+    vi.mocked(loginWithPasskey).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'user' }),
+    )
+
+    const result = await authState.loginWithPasskey()
+
+    expect(result).toBeNull()
+    expect(fetchAuthSession).toHaveBeenCalled()
+    expect(authState.state).toBe('authenticated')
+  })
+
+  it('returns the error and does not re-check on a refused ceremony', async () => {
+    vi.mocked(loginWithPasskey).mockResolvedValue("that passkey couldn't be verified")
+
+    const result = await authState.loginWithPasskey()
+
+    expect(result).toBe("that passkey couldn't be verified")
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // The 5-minute pending-login cookie can outlive the passkey prompt too
+  // -- same fallback as submitFactor's own case below.
+  it('falls back to the password form on a pending-login timeout, instead of an inline error', async () => {
+    authState.state = 'pending-factor'
+    authState.pendingSecondFactor = ['passkey']
+    authState.pendingPasskeyOrigin = location.origin
+    vi.mocked(loginWithPasskey).mockResolvedValue('sign in again\n')
+
+    const result = await authState.loginWithPasskey()
+
+    expect(result).toBeNull()
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.signInTimedOut).toBe(true)
+    expect(authState.pendingSecondFactor).toEqual([])
+    expect(authState.pendingPasskeyOrigin).toBeUndefined()
+  })
+})
+
+describe('AuthState.submitFactor', () => {
+  it('re-checks the session and returns null on success', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'tom', role: 'user', hasTOTP: true }),
+    )
+
+    const result = await authState.submitFactor('123456')
+
+    expect(result).toBeNull()
+    expect(submitLoginFactor).toHaveBeenCalledWith('123456')
+    expect(fetchAuthSession).toHaveBeenCalled()
+    expect(authState.state).toBe('authenticated')
+    expect(authState.hasTOTP).toBe(true)
+  })
+
+  it('returns the error and does not re-check on a wrong code', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
+
+    const result = await authState.submitFactor('000000')
+
+    expect(result).toBe('invalid code')
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+  })
+
+  // A recovery code goes through the same box and the same call -- the
+  // server is what tells the two apart, not this method.
+  it('accepts a recovery code through the same call', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authenticated: true, username: 'tom', role: 'user' }))
+
+    await authState.submitFactor('a1b2-c3d4-e5f6-g7h8')
+
+    expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
+  })
+
+  // #1249's pending-login cookie lasts 5 minutes -- past that, the
+  // server answers every one of code/recovery/passkey with the same
+  // "sign in again" 401 (handleAuthLoginFactor), which is not an
+  // ordinary wrong code for the box to show inline: there is no session
+  // left for any code to complete. This falls back to the password form
+  // instead of leaving the code box up with nothing that can ever work.
+  it('falls back to the password form on a pending-login timeout, instead of an inline error', async () => {
+    authState.state = 'pending-factor'
+    authState.pendingSecondFactor = ['totp']
+    // The body exactly as the server sends it: Go's http.Error ends it
+    // with a newline.
+    vi.mocked(submitLoginFactor).mockResolvedValue('sign in again\n')
+
+    const result = await authState.submitFactor('123456')
+
+    expect(result).toBeNull()
+    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.signInTimedOut).toBe(true)
+    expect(authState.pendingSecondFactor).toEqual([])
+  })
+
+  // "invalid code" is a different 401 from the very same route -- an
+  // ordinary wrong guess, not an expired cookie -- and must stay on the
+  // code box exactly as it did before.
+  it('does not bounce to the password form on an ordinary wrong code', async () => {
+    authState.state = 'pending-factor'
+    vi.mocked(submitLoginFactor).mockResolvedValue('invalid code')
+
+    const result = await authState.submitFactor('000000')
+
+    expect(result).toBe('invalid code')
+    expect(authState.state).toBe('pending-factor')
+    expect(authState.signInTimedOut).toBe(false)
+  })
+
+  // The timed-out note belongs to the attempt that timed out: signing in
+  // again takes it away, rather than leaving it beside a fresh code box.
+  it('drops the timed-out note once the next sign-in starts', async () => {
+    authState.signInTimedOut = true
+    vi.mocked(login).mockResolvedValue({ secondFactor: ['totp'] } as never)
+
+    await authState.login('admin', 'right-password')
+
+    expect(authState.state).toBe('pending-factor')
+    expect(authState.signInTimedOut).toBe(false)
   })
 })
 
@@ -201,6 +489,68 @@ describe('AuthState.logout', () => {
     // Set so AuthLogin's next mount plays the door's way-out beat
     // (#645) -- consumeJustSignedOut() below is how it reads this.
     expect(authState.justSignedOut).toBe(true)
+  })
+
+  // #1283: a debounced write still sitting inside its 500ms window must
+  // reach the server before the session it depends on is gone --
+  // flush() has to run, and it has to run before the server logout
+  // call, not after.
+  it('flushes any pending preference write before ending the session', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(logout).mockResolvedValue(null)
+    preferencesState.seedForTest({})
+    preferencesState.set('colorway', 'nebula')
+
+    const order: string[] = []
+    vi.mocked(saveMyPreferences).mockImplementation(async () => {
+      order.push('saveMyPreferences')
+      return null
+    })
+    vi.mocked(logout).mockImplementation(async () => {
+      order.push('logout')
+      return null
+    })
+
+    await authState.logout()
+
+    expect(order).toEqual(['saveMyPreferences', 'logout'])
+  })
+})
+
+// #1253: AuthenticatorOverlay/PasskeysOverlay call this when
+// disableTOTP/disablePasskey answers signedOut -- the server has
+// already revoked every session on the account (removing its last
+// second factor), so unlike logout() above this makes no server call of
+// its own.
+describe('AuthState.signOutAfterFactorRemoved', () => {
+  it('clears identity and reloads without calling the server logout route', async () => {
+    authState.state = 'authenticated'
+    authState.username = 'tom'
+    authState.role = 'user'
+    authState.hasTOTP = true
+
+    await authState.signOutAfterFactorRemoved()
+
+    expect(logout).not.toHaveBeenCalled()
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.username).toBe('')
+    expect(authState.role).toBe('')
+    expect(pageReload.now).toHaveBeenCalled()
+    // Plays the door's way-out beat, the same as an ordinary logout()
+    // -- this is the caller's own action ending their session, not a
+    // forced expiry (handleUnauthorized deliberately leaves this alone).
+    expect(authState.justSignedOut).toBe(true)
+  })
+
+  it('flushes any pending preference write first, the same as logout()', async () => {
+    authState.state = 'authenticated'
+    preferencesState.seedForTest({})
+    preferencesState.set('colorway', 'nebula')
+    vi.mocked(saveMyPreferences).mockResolvedValue(null)
+
+    await authState.signOutAfterFactorRemoved()
+
+    expect(saveMyPreferences).toHaveBeenCalled()
   })
 })
 
@@ -648,6 +998,25 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
     expect(configUpgradeState.loaded).toBe(false)
     expect(configUpgradeState.error).toBeNull()
   })
+
+  // #1283: preferencesState is the seventh module-lifetime singleton in
+  // this batch. logout() flushes it first (its own test, above); this
+  // is the "dropped from memory" half -- the next sign-in on this tab
+  // must call ensureLoaded() again rather than see the previous
+  // account's cached record.
+  it('drops preferencesState from memory and re-fetches on the next ensureLoaded()', async () => {
+    preferencesState.seedForTest({ colorway: 'nebula' })
+    expect(preferencesState.get('colorway')).toBe('nebula')
+
+    await authState.logout()
+
+    expect(preferencesState.get('colorway')).toBeUndefined()
+
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'frequency' } })
+    await preferencesState.ensureLoaded()
+    expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+    expect(preferencesState.get('colorway')).toBe('frequency')
+  })
 })
 
 describe('AuthState.handleUnauthorized clears the previous session state (#1083)', () => {
@@ -661,6 +1030,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     watchlistState.loaded = true
     tokensState.list = [fixtureApiToken()]
     tokensState.justCreated = fixtureApiToken()
+    preferencesState.seedForTest({ colorway: 'nebula' })
 
     authState.handleUnauthorized()
 
@@ -672,6 +1042,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     expect(watchlistState.loaded).toBe(false)
     expect(tokensState.list).toEqual([])
     expect(tokensState.justCreated).toBeNull()
+    expect(preferencesState.get('colorway')).toBeUndefined()
   })
 
   it('leaves every store untouched when the session was not authenticated', () => {
@@ -812,5 +1183,104 @@ describe('AuthState and a forced password change (#1251)', () => {
 
     expect(authState.state).toBe('unauthenticated')
     expect(authState.mustChangePassword).toBe(false)
+  })
+})
+
+
+// #1336 (#1253's door): a local account with no second factor holds a
+// real session that may reach nothing but the four enrolment routes.
+// Unlike 'pending-factor', this state comes straight from
+// GET /api/auth/session -- the flag is computed from the account, not
+// the session -- so a plain check() (app boot, page reload
+// mid-enrolment) lands on the door and stays there until a factor is
+// proven.
+describe('AuthState and the forced-enrolment door (#1336)', () => {
+  const cases: {
+    name: string
+    mustEnrolSecondFactor: boolean | undefined
+    want: string
+  }[] = [
+    { name: 'the account holds no second factor', mustEnrolSecondFactor: true, want: 'must-enrol-factor' },
+    { name: 'the account holds a factor', mustEnrolSecondFactor: false, want: 'authenticated' },
+    {
+      name: 'an older server does not report the flag at all',
+      mustEnrolSecondFactor: undefined,
+      want: 'authenticated',
+    },
+  ]
+
+  for (const c of cases) {
+    it(`lands in ${c.want} when ${c.name}`, async () => {
+      vi.mocked(fetchAuthSession).mockResolvedValue(
+        session({
+          authenticated: true,
+          username: 'meredith',
+          role: 'viewer',
+          mustEnrolSecondFactor: c.mustEnrolSecondFactor,
+        }),
+      )
+
+      await authState.check()
+
+      expect(authState.state).toBe(c.want)
+      expect(authState.mustEnrolSecondFactor).toBe(c.mustEnrolSecondFactor ?? false)
+    })
+  }
+
+  it('a page reload mid-enrolment lands back on the door, not the login form', async () => {
+    // The state a reload starts from is 'loading' with the flag long
+    // gone from memory -- everything the door needs must come from the
+    // session response alone.
+    authState.state = 'loading'
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'meredith', role: 'viewer', mustEnrolSecondFactor: true }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('must-enrol-factor')
+  })
+
+  it('an outstanding password change outranks the door, matching requireAuth\'s own gate order', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({
+        authenticated: true,
+        username: 'meredith',
+        role: 'viewer',
+        mustChangePassword: true,
+        mustEnrolSecondFactor: true,
+      }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('must-change-password')
+    // Both flags are still mirrored -- the door is what comes next once
+    // the password is set.
+    expect(authState.mustEnrolSecondFactor).toBe(true)
+  })
+
+  it('opens the app once a re-check reports the factor is held', async () => {
+    authState.state = 'must-enrol-factor'
+    authState.mustEnrolSecondFactor = true
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'meredith', role: 'viewer', mustEnrolSecondFactor: false }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('authenticated')
+    expect(authState.mustEnrolSecondFactor).toBe(false)
+  })
+
+  it('drops the flag when a mid-enrolment request comes back 401', () => {
+    authState.state = 'must-enrol-factor'
+    authState.mustEnrolSecondFactor = true
+
+    authState.handleUnauthorized()
+
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.mustEnrolSecondFactor).toBe(false)
+    expect(pageReload.now).toHaveBeenCalled()
   })
 })

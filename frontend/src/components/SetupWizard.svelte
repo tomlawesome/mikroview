@@ -131,9 +131,15 @@
 
   // The refused senders (#1281), on the same cadence and for the same
   // reason as the two polls above: the Send logs step's warning box is
-  // a reading of what has arrived while it waits.
+  // a reading of what has arrived while it waits. Scoped to the Send
+  // logs pane itself (v0.6.0 audit Lows, E12): every other pane never
+  // draws refusedLine/refusedForThisWalk at all (see the `step.key ===
+  // 'syslog'` guard around the warning box below), so polling this
+  // while looking at, say, the name step or the finish pane was a
+  // request every 5s for a result nothing on screen could show.
   $effect(() => {
     if (!wizardState.open) return
+    if (wizardState.steps[wizardState.pane - 1] !== 'syslog') return
     wizardState.refreshRefused()
     const timer = setInterval(() => wizardState.refreshRefused(), POLL_MS)
     return () => clearInterval(timer)

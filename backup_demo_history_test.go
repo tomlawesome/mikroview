@@ -117,6 +117,10 @@ func TestRestoredSevenNightHistorySurvivesLiveFill(t *testing.T) {
 	restoredPath := filepath.Join(dstDir, "definitions.json")
 	t.Setenv("MIKROVIEW_CONFIG", "")
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	// #1293: the restore marker lives beside the data directory
+	// (derived from Auth.StorePath), which must be writable even for a
+	// restore that never touches the auth store itself.
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", filepath.Join(dstDir, "users.json"))
 	t.Setenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH", restoredPath)
 	if code := runRestore([]string{envelopePath}); code != 0 {
 		t.Fatalf("runRestore = %d, want 0", code)
@@ -239,6 +243,10 @@ func TestRestoreWritesRetainedEventsThroughRetentionEncryption(t *testing.T) {
 	historyDir := filepath.Join(dir, "history")
 	t.Setenv("MIKROVIEW_CONFIG", "")
 	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	// #1293: the restore marker lives beside the data directory
+	// (derived from Auth.StorePath), which must be writable even for a
+	// restore that only carries retained events.
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", filepath.Join(dir, "users.json"))
 	t.Setenv("MIKROVIEW_HISTORY_KEY_FILE", keyPath)
 	t.Setenv("MIKROVIEW_HISTORY_DIR", historyDir)
 

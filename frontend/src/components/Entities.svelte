@@ -297,7 +297,19 @@
   })
 
   const hostEntities = $derived(entitiesState.list.filter((e) => e.type === 'host'))
-  const discoveredHosts = $derived(discoverHosts(appState.events, entitiesState.list))
+  // rawDiscoveredHosts walks the whole event buffer, keyed only on
+  // appState.events -- not on entitiesState.list too -- so that walk
+  // runs once per buffer change (v0.6.0 audit Lows, E4), not on every
+  // unrelated entities-list change (a rename, a different entity named
+  // elsewhere). discoverHosts is called with no entities so it does no
+  // filtering of its own; discoveredHosts below does that filtering
+  // itself, over the already-small discovered set rather than the
+  // buffer.
+  const rawDiscoveredHosts = $derived(discoverHosts(appState.events, []))
+  const discoveredHosts = $derived.by(() => {
+    const named = new Set(hostEntities.map((e) => e.key))
+    return rawDiscoveredHosts.filter((d) => !named.has(d.key))
+  })
 
   interface ThingRow {
     key: string // the IP address -- the entity key
@@ -550,7 +562,14 @@
   // --- ports tab: every port named, plus every port seen in traffic
   // that isn't yet (#681) --------------------------------------------
   const portEntities = $derived(entitiesState.list.filter((e) => e.type === 'port'))
-  const discoveredPorts = $derived(discoverPorts(appState.events, entitiesState.list))
+  // Same reasoning as rawDiscoveredHosts above (#1304 E4): the buffer
+  // walk is keyed only on appState.events, and the entities filter runs
+  // separately over the small discovered set.
+  const rawDiscoveredPorts = $derived(discoverPorts(appState.events, []))
+  const discoveredPorts = $derived.by(() => {
+    const named = new Set(portEntities.map((e) => e.key))
+    return rawDiscoveredPorts.filter((d) => !named.has(d.key))
+  })
 
   interface PortRow {
     key: string
@@ -616,6 +635,16 @@
   let renameDraft = $state('')
   let renameSaving = $state(false)
   let renameError = $state<string | null>(null)
+  // renameSeq guards a refused save against overwriting a newer rename
+  // (v0.6.0 audit Lows, R8): saveRename clears renamingKey before its
+  // await so the row's own input disappears while the request is in
+  // flight, and used to put it straight back on a refusal with no check
+  // that the operator had, in the meantime, started renaming a different
+  // row (or the same one again). A slow refusal landing after that would
+  // reopen the old row's editor over whatever the operator is doing now.
+  // Bumped by startRename and cancelRename -- both are "moved on" from
+  // whatever saveRename was in flight for.
+  let renameSeq = 0
 
   function isRenaming(type: EntityType, key: string): boolean {
     return renamingKey?.type === type && renamingKey.key === key
@@ -625,11 +654,13 @@
     renamingKey = { type, key }
     renameDraft = label
     renameError = null
+    renameSeq++
   }
 
   function cancelRename() {
     renamingKey = null
     renameError = null
+    renameSeq++
   }
 
   async function saveRename(type: EntityType, key: string) {
@@ -637,6 +668,7 @@
     renameSaving = true
     const existing = entitiesState.list.find((e) => e.type === type && e.key === key)
     const wasRenaming = renamingKey
+    const requestSeq = renameSeq
     renamingKey = null
     const err = await entitiesState.upsert({
       type,
@@ -645,7 +677,7 @@
       tags: existing?.tags ?? [],
     })
     renameSaving = false
-    if (err) {
+    if (err && renameSeq === requestSeq) {
       renamingKey = wasRenaming
       renameError = err
     }
