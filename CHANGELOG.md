@@ -16,7 +16,16 @@ rewritten.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **On-disk event history is no longer deleted just because it is off**
+  (#1353). A config with the `history:` block missing, `enabled: false`,
+  or no key file used to make MikroView delete every retained day at
+  startup, with one info line after the fact. It now keeps the files,
+  retains nothing new, and logs a warning saying where they are and how
+  to turn history back on. Nothing in the config file deletes retained
+  history any more; deleting is only ever an admin choice made from
+  Settings. Turning history off from Settings still asks, then deletes.
 
 ## [0.6.1] - 2026-09-24
 
