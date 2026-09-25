@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,9 +16,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -166,6 +169,45 @@ func TestVersionBootMessageTrimsWhitespaceFromPersistedMarker(t *testing.T) {
 	want := "version abc1234"
 	if got != want {
 		t.Errorf("versionBootMessage with a trailing newline in the persisted marker = %q, want %q", got, want)
+	}
+}
+
+// TestPasskeyStartupRefusal covers all four combinations
+// passkeyStartupRefusal decides between: each non-ready PasskeyStatus
+// with and without an existing passkey, plus PasskeyStatusReady (which
+// must never refuse, however anyPasskeysExist answers -- a ready
+// relying party is exactly the case that needs no rescuing). A refusal
+// must name both ways out: publicUrl and `-clear-second-factor`.
+func TestPasskeyStartupRefusal(t *testing.T) {
+	cases := []struct {
+		name             string
+		status           api.PasskeyStatus
+		anyPasskeysExist bool
+		wantRefusal      bool
+	}{
+		{"ready, none registered", api.PasskeyStatusReady, false, false},
+		{"ready, some registered", api.PasskeyStatusReady, true, false},
+		{"unset, none registered", api.PasskeyStatusUnset, false, false},
+		{"unset, some registered", api.PasskeyStatusUnset, true, true},
+		{"ip, none registered", api.PasskeyStatusIP, false, false},
+		{"ip, some registered", api.PasskeyStatusIP, true, true},
+		{"insecure, none registered", api.PasskeyStatusInsecure, false, false},
+		{"insecure, some registered", api.PasskeyStatusInsecure, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := passkeyStartupRefusal(c.status, c.anyPasskeysExist)
+			if c.wantRefusal {
+				if got == "" {
+					t.Fatal("wanted a refusal message, got none")
+				}
+				if !strings.Contains(got, "publicUrl") || !strings.Contains(got, "-clear-second-factor") {
+					t.Errorf("refusal message = %q, want it to name both publicUrl and -clear-second-factor", got)
+				}
+			} else if got != "" {
+				t.Errorf("wanted no refusal, got %q", got)
+			}
+		})
 	}
 }
 
@@ -363,6 +405,32 @@ func TestJoinOnShutdownWaitsForShutdownToFinishDraining(t *testing.T) {
 	}
 }
 
+// TestReportListenerFailureRoutesThroughStopNotExit is #1304's R7: a
+// listener dying (a bind failure, or Serve returning a real error) used
+// to call os.Exit(1) on the spot, which skips closeStoreOnShutdown,
+// writeFinalSnapshot and hist.Close() entirely -- the same "a change
+// made right before shutdown is silently dropped" failure issue #400
+// exists to prevent. reportListenerFailure exists so a caller ends up on
+// the exact path a real signal takes (cancelling the context every
+// joinOnShutdown registration waits on, per
+// TestJoinOnShutdownWaitsForShutdownToFinishDraining above) rather than
+// exiting immediately: it must call stop, not os.Exit, which this test
+// pins by supplying a fake stop and checking it actually ran.
+func TestReportListenerFailureRoutesThroughStopNotExit(t *testing.T) {
+	var failed atomic.Bool
+	var stopped atomic.Bool
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	reportListenerFailure(log, errors.New("bind: address already in use"), &failed, func() { stopped.Store(true) })
+
+	if !failed.Load() {
+		t.Error("reportListenerFailure did not mark the failure -- main would exit 0 despite the listener dying")
+	}
+	if !stopped.Load() {
+		t.Error("reportListenerFailure did not call stop -- every joinOnShutdown goroutine would block on <-ctx.Done() forever, and main would hang instead of draining and exiting")
+	}
+}
+
 func TestSecurityHeadersSetOnEveryResponse(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 
@@ -409,7 +477,6 @@ func TestStaticCacheHeaders(t *testing.T) {
 		{"/assets/index-BShEGKey.js", "public, max-age=31536000, immutable", "content-hashed: the name changes when the bytes do"},
 		{"/assets/index-CE5qYX4Y.css", "public, max-age=31536000, immutable", "content-hashed"},
 		{"/sw.js", "no-cache", "stable name, and the file that decides whether an upgrade is noticed at all"},
-		{"/registerSW.js", "no-cache", "stable name"},
 		{"/", "no-cache", "index.html under a stable name"},
 		{"/index.html", "no-cache", "stable name"},
 		{"/manifest.webmanifest", "no-cache", "stable name"},

@@ -19,6 +19,10 @@ vi.mock('../lib/api', () => ({
   login: vi.fn(),
   logout: vi.fn(async () => null),
   register: vi.fn(),
+  // metricsPref now writes through preferencesState (#1283), which
+  // talks to the backend through these two.
+  fetchMyPreferences: vi.fn().mockResolvedValue({ version: 1, prefs: {} }),
+  saveMyPreferences: vi.fn().mockResolvedValue(null),
 }))
 
 import { appState } from '../lib/state.svelte'
@@ -26,6 +30,7 @@ import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { metricsPref } from '../lib/metrics.svelte'
+import { preferencesState } from '../lib/preferences.svelte'
 import { emptyFilters } from '../lib/types'
 
 // jsdom has no window.matchMedia -- AccountMenu (mounted by SceneBar)
@@ -102,8 +107,9 @@ describe('SceneBar (#683, ratified round 30)', () => {
     flushSync()
     expect(metricsPref.view).toBe('register')
     expect(screen.getByRole('button', { name: 'register' }).getAttribute('aria-pressed')).toBe('true')
-    // Persisted, so a reload applies it before first paint (#488).
-    expect(localStorage.getItem('mikroview-metrics-view')).toBe('register')
+    // Persisted (#1283: to the shared per-user record, not localStorage
+    // any more), so a sign-in anywhere applies it before first paint (#488).
+    expect(preferencesState.get('metrics')).toBe('register')
   })
 
   // Moved here from Docket.svelte.test.ts with the tab row (#700). The

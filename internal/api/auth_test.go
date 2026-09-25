@@ -376,6 +376,7 @@ func TestLoginThenAccessProtectedRoute(t *testing.T) {
 	if loginResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected login to succeed, got %d", loginResp.StatusCode)
 	}
+	seedFactor(t, s, ts, "admin") // #1253: needed before /api/events below
 
 	resp, err := client.Get(ts.URL + "/api/events")
 	if err != nil {
@@ -488,6 +489,13 @@ func TestLogoutAllEndsEverySessionButTheCallers(t *testing.T) {
 	deviceB := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, deviceB, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
 
+	// #1253: needed before /api/auth/logout-all and /api/events below --
+	// done only now, with both devices already signed in, since the
+	// factor lives on the account rather than the session and deviceB's
+	// own plain-password login above would otherwise stall on the
+	// pending-login step once the account holds one.
+	totpEnrolAndConfirm(t, deviceA, ts)
+
 	callResp := postJSON(t, deviceA, ts.URL+"/api/auth/logout-all", map[string]any{})
 	callResp.Body.Close()
 	if callResp.StatusCode != http.StatusOK {
@@ -518,8 +526,7 @@ func TestAdminCanCreateAdditionalUsers(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	client := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"})
 	defer resp.Body.Close()
@@ -538,8 +545,7 @@ func TestAdminCanCreateViewerAndSessionReportsIt(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password456", Role: "viewer"})
 	defer resp.Body.Close()
@@ -571,8 +577,7 @@ func TestCreateUserDefaultsToUserRole(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456"})
 	defer resp.Body.Close()
@@ -598,8 +603,7 @@ func TestCreateUserRejectsUnrecognizedRole(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "someone", Password: "password456", Role: "owner"})
 	defer resp.Body.Close()
@@ -616,12 +620,12 @@ func TestNonAdminCannotCreateUsers(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/auth/users below
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/auth/users", createUserRequest{Username: "another", Password: "password789", Role: "user"})
 	defer resp.Body.Close()
@@ -639,8 +643,7 @@ func TestPasswordResetInvalidatesExistingSessions(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	client := registerAdmin(t, s, ts)
 
 	// Confirm the session works before the reset.
 	pre, err := client.Get(ts.URL + "/api/events")
@@ -734,8 +737,7 @@ func TestAdminCannotCreateASecondAdmin(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	client := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "second", Password: "password456", Role: "admin"})
 	defer resp.Body.Close()
@@ -755,12 +757,15 @@ func TestUserListIsAdminOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	// Enrolled too, so the 403 below is actually proving the admin-only
+	// gate rather than being masked by #1253's door refusing a
+	// still-factor-less viewer for an unrelated reason.
+	totpEnrolAndConfirm(t, viewerClient, ts)
 
 	// 403, not an empty list: who holds an account and which one is the
 	// admin is exactly what an attacker wants in order to pick a target.
@@ -800,8 +805,7 @@ func TestDeletingAUserRevokesTheirSessionAndTokens(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewer, ok := s.Auth.ByUsername("viewer")
@@ -820,6 +824,7 @@ func TestDeletingAUserRevokesTheirSessionAndTokens(t *testing.T) {
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/events below
 	live, err := viewerClient.Get(ts.URL + "/api/events")
 	if err != nil {
 		t.Fatal(err)
@@ -873,8 +878,7 @@ func TestDeletingTheAdminIsRefused(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 	admin, _ := s.Auth.ByUsername("admin")
 
 	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+admin.ID, nil)
@@ -993,8 +997,7 @@ func TestCreateTokenRejectsAnUnscopedIngestToken(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	adminClient := registerAdmin(t, s, ts)
 
 	cases := []struct {
 		name string
@@ -1027,7 +1030,7 @@ func TestChangePasswordRotatesTheSessionAndEndsOthers(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 	user, _ := s.Auth.ByUsername("admin")
 
 	// A second signed-in browser, which must not survive the change --
@@ -1074,7 +1077,7 @@ func TestChangePasswordRefusesAWrongCurrentPassword(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	resp := postJSON(t, client, ts.URL+"/api/auth/password", changePasswordRequest{
 		CurrentPassword: "not-the-password",
@@ -1094,7 +1097,7 @@ func TestChangePasswordRefusesAShortOrUnchangedPassword(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := registerAdmin(t, ts)
+	client := registerAdmin(t, s, ts)
 
 	short := postJSON(t, client, ts.URL+"/api/auth/password", changePasswordRequest{
 		CurrentPassword: "password123",
@@ -1122,7 +1125,7 @@ func TestChangePasswordRequiresASession(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	registerAdmin(t, ts)
+	registerAdmin(t, s, ts)
 
 	anon := &http.Client{Jar: mustCookieJar(t)}
 	resp := postJSON(t, anon, ts.URL+"/api/auth/password", changePasswordRequest{

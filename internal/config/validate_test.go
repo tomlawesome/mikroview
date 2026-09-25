@@ -278,3 +278,220 @@ func TestDeviceIDDefaultsToSourceIP(t *testing.T) {
 		t.Errorf("id-less devices with distinct sourceIps collided: %+v", p)
 	}
 }
+
+// TestPublicURLAbsent is the baseline: unset is the default, and an
+// install reached only by IP keeps working exactly as it does today --
+// no warning, nothing fatal, publicUrl stays empty.
+func TestPublicURLAbsent(t *testing.T) {
+	c := validCfg()
+	r := c.Validate()
+
+	for _, code := range []string{"CFG-0100", "CFG-0101", "CFG-0102", "CFG-0103", "CFG-0104"} {
+		if p := has(r.Warnings, code); p != nil {
+			t.Errorf("unset publicUrl must not warn, got %s: %+v", code, p)
+		}
+	}
+	if c.PublicURL != "" {
+		t.Errorf("PublicURL = %q, want empty", c.PublicURL)
+	}
+}
+
+// TestPublicURLHostname is a working value: no warning of any kind, and
+// the value passes through Validate untouched.
+func TestPublicURLHostname(t *testing.T) {
+	c := validCfg()
+	c.PublicURL = "https://mikroview.home.lan:8443"
+	r := c.Validate()
+
+	if len(r.Fatal) != 0 {
+		t.Errorf("a valid publicUrl must never be fatal: %v", codes(r.Fatal))
+	}
+	for _, code := range []string{"CFG-0100", "CFG-0101", "CFG-0102", "CFG-0103"} {
+		if p := has(r.Warnings, code); p != nil {
+			t.Errorf("a working hostname URL must not trip %s: %+v", code, p)
+		}
+	}
+	if c.PublicURL != "https://mikroview.home.lan:8443" {
+		t.Errorf("PublicURL was rewritten to %q, want it left alone", c.PublicURL)
+	}
+}
+
+// TestPublicURLIPAddress: WebAuthn refuses outright to bind a passkey to
+// an IP literal (that is a browser rule, not MikroView's), so this warns
+// and degrades -- CFG-0101 -- rather than refusing to start, and the
+// configured value is left in place for internal/api's RP construction
+// to read the same way CFG-0060 leaves oidc.publicBaseUrl alone.
+func TestPublicURLIPAddress(t *testing.T) {
+	c := validCfg()
+	c.PublicURL = "https://192.168.1.10:8443"
+	r := c.Validate()
+
+	if len(r.Fatal) != 0 {
+		t.Errorf("an IP-literal publicUrl must never be fatal: %v", codes(r.Fatal))
+	}
+	p := has(r.Warnings, "CFG-0101")
+	if p == nil {
+		t.Fatalf("expected warning CFG-0101, got %v", codes(r.Warnings))
+	}
+	if p.Applied == "" {
+		t.Error("no Applied value: the operator needs to know passkeys are unavailable")
+	}
+	if c.PublicURL != "https://192.168.1.10:8443" {
+		t.Errorf("PublicURL was changed to %q, want it left alone -- nothing is substituted for CFG-0101", c.PublicURL)
+	}
+}
+
+// TestPublicURLMalformed: a value that does not even parse as an
+// absolute URL cannot yield a host to reason about at all, so it is
+// treated as though publicUrl were never set (CFG-0100) rather than left
+// for a later check to trip over.
+func TestPublicURLMalformed(t *testing.T) {
+	for _, bad := range []string{"not-a-url", "mikroview.home.lan", "https://"} {
+		t.Run(bad, func(t *testing.T) {
+			c := validCfg()
+			c.PublicURL = bad
+			r := c.Validate()
+
+			if len(r.Fatal) != 0 {
+				t.Errorf("a malformed publicUrl must never be fatal: %v", codes(r.Fatal))
+			}
+			p := has(r.Warnings, "CFG-0100")
+			if p == nil {
+				t.Fatalf("expected warning CFG-0100 for %q, got %v", bad, codes(r.Warnings))
+			}
+			if c.PublicURL != "" {
+				t.Errorf("PublicURL = %q, want cleared to empty", c.PublicURL)
+			}
+		})
+	}
+}
+
+// TestPublicURLInsecureScheme: browsers only offer passkeys over https,
+// so a plain http:// value degrades the same way an IP literal does --
+// except for localhost, which is exempt because a browser's own
+// same-origin secure-context rules already treat it as secure.
+func TestPublicURLInsecureScheme(t *testing.T) {
+	c := validCfg()
+	c.PublicURL = "http://mikroview.home.lan:8080"
+	r := c.Validate()
+
+	p := has(r.Warnings, "CFG-0102")
+	if p == nil {
+		t.Fatalf("expected warning CFG-0102, got %v", codes(r.Warnings))
+	}
+	if c.PublicURL != "http://mikroview.home.lan:8080" {
+		t.Errorf("PublicURL was changed to %q, want it left alone", c.PublicURL)
+	}
+}
+
+// TestPublicURLNonHTTPSchemeAlsoWarns pins the agreement between this
+// check and NewRelyingParty in internal/api, which is where the two
+// were briefly out of step: that side treats every non-https scheme as
+// insecure and switches passkeys off, so a scheme this check stayed
+// silent about would leave the operator with no warning and no
+// passkeys -- the silent failure the design rules out. CFG-0102's
+// wording names http because that is the realistic typo; the condition
+// deliberately covers more than its wording.
+func TestPublicURLNonHTTPSchemeAlsoWarns(t *testing.T) {
+	for _, raw := range []string{
+		"ftp://mikroview.home.lan:8080",
+		"ws://mikroview.home.lan:8080",
+	} {
+		c := validCfg()
+		c.PublicURL = raw
+		r := c.Validate()
+
+		if p := has(r.Warnings, "CFG-0102"); p == nil {
+			t.Errorf("%s did not trip CFG-0102, so passkeys would switch off with nothing said: got %v",
+				raw, codes(r.Warnings))
+		}
+	}
+}
+
+func TestPublicURLHTTPLocalhostExempt(t *testing.T) {
+	c := validCfg()
+	c.PublicURL = "http://localhost:8080"
+	r := c.Validate()
+
+	if p := has(r.Warnings, "CFG-0102"); p != nil {
+		t.Errorf("http://localhost must not trip CFG-0102: %+v", p)
+	}
+}
+
+// TestPublicURLPathStripped: a path/query/fragment is not a reason to
+// lose passkeys -- WebAuthn only cares about the origin -- so this warns
+// and strips (CFG-0103) rather than degrading availability the way
+// CFG-0101/CFG-0102 do.
+func TestPublicURLPathStripped(t *testing.T) {
+	c := validCfg()
+	c.PublicURL = "https://mikroview.home.lan:8443/some/path?x=1#frag"
+	r := c.Validate()
+
+	p := has(r.Warnings, "CFG-0103")
+	if p == nil {
+		t.Fatalf("expected warning CFG-0103, got %v", codes(r.Warnings))
+	}
+	const want = "https://mikroview.home.lan:8443"
+	if c.PublicURL != want {
+		t.Errorf("PublicURL = %q, want stripped to %q", c.PublicURL, want)
+	}
+	if p.Applied != want {
+		t.Errorf("Applied = %q, want %q", p.Applied, want)
+	}
+	if pIP := has(r.Warnings, "CFG-0101"); pIP != nil {
+		t.Errorf("a hostname with a path must not also trip CFG-0101: %+v", pIP)
+	}
+}
+
+// A bare trailing slash carries no real path, so it must not trip
+// CFG-0103 -- otherwise the most natural way to type the setting
+// ("https://host/") would warn on every single boot.
+func TestPublicURLBareTrailingSlashNotStripped(t *testing.T) {
+	c := validCfg()
+	c.PublicURL = "https://mikroview.home.lan:8443/"
+	r := c.Validate()
+
+	if p := has(r.Warnings, "CFG-0103"); p != nil {
+		t.Errorf("a bare trailing slash must not trip CFG-0103: %+v", p)
+	}
+}
+
+// TestPublicURLSuggestedFromOIDC: publicUrl never falls back to
+// oidc.publicBaseUrl (that is the point -- see PublicURL's doc comment),
+// but leaving publicUrl unset while oidc.publicBaseUrl is set is worth a
+// nudge, since the two usually name the same address.
+func TestPublicURLSuggestedFromOIDC(t *testing.T) {
+	c := validCfg()
+	c.OIDC.IssuerURL = "https://id.example.com"
+	c.OIDC.PublicBaseURL = "https://mikroview.example.com"
+	c.OIDC.ClientID = "mikroview"
+	c.OIDC.ClientSecret = "secret"
+	r := c.Validate()
+
+	if has(r.Warnings, "CFG-0104") == nil {
+		t.Fatalf("expected warning CFG-0104, got %v", codes(r.Warnings))
+	}
+	if c.PublicURL != "" {
+		t.Errorf("PublicURL was set to %q -- CFG-0104 must only nudge, never substitute (no fallback to oidc.publicBaseUrl)", c.PublicURL)
+	}
+}
+
+// The other half of the no-fallback rule: publicUrl actually set to
+// something different from oidc.publicBaseUrl must be left exactly as
+// configured -- CFG-0104 only fires when publicUrl is unset.
+func TestPublicURLNotOverriddenByOIDC(t *testing.T) {
+	c := validCfg()
+	c.OIDC.IssuerURL = "https://id.example.com"
+	c.OIDC.PublicBaseURL = "https://mikroview.example.com"
+	c.OIDC.ClientID = "mikroview"
+	c.OIDC.ClientSecret = "secret"
+	c.PublicURL = "https://mikroview.home.lan:8443"
+	r := c.Validate()
+
+	if p := has(r.Warnings, "CFG-0104"); p != nil {
+		t.Errorf("CFG-0104 must not fire when publicUrl is set: %+v", p)
+	}
+	if c.PublicURL != "https://mikroview.home.lan:8443" {
+		t.Errorf("PublicURL = %q, want left exactly as configured", c.PublicURL)
+	}
+}

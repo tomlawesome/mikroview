@@ -3,6 +3,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -62,7 +63,14 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 
 	e, err := s.Entities.Upsert(entities.Entity{Type: req.Type, Key: req.Key, Label: req.Label, Tags: req.Tags})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if errors.Is(err, entities.ErrInvalidEntity) || errors.Is(err, entities.ErrInvalidEntityText) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Anything else reaching here is a failed write (Store.Upsert's
+		// tryPersistLocked branch), whose text can carry the backend's
+		// own path or detail and has no business leaving this process.
+		http.Error(w, "could not save that entity", http.StatusInternalServerError)
 		return
 	}
 	s.Audit.Record(auditActor(r), "entity.upsert", e.Type+":"+e.Key, "label="+e.Label)
@@ -91,7 +99,12 @@ func (s *Server) handleEntitiesDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.Entities.Delete(req.Type, req.Key) {
+	deleted, err := s.Entities.Delete(req.Type, req.Key)
+	if err != nil {
+		http.Error(w, "could not delete that entity", http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

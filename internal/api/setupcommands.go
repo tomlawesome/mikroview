@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/setup"
 )
@@ -419,12 +420,6 @@ func validEnrolToken(token string) bool {
 	return true
 }
 
-// maxSetupDeviceLen mirrors internal/auth/token.go's maxDeviceIDLen --
-// that constant is unexported, so it cannot be reused directly, but
-// nothing legitimate needs a longer device name than an ingest token's
-// own device scope already allows.
-const maxSetupDeviceLen = 64
-
 // validSetupDevice restricts Device to the charset internal/auth/token.go's
 // validDeviceID already accepts in practice for a real device -- letters,
 // digits, dot, underscore, hyphen -- narrower than validDeviceID itself,
@@ -432,11 +427,16 @@ const maxSetupDeviceLen = 64
 // about to sit bare inside routeros.BackupScript's user=/dst-path=
 // placements (#1095). Empty is fine: Device is optional, and
 // handleSetupCommands already treats "" as "render no backup script."
+//
+// The length bound is auth.MaxDeviceIDLen itself (#1304, Q9), not a
+// second constant here kept equal to it only by a comment: nothing
+// legitimate needs a longer device name than an ingest token's own
+// device scope already allows.
 func validSetupDevice(device string) bool {
 	if device == "" {
 		return true
 	}
-	if len(device) > maxSetupDeviceLen {
+	if len(device) > auth.MaxDeviceIDLen {
 		return false
 	}
 	// An auto-discovered device's id is its source address

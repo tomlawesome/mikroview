@@ -37,13 +37,33 @@ export function sortedDevices(devices: readonly Device[]): Device[] {
 // A rough per-device rate, client-side, from the live event buffer --
 // complements the lifetime eventCount GET /api/devices already reports,
 // without needing a new backend endpoint.
-export function recentCount(events: readonly ClientEvent[], deviceId: string, nowMs: number): number {
-  const cutoff = nowMs - RECENT_WINDOW_MS
-  let n = 0
-  for (const e of events) {
-    if (e.deviceId === deviceId && e.receivedAt >= cutoff) n++
+//
+// #1304 E3: Fleet.svelte/Entities.svelte call this (via ratePerSecond)
+// once per router card, every tick -- with N routers on screen, that
+// used to mean N full scans of the same event buffer per render. The
+// cache below keys on the exact (events, nowMs) pair every card in one
+// render pass calls in with -- same buffer reference, same clock reading
+// -- so the first card's call counts every device in one pass and the
+// rest are a Map lookup. Correctness never depends on the cache hitting:
+// a miss (a different events reference, or a genuinely different nowMs)
+// just recomputes, same as before.
+let recentCountsCache: { events: readonly ClientEvent[]; nowMs: number; counts: Map<string, number> } | null = null
+
+function recentCountsByDevice(events: readonly ClientEvent[], nowMs: number): Map<string, number> {
+  if (recentCountsCache && recentCountsCache.events === events && recentCountsCache.nowMs === nowMs) {
+    return recentCountsCache.counts
   }
-  return n
+  const cutoff = nowMs - RECENT_WINDOW_MS
+  const counts = new Map<string, number>()
+  for (const e of events) {
+    if (e.receivedAt >= cutoff) counts.set(e.deviceId, (counts.get(e.deviceId) ?? 0) + 1)
+  }
+  recentCountsCache = { events, nowMs, counts }
+  return counts
+}
+
+export function recentCount(events: readonly ClientEvent[], deviceId: string, nowMs: number): number {
+  return recentCountsByDevice(events, nowMs).get(deviceId) ?? 0
 }
 
 // The router card's status vocabulary (#675's fstate, hoisted here for

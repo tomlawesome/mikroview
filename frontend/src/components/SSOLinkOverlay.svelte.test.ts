@@ -27,10 +27,10 @@ describe('SSOLinkOverlay', () => {
   // undone from MikroView. The issue's requirement is that this is said
   // plainly *before* the person confirms -- not afterwards, and not
   // only in the docs.
-  it('warns that the password will be deleted, before anything is confirmed', () => {
+  it('warns that the password and the second step will be deleted, before anything is confirmed', () => {
     render(SSOLinkOverlay)
 
-    expect(screen.getByText(/password will be deleted/i)).toBeTruthy()
+    expect(screen.getByText(/password and second step will be deleted/i)).toBeTruthy()
     expect(screen.getByText(/can't be undone/i)).toBeTruthy()
     expect(startSSOLink).not.toHaveBeenCalled()
   })
@@ -39,7 +39,7 @@ describe('SSOLinkOverlay', () => {
   // without reading. The label has to name the consequence.
   it('labels the confirm button with what it does', () => {
     render(SSOLinkOverlay)
-    expect(screen.getByRole('button', { name: /delete my password and connect sso/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i })).toBeTruthy()
   })
 
   it('does nothing at all when cancelled', async () => {
@@ -54,7 +54,7 @@ describe('SSOLinkOverlay', () => {
     vi.mocked(startSSOLink).mockResolvedValue({ url: 'https://idp.example/authorize' })
     render(SSOLinkOverlay)
 
-    await fireEvent.click(screen.getByRole('button', { name: /delete my password and connect sso/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }))
     expect(startSSOLink).toHaveBeenCalledOnce()
   })
 
@@ -67,11 +67,11 @@ describe('SSOLinkOverlay', () => {
     vi.mocked(startSSOLink).mockRejectedValue(new Error('Failed to fetch'))
     render(SSOLinkOverlay)
 
-    await fireEvent.click(screen.getByRole('button', { name: /delete my password and connect sso/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }))
 
     expect(await screen.findByText(/failed to fetch/i)).toBeTruthy()
     // And offered again, rather than left disabled mid-flight.
-    expect(screen.getByRole('button', { name: /delete my password and connect sso/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i })).toBeTruthy()
     expect(authState.showSSOLink).toBe(true)
   })
 
@@ -79,7 +79,7 @@ describe('SSOLinkOverlay', () => {
     vi.mocked(startSSOLink).mockResolvedValue('this account already signs in through your identity provider')
     render(SSOLinkOverlay)
 
-    await fireEvent.click(screen.getByRole('button', { name: /delete my password and connect sso/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }))
     expect(await screen.findByText(/already signs in through your identity provider/i)).toBeTruthy()
     // Still open, so the person can read what happened.
     expect(authState.showSSOLink).toBe(true)
@@ -95,9 +95,9 @@ describe('SSOLinkOverlay', () => {
       authState.role = 'admin'
       render(SSOLinkOverlay)
 
-      expect(screen.getByText(/your MikroView password stays/i)).toBeTruthy()
+      expect(screen.getByText(/your MikroView password and second step stay/i)).toBeTruthy()
       expect(screen.getByText(/extra way in rather than a replacement/i)).toBeTruthy()
-      expect(screen.queryByText(/password will be deleted/i)).toBeNull()
+      expect(screen.queryByText(/password and second step will be deleted/i)).toBeNull()
     })
 
     it('labels the admin confirm with what actually happens', () => {
@@ -111,10 +111,23 @@ describe('SSOLinkOverlay', () => {
       expect(screen.queryByRole('checkbox')).toBeNull()
     })
 
+    // #1253: linking clears the non-admin's authenticator app and
+    // passkeys in the same store write that clears the password
+    // (auth.Store.LinkOIDCIdentity). A warning that names only the
+    // password understates what the person is agreeing to, which is the
+    // whole reason this dialog exists.
+    it('names the second factor, not only the password, for every other role', () => {
+      render(SSOLinkOverlay)
+      expect(screen.getByText(/authenticator app or passkeys/i)).toBeTruthy()
+      expect(
+        screen.getByRole('button', { name: /delete my password and second step, and connect sso/i }),
+      ).toBeTruthy()
+    })
+
     it('keeps the deletion warning for every other role', () => {
       render(SSOLinkOverlay)
-      expect(screen.getByText(/password will be deleted/i)).toBeTruthy()
-      expect(screen.queryByText(/your MikroView password stays/i)).toBeNull()
+      expect(screen.getByText(/password and second step will be deleted/i)).toBeTruthy()
+      expect(screen.queryByText(/your MikroView password and second step stay/i)).toBeNull()
     })
 
     it('asks the server for the link with nothing but the session', async () => {

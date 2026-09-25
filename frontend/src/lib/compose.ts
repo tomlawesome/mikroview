@@ -99,6 +99,20 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
 // -- never a line with an unchecked value in it. Every interpolation
 // below is either validated here (addresses, protocol, port), slugged
 // (log-prefix), constant (chain, action) or quoted (comments).
+//
+// #1276: pasting this line twice must not leave two identical rules --
+// RouterOS filter rules do not deduplicate, and this line is handed to
+// the operator again every time the reach view is reopened on the same
+// strand. Guarded the same way #1266/#1208 already guard every other
+// generated command (internal/droplist/setup.go's Rule): a rule is
+// found by its own comment, since that is the one value both branches
+// agree on and the only handle a filter rule offers before it exists.
+// place-before is placement, not a property of the rule itself, so it
+// belongs to the add branch alone -- a rule already on the router keeps
+// the position it already has. The set branch names disabled=no for
+// the reason routeros.SchedulerAdd's does: `set` changes only what it
+// names, so a rule the operator had disabled would otherwise stay off
+// through a re-paste that reported success.
 export function composeCommand(c: ComposeInput): string | null {
   if (!isRouterOsAddress(c.hostIp) || !isRouterOsAddress(c.target)) return null
   if (!PROTOCOL.test(c.proto)) return null
@@ -112,12 +126,14 @@ export function composeCommand(c: ComposeInput): string | null {
     c.mode === 'allow'
       ? `${c.hostName} → ${c.targetName} :${c.port}`
       : `named block: ${c.hostName} → ${c.targetName} :${c.port}`
-  const lines = [
-    `/ip firewall filter add chain=forward src-address=${src} dst-address=${dst} \\`,
-    `    protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${prefix}" \\`,
-    `    comment="${quoteRouterOS(comment)}"${c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${quoteRouterOS(c.placeBefore)}"]` : ''}`,
-  ]
-  return lines.join('\n')
+  const quotedComment = quoteRouterOS(comment)
+  const placeBefore = c.mode === 'allow' && c.placeBefore ? ` place-before=[find comment="${quoteRouterOS(c.placeBefore)}"]` : ''
+  const shared = `chain=forward src-address=${src} dst-address=${dst} protocol=${c.proto} dst-port=${c.port} action=${action} log=yes log-prefix="${prefix}"`
+  return (
+    `:if ([:len [/ip firewall filter find comment="${quotedComment}"]] = 0) do={ ` +
+    `/ip firewall filter add ${shared} comment="${quotedComment}"${placeBefore} } else={ ` +
+    `/ip firewall filter set [find comment="${quotedComment}"] ${shared} disabled=no }`
+  )
 }
 
 /** The refusing rule's comment for a pair, read from the pushed table

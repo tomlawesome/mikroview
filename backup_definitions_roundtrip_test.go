@@ -89,6 +89,10 @@ func TestBackupRestoreRoundTripCarriesDefinitions(t *testing.T) {
 	// same way a disaster recovery restores onto a new host.
 	dstDir := t.TempDir()
 	newDefinitionsPath := filepath.Join(dstDir, "definitions.json")
+	// #1293: the restore marker lives beside the data directory
+	// (derived from Auth.StorePath), which must be writable even for a
+	// restore that never touches the auth store itself.
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", filepath.Join(dstDir, "users.json"))
 	t.Setenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH", newDefinitionsPath)
 
 	if code := runRestore([]string{backupPath}); code != 0 {

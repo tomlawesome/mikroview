@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
@@ -40,6 +41,7 @@ func (c *Config) Validate() Result {
 	}
 
 	c.validateListen(fatal)
+	c.validateUI(fatal)
 	c.validateStore(fatal, warn)
 	c.validateWatchlist(warn)
 	c.validateBaseline(warn)
@@ -50,6 +52,7 @@ func (c *Config) Validate() Result {
 	c.validateDevices(fatal)
 	c.validateNotify(warn)
 	c.validateOIDC(warn)
+	c.validatePublicURL(warn)
 
 	return r
 }
@@ -89,6 +92,12 @@ var examplesByCode = map[string]string{
   trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
   # ... or the shorthand for a proxy on your LAN or docker network
   # trustedProxies: ["private"]`,
+
+	"CFG-0004": `ui:
+  # only these may reach the web UI ...
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+  # ... or leave the list out entirely, which admits every address
+  # allow: []`,
 
 	"CFG-0010": `store:
   retention: 24h`,
@@ -190,6 +199,27 @@ auth:
   days: 30`,
 	"CFG-0082": `history:
   maxBytes: 1073741824   # 1 GiB`,
+
+	"CFG-0100": `publicUrl: "https://mikroview.example.com:8443"`,
+	"CFG-0101": `publicUrl: "https://mikroview.example.com:8443"  # a hostname, not an IP address`,
+	"CFG-0102": `publicUrl: "https://mikroview.example.com:8443"  # https, not http`,
+	"CFG-0103": `publicUrl: "https://mikroview.example.com:8443"  # scheme, host and port only -- no path, query or fragment`,
+	"CFG-0104": `publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ`,
+}
+
+// validateUI checks ui.allow (issue #1287).
+//
+// Fatal, the same stance validateListen takes for trustedProxies and
+// for the same reason: an entry MikroView skipped would leave the
+// operator believing an address is admitted (or kept out) when it is
+// neither. It matters more here, because this setting is only editable
+// in the file -- a list that quietly dropped an entry is either a wall
+// that is not there or a lockout nobody can fix from the screen.
+func (c *Config) validateUI(fatal problemFunc) {
+	if _, err := ParseUIAllow(c.UI.Allow); err != nil {
+		fatal("CFG-0004", "ui.allow", err.Error(),
+			"list each address as an IP or CIDR, or leave the list empty to let every address reach the web UI")
+	}
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -483,6 +513,88 @@ func (c *Config) validateOIDC(warn warnFunc) {
 			"names a multi-tenant provider, which MikroView does not support",
 			"SSO login disabled; local login unaffected",
 			"use a self-hosted provider (Authentik, Keycloak, Zitadel) or a single-tenant Entra issuer URL, where the issuer itself restricts who can sign in")
+	}
+}
+
+// validatePublicURL checks publicUrl (issue #1250): the address
+// WebAuthn needs to bind a passkey to, since it refuses outright to
+// register one against a bare IP address, and MikroView never infers
+// this address from a request's Host header (same redirect_uri-confusion
+// reasoning validateOIDC's doc comment gives for oidc.publicBaseUrl).
+//
+// Warn-and-degrade throughout, never fatal -- see docs/plans/
+// passkeys-second-factor.md's "public URL setting" section. An install
+// reached only by IP address, or with this unset entirely, keeps working
+// exactly as it does today; it simply cannot offer passkeys, in the
+// specific way each check below names. internal/api computes the actual
+// ready/unset/ip/insecure status a boot-time RP construction needs from
+// the value this leaves behind -- this function's job stops at warning
+// the operator and leaving publicUrl in a state that value can trust.
+func (c *Config) validatePublicURL(warn warnFunc) {
+	raw := strings.TrimSpace(c.PublicURL)
+	if raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || !u.IsAbs() || u.Host == "" {
+			// Not recoverable -- there's no host to extract a status
+			// from, so this is treated as though the setting were never
+			// made rather than left in place for a later check to trip
+			// over.
+			c.PublicURL = ""
+			warn("CFG-0100", "publicUrl",
+				fmt.Sprintf("%q does not parse as an absolute URL (a scheme and a host are both required)", raw),
+				"ignored; passkeys unavailable",
+				"set the https address people reach MikroView on, e.g. https://mikroview.example.com:8443")
+		} else {
+			// IP-literal and insecure-scheme are independent problems --
+			// a value can trip either, both, or neither -- so each gets
+			// its own check rather than an early return.
+			if _, err := netip.ParseAddr(u.Hostname()); err == nil {
+				warn("CFG-0101", "publicUrl",
+					fmt.Sprintf("host %q is an IP address -- WebAuthn refuses to bind a passkey to one", u.Hostname()),
+					`passkeys unavailable (status "ip")`,
+					"set a hostname you actually use to reach MikroView, e.g. https://mikroview.home.lan:8443, or leave publicUrl unset")
+			}
+			// Any scheme that is not https, rather than http alone.
+			// CFG-0102 names http because that is what an operator
+			// actually mistypes, but the runtime side (NewRelyingParty
+			// in internal/api) treats every non-https scheme as
+			// insecure, and the two have to agree: a setting that
+			// switches passkeys off while this check stays silent is
+			// the silent failure the design rules out. http on
+			// localhost is the one exemption, because a browser counts
+			// it as a secure context.
+			if !(u.Scheme == "https" || (u.Scheme == "http" && u.Hostname() == "localhost")) {
+				warn("CFG-0102", "publicUrl",
+					fmt.Sprintf("scheme is %q, and browsers only offer passkeys over https", u.Scheme),
+					`passkeys unavailable (status "insecure")`,
+					"use an https:// URL, or a reverse proxy that terminates TLS at that address")
+			}
+			// A path, query or fragment is not wrong the way the above
+			// two are -- WebAuthn only cares about the origin -- so this
+			// warns and strips rather than degrading availability.
+			if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+				u.Path, u.RawPath = "", ""
+				u.RawQuery = ""
+				u.Fragment, u.RawFragment = "", ""
+				stripped := u.String()
+				warn("CFG-0103", "publicUrl",
+					fmt.Sprintf("%q carries a path, query or fragment -- only the origin matters to WebAuthn", raw),
+					stripped,
+					"set only the scheme, host and port, e.g. https://mikroview.example.com:8443")
+				c.PublicURL = stripped
+			}
+		}
+	}
+
+	// oidc.publicBaseUrl and publicUrl usually name the same address,
+	// but neither falls back to the other (see PublicURL's doc comment
+	// for why) -- this is the whole of what closes that gap: a nudge,
+	// never a substitution.
+	if strings.TrimSpace(c.OIDC.PublicBaseURL) != "" && strings.TrimSpace(c.PublicURL) == "" {
+		warn("CFG-0104", "publicUrl",
+			"oidc.publicBaseUrl is set but publicUrl is not -- they usually name the same address",
+			"passkeys unavailable",
+			"set publicUrl to the same address as oidc.publicBaseUrl, unless they genuinely differ")
 	}
 }
 

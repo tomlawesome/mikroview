@@ -222,7 +222,10 @@ func (s *Store) SetHistory(h History) error {
 	return s.persistLocked()
 }
 
-// persistLocked writes the document if persistence is configured.
+// persistLocked writes the document if persistence is configured. Both
+// callers (SetMaxMemory, SetHistory) change an operator-set value and
+// already return this error rather than swallowing it -- there is no
+// log-and-carry-on variant in this package, unlike internal/auth's.
 func (s *Store) persistLocked() error {
 	if s.backend == nil {
 		return nil

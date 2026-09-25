@@ -1,0 +1,8 @@
+Recaptured at d41df711 (2026-09-24) and the output was byte-for-byte
+identical to the committed image: the only change to AuthScreen.svelte /
+AuthLogin.svelte since the last capture was 344c89a7 (passkeys as a
+second factor), which only alters what an account with a registered
+passkey sees -- an account with just an authenticator app, the case this
+crop shows, renders exactly as before. Recorded here because an
+identical recapture leaves git nothing to commit, so the image's own
+commit cannot move.

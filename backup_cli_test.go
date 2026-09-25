@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -438,5 +440,245 @@ func TestRestoreRollsBackEveryStoreWhenOneWriteFails(t *testing.T) {
 
 	if _, err := os.Stat(coveragePath); !os.IsNotExist(err) {
 		t.Errorf("coverage store after the failed restore: stat = %v, want it to still not exist", err)
+	}
+}
+
+// TestRestoreRemovesTheMarkerOnSuccess is #1293's Done-when for the happy
+// path: restoreMarkerName goes down before the first store is touched,
+// and must come back off again once the restore has fully landed (the
+// store loop and, if the backup carries one, schema.json), so a later
+// start never finds #1293's marker for a restore that actually finished.
+func TestRestoreRemovesTheMarkerOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	if err := writeBackup(backupPath, true, map[string][]byte{"auth": []byte(`{"users":[]}`)}); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 0 {
+		t.Fatalf("runRestore(--force) = %d, want 0", code)
+	}
+
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("restore marker at %s after a successful restore: stat = %v, want it removed", markerPath, err)
+	}
+}
+
+// TestRestoreLeavesTheMarkerWhenRollbackCannotFullyRecover is #1293's
+// Done-when for the case checkNoRestoreInProgress exists to catch: a
+// write failure that even rollback (#1257) cannot fully undo must leave
+// restoreMarkerName in place, so the next start refuses instead of
+// coming up quietly on a data directory that is part restored-backup,
+// part whatever was there before.
+//
+// hostsPath's directory is made read-only after its original content is
+// written, so recordPriorState can still read it back (rollback needs
+// that), but both the restore's own write to hostsPath and rollback's
+// attempt to put the original bytes back fail the same way -- neither
+// persist.WriteFileAtomic call has anywhere to put its temp file.
+func TestRestoreLeavesTheMarkerWhenRollbackCannotFullyRecover(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test depends on")
+	}
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	hostsDir := filepath.Join(dir, "hostsdir")
+	if err := os.Mkdir(hostsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hostsPath := filepath.Join(hostsDir, "hosts.json")
+	if err := os.WriteFile(hostsPath, []byte(`{"marker":"original-hosts"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hostsDir, 0o500); err != nil { // read+execute, no write
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(hostsDir, 0o700) })
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+	t.Setenv("MIKROVIEW_HOSTS_STORE_PATH", hostsPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	if err := writeBackup(backupPath, true, map[string][]byte{"hosts": []byte(`{"marker":"new-hosts"}`)}); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 1 {
+		t.Fatalf("runRestore(--force) = %d, want 1 (hosts cannot be written back)", code)
+	}
+
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("restore marker at %s after an unrecoverable failure: stat = %v, want it left in place", markerPath, err)
+	}
+}
+
+// TestRestoreLeavesTheMarkerWhenTheVaultBundleFailsAfterStoresLand pins
+// the ordering fix to #1293's marker: the vault bundle and retained
+// corpus are written after every plain store, but outside rollback's
+// coverage (see the comment above the marker-removal line in runRestore),
+// so a failure writing either of them must still leave the marker in
+// place. Before the fix, the marker was removed as soon as the store loop
+// finished -- right before the vault write -- so a crash here booted
+// clean on a data directory whose stores had landed but whose vault
+// bundle had not.
+//
+// The vault store here carries a malicious entry name ("../escape") that
+// vaultPath refuses, so runRestore fails on the vault step specifically,
+// after the auth store has already been written.
+func TestRestoreLeavesTheMarkerWhenTheVaultBundleFailsAfterStoresLand(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+	vaultDir := filepath.Join(dir, "vault")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+	t.Setenv("MIKROVIEW_BACKUP_VAULT_DIR", vaultDir)
+
+	badBundle, err := json.Marshal(vaultBundle{Files: map[string][]byte{"../escape": []byte("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"auth":         []byte(`{"users":[]}`),
+		vaultStoreName: badBundle,
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath, "--force"}); code != 1 {
+		t.Fatalf("runRestore(--force) = %d, want 1 (the vault bundle entry escapes vaultDir)", code)
+	}
+
+	// The auth store landed -- the failure is specifically in the vault
+	// step, after the stores.
+	if _, err := os.Stat(authPath); err != nil {
+		t.Errorf("auth store after the failed restore: stat = %v, want it written", err)
+	}
+
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("restore marker at %s after the vault bundle failed: stat = %v, want it left in place "+
+			"-- stores and schema landed but the vault bundle did not, so the data directory is "+
+			"silently incomplete", markerPath, err)
+	}
+}
+
+// TestRestoreWithoutForceAdvisesCopyingTheDataDirectoryFirst pins #1293's
+// third requirement: the refusal an operator sees without --force must
+// say to copy the data directory first if they want a way back, since
+// -restore itself does not make that copy for them.
+func TestRestoreWithoutForceAdvisesCopyingTheDataDirectoryFirst(t *testing.T) {
+	src, err := os.ReadFile("backup_cli.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "copy the data directory") {
+		t.Error("the non-force refusal must tell the operator to copy the data directory first if they want a way back")
+	}
+
+	docs, err := os.ReadFile("docs/configuration.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(docs), "Copy the data directory") {
+		t.Error("docs/configuration.md's restore section must also say to copy the data directory first")
+	}
+}
+
+// TestRetiredStoreIsSkippedAndReported is #1277's Done-when for
+// retiredStoresIn: a store name a past release stopped writing (see
+// retiredStores) is pulled out of the envelope and never written to
+// disk, and the reason -- which version retired it, and why -- lands in
+// the restore's own log output rather than the generic "unknown store"
+// refusal.
+func TestRetiredStoreIsSkippedAndReported(t *testing.T) {
+	stores := map[string]json.RawMessage{
+		"config_drift": json.RawMessage(`{"dismissedVersion":"v0.5.0"}`),
+	}
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	got := retiredStoresIn(stores, log)
+
+	if len(got) != 1 || got[0] != "config_drift" {
+		t.Fatalf("retiredStoresIn returned %v, want [config_drift]", got)
+	}
+	if _, ok := stores["config_drift"]; ok {
+		t.Error("config_drift is still in the stores map -- it should have been removed rather than restored")
+	}
+	out := buf.String()
+	for _, want := range []string{"config_drift", retiredStores["config_drift"].Version, "#1218", "#1277"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log output %q lacks %q", out, want)
+		}
+	}
+}
+
+// TestRestoreSkipsARetiredStoreAndRestoresTheRest is the end-to-end
+// pin: a backup made before config_drift was retired restores cleanly
+// (the known stores it also carries land on disk) instead of the whole
+// bundle being refused for carrying a name backedUpStores may no longer
+// list.
+func TestRestoreSkipsARetiredStoreAndRestoresTheRest(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "users.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", authPath)
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"auth":         []byte(`{"users":[]}`),
+		"config_drift": []byte(`{"dismissedVersion":"v0.5.0"}`),
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath}); code != 0 {
+		t.Fatalf("runRestore() = %d, want 0 (a retired store must not stop the rest of the backup restoring)", code)
+	}
+
+	if _, err := os.Stat(authPath); err != nil {
+		t.Errorf("auth store was not restored: %v", err)
+	}
+}
+
+// TestRestoreRefusesAnUnknownStoreNotOnTheRetiredList confirms
+// retiredStoresIn does not widen the "unknown store" refusal into a
+// blanket amnesty: a name that is neither a current store nor
+// documented in retiredStores still stops the restore rather than being
+// silently skipped or guessed at.
+func TestRestoreRefusesAnUnknownStoreNotOnTheRetiredList(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_POSTGRES_DSN_FILE", "")
+
+	backupPath := filepath.Join(dir, "mikroview.backup")
+	stores := map[string][]byte{
+		"totally_made_up_store": []byte(`{}`),
+	}
+	if err := writeBackup(backupPath, true, stores); err != nil {
+		t.Fatalf("writeBackup: %v", err)
+	}
+
+	if code := runRestore([]string{backupPath}); code != 1 {
+		t.Fatalf("runRestore() with an unrecognised, non-retired store = %d, want 1 (refused)", code)
 	}
 }

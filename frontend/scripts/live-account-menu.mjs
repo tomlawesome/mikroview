@@ -23,7 +23,7 @@
 // opens one overlay, feeds nothing, and deletes the viewer account it
 // creates, so nothing downstream inherits anything from it.
 
-import { session, check, responsive, openAccountMenu, done, launchBrowser } from './live-browser.mjs'
+import { session, check, responsive, openAccountMenu, done, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -147,7 +147,9 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
+// #1335: a fresh account holds no second factor at all, so the forced-
+// enrolment door sits between the password step and #main-content.
+await enrolFactorAndSignIn(viewerPage)
 
 // The read-only viewer, declared once (#804, round 37): the chip is the
 // one place every screen already says who you are, so it is the one

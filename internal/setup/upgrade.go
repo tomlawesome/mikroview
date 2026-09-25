@@ -3,6 +3,7 @@
 package setup
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -57,6 +58,12 @@ func (u Upgrade) Acknowledged() bool { return !u.AcknowledgedAt.IsZero() }
 // would reset both the moment it was noticed and -- far worse -- an
 // acknowledgement the operator already gave, so the notice would come
 // back from the dead on the next restart.
+//
+// Kept on the swallow-and-log persistLocked rather than converted for
+// R6: this is main.go's own boot-time observation, not an operator
+// action, and a write that fails to persist self-heals -- s.upgrade
+// stays nil on disk, so the very next restart's call finds no matching
+// crossing recorded and notes it again, same as the first time.
 func (s *Store) NoteUpgrade(previous, current string, now time.Time) bool {
 	previous, current = strings.TrimSpace(previous), strings.TrimSpace(current)
 	if previous == "" || current == "" || previous == current {
@@ -97,22 +104,32 @@ func (s *Store) Upgrade() (Upgrade, bool) {
 // Idempotent: a second done keeps the first admin's name and time,
 // because it is the first one who actually did the work. Persists
 // immediately, same reasoning as NoteMark.
-func (s *Store) AcknowledgeUpgrade(actor string, now time.Time) (Upgrade, bool) {
+//
+// The returned error is a persistence failure: an acknowledgement that
+// only exists in memory must not be reported as recorded, since the
+// caller writes an audit entry for it and a restart before the next
+// good write would bring the notice back for an admin who already dealt
+// with it (R6).
+func (s *Store) AcknowledgeUpgrade(actor string, now time.Time) (Upgrade, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.upgrade == nil {
-		return Upgrade{}, false
+		return Upgrade{}, false, nil
 	}
 	if s.upgrade.Acknowledged() {
-		return *s.upgrade, true
+		return *s.upgrade, true, nil
 	}
 	if len(actor) > maxNote {
 		actor = actor[:maxNote]
 	}
-	u := *s.upgrade
+	prev := *s.upgrade
+	u := prev
 	u.AcknowledgedAt = now
 	u.AcknowledgedBy = actor
 	s.upgrade = &u
-	s.persistLocked()
-	return u, true
+	if err := s.tryPersistLocked(); err != nil {
+		s.upgrade = &prev
+		return Upgrade{}, false, fmt.Errorf("saving the setup ledger: %w", err)
+	}
+	return u, true, nil
 }

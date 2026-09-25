@@ -17,7 +17,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -32,6 +31,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
+	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -257,6 +257,15 @@ type Server struct {
 	// /api/droplist/{cidr...}, the key routes and the RouterOS feed
 	// below all read and write through this store.
 	Droplist *droplist.Store
+	// Prefs is the per-user preferences store (issue #1283): one
+	// versioned JSON record per account, read on sign-in and written on
+	// change, replacing what used to live in the browser's localStorage.
+	// Always non-nil (internal/prefs.Open("") returns a usable, empty,
+	// unpersisted store), same always-usable convention as Droplist
+	// above. GET/PATCH /api/me/preferences (preferences.go) are the only
+	// routes that touch it; handleAuthDeleteUser clears a user's record
+	// when the account itself is deleted.
+	Prefs *prefs.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
 	// same threshold detect.DeviceSilenceDetector uses to raise an actual
@@ -337,10 +346,6 @@ type Server struct {
 	// depends on (this binary, this process's config) -- see main.go and
 	// config.MissingSettings -- and served as-is by handleConfigUpgrade.
 	ConfigUpgradeSettings []config.MissingSetting
-	// ConfigDrift is where an operator's dismissal of that same notice
-	// is remembered, per version (#1218). Nil when persistence for it is
-	// unconfigured, same optional-persistence contract as Setup below.
-	ConfigDrift *configdrift.Store
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -351,6 +356,20 @@ type Server struct {
 	LoginLimiter *auth.LoginLimiter
 	SecureCookie bool
 
+	// RelyingParty is #1250's WebAuthn configuration (webauthn.go, wave 1
+	// slice C), computed once at boot from the validated `publicUrl`
+	// setting -- nil on a Server built without one (every pre-#1250 test,
+	// and any deployment path that never wires one up), which every
+	// passkey handler (passkey.go) treats the same as
+	// PasskeyStatusUnset: the same nil-means-disabled convention Vault/
+	// NetClass/Reputation already use elsewhere on this struct. Never nil
+	// once wired up in main.go, even when passkeys are unavailable --
+	// NewRelyingParty always returns a non-nil *RelyingParty, carrying
+	// *why* they're unavailable in its Status field, which is what lets
+	// GET /api/auth/session and the login response explain the reason
+	// instead of just omitting the feature.
+	RelyingParty *RelyingParty
+
 	// TrustedProxies/ClientIPHeader control how the login rate limiter
 	// attributes a request to a source address when mikroview sits behind
 	// a reverse proxy -- see clientip.go, and config.Listen's fields of
@@ -358,6 +377,17 @@ type Server struct {
 	// rather than trusting them.
 	TrustedProxies []netip.Prefix
 	ClientIPHeader string
+
+	// UIAllow is config.yaml's ui.allow (issue #1287), parsed by
+	// config.ParseUIAllow: the addresses that may reach the web UI at
+	// all. Empty -- the default, and every deployment before the key
+	// existed -- admits everyone, so an upgrade changes nothing. See
+	// uiallow.go, and RestrictToAllowList for where it is enforced.
+	//
+	// Never settable from the UI: the list governs the screen it would
+	// be edited from, so a slip locks the admin out with no way back in
+	// from the browser.
+	UIAllow []netip.Prefix
 
 	// Tokens holds read-only API and ingest bearer tokens (issues #101,
 	// #186) -- always non-nil (internal/auth.OpenTokenStore("") returns a
@@ -436,6 +466,16 @@ type Server struct {
 	// every test constructs) needs no extra setup.
 	ingestAuditMu sync.Mutex
 	ingestAudit   map[ingestAuditKey]ingestAuditState
+
+	// uiAllowAudit remembers, per refused address, when that address
+	// last produced an audit row, so a browser retrying (or a scanner
+	// hammering) does not write one per request. Same shape and same
+	// reasoning as ingestAudit above -- see noteUIRefusal, which also
+	// explains the extra cap this map needs and that one does not.
+	// Unexported and lazily built, so a zero-valued Server needs no
+	// setup.
+	uiAllowAuditMu sync.Mutex
+	uiAllowAudit   map[string]time.Time
 
 	// definitionsEnabledScopeMu serializes handleDefinitionsUpdate's
 	// read-merge-write of a definition's Enabled/Scope fields (issue
@@ -689,6 +729,15 @@ func (s *Server) apiRoutes() []route {
 
 		{http.MethodGet, "/api/third-party-notices", s.handleThirdPartyNotices},
 
+		// The caller's own preferences record (issue #1283): presets,
+		// widgets and layout, held on the server instead of the
+		// browser's localStorage. Open to any signed-in user, same
+		// reasoning as /api/auth/password above -- it acts only on the
+		// session's own account, with no id in the request that could
+		// point it at someone else's.
+		{http.MethodGet, "/api/me/preferences", s.handlePreferencesGet},
+		{http.MethodPatch, "/api/me/preferences", s.handlePreferencesPatch},
+
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 
 		// The guided setup wizard's view of what has actually landed
@@ -727,12 +776,11 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 		{http.MethodGet, "/api/persistence", s.handlePersistence},
 
-		// The "N new settings are available" notice (#1218) and its
-		// per-version dismissal -- the setup wizard's paste-block
-		// treatment, applied to whatever this version understands that
-		// config.yaml does not set. See configupgrade.go.
+		// The "N new settings are available" notice (#1218) -- the setup
+		// wizard's paste-block treatment, applied to whatever this
+		// version understands that config.yaml does not set. See
+		// configupgrade.go.
 		{http.MethodGet, "/api/config/upgrade", s.handleConfigUpgrade},
-		{http.MethodPost, "/api/config/upgrade/dismiss", s.handleConfigUpgradeDismiss},
 
 		// The upgrade notice (#1240): which build this data directory
 		// last ran, how much of the fleet is still on the old setup, and
@@ -793,6 +841,36 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
 		{http.MethodPost, "/api/auth/users/{id}/reset-password", s.handleAuthResetUserPassword},
+
+		// Authenticator-app second factor (#1249): enrol/confirm/remove
+		// are the account owner's own three steps, login/factor is the
+		// second half of a login handleAuthLogin stopped short of a
+		// session for, and the users/{id}/totp route is the Users
+		// group's admin-clear path for a lost phone. See auth.go's own
+		// "#1249" section, right after handleAuthResetUserPassword, for
+		// all five handlers.
+		{http.MethodPost, "/api/auth/totp/enrol", s.handleTOTPEnrol},
+		{http.MethodPost, "/api/auth/totp/confirm", s.handleTOTPConfirm},
+		{http.MethodDelete, "/api/auth/totp", s.handleTOTPDelete},
+		{http.MethodPost, "/api/auth/login/factor", s.handleAuthLoginFactor},
+		{http.MethodDelete, "/api/auth/users/{id}/totp", s.handleTOTPAdminClear},
+
+		// Passkeys (#1250, wave 2 slice D) -- see passkey.go's own header
+		// comment for the shape of each handler. The list/register/
+		// rename/delete four are the account owner's own passkey
+		// management, login/factor/begin is the passkey half of #1249's
+		// second login step (its finish half shares POST
+		// /api/auth/login/factor with the TOTP code path, branching on
+		// the request body), and the users/{id}/passkeys route is the
+		// Users group's admin-clear path, mirroring users/{id}/totp
+		// above it.
+		{http.MethodGet, "/api/auth/passkeys", s.handleAuthPasskeysList},
+		{http.MethodPost, "/api/auth/passkeys/register/begin", s.handleAuthPasskeysRegisterBegin},
+		{http.MethodPost, "/api/auth/passkeys/register/finish", s.handleAuthPasskeysRegisterFinish},
+		{http.MethodPatch, "/api/auth/passkeys/{id}", s.handleAuthPasskeyRename},
+		{http.MethodDelete, "/api/auth/passkeys/{id}", s.handleAuthPasskeyDelete},
+		{http.MethodPost, "/api/auth/login/factor/begin", s.handleAuthLoginFactorBegin},
+		{http.MethodDelete, "/api/auth/users/{id}/passkeys", s.handleAuthPasskeysAdminClear},
 
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/

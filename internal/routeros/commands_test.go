@@ -204,6 +204,50 @@ func TestLogPrefixForAction(t *testing.T) {
 	}
 }
 
+// TestLogPrefixForActionFitsAndDoesNotCollide is #1304's S4: several
+// real RouterOS filter/mangle/NAT actions -- add-src-to-address-list,
+// add-dst-to-address-list, fasttrack-connection, mark-connection,
+// strip-ipv4-options -- render a log-prefix past maxLogPrefixLen when
+// the action name is spelled out in full. RouterOS's own log formatter
+// is documented (docs/routeros-setup.md) to corrupt or overwrite
+// adjacent fields once a prefix runs much past ~20 characters, and
+// mikroview's own decoder (stripPrefix) only recognises a fixed-shape
+// prefix in the first place -- either way a hit on that rule shows up as
+// action "unknown". Every action RouterOS is known to give a filter,
+// mangle or NAT rule is checked here: its prefix must fit, and it must
+// be the only action that produces that exact prefix.
+func TestLogPrefixForActionFitsAndDoesNotCollide(t *testing.T) {
+	// Filter, mangle and NAT actions together -- the three tables
+	// LogPrefixForAction's callers (RuleTaggingCommands and #435's
+	// per-rule tune-logging render) between them can hand it a rule
+	// from.
+	actions := []string{
+		// Filter (shared with mangle where noted).
+		"accept", "add-dst-to-address-list", "add-src-to-address-list",
+		"drop", "fasttrack-connection", "jump", "log", "passthrough",
+		"reject", "return", "tarpit",
+		// Mangle-specific.
+		"mark-connection", "mark-packet", "mark-routing",
+		"change-mss", "change-ttl", "change-dscp", "clear-df",
+		"route", "sniff-pc", "sniff-tzsp", "strip-ipv4-options",
+		// NAT-specific.
+		"dst-nat", "masquerade", "netmap", "redirect", "same", "src-nat",
+	}
+
+	seen := make(map[string]string, len(actions))
+	for _, action := range actions {
+		got := LogPrefixForAction(action, "a")
+		if len(got) > maxLogPrefixLen {
+			t.Errorf("LogPrefixForAction(%q) = %q (%d bytes), want at most %d", action, got, len(got), maxLogPrefixLen)
+		}
+		if other, ok := seen[got]; ok {
+			t.Errorf("LogPrefixForAction(%q) and LogPrefixForAction(%q) both render %q -- a hit from either rule would be indistinguishable from the other", action, other, got)
+			continue
+		}
+		seen[got] = action
+	}
+}
+
 func TestPushScriptReportsVersionOnThePayloadNotARecord(t *testing.T) {
 	script := PushScript("h", "t", []string{"filter-rule", "arp"}, "a")
 	if n := strings.Count(script, `"routerosVersion"=[/system/resource get version]`); n != 3 {

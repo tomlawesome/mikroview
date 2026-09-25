@@ -252,6 +252,30 @@ check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*
 check "$(case "$out" in *"FAIL:"*"fall-dark.png"*) echo false;; *) echo true;; esac)" \
   "and no FAIL line names it"
 
+# a recapture that comes out pixel-identical (#1317): the source moved
+# somewhere the crop does not show, so git has nothing to commit and the
+# image's own commit cannot move. A sibling .checked file records that
+# the recapture was run, and clears the failure.
+c6d="$TMP/case6d-identical-recapture"
+cp -r "$good" "$c6d"
+printf 'changed\n' >>"$c6d/frontend/src/components/Fall.svelte"
+commit "$c6d" "2026-01-03T00:00:00" "move the component the crop does not show"
+run "$c6d"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "before the record, the identical recapture still fails (rc=$rc)"
+printf 'recaptured at this commit, output identical\n' >"$c6d/docs/screenshots/fall-dark.png.checked"
+commit "$c6d" "2026-01-04T00:00:00" "record the identical recapture"
+run "$c6d"
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a recorded identical recapture passes overall (rc=$rc)"
+check "$(case "$out" in *"ok: screenshot fresh: docs/screenshots/fall-dark.png"*) echo true;; *) echo false;; esac)" \
+  "and the screenshot reads as fresh"
+
+# the record does not silence later drift: the source moving again after
+# it fails exactly as an unrecaptured screenshot does
+printf 'changed again\n' >>"$c6d/frontend/src/components/Fall.svelte"
+commit "$c6d" "2026-01-05T00:00:00" "move the component again"
+run "$c6d"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "drift after the record fails again (rc=$rc)"
+
 # a screenshot with no entry in screenshot_sources() fails loudly, naming
 # itself, rather than silently passing or guessing
 c6c="$TMP/case6c-unmapped"
@@ -331,6 +355,24 @@ run "$c8c"
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "no install.sh/docker-compose.yml present passes (rc=$rc)"
 check "$(case "$out" in *"skip: install/compose hardening parity"*) echo true;; *) echo false;; esac)" \
   "and says so"
+
+# --- check 9: shot markers realized -----------------------------------------
+
+# a <!-- shot: --> marker with no image in its place fails, naming the
+# file, the line, and the marker's own text
+c9a="$TMP/case9a-shot-marker"
+cp -r "$good" "$c9a"
+printf '\n<!-- shot: the widget in its collapsed state -->\n' >>"$c9a/docs/x.md"
+commit "$c9a" "2026-01-02T00:00:00" "add an unrealized shot marker"
+run "$c9a"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "an unrealized shot marker fails (rc=$rc)"
+check "$(case "$out" in *"FAIL: docs/x.md:"*"shot marker 'the widget in its collapsed state' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
+  "and names the file, the line, and the marker's own text"
+
+# a fixture with no shot markers at all passes that check specifically
+run "$good"
+check "$(case "$out" in *"ok: no unrealized shot markers"*) echo true;; *) echo false;; esac)" \
+  "a fixture with no shot markers passes"
 
 echo
 if [ "$fails" -ne 0 ]; then

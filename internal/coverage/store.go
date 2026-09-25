@@ -148,9 +148,21 @@ func (s *Store) Put(key, reason, declaredBy string) (Declaration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	previous, existed := s.byKey[key]
 	d := Declaration{Key: key, Reason: reason, DeclaredBy: declaredBy, DeclaredAt: time.Now()}
 	s.byKey[key] = &d
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A coverage-gap declaration that cannot be saved must not read
+		// back as declared (R6): put the previous one back (or drop the
+		// key entirely for a brand new declaration) rather than leave
+		// this write only in memory for a restart to discard silently.
+		if existed {
+			s.byKey[key] = previous
+		} else {
+			delete(s.byKey, key)
+		}
+		return Declaration{}, fmt.Errorf("saving coverage declarations: %w", err)
+	}
 	return d, nil
 }
 
@@ -159,16 +171,27 @@ func (s *Store) Put(key, reason, declaredBy string) (Declaration, error) {
 // an error, same "caller might be looking at a stale list" reasoning
 // internal/entities.Store.Delete and internal/flags.Store.Clear already
 // document.
-func (s *Store) Delete(key string) bool {
+//
+// Returns an error (rather than only the found/removed bool) when the
+// key existed but the removal could not be saved -- see the
+// restore-on-error comment inside for why (R6).
+func (s *Store) Delete(key string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.byKey[key]; !ok {
-		return false
+	existing, ok := s.byKey[key]
+	if !ok {
+		return false, nil
 	}
 	delete(s.byKey, key)
-	s.persistLocked()
-	return true
+	if err := s.tryPersistLocked(); err != nil {
+		// An undeclare that cannot be saved must not read as undeclared
+		// (R6): put the declaration back rather than report success and
+		// have it reappear, un-deleted, after the next restart.
+		s.byKey[key] = existing
+		return false, fmt.Errorf("saving coverage declarations: %w", err)
+	}
+	return true, nil
 }
 
 // List returns every known declaration, sorted by Key for a stable,
@@ -188,18 +211,17 @@ func (s *Store) listLocked() []Declaration {
 	return out
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured. No debounce interval, same reasoning as
-// internal/entities.Store.persistLocked: declarations are rare,
-// admin-only, interactive writes, not a high-rate hot path, so there is
-// nothing to rate-limit. Write failures are swallowed rather than
-// surfaced to Put/Delete's callers: the in-memory state (which every
-// read goes through) stays correct either way, so a transient disk issue
-// degrades to "won't survive a restart right now" rather than breaking
-// live use.
-func (s *Store) persistLocked() {
+// tryPersistLocked is persistLocked's error-returning half, for Put and
+// Delete -- every mutator on this store, both of which change an
+// operator's on-record coverage-gap declaration, and so must not let a
+// caller believe a write happened when it didn't (v0.6.0 audit finding
+// R6) -- see each one's own restore-on-error comment. No debounce
+// interval, same reasoning as internal/entities.Store.tryPersistLocked:
+// declarations are rare, admin-only, interactive writes, not a
+// high-rate hot path, so there is nothing to rate-limit.
+func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
-		return
+		return nil
 	}
 	list := s.listLocked()
 	ptrs := make([]*Declaration, len(list))
@@ -208,20 +230,18 @@ func (s *Store) persistLocked() {
 	}
 	data, err := json.MarshalIndent(storeFile{Declarations: ptrs}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding coverage declarations for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
+		return fmt.Errorf("encoding coverage declarations for persistence failed: %w", err)
 	}
 	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing coverage declarations to %s failed: %v -- this change exists only in memory and will be lost on restart",
-			s.backend.Describe(), err))
-		return
+		return fmt.Errorf("writing coverage declarations to %s failed: %w", s.backend.Describe(), err)
 	}
 	if conflicted {
 		persistLog.Warn(fmt.Sprintf("coverage declarations store was modified by another process while this change was pending (%s); this change was applied on top",
 			s.backend.Describe()))
 	}
 	s.version = version
+	return nil
 }
 
 // validateText rejects an empty string, text over maxLen runes, invalid
