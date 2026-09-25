@@ -389,7 +389,18 @@ func (s *DefinitionsStore) writeExpectationLocked(e watchlist.Entry, countAsNew 
 		return fmt.Errorf("engine: encoding expectation %q: %w", e.ID, err)
 	}
 	s.raw[e.ID] = raw
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// An expectation an operator just created or edited must not read
+		// back as saved when it isn't (R6): put the previous bytes back
+		// (or drop the id entirely for a brand new one) rather than leave
+		// this write only in memory for a restart to discard silently.
+		if exists {
+			s.raw[e.ID] = existing
+		} else {
+			delete(s.raw, e.ID)
+		}
+		return err
+	}
 	return nil
 }
 
@@ -492,7 +503,13 @@ func (s *DefinitionsStore) deleteExpectationLocking(id string) (bool, error) {
 		return false, fmt.Errorf("%w: %q", ErrNotAnExpectation, id)
 	}
 	delete(s.raw, id)
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A delete that cannot be saved must not read as deleted (R6):
+		// put the expectation back rather than report success and have
+		// it reappear, undeleted, after the next restart.
+		s.raw[id] = entry
+		return false, err
+	}
 	return true, nil
 }
 
@@ -506,31 +523,44 @@ func (s *DefinitionsStore) deleteExpectationLocking(id string) (bool, error) {
 // store; the caller (internal/api) is responsible for wiping both
 // together, since nuking one without the other would leave every
 // candidate pointing at an EntryID that no longer exists.
-func (s *DefinitionsStore) ResetExpectations() int {
-	n := s.resetExpectationsLocking()
+func (s *DefinitionsStore) ResetExpectations() (int, error) {
+	n, err := s.resetExpectationsLocking()
+	if err != nil {
+		return 0, err
+	}
 	if n > 0 {
 		s.notifyChange()
 	}
-	return n
+	return n, nil
 }
 
-func (s *DefinitionsStore) resetExpectationsLocking() int {
+func (s *DefinitionsStore) resetExpectationsLocking() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	n := 0
+	removed := make(map[string]json.RawMessage)
 	for id, entry := range s.raw {
 		sd := decodeStored(id, entry)
 		if !sd.Available || sd.Definition.Intent != IntentExpectation {
 			continue
 		}
+		removed[id] = entry
 		delete(s.raw, id)
-		n++
 	}
-	if n > 0 {
-		s.persistLocked()
+	if len(removed) == 0 {
+		return 0, nil
 	}
-	return n
+	if err := s.tryPersistLocked(); err != nil {
+		// A "nuke every expectation" that cannot be saved must not wipe
+		// memory either (R6): the caller (POST /api/suggestions/reset)
+		// reports every entry gone, and a restart before the next good
+		// write would resurrect them all with no record this happened.
+		for id, entry := range removed {
+			s.raw[id] = entry
+		}
+		return 0, err
+	}
+	return len(removed), nil
 }
 
 // RecordObservation upserts (or bumps) an observed candidate for the

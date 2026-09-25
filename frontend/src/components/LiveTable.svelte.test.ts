@@ -793,7 +793,12 @@ describe('LiveTable Loading and first-run empty states (#549)', () => {
 // columns, not nine -- the nine above are unchanged, and the restored
 // six get their own describe block below.
 describe('LiveTable squared columns (#644)', () => {
-  it('shows a bare external source dim in the name column, an em dash in its address column', () => {
+  // #1304 Q10: this test's name used to describe only the source half
+  // (bare/unnamed) below, but its body also pinned the destination half
+  // (named) -- narrower than what it actually checked. Renamed to say
+  // both, rather than dropping either: the two together are what prove
+  // the per-side pairing logic renders each side independently.
+  it('shows a bare unnamed source dim with an em-dash address, and a named destination bright with its raw address shown', () => {
     const e = makeEvent('bare-source', {
       srcIp: '185.220.101.34',
       srcCountry: 'DE',
@@ -1766,5 +1771,32 @@ describe('the stream says it scrolls sideways, and keeps Rule in view (#1150)', 
     for (const selector of [/\.row\.banded \.rule\s*\{/, /\.row\.flagged \.rule\s*\{/, /\.row:hover \.rule\s*\{/]) {
       expect(eventRowSource).toMatch(selector)
     }
+  })
+})
+
+// #1304 E5: startResize's pointermove listener was only ever removed by
+// endResize's own pointerup handler -- unmounting the table mid-drag (the
+// row of buttons above it can switch views at any time) skipped that,
+// leaking the listener (and this component instance's whole closure) on
+// window for the rest of the page's life. A stray pointermove after that
+// point would still fire it and mutate columnState, a module-level
+// singleton that outlives the unmounted component.
+describe('LiveTable column resize does not leak its drag listener (#1304 E5)', () => {
+  it('stops reacting to pointermove once unmounted mid-drag', () => {
+    const { container, unmount } = render(LiveTable)
+    flushSync()
+
+    const resizer = container.querySelector('.resizer')
+    expect(resizer).toBeTruthy()
+    resizer!.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, bubbles: true }))
+    flushSync()
+
+    const setWidthForKey = vi.spyOn(columnState, 'setWidthForKey')
+    unmount()
+
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 300 }))
+
+    expect(setWidthForKey).not.toHaveBeenCalled()
+    setWidthForKey.mockRestore()
   })
 })

@@ -24,15 +24,18 @@
 // derived from the interface it replaces. Re-derived the original way on
 // #910 (2026-09-03), the reshape having shipped as v0.4.0 on 2026-08-25:
 // the bundle then measured 201,044 bytes gzipped (666,551 raw), and
-// 201,044 + ~15% is 230,000.
+// 201,044 + ~15% is 230,000. Re-derived again on #1249 (2026-09-23),
+// which added the `qrcode` package for TOTP enrolment's QR code: the
+// bundle then measured 230,235 bytes gzipped (780,756 raw) -- already
+// over the old 230,000 gate -- and 230,235 + ~15% is 265,000.
 //
 // Raise this only alongside a stated reason in the commit that does so,
-// and update README.md's "UI" bullet (the shipped-bundle figure) in the
-// same change -- otherwise raising the budget just relocates the drift
-// this check exists to close off. Do not "tidy" it down to match
+// and update docs/features.md's "UI" bullet (the shipped-bundle figure)
+// in the same change -- otherwise raising the budget just relocates the
+// drift this check exists to close off. Do not "tidy" it down to match
 // whatever the bundle happens to measure today; that would turn the
 // very next legitimate feature PR into a spurious CI failure.
-const BUDGET_BYTES = 230_000
+const BUDGET_BYTES = 265_000
 
 import { readFileSync, existsSync, globSync } from 'node:fs'
 import { gzipSync, constants as zlibConstants } from 'node:zlib'
@@ -79,8 +82,8 @@ if (gzipBytes > BUDGET_BYTES) {
       `(${raw.length} bytes raw).\n\n` +
       'Either bring the bundle back under budget, or -- if the growth is ' +
       'deliberate -- raise BUDGET_BYTES at the top of this file with a ' +
-      "stated reason, and update README.md's shipped-bundle figure (the " +
-      '"UI" bullet under Features) to the new measurement in the same PR. ' +
+      "stated reason, and update docs/features.md's shipped-bundle figure " +
+      '(the "UI" bullet) to the new measurement in the same PR. ' +
       'A budget raised without updating the README just moves the drift ' +
       'this check exists to catch.',
   )

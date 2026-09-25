@@ -4,10 +4,13 @@ import {
   fetchAuthSession,
   login,
   logout,
+  PENDING_LOGIN_EXPIRED,
   register,
   setNewPasswordAfterReset,
   signOutEverywhere,
+  submitLoginFactor,
 } from "./api";
+import { loginWithPasskey as runPasskeyLogin } from "./passkeys.svelte";
 import { appState } from "./state.svelte";
 import { flagsState } from "./flags.svelte";
 import { watchlistState } from "./watchlist.svelte";
@@ -20,6 +23,7 @@ import { auditState } from "./audit.svelte";
 import { persistenceState } from "./persistence.svelte";
 import { configProblemsState } from "./configProblems.svelte";
 import { configUpgradeState } from "./configUpgrade.svelte";
+import { preferencesState } from "./preferences.svelte";
 import type { AuthSession } from "./types";
 
 // 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
@@ -86,6 +90,14 @@ function clearSessionState() {
   // accessAdmin rows of internal/api/authz_matrix_test.go) whose
   // answer lived in a module-level store rather than a component.
   configUpgradeState.reset();
+  // #1283: the shared per-user preferences record (presets, top-talker
+  // widgets, colorway, and the rest of the nine modules that used to
+  // read/write localStorage directly). logout() below has already
+  // flushed anything pending while the session was still good; this
+  // just drops the in-memory copy so the next sign-in on this tab
+  // starts from ensureLoaded() again rather than the previous
+  // account's cached record.
+  preferencesState.reset();
 }
 
 // 'loading' only lasts for the initial check() call on app boot; after
@@ -99,11 +111,31 @@ function clearSessionState() {
 // rather than a flag on 'authenticated' because the app is not open in
 // it -- every other request would 403 -- so App.svelte must draw the
 // door's set-a-new-password form and nothing else.
+// 'pending-factor' is the same shape for #1249's second step: the
+// password was right, but the server set a pending cookie rather than a
+// session (see login() below) and everything but
+// POST /api/auth/login/factor still 403s. Set by login() alone, straight
+// from its own response -- never by apply()/check(), since a bare
+// GET /api/auth/session has no way to tell "pending" from "signed out"
+// apart, and a page reload mid-step is meant to fall back to asking for
+// the password again rather than resurrecting this state from nothing.
+// 'must-enrol-factor' is #1253's door (#1336, round 61): a real session
+// on a local account with no second factor, which may reach nothing but
+// the four enrolment routes (internal/api/auth.go's
+// secondFactorEnrolPaths). Unlike 'pending-factor' it IS set by
+// apply()/check(), straight from the server's own mustEnrolSecondFactor
+// on GET /api/auth/session -- the flag is computed from the account,
+// not the session, so a page reload mid-enrolment lands back on this
+// door rather than falling out of it. 'must-change-password' wins when
+// both hold, matching requireAuth's own gate order: a session owing
+// both is sent to set a password first.
 export type AuthViewState =
   | "loading"
   | "setup-required"
   | "unauthenticated"
   | "must-change-password"
+  | "must-enrol-factor"
+  | "pending-factor"
   | "authenticated";
 
 class AuthState {
@@ -138,6 +170,32 @@ class AuthState {
   // account action reached from the menu.
   showChangePassword = $state(false);
   showSSOLink = $state(false);
+  // Whether this account has an active authenticator-app factor.
+  // Mirrors sessionResponse.hasTOTP -- set here, read by AccountMenu to
+  // decide what its row says and which screen the overlay opens on, and
+  // flipped straight after a successful confirm/disable rather than
+  // waiting on a full re-check() for something the caller already knows.
+  hasTOTP = $state(false);
+  // #1250: this account's passkeys, mirroring sessionResponse.passkeys.
+  // count/status feed AccountMenu's "Passkeys · N" row and
+  // PasskeysOverlay's unavailable copy; origin is set only while status
+  // is 'ready', compared against location.origin (see
+  // lib/passkeys.svelte.ts's passkeysUsableAt) to catch a capable
+  // browser sitting at the wrong address.
+  passkeyCount = $state(0);
+  passkeyStatus = $state<"ready" | "unset" | "ip" | "insecure">("unset");
+  passkeyOrigin = $state<string | undefined>(undefined);
+  // Set by login() below when the account holds at least one usable
+  // factor of either kind -- which kinds are still owed for *this*
+  // pending login, passkey first (server order, see the design). Empty
+  // is itself meaningful (#1250): an account whose only factor is a
+  // stale passkey still never signs in on the password alone, and
+  // AuthScreen falls back to asking for a recovery code with that said
+  // in words. pendingPasskeyOrigin is set iff 'passkey' is listed --
+  // this pending login's own origin, which may differ from an older
+  // stale passkey's if the deployment's address changed since.
+  pendingSecondFactor = $state<string[]>([]);
+  pendingPasskeyOrigin = $state<string | undefined>(undefined);
   // Set after a successful link (the callback redirects with
   // ?ssoLinked=1), so the UI can confirm what just happened rather than
   // leaving the person to notice their password stopped working.
@@ -147,11 +205,23 @@ class AuthState {
   // deliberately a fixed message chosen from the opaque error code,
   // never the raw code or any provider-supplied text.
   ssoError = $state<string | null>(null);
+  // Set by submitFactor()/loginWithPasskey() below on api.ts's
+  // PENDING_LOGIN_EXPIRED -- the 5-minute pending-login cookie outlived
+  // whoever was filling in the code box, recovery code or passkey
+  // prompt. The pending-factor screen has no timeout of its own to
+  // notice this, so without it the code box just sits there answering
+  // "invalid code" forever to whatever is typed once the cookie is
+  // already gone; AuthScreen reads this the same way it reads ssoError,
+  // as a banner on the password form this falls back to.
+  signInTimedOut = $state(false);
   // Mirrors sessionResponse.mustChangePassword. Kept beside `state`
   // rather than replacing it so the rest of the app can keep asking the
   // one question it asks today ("are we signed in?") without learning
   // about the reset flow.
   mustChangePassword = $state(false);
+  // Mirrors sessionResponse.mustEnrolSecondFactor (#1336), kept beside
+  // `state` for the same reason mustChangePassword above is.
+  mustEnrolSecondFactor = $state(false);
   // #677's sessions row ("this device ... signed in 4 d") -- this
   // session's own IssuedAt, RFC3339, from sessionResponse.signedInSince.
   // Empty while unauthenticated or against an older server.
@@ -251,9 +321,14 @@ class AuthState {
       this.state = "setup-required";
     } else if (session.authenticated) {
       this.mustChangePassword = session.mustChangePassword ?? false;
+      this.mustEnrolSecondFactor = session.mustEnrolSecondFactor ?? false;
+      // The password change comes first when both are owed, matching
+      // requireAuth's gate order (see AuthViewState's own comment).
       this.state = this.mustChangePassword
         ? "must-change-password"
-        : "authenticated";
+        : this.mustEnrolSecondFactor
+          ? "must-enrol-factor"
+          : "authenticated";
       this.username = session.username ?? "";
       this.role = (session.role as "admin" | "user" | "viewer") ?? "";
       // Absent on an older server: treated as "has one", which only
@@ -262,6 +337,23 @@ class AuthState {
       this.hasLocalPassword = session.hasLocalPassword ?? true;
       this.ssoConnected = session.ssoConnected ?? false;
       this.signedInSince = session.signedInSince ?? "";
+      this.hasTOTP = session.hasTOTP ?? false;
+      this.passkeyCount = session.passkeys?.count ?? 0;
+      this.passkeyStatus = session.passkeys?.status ?? "unset";
+      this.passkeyOrigin = session.passkeys?.origin;
+      // #1283: the one place preferences load from the server, rather
+      // than each of the nine modules reading localStorage at import
+      // time. Gated on the real 'authenticated' view, not
+      // 'must-change-password' -- that session 403s everything but the
+      // set-a-new-password route (see AuthViewState's own comment), so
+      // there is nothing yet for this account to fetch or apply. Not
+      // awaited -- check() runs on every boot and re-check (login,
+      // register, signOutEverywhere), and ensureLoaded() is itself
+      // idempotent (a no-op once loaded, joins the same fetch if one is
+      // already in flight), so calling it here on every pass is cheap
+      // and simpler than tracking "did this transition freshly into
+      // authenticated" separately.
+      if (this.state === "authenticated") void preferencesState.ensureLoaded();
     } else {
       this.state = "unauthenticated";
       this.username = "";
@@ -269,7 +361,12 @@ class AuthState {
       this.hasLocalPassword = true;
       this.ssoConnected = false;
       this.mustChangePassword = false;
+      this.mustEnrolSecondFactor = false;
       this.signedInSince = "";
+      this.hasTOTP = false;
+      this.passkeyCount = 0;
+      this.passkeyStatus = "unset";
+      this.passkeyOrigin = undefined;
     }
   }
 
@@ -284,10 +381,67 @@ class AuthState {
   }
 
 
+  // A right password on an account holding a factor (#1249) does not
+  // sign the caller in -- login() answers with the methods still owed
+  // instead of an error, told apart from failure by its own return shape
+  // (see LoginPendingFactor). That lands here as 'pending-factor' rather
+  // than a re-check(): the server issued a pending cookie, not a session,
+  // and GET /api/auth/session has no field that would tell "pending"
+  // apart from "signed out" if this asked it right now.
   async login(username: string, password: string): Promise<string | null> {
-    const err = await login(username, password);
-    if (err) return err;
+    this.signInTimedOut = false;
+    const result = await login(username, password);
+    if (typeof result === "string") return result;
+    if (result) {
+      this.pendingSecondFactor = result.secondFactor;
+      this.pendingPasskeyOrigin = result.passkeyOrigin;
+      this.state = "pending-factor";
+      return null;
+    }
     await this.check();
+    return null;
+  }
+
+  // submitFactor is the second step: the pending cookie login() above
+  // left behind carries this request, whichever of a TOTP code or a
+  // recovery code AuthLogin's box held -- the server is what tells them
+  // apart, not this call. Success re-checks the session the same way
+  // login() does, since this is what actually signs the caller in.
+  async submitFactor(code: string): Promise<string | null> {
+    const err = await submitLoginFactor(code);
+    if (err) return this.pendingFactorFailed(err);
+    await this.check();
+    return null;
+  }
+
+  // loginWithPasskey is the passkey alternative to submitFactor above,
+  // for the same pending cookie -- lib/passkeys.svelte.ts carries the
+  // actual ceremony (begin -> browser prompt -> finish); this just wires
+  // its result into the same re-check() every other successful step here
+  // already does.
+  async loginWithPasskey(): Promise<string | null> {
+    const err = await runPasskeyLogin();
+    if (err) return this.pendingFactorFailed(err);
+    await this.check();
+    return null;
+  }
+
+  // Shared by submitFactor/loginWithPasskey above: both answer 401 with
+  // the exact same PENDING_LOGIN_EXPIRED text once the pending-login
+  // cookie has already expired -- the one case here that isn't an
+  // ordinary wrong code/assertion for AuthScreen's factorOnly box to
+  // show inline. That case instead falls back to the password form the
+  // same way an unauthenticated visitor sees it, with a word for why
+  // rather than a code box nothing can ever satisfy again. Returns what
+  // the caller (submitFactor/loginWithPasskey) should itself return, so
+  // each stays a one-line `if (err) return ...`.
+  private pendingFactorFailed(err: string): string | null {
+    // Trimmed: the server's http.Error ends the text with a newline.
+    if (err.trim() !== PENDING_LOGIN_EXPIRED) return err;
+    this.state = "unauthenticated";
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
+    this.signInTimedOut = true;
     return null;
   }
 
@@ -312,17 +466,48 @@ class AuthState {
   // check() straight back into the account the user just tried to
   // leave.
   async logout(): Promise<string | null> {
+    // #1283: send any preference change still sitting inside its 500ms
+    // debounce window before the server call below ends the session --
+    // clearSessionState() further down drops the in-memory record
+    // (preferencesState.reset()) but does not itself flush, since by
+    // then the session may already be gone.
+    await preferencesState.flush();
     const err = await logout();
     this.state = "unauthenticated";
     this.username = "";
     this.role = "";
     this.mustChangePassword = false;
+    this.mustEnrolSecondFactor = false;
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
     this.justSignedOut = true;
     clearSessionState();
     if (err) return err;
     sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
     pageReload.now();
     return null;
+  }
+
+  // #1253: called by AuthenticatorOverlay/PasskeysOverlay when
+  // disableTOTP/disablePasskey answers signedOut -- removing the
+  // account's last second factor, which the server already turned into
+  // signing the caller out everywhere, this browser's session included.
+  // logout()'s own local half, minus its network call: that call would
+  // only 401 against a session the server has already revoked, and the
+  // removal itself is the action being confirmed here, not a second one.
+  async signOutAfterFactorRemoved(): Promise<void> {
+    await preferencesState.flush();
+    this.state = "unauthenticated";
+    this.username = "";
+    this.role = "";
+    this.mustChangePassword = false;
+    this.mustEnrolSecondFactor = false;
+    this.pendingSecondFactor = [];
+    this.pendingPasskeyOrigin = undefined;
+    this.justSignedOut = true;
+    clearSessionState();
+    sessionStorage.setItem(JUST_SIGNED_OUT_KEY, "1");
+    pageReload.now();
   }
 
   // signOutEverywhere is #677's sessions row action. Unlike logout()
@@ -341,11 +526,16 @@ class AuthState {
   // burst of 401s from several in-flight polls reloading more than
   // once.
   handleUnauthorized() {
-    if (this.state === "authenticated" || this.state === "must-change-password") {
+    if (
+      this.state === "authenticated" ||
+      this.state === "must-change-password" ||
+      this.state === "must-enrol-factor"
+    ) {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
       this.mustChangePassword = false;
+      this.mustEnrolSecondFactor = false;
       clearSessionState();
       pageReload.now();
     }

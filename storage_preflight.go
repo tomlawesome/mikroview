@@ -60,6 +60,50 @@ func checkStoresUsable(cfg config.Config) error {
 	return nil
 }
 
+// restoreMarkerName is left in the data directory by runRestore
+// (backup_cli.go) from just before its first destructive write until just
+// after its last, so a restore that never reaches the end -- killed,
+// crashed, the disk fills -- leaves a file behind saying so, rather than a
+// data directory that looks finished while some stores still carry the
+// backup's schema and others (or schema.json itself) still carry whatever
+// was there before (#1293). One constant, read by checkNoRestoreInProgress
+// below and written/removed only by runRestore, so the two can never name
+// it differently.
+const restoreMarkerName = "restore-in-progress"
+
+// restoreMarkerPath is where restoreMarkerName lives for cfg's deployment.
+func restoreMarkerPath(cfg config.Config) string {
+	return filepath.Join(dataDir(cfg), restoreMarkerName)
+}
+
+// checkNoRestoreInProgress refuses to start while restoreMarkerName
+// exists: proof that a restore began overwriting this data directory and
+// never finished, so the stores on disk are some mixture of the backup
+// and whatever was here before it. Starting on that mixture is exactly
+// what #1293 is about -- the app would boot quietly on it, with nothing
+// to say which store came from which side.
+//
+// Skipped on Postgres for the same reason checkStoresUsable is:
+// refuseBackupOnPostgres already stops `-restore` from running at all on
+// a Postgres deployment, so the marker can never be left there.
+func checkNoRestoreInProgress(cfg config.Config) error {
+	if cfg.Postgres.DSNFile != "" {
+		return nil
+	}
+	path := restoreMarkerPath(cfg)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("checking for an in-progress restore at %s: %w", path, err)
+	}
+	return fmt.Errorf("a restore into this data directory stopped part-way through -- the marker "+
+		"at %s is still there, which means the stores on disk are a mixture of the backup and "+
+		"whatever was here before it. Finish it by re-running the same `mikroview -restore <file> "+
+		"--force` that was interrupted, or replace this data directory with your own copy of it",
+		path)
+}
+
 // storeUnusable carries the directory that actually has to change, so
 // the advice printed alongside it can name that path and its current
 // ownership rather than guessing at the default data directory.
@@ -152,6 +196,10 @@ func storeFailureAdvice(e *storeUnusable) []string {
 		"In a container, run that against the host directory bind-mounted there, not",
 		"the path inside the container. The shipped deploy/docker-compose.yml avoids",
 		"this entirely by mounting the mikroview-data volume at "+config.DefaultDataDir+".",
+		"",
+		"Running as this uid/gid on purpose, with Docker's own user: override",
+		"rather than the image's default? See docs/install.md, \"Running as a",
+		"different account\" -- a fresh named volume needs its own chown to match.",
 		"",
 		"Changing your mind about where the data lives is a supported move rather than",
 		"a hand-copy: mikroview -migrate-data <destination> carries every store across",

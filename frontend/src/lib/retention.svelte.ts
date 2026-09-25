@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-const STORAGE_KEY = 'mikroview-max-age-seconds'
+import { preferencesState } from './preferences.svelte'
+
+// #1283: was its own localStorage key ('mikroview-max-age-seconds').
+const PREFS_KEY = 'retention'
 
 // How long an event stays visible in the live table after it's received,
 // independent of the backend's Retention/MaxEvents config (which governs
@@ -23,28 +26,24 @@ export const MAX_AGE_OPTIONS: { value: number | null; label: string }[] = [
   { value: null, label: 'No limit' },
 ]
 
-function loadInitial(): number | null {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY)
-    if (v === null) return null
-    if (v === 'null') return null
-    const n = Number(v)
-    return Number.isFinite(n) && n > 0 ? n : null
-  } catch {
-    return null
-  }
+function sanitize(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
 }
 
 class RetentionState {
-  maxAgeSeconds = $state<number | null>(loadInitial())
+  maxAgeSeconds = $state<number | null>(null)
+
+  constructor() {
+    preferencesState.register(PREFS_KEY, (value) => {
+      this.maxAgeSeconds = sanitize(value)
+    })
+  }
 
   set(value: number | null) {
     this.maxAgeSeconds = value
-    try {
-      localStorage.setItem(STORAGE_KEY, value === null ? 'null' : String(value))
-    } catch {
-      // storage unavailable -- setting just won't persist across reloads
-    }
+    preferencesState.set(PREFS_KEY, value)
   }
 }
 

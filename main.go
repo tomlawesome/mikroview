@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	// The IANA zone database, compiled in as a fallback (#680). A watch
@@ -47,7 +48,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/baseline"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/configdrift"
 	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/decommission"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -65,6 +65,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/oui"
+	"github.com/tomlawesome/mikroview/internal/prefs"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -267,7 +268,7 @@ func securityHeaders(next http.Handler, hsts bool) http.Handler {
 //   - /assets/* is content-hashed by Vite -- index-BShEGKey.js changes
 //     its *name* whenever its contents change, so a copy can never go
 //     stale and is safe to keep for as long as the browser likes.
-//   - Everything else (index.html, sw.js, registerSW.js, the manifest,
+//   - Everything else (index.html, sw.js, the manifest,
 //     the icons) keeps a fixed name across builds, so it gets no-cache:
 //     store it, but check with the server before using it again.
 //
@@ -516,6 +517,51 @@ func joinOnShutdown(wg *sync.WaitGroup, ctx context.Context, shutdown func(conte
 	}()
 }
 
+// reportListenerFailure is what a listener dying on its own -- a bind
+// failure, or Serve returning a real error -- calls instead of
+// os.Exit(1) directly (R7, v0.6.0 audit, #1304). Exiting on the spot
+// used to skip closeStoreOnShutdown, writeFinalSnapshot and
+// hist.Close() entirely: the same "a change made right before shutdown
+// is silently dropped" failure issue #400 exists to prevent, just
+// reached from a listener dying instead of an operator's signal.
+//
+// Marking failed and calling stop routes the failure through the exact
+// path a real signal takes: stop cancels the context every
+// joinOnShutdown registration is waiting on, so main falls through to
+// the shared drain sequence exactly as it would for SIGTERM, and only
+// exits nonzero once that has actually run (see the end of main).
+func reportListenerFailure(log *slog.Logger, err error, failed *atomic.Bool, stop func()) {
+	log.Error(err.Error())
+	failed.Store(true)
+	stop()
+}
+
+// passkeyStartupRefusal is the owner's ruling on booting with passkeys
+// that publicUrl cannot support: status is the RelyingParty's own
+// PasskeyStatus (api.PasskeyStatusReady never reaches this -- main's own
+// switch only calls this from the non-ready branches), and
+// anyPasskeysExist is authStore.AnyPasskeysExist() (internal/auth).
+// Returns the message to log before os.Exit(1), or "" to boot normally
+// -- an install that has never registered a passkey is unaffected by
+// whatever publicUrl says, on any status.
+//
+// A pure function rather than inlined in main so the four combinations
+// (three non-ready statuses x passkeys-exist or not) are each one direct
+// call in main_test.go, without driving the whole of main() -- including
+// the both-remedies wording, since a caller who only sees "passkeys are
+// off" from the log line above this has no way to know a CLI command is
+// the way out for accounts already holding one.
+func passkeyStartupRefusal(status api.PasskeyStatus, anyPasskeysExist bool) string {
+	if status == api.PasskeyStatusReady || !anyPasskeysExist {
+		return ""
+	}
+	return fmt.Sprintf(
+		"passkeys are off (%s) but at least one account already holds a passkey -- "+
+			"set publicUrl in the configuration to the https address people reach MikroView on, "+
+			"or run `mikroview -clear-second-factor <username>` for each affected account to remove them",
+		status)
+}
+
 func main() {
 	// -version: prints the build-time-stamped commit SHA (see the
 	// `version` var above) and exits -- no config load, no network,
@@ -570,6 +616,18 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
 		os.Exit(runTransferAdmin(os.Args[2:]))
+	}
+	// -clear-second-factor: the way back in for an admin who has lost the
+	// device holding their authenticator app (#1249). No web route clears
+	// a user's own factor without their password -- the account-owner
+	// DELETE route re-checks the password, and the admin-facing clear
+	// route in the Users group explicitly refuses the caller's own
+	// account, for the same reason a self-service "forgot my password"
+	// web form does not exist either. This is the CLI equivalent of
+	// -recover-admin-account for that lockout: host access plus a
+	// recovery key, same as every other command in this block.
+	if len(os.Args) > 1 && os.Args[1] == "-clear-second-factor" {
+		os.Exit(runClearSecondFactor(os.Args[2:]))
 	}
 
 	configLog := logging.New("config")
@@ -636,6 +694,15 @@ func main() {
 	}
 
 	previousVersion := logVersionAndMigration(logging.New("mikroview"), len(missingSettings))
+
+	// Before checkStoresUsable below, which would otherwise see a
+	// mid-restore data directory as merely "usable" -- every store in it
+	// really is readable and writable, just not in a state that agrees
+	// with itself (#1293).
+	if err := checkNoRestoreInProgress(cfg); err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
 
 	// Before anything is built on top of them (#536). Checked here
 	// rather than at each store's first write so the operator gets one
@@ -809,7 +876,15 @@ func main() {
 	}
 	entityStore, err := entities.OpenWithBackend(entityBackend)
 	mustOpenStore(entitiesLog, err)
-	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
+	// A failed seed write is logged, not fatal (unlike mustOpenStore's
+	// other callers): the store itself opened fine, and refusing to boot
+	// over a one-time migration step that can simply retry on the next
+	// restart would be a disproportionate response -- see Store.Seed's
+	// own doc comment on why it must not mark itself seeded when this
+	// happens (R6).
+	if n, err := entityStore.Seed(cfg.RuleNames, cfg.HostNames); err != nil {
+		entitiesLog.Error(fmt.Sprintf("importing config.yaml's ruleNames/hostNames failed: %v -- will retry on the next restart", err))
+	} else if n > 0 {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
 	}
 
@@ -948,6 +1023,21 @@ func main() {
 	droplistStore, err := droplist.OpenWithBackend(droplistBackend)
 	mustOpenStore(droplistLog, err)
 	droplistStore.SetAuditor(auditStore)
+
+	// The per-user preferences store (issue #1283): one versioned JSON
+	// record per account, read on sign-in and written on change,
+	// replacing what used to live in the browser's localStorage.
+	// Persistence itself is optional, same contract as Droplist.StorePath
+	// above -- a deployment that hasn't mounted a key still has working
+	// preferences for the running process, they just don't survive a
+	// restart (see storage.go's backendFor and #853).
+	prefsLog := logging.New("prefs")
+	prefsBackend, err := persistence.backendFor(bootCtx, "prefs", cfg.Prefs.StorePath)
+	if err != nil {
+		prefsLog.Warn(err.Error())
+	}
+	prefsStore, err := prefs.OpenWithBackend(prefsBackend)
+	mustOpenStore(prefsLog, err)
 
 	// The watchlist's match log has no in-memory-only mode (durability
 	// is the entire point of it, see internal/matchlog's package doc
@@ -1290,6 +1380,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// listenFailed is reportListenerFailure's flag -- see that function.
+	// Set from more than one goroutine (the syslog TLS listener runs on
+	// its own), so this is an atomic rather than a plain bool.
+	var listenFailed atomic.Bool
+
 	// shutdownWG tracks every goroutine that has to finish before main
 	// proceeds past the blocking Serve call below, so the process
 	// actually waits out the graceful window instead of exiting the
@@ -1374,17 +1469,6 @@ func main() {
 	// re-raised by them.
 	setupStore.NoteUpgrade(previousVersion, version, time.Now())
 
-	// #1218: which "N new settings are available" notice an operator has
-	// already dismissed -- the notice's own content (missingSettings,
-	// computed above) is never persisted, only this. Same optional-
-	// persistence contract as setupStore just above.
-	configDriftLog := logging.New("configdrift")
-	configDriftBackend, err := persistence.backendFor(bootCtx, "config_drift", cfg.ConfigDrift.StorePath)
-	if err != nil {
-		configDriftLog.Warn(err.Error())
-	}
-	configDriftStore, err := configdrift.OpenWithBackend(configDriftBackend)
-	mustOpenStore(configDriftLog, err)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Devices: device.ConfigNames(cfg.Devices), Entities: entityStore, RouterHosts: routerState}
 	// #600: the registry answers device display names through the same
 	// resolver, so a rename stored by one operator is what every
@@ -1701,6 +1785,20 @@ func main() {
 		proxyLog.Info(fmt.Sprintf("trusting %s from %d proxy range(s) for login rate limiting", header, len(trustedProxies)))
 	}
 
+	// ui.allow (issue #1287) -- config-file only, and refusing to start
+	// on a bad entry for the same reason trustedProxies does, only more
+	// so: an entry silently skipped here is either a lockout or a wall
+	// that is not there, and neither is visible from the screen.
+	uiLog := logging.New("ui")
+	uiAllow, err := config.ParseUIAllow(cfg.UI.Allow)
+	if err != nil {
+		uiLog.Error(fmt.Sprintf("ui.allow: %v", err))
+		os.Exit(1)
+	}
+	if len(uiAllow) > 0 {
+		uiLog.Info(fmt.Sprintf("web UI limited to %d address range(s) from ui.allow -- edit config.yaml and restart to change it, it is not settable from the UI", len(uiAllow)))
+	}
+
 	// Logged here and surfaced in the admin UI (see api.Server.
 	// ConfigProblems). The log line alone is not enough: it is seen once,
 	// by whoever ran `docker compose up`, and never again -- which is not
@@ -1750,6 +1848,51 @@ func main() {
 		}
 	}
 
+	// Passkeys (#1250). NewRelyingParty turns the validated publicUrl
+	// setting into either a usable WebAuthn relying party or the reason
+	// there isn't one; internal/config has already warned the operator
+	// about the setting itself (CFG-0100..CFG-0103), so an unusable
+	// value is not a startup failure here -- passkeys simply report why
+	// they are off, which is the design's "MikroView always boots"
+	// stance. An error return is a different thing: it means
+	// webauthn.New rejected a configuration this code believed was
+	// well-formed, which is a bug rather than a bad setting, and
+	// booting past it would ship a deployment whose passkeys are
+	// missing with nothing said.
+	passkeyLog := logging.New("passkeys")
+	relyingParty, err := api.NewRelyingParty(cfg.PublicURL)
+	if err != nil {
+		passkeyLog.Error(fmt.Sprintf("building the WebAuthn relying party from publicUrl: %v", err))
+		os.Exit(1)
+	}
+	switch relyingParty.Status {
+	case api.PasskeyStatusReady:
+		passkeyLog.Info(fmt.Sprintf("passkeys on for %s (relying party %q)", relyingParty.Origin, relyingParty.RPID))
+	default:
+		// Said once, at boot, because the alternative is an operator
+		// discovering it from an empty panel in the account menu.
+		passkeyLog.Info(fmt.Sprintf("passkeys off: %s -- set publicUrl to the https address people reach MikroView on", relyingParty.Status))
+
+		// Owner ruling: booting past this point with a passkey already
+		// registered would be worse than saying nothing -- that account
+		// has a credential sitting in its account menu that can never
+		// complete a login while publicUrl stays in this state (see
+		// nonStalePasskeys/PasskeyStatus's own doc comments for why), and
+		// nothing else would ever tell its owner that. Refused here,
+		// naming both ways out, rather than left for someone to discover
+		// as an unexplained sign-in failure.
+		//
+		// Only reachable from ordinary server start-up: -clear-second-
+		// factor (runClearSecondFactor, above) os.Exits before this
+		// function is even entered, and never constructs a RelyingParty
+		// itself, so the command this message points an operator at is
+		// never caught by the refusal it exists to resolve.
+		if msg := passkeyStartupRefusal(relyingParty.Status, authStore.AnyPasskeysExist()); msg != "" {
+			passkeyLog.Error(msg)
+			os.Exit(1)
+		}
+	}
+
 	srv := &api.Server{
 		Store:                   st,
 		History:                 hist,
@@ -1776,6 +1919,7 @@ func main() {
 		Rules:                   ru,
 		Audit:                   auditStore,
 		Droplist:                droplistStore,
+		Prefs:                   prefsStore,
 		Suggest:                 suggestStore,
 		DefaultWatchPorts:       cfg.Flags.CriticalPorts,
 		MatchLog:                matchLog,
@@ -1788,6 +1932,7 @@ func main() {
 		SecureCookie:            cfg.Auth.SecureCookie,
 		TrustedProxies:          trustedProxies,
 		ClientIPHeader:          cfg.Listen.ClientIPHeader,
+		UIAllow:                 uiAllow,
 		Tokens:                  tokenStore,
 		IngestLimiter:           auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:             routerState,
@@ -1811,7 +1956,7 @@ func main() {
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
-		ConfigDrift:           configDriftStore,
+		RelyingParty:          relyingParty,
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
@@ -1887,7 +2032,12 @@ func main() {
 		// they've supplied their own real certificate (cfg.TLS.CertFile
 		// set), not for the self-generated default every fresh install
 		// starts with.
-		Handler: securityHeaders(rootMux, cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
+		// RestrictToAllowList wraps the whole root mux, not just the API:
+		// ui.allow (#1287) has to be able to refuse the static UI too,
+		// because a refusal is a plain 403 rather than a login page, and
+		// /ca.crt -- one of the paths it exempts -- is registered on this
+		// mux below. With ui.allow unset it passes everything through.
+		Handler: securityHeaders(srv.RestrictToAllowList(rootMux), cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
 		// Bounds a slow client trickling headers/body in to tie up a
 		// connection indefinitely (the WS listener, syslog listeners, and
 		// hub already have their own backpressure/deadline handling --
@@ -2037,8 +2187,7 @@ func main() {
 		// cfg.TLS.Enabled, see that block's comment for why.
 		go func() {
 			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, certReloader, raw); err != nil && ctx.Err() == nil {
-				logging.New("syslog-tls").Error(err.Error())
-				os.Exit(1)
+				reportListenerFailure(logging.New("syslog-tls"), err, &listenFailed, stop)
 			}
 		}()
 	}
@@ -2063,21 +2212,20 @@ func main() {
 		// internal/tlssniff (#325).
 		ln, lnErr := net.Listen("tcp", httpServer.Addr)
 		if lnErr != nil {
-			logging.New("http").Error(lnErr.Error())
-			os.Exit(1)
+			reportListenerFailure(logging.New("http"), lnErr, &listenFailed, stop)
+		} else {
+			sniffLog := logging.New("http")
+			serveErr = httpServer.ServeTLS(
+				tlssniff.Listener(ln, sniffLog, func(requested string) string {
+					return samePortRedirectHost(requested, cfg.TLS.Hosts, ln.Addr().String())
+				}),
+				"", "")
 		}
-		sniffLog := logging.New("http")
-		serveErr = httpServer.ServeTLS(
-			tlssniff.Listener(ln, sniffLog, func(requested string) string {
-				return samePortRedirectHost(requested, cfg.TLS.Hosts, ln.Addr().String())
-			}),
-			"", "")
 	} else {
 		serveErr = httpServer.ListenAndServe()
 	}
 	if serveErr != nil && serveErr != http.ErrServerClosed {
-		logging.New("http").Error(serveErr.Error())
-		os.Exit(1)
+		reportListenerFailure(logging.New("http"), serveErr, &listenFailed, stop)
 	}
 
 	// ServeTLS/ListenAndServe unblocks as soon as Shutdown is *called*
@@ -2113,6 +2261,16 @@ func main() {
 	// events themselves -- but a planned restart should lose nothing.
 	if err := hist.Close(); err != nil {
 		logging.New("history").Warn("could not flush the retained event history at shutdown", "err", err)
+	}
+
+	// Everything above has now run -- stores drained, snapshot and
+	// history flushed -- exactly as it would for an operator's signal.
+	// Only now does a listener failure actually end the process (R7,
+	// #1304): the nonzero exit still has to happen, so systemd, Docker
+	// and anyone else watching the exit code see a crash as a crash, not
+	// a clean stop.
+	if listenFailed.Load() {
+		os.Exit(1)
 	}
 }
 
@@ -2534,6 +2692,172 @@ func runTransferAdmin(args []string) int {
 		return 1
 	}
 	logger.Info(fmt.Sprintf("admin transferred from %s to %s", logging.Printable(from.Username), logging.Printable(to.Username)))
+	return 0
+}
+
+// runClearSecondFactor backs `-clear-second-factor <username>` -- the way
+// back in for an admin who has lost every second factor on the account
+// (phone holding the authenticator app, passkeys, or both), mirroring
+// what -recover-admin-account is for a lost password (issue #1249,
+// widened to passkeys by #1250). It is the "I lost everything" command:
+// one recovery-key-gated clear of whatever the account has, not a
+// per-factor tool, so there is no passkey-only variant of it.
+//
+// No web route can do this job. handleTOTPDelete and the passkey delete
+// route require the caller's current password, which is exactly what a
+// session that also lost its second factor cannot always be assumed to
+// have handy, and handleTOTPAdminClear -- the admin's own "clear someone
+// else's factor" button in the Users group -- explicitly refuses the
+// caller's own account (mikroview holds exactly one admin, so that
+// refusal is also what keeps the admin account out of that route
+// entirely). Between them there is no route back in for an admin locked
+// out of their own factors, which is what this command is for.
+//
+// Unlike -recover-admin-account, this is not limited to the admin
+// account. Losing a second factor is not a privilege escalation the way
+// a lost admin password is -- clearing an ordinary user's factors grants
+// nothing beyond what their password already does -- so there is no
+// equivalent reason to narrow the target, and narrowing it would leave
+// every non-admin user with a lost phone or passkey and no way back in
+// at all (handleTOTPAdminClear needs the admin to still be signed in to
+// use it; a user locked out of their own account has no session to reach
+// it from).
+//
+// Follows -recover-admin-account's shape in every other respect: CLI
+// only, host access plus a recovery key, every use rotates the keys
+// (openRecoveryStoreForCLI/Redeem/Commit), and stdout is refused as the
+// container's main process before anything runs, because that stream is
+// where the rotated keys are about to be printed.
+func runClearSecondFactor(args []string) int {
+	logger := logging.New("clear-second-factor")
+	if err := refuseIfContainerMainProcess("-clear-second-factor"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// The username is required, unlike -transfer-admin's optional
+	// numbered list: there is no small, well-known set of accounts to
+	// offer a choice from here (transfer only ever chooses among the
+	// handful of accounts that could plausibly become admin), and an
+	// operator reaching for this command already knows whose factors are
+	// lost. Exit code 2 for a usage mistake, matching -backup, -restore
+	// and -migrate-data -- distinct from 1, which is everything that got
+	// as far as actually trying and failed.
+	target, ok := firstNonFlag(args)
+	if !ok {
+		logger.Error("usage: mikroview -clear-second-factor <username>")
+		return 2
+	}
+
+	recovery, closeStorage, err := openRecoveryStoreForCLI()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeStorage()
+	store, closeAuth, err := openAuthStoreForCLI("-clear-second-factor")
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeAuth()
+
+	// The key is asked for before the username is looked up -- the same
+	// ordering -transfer-admin had to be fixed into (#267): resolving the
+	// account first would let anyone able to run the binary learn
+	// whether a given username exists before proving they hold a key.
+	key, err := readRecoveryKey()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// Redeem verifies the key and prepares a replacement set without
+	// persisting the rotation -- Commit below does that, once the
+	// operator confirms they captured the new keys. So an unknown
+	// username below costs nothing: the previous keys stay valid because
+	// Commit never runs.
+	fresh, err := recovery.Redeem(key)
+	if err != nil {
+		// One message for a wrong key and for a corrupt store: the
+		// difference is only useful to someone probing.
+		logger.Error(err.Error())
+		return 1
+	}
+
+	user, ok := store.ByUsername(target)
+	if !ok {
+		logger.Error(fmt.Sprintf("no such account: %s -- nothing was changed, and your recovery keys are unchanged",
+			logging.Printable(target)))
+		return 1
+	}
+
+	// A factor that is already off, or was never carried past enrolment,
+	// is reported rather than treated as a failure the operator has to
+	// interpret. Whoever is running this because their phone is lost has
+	// no way to know in advance which case they are in, and finding out
+	// here is not a mistake on their part. The key was already redeemed
+	// above, so the rest of this command -- printing and confirming the
+	// rotated keys -- proceeds exactly as it would if there had been
+	// something to clear.
+	//
+	// #1250: an account can hold an authenticator app, passkeys, both or
+	// neither, so there are four honest shapes for outcome rather than
+	// two -- read off user, the pre-clear record ByUsername returned
+	// above (unlike List, it does not blank Passkeys, so this is real
+	// state, not a zeroed copy). ClearAllSecondFactors clears both kinds
+	// and the shared recovery codes in one write regardless of which
+	// kind was actually present, so a "nothing to clear" account never
+	// reaches the store call at all -- there is nothing for it to do.
+	//
+	// outcome is what actually happened, in prose -- built once and
+	// reused across the terminal message and every log line below it, so
+	// the "nothing was there" case reads honestly everywhere instead of
+	// only on stdout. Written as a past-tense clause with no leading
+	// subject, so it composes into "<outcome>, but ..." and "<outcome>,
+	// recovery keys rotated" without repeating itself.
+	hadTOTP := user.HasActiveTOTP()
+	hadPasskeys := len(user.Passkeys) > 0
+
+	var outcome string
+	switch {
+	case hadTOTP && hadPasskeys:
+		if err := store.ClearAllSecondFactors(user.ID); err != nil {
+			logger.Error(fmt.Sprintf("clearing the factors failed, no keys were consumed: %v", err))
+			return 1
+		}
+		outcome = fmt.Sprintf("authenticator-app factor and passkeys for %s cleared, along with their recovery codes", logging.Printable(user.Username))
+	case hadTOTP:
+		if err := store.ClearAllSecondFactors(user.ID); err != nil {
+			logger.Error(fmt.Sprintf("clearing the factor failed, no keys were consumed: %v", err))
+			return 1
+		}
+		outcome = fmt.Sprintf("authenticator-app factor for %s cleared, along with its recovery codes", logging.Printable(user.Username))
+	case hadPasskeys:
+		if err := store.ClearAllSecondFactors(user.ID); err != nil {
+			logger.Error(fmt.Sprintf("clearing the passkeys failed, no keys were consumed: %v", err))
+			return 1
+		}
+		outcome = fmt.Sprintf("passkeys for %s cleared, along with their recovery codes", logging.Printable(user.Username))
+	default:
+		outcome = fmt.Sprintf("%s had no active second factor -- nothing to clear", logging.Printable(user.Username))
+	}
+	fmt.Println(outcome + ".")
+
+	// Past this point the outcome above already stands, cleared or not.
+	// Every remaining failure leaves the previous keys valid and says
+	// so -- rotating into a set the operator never captured is the one
+	// outcome worse than not rotating at all.
+	printRecoveryKeys(fresh)
+	if !confirmSaved() {
+		logger.Warn(fmt.Sprintf("%s, but the new keys were not confirmed -- your previous recovery keys remain valid", outcome))
+		return 1
+	}
+	if err := recovery.Commit(); err != nil {
+		logger.Warn(fmt.Sprintf("%s, but storing the new keys failed: %v -- your previous recovery keys remain valid", outcome, err))
+		return 1
+	}
+	logger.Info(fmt.Sprintf("%s, recovery keys rotated", outcome))
 	return 0
 }
 

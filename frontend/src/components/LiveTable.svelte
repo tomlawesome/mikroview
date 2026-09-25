@@ -374,6 +374,21 @@
     window.removeEventListener('pointermove', onResizeMove)
   }
 
+  // #1304 E5: startResize's pointermove listener only came off window via
+  // endResize's own pointerup handler -- unmounting mid-drag (closing the
+  // tab's other panel, navigating away) skipped that, leaking both the
+  // listener and this component's closure for the rest of the page's
+  // life. No dependency read on purpose: this effect's only job is its
+  // own destroy-time cleanup, which fires exactly once, on unmount,
+  // whether or not a drag was ever started -- removing a listener that
+  // was never added is a harmless no-op.
+  $effect(() => {
+    return () => {
+      window.removeEventListener('pointermove', onResizeMove)
+      window.removeEventListener('pointerup', endResize)
+    }
+  })
+
   $effect(() => {
     // re-measure whenever the column template changes (resize, reset) or
     // the header row's own height/content changes

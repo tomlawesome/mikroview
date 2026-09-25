@@ -377,6 +377,7 @@ listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirec
 $TLS_BLOCK
 $(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 history: {enabled: true, keyFile: "$MV_DIR/history.key", dir: "$MV_DIR/data/history"}
+publicUrl: "$MV_SCHEME://localhost:$HTTP_PORT"
 $DEVICES_BLOCK
 EOF
   # MV_TEST_HOOKS=1 registers POST /api/test/clock and POST /api/test/reset
@@ -396,11 +397,73 @@ EOF
     sleep 0.25
   done
 
-  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+  jar="$MV_DIR/admin.cookies"
+  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -c "$jar" -X POST -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
     -d "{\"username\":\"$MV_USER\",\"password\":\"$MV_PASS\"}" \
     "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/register" >/dev/null
 
+  # Enrol an authenticator-app factor for the admin (#1253, #1335).
+  #
+  # Every local account must hold a second factor -- requireAuth's
+  # forced-enrolment door refuses an account without one everything but
+  # the four enrolment routes. The admin this harness registers is
+  # exactly such an account, so without this every scenario dies on its
+  # first ordinary request: POST /api/test/reset answers 403 and
+  # session() throws before a single check runs.
+  #
+  # Done here rather than in live-browser.mjs so the standalone shell
+  # phase is covered by the same fix, and because it only has to happen
+  # once: POST /api/test/reset clears events, flags, router state,
+  # definitions and matches, but never accounts, so the factor survives
+  # every scenario's reset.
+  #
+  # The secret is exported rather than kept, because enrolling a factor
+  # also puts a second step in front of every sign-in: live-browser.mjs
+  # needs it to finish the login it starts with MV_PASS.
+  totp_secret="$(curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+    -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/enrol" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["secret"])')"
+
+  # RFC 6238 over the standard library: HMAC-SHA1 of the big-endian
+  # 30-second counter, dynamic truncation, six digits -- the same thing
+  # internal/auth/totp.go does, checked against GenerateTOTPCode for
+  # matching secrets and counters rather than assumed compatible.
+  # Prints the counter alongside the code, because confirming enrolment
+  # spends that counter: VerifyTOTP's replay guard refuses it ever after,
+  # so the first scenario to sign in has to know not to try it. The
+  # counter is left in $MV_DIR for live-browser.mjs to read (see
+  # freshTotpCode there).
+  totp_pair="$(python3 -c '
+import base64, hmac, hashlib, struct, sys, time
+secret = sys.argv[1]
+raw = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
+counter = int(time.time()) // 30
+mac = hmac.new(raw, struct.pack(">Q", counter), hashlib.sha1).digest()
+o = mac[-1] & 0x0F
+print(counter, "%06d" % ((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 1000000))
+' "$totp_secret")"
+  totp_counter="${totp_pair%% *}"
+  totp_code="${totp_pair##* }"
+
+  curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" -b "$jar" -c "$jar" -X POST \
+    -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+    -d "{\"code\":\"$totp_code\"}" \
+    "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm" >/dev/null
+  echo "$totp_counter" > "$MV_DIR/totp-last-counter"
+
   echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
+  # The same instance under the name passkeys need (#1250). A WebAuthn
+  # credential is bound to the publicUrl the relying party was built
+  # from, and NewRelyingParty (internal/api/webauthn.go) refuses an IP
+  # literal outright -- PasskeyStatusIP -- so MV_URL's 127.0.0.1 form
+  # cannot register one however the browser reaches it. "localhost" is
+  # the one hostname a browser treats as a secure context over plain
+  # http, which is what makes passkeys testable here without TLS.
+  # MV_URL stays as it is: every other scenario is happier on the
+  # literal address than on a name that may resolve to ::1 first.
+  echo "export MV_PUBLIC_URL=$MV_SCHEME://localhost:$HTTP_PORT"
+  echo "export MV_TOTP_SECRET=$totp_secret"
   echo "export MV_USER=$MV_USER"
   echo "export MV_PASS=$MV_PASS"
   echo "export MV_DIR=$MV_DIR"

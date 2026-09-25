@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { preferencesState } from './preferences.svelte'
+
 export interface ColumnDef {
   key: string
   label: string
@@ -226,27 +228,28 @@ export const FLEX_MIN_WIDTH = 140
 // shape change here has followed -- a stored width array and the
 // column set it was measured against should always be nameably the
 // same version, not just accidentally the same length.
-// v7 (#1197): the shape is unchanged (still fifteen entries), so
-// loadInitial's length guard alone would accept a v6 array and keep
-// whatever a reader had -- including the squashed defaults nobody
-// dragged away from, since a column sitting at its (old, too-narrow)
-// default is indistinguishable in storage from one a reader chose. The
-// key still bumps, same as v5's shape-only change did, so every
-// installed v6 array -- chosen or default -- falls back to these wider
-// numbers instead.
-const STORAGE_KEY = 'mikroview-column-widths-v8'
+// v7 (#1197): the shape is unchanged (still fifteen entries), so a bare
+// length guard alone would accept a v6 array and keep whatever a reader
+// had -- including the squashed defaults nobody dragged away from,
+// since a column sitting at its (old, too-narrow) default is
+// indistinguishable in storage from one a reader chose. The key still
+// bumped, same as v5's shape-only change did, so every installed v6
+// array -- chosen or default -- fell back to these wider numbers
+// instead.
+//
+// #1283 moved this off a versioned localStorage key onto the shared
+// per-user preferences record -- there is no key to bump any more (the
+// whole record replaces at once on every write), so a future shape
+// change instead has sanitizeWidths below simply reject the old shape,
+// the same way it already rejects a wrong-length array. 'mikroview-
+// column-widths-v8' survives only as the legacy key name
+// preferences.svelte.ts's one-time migration reads on a browser that
+// still has it.
+const PREFS_KEY = 'columns'
 
-function loadInitial(): Width[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.length === DEFAULT_WIDTHS.length) {
-        return parsed.map((w) => (w === null ? null : Math.max(MIN_WIDTH, Number(w) || 0)))
-      }
-    }
-  } catch {
-    // ignore malformed/unavailable storage, fall through to defaults
+function sanitizeWidths(value: unknown): Width[] {
+  if (Array.isArray(value) && value.length === DEFAULT_WIDTHS.length) {
+    return value.map((w) => (w === null ? null : Math.max(MIN_WIDTH, Number(w) || 0)))
   }
   return [...DEFAULT_WIDTHS]
 }
@@ -314,39 +317,32 @@ function startingVisibility(): Visibility {
   return next
 }
 
-// Same reader-preference mechanism the widths above already use (a plain
-// localStorage entry, versioned key bumped whenever the shape it was
-// measured against changes) -- not a second mechanism invented for this
-// issue. A separate key from STORAGE_KEY: widths and visibility are
-// independent choices, and giving them one combined value would force a
-// version bump (and a reset to defaults) on every reader's saved widths the
-// day visibility shipped, for no reason tied to widths at all.
-const VISIBILITY_STORAGE_KEY = 'mikroview-column-visibility-v1'
-
-function loadInitialVisibility(): Visibility {
+// Same reader-preference mechanism the widths above already use, and
+// the same object as them now (#1283): a `columns` prefs key holding
+// `{ widths, visible }`. It was a separate localStorage entry from the
+// widths' before this moved -- widths and visibility are independent
+// choices, and combining them into one JSON blob under one PUT costs
+// nothing now that the whole record replaces at once regardless of
+// which one changed. 'mikroview-column-visibility-v1' survives only as
+// the legacy key name the one-time migration in preferences.svelte.ts
+// reads on a browser that still has it.
+function sanitizeVisibility(value: unknown): Visibility {
   const starting = startingVisibility()
-  try {
-    const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (parsed && typeof parsed === 'object') {
-        const next: Visibility = {}
-        for (const col of COLUMNS) {
-          // A pinned column reads as visible regardless of what was saved --
-          // guards against a stored value from a build that let it be
-          // hidden, or hand-edited storage, either of which would otherwise
-          // drop Time or Rule off the table with no way back short of
-          // clearing storage. A key missing from an older saved value (one
-          // written before a new column existed) falls back to the
-          // starting default for this width, so a column added later
-          // starts where a fresh reader's would.
-          next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? starting[col.key])
-        }
-        return next
-      }
+  if (value && typeof value === 'object') {
+    const parsed = value as Record<string, unknown>
+    const next: Visibility = {}
+    for (const col of COLUMNS) {
+      // A pinned column reads as visible regardless of what was saved --
+      // guards against a stored value from a build that let it be
+      // hidden, or hand-edited storage, either of which would otherwise
+      // drop Time or Rule off the table with no way back short of
+      // clearing the record. A key missing from an older saved value
+      // (one written before a new column existed) falls back to the
+      // starting default for this width, so a column added later
+      // starts where a fresh reader's would.
+      next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? starting[col.key])
     }
-  } catch {
-    // ignore malformed/unavailable storage, fall through to defaults
+    return next
   }
   return starting
 }
@@ -358,8 +354,19 @@ function loadInitialVisibility(): Visibility {
 // string that drives the sticky header row and the event rows below it,
 // since both live in the same CSS Grid container.
 class ColumnState {
-  widths = $state<Width[]>(loadInitial())
-  visible = $state<Visibility>(loadInitialVisibility())
+  widths = $state<Width[]>([...DEFAULT_WIDTHS])
+  visible = $state<Visibility>(startingVisibility())
+
+  constructor() {
+    // Hydrated once the shared record has loaded -- until then this
+    // stays the same starting point a signed-out reader always saw
+    // (all fifteen, narrowed below NARROW_BREAKPOINT).
+    preferencesState.register(PREFS_KEY, (value) => {
+      const record = value as { widths?: unknown; visible?: unknown } | undefined
+      this.widths = sanitizeWidths(record?.widths)
+      this.visible = sanitizeVisibility(record?.visible)
+    })
+  }
 
   visibleColumns = $derived(COLUMNS.filter((c) => this.visible[c.key]))
 
@@ -422,23 +429,14 @@ class ColumnState {
   toggleColumn(key: string) {
     if (PINNED_COLUMNS.has(key)) return
     this.visible = { ...this.visible, [key]: !this.visible[key] }
-    this.persistVisibility()
+    this.persist()
   }
 
+  // One prefs key for both halves (#1283) -- whichever changed, the
+  // write carries the other along too, since the whole record replaces
+  // at once regardless.
   private persist() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.widths))
-    } catch {
-      // storage unavailable -- widths just won't persist across reloads
-    }
-  }
-
-  private persistVisibility() {
-    try {
-      localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(this.visible))
-    } catch {
-      // storage unavailable -- the choice just won't persist across reloads
-    }
+    preferencesState.set(PREFS_KEY, { widths: this.widths, visible: this.visible })
   }
 }
 

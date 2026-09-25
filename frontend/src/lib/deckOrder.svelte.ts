@@ -2,10 +2,14 @@
 //
 // The deck's card order (#633, rounds 23-25: "the order you keep them —
 // drag to reorder; sign-in lands on the first"). One small module per
-// preference (theme, colorway, retention each have theirs) -- persisted
-// per browser, not synced anywhere.
+// preference (theme, colorway, retention each have theirs) -- kept in
+// the shared per-user preferences record (#1283), not synced any other
+// way.
 
-const STORAGE_KEY = 'mikroview-deck-order'
+import { preferencesState } from './preferences.svelte'
+
+// #1283: was its own localStorage key ('mikroview-deck-order').
+const PREFS_KEY = 'deckOrder'
 
 // The ratified default order -- deckCards.ts renders from this module's
 // order, not the other way round, so this list is the one source of the
@@ -36,19 +40,6 @@ const DEFAULT_ORDER = [
   'fleet',
 ]
 
-function loadInitial(): string[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.every((k) => typeof k === 'string')) return normalize(parsed)
-    }
-  } catch {
-    // ignore -- fall through to the default
-  }
-  return [...DEFAULT_ORDER]
-}
-
 // A stored order survives cards being added or removed: unknown keys
 // drop, missing keys append in their default position's relative order.
 function normalize(keys: string[]): string[] {
@@ -57,16 +48,23 @@ function normalize(keys: string[]): string[] {
   return [...known, ...missing]
 }
 
+function sanitize(value: unknown): string[] {
+  if (Array.isArray(value) && value.every((k) => typeof k === 'string')) return normalize(value)
+  return [...DEFAULT_ORDER]
+}
+
 class DeckOrderState {
-  order = $state<string[]>(loadInitial())
+  order = $state<string[]>([...DEFAULT_ORDER])
+
+  constructor() {
+    preferencesState.register(PREFS_KEY, (value) => {
+      this.order = sanitize(value)
+    })
+  }
 
   set(keys: string[]) {
     this.order = normalize(keys)
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.order))
-    } catch {
-      // storage unavailable -- won't persist across reloads
-    }
+    preferencesState.set(PREFS_KEY, this.order)
   }
 
   /** Moves `key` to sit before `beforeKey` (or last when undefined). */

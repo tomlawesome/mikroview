@@ -171,6 +171,25 @@ describe('a router at rest', () => {
     expect(await screen.findByText('locked')).toBeTruthy()
   })
 
+  // v0.6.0 audit Lows, R1: a 403 download used to re-read the lock
+  // silently and, on the comment's own word, leave it to "the parent's
+  // own periodic refresh" to catch up -- which can be up to a minute
+  // away. A refusal the operator just caused deserves the same kind of
+  // answer a plain failed download already gets.
+  it('says so when the lock refresh itself fails after a 403, rather than leaving it to the next periodic poll', async () => {
+    vi.mocked(downloadFromUrl).mockResolvedValue('forbidden')
+    vi.mocked(fetchRouterBackups).mockRejectedValue(new Error('network unreachable'))
+    render(RouterBackups, {
+      props: { resp: resp({ routers: [router] }), fetchedAt: 0, onopenlost: vi.fn() },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'download .backup' }))
+    await waitFor(() => expect(fetchRouterBackups).toHaveBeenCalled())
+
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      "The download was refused, and mikroview couldn't refresh the lock status. Try again.",
+    )
+  })
+
   // The button used to do nothing and say nothing on anything but a
   // 403 -- a dropped connection or a 5xx looked identical to a click
   // that never happened.

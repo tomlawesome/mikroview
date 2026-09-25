@@ -25,7 +25,17 @@
 // account. The moment a viewer is ever given Settings, that account sees
 // exactly what this scenario checks a user seeing.
 
-import { session, check, done, goTo, feedSyslog, launchBrowser, responsive, waitForStreamRows } from './live-browser.mjs'
+import {
+  session,
+  check,
+  done,
+  goTo,
+  feedSyslog,
+  launchBrowser,
+  responsive,
+  waitForStreamRows,
+  enrolFactorAndSignIn,
+} from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const MIB = 1024 * 1024
@@ -323,7 +333,7 @@ await reader.goto(URL_BASE, { waitUntil: 'networkidle' })
 await reader.fill('input[autocomplete="username"]', USER_NAME)
 await reader.fill('input[autocomplete="current-password"]', USER_PASS)
 await reader.click('button[type="submit"]')
-await reader.waitForSelector('#main-content', { timeout: 15000 })
+await enrolFactorAndSignIn(reader)
 await goTo(reader, 'Settings')
 await reader.waitForSelector(MEMG)
 

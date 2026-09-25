@@ -74,4 +74,7 @@ requires and why.
   failed and passed again on unchanged code
 - [docs/routeros-chr-exercise.md](routeros-chr-exercise.md) — the
   RouterOS CHR exercise the pipeline runs
+- [docs/release-signing.md](release-signing.md) — how a release's two
+  independent signatures are produced, and the owner-only setup on the
+  signing runner behind them
 - [docs/decisions/](decisions/) — design and delivery decisions

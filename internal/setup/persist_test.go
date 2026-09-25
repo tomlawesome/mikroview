@@ -89,11 +89,11 @@ func TestMarksSurviveARestart(t *testing.T) {
 		at := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
 
 		first := open()
-		if _, ok := first.NoteMark(2, MarkForced, "tom", "no router has opened a syslog connection", at); !ok {
-			t.Fatal("NoteMark refused a valid force")
+		if _, ok, err := first.NoteMark(2, MarkForced, "tom", "no router has opened a syslog connection", at); err != nil || !ok {
+			t.Fatalf("NoteMark refused a valid force: ok=%v err=%v", ok, err)
 		}
-		if _, ok := first.NoteMark(4, MarkSkipped, "tom", "no pushed table has arrived", at); !ok {
-			t.Fatal("NoteMark refused a valid skip")
+		if _, ok, err := first.NoteMark(4, MarkSkipped, "tom", "no pushed table has arrived", at); err != nil || !ok {
+			t.Fatalf("NoteMark refused a valid skip: ok=%v err=%v", ok, err)
 		}
 
 		// A second process, reading the same document.
@@ -133,8 +133,8 @@ func TestAddressSurvivesARestart(t *testing.T) {
 		if first.Address() != "" {
 			t.Fatalf("Address() on a fresh store = %q, want empty", first.Address())
 		}
-		if !first.SetAddress("10.0.40.5:8443") {
-			t.Fatal("SetAddress refused a valid address")
+		if ok, err := first.SetAddress("10.0.40.5:8443"); err != nil || !ok {
+			t.Fatalf("SetAddress refused a valid address: ok=%v err=%v", ok, err)
 		}
 
 		second := open()
@@ -145,8 +145,8 @@ func TestAddressSurvivesARestart(t *testing.T) {
 		// Editable afterwards (re-running setup on a moved instance must
 		// not require a reinstall): a later answer replaces the first,
 		// and that replacement survives too.
-		if !second.SetAddress("192.168.1.9") {
-			t.Fatal("SetAddress refused a valid replacement")
+		if ok, err := second.SetAddress("192.168.1.9"); err != nil || !ok {
+			t.Fatalf("SetAddress refused a valid replacement: ok=%v err=%v", ok, err)
 		}
 		third := open()
 		if got := third.Address(); got != "192.168.1.9" {
@@ -166,8 +166,8 @@ func TestBackupTransportSurvivesARestart(t *testing.T) {
 		if got := first.BackupTransport(); got != BackupTransportSFTP {
 			t.Fatalf("BackupTransport() on a fresh store = %q, want the %q default", got, BackupTransportSFTP)
 		}
-		if !first.SetBackupTransport(BackupTransportHTTPS) {
-			t.Fatal("SetBackupTransport refused https")
+		if ok, err := first.SetBackupTransport(BackupTransportHTTPS); err != nil || !ok {
+			t.Fatalf("SetBackupTransport refused https: ok=%v err=%v", ok, err)
 		}
 
 		second := open()
@@ -177,8 +177,8 @@ func TestBackupTransportSurvivesARestart(t *testing.T) {
 
 		// Switching back is one answer replacing another, not a second
 		// claim -- and the replacement survives the same way.
-		if !second.SetBackupTransport(BackupTransportSFTP) {
-			t.Fatal("SetBackupTransport refused sftp")
+		if ok, err := second.SetBackupTransport(BackupTransportSFTP); err != nil || !ok {
+			t.Fatalf("SetBackupTransport refused sftp: ok=%v err=%v", ok, err)
 		}
 		third := open()
 		if got := third.BackupTransport(); got != BackupTransportSFTP {
@@ -193,8 +193,12 @@ func TestChangedMindSurvivesAsOneMark(t *testing.T) {
 	eachSetupBackend(t, func(t *testing.T, open func() *Store) {
 		now := time.Now()
 		first := open()
-		first.NoteMark(3, MarkSkipped, "tom", "nothing yet", now)
-		first.NoteMark(3, MarkForced, "tom", "still nothing", now.Add(time.Minute))
+		if _, _, err := first.NoteMark(3, MarkSkipped, "tom", "nothing yet", now); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := first.NoteMark(3, MarkForced, "tom", "still nothing", now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
 
 		marks := open().Marks()
 		if len(marks) != 1 {
@@ -224,7 +228,9 @@ func TestObservationsAreNotPersisted(t *testing.T) {
 	first.NoteSyslogConnection("192.0.2.1", now)
 	first.NoteEvent("r1", true, now)
 	// One mark, so the document exists at all.
-	first.NoteMark(1, MarkSkipped, "tom", "", now)
+	if _, _, err := first.NoteMark(1, MarkSkipped, "tom", "", now); err != nil {
+		t.Fatal(err)
+	}
 
 	second, err := Open(path)
 	if err != nil {
@@ -292,16 +298,13 @@ func TestOpenRefusesAnUnparseableDocument(t *testing.T) {
 	}
 }
 
-// TestPersistFailureIsNotSilent mirrors internal/audit's test of the
-// same name, for the same reason: every persisted store used to swallow
-// all three failure paths in persistLocked, so a full disk or a
-// read-only remount left mikroview running and reporting success while
-// nothing reached disk.
-//
-// It asserts the observable contract that survives regardless of how
-// logging is wired: the write genuinely failed, the in-memory state is
-// still coherent, and the store did not corrupt the real document by
-// leaving a half-written temp in its place.
+// TestPersistFailureIsNotSilent is the v0.6.0 audit's R6 finding fixed:
+// NoteMark used to swallow a failed write and report the decision as
+// made anyway, so a restart before the next good write silently
+// resurrected whatever mark the operator thought they had just changed.
+// It now rolls the in-memory mark back and reports the failure, so the
+// caller (and the audit entry it writes) can't claim a decision that
+// isn't durable.
 func TestPersistFailureIsNotSilent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "setup.json")
@@ -311,7 +314,9 @@ func TestPersistFailureIsNotSilent(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	s.NoteMark(1, MarkSkipped, "admin", "no router has fetched /ca.crt", now)
+	if _, _, err := s.NoteMark(1, MarkSkipped, "admin", "no router has fetched /ca.crt", now); err != nil {
+		t.Fatal(err)
+	}
 
 	before, err := os.ReadFile(path)
 	if err != nil {
@@ -328,14 +333,15 @@ func TestPersistFailureIsNotSilent(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 
-	if _, ok := s.NoteMark(2, MarkForced, "admin", "no router has opened a syslog connection", now); !ok {
-		t.Fatal("a failed persist must not refuse the decision -- the audit entry for it is written either way")
+	if _, ok, err := s.NoteMark(2, MarkForced, "admin", "no router has opened a syslog connection", now); ok || err == nil {
+		t.Fatalf("NoteMark against an unwritable backend was reported as succeeding: ok=%v err=%v", ok, err)
 	}
 
-	// The in-memory store must still be coherent: a failed persist is
-	// not allowed to lose or corrupt what the process already knows.
-	if got := len(s.Marks()); got != 2 {
-		t.Errorf("in-memory marks = %d, want 2 (a failed persist must not drop in-memory state)", got)
+	// The in-memory store must roll back to what was durably recorded --
+	// the whole point of R6 is that this must not silently gain a mark
+	// the disk does not have.
+	if got := len(s.Marks()); got != 1 {
+		t.Errorf("in-memory marks = %d, want 1 (the failed mark must be rolled back)", got)
 	}
 
 	// The on-disk document must be untouched rather than truncated: the
@@ -355,8 +361,8 @@ func TestPersistFailureIsNotSilent(t *testing.T) {
 func TestInMemoryStoreStillWorks(t *testing.T) {
 	for name, s := range map[string]*Store{"New": New(), "Open(\"\")": mustOpenEmpty(t)} {
 		t.Run(name, func(t *testing.T) {
-			if _, ok := s.NoteMark(1, MarkSkipped, "tom", "", time.Now()); !ok {
-				t.Fatal("NoteMark refused a valid mark")
+			if _, ok, err := s.NoteMark(1, MarkSkipped, "tom", "", time.Now()); err != nil || !ok {
+				t.Fatalf("NoteMark refused a valid mark: ok=%v err=%v", ok, err)
 			}
 			if len(s.Marks()) != 1 {
 				t.Error("an unpersisted store must still hold its marks in memory")

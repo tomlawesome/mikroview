@@ -12,8 +12,15 @@ docker pull ghcr.io/tomlawesome/mikroview:latest
 
 The README's quickstart (`curl ... | sh`) is
 [`install.sh`](https://github.com/tomlawesome/mikroview/blob/main/install.sh)
-running this same `docker run`. If you'd rather run it yourself instead
-of fetching a script:
+running this same `docker run`. After pulling, it prints the exact image
+digest it just pulled (`ghcr.io/tomlawesome/mikroview@sha256:...`) --
+see [SECURITY.md](../SECURITY.md) for verifying that digest with
+`cosign verify` before you trust it. A release carries **two independent
+signatures**, one made by the GitLab tag pipeline with a held key and one
+made keyless on GitHub by hand, and a digest is only good if **both**
+verify -- treat either one missing as a reason not to trust it.
+SECURITY.md has both commands. If you'd rather run it yourself instead of
+fetching a script:
 
 ```sh
 docker run -d --name mikroview --restart unless-stopped \
@@ -144,6 +151,32 @@ mikroview/
 
 The bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try there. **The Compose form is no different**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and an empty folder starts on defaults just as the `docker run` above does. Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
 
+## Which ports to publish, and to whom
+
+The examples above publish every port on every interface, which is the
+right default for a first run on a LAN you trust. Two changes are worth
+making once it is more than that, and neither can be made from inside
+the container — a container cannot firewall its own host:
+
+- **A reverse proxy in front? Publish the web port on loopback only.**
+  `-p 127.0.0.1:443:8080` (or `"127.0.0.1:443:8080"` in the Compose
+  `ports:` list) means the proxy is the only way in and nothing else on
+  the network can go round it. Set `listen.trustedProxies` at the same
+  time, so MikroView sees your users' real addresses instead of the
+  proxy's — see
+  [docs/configuration.md](configuration.md#running-behind-a-reverse-proxy).
+- **Firewall the syslog port to your routers.** `6514/tcp` accepts a log
+  line from anything that can reach it — TLS proves MikroView's identity
+  to the router, not the router's to MikroView — so restrict it on the
+  host to your routers' addresses.
+
+You can also limit which addresses reach the web UI from MikroView's own
+side, with `ui.allow` in `config.yaml`; it is a file-only setting, and
+[docs/configuration.md](configuration.md#limiting-which-addresses-can-reach-the-web-ui)
+covers it, including how to get back in if you lock yourself out.
+[SECURITY.md](../SECURITY.md) has the rest of the deployment hardening
+advice.
+
 ## From source
 
 ```sh
@@ -223,3 +256,61 @@ failed, the uid/gid it is running as versus the directory's actual
 owner, and the exact `chown` that fixes it, then exits. Under
 `restart: unless-stopped` that means a restart loop, not silent data
 loss -- fix the ownership and the next restart comes up clean.
+
+## Running as a different account
+
+MikroView needs no special support to run as an account other than the
+image's own uid `1000` -- Docker's own override does the whole job.
+Add a `user:` line to the compose file:
+
+```yaml
+    user: "2000:2000"
+```
+
+or pass `--user 2000:2000` to `docker run`. The binary has no notion of
+its own uid; it just opens its files, so whichever account Docker hands
+it works as long as that account owns the two mounted paths
+(`/var/lib/mikroview` and `/etc/mikroview`).
+
+**Bind mounts** (the `mikroview/` folder layout above) need nothing
+extra beyond the ownership step in "Persistent data" -- `chown` the
+folder to whichever uid/gid you put in `user:` instead of `1000:1000`,
+and it works exactly as before.
+
+**Named volumes are the trap.** A fresh named volume is filled in from
+the image the first time a container is *created* against it, ownership
+included -- so a new `mikroview-data` volume comes up owned by uid
+`1000`, and `user: "2000:2000"` fails at the very first start:
+
+```
+the auth store at /var/lib/mikroview/users.json is not usable: permission denied
+Refusing to start: continuing would appear to work while silently discarding
+every change to that store on the next restart.
+
+MikroView is running as uid 2000, gid 2000.
+/var/lib/mikroview is owned by uid 1000, gid 1000 with mode 0755.
+
+Fix it by giving MikroView ownership: sudo chown -R 2000:2000 /var/lib/mikroview
+```
+
+Fix it with a throwaway container against the named volume, the same
+idea as the `chown` for a bind mount, just aimed at the volume instead
+of a host path:
+
+```sh
+docker run --rm -v mikroview-data:/var/lib/mikroview alpine \
+    chown 2000:2000 /var/lib/mikroview
+```
+
+One wrinkle: that volume is still completely empty (MikroView never got
+far enough to write anything to it), and Docker repeats the same
+image-owned copy-in on every *new* container it creates against an
+empty volume. So chowning it and then running a fresh `docker run` or
+recreating the container puts you right back at uid `1000`. What you
+want instead is for the *existing, already-failed* container to come
+back up -- under `restart: unless-stopped` (the shipped compose file's
+default) it is already looping and picks the fix up on its own next
+attempt, or start it by hand with `docker start <container>` /
+`docker compose up -d` (which reuses the existing container rather than
+recreating it). Either way, once the chown has happened, that same
+container starts clean.

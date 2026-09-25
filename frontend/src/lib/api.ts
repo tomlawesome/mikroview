@@ -36,12 +36,14 @@ import type {
   MACRegistryEntry,
   PasswordResetCode,
   PersistenceInfo,
+  PreferencesRecord,
   ReplayResult,
   ReputationResult,
   RouterBackupDiff,
   RouterBackupRouter,
   RouterBackupsResponse,
   RouterBackupText,
+  PasskeySummary,
   RuleUsage,
   VaultLock,
   SetupCommandsRequest,
@@ -53,6 +55,7 @@ import type {
   SetupStatus,
   Suggestion,
   SuggestionStatus,
+  TotpEnrollment,
   TuneLoggingAnalyseRequest,
   TuneLoggingAnalyseResponse,
   TuneLoggingRenderRequest,
@@ -156,22 +159,31 @@ async function postJSON(url: string, body: unknown = {}): Promise<Response> {
   })
 }
 
-async function putJSON(url: string, body: unknown = {}): Promise<Response> {
+// extra merges into the request init -- #1283's preferences flush is the
+// caller that needs it (now via patchJSON below, since that flush is a
+// PATCH), passing { keepalive: true } so a write fired from a pagehide
+// handler survives the page already being torn down (the same guarantee
+// sendBeacon gives, without giving up PUT/JSON).
+async function putJSON(url: string, body: unknown = {}, extra: RequestInit = {}): Promise<Response> {
   return send(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
+    ...extra,
   })
 }
 
-// PATCH, for the one route that edits a single field of something the
-// server already holds (a kept backup's comment, #1126). Same CSRF
-// header as its neighbours, for the same reason.
-async function patchJSON(url: string, body: unknown = {}): Promise<Response> {
+// PATCH, for a route that edits part of something the server already
+// holds (a kept backup's comment, #1126; the caller's changed
+// preference keys, #1283) rather than the whole thing. extra is putJSON's
+// own { keepalive: true } escape hatch, needed here too since
+// lib/preferences.svelte.ts's pagehide flush now goes through PATCH.
+async function patchJSON(url: string, body: unknown = {}, extra: RequestInit = {}): Promise<Response> {
   return send(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
+    ...extra,
   })
 }
 
@@ -827,12 +839,247 @@ export async function register(username: string, password: string): Promise<stri
   return (await res.text()) || `register: ${res.status}`
 }
 
-export async function login(username: string, password: string): Promise<string | null> {
-  const res = await postJSON('/api/auth/login', { username, password })
-  if (res.ok) return null
-  return (await res.text()) || `login: ${res.status}`
+// A correct password on an account holding an active second factor
+// (#1249) does not sign the caller in: handleAuthLogin sets a short-lived
+// pending cookie instead of a session and answers with the methods still
+// owed, never a 4xx -- the password itself was right. login() below
+// tells that apart from a plain failure by reading the body only once
+// the request has already succeeded.
+export interface LoginPendingFactor {
+  secondFactor: string[]
+  // #1250: present iff 'passkey' is listed in secondFactor -- the origin
+  // this account's passkeys were registered under, so AuthScreen can
+  // decide whether *this* browser, at *this* address, can actually use
+  // one before offering the button (see lib/passkeys.svelte.ts's
+  // capability check).
+  passkeyOrigin?: string
 }
 
+export async function login(username: string, password: string): Promise<LoginPendingFactor | string | null> {
+  const res = await postJSON('/api/auth/login', { username, password })
+  if (!res.ok) return (await res.text()) || `login: ${res.status}`
+  // Ordinary success carries no body -- res.json() would throw on the
+  // empty string, which the catch below reads as "nothing pending",
+  // same as an older server that predates this field entirely.
+  const body = await res.json().catch(() => null)
+  // #1250: an account whose only factor is a stale passkey answers with
+  // an *empty* secondFactor array rather than omitting it -- the design
+  // is explicit that the password still never creates a session there.
+  // So the presence of the array is what means "pending", not its
+  // length; a length check here used to read that empty-list case as an
+  // ordinary success, which would have opened the app on a password
+  // alone.
+  if (body && Array.isArray(body.secondFactor)) {
+    return { secondFactor: body.secondFactor, passkeyOrigin: body.passkeyOrigin }
+  }
+  return null
+}
+
+// submitLoginFactor is the second step (#1249): POST /api/auth/login/factor,
+// carried by the pending cookie login() above triggered rather than any
+// session -- there isn't one yet. A recovery code is accepted in the same
+// box; the server tells the two apart, not this call.
+export async function submitLoginFactor(code: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/login/factor', { code })
+  if (res.ok) return null
+  return (await res.text()) || `submitLoginFactor: ${res.status}`
+}
+
+// The literal refusal text handleAuthLoginFactor and its passkey-begin
+// counterpart (internal/api/auth.go, passkey.go) answer with once the
+// 5-minute pending-login cookie has already expired or was never sent --
+// exported so authState can tell that apart from an ordinary wrong code
+// or a refused passkey assertion (both 401 too, from the same route,
+// with no other distinguishing signal) and bounce back to the password
+// form instead of leaving the code box up with no session left to
+// complete.
+export const PENDING_LOGIN_EXPIRED = 'sign in again'
+
+// beginPasskeyLogin/submitPasskeyLoginAssertion are the passkey half of
+// the same second step (#1250), carried by the same pending cookie as
+// submitLoginFactor above -- the two are alternatives, not a sequence.
+// The begin response is the go-webauthn library's own
+// protocol.CredentialAssertion JSON, {"publicKey": <request options>} --
+// handed straight to PublicKeyCredential.parseRequestOptionsFromJSON by
+// lib/passkeys.svelte.ts, never hand-decoded here.
+export interface PasskeyCeremonyBegin {
+  publicKey: unknown
+}
+
+export async function beginPasskeyLogin(): Promise<PasskeyCeremonyBegin | string> {
+  const res = await postJSON('/api/auth/login/factor/begin')
+  if (res.ok) return res.json()
+  return (await res.text()) || `beginPasskeyLogin: ${res.status}`
+}
+
+// assertion is credential.toJSON() from navigator.credentials.get() --
+// the browser's own AuthenticationResponseJSON shape, forwarded as-is.
+export async function submitPasskeyLoginAssertion(assertion: unknown): Promise<string | null> {
+  const res = await postJSON('/api/auth/login/factor', { assertion })
+  if (res.ok) return null
+  return (await res.text()) || `submitPasskeyLoginAssertion: ${res.status}`
+}
+
+// enrolTOTP mints a pending secret and returns the otpauth:// URI to draw
+// (#1249). Not active until confirmTOTP below verifies a code against
+// it -- calling this again before confirming replaces the pending secret,
+// which is what lets AuthenticatorOverlay's "scan didn't work, try again"
+// just call it a second time rather than needing a dedicated retry route.
+// A 401 here is never "wrong credentials" -- unlike login/submitLoginFactor
+// above, every one of the four forced-enrolment routes (this one and the
+// other three below) requires an already-authenticated session before it
+// does anything else, so a 401 can only mean that session is gone (most
+// often: a second device finished enrolling first, which ends every other
+// session on the account). Thrown, not returned as text, so the forced-
+// enrolment door -- which otherwise has no way out at all -- can send that
+// case to authState.handleUnauthorized() instead of stranding the caller
+// on an error line with nothing else on screen.
+export async function enrolTOTP(): Promise<TotpEnrollment | string> {
+  const res = await postJSON('/api/auth/totp/enrol')
+  if (res.ok) return res.json()
+  if (res.status === 401) throw new ApiError((await res.text()) || `enrolTOTP: ${res.status}`, res.status)
+  return (await res.text()) || `enrolTOTP: ${res.status}`
+}
+
+// #1250: recovery codes are minted once, by whichever factor -- TOTP
+// confirm or passkey register-finish -- activates first, and never
+// reissued by the other. confirmTOTP below used to return the codes
+// bare, unconditionally minting; now it mints only if none exist yet,
+// and alreadyIssued tells the overlay to say the existing ones still
+// stand rather than rendering a blank list.
+export interface TotpConfirmResult {
+  recoveryCodes: string[] | null
+  alreadyIssued: boolean
+}
+
+// confirmTOTP activates the pending secret (#1249). Also ends every
+// other session for this account server-side, the same "if you thought
+// someone else had it, this ends their access too" guarantee
+// changePassword already gives.
+export async function confirmTOTP(code: string): Promise<TotpConfirmResult | string> {
+  const res = await postJSON('/api/auth/totp/confirm', { code })
+  if (res.ok) {
+    const body = await res.json()
+    return { recoveryCodes: body.recoveryCodes ?? null, alreadyIssued: body.alreadyIssued ?? false }
+  }
+  // See enrolTOTP's own comment: a wrong code answers 400, never 401, so
+  // a 401 here always means the session died, not a bad code.
+  if (res.status === 401) throw new ApiError((await res.text()) || `confirmTOTP: ${res.status}`, res.status)
+  return (await res.text()) || `confirmTOTP: ${res.status}`
+}
+
+// #1253's ruling: an account may remove its own last second factor --
+// the server signs the caller out immediately when that leaves none
+// (every session on the account revoked, this browser's included), and
+// says so back rather than answering exactly as it would have for an
+// ordinary removal that leaves another factor standing. Absent (an
+// older server, or the ordinary case) reads as false -- the safe
+// direction to be wrong in, since it only means AuthenticatorOverlay/
+// PasskeysOverlay show the ordinary "turned off" screen for a session
+// that in fact no longer exists, which the next request 401s out of
+// anyway rather than silently misrepresenting anything.
+export interface DisableFactorResult {
+  signedOut: boolean
+}
+
+// disableTOTP is the user's own way to turn a factor off, password-gated
+// like changePassword -- there is deliberately no web route that can do
+// this without it (#1249's "no web route clears your own factor without
+// the password"); a lost phone goes through the CLI recovery path instead.
+export async function disableTOTP(password: string): Promise<DisableFactorResult | string> {
+  const res = await deleteJSON('/api/auth/totp', { password })
+  if (!res.ok) return (await res.text()) || `disableTOTP: ${res.status}`
+  const body = await res.json().catch(() => null)
+  return { signedOut: body?.signedOut === true }
+}
+
+// clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
+// /api/auth/users/{id}/totp turns someone else's factor off with no
+// password, audited server-side. Refused on the admin's own id -- see
+// EngineRoom's people group, which never renders the button on that row
+// in the first place.
+export async function clearUserTOTP(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/totp`)
+  if (res.ok) return null
+  return (await res.text()) || `clearUserTOTP: ${res.status}`
+}
+
+// fetchPasskeys feeds PasskeysOverlay's list step (#1250).
+export async function fetchPasskeys(): Promise<PasskeySummary[] | string> {
+  const res = await fetch('/api/auth/passkeys')
+  if (res.ok) return res.json()
+  return (await res.text()) || `fetchPasskeys: ${res.status}`
+}
+
+// beginPasskeyRegistration/finishPasskeyRegistration wrap the two round
+// trips of the registration ceremony (#1250). The begin response is the
+// go-webauthn library's own protocol.CredentialCreation JSON --
+// {"publicKey": <creation options>} -- handed straight to
+// PublicKeyCredential.parseCreationOptionsFromJSON by
+// lib/passkeys.svelte.ts, never hand-decoded here.
+export async function beginPasskeyRegistration(): Promise<PasskeyCeremonyBegin | string> {
+  const res = await postJSON('/api/auth/passkeys/register/begin')
+  if (res.ok) return res.json()
+  // Same reasoning as enrolTOTP's own comment: this is one of the four
+  // forced-enrolment routes, all of which need an existing session, so a
+  // 401 here means that session is gone, not a ceremony refusal.
+  if (res.status === 401) {
+    throw new ApiError((await res.text()) || `beginPasskeyRegistration: ${res.status}`, res.status)
+  }
+  return (await res.text()) || `beginPasskeyRegistration: ${res.status}`
+}
+
+// #1250, mirroring TotpConfirmResult above: recoveryCodes is null when
+// this account's codes were already minted by an earlier factor.
+export interface PasskeyRegistrationFinish {
+  passkey: PasskeySummary
+  recoveryCodes: string[] | null
+}
+
+// credential is credential.toJSON() from navigator.credentials.create()
+// -- the browser's own RegistrationResponseJSON shape, forwarded as-is.
+export async function finishPasskeyRegistration(
+  credential: unknown,
+  name: string,
+): Promise<PasskeyRegistrationFinish | string> {
+  const res = await postJSON('/api/auth/passkeys/register/finish', { credential, name })
+  if (res.ok) return res.json()
+  // Same reasoning as beginPasskeyRegistration's own comment.
+  if (res.status === 401) {
+    throw new ApiError((await res.text()) || `finishPasskeyRegistration: ${res.status}`, res.status)
+  }
+  return (await res.text()) || `finishPasskeyRegistration: ${res.status}`
+}
+
+export async function renamePasskey(id: string, name: string): Promise<string | null> {
+  const res = await patchJSON(`/api/auth/passkeys/${encodeURIComponent(id)}`, { name })
+  if (res.ok) return null
+  return (await res.text()) || `renamePasskey: ${res.status}`
+}
+
+// disablePasskey is the user's own way to remove one passkey,
+// password-gated like disableTOTP -- there is deliberately no web route
+// that can do this without it. Same #1253 signedOut contract as
+// disableTOTP's own comment describes -- removing an account's last
+// passkey with no authenticator app left standing signs the caller out
+// immediately too.
+export async function disablePasskey(id: string, password: string): Promise<DisableFactorResult | string> {
+  const res = await deleteJSON(`/api/auth/passkeys/${encodeURIComponent(id)}`, { password })
+  if (!res.ok) return (await res.text()) || `disablePasskey: ${res.status}`
+  const body = await res.json().catch(() => null)
+  return { signedOut: body?.signedOut === true }
+}
+
+// clearUserPasskeys is the admin's side of a lost device (#1250): DELETE
+// /api/auth/users/{id}/passkeys turns every one of someone else's
+// passkeys off with no password, audited server-side -- mirrors
+// clearUserTOTP above, including being refused on the admin's own id
+// (EngineRoom never renders the button on that row in the first place).
+export async function clearUserPasskeys(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}/passkeys`)
+  if (res.ok) return null
+  return (await res.text()) || `clearUserPasskeys: ${res.status}`
+}
 
 // Change the signed-in account's own password (#294 item 4). Returns
 // error text on failure, like every other mutating wrapper here.
@@ -864,6 +1111,27 @@ export async function signOutEverywhere(): Promise<string | null> {
   const res = await postJSON('/api/auth/logout-all')
   if (res.ok) return null
   return (await res.text()) || `signOutEverywhere: ${res.status}`
+}
+
+// #1283: the signed-in user's own preferences record. No record yet
+// reads as version 1 with an empty prefs object -- never a 404 -- so a
+// caller never has to special-case "nothing saved yet".
+export async function fetchMyPreferences(): Promise<PreferencesRecord> {
+  const res = await fetch('/api/me/preferences')
+  if (!res.ok) throw new ApiError(`fetchMyPreferences: ${res.status}`, res.status)
+  return res.json()
+}
+
+// Merges record.prefs's keys into the stored record -- record.prefs
+// holds only the keys that changed since the last successful save
+// (lib/preferences.svelte.ts's flush()), not the caller's whole record,
+// so two tabs saving different keys don't race each other off the
+// server (#1283). keepalive lets the pagehide flush outlive the page
+// unload that triggers it (see putJSON's own comment on `extra`).
+export async function saveMyPreferences(record: PreferencesRecord, opts: { keepalive?: boolean } = {}): Promise<string | null> {
+  const res = await patchJSON('/api/me/preferences', record, opts.keepalive ? { keepalive: true } : {})
+  if (res.ok) return null
+  return await serverSaid(res)
 }
 
 // role chooses between the two tiers this call can create (#653).

@@ -3,10 +3,29 @@
 package settings
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// failingSaveBackend lets Open succeed (nothing stored yet) but fails
+// every Save -- for R6 cases proving SetMaxMemory/SetHistory return the
+// persistence error rather than reporting a change as durably stored
+// when it wasn't.
+type failingSaveBackend struct{}
+
+func (failingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	return persist.Snapshot{}, nil
+}
+func (failingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	return 0, errors.New("backend unavailable")
+}
+func (failingSaveBackend) Close() error     { return nil }
+func (failingSaveBackend) Describe() string { return "failing test backend" }
 
 func TestFirstRunHasNothingStored(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "settings.json"))
@@ -191,6 +210,32 @@ func TestTheTwoSettingsDoNotOverwriteEachOther(t *testing.T) {
 	}
 	if got, ok := reopened.History(); !ok || got.Days != 7 {
 		t.Errorf("History = (%+v, %v), want 7 days stored", got, ok)
+	}
+}
+
+// TestSetMaxMemoryReportsAPersistFailure is R6 (v0.6.0 audit): a store
+// whose backend cannot durably save must not tell its caller the change
+// took effect, or a restart before the next good write silently reverts
+// it with nobody told.
+func TestSetMaxMemoryReportsAPersistFailure(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMaxMemory(480 << 20); err == nil {
+		t.Fatal("SetMaxMemory against a failing backend was reported as succeeding")
+	}
+}
+
+// TestSetHistoryReportsAPersistFailure is the same R6 case for
+// SetHistory.
+func TestSetHistoryReportsAPersistFailure(t *testing.T) {
+	s, err := OpenWithBackend(failingSaveBackend{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHistory(History{Enabled: true, Days: 7, MaxBytes: 1 << 30}); err == nil {
+		t.Fatal("SetHistory against a failing backend was reported as succeeding")
 	}
 }
 

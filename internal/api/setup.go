@@ -354,9 +354,18 @@ func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "setup observations are not available", http.StatusServiceUnavailable)
 		return
 	}
-	mark, ok := s.Setup.NoteMark(req.Step, setup.MarkOutcome(req.Outcome), auditActor(r), req.Note, time.Now())
+	mark, ok, err := s.Setup.NoteMark(req.Step, setup.MarkOutcome(req.Outcome), auditActor(r), req.Note, time.Now())
+	if err != nil {
+		apiLog.Error(fmt.Sprintf("recording a setup mark failed: %v", err))
+		http.Error(w, "the decision could not be stored, so nothing was changed", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
-		http.Error(w, "step must be 1-7 and outcome one of skipped, forced", http.StatusBadRequest)
+		// The bound comes from setup.MaxStep (#1304), not a literal repeated
+		// here, so this message cannot lag the wizard's step count the way
+		// it twice lagged before that constant existed (see MaxStep's own
+		// comment).
+		http.Error(w, fmt.Sprintf("step must be 1-%d and outcome one of skipped, forced", setup.MaxStep), http.StatusBadRequest)
 		return
 	}
 	// The audit vocabulary is owned by the caller (see internal/audit's
@@ -418,7 +427,13 @@ func (s *Server) handleSetupAddress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "setup observations are not available", http.StatusServiceUnavailable)
 		return
 	}
-	if !s.Setup.SetAddress(req.Address) {
+	ok, err := s.Setup.SetAddress(req.Address)
+	if err != nil {
+		apiLog.Error(fmt.Sprintf("storing the setup address failed: %v", err))
+		http.Error(w, "the address could not be stored, so nothing was changed", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		http.Error(w, "address could not be stored", http.StatusBadRequest)
 		return
 	}
@@ -472,7 +487,13 @@ func (s *Server) handleSetupBackupTransport(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "setup observations are not available", http.StatusServiceUnavailable)
 		return
 	}
-	if !s.Setup.SetBackupTransport(req.Transport) {
+	ok, err := s.Setup.SetBackupTransport(req.Transport)
+	if err != nil {
+		apiLog.Error(fmt.Sprintf("storing the backup transport failed: %v", err))
+		http.Error(w, "the transport could not be stored, so nothing was changed", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
 		http.Error(w, "transport must be sftp or https", http.StatusBadRequest)
 		return
 	}
