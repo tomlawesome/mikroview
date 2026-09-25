@@ -644,8 +644,8 @@ store:
 #   # recoveryPepperPath only if you want the pepper off that volume
 #   # entirely, so a stolen backup of the volume does not carry the one
 #   # value the recovery-key hashes are useless without.
-#   recoveryKeysPath: /var/lib/mikroview/recovery.json
-#   recoveryPepperPath: /var/lib/mikroview/recovery-pepper
+#   recoveryKeysPath: /var/lib/mikroview/recovery-keys.json
+#   recoveryPepperPath: /var/lib/mikroview/recovery-pepper.key
 
 # TLS is on by default and needs no configuration to work -- MikroView
 # generates its own local CA + certificate on first start, already
