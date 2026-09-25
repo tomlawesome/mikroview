@@ -21,9 +21,12 @@ it needs MikroView to have a proper web address configured first (see
 anywhere, including a bare IP address, at the cost of typing a code
 each time.
 
-**Recovery codes are shared between the two.** Whichever one you set
-up first mints one set of ten codes, and that same set backs both —
-see "Save your recovery codes" below.
+**Recovery codes are shared between the two.** Every local account meets
+a forced setup screen the moment it first signs in with no second
+factor yet — that screen is where your very first one is chosen and
+where its ten recovery codes are minted. Anything you add afterwards
+from the account menu shares that same set rather than minting a new
+one — see "Save your recovery codes" below.
 
 **Single sign-on accounts don't need either.** If you sign in through
 SSO, your identity provider is what verifies you, and the account menu
@@ -101,11 +104,11 @@ device it's on, like "this laptop" or "YubiKey" — and continue. Your
 browser then prompts you the normal way it does for a fingerprint, face
 scan, screen-lock PIN or security key tap.
 
-Adding your very first second factor of either kind — the first
-passkey, if you haven't already set up an authenticator app — signs out
-every other browser or device this account is currently signed into,
-the same as confirming an authenticator app does. Adding a second (or
-third) passkey afterwards doesn't sign anything out.
+Adding a passkey here never signs anything out. That only happens for
+an account's very first second factor of either kind, and every local
+account sets that one up at the forced setup screen it meets on its
+first sign-in, not from this menu — see "Save your recovery codes"
+below.
 
 You can register up to ten passkeys on one account — a phone, a laptop
 and a couple of security keys, say — and each one shows in the list
@@ -140,10 +143,13 @@ you in.
 
 ## Save your recovery codes
 
-The first time you activate a second factor — whichever kind you set
-up first — MikroView shows ten recovery codes.
+A local account can never be signed in with no second factor, so the
+first time you sign in with none set up yet, MikroView stops you at a
+forced setup screen instead of taking you in: choose an authenticator
+app or a passkey, prove it works, and the last step is ten recovery
+codes.
 
-![The recovery-codes screen -- ten codes in two columns, the Copy all button, and I have saved these](screenshots/authenticator-recovery-codes-dark.png)
+![The forced setup screen's last step -- "Keep the codes", ten codes in two columns, the Copy all button, and I have saved these](screenshots/authenticator-recovery-codes-dark.png)
 
 **This is the only time they're shown.** Each works once, in place of a
 code from your app or a passkey prompt, if you can't get to either —
@@ -151,21 +157,21 @@ phone lost, out of battery, or just not to hand. Save all ten somewhere
 safe now — a password manager is the obvious place — before you press
 **I have saved these**. MikroView can't show them to you again.
 
-The screen won't close by clicking outside it or pressing Escape,
-unlike every other dialog in MikroView — the ten codes exist in the
+There is no way past this screen other than that button — no cancel,
+no skip, no sign-out, no switching accounts. The ten codes exist in the
 clear nowhere else, so leaving has to be the deliberate "I have saved
 these", not an accidental dismiss.
 
-**Setting up the other kind afterwards doesn't mint a new set.** If you
-already have an authenticator app and add a passkey (or the other way
-round), MikroView tells you your existing codes still cover the new
-factor too, rather than showing you a second set. Removing one factor
-doesn't clear the codes either, as long as the other kind is still
-active — codes are only cleared when your account goes back to having
-no second factor at all (see "If you lose access" below). The only way
-to draw a genuinely fresh set of ten is to remove every second factor
-you have — which does clear the shared codes — and set one up again
-from scratch.
+**Adding the other kind afterwards, from the account menu, doesn't mint
+a new set.** If you already have an authenticator app and add a
+passkey (or the other way round), MikroView tells you your existing
+codes still cover the new factor too, rather than showing you a second
+set. Removing one factor doesn't clear the codes either, as long as the
+other kind is still active — codes are only cleared when your account
+goes back to having no second factor at all (see "If you lose access"
+below). Removing your very last factor signs you out at once, and the
+next time you sign in you're back at the forced setup screen above,
+picking a factor and drawing a genuinely fresh set of ten from scratch.
 
 ## Signing in afterwards
 

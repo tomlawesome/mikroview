@@ -16,6 +16,54 @@ rewritten.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.1] - 2026-09-24
+
+### Security
+
+- **Every local account is made to enrol a second factor at its first
+  sign-in after upgrading** (#1253, owner's request on #1259). MikroView
+  stops the account at a "set up your second factor" screen and won't
+  let it go anywhere else until an authenticator app or a passkey is
+  active. An account that already had one before the upgrade sees
+  nothing different. **SSO-only accounts are not affected** — your
+  identity provider already does this job for them. See "Upgrading to
+  0.6.1: every local account needs a second factor" in
+  [docs/upgrades.md](docs/upgrades.md) for what you'll see and how to
+  help someone who gets stuck.
+
+- **Authenticator app and passkey sign-in, with shared recovery codes**
+  (#1249, #1250). Every account can now add a 6-digit code from an
+  authenticator app (Google Authenticator, 1Password, Bitwarden or
+  similar) or a passkey (a fingerprint, face, screen-lock PIN, or a
+  physical security key) as a second step at sign-in, from the account
+  menu. Setting up the first factor of either kind mints ten recovery
+  codes, shared between both, for getting back in if a phone or passkey
+  later goes missing. **Removing your only second factor gives a brief
+  warning, signs you out at once, and asks you to enrol again the next
+  time you sign in** — a local account is never left without one for
+  more than that one moment. See
+  [docs/authenticator-app.md](docs/authenticator-app.md).
+
+- **MikroView refuses to start if a passkey on the instance can never
+  work** (#1334). If any account holds a passkey and `publicUrl` cannot
+  support one — unset, an IP address, or anything other than
+  `https://` or `http://localhost` — MikroView now refuses to start
+  instead of silently leaving that account unable to sign in with it. It
+  names the problem and both ways out: set `publicUrl` to a working
+  address, or run `mikroview -clear-second-factor <username>` for each
+  affected account. An install where nobody has registered a passkey
+  starts exactly as before. See "Public URL" in
+  [docs/configuration.md](docs/configuration.md).
+
+- **A release now carries two independent signatures, and both must
+  verify** (#1309). Alongside GitLab's own key-based signature, a
+  release is now also countersigned keyless on GitHub, started by hand
+  only after the first signature has been checked — a second,
+  independent custody over what shipped, so a compromise of one signer
+  alone is not enough. See [SECURITY.md](SECURITY.md).
+
 ### Added
 
 - **You can limit the web UI to the addresses that administer it**
@@ -42,6 +90,26 @@ rewritten.
   restart the container; docs/configuration.md and SECURITY.md give the
   exact command for an image with no shell. Each address turned away is
   audited once an hour (`ui.address_refused`), not once per request.
+
+- **Your preferences now roam with your account, not your browser**
+  (#1283). Saved filter presets, top-talker widgets, accent colour,
+  column layout and every other setting that used to live in the
+  browser's own storage now live in a record on the server, read at
+  sign-in and written as you change things. Sign in on another machine
+  and your settings are there; sign out on a shared one and the next
+  person to sign in sees none of yours. An existing browser's settings
+  are carried up into your account once, on first sign-in after the
+  upgrade. Each account's preferences are capped at 256 KiB — a change
+  that would push a record over the cap is refused, with nothing saved,
+  though a record an older install already grew past the cap still loads
+  and reads back as it did before.
+
+### Changed
+
+- **`PUT /api/me/preferences` is gone; `PATCH /api/me/preferences`
+  replaces it** (#1283). The old endpoint replaced your whole
+  preferences record on every write; the new one merges only the keys
+  you send into what's already stored, leaving everything else alone.
 
 ### Fixed
 
