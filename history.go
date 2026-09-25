@@ -52,8 +52,8 @@ func historyDirectory(cfg config.Config) string {
 //     writing events in the clear, which the ADR rules out.
 //   - Key present but the switch off: retention stays off.
 //
-// Neither off path deletes what an earlier run retained unless
-// history.deleteWhenOff is set -- see leaveHistoryOff.
+// Neither off path deletes what an earlier run retained -- see
+// leaveHistoryOff.
 func openHistory(log *slog.Logger, cfg config.Config) *retention.Store {
 	dir := historyDirectory(cfg)
 
@@ -68,7 +68,7 @@ func openHistory(log *slog.Logger, cfg config.Config) *retention.Store {
 		} else {
 			log.Info("on-disk event history is off: no key file configured, so the corpus is the in-memory ring only")
 		}
-		leaveHistoryOff(log, cfg, dir)
+		leaveHistoryOff(log, dir)
 		return nil
 	case err != nil:
 		log.Warn("on-disk event history is off: the key file could not be used -- MikroView runs normally and retains nothing", "keyFile", cfg.History.KeyFile, "err", err)
@@ -86,7 +86,7 @@ func openHistory(log *slog.Logger, cfg config.Config) *retention.Store {
 
 	if !cfg.History.Enabled {
 		log.Info("on-disk event history is switched off")
-		leaveHistoryOff(log, cfg, dir)
+		leaveHistoryOff(log, dir)
 		return nil
 	}
 
@@ -105,22 +105,14 @@ func openHistory(log *slog.Logger, cfg config.Config) *retention.Store {
 }
 
 // leaveHistoryOff deals with a history an earlier run left behind while
-// retention is off: deleted only if the operator wrote
-// history.deleteWhenOff: true, otherwise kept and reported.
+// retention is off: always kept and reported.
 //
-// Kept by default because "off" is also what a missing history block,
-// a typo or a copied example reads as, and deleting a month of retained
-// events on that reading cannot be undone. Needs no key either way:
-// see retention.PurgeDir.
-func leaveHistoryOff(log *slog.Logger, cfg config.Config, dir string) {
-	if cfg.History.DeleteWhenOff {
-		if err := retention.PurgeDir(dir); err != nil {
-			log.Warn("could not delete the previously retained event history", "dir", dir, "err", err)
-			return
-		}
-		log.Info("on-disk event history is off and history.deleteWhenOff is set -- anything previously retained has been deleted", "dir", dir)
-		return
-	}
+// Kept because "off" is also what a missing history block, a typo or a
+// copied example reads as, and deleting a month of retained events on
+// that reading cannot be undone. Deleting is only ever an admin choice
+// made in the UI (#1354), never something a config setting can trigger.
+// Needs no key: see retention.DaysHeld.
+func leaveHistoryOff(log *slog.Logger, dir string) {
 	files, err := retention.DaysHeld(dir)
 	if err != nil {
 		log.Warn("could not read what the on-disk event history holds", "dir", dir, "err", err)
@@ -132,6 +124,6 @@ func leaveHistoryOff(log *slog.Logger, cfg config.Config, dir string) {
 	log.Warn(fmt.Sprintf(
 		"on-disk event history is off, but %d day(s) retained by an earlier run are still in %s -- nothing is being deleted and nothing new is retained. "+
 			"To use them again set history.enabled: true with the history.keyFile they were written under; "+
-			"to delete them instead set history.deleteWhenOff: true and restart",
+			"to delete them, an admin can do so from Settings",
 		len(files), dir), "dir", dir, "days", len(files))
 }

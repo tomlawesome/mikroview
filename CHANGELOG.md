@@ -22,10 +22,10 @@ rewritten.
   (#1353). A config with the `history:` block missing, `enabled: false`,
   or no key file used to make MikroView delete every retained day at
   startup, with one info line after the fact. It now keeps the files,
-  retains nothing new, and logs a warning saying where they are, how to
-  turn history back on, and that the new `history.deleteWhenOff: true`
-  would delete them. Set that only if you want the old behaviour. Turning
-  history off from Settings still asks, then deletes.
+  retains nothing new, and logs a warning saying where they are and how
+  to turn history back on. Nothing in the config file deletes retained
+  history any more; deleting is only ever an admin choice made from
+  Settings. Turning history off from Settings still asks, then deletes.
 
 ## [0.6.1] - 2026-09-24
 

@@ -296,9 +296,6 @@ store:
 # encryption does and doesn't protect against.
 # history:
 #   enabled: false
-#   # Delete retained history at startup while off. Default false, because a
-#   # missing or mistyped block reads as "off" and a deletion can't be undone.
-#   deleteWhenOff: false
 #   keyFile: /run/secrets/mikroview-history.key   # must be outside the data directory
 #   days: 30
 #   maxBytes: 1073741824   # 1 GiB

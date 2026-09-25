@@ -1135,15 +1135,10 @@ type History struct {
 	// file the operator mounts, per AGENTS.md's secret rule.
 	KeyFile string `yaml:"keyFile"`
 	// Enabled is the operator's switch, beside the memory slider. Off
-	// at startup stops retaining; it does not delete what an earlier run
-	// retained unless DeleteWhenOff says so.
+	// at startup stops retaining; it never deletes what an earlier run
+	// retained -- nothing in this file does. Deleting is only ever an
+	// admin choice made in the UI (#1354).
 	Enabled bool `yaml:"enabled"`
-	// DeleteWhenOff lets startup delete retained history while Enabled
-	// is off, or no key is configured. False unless written in the file:
-	// a block that went missing from a regenerated or hand-edited
-	// config reads exactly like "off", and deleting a month of evidence
-	// on that reading cannot be undone. Deliberately no env override.
-	DeleteWhenOff bool `yaml:"deleteWhenOff"`
 	// Days is how many days are kept. Below 1 the default is applied
 	// (CFG-0081): zero would mean the day just written is deleted on the
 	// next flush, which is retention that reports itself as on and keeps
