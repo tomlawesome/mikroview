@@ -1134,10 +1134,10 @@ type History struct {
 	// Not a key value, and not an environment variable -- a path to a
 	// file the operator mounts, per AGENTS.md's secret rule.
 	KeyFile string `yaml:"keyFile"`
-	// Enabled is the operator's switch, beside the memory slider.
-	// Turning it off deletes what was retained (see CFG-0080's note and
-	// retention.Store.Purge): off has to mean the history is gone, or
-	// the setting is a lie.
+	// Enabled is the operator's switch, beside the memory slider. Off
+	// at startup stops retaining; it never deletes what an earlier run
+	// retained -- nothing in this file does. Deleting is only ever an
+	// admin choice made in the UI (#1354).
 	Enabled bool `yaml:"enabled"`
 	// Days is how many days are kept. Below 1 the default is applied
 	// (CFG-0081): zero would mean the day just written is deleted on the

@@ -341,10 +341,16 @@ MikroView first sees that value in the file you mount, which is also why
 the wizard says it can never show it to you again.
 
 - `history.enabled` — the switch, and the initial position of the one in
-  Settings. **Turning it off deletes what was already retained** — off
-  has to mean the history is actually gone, or the setting is a lie.
-  That applies to the control in the app as well: the files are gone
-  before the change is confirmed on screen.
+  Settings. **Off in the file stops retaining; nothing in the config file
+  ever deletes what was already retained.** At startup with history off
+  (`enabled: false`, the `history:` block missing, or no key file
+  configured) MikroView keeps the files it finds, writes nothing new, and
+  logs a warning naming the directory, and how to turn history back on
+  (`history.enabled: true` with the `history.keyFile` they were written
+  under). An admin can delete the files from Settings. Turning it off
+  from the control in Settings is different: that asks first ("delete N
+  days · keep them") and, once confirmed, deletes the files before the
+  change shows on screen.
 - `history.keyFile` — path to a master key file that you generate.
   **Put it at `mikroview/keys/history.key` and restart** — MikroView
   finds it there with nothing else set:
