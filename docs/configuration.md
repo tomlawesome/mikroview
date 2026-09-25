@@ -319,7 +319,6 @@ missing a setup step:
 ```yaml
 history:
   enabled: false
-  deleteWhenOff: false
   keyFile: ""
   days: 30
   maxBytes: 1073741824   # 1 GiB
@@ -342,20 +341,16 @@ MikroView first sees that value in the file you mount, which is also why
 the wizard says it can never show it to you again.
 
 - `history.enabled` — the switch, and the initial position of the one in
-  Settings. **Off in the file stops retaining; it does not delete what
-  was already retained.** At startup with history off (`enabled: false`,
-  the `history:` block missing, or no key file configured) MikroView
-  keeps the files it finds, writes nothing new, and logs a warning naming
-  the directory, how to turn history back on, and the setting that would
-  delete them. Turning it off from the control in Settings is different:
-  that asks first ("delete N days · keep them") and, once confirmed,
-  deletes the files before the change shows on screen.
-- `history.deleteWhenOff` — default `false`. Set it to `true` to have
-  MikroView delete retained history at startup whenever history is off
-  or no key is configured. Only this setting, written in the file,
-  deletes at startup: a missing `history:` block, a typo or a copied
-  example reads exactly like "off", and deleting a month of evidence on
-  that reading can't be undone. There is no environment variable for it.
+  Settings. **Off in the file stops retaining; nothing in the config file
+  ever deletes what was already retained.** At startup with history off
+  (`enabled: false`, the `history:` block missing, or no key file
+  configured) MikroView keeps the files it finds, writes nothing new, and
+  logs a warning naming the directory, and how to turn history back on
+  (`history.enabled: true` with the `history.keyFile` they were written
+  under). An admin can delete the files from Settings. Turning it off
+  from the control in Settings is different: that asks first ("delete N
+  days · keep them") and, once confirmed, deletes the files before the
+  change shows on screen.
 - `history.keyFile` — path to a master key file that you generate.
   **Put it at `mikroview/keys/history.key` and restart** — MikroView
   finds it there with nothing else set:

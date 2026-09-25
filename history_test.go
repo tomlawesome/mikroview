@@ -163,9 +163,9 @@ func TestOpenHistoryKeepsTheHistoryWhenSwitchedOff(t *testing.T) {
 		t.Fatal("openHistory returned a store with the switch off")
 	}
 	if n := retainedDayCount(t, dir); n != 1 {
-		t.Errorf("switching it off left %d day file(s), want the 1 retained -- nothing may be deleted without history.deleteWhenOff", n)
+		t.Errorf("switching it off left %d day file(s), want the 1 retained -- nothing in the config may delete it", n)
 	}
-	for _, want := range []string{"level=WARN", dir, "history.deleteWhenOff: true", "history.enabled: true"} {
+	for _, want := range []string{"level=WARN", dir, "history.enabled: true"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the startup log does not mention %q:\n%s", want, out.String())
 		}
@@ -186,9 +186,9 @@ func TestOpenHistoryKeepsTheHistoryWithNoKey(t *testing.T) {
 		t.Fatal("openHistory returned a store with no key configured")
 	}
 	if n := retainedDayCount(t, dir); n != 1 {
-		t.Errorf("no key configured left %d day file(s), want the 1 retained -- nothing may be deleted without history.deleteWhenOff", n)
+		t.Errorf("no key configured left %d day file(s), want the 1 retained -- nothing in the config may delete it", n)
 	}
-	for _, want := range []string{"level=WARN", dir, "history.deleteWhenOff: true"} {
+	for _, want := range []string{"level=WARN", dir, "history.enabled: true"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the startup log does not mention %q:\n%s", want, out.String())
 		}
@@ -205,28 +205,6 @@ func TestOpenHistoryOffWithNothingRetainedDoesNotWarn(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "level=WARN") {
 		t.Errorf("warned with nothing retained:\n%s", out.String())
-	}
-}
-
-// history.deleteWhenOff: true is the operator asking for the old
-// behaviour, and gets it on both off paths.
-func TestOpenHistoryDeletesWhenOffOnlyWhenAsked(t *testing.T) {
-	for _, noKey := range []bool{false, true} {
-		cfg := historyConfig(t, true, writeKeyFile(t))
-		dir := retainOneDay(t, cfg)
-
-		cfg.History.Enabled = false
-		cfg.History.DeleteWhenOff = true
-		if noKey {
-			cfg.History.KeyFile = ""
-		}
-		if hist := openHistory(quietLog(), cfg); hist != nil {
-			hist.Close()
-			t.Fatal("openHistory returned a store with the switch off")
-		}
-		if n := retainedDayCount(t, dir); n != 0 {
-			t.Errorf("noKey=%v: history.deleteWhenOff: true left %d day file(s) behind", noKey, n)
-		}
 	}
 }
 
