@@ -203,6 +203,18 @@ describe('openRegister resumes an enrolled-but-unregistered router (#1291)', () 
     expect(wizardState.registerError).toBeNull()
     expect(wizardState.registering).toBe(false)
   })
+
+  // syslogCopiedAddress (#1370) is a module-lifetime field the same way
+  // token/address/registerError above are -- what one account's session
+  // last copied the Send logs block for is not something the next
+  // account signing in on this tab should see a stale warning about.
+  it('reset() clears which address the Send logs block was last copied for', () => {
+    wizardState.syslogCopiedAddress = '192.0.2.10'
+
+    wizardState.reset()
+
+    expect(wizardState.syslogCopiedAddress).toBeNull()
+  })
 })
 
 // #1218 audit finding 11: saveSetupAddress/saveSetupBackupTransport

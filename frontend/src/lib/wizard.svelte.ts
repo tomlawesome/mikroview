@@ -213,6 +213,14 @@ class WizardState {
   // charset check, #1095), read by the header field beside the input.
   addressSaveError = $state<string | null>(null)
 
+  // syslogCopiedAddress is #1370's own memory: the address this instance
+  // carried the last time the operator pressed Copy on the Send logs
+  // block, so SetupWizard.svelte can tell a since-changed address apart
+  // from a block nobody has copied yet (null). Set by that Copy button
+  // alone, never by a poll -- this is what the operator's clipboard
+  // holds, not what the server reports.
+  syslogCopiedAddress = $state<string | null>(null)
+
   // backupTransport is step 6's one choice (#955): how the router hands
   // its backup over -- 'sftp' through the drop box, or 'https' in
   // slices over the ingest channel, for an install whose only open way
@@ -847,6 +855,7 @@ class WizardState {
     this.address = ''
     this.addressInitialized = false
     this.addressSaveError = null
+    this.syslogCopiedAddress = null
     this.backupTransport = 'sftp'
     this.backupTransportInitialized = false
     this.backupTransportError = null
