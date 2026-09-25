@@ -26,14 +26,22 @@ export function qrCode(node: HTMLCanvasElement, uri: string) {
   function render(value: string) {
     // margin: 1 keeps the code's quiet zone tight -- the default (4
     // modules) reads fine on paper but wastes space in a dialog this
-    // narrow. width matches the canvas's own CSS size in ChangePassword-
-    // style dialog above -- QRCode.toCanvas sets the bitmap size, so
-    // this is the actual pixel size drawn, not just a CSS hint.
-    QRCode.toCanvas(node, value, { margin: 1, width: 176 }).catch(() => {
-      // Nothing sensible to show in place of a QR code that failed to
-      // draw -- the secret text beside it (AuthenticatorOverlay's own)
-      // still lets enrolment finish by typing it in instead of scanning.
-    })
+    // narrow. width is the bitmap drawn, not the size shown: each caller's
+    // CSS scales it down to its own tile (120px, 88px), which keeps the
+    // modules sharp on a high-density screen.
+    QRCode.toCanvas(node, value, { margin: 1, width: 176 })
+      .then(() => {
+        // #1364: toCanvas also sets an inline width and height of the
+        // drawn size, which beats the caller's CSS -- the code spilled
+        // out of its tile and over the secret text beneath it.
+        node.style.removeProperty('width')
+        node.style.removeProperty('height')
+      })
+      .catch(() => {
+        // Nothing sensible to show in place of a QR code that failed to
+        // draw -- the secret text beside it (AuthenticatorOverlay's own)
+        // still lets enrolment finish by typing it in instead of scanning.
+      })
   }
 
   render(uri)
