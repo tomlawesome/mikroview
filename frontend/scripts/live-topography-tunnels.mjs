@@ -267,18 +267,34 @@ const svgSel = '[data-card="topography"] .stage > svg'
  * from the pointer with no animation; the fit chip's own return-to-frame
  * (fitMap) eases over a real 240ms, cancelled via cancelAnimationFrame if
  * interrupted. Either way this is the actual end state, not a guess at it.
+ *
+ * Settled means unchanged across two animation frames, counted in the
+ * page, not across a wall-clock poll. The ease writes a new viewBox every
+ * frame it runs, but headless WebKit spaces frames 60-190 ms apart, so a
+ * 30 ms poll read the ease's first frame twice and called it the end.
  */
-async function waitForViewBoxSettle(timeoutMs = 800) {
-  const read = () => page.getAttribute(svgSel, 'viewBox')
-  let last = await read()
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(30)
-    const cur = await read()
-    if (cur === last) return cur
-    last = cur
-  }
-  return last
+async function waitForViewBoxSettle(timeoutMs = 2000) {
+  return page.evaluate(
+    async ([sel, timeout]) => {
+      const read = () => document.querySelector(sel)?.getAttribute('viewBox') ?? null
+      const frame = () => new Promise((r) => requestAnimationFrame(() => r()))
+      const deadline = performance.now() + timeout
+      let last = read()
+      let still = 0
+      while (performance.now() < deadline) {
+        await frame()
+        const cur = read()
+        if (cur !== last) {
+          last = cur
+          still = 0
+        } else if (++still >= 2) {
+          return cur
+        }
+      }
+      return last
+    },
+    [svgSel, timeoutMs],
+  )
 }
 
 const before = await page.getAttribute(svgSel, 'viewBox')

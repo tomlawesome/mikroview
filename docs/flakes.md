@@ -17,22 +17,6 @@ testing-and-ci skill (owner, 2026-09-08).
   The runner host was also running the CHR exercise (pipeline 1451) and two
   other pipelines around that time. First sighting.
 
-## live-topography-tunnels: the fit chip does not restore the frame after a wheel zoom
-
-- 2026-09-22 · dd33e04a (dev) · local WebKit run in the live-check image, the
-  first full WebKit run of the suite · `FAIL and the fit chip brings the whole
-  map back again` at `live-topography-tunnels.mjs:306`. The neighbouring check
-  restoring after a pan passed and named the frame, so only the restore after a
-  *wheel* zoom failed. Filed as #1323 on this single sighting, against the rule
-  that one sighting is a flake record rather than an issue; the issue was closed
-  once it would not reproduce.
-
-  Chased the same day on the same slice and engine, alone on an idle
-  workstation so nothing competed for it. It passed both at dd33e04a itself --
-  the commit it failed on -- and on top of the #1322 stroke-linejoin fix, in
-  both cases reporting `got 0 0 1400 720, want 0 0 1400 720`. So it is neither
-  deterministic nor something #1322 cured. First sighting.
-
 ## live-watchers-editor: the cloned shipped watcher's row has no open drawer
 
 - 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox, first deliberate Firefox run of this shard · `FAIL the copy is already expanded, ready to be edited` at `live-watchers-editor.mjs:344` -- the sibling check 66 lines below the 2026-09-21 sighting's, same clone, same drawer-not-open shape. Every check before it passed. The immediately following Firefox run of the same shard on the same commit passed this scenario, and two Chromium runs of it passed, so the engine is not the cause. Second sighting.
@@ -165,3 +149,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio
 
 - 2026-09-23 · 1c0eef18 (feature/m19-second-factor, local `go test ./... -count=1`, this sandboxed container) · one test of 4055 · `nextHeaderStart: 256 KiB 2.273977ms, 1 MiB 24.022903ms, ratio 10.6 ... want about 4x -- the per-offset '>' scan looks unbounded again`, the assertion failing above a ratio of 10. Re-run alone on the same commit immediately afterwards: passed, ratio 3.7 (256 KiB 2.39ms, 1 MiB 8.73ms). The test measures wall-clock scan time at two buffer sizes and compares the ratio, so it reads whatever else the machine was doing; the run that tripped it was the full 55-package suite on a container also hosting other work. Nothing in the branch touches `internal/syslog`. If it recurs, the question is whether the threshold can be made to measure work rather than elapsed time, since a ratio guard on a loaded box will keep doing this.
+
+## live-connection-states: content does not return to its pre-loss position after the banner clears
+
+- 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.
