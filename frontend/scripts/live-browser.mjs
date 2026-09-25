@@ -16,6 +16,8 @@ import { execFileSync } from 'child_process'
 import http from 'node:http'
 import https from 'node:https'
 import { setGlobalDispatcher, Agent } from 'undici'
+import fs from 'node:fs'
+import { createHmac } from 'node:crypto'
 import { fileURLToPath } from 'url'
 import path from 'path'
 
@@ -78,6 +80,14 @@ if (!(BROWSER_NAME in ENGINES)) {
  * missing system libraries, ...) is rethrown as Playwright reported it,
  * because guessing a friendlier message for a failure this function
  * does not understand risks hiding what actually went wrong.
+ *
+ * After a successful launch, prints one line naming the engine as the
+ * launched browser itself reports it (browserType().name() and
+ * version()) alongside the MV_BROWSER setting that chose it (#1306) --
+ * not the setting alone, since a shard that launched the wrong engine
+ * would otherwise look identical to a real one in the log. A mismatch
+ * between the two is a broken run, not a note: it throws rather than
+ * printing and carrying on.
  */
 export async function launchBrowser() {
   try {
@@ -98,7 +108,17 @@ export async function launchBrowser() {
     // Firefox activates the same worker over the same certificate with
     // no equivalent flag at all.
     const args = BROWSER_NAME === 'chromium' ? ['--ignore-certificate-errors'] : []
-    return await ENGINES[BROWSER_NAME].launch({ args })
+    const launched = await ENGINES[BROWSER_NAME].launch({ args })
+    const reportedName = launched.browserType().name()
+    if (reportedName !== BROWSER_NAME) {
+      await launched.close()
+      throw new Error(
+        `launched browser reports engine ${JSON.stringify(reportedName)}, but MV_BROWSER=${JSON.stringify(BROWSER_NAME)} -- ` +
+          `a run under one engine that actually launched another proves nothing`,
+      )
+    }
+    console.log(`engine: ${reportedName} ${launched.version()} (MV_BROWSER=${BROWSER_NAME})`)
+    return launched
   } catch (e) {
     const message = String(e?.message ?? e)
     if (/Executable doesn't exist/.test(message)) {
@@ -351,7 +371,6 @@ function isResizeObserverLoopNotice(text) {
   return text.includes('ResizeObserver loop completed with undelivered notifications')
 }
 
-/** session launches a browser and signs in, returning a live page. */
 /**
  * dismissSetupWizard closes the setup modal if a fresh instance
  * auto-launched it (#487).
@@ -384,15 +403,6 @@ export async function dismissSetupWizard(page) {
   }
 }
 
-/**
- * session's own landing default is 'stream' (#616 retired #544's interim
- * -- the fall is the real landing page now, not Stream) so that every
- * scenario written against the old landing keeps working unmodified:
- * session() signs in, then navigates to Stream itself before returning,
- * exactly where those scenarios already assume they start. Pass
- * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
- * instead of being moved off it.
- */
 /**
  * SCENES maps the deck's visible names to their view keys (Deck.svelte's
  * own table). Anything not in here is an operate page or account action,
@@ -607,8 +617,10 @@ export async function goTo(page, label, { unfold = true } = {}) {
 
 /**
  * resetInstance puts the shared instance back to having seen nothing:
- * events, flags, matches, pushed router tables, definitions and
- * suggestions all go; accounts, sessions, devices, ingest tokens,
+ * events, flags, matches, pushed router tables, definitions,
+ * suggestions and every account's preferences record (#1283 -- the
+ * fresh browser context used to give each scenario fresh preferences
+ * for free) all go; accounts, sessions, devices, ingest tokens,
  * settings and the setup ledger stay (#1064, POST /api/test/reset).
  *
  * Scenarios in a shard share one instance and run in filename order, so
@@ -658,6 +670,277 @@ async function resetInstance(page) {
  */
 export const DESKTOP_VIEWPORT = { width: 1920, height: 1080 }
 
+/**
+ * session launches a browser and signs in, returning a live page.
+ *
+ * Its own landing default is 'stream' (#616 retired #544's interim --
+ * the fall is the real landing page now, not Stream) so that every
+ * scenario written against the old landing keeps working unmodified:
+ * session() signs in, then navigates to Stream itself before returning,
+ * exactly where those scenarios already assume they start. Pass
+ * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
+ * instead of being moved off it.
+ */
+// ---- The second step at sign-in (#1253) ----------------------------------
+//
+// Every local account must now hold a second factor, so the right
+// password on its own no longer signs anybody in: the door asks for a
+// code instead. scripts/live-env.sh enrols an authenticator-app factor
+// for the admin when it stands the instance up, and exports the secret
+// as MV_TOTP_SECRET precisely so this can finish the job.
+//
+// Kept here, in session()'s own sign-in, rather than pushed into every
+// scenario: none of them are about the login door, and the two that are
+// (live-passkeys.mjs and the authenticator scenarios) drive it
+// themselves from a signed-out page.
+
+const TOTP_SECRET = process.env.MV_TOTP_SECRET
+
+// base32Decode is RFC 4648 without padding -- node has no built-in, and
+// the alternative is a dependency for fifteen lines.
+function base32Decode(s) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = 0
+  let value = 0
+  const out = []
+  for (const ch of s.replace(/=+$/, '').toUpperCase()) {
+    const idx = alphabet.indexOf(ch)
+    if (idx === -1) throw new Error(`MV_TOTP_SECRET is not base32: unexpected ${JSON.stringify(ch)}`)
+    value = (value << 5) | idx
+    bits += 5
+    if (bits >= 8) {
+      bits -= 8
+      out.push((value >> bits) & 0xff)
+    }
+  }
+  return Buffer.from(out)
+}
+
+// The same RFC 6238 computation internal/auth/totp.go does: HMAC-SHA1
+// of the big-endian 30-second counter, dynamic truncation, six digits.
+function totpCode(secret, counter) {
+  const buf = Buffer.alloc(8)
+  buf.writeBigUInt64BE(BigInt(counter))
+  const mac = createHmac('sha1', base32Decode(secret)).update(buf).digest()
+  const offset = mac[mac.length - 1] & 0x0f
+  const truncated = mac.readUInt32BE(offset) & 0x7fffffff
+  return String(truncated % 1000000).padStart(6, '0')
+}
+
+// freshTotpCode hands back a code for a time step this instance has not
+// already spent, waiting for the next one if it has to.
+//
+// Submitting a code that cannot work is not free, which is what makes
+// this necessary rather than tidy. VerifyTOTP's replay guard refuses any
+// counter already accepted, and a refused code is a *failed* login:
+// handleAuthLoginFactor reserves the same LoginLimiter buckets
+// handleAuthLogin does, five attempts per five minutes per account and
+// per source address, released only on success. So retrying a doomed
+// code three times, twice, locks the admin out of its own harness -- and
+// every scenario after it fails on a 429 that has nothing to do with
+// what it was testing. That is exactly how the first full-suite run
+// went: 22 scenarios failed, cascading from the first few collisions.
+//
+// The spent counter lives in $MV_DIR, not in this process, because each
+// scenario is its own node process and the guard is server-side and
+// shared. scripts/live-env.sh seeds it with the counter it spent
+// confirming enrolment.
+const COUNTER_FILE = process.env.MV_DIR ? path.join(process.env.MV_DIR, 'totp-last-counter') : null
+
+async function freshTotpCode(secret) {
+  for (;;) {
+    const counter = Math.floor(Date.now() / 1000 / 30)
+    let spent = -1
+    try {
+      spent = Number.parseInt(fs.readFileSync(COUNTER_FILE, 'utf8').trim(), 10)
+    } catch {
+      spent = -1
+    }
+    if (!Number.isFinite(spent) || counter > spent) {
+      if (COUNTER_FILE) fs.writeFileSync(COUNTER_FILE, String(counter))
+      return totpCode(secret, counter)
+    }
+    // +1s so the server's clock has certainly crossed the boundary too.
+    await new Promise((r) => setTimeout(r, 30000 - (Date.now() % 30000) + 1000))
+  }
+}
+
+// completeFactorOverApi finishes a sign-in made with fetch rather than
+// through the screen -- POST /api/auth/login answers 200 with a
+// pending-factor body, not a session, for any account holding a factor,
+// which since #1253 is every local account. Exported because one
+// scenario (live-change-password.mjs) signs a second, genuinely
+// separate client in to watch it be signed out again.
+//
+// Retries across time steps for the same reason completeSecondFactor
+// does: one code, one sign-in, and a second attempt inside the same
+// 30-second window is refused as a replay.
+export async function completeFactorOverApi(request, urlBase = URL_BASE) {
+  if (!TOTP_SECRET) {
+    throw new Error('completeFactorOverApi needs MV_TOTP_SECRET -- run `eval "$(scripts/live-env.sh up)"`')
+  }
+  const res = await request.fetch(`${urlBase}/api/auth/login/factor`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    data: { code: await freshTotpCode(TOTP_SECRET) },
+  })
+  // Not retried, for the reason completeSecondFactor gives: the code was
+  // already known-unspent, so a refusal is a fault worth surfacing rather
+  // than an attempt worth spending.
+  return res.status() === 200
+}
+
+// Waits for whichever of the two outcomes the password produced, so a
+// server without the door costs nothing here rather than a fixed
+// timeout: either the app is already up, or the code box is.
+//
+// Exported for #1335's pattern B: a scenario that signs the admin in
+// with its own page.fill calls, in a page session() did not create (a
+// second browser context, or a hand-rolled signInHere()), stops at
+// exactly the step session() would otherwise finish for it. The admin
+// already holds an active factor from `scripts/live-env.sh up`, so this
+// is always the completing-an-existing-factor half, keyed to
+// MV_TOTP_SECRET like every other call here -- never the enrolling half,
+// which is enrolFactorAndSignIn below.
+export async function completeSecondFactor(page) {
+  const codeBox = 'input[autocomplete="one-time-code"]'
+  // Which of the two outcomes the password produced is decided by which
+  // wait wins, not by asking afterwards. page.isVisible() answers from
+  // the DOM as it stands at that instant, and the auth screen re-renders
+  // as it swaps the password step for the code step -- so a check made
+  // between the wait and the render said "no code box" for a code box
+  // that was about to appear, and sign-in was skipped. Intermittent, and
+  // the same trap live-passkeys.mjs hit.
+  const outcome = await Promise.race([
+    page.waitForSelector(codeBox, { timeout: 20000 }).then(
+      () => 'factor',
+      () => 'gave-up',
+    ),
+    page.waitForSelector('#main-content', { timeout: 20000 }).then(
+      () => 'signed-in',
+      () => 'gave-up',
+    ),
+  ])
+  if (outcome === 'signed-in') return
+  if (outcome === 'gave-up') {
+    // No code box, but the step may still be here leading with a
+    // passkey: an account holding both factors offers whichever suits
+    // the origin first, and passkeys win wherever they are usable (a
+    // scenario driving MV_PUBLIC_URL, say). The switch back to the
+    // authenticator app is a plain button on that screen, and this
+    // harness always has the secret, never a virtual authenticator.
+    const toApp = page.locator('button:has-text("Use your authenticator app instead")')
+    if (!(await toApp.count())) return
+    await toApp.first().click()
+    if (
+      !(await page
+        .waitForSelector(codeBox, { timeout: 10000 })
+        .then(() => true)
+        .catch(() => false))
+    ) {
+      return
+    }
+  }
+  if (!TOTP_SECRET) {
+    throw new Error(
+      'sign-in stopped at the second-factor step but MV_TOTP_SECRET is unset -- ' +
+        're-run `eval "$(scripts/live-env.sh up)"`, which enrols the factor and exports it',
+    )
+  }
+
+  // Retried across time steps, because one authenticator code is good
+  // for exactly one sign-in. VerifyTOTP's replay guard
+  // (TOTPLastCounter, internal/auth/store.go) refuses any counter it
+  // has already accepted, and it advances on every success -- so a
+  // second sign-in inside the same 30-second window is refused however
+  // correct the code is. Two scenarios in a row do exactly that, and so
+  // does the very first one after live-env.sh enrols the factor, since
+  // confirming enrolment burns that window's code too.
+  //
+  // Nothing here can shorten the wait: the server accepts a code only
+  // within one step of its own clock, so there is no "next" code to
+  // reach for -- the only thing that helps is the window turning over.
+  // Costs nothing when the window has already moved on, which is the
+  // common case for anything but a fast scenario following another.
+  await page.fill(codeBox, await freshTotpCode(TOTP_SECRET))
+  await page.click('button[type="submit"]')
+  const signedIn = await page
+    .waitForSelector('#main-content', { timeout: 15000 })
+    .then(() => true)
+    .catch(() => false)
+  // Deliberately not retried. freshTotpCode already guarantees an unspent
+  // counter, so a refusal here is a real fault -- a drifted secret, a
+  // cleared factor -- and trying again would only spend the account's
+  // five-per-five-minutes allowance on it and turn one broken scenario
+  // into every later one failing on a 429.
+  if (!signedIn) {
+    throw new Error(
+      'the second-factor step refused a fresh code from MV_TOTP_SECRET -- the exported secret and ' +
+        'the enrolled factor have drifted apart; re-run `eval "$(scripts/live-env.sh up)"`',
+    )
+  }
+}
+
+/**
+ * enrolFactorAndSignIn finishes signing in an account that has just been
+ * created through the people list and holds no second factor at all --
+ * #1335's pattern A. Call it right after filling and submitting that
+ * account's own sign-in form: an account with no factor gets a real
+ * session cookie immediately (handleAuthLogin only withholds one for an
+ * account that already has a factor to check), so the forced-enrolment
+ * door is now the only thing standing between that page and #main-content,
+ * restricting it to the four routes AuthEnrolFactor.svelte itself drives.
+ *
+ * Drives those same routes directly with page.request rather than
+ * clicking through the screen -- the same reasoning completeFactorOverApi
+ * uses for the login half. There is no MV_TOTP_SECRET for an account
+ * this helper just found out exists: POST /api/auth/totp/enrol mints a
+ * fresh secret server-side and hands it back, and that response is the
+ * only place it exists, so it is threaded straight into freshTotpCode as
+ * a plain local value rather than read from the admin's env var.
+ *
+ * Not retried, for the reason freshTotpCode's own comment gives: a
+ * refused code is a spent login attempt against the same five-per-five-
+ * minutes budget every other sign-in shares.
+ */
+export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
+  const call = (path, data) =>
+    page.request.fetch(`${urlBase}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+      ...(data ? { data } : {}),
+    })
+
+  // The click that submitted the password form only starts that
+  // request; calling the enrol route before the browser has actually
+  // received and stored its Set-Cookie races the login itself; and
+  // page.request shares the page's own cookie jar, not the login
+  // fetch's promise, so nothing else here would surface that race. Wait
+  // for the one screen an account with no factor can possibly land on
+  // (AuthEnrolFactor.svelte's own top-level element) so the session
+  // cookie is certainly already set by the time the fetch below sends it.
+  await page.waitForSelector('main.door', { timeout: 15000 })
+
+  const enrolRes = await call('/api/auth/totp/enrol')
+  if (enrolRes.status() !== 200) {
+    throw new Error(`POST /api/auth/totp/enrol answered ${enrolRes.status()} -- cannot enrol a factor for this account`)
+  }
+  const { secret } = await enrolRes.json()
+
+  const confirmRes = await call('/api/auth/totp/confirm', { code: await freshTotpCode(secret) })
+  if (confirmRes.status() !== 200) {
+    throw new Error(`POST /api/auth/totp/confirm answered ${confirmRes.status()} -- the fresh code was refused`)
+  }
+
+  // The two fetches above changed the session's own state, not anything
+  // the already-rendered page knows about -- AuthEnrolFactor's own
+  // enter() re-checks the session the same way after a click; a reload
+  // does the same thing here without needing a signed-in instance of the
+  // Svelte app to drive by hand.
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForSelector('#main-content', { timeout: 15000 })
+}
+
 export async function session({
   dismissSetup = true,
   landing = 'stream',
@@ -697,6 +980,15 @@ export async function session({
     ...(mocksApi ? { serviceWorkers: 'block' } : {}),
   })
   const consoleErrors = []
+  // completeSecondFactor's own comment ("Deliberately not retried") is
+  // why nothing here needs to blanket-ignore console errors during
+  // sign-in any more: freshTotpCode already guarantees the code it
+  // submits is unspent, so there is no doomed-retry 401 for this window
+  // to hide. A console error during sign-in now is exactly as real a
+  // fault as one anywhere else, so it is recorded like any other -- the
+  // four named filters below are the only exceptions, and each is a
+  // specific, understood message from the browser engine itself, not
+  // from the app.
   const record = (text) => {
     if (isUntrustedCertServiceWorkerError(text)) return
     if (isNavigationCancelledFetch(text)) return
@@ -713,6 +1005,7 @@ export async function session({
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
+  await completeSecondFactor(page)
   // #main-content is the one marker present on every signed-in view
   // (App.svelte wraps all of them in it) -- unlike the old `input.rule`
   // wait, it does not assume which view is the landing page.

@@ -151,7 +151,7 @@ func TestConfigTopLevelKeysFindsKnownFields(t *testing.T) {
 	for _, k := range configTopLevelKeys() {
 		keys[k] = true
 	}
-	for _, want := range []string{"listen", "store", "devices", "history", "backup", "configDrift"} {
+	for _, want := range []string{"listen", "store", "devices", "history", "backup", "setup"} {
 		if !keys[want] {
 			t.Errorf("configTopLevelKeys is missing %q", want)
 		}

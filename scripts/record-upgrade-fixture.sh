@@ -6,8 +6,8 @@
 # storage, drives the scripted session in
 # scripts/upgrade-fixture-session.py (an admin, a viewer, an API token, a
 # named entity, a watchlist entry, a flag, a coverage declaration, a host
-# mark -- each only where that version's API has it), stops it, and keeps
-# what it wrote.
+# mark, a declared router -- each only where that version's API has it),
+# stops it, and keeps what it wrote.
 #
 # Two modes, one session, so the two recordings of a release are
 # comparable:
@@ -86,6 +86,9 @@ CONTAINER_NAME="upgrade-fixture-${VERSION}${SUFFIX}"
 VOLUME_NAME="upgrade-fixture-data-${VERSION}${SUFFIX}"
 PG_CONTAINER="upgrade-fixture-postgres-${VERSION}"
 NETWORK_NAME="upgrade-fixture-net-${VERSION}"
+# Throwaway, created but never started -- see the copy-out step below,
+# which only needs the volume attached, not a running process.
+COPY_OUT_CONTAINER="upgrade-fixture-copy-${VERSION}${SUFFIX}"
 GITLAB_PROJECT_ID="${MIKROVIEW_GITLAB_PROJECT_ID:-53}"
 
 FIXTURE_DIR="$ROOT/.upgrade-fixtures"
@@ -99,6 +102,7 @@ WORKDIR=""
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$COPY_OUT_CONTAINER" >/dev/null 2>&1 || true
   docker volume rm -f "$VOLUME_NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
   [ -z "$WORKDIR" ] || rm -rf "$WORKDIR"
@@ -146,6 +150,17 @@ GENERATION="A"
 $HAS_WATCHLIST && GENERATION="B"
 $HAS_COVERAGE && GENERATION="C"
 
+# Issue #1281 landed at v0.6.0: a TLS syslog connection from an address
+# nobody declared under `devices:` is refused before the handshake even
+# starts. This is not a config-file schema question -- `devices:` and
+# its id/name/sourceIp fields have been understood since v0.1.0
+# (internal/config/config.go's Device struct is unchanged across every
+# tag) -- it is that only v0.6.0+ actually enforces it, so only those
+# versions need the declaration below to let the session's syslog line
+# through at all.
+NEEDS_DEVICE_DECLARATION=false
+version_ge "$VERSION_BARE" "0.6.0" && NEEDS_DEVICE_DECLARATION=true
+
 # v0.1.0 is syslog UDP/TCP on :1514, plain -- issue #188 (TLS on :6514)
 # landed at v0.2.0. Every later tag speaks RouterOS's remote-protocol=tls
 # on :6514, which is what every other generation here assumes.
@@ -156,12 +171,14 @@ if [ "$VERSION_BARE" = "0.1.0" ]; then
   SYSLOG_MODE="plain"
 fi
 
-log "generation $GENERATION (watchlist=$HAS_WATCHLIST coverage/hosts=$HAS_COVERAGE history-key=$NEEDS_HISTORY_KEY syslog=$SYSLOG_MODE)"
+log "generation $GENERATION (watchlist=$HAS_WATCHLIST coverage/hosts=$HAS_COVERAGE history-key=$NEEDS_HISTORY_KEY declared-router=$NEEDS_DEVICE_DECLARATION syslog=$SYSLOG_MODE)"
 
 WORKDIR="$(mktemp -d)"
+mkdir -p "$WORKDIR/etc"
 
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
+docker rm -f "$COPY_OUT_CONTAINER" >/dev/null 2>&1 || true
 docker volume rm -f "$VOLUME_NAME" >/dev/null 2>&1 || true
 
 # Nothing is published. GitLab's runner hands jobs the runner *host's*
@@ -170,7 +187,18 @@ docker volume rm -f "$VOLUME_NAME" >/dev/null 2>&1 || true
 # health wait therefore run inside a throwaway container joined to this
 # container's own network namespace, which behaves identically here and
 # there.
-RUN_ARGS=(-d --name "$CONTAINER_NAME" -v "$VOLUME_NAME:/var/lib/mikroview")
+#
+# Nothing is bind-mounted from a host path either, for the same reason:
+# a -v naming a path in this job's own filesystem asks the runner
+# host's daemon to look on the runner host, where the path does not
+# exist -- the daemon silently creates an empty directory there rather
+# than erroring (#1310: the helper got "can't open file '/w/session.py'"
+# and MikroView logged "history.key: is a directory"). Every file
+# MikroView or the helper must read is staged under $WORKDIR/etc (or
+# piped over stdin, for the session script below) and delivered with
+# `docker cp`, which streams through the client and so works
+# identically on a laptop and in CI.
+RUN_ARGS=(--name "$CONTAINER_NAME" -v "$VOLUME_NAME:/var/lib/mikroview")
 
 if $NEEDS_HISTORY_KEY; then
   # >= 32 bytes, per docs/configuration.md's history.keyFile section.
@@ -178,12 +206,35 @@ if $NEEDS_HISTORY_KEY; then
   # recording's fake accounts/flags/watchlist legible to the fixture
   # tarball's own key file, packed alongside the data directory below
   # (never committed -- see the .gitignore entry this script's own
-  # header points at). 644 because rootless docker maps container uid 0
-  # to the invoking user, and the image runs as uid 65532.
-  head -c 32 /dev/urandom | base64 > "$WORKDIR/history.key"
-  chmod 644 "$WORKDIR/history.key"
-  RUN_ARGS+=(-v "$WORKDIR/history.key:/etc/mikroview/history.key:ro"
-    -e MIKROVIEW_HISTORY_KEY_FILE=/etc/mikroview/history.key)
+  # header points at). 644 so the file is readable regardless of which
+  # uid the image runs as (65532 before v0.6.0, 1000 from v0.6.0 on --
+  # the Dockerfile's USER line moved) -- `docker cp` keeps the source
+  # file's mode, and there is no bind mount here for rootless docker's
+  # own uid remapping to apply to.
+  head -c 32 /dev/urandom | base64 > "$WORKDIR/etc/history.key"
+  chmod 644 "$WORKDIR/etc/history.key"
+  RUN_ARGS+=(-e MIKROVIEW_HISTORY_KEY_FILE=/etc/mikroview/history.key)
+fi
+
+if $NEEDS_DEVICE_DECLARATION; then
+  # See NEEDS_DEVICE_DECLARATION's own comment above (#1281). The
+  # session's one syslog line comes from 127.0.0.1 -- it runs sharing
+  # this container's own network namespace, same as the health wait --
+  # so that is the address declared here, matching DECLARED_ROUTER_ID/
+  # DECLARED_ROUTER_SOURCE_IP in upgrade-fixture-session.py so the
+  # manifest and the config agree about which router this was.
+  #
+  # Delivered to /etc/mikroview/config.yaml and read automatically,
+  # with no MIKROVIEW_CONFIG needed (docs/configuration.md's
+  # "config.yaml" section) -- confirmed against the real image by hand,
+  # not assumed.
+  cat > "$WORKDIR/etc/config.yaml" <<'CFG'
+devices:
+  - id: upgrade-fixture-router
+    name: upgrade-fixture-router
+    sourceIp: 127.0.0.1
+CFG
+  chmod 644 "$WORKDIR/etc/config.yaml"
 fi
 
 if [ "$MODE" = "postgres" ]; then
@@ -246,23 +297,41 @@ if [ "$MODE" = "postgres" ]; then
   # What the mode buys here is that the released image's own TLS
   # enforcement is exercised rather than bypassed.
   printf '%s' "postgres://${PG_USER}:${PG_PASSWORD}@postgres:5432/${PG_DB}?sslmode=require" \
-    > "$WORKDIR/postgres.dsn"
-  chmod 644 "$WORKDIR/postgres.dsn"
+    > "$WORKDIR/etc/postgres.dsn"
+  chmod 644 "$WORKDIR/etc/postgres.dsn"
   umask 022
   RUN_ARGS+=(--network "$NETWORK_NAME"
-    -v "$WORKDIR/postgres.dsn:/etc/mikroview/postgres.dsn:ro"
     -e MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres.dsn)
 fi
 
 log "starting $IMAGE"
-docker run "${RUN_ARGS[@]}" "$IMAGE" >/dev/null
+docker create "${RUN_ARGS[@]}" "$IMAGE" >/dev/null
+if [ -n "$(ls -A "$WORKDIR/etc")" ]; then
+  # /etc/mikroview does not exist in the image -- nothing creates it,
+  # only files an operator chooses to mount ever put anything there --
+  # and `docker cp` refuses a destination whose parent directory is
+  # missing when the source is a single file. Copying the whole staged
+  # directory's contents in one call creates it as a side effect
+  # instead, and works on a created-but-not-yet-started container
+  # exactly as it does on a running one (checked by hand against this
+  # image, not assumed).
+  docker cp "$WORKDIR/etc/." "$CONTAINER_NAME:/etc/mikroview"
+fi
+docker start "$CONTAINER_NAME" >/dev/null
 
 log "driving the scripted session"
-cp "$ROOT/scripts/upgrade-fixture-session.py" "$WORKDIR/session.py"
+DECLARED_ROUTER_ARG=no
+$NEEDS_DEVICE_DECLARATION && DECLARED_ROUTER_ARG=yes
+# session.py travels over stdin rather than a bind mount, for the same
+# reason as /etc/mikroview above -- `-i` streams it through the client,
+# so `cat` inside the helper sees exactly the file on this side
+# regardless of which host the daemon actually runs on. Its own stdout
+# stays the manifest JSON and nothing else, same contract as before.
 set +e
-docker run --rm --network "container:${CONTAINER_NAME}" -v "$WORKDIR:/w" "$HELPER_IMAGE" \
-  sh -c "apk add --no-cache python3 >/dev/null && exec python3 /w/session.py \
-    https://127.0.0.1:8080 127.0.0.1 ${SYSLOG_PORT} ${GENERATION} ${VERSION} ${SYSLOG_MODE}" \
+docker run -i --rm --network "container:${CONTAINER_NAME}" "$HELPER_IMAGE" \
+  sh -c "apk add --no-cache python3 >/dev/null && cat > /tmp/session.py && exec python3 /tmp/session.py \
+    https://127.0.0.1:8080 127.0.0.1 ${SYSLOG_PORT} ${GENERATION} ${VERSION} ${SYSLOG_MODE} ${DECLARED_ROUTER_ARG}" \
+  < "$ROOT/scripts/upgrade-fixture-session.py" \
   > "$WORKDIR/session.json"
 SESSION_OK=$?
 set -e
@@ -272,6 +341,16 @@ if [ "$SESSION_OK" -ne 0 ] || [ ! -s "$WORKDIR/session.json" ]; then
   exit 1
 fi
 log "session recorded: $(cat "$WORKDIR/session.json")"
+
+# #1281's gate logs a specific line when it turns a connection away.
+# Catching it here means a config.yaml mistake fails loudly at the
+# point it happened, rather than surfacing later as "the session
+# claimed success but the new_device flag never landed."
+if docker logs "$CONTAINER_NAME" 2>&1 | grep -q "neither a declared/enrolled router"; then
+  log "the syslog connection was refused by #1281's gate -- config.yaml's devices: entry did not take. Container log:"
+  docker logs "$CONTAINER_NAME" 2>&1 | tail -40 >&2
+  exit 1
+fi
 
 log "stopping container (graceful, so write-behind stores flush)"
 docker stop --time 20 "$CONTAINER_NAME" >/dev/null
@@ -333,17 +412,19 @@ fi
 log "packing the data directory"
 STAGE="$WORKDIR/stage"
 mkdir -p "$STAGE/data"
-# The volume's files are owned by uid 65532 (the image's own runtime
-# user -- see Dockerfile's USER line at every one of these tags), which
-# `cp -a` carries over as-is. Rootless docker maps container uid 0 to
-# this host's own invoking user, so chowning to 0:0 before copying out
-# is what makes the copy readable (and later removable) outside the
-# container -- without it every later step here fails with "permission
-# denied" reading its own temp directory.
-docker run --rm -v "${VOLUME_NAME}:/data:ro" -v "$STAGE/data:/out" "$HELPER_IMAGE" \
-  sh -c 'cp -a /data/. /out/ && chown -R 0:0 /out'
+# `docker cp` out of a container gives the copied files the invoking
+# user's own ownership -- rootless docker's own uid remapping, not
+# something this script has to arrange (checked by hand: a volume
+# written by the image's uid, 65532 before v0.6.0 and 1000 from
+# v0.6.0 on, comes out owned by whoever is running this script). A
+# throwaway container is created for this and never started -- nothing
+# needs to run, only the volume needs to be attached for `docker cp` to
+# read from it.
+docker create --name "$COPY_OUT_CONTAINER" -v "${VOLUME_NAME}:/data:ro" "$HELPER_IMAGE" true >/dev/null
+docker cp "$COPY_OUT_CONTAINER:/data/." "$STAGE/data"
+docker rm -f "$COPY_OUT_CONTAINER" >/dev/null
 if $NEEDS_HISTORY_KEY; then
-  cp "$WORKDIR/history.key" "$STAGE/history.key"
+  cp "$WORKDIR/etc/history.key" "$STAGE/history.key"
 fi
 
 forbid_real_addresses "$STAGE"

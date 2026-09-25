@@ -38,7 +38,7 @@
 // the five-row ordering in isolation, and the screenshots attached to
 // #1015 show it rendered.
 
-import { session, feedRaw, check, done, goTo, launchBrowser } from './live-browser.mjs'
+import { session, feedRaw, check, done, goTo, launchBrowser, enrolFactorAndSignIn } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -177,7 +177,7 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
+await enrolFactorAndSignIn(viewerPage)
 
 const viewerBanner = viewerPage.locator('.banner').first()
 await viewerBanner.waitFor({ timeout: 25000 })

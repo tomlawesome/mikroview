@@ -9199,6 +9199,22 @@
 
   .hb {
     stroke-width: 0.9;
+    /* #1322. Firefox reserves room in getBoundingClientRect for a mitred
+       spike at every join -- stroke-miterlimit 4 x stroke-width / 2, a
+       user-space constant, so it grows with the viewport. Every join in
+       fullBarPath is tangential (the flat edge meets the end arc at the
+       arc's own tangent), so no spike is ever drawn, but the allowance
+       still made this bar's reported box ~1.8px per side wider than the
+       .isl rect it is drawn flush with. live-topography-layout measures
+       that flushness and read it as a 1.6px inset at 1920 wide.
+       Chromium never showed it, because it returns the fill geometry and
+       ignores stroke: hence an exact 0.0px there and a growing number
+       here. A round join drops the discrepancy to 0.216px per side.
+       Visually this only softens the two inner corners of
+       leftBarPath/rightBarPath by stroke-width / 2, 0.45 user units:
+       measured as 0 differing pixels at 1x and 2 of 47564 at 2x, max
+       channel shift 16/255, with a 40%-transparent stroke over it. */
+    stroke-linejoin: round;
   }
 
   /* Mixed against --bg-elevated, not transparent (owner, 2026-08-31): a

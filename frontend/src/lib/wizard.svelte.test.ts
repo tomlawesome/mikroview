@@ -12,6 +12,7 @@ vi.mock('./api', () => ({
   saveSetupBackupTransport: vi.fn(),
   rebindEnrolment: vi.fn(),
   fetchRefusedSenders: vi.fn(),
+  registerDevice: vi.fn(),
 }))
 
 import {
@@ -21,6 +22,7 @@ import {
   fetchSetupStatus,
   mintEnrolment,
   rebindEnrolment,
+  registerDevice,
   saveSetupAddress,
   saveSetupBackupTransport,
 } from './api'
@@ -243,6 +245,7 @@ describe('a thrown call surfaces the same way a refusal does', () => {
 describe('the minted token reaches the block the operator pastes (#1281)', () => {
   it('re-renders the commands with the token as soon as it is minted', async () => {
     wizardState.status = status()
+    wizardState.open = true
     wizardState.ledgerDevice = 'edge-1'
     wizardState.enrolment = null
     // #1291: minting now needs the router's own address, which the
@@ -269,6 +272,7 @@ describe('the minted token reaches the block the operator pastes (#1281)', () =>
   // "once per modal", which is the thing #1291 exists to stop.
   it('clears the password whether the mint succeeded or failed', async () => {
     wizardState.status = status()
+    wizardState.open = true
     wizardState.ledgerDevice = 'edge-1'
     wizardState.enrolExpectedAddress = '192.0.2.50'
 
@@ -508,5 +512,71 @@ describe('minting is one at a time whichever way it is asked for (#1291)', () =>
     expect(mintEnrolment).toHaveBeenCalledTimes(1)
     settleFirst({ token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' })
     await first
+  })
+})
+
+// A slow mint or register response can still be in flight once the
+// operator has clicked Back/Next, closed the modal, or opened a
+// different router's walk. Applying it then would flash a token or a
+// refusal onto a pane nobody is looking at any more. v0.6.0 audit Lows,
+// F4.
+describe('a stale enrol or register response is ignored once the operator has left (F4)', () => {
+  it('mintEnrolmentToken drops a response that lands after the pane changed', async () => {
+    wizardState.status = status()
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+    let settle: (v: { token: string; expiresAt: string }) => void = () => {}
+    vi.mocked(mintEnrolment).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+
+    const mint = wizardState.mintEnrolmentToken()
+    wizardState.back()
+    settle({ token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' })
+    await mint
+
+    expect(wizardState.enrolment).toBeNull()
+  })
+
+  it('mintEnrolmentToken drops a response for a router the operator has left', async () => {
+    wizardState.status = status()
+    wizardState.openReEnrol('edge-1')
+    wizardState.enrolExpectedAddress = '192.0.2.50'
+    wizardState.enrolPassword = 'the-admin-password'
+    let settle: (v: { token: string; expiresAt: string }) => void = () => {}
+    vi.mocked(mintEnrolment).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+
+    const mint = wizardState.mintEnrolmentToken()
+    wizardState.openReEnrol('edge-2')
+    settle({ token: 'examplenotarealtoken', expiresAt: '2026-09-19T12:15:00Z' })
+    await mint
+
+    expect(wizardState.enrolment).toBeNull()
+    expect(wizardState.ledgerDevice).toBe('edge-2')
+  })
+
+  it('registerRouter drops a response that lands after the modal was closed', async () => {
+    wizardState.status = status()
+    wizardState.openRegister('edge-1')
+    let settle: (v: string) => void = () => {}
+    vi.mocked(registerDevice).mockReturnValueOnce(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+
+    const register = wizardState.registerRouter('edge-1')
+    wizardState.close()
+    settle('a name is already registered for this router')
+    await register
+
+    expect(wizardState.registerError).toBeNull()
   })
 })

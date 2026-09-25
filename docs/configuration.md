@@ -69,6 +69,11 @@ listen:
   # trustedProxies: ["private"]
   # clientIpHeader: "X-Forwarded-For"  # this is the default
 
+# Optional. Leave it out and every address may reach the web UI -- see
+# "Limiting which addresses can reach the web UI" below.
+# ui:
+#   allow: ["192.168.1.20", "10.0.0.0/24"]
+
 store:
   retention: 24h
   maxMemory: 120MiB
@@ -684,6 +689,85 @@ A misconfigured entry here fails startup rather than being skipped —
 silently ignoring it would leave you believing forwarded addresses were
 being honoured when they weren't.
 
+### Limiting which addresses can reach the web UI
+
+`ui.allow` lists the addresses allowed to open MikroView in a browser.
+Anything else gets a plain `403 Forbidden` — not the login page, so
+there is nothing there to guess at.
+
+```yaml
+ui:
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+```
+
+- Bare IPs or CIDRs. There is no `"private"` shorthand here, unlike
+  `trustedProxies` above: that setting describes where your own proxy
+  sits, this one says who may administer MikroView, and "the whole LAN,
+  plus CGNAT, plus link-local" is not what anyone means by that.
+- **Leave the key out and every address may reach the UI.** That is the
+  default, and it is what every deployment had before this setting
+  existed, so upgrading changes nothing until you set it.
+- A bad entry fails startup rather than being skipped, for the same
+  reason as `trustedProxies` — and it matters more here, because a
+  skipped entry is either a wall that isn't there or a lockout.
+
+**Behind a reverse proxy, set `listen.trustedProxies` too.** The address
+checked is the one MikroView resolved for the request, which is the
+proxy's own address unless you have declared that proxy — so without it
+the list admits everyone who comes through the proxy, or nobody. See
+[Running behind a reverse proxy](#running-behind-a-reverse-proxy).
+
+**Your routers are not affected.** The certificate download (`/ca.crt`),
+the two push endpoints (`/api/ingest/routeros`,
+`/api/ingest/router-backup`) and the drop-list feed (`/api/droplist.rsc`)
+answer from any address, because a router cannot be listed in a file it
+never reads, and each of those already has a tighter gate of its own —
+a push is accepted only from the address that device enrolled from.
+Enrolling a router is unaffected as well: the router enrols by logging a
+marker line to the syslog port, not over the web port. The health probe
+(`/api/healthz`) also answers from any address, so the container's own
+health check — which runs from inside the container, at an address you
+would not think to list — keeps passing.
+
+This is not a replacement for signing in, and it does not change CSRF
+protection: a cross-site request rides your own browser, at your own —
+allowed — address.
+
+Each address turned away is recorded in the audit log once an hour
+(action `ui.address_refused`), not once per request: a scanner retrying
+would otherwise push every other entry out of the log.
+
+#### This setting is in the file only, and how to get back in
+
+`ui.allow` cannot be edited from inside MikroView, on purpose: the list
+governs the screen you would be editing it on, so one slip locks you out
+with no way back. It is read once at startup, so a change needs a
+restart.
+
+If you have locked yourself out, edit the file on the volume and restart
+the container. The image has no shell, so borrow one — this runs a
+throwaway `alpine` container with the same volume mounted, edits the
+file there, and exits:
+
+```sh
+docker run --rm -it -v mikroview-etc:/etc/mikroview alpine vi /etc/mikroview/config.yaml
+docker restart mikroview
+```
+
+Fix the `allow:` list to include the address you are coming from, or
+delete the whole `ui:` block to go back to admitting everyone. If you
+are using a bind mount (`./mikroview:/etc/mikroview:ro`) rather than a
+named volume, the file is just a file on the host — edit it there and
+restart, no helper container needed.
+
+Two things worth checking before you conclude the list is wrong:
+
+- Run `mikroview -validate-config` (see below) — it reports a malformed
+  entry with the key name and a corrected example.
+- Check which address MikroView actually sees you arriving from. Behind
+  a proxy that is the proxy's address unless `listen.trustedProxies`
+  names it.
+
 ### Checking your config before you deploy
 
 ```
@@ -774,6 +858,21 @@ ignored entirely.
 listen:
   trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
   # trustedProxies: ["private"]   # a proxy on your LAN or docker network
+```
+
+#### CFG-0004
+
+`ui.allow` has an entry that is not an IP or a CIDR. There is no
+`private` shorthand for this key. Leaving the list out entirely is fine
+and means every address may reach the web UI. See
+[Limiting which addresses can reach the web UI](#limiting-which-addresses-can-reach-the-web-ui).
+
+```yaml
+ui:
+  # only these may reach the web UI ...
+  allow: ["192.168.1.20", "10.0.0.0/24"]
+  # ... or leave the list out entirely, which admits every address
+  # allow: []
 ```
 
 #### CFG-0010
@@ -1138,6 +1237,61 @@ engine:
   decommissionCleanWindow: 6h
 ```
 
+#### CFG-0100
+
+`publicUrl` does not parse as an absolute URL -- a scheme and a host are
+both required. Treated as though it were never set: passkeys are
+unavailable, the same as if the key were absent. See [Public
+URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"
+```
+
+#### CFG-0101
+
+`publicUrl`'s host is an IP address. WebAuthn refuses outright to bind a
+passkey to one -- this is a browser rule, not a MikroView choice.
+Passkeys are unavailable; everything else about the deployment is
+unaffected. See [Public URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # a hostname, not an IP address
+```
+
+#### CFG-0102
+
+`publicUrl`'s scheme is `http` and the host is not `localhost`. Browsers
+only offer passkeys over https. Passkeys are unavailable; everything
+else is unaffected. See [Public
+URL](#public-url-publicurl-optional-for-passkeys).
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # https, not http
+```
+
+#### CFG-0103
+
+`publicUrl` carries a path, query or fragment. Only the origin (scheme,
+host, port) matters to WebAuthn, so MikroView strips the rest and keeps
+going -- unlike CFG-0100 through CFG-0102, this one does not cost you
+passkeys.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # scheme, host and port only
+```
+
+#### CFG-0104
+
+`oidc.publicBaseUrl` is set but `publicUrl` is not. The two usually name
+the same address, but MikroView never copies one into the other -- see
+[Public URL](#public-url-publicurl-optional-for-passkeys) for why --
+so this is only a nudge to set it yourself if that is what you meant.
+
+```yaml
+publicUrl: "https://mikroview.example.com:8443"  # match oidc.publicBaseUrl, unless they genuinely differ
+```
+
 ## Logging
 
 MikroView's own server output (not event data -- see `store.retention`
@@ -1405,6 +1559,37 @@ guarantee the read-only and ingest tokens carry (see [API
 tokens](#api-tokens-read-only)). Minting again **replaces** the existing
 key rather than adding a second one -- every router that fetches the drop
 list uses the same key, so there is only ever one to rotate.
+
+## Preferences: settings live on the server, per user (#1283)
+
+Every preference a user's browser used to keep in `localStorage` --
+saved filter presets, top-talker widgets, accent colour, column widths
+and visibility, and the rest -- is now one versioned JSON record per
+account on the server, read on sign-in and written on change. Signing
+out and signing in as someone else on the same browser shows that
+person's own settings, not the last one's, and a user's settings follow
+them to any browser they sign into. The record is cleared when the
+account itself is deleted. See `GET`/`PATCH /api/me/preferences` in the
+[API reference](#api-reference); this package never interprets what is
+inside a record, so the frontend modules that own each key are the
+source of truth for its shape.
+
+`PATCH` merges rather than replaces: only the keys present in the
+request body are changed, so two browser tabs saving different keys
+around the same time can't clobber one another's. A key is left alone
+by leaving it out of the body; it is cleared by sending it with a JSON
+`null` value, which is stored as-is (not removed from the record) --
+the frontend module that owns that key then falls back to its own
+default the same way it does for a key that was never set.
+
+```yaml
+prefs:
+  # Where preferences are persisted, as a small JSON file. Same
+  # optional-persistence contract as droplist.storePath: left unset,
+  # preferences still work for the running process, they just don't
+  # survive a restart.
+  storePath: "/var/lib/mikroview/preferences.json"
+```
 
 ## Network attribution (optional, on by default)
 
@@ -3092,18 +3277,24 @@ auth:
   tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
-- **`storePath`** — where accounts are persisted, as a small JSON file (usernames + Argon2id password hashes,
-  never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
+- **`storePath`** — where accounts are persisted, as a small JSON file (usernames, Argon2id password hashes and
+  hashed recovery codes, never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
   the Dockerfile creates and owns -- no configuration needed for the
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
   the decision (and any accounts) to survive container recreation, not
   just process restarts -- see `deploy/docker-compose.yml`.
 
-  **Persists with or without `history.keyFile` (#853 rule 6).** Accounts
-  hold only usernames and Argon2id hashes, never a plaintext password, so
-  this file keeps persisting in plain JSON with no key configured, the
-  same as every MikroView release before #853 -- the choice screen above
-  does not reappear on restart. Most other file-backed stores are
+  **Persists with or without `history.keyFile` (#853 rule 6).** Almost
+  everything an account holds is a one-way hash, never a plaintext
+  password, so this file keeps persisting in plain JSON with no key
+  configured, the same as every MikroView release before #853 -- the
+  choice screen above does not reappear on restart. The one field this
+  doesn't cover is the
+  [authenticator-app secret](authenticator-app.md), which has to stay
+  reversible to verify a code and so sits in this same file in the
+  clear whenever no key is mounted -- see
+  [SECURITY.md](../SECURITY.md#data-handling) for why. Most other
+  file-backed stores are
   memory-only without a key; see
   [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853).
   With a key mounted, this file is encrypted the same way the event
@@ -3190,7 +3381,8 @@ existing state exactly as it was — which matters most for the accounts
 file, where the alternative to "unchanged" is "locked out".
 
 `-restore` refuses to overwrite stores that already exist unless you pass
-`--force`.
+`--force`. Copy the data directory somewhere safe first if you want a way
+back to what's on it now — `-restore` does not do that for you.
 
 **Peak memory tracks the backup you actually have, not a worst case you
 don't.** A restore holds the decompressed envelope in memory before
@@ -3345,6 +3537,17 @@ command-line step (see below) — so nobody who gets
 hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
 
+A row also carries an **authenticator app** tag once that person has
+turned one on, and a **passkeys** tag counting how many they have
+registered. Beside each sits a **clear authenticator app** or **clear
+passkeys** button, for when the phone or the key is lost and they still
+have their password -- never on your own row, since that would let a
+signed-in admin remove their own second step with nothing to stop them.
+Clearing one kind leaves the other standing. See
+[docs/authenticator-app.md](authenticator-app.md) for setting one up and
+every way to recover from a lost phone, including the console command
+for an admin locked out of their own.
+
 ### Connecting your account to SSO
 
 If your deployment has SSO set up, you can switch your own account over
@@ -3352,19 +3555,20 @@ to it: open the account menu at the bottom of the rail (click your
 username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
-**Unless you are the admin, this deletes your MikroView password, and
-can't be undone from MikroView.** After connecting:
+**Unless you are the admin, this deletes your MikroView password and
+second factor, and can't be undone from MikroView.** After connecting:
 
 - You sign in through your identity provider only.
 - If you lose access to that provider, MikroView can't recover the
   account for you.
 
-**The admin is the exception: it keeps its password.** MikroView holds
-exactly one admin, and a provider outage with no password anywhere locks
-everybody out rather than one person — so for that account SSO is an
-extra way in rather than a replacement, and the dialog says so instead
-of warning about a deletion that does not happen. See [SSO is additive:
-keep a local admin](#sso-is-additive-keep-a-local-admin).
+**The admin is the exception: it keeps its password and its second
+factor.** MikroView holds exactly one admin, and a provider outage with
+no local way in locks everybody out rather than one person — so for
+that account SSO is an extra way in rather than a replacement, and the
+dialog says so instead of warning about a deletion that does not
+happen. See [SSO is additive: keep a local
+admin](#sso-is-additive-keep-a-local-admin).
 
 - You stay signed in on the browser you did it from. Anywhere else
   you're signed in gets signed out.
@@ -3705,12 +3909,23 @@ oidc:
 
 ### SSO is additive: keep a local admin
 
-**Your admin account keeps its MikroView password, whether or not you
-connect it to SSO.** That password is the way back in on the day your
-identity provider is down, misconfigured after an upgrade, or has lost
-the admin's directory entry. MikroView never signs in to your provider
-on its own behalf, so if the provider cannot answer, SSO cannot let
-anybody in.
+**Your admin account keeps its MikroView password and its second
+factor, whether or not you connect it to SSO.** That password-and-factor
+pair is the way back in on the day your identity provider is down,
+misconfigured after an upgrade, or has lost the admin's directory entry.
+MikroView never signs in to your provider on its own behalf, so if the
+provider cannot answer, SSO cannot let anybody in.
+
+**A second factor is required on every local account, not just the
+admin's.** Once you've set a local password, MikroView won't let a
+signed-in session go anywhere except enrolling a second factor (an
+authenticator app or a passkey) until one is active — see
+[docs/authenticator-app.md](authenticator-app.md). This applies whether the
+account is brand new or has existed for a while: an account that somehow
+reaches sign-in without a factor is sent straight to enrolment and can't
+reach anything else until it has one. The one account this never applies
+to is one that signs in through SSO only — your identity provider
+already handles that step.
 
 What this means in practice:
 
@@ -3726,14 +3941,15 @@ What this means in practice:
   account has been created and that the OIDC settings go in the config
   file; add them, restart, and connect the account from the account
   menu whenever you like.
-- **Connecting the admin to SSO keeps its password.** Afterwards you
-  can sign in either way: through your provider normally, with the
-  password when the provider is unreachable.
-- **Everybody else loses their password when they connect.** A user or
-  viewer who connects their account signs in through your provider from
-  then on, and MikroView cannot recover that account for them. That is
-  unchanged, and it costs the deployment nothing — the admin still has
-  a password.
+- **Connecting the admin to SSO keeps its password and its second
+  factor.** Afterwards you can sign in either way: through your provider
+  normally, or the break-glass path — username, password, and second
+  factor — when the provider is unreachable.
+- **Everybody else loses both their password and their second factor
+  when they connect.** A user or viewer who connects their account
+  signs in through your provider from then on, and MikroView cannot
+  recover that account for them. That is unchanged, and it costs the
+  deployment nothing — the admin still has a password and a factor.
 - **A MikroView username can't be an email address.** Identity
   providers send an email as the username, so keeping local names clear
   of them means the two can never be the same name and MikroView never
@@ -4111,6 +4327,52 @@ verification for that specific upstream (reasonable here, since you
 configured that upstream address yourself) or trusting MikroView's
 local CA explicitly (more correct, and what `/ca.crt` is for).
 
+## Public URL (`publicUrl`, optional, for passkeys)
+
+The address people actually reach MikroView on, e.g.
+`https://mikroview.home.lan:8443` (issue #1250, passkeys as a second
+factor). WebAuthn binds a passkey to the domain the browser saw when it
+was created, and refuses outright to create one for a bare IP address --
+this is the one place MikroView learns what that domain is, since it
+never infers it from a request's `Host` header (the same
+`redirect_uri`-confusion reasoning `oidc.publicBaseUrl` above is guarded
+against).
+
+```yaml
+publicUrl: "https://mikroview.home.lan:8443"
+```
+
+Left unset -- the default -- MikroView starts and runs exactly as it
+always has; passkeys are simply unavailable. Most problems here are a
+warning, not a startup refusal: a security monitor that will not boot
+has cost you all visibility, which is worse than one login method
+staying off. The one exception is an install where an account already
+holds a passkey: if `publicUrl` is unset, an IP address, or anything
+other than `https://` (aside from `http://localhost`), MikroView
+refuses to start rather than boot with that passkey silently unable to
+sign anyone in, since the account would otherwise lose its second
+factor without warning. It logs:
+
+```
+passkeys are off (<status>) but at least one account already holds a
+passkey -- set publicUrl in the configuration to the https address
+people reach MikroView on, or run `mikroview -clear-second-factor
+<username>` for each affected account to remove them
+```
+
+An install where nobody has registered a passkey yet still only gets
+the warning. See [CFG-0100](#cfg-0100) through [CFG-0104](#cfg-0104)
+above for exactly what each one catches and what happens as a result.
+
+**Not `oidc.publicBaseUrl`, and no fallback between them.** The two
+usually hold the same address, but changing one for its own reason --
+rotating an OIDC redirect, moving where passkeys are registered -- must
+never silently move the other, so MikroView never reuses one to fill in
+the other. If `oidc.publicBaseUrl` is set and this isn't, CFG-0104 says
+so; it does not set it for you.
+
+`MIKROVIEW_PUBLIC_URL` overrides it from the environment.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -4189,6 +4451,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
 | `MIKROVIEW_TLS_HOSTS` | `tls.hosts` (comma-separated) |
 | `MIKROVIEW_TLS_STORE_PATH` | `tls.storePath` |
+| `MIKROVIEW_PUBLIC_URL` | `publicUrl` (see [Public URL](#public-url-publicurl-optional-for-passkeys)) -- not `MV_PUBLIC_URL`, the name issue #1250 first proposed; every env var in this codebase is `MIKROVIEW_*` |
 | `MIKROVIEW_OIDC_ISSUER_URL` | `oidc.issuerUrl` (see [Single sign-on](#single-sign-on-oidcsso)) |
 | `MIKROVIEW_OIDC_CLIENT_ID` | `oidc.clientId` |
 | `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
@@ -4214,6 +4477,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
 | `MIKROVIEW_DROPLIST_STORE_PATH` | `droplist.storePath` (see [Drop list: operator-authored ranges to block](#drop-list-operator-authored-ranges-to-block-optional-12231224)) -- unrelated to `blocklist.sources` above: this is where drop list entries (issue #1223) persist, not the fetched feeds |
+| `MIKROVIEW_PREFS_STORE_PATH` | `prefs.storePath` (see [Preferences: settings live on the server, per user](#preferences-settings-live-on-the-server-per-user-1283)) -- where per-user preferences records persist |
 | `MIKROVIEW_OUI_ENABLED` | `oui.enabled` -- the IEEE MAC-vendor registry feed (see [MAC vendor lookups](#mac-vendor-lookups-optional-on-by-default)) |
 | `MIKROVIEW_OUI_CACHE_PATH` | `oui.cachePath` -- where the parsed registry is kept between restarts |
 | `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
@@ -4541,6 +4805,8 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/auth/password` | open to any signed-in user, not admin-gated: changes the caller's own password and ends every other session on the account, issuing a fresh one for this browser. After an admin reset it takes only `newPassword` -- there is no current one -- and it is the only route that session can reach until it does |
 | `POST /api/auth/logout-all` | open to any signed-in user, not admin-gated: ends every session the caller holds everywhere, then re-establishes this one -- the settings page's "sign out everywhere" |
 | `GET /api/third-party-notices` | open to any signed-in user: the licence/copyright texts of everything statically linked into this binary -- session-gated rather than public so an unauthenticated caller can't use it as a precise dependency-and-version inventory, though the same file already ships in the public repo and image |
+| `GET /api/me/preferences` | open to any signed-in user, not admin-gated: the caller's own preferences record (#1283), as `{"version": 1, "prefs": {...}}`. A user with no stored record yet gets `{"version": 1, "prefs": {}}`, not a 404 -- see [Preferences](#preferences-settings-live-on-the-server-per-user-1283) |
+| `PATCH /api/me/preferences` | open to any signed-in user, not admin-gated: merges the given `{"version": 1, "prefs": {...}}` into the caller's stored record -- only the keys present in `prefs` are changed, everything else stored is left alone; a key is cleared by sending it as `null`, which is stored as-is rather than removed. 204 on success. 400 for a wrong `version`, a `prefs` that isn't a JSON object, malformed JSON, or a body over the shared 64 KiB cap; 413 if the merged record would exceed 256 KiB per user, in which case nothing is saved (a record already over that size, from an older install, still loads and still reads back -- only growth is refused) |
 | `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |

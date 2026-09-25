@@ -72,7 +72,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "dev"
@@ -138,6 +138,17 @@ workflow:
   - "docs/**/*.gif"
   - "docs/**/*.webp"
   - "docs/**/*.svg"
+  # The note beside a screenshot recording that a recapture came out
+  # byte-for-byte identical (#1317, check-release-surfaces.sh). It is a
+  # sentence about a picture, and changes nothing the code does.
+  - "docs/**/*.png.checked"
+  # The console transcript the weekly CHR exercise commits for the
+  # RouterOS version it booted (#894, scripts/routeros-chr-open-mr.sh).
+  # Same reasoning as the line above: it is a record of what a router
+  # said, written after the fact, and nothing reads it back. Scoped to
+  # that one tree rather than `**/*.log`, so an ordinary log file
+  # appearing anywhere else still stops the guard and gets a decision.
+  - "docs/routeros-verification-logs/**/*.log"
 
 .code_paths: &code_paths
   # Source extensions at any depth. These are what catch a file in a
@@ -202,6 +213,13 @@ workflow:
   - ".gitignore"
   - ".gitleaksignore"
   - "renovate.json"
+  # cosign.pub is the public half of the release signing key (#1309). It
+  # has no source extension, so without this line it matches neither list
+  # and the guard refuses the pipeline -- which is what happened on
+  # !1089's first run. It belongs here rather than in .docs_only_paths: a
+  # change to it changes what a released digest verifies against, so it
+  # must never be paired with a README edit and read as documentation.
+  - "cosign.pub"
 
 # .dev_or_mr, plus the three-rule ladder described above. Everything
 # .dev_or_mr does is unchanged and comes first: schedules and the
@@ -210,7 +228,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: *code_paths
@@ -233,7 +251,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: never
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
@@ -292,14 +310,66 @@ workflow:
 # image runs as `node`, and a cache the root jobs saved is restored
 # root-owned into a node-user job, so its `npm ci` fails with EACCES on
 # the first rmdir (#1098). Those jobs fetch cold; it costs them ~11 s.
+.npm_cache_entry: &npm_cache_entry
+  key:
+    files:
+      - frontend/package-lock.json
+  paths:
+    - frontend/node_modules/
+  policy: $NPM_CACHE_POLICY
+
 .npm_cache: &npm_cache
-  cache:
-    key:
-      files:
-        - frontend/package-lock.json
-    paths:
-      - frontend/node_modules/
-    policy: $NPM_CACHE_POLICY
+  cache: *npm_cache_entry
+
+# #1304 item E7: the comment above explains why gate:scenarios,
+# gate:scripts and perf:promotion cannot use .npm_cache above -- they run
+# the live-check image as its own `node` user (uid 1000, fixed by
+# live-check.Dockerfile), and that cache is written by the root-running
+# node:26 jobs. This is the same node_modules path under a key those
+# root jobs never touch (`prefix`, not the bare lockfile hash), so the
+# two caches never collide and every job that pulls or pushes it runs as
+# the same uid. A plain entry, not wrapped in a `cache:` key like
+# .npm_cache above, because gate:scenarios' three engines need it
+# alongside other fields in one list rather than merged in as a whole
+# job (see .gate_scenarios_shard below).
+.live_check_npm_cache_entry: &live_check_npm_cache_entry
+  key:
+    prefix: live-check
+    files:
+      - frontend/package-lock.json
+  paths:
+    - frontend/node_modules/
+  policy: $NPM_CACHE_POLICY
+
+# #1304 item E6: test:build-checks and security:licence-policy each curl
+# and untar the same pinned Go tarball from go.dev on every run. Keyed on
+# go.mod so a toolchain bump invalidates it, same convention as the npm
+# caches above. An entry, not a `cache:`-wrapped anchor, for the same
+# reason as live_check_npm_cache_entry: both jobs already carry
+# .npm_cache and a job cannot merge two anchors that each define `cache:`
+# (the second is silently dropped) -- see where these are used.
+.go_toolchain_cache_entry: &go_toolchain_cache_entry
+  key:
+    files:
+      - go.mod
+  paths:
+    - .go-toolchain-cache/
+  policy: $NPM_CACHE_POLICY
+
+# #1304 item E8: test:go and test:postgres each run
+# scripts/fetch-upgrade-fixtures.sh, which downloads every recorded
+# upgrade fixture from the generic package registry. The script already
+# skips a file already present, so caching .upgrade-fixtures/ turns a
+# repeat pipeline's two downloads into two no-ops rather than two fresh
+# fetches; a fixed key (not lockfile- or go.mod-keyed) because nothing in
+# the repo names which fixture versions exist -- the registry does, and
+# the script itself decides what is missing. Both jobs run as root in an
+# unmodified golang:1.27.1 container, so there is no cross-uid risk here.
+.upgrade_fixtures_cache_entry: &upgrade_fixtures_cache_entry
+  key: upgrade-fixtures
+  paths:
+    - .upgrade-fixtures/
+  policy: $NPM_CACHE_POLICY
 
 # Standing on an earlier run instead of repeating it (#1066, ported from
 # Orbit's reuse gate, orbit #898). A push that only touched one shard's
@@ -457,7 +527,7 @@ lint:script-tests:
 lint:go:
   stage: lint
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go build ./...
@@ -519,13 +589,20 @@ lint:supply-chain-pins:
 test:go:
   stage: test
   # Stays on big: peaks at ~7.2 GB, over the light lane's 6 GB cap.
-  image: golang:1.27
+  image: golang:1.27.1
   # Not gated by #1038, and must not be: five tests read
   # docs/configuration.md and assert on its contents (ca_docs_test.go,
   # migrate_cli_test.go, internal/api/route_docs_test.go,
   # internal/config/env_docs_test.go and problem_docs_test.go). A prose
   # edit can fail this job for real, so it runs for prose.
   <<: *dev_or_mr
+  # #1304 item E8: shared with test:postgres below, so a fixture already
+  # fetched by either job on an earlier pipeline is not fetched again --
+  # see upgrade_fixtures_cache_entry above. fetch-upgrade-fixtures.sh
+  # already skips a file it finds present, so this only ever saves a
+  # download, never risks serving something stale.
+  cache:
+    - *upgrade_fixtures_cache_entry
   # GitLab's docker executor runs this container as root by default; GitHub's
   # ci.yml runs the same test directly on the runner VM as an unprivileged
   # user. That mismatch makes permission-enforcement tests (e.g.
@@ -598,15 +675,24 @@ test:build-checks:
       when: never
     # Same on-demand skip as .dev_or_mr (#951); repeated because `exists:`
     # keeps these rules inline rather than merged from the anchor.
-    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true")
+    - if: ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api") && ($CHR_EXERCISE == "true" || $CHR_WATCH == "true" || $RENOVATE == "true" || $SIGN_EXERCISE == "true")
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       exists: ["frontend/package.json"]
     - if: $CI_COMMIT_BRANCH == "dev"
       exists: ["frontend/package.json"]
-  <<: [*git_safe, *npm_cache]
+  <<: *git_safe
+  # #1304 item E6: a job cannot merge two anchors that each define
+  # `cache:` (only the first is kept), so this needs both cache entries
+  # written out rather than merging in .npm_cache -- see
+  # go_toolchain_cache_entry above, next to .npm_cache itself.
+  cache:
+    - *npm_cache_entry
+    - *go_toolchain_cache_entry
   script:
-    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - mkdir -p .go-toolchain-cache
+    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     - (cd frontend && npm ci && npm run build)
     - node frontend/scripts/check-bundle-budget.mjs
@@ -628,8 +714,12 @@ test:build-checks:
 test:postgres:
   stage: test
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: *dev_or_mr_code
+  # #1304 item E8: shared with test:go above -- see
+  # upgrade_fixtures_cache_entry and the comment on test:go's cache.
+  cache:
+    - *upgrade_fixtures_cache_entry
   services:
     - name: postgres:18-alpine
       alias: postgres
@@ -945,13 +1035,31 @@ gate:image:
 # The image runs as its own `node` user (the gate must not run as root --
 # docs/decisions/gitlab-ci-root-in-container-test-failure.md) and the
 # executor checks out world-writable, so no chown dance is needed here.
-gate:scenarios:
+#
+# A hidden template, `<<:`-merged into the three concrete jobs below,
+# rather than repeating the script: gate:scenarios (Chromium, every MR
+# and `dev` pipeline) and the two engines #1306 adds (Firefox and
+# WebKit, dev -> preview merge requests only) run the identical shard
+# script, so it is written once here. Each concrete job supplies its own
+# `rules:` -- the one thing that has to differ -- by merging *git_safe
+# (and *dev_or_mr_code for Chromium alone) alongside this anchor rather
+# than through it, since a job cannot merge two anchors that both set
+# `rules:`.
+.gate_scenarios_shard: &gate_scenarios_shard
   stage: gate
   tags: [light]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
-  <<: [*dev_or_mr_code, *git_safe]
   parallel: 4
   timeout: 30m
+  # #1304 item E7: node_modules for this image's own `node` user, keyed
+  # separately from .npm_cache so it never crosses paths with the
+  # root-owned cache (see live_check_npm_cache_entry above). All four
+  # shards, times three engines once #1306 lands, pull and push the same
+  # key: they install identical node_modules from the same lockfile, so
+  # a race on the upload just leaves whichever shard finished last, not
+  # a corrupt cache.
+  cache:
+    - *live_check_npm_cache_entry
   script:
     # #1066: CI_JOB_NAME under `parallel: 4` is "gate:scenarios 1/4" etc,
     # exactly the shape scripts/ci-reuse-inputs.js's JOB_INPUTS uses. Node
@@ -1054,6 +1162,38 @@ gate:scenarios:
       - ci-reuse-evidence/
     expire_in: 1 week
 
+gate:scenarios:
+  <<: [*dev_or_mr_code, *git_safe, *gate_scenarios_shard]
+
+# #1306: dev -> preview also runs the scenario suite under Firefox and
+# WebKit, not only Chromium -- owner ruling 2026-09-20. The live-check
+# image already carries all three engines (AGENTS.md, "The second host
+# live-check runs on"); #659 shipped a static `style` attribute Chromium
+# tolerates and Firefox refuses under this app's CSP, past a
+# Chromium-only gate, found only by the owner opening the app -- these
+# two engines are part of the dev -> preview promotion specifically so
+# that class of defect is caught here instead. A branch-tip push and an
+# ordinary merge request into `dev` stay Chromium-only: nothing here
+# changes gate:scenarios above.
+#
+# Rule shape copied from policy:promotion-hop (not the #1038 docs-only
+# ladder gate:scenarios uses): this blocks the merge exactly like the
+# Chromium shards -- same `gate` stage, no `allow_failure` -- on every
+# dev -> preview merge request, docs-only diff or not.
+gate:scenarios:firefox:
+  <<: [*git_safe, *gate_scenarios_shard]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+  variables:
+    MV_BROWSER: firefox
+
+gate:scenarios:webkit:
+  <<: [*git_safe, *gate_scenarios_shard]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+  variables:
+    MV_BROWSER: webkit
+
 # The four standalone shell checks (scripts/run-live-scripts.sh), once,
 # plus the quiet-host unit tests (#1003) -- plain bash, no live instance
 # needed, so they run here rather than earning their own job.
@@ -1063,6 +1203,10 @@ gate:scripts:
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: [*dev_or_mr_code, *git_safe]
   timeout: 30m
+  # #1304 item E7: same live-check-user npm cache gate:scenarios' shards
+  # share -- see live_check_npm_cache_entry above.
+  cache:
+    - *live_check_npm_cache_entry
   script:
     - set -o pipefail
     - (cd frontend && npm ci)
@@ -1073,7 +1217,10 @@ gate:scripts:
     - scripts/assert-ui-built.test.sh
     - scripts/check-release-surfaces.test.sh
     - scripts/dockerignore.test.sh
+    - scripts/gitignore.test.sh
     - scripts/install.test.sh
+    - scripts/ensure-cosign.test.sh
+    - scripts/sign-release-digest.test.sh
   artifacts:
     when: always
     paths:
@@ -1118,8 +1265,8 @@ gate:scripts:
 #
 # resource_group still serialises this against any other promotion MR
 # measuring at the same time -- two at once would each see the other's
-# CPU as noise in its own numbers, and a second `hold` would simply
-# refuse while the first is active.
+# CPU as noise in its own numbers, and a second `hold` would queue
+# behind the first anyway.
 #
 # Timeout arithmetic, corrected 2026-09-06 from the job's first four runs
 # on the runner rather than from workstation figures: npm ci measured 11,
@@ -1129,14 +1276,20 @@ gate:scripts:
 # took 38s unseeded, and will be longer now it renders 3000 events.
 #
 # The drain cap sets the bound, not npm ci. Worst case is roughly 60s
-# npm ci + 60s hold + 600s drain + 180s probe, about 16 minutes, so the
-# 25 stands -- 1.6x worst case, not the 11x a 134s run makes it look.
+# npm ci + 60s hold + 600s drain + 180s probe, about 16 minutes.
+#
+# Plus the queue, since 2026-09-24: `hold` now waits for any other hold
+# on the host rather than failing, and the orbit-base-image Node compile
+# takes one for about forty minutes (orbit#1106). The host caps any hold
+# at an hour, and `hold` queues for up to 65 minutes (QH_QUEUE_MAX_S), so
+# 16 + 65 is about 81 minutes: 90m. A run that does not queue still takes
+# its usual few minutes; the limit only matters when it does.
 perf:promotion:
   stage: gate
   tags: [big]
   image: $CI_REGISTRY_IMAGE/live-check:$CI_COMMIT_REF_SLUG
   <<: *git_safe
-  # The #1038 ladder, target-branch guard and all: a 25-minute job that
+  # The #1038 ladder, target-branch guard and all: a job that
   # holds the whole host quiet is the one most worth not running for a
   # prose change. In practice it will almost always run anyway, because a
   # promotion merge request is diffed against the preview tip and so
@@ -1149,7 +1302,7 @@ perf:promotion:
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"
   resource_group: perf-promotion
-  timeout: 25m
+  timeout: 90m
   # #1104: the hold stops the runner picking up *new* jobs; it cannot
   # stop the scenario shards this pipeline already started, and they run
   # for ten minutes on the same box. Twice (pipelines 899 and 914) the
@@ -1160,6 +1313,12 @@ perf:promotion:
   # and a missing hard need would skip this job silently.
   needs:
     - job: gate:scenarios
+      optional: true
+      artifacts: false
+    - job: gate:scenarios:firefox
+      optional: true
+      artifacts: false
+    - job: gate:scenarios:webkit
       optional: true
       artifacts: false
     - job: gate:scripts
@@ -1176,6 +1335,14 @@ perf:promotion:
   # depends on the world-writable checkout (comment above it).
   variables:
     FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR: "true"
+  # #1304 item E7: the same live-check-user npm cache gate:scenarios and
+  # gate:scripts share (live_check_npm_cache_entry above) -- this job
+  # runs the identical image as the same uid 1000, so ownership is never
+  # the issue .npm_cache hit. It runs on the `big` lane rather than
+  # `light`; if that lane's runner does not share cache storage with
+  # `light`'s this is a harmless miss, same cold npm ci as today.
+  cache:
+    - *live_check_npm_cache_entry
   script:
     - set -o pipefail
     - t0=$(date +%s)
@@ -1326,7 +1493,33 @@ security:gosec:
     name: ghcr.io/securego/gosec:2.29.0
     entrypoint: [""]
   <<: *dev_or_mr_code
+  # The image ships its own Go (1.27.0 in 2.29.0) with GOTOOLCHAIN=local,
+  # so the moment go.mod asks for a newer patch (#1312 pinned 1.27.1)
+  # gosec cannot load a single package -- and in SARIF mode it says
+  # nothing about why: exit 1, an empty results array, one second of
+  # runtime. The fix installs the exact go.mod toolchain over the
+  # image's own, the same tarball-and-cache dance test:build-checks and
+  # security:licence-policy already do -- see go_toolchain_cache_entry
+  # above -- rather than paying for a fresh download from go.dev on
+  # every MR and dev pipeline. `auto` stays set as a safety net: if the
+  # cache is ever stale (go.mod bumped past what the tarball below
+  # names), Go still fetches the right one itself instead of failing the
+  # way GOTOOLCHAIN=local would. `go version` prints which one actually
+  # ran so the next mismatch is readable in the log rather than
+  # reconstructed from the timing.
+  variables:
+    GOTOOLCHAIN: auto
+  cache:
+    - *go_toolchain_cache_entry
   script:
+    # This image is Alpine (gosec's own base), with tar but no curl --
+    # the one line the other two jobs' node:26-bookworm image does not
+    # need.
+    - apk add --no-cache curl
+    - mkdir -p .go-toolchain-cache
+    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - export PATH="/usr/local/go/bin:$PATH" && go version
     - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
   artifacts:
     when: always
@@ -1351,7 +1544,7 @@ security:gosec:
 security:govulncheck:
   stage: security
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
@@ -1389,7 +1582,7 @@ security:govulncheck:
 security:fuzz:
   stage: security
   tags: [light]
-  image: golang:1.27
+  image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   timeout: 15m
   script:
@@ -1463,10 +1656,18 @@ security:licence-policy:
   stage: security
   tags: [light]
   image: node:26-bookworm
-  <<: [*dev_or_mr_code, *git_safe, *npm_cache]
+  <<: [*dev_or_mr_code, *git_safe]
+  # #1304 item E6: same reasoning as test:build-checks above -- a job
+  # cannot merge two `cache:`-defining anchors, so both entries are
+  # written out here rather than merging in .npm_cache.
+  cache:
+    - *npm_cache_entry
+    - *go_toolchain_cache_entry
   script:
     - node --test tools/licenses/licence-policy.test.mjs
-    - curl -fsSL https://go.dev/dl/go1.27.0.linux-amd64.tar.gz | tar -C /usr/local -xz
+    - mkdir -p .go-toolchain-cache
+    - test -f .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz || curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
+    - tar -C /usr/local -xzf .go-toolchain-cache/go1.27.1.linux-amd64.tar.gz
     - export PATH="/usr/local/go/bin:$PATH" && go version
     # `go install` drops the binary in $(go env GOPATH)/bin, which the node
     # image does not have on PATH; pipeline 287 failed with "command not
@@ -1752,6 +1953,79 @@ record:upgrade-fixture:
     # missing one costs a hand step nobody will remember.
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
 
+# The GitLab half of #1309's two signatures, and the automatic one: this
+# job runs on every v* tag pipeline and adds a key-based signature from a
+# private key that exists only on this dedicated, protected
+# `mikroview-signing` runner's host, mounted read-only into its jobs. The
+# second, keyless (Sigstore/OIDC) signature is GitHub's, added by
+# .github/workflows/countersign.yml -- deliberately manual, started by
+# the owner by hand after it verifies this key-based signature against
+# the committed cosign.pub (docs/release-signing.md). Requiring the
+# owner's own GitHub login for that half is the point: compromising
+# GitHub's OIDC issuer alone is not enough to forge both signatures over
+# the same digest.
+# Same runner-is-the-key-fence reasoning as orbit's `sign_evidence`
+# (orbit/docs/releasing.md): this GitLab is CE, which has no protected
+# environments or environment-scoped variables, so a CI/CD variable would
+# be readable by every job in a protected-branch pipeline.
+#
+# Waits for GHCR to have the image GitHub Actions publishes (same tag
+# pipeline, same 45-minute budget as record:upgrade-fixture above), then
+# resolves and signs its digest. All the logic is in the script -- unit
+# tested in scripts/sign-release-digest.test.sh against stubbed
+# docker/cosign, never the network -- so this job only installs what it
+# needs and calls it.
+sign:release-digest:
+  stage: sync
+  tags: [mikroview-signing]
+  # No daemon and no dind, the same shape orbit's sign_evidence job uses:
+  # `docker manifest inspect`, `docker buildx imagetools inspect` and
+  # `docker login` are all registry operations the CLI performs itself over
+  # HTTPS, and cosign talks to the registry directly too. Verified against a
+  # real GHCR tag with DOCKER_HOST pointed at a socket that does not exist
+  # (2026-09-22). So this job needs no Docker socket mounted into it, which
+  # matters: the signing runner is the better-protected half of the pair,
+  # and handing it daemon access to earn a digest lookup would be a poor
+  # trade. Setting DOCKER_HOST here at all was misleading and is gone.
+  image: docker:29-cli
+  # Waits on GHCR, not on this pipeline's own lint/test/security -- same
+  # reasoning as record:upgrade-fixture's needs: [].
+  needs: []
+  # A cancelled signing run leaves a published release with only one of
+  # its two signatures and nothing to show why -- never cut mid-write.
+  interruptible: false
+  timeout: 1h
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v[0-9]/'
+    # The exercise path (#1309). A v* tag on this project *is* a release --
+    # the mirror job pushes it to GitHub and GitHub's docker workflow
+    # publishes from it -- so there is no throwaway tag that exercises
+    # signing without also cutting a release. Instead the job can be started
+    # by hand against an already-published tag, the same web/API-plus-
+    # variable shape CHR_EXERCISE and CHR_WATCH use, and SIGN_EXERCISE is on
+    # their `never` lists above so triggering it does not re-run all of dev
+    # (#951).
+    #
+    # Owner decision, 2026-09-22: exercise it by signing v0.6.0's digest for
+    # real rather than dry-running, so the GHCR write and the signature push
+    # are proved too, not just the key mount and the digest lookup. Signing
+    # an already-published release adds a valid second signature to it; it
+    # changes nothing about what that release contains.
+    #
+    # Run it from the web UI on a protected branch -- the signing runner
+    # refuses unprotected refs -- with SIGN_EXERCISE=true and
+    # SIGN_TAG=v0.6.0.
+    - if: '$SIGN_EXERCISE == "true" && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
+  script:
+    # bash because the script is `#!/usr/bin/env bash` and Alpine ships
+    # ash; curl for ensure-cosign.sh's pinned download; coreutils for the
+    # checksum verification inside it.
+    - apk add --no-cache bash coreutils curl >/dev/null
+    # SIGN_TAG only when exercising by hand; a tag pipeline has no SIGN_TAG
+    # and signs its own CI_COMMIT_TAG. If neither is set the script refuses
+    # rather than sign something it guessed.
+    - bash scripts/sign-release-digest.sh "${SIGN_TAG:-$CI_COMMIT_TAG}"
+
 # record:upgrade-fixture above is allow_failure (a slow build or a GHCR
 # blip must not redden a tag already cut -- see its own header), so it
 # can fail unseen. This is #1274's automated replacement for the manual
@@ -1806,7 +2080,7 @@ check:upgrade-fixture-recorded:
 
 chr-exercise:run:
   stage: chr-exercise
-  image: golang:1.27
+  image: golang:1.27.1
   # #952: this job pushes chr/last-run.json to the chr-reports branch on
   # every run (scripts/chr-report.sh) and, on a fully clean exercise, also
   # pushes a branch and opens a merge request

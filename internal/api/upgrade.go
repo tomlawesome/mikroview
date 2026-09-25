@@ -3,6 +3,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -87,7 +88,12 @@ func (s *Server) handleUpgradeAcknowledge(w http.ResponseWriter, r *http.Request
 		http.Error(w, "the setup ledger is not available", http.StatusServiceUnavailable)
 		return
 	}
-	u, ok := s.Setup.AcknowledgeUpgrade(auditActor(r), time.Now())
+	u, ok, err := s.Setup.AcknowledgeUpgrade(auditActor(r), time.Now())
+	if err != nil {
+		apiLog.Error(fmt.Sprintf("acknowledging the upgrade failed: %v", err))
+		http.Error(w, "the acknowledgement could not be stored, so nothing was changed", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		// Nothing to acknowledge: a first install, or a click that
 		// raced a restart onto a version with no crossing behind it. A

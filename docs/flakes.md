@@ -6,6 +6,23 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## security:gosec: killed mid-scan, exit 137, no findings written
+
+- 2026-09-22 · 9b17fa39 (fix/chr-log-changed-paths) · pipeline 1461, job 19810
+  · `ERROR: Job failed: exit code 137` after 409s, with gosec still logging
+  `Checking package: main` and no `gosec.sarif` produced (`No files to
+  upload`). 137 is SIGKILL, so the scan was killed rather than finding
+  anything. The branch changes a CI path list and a shell test, which a Go
+  scan cannot reach. Retried on the same commit as job 19842: passed in 293s.
+  The runner host was also running the CHR exercise (pipeline 1451) and two
+  other pipelines around that time. First sighting.
+
+## live-watchers-editor: the cloned shipped watcher's row has no open drawer
+
+- 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox, first deliberate Firefox run of this shard · `FAIL the copy is already expanded, ready to be edited` at `live-watchers-editor.mjs:344` -- the sibling check 66 lines below the 2026-09-21 sighting's, same clone, same drawer-not-open shape. Every check before it passed. The immediately following Firefox run of the same shard on the same commit passed this scenario, and two Chromium runs of it passed, so the engine is not the cause. Second sighting.
+
+- 2026-09-21 · 83609eae (dev, base of batch/v061-wave-4) · local 4-shard Firefox gate run by the #1314 sub-agent · `FAIL the copy opens into the conditions editor, ready to be changed` at `live-watchers-editor.mjs:278` -- the "Port scan (copy)" row appeared after Clone, but its `.drawer` count read 0 when checked straight after the row became visible; every other check passed. The run was on an otherwise idle worktree and the change under test (service-worker registration) does not touch the watchers bench; the same commit passed the scenario in pipeline 1386 (!1078, `gate:scenarios`).
+
 ## live-city-reach: Escape does not restore the exact pan position
 
 - 2026-09-16 · 83b35730 (feature/m16-upgrade-guard-and-401, !1054) · pipeline 1168, `gate:scenarios 1/4` · `Escape restores the exact pan position (13.4 -> 19.3)` -- the mini-map viewport read 19.3 after the 900 ms settle instead of the 13.4 it started at; every other check in the scenario passed. The branch is backend-only (persist schema, a 401 header, `-backup`); the same scenario passed three times in a row locally at ebbce549, which contains that branch.
@@ -63,7 +80,10 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-watchlist-manage: the fenced button never reads "learn again"
 
 - 2026-09-10 · 4d37f0cf (!1026) · pipeline 977, gate:scenarios 4/4 · `FAIL the same button now reads learn again` at `live-watchlist-manage.mjs:216`; the preceding check ("fence now turns the chip to fencing") passed, so the fence itself landed and only the button's relabel was missing. Ran three times standalone at the same commit against a fresh instance: passed every time. The batch's diff cannot reach it -- it touches no frontend file at all, and nothing in the watchlist's own request path.
-- 2026-09-11 · c3bcb56f (dev, after !1031) · pipeline 996, gate:scenarios 4/4 · `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs:208`: Playwright reported the button "outside of the viewport" then "detached from the DOM" on every retry, so the drawer replaced the button's node under the click. Pipeline 997 ran the same commit as !1032's MR pipeline and passed. Same button as the sighting above, one check earlier. Job retried (11971).
+
+## live-viewer-surfaces: goTo("Flags") times out waiting for the docket card
+
+- 2026-09-22 · c6397ffe (dev) · local shard 4/4 under Firefox · `goTo("Flags") timed out waiting for card "docket"` at `live-browser.mjs:514`, from `visibleSurfaces` before any surface was read, so the scenario threw and printed no verdict. The diagnostic says the deck and the card were both present with `offsetFromDeckTop: 2880`, so the card had mounted and the roll never settled on it -- the same family as the `live-decommission`, `live-rule-regex`, `live-settings-doors` and `live-log-every-rule` entries. The preceding Firefox run of the same shard on the same commit passed this scenario, as did two Chromium runs. First sighting.
 
 ## live-decommission: goTo("Stream") times out (10 s) on the workstation
 
@@ -72,6 +92,8 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-learning-window: a detector's rendered line lags its own API count of sources
 
 - 2026-09-10 · 55a84437 (dev) · pipeline 864, gate:scenarios 2/4, job 9998 · three `FAIL`s of the shape `activity_spike's rendered line matches the state its own API data describes -- got "Baselines established (69 sources)", want "... (80 sources)"` (also low_slow_scan 69/80, off_hours_activity 68/80): the page's line was read while the feed was still adding sources, so the API answered later than the render did; pipeline 865, same commit, passed the shard.
+
+- 2026-09-23 · 17542c5e (feature/m19-second-factor, remote gate `MV_GATE_WAIT=1 make live-check-remote`, chromium, 4 shards) · three `FAIL`s of the same shape, this time counting up rather than settled: `activity_spike ... got "Learning -- nearest source 2 of 5 samples (0 of 63 sources ready)", want "... (0 of 80 sources ready)"` (also low_slow_scan 0/62, off_hours_activity 0/62). Same cause as the sighting above -- the rendered line was read while the feed was still adding sources -- so the shortfall is 62/63 of 80 rather than a wrong number. Not re-run at this commit: the same suite's previous full run, unsharded on the workstation the evening before, did not fail this scenario, and the four other failures in this run are all the forced-enrolment door and unrelated to it. Second sighting.
 
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
@@ -94,22 +116,10 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-10 · 751acc43 (dev) · pipeline 891, gate:scenarios 1/4, job 10361 · `FAIL the foot carries uptime as days and hours -- got "0.4.0+g751acc43… · AGPL-3.0"`: the line rendered without its `· up N d N h` tail; pipeline 893 on the same commit passed the shard.
 
-## live-watchlist-manage: the drawer's "fence now" button never becomes stable
-
-- 2026-09-19 · 53b935f4 (fix/v060-audit, local `make live-check`) · 102 scenarios, this one the only failure · `waiting for locator('.wt-drawer').getByRole('button', { name: /fence now/ })` → "waiting for element to be visible, enabled and stable" three times, then the 30 s timeout. Run alone at the same commit on a fresh instance: PASS. The suite's previous run at the parent commit passed this scenario; the three other failures in that run were a real ordering fault (routers left behind by earlier scenarios) and are fixed, so this one is on its own. First sighting.
-
-- 2026-09-20 · dd84ce3b (fix/v060-audit, !1069) · pipeline 1305, gate:scenarios 4/4 (job 17145) · same `TimeoutError` clicking `fence now · 1 permitted` at `live-watchlist-manage.mjs`: "element is not stable", then "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed docs and two Go error strings, no frontend file. Retried as job 17159. With the 2026-09-11 sighting above (same button, same TimeoutError, filed under the "learn again" heading before this one existed) this is the third: #1301.
-
-- 2026-09-20 · f3d79bce (fix/v060-audit, !1069) · pipeline 1309, gate:scenarios 4/4 (job 17233) · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "outside of the viewport", then "detached from the DOM" on every retry, 30s. The commit changed a shell script and a CI comment, no frontend file. Fourth sighting, on #1301. Retried as a job retry.
-
-- 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", then "detached from the DOM" on every retry, 30s. First sighting under Firefox, so the engine is not the cause. Fifth sighting, on #1301.
-- 2026-09-20 · dd0607a5 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · one shard of four · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable", "outside of the viewport", then "detached from the DOM" on every retry, 30s; the other 106 scenarios passed. The commit changed docs/flakes.md only. Sixth sighting, on #1301.
-
-- 2026-09-20 · 6341af40 (fix/cross-engine-live-checks, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`) · shard 4/4 · same `TimeoutError` on the same button at `live-watchlist-manage.mjs:208`: "element is not stable" on every retry, 30s. The commits since the sixth sighting touch LiveTable, the changelog, two screenshots and one other scenario script. Seventh sighting, on #1301.
-
 ## CamBeaconTests.test_beacon_refires_after_the_period_elapses: cam-porch's beacon line count comes back 2
 
 - 2026-09-19 · df4ba9af (fix/v060-audit, local `python3 -m unittest scripts.seed_demo_test`) · full-file run, this the only failure · `AssertionError: 2 != 1` on `len(cam_beacon_lines)`. `lines_for_round40`'s DNS-beacon block (`scripts/seed-demo.py` ~1169) fires deterministically off `elapsed // CAM_BEACON_SECONDS`, but an earlier, unrelated block in the same function can independently emit a second line matching the test's own filter (cam-porch's mac plus `r40-iot-srv-dns`): it calls `random.choice([("r40-iot-srv-dns", 53), ("r40-iot-srv-ntp", 123)])` for a random `iot`-zone host, so whenever that random pick lands on cam-porch and `r40-iot-srv-dns` together, the count goes to 2. **Root cause confirmed, not just suspected:** the test seeds nothing and reads the shared `random` module, which Python seeds from OS entropy fresh in every process -- `CamBeaconTests` run completely alone (`python3 -m unittest scripts.seed_demo_test.CamBeaconTests`, nothing else in the process) still failed 2 of 20 runs, so this has nothing to do with test order or other tests' random draws; it is a roughly 1-in-10 chance on any given process regardless of what else runs. (An earlier note here blamed #1272's new tests shifting shared state -- ruled out by this isolation run; kept as a correction rather than deleted per this file's own header about superseded reasoning.)
+- 2026-09-20 · 8f2c1f54 (agent/v061-lows-scripts worktree, local `python3 -m unittest scripts.seed_demo_test`) · same `2 != 1`, about one full run in three or four. Second sighting; the cause above is confirmed, so the fix went in with this sighting rather than waiting for a third: `CamBeaconTests.setUp` now calls `random.seed(40)`, so the unrelated iot->dns roll lands the same way every run (25 of 25 runs green after). The beacon itself is cadence-driven, so seeding changes nothing about what the test proves.
 
 ## security:trivy-fs: the vulnerability database will not download
 
@@ -126,3 +136,20 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
 
 - 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.
+
+## npm run test (frontend): a different handful of unrelated tests fails on each full local run
+
+- 2026-09-23 · 9a920057 (feature/m19-second-factor, local `npm run test -- --run`, this sandboxed container) · full suite, 156 files / 3134 tests · 5 failures across four unrelated files, each `Test timed out in 5000ms`: `LiveTable.svelte.test.ts` ("does not cost dramatically more than linearly per row as the mount count grows"), `MetricsTable.svelte.test.ts` ("shows the server-reported winner for a minute the buffer fully covers"), `Topography.svelte.test.ts` ("lane 1's edge to anywhere clears its own limb, whichever slot the lane holds"), `Watchlist.svelte.test.ts` ("keeps set-aside suggestions out of the list until \"show them\" is clicked..."), plus a fifth whose header was lost to a `tail -60` on the captured output -- not re-identified. None of the four touch #1332's diff (`AccountMenu.svelte`, `AuthenticatorOverlay.svelte`, `auth.svelte.ts`). Rerun of just those four files alone, unchanged code: 403/403 passed in 52s.
+- 2026-09-23 · 9a920057 (feature/m19-second-factor, local `npm run test -- --run`, same container, immediately after the sighting above) · full suite · 2 failures this time, both `#1332`'s own new/edited tests in `AccountMenu.svelte.test.ts` ("opens AuthenticatorOverlay on click", "opens the dialog in the clicked menu only, not in an unrelated mounted copy"): the account chip's own menu never opened (`aria-expanded="false"`) despite an `await fireEvent.click` + `flushSync()` sequence identical to this file's own `openMenu()` helper, which the other 12 tests in the same run used successfully. 8 further isolated runs of `AccountMenu.svelte.test.ts` alone, unchanged code: 14/14 passed every time. A different file failed each full run (LiveTable and friends the first time, AccountMenu the second), which points at contention from running 3134 tests in one process on this container rather than a fault in any one file.
+
+## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
+
+- 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
+
+## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio
+
+- 2026-09-23 · 1c0eef18 (feature/m19-second-factor, local `go test ./... -count=1`, this sandboxed container) · one test of 4055 · `nextHeaderStart: 256 KiB 2.273977ms, 1 MiB 24.022903ms, ratio 10.6 ... want about 4x -- the per-offset '>' scan looks unbounded again`, the assertion failing above a ratio of 10. Re-run alone on the same commit immediately afterwards: passed, ratio 3.7 (256 KiB 2.39ms, 1 MiB 8.73ms). The test measures wall-clock scan time at two buffer sizes and compares the ratio, so it reads whatever else the machine was doing; the run that tripped it was the full 55-package suite on a container also hosting other work. Nothing in the branch touches `internal/syslog`. If it recurs, the question is whether the threshold can be made to measure work rather than elapsed time, since a ratio guard on a loaded box will keep doing this.
+
+## live-connection-states: content does not return to its pre-loss position after the banner clears
+
+- 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.

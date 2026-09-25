@@ -150,8 +150,17 @@ type Registry struct {
 	// refused holds every syslog source address the listener gate has
 	// refused a line from -- issue #1281's GET /api/devices/refused.
 	// Bounded and evicted the same oldest-last-seen-first way as
-	// sources; see pruneRefusedLocked.
+	// sources, plus the two extra preferences issue #1289 added; see
+	// pruneRefusedLocked.
 	refused map[string]*Refused
+	// refusedByPrefix indexes refused's keys by the IPv4 /24 or IPv6 /64
+	// each falls in, kept in step with refused on every add and remove
+	// (addRefusedLocked/removeRefusedLocked) -- issue #1289. Answering
+	// "how many refused addresses are in this prefix already" is then a
+	// map lookup rather than a walk of the whole refused list, which
+	// matters because prunePrefixLocked asks it on every newly refused
+	// address, not just on the rare global-cap overflow.
+	refusedByPrefix map[netip.Prefix]map[string]struct{}
 	// pendingByDevice holds each device's current enrolment token, by
 	// device id -- at most one per device, replaced (never
 	// accumulated) by MintEnrolment. Only the token's hash is kept; see
@@ -184,6 +193,18 @@ type Registry struct {
 	// Read under the same lock as byIP, but never on the ingest path:
 	// Resolve returns the id, and only List asks for a name.
 	names NameLookup
+
+	// ownPrefixesCache and ownPrefixesValid cache OwnPrefixes' answer
+	// (#1304, E1): it used to rebuild its map-and-slice from every
+	// device's SourceIP/AcceptedIP on every call, including from
+	// droplist's own Add and OwnRangesKnown, which read it on every
+	// droplist request even though those two fields rarely change.
+	// Invalidated unconditionally in tryPersistLocked, the one place
+	// every write that can touch either field passes through -- see that
+	// function's own comment for why "invalidate on every write" is
+	// safer here than tracking which field actually changed.
+	ownPrefixesCache []netip.Prefix
+	ownPrefixesValid bool
 }
 
 // maxUnattributedSources bounds how many unclaimed syslog source
@@ -271,6 +292,7 @@ func OpenRegistryWithBackend(b persist.Backend, configured []config.Device) (*Re
 		byID:            make(map[string]*Info),
 		sources:         make(map[string]*Source),
 		refused:         make(map[string]*Refused),
+		refusedByPrefix: make(map[netip.Prefix]map[string]struct{}),
 		pendingByDevice: make(map[string]pendingToken),
 		pendingByHash:   make(map[string]string),
 		backend:         b,
@@ -353,12 +375,23 @@ type persistedDevice struct {
 	RegisteredAt time.Time `json:"registeredAt,omitzero"`
 }
 
-// tryPersistLocked is persistLocked's error-returning half, for TryEnrol:
-// an enrolment that cannot be saved must not read as enrolled in memory,
-// so that call needs to know the write failed rather than have it
-// swallowed. Keeps the same version/conflict handling as persistLocked
-// always has. Must be called with r.mu held.
+// tryPersistLocked is persistLocked's error-returning half, for the
+// writes an operator asked for (TryEnrol, Create, Register, Delete):
+// a change that cannot be saved must not read as made in memory, so
+// those calls need to know the write failed rather than have it
+// swallowed, put the old state back, and tell the operator (#1303).
+// Keeps the same version/conflict handling as persistLocked always
+// has. Must be called with r.mu held.
 func (r *Registry) tryPersistLocked() error {
+	// Every write that reaches here can have changed a device's SourceIP
+	// or AcceptedIP -- the two fields OwnPrefixes reads (#1304, E1) -- so
+	// the cached answer is invalidated unconditionally here rather than
+	// tracked field-by-field at each call site. A false invalidation only
+	// costs one cheap recompute on the next OwnPrefixes call; a missed
+	// one would let a stale "known" answer survive a real change to the
+	// router's own addresses, which is the security-relevant direction to
+	// avoid (see droplist.Store.OwnRangesKnown).
+	r.ownPrefixesValid = false
 	if r.backend == nil {
 		return nil
 	}
@@ -398,11 +431,12 @@ func (r *Registry) tryPersistLocked() error {
 }
 
 // persistLocked writes every non-config.yaml device to disk, if
-// persistence is configured. Write failures are swallowed rather than
-// surfaced to the caller -- the in-memory state (which every read goes
-// through) stays correct either way, same contract as every other
-// store's persistLocked in this codebase (e.g. internal/droplist).
-// Must be called with r.mu held.
+// persistence is configured, logging a failed write instead of
+// returning it. Only bookkeeping nobody asked for uses it now (Ensure's
+// first-push creation): there is no operator to tell, and the in-memory
+// state every read goes through stays correct either way. Anything an
+// operator requested goes through tryPersistLocked and rolls back on
+// failure (#1303). Must be called with r.mu held.
 func (r *Registry) persistLocked() {
 	if err := r.tryPersistLocked(); err != nil {
 		deviceLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))
@@ -427,6 +461,9 @@ func (r *Registry) Ensure(deviceID string, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, created := r.ensureLocked(deviceID, now); created {
+		// Bookkeeping from a push, not an operator's request: nobody is
+		// waiting on an answer, and the next push recreates the entry
+		// if this write is lost, so log-and-continue is right here.
 		r.persistLocked()
 	}
 }
@@ -559,15 +596,137 @@ func (r *Registry) pruneLocked() {
 	})
 }
 
-// pruneRefusedLocked is pruneLocked for the refused-address list --
-// same oldest-last-seen-first eviction, capped at maxRefusedAddresses.
+// pruneRefusedLocked is pruneLocked for the refused-address list, with
+// two preferences beyond sources' plain oldest-last-seen-first order
+// (issue #1289). First, no single IPv4 /24 or IPv6 /64 may hold more
+// than maxRefusedPerPrefix entries -- prunePrefixLocked enforces that
+// the moment a new address from an over-share prefix is added, before
+// this global cap is ever consulted. Second, once this cap
+// (maxRefusedAddresses) is reached, a one-shot entry (Lines == 1) is
+// shed before a repeat sender, oldest-last-seen first within each of
+// those two bands -- a router that keeps trying outranks a stranger's
+// single probe, whatever their relative ages.
 func (r *Registry) pruneRefusedLocked() {
 	if len(r.refused) <= maxRefusedAddresses {
 		return
 	}
-	evict.DownTo(r.refused, evict.Target(maxRefusedAddresses), func(s *Refused) time.Time {
-		return s.LastSeen
-	})
+	target := evict.Target(maxRefusedAddresses)
+	need := len(r.refused) - target
+
+	oneShot := make(map[string]*Refused)
+	for k, v := range r.refused {
+		if v.Lines == 1 {
+			oneShot[k] = v
+		}
+	}
+	r.evictBandLocked(oneShot, len(oneShot)-need)
+	if len(r.refused) <= target {
+		return
+	}
+
+	rest := make(map[string]*Refused, len(r.refused))
+	for k, v := range r.refused {
+		if v.Lines != 1 {
+			rest[k] = v
+		}
+	}
+	r.evictBandLocked(rest, target)
+}
+
+// prunePrefixLocked enforces maxRefusedPerPrefix for key's own prefix,
+// evicting that prefix's oldest-last-seen entries first when it runs
+// over its share -- issue #1289. Cheap in the common case: it does
+// nothing beyond the one refusedByPrefix lookup unless key's prefix is
+// actually over its share, which only a range of addresses genuinely
+// cycling through this instance can cause. Called right after key is
+// newly added to r.refused; must be called with r.mu held.
+func (r *Registry) prunePrefixLocked(key string) {
+	p, ok := refusedPrefix(key)
+	if !ok {
+		return
+	}
+	members := r.refusedByPrefix[p]
+	if len(members) <= maxRefusedPerPrefix {
+		return
+	}
+	band := make(map[string]*Refused, len(members))
+	for addr := range members {
+		band[addr] = r.refused[addr]
+	}
+	r.evictBandLocked(band, evict.Target(maxRefusedPerPrefix))
+}
+
+// evictBandLocked shrinks band to at most target entries, removing
+// whichever have the oldest LastSeen first, and removes those same
+// keys from the registry's own refused index (and its prefix index)
+// through removeRefusedLocked -- so callers can slice r.refused into
+// any bands issue #1289's preferences need (a prefix's own members, or
+// the one-shot/repeat-sender split) and evict within just that band
+// without disturbing the rest. Must be called with r.mu held.
+func (r *Registry) evictBandLocked(band map[string]*Refused, target int) {
+	before := make([]string, 0, len(band))
+	for k := range band {
+		before = append(before, k)
+	}
+	evict.DownTo(band, target, func(ref *Refused) time.Time { return ref.LastSeen })
+	for _, k := range before {
+		if _, still := band[k]; !still {
+			r.removeRefusedLocked(k)
+		}
+	}
+}
+
+// refusedPrefix returns the IPv4 /24 or IPv6 /64 that a normalised
+// refused-list key falls in, and false for a key that does not parse as
+// an address at all (defensive only -- normalizeIP's output always
+// does). Issue #1289.
+func refusedPrefix(key string) (netip.Prefix, bool) {
+	addr, err := netip.ParseAddr(key)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	bits := 24
+	if addr.Is6() {
+		bits = 64
+	}
+	p, err := addr.Prefix(bits)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	return p, true
+}
+
+// addRefusedLocked stores ref under key in both r.refused and
+// refusedByPrefix, so the two never drift apart. Must be called with
+// r.mu held.
+func (r *Registry) addRefusedLocked(key string, ref *Refused) {
+	r.refused[key] = ref
+	if p, ok := refusedPrefix(key); ok {
+		set := r.refusedByPrefix[p]
+		if set == nil {
+			set = make(map[string]struct{})
+			r.refusedByPrefix[p] = set
+		}
+		set[key] = struct{}{}
+	}
+}
+
+// removeRefusedLocked deletes key from both r.refused and
+// refusedByPrefix -- the other half of addRefusedLocked. A no-op for a
+// key not currently refused. Must be called with r.mu held.
+func (r *Registry) removeRefusedLocked(key string) {
+	if _, ok := r.refused[key]; !ok {
+		return
+	}
+	delete(r.refused, key)
+	if p, ok := refusedPrefix(key); ok {
+		if set, ok := r.refusedByPrefix[p]; ok {
+			delete(set, key)
+			if len(set) == 0 {
+				delete(r.refusedByPrefix, p)
+			}
+		}
+	}
 }
 
 // SetNames wires the display-name resolver in. Separate from
@@ -730,6 +889,14 @@ func normalizeIP(s string) string {
 	return s
 }
 
+// ErrPersistFailed is returned by Create, Register and Delete when the
+// change could not be written to the registry's backend. The in-memory
+// state has been put back to what it was, so nothing happened: the
+// operator sees the failure and can retry once the backend is back
+// (#1303). The underlying error is wrapped for the log; callers report
+// only that the save failed.
+var ErrPersistFailed = errors.New("device: saving the device registry failed, so nothing was changed")
+
 // ErrDeviceExists is returned by Create for an id already in the
 // registry, config.yaml-declared or otherwise.
 var ErrDeviceExists = errors.New("device: a device with that id already exists")
@@ -763,8 +930,20 @@ func (r *Registry) Create(id, name string, now time.Time) (Info, error) {
 	}
 	info := &Info{ID: id, Name: name}
 	r.byID[id] = info
-	r.persistLocked()
+	if err := r.tryPersistLocked(); err != nil {
+		delete(r.byID, id)
+		return Info{}, r.persistFailed(err)
+	}
 	return *info, nil
+}
+
+// persistFailed logs the real write error and returns ErrPersistFailed
+// for the caller, wrapping err so errors.Is still finds either. Callers
+// have already put the in-memory state back by the time they reach
+// this.
+func (r *Registry) persistFailed(err error) error {
+	deviceLog.Error(fmt.Sprintf("%v -- the change was not applied", err))
+	return fmt.Errorf("%w: %w", ErrPersistFailed, err)
 }
 
 // Register records the operator's confirmation of a router on the
@@ -795,11 +974,15 @@ func (r *Registry) Register(id, name string, now time.Time) (Info, error) {
 	if info.Configured {
 		return Info{}, ErrDeviceConfigured
 	}
+	prevName, prevRegisteredAt := info.Name, info.RegisteredAt
 	if name != "" {
 		info.Name = name
 	}
 	info.RegisteredAt = now
-	r.persistLocked()
+	if err := r.tryPersistLocked(); err != nil {
+		info.Name, info.RegisteredAt = prevName, prevRegisteredAt
+		return Info{}, r.persistFailed(err)
+	}
 	return *info, nil
 }
 
@@ -822,9 +1005,23 @@ func (r *Registry) Delete(id string) error {
 	if info.AcceptedIP != "" {
 		delete(r.byAcceptedIP, normalizeIP(info.AcceptedIP))
 	}
+	pending, hadPending := r.pendingByDevice[id]
 	r.burnPendingLocked(id)
 	delete(r.byID, id)
-	r.persistLocked()
+	if err := r.tryPersistLocked(); err != nil {
+		// Put everything back exactly as it was: the device, its
+		// accepted address, and the pending token (which the persisted
+		// file never held, but the operator's browser still does).
+		r.byID[id] = info
+		if info.AcceptedIP != "" {
+			r.byAcceptedIP[normalizeIP(info.AcceptedIP)] = info
+		}
+		if hadPending {
+			r.pendingByDevice[id] = pending
+			r.pendingByHash[pending.hash] = id
+		}
+		return r.persistFailed(err)
+	}
 	return nil
 }
 
@@ -842,7 +1039,23 @@ func (r *Registry) Delete(id string) error {
 // would check against anyway.
 func (r *Registry) OwnPrefixes() []netip.Prefix {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if r.ownPrefixesValid {
+		out := cloneOwnPrefixes(r.ownPrefixesCache)
+		r.mu.RUnlock()
+		return out
+	}
+	r.mu.RUnlock()
+
+	// The cache was cold: recompute under the write lock. Re-check
+	// validity once inside it -- another goroutine may have already
+	// recomputed between the RUnlock above and this Lock -- so a burst of
+	// concurrent callers arriving cold together rebuilds once, not once
+	// each.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ownPrefixesValid {
+		return cloneOwnPrefixes(r.ownPrefixesCache)
+	}
 
 	var out []netip.Prefix
 	seen := make(map[string]bool)
@@ -861,5 +1074,19 @@ func (r *Registry) OwnPrefixes() []netip.Prefix {
 		add(info.SourceIP)
 		add(info.AcceptedIP)
 	}
+	r.ownPrefixesCache = out
+	r.ownPrefixesValid = true
+	return cloneOwnPrefixes(out)
+}
+
+// cloneOwnPrefixes returns a copy of the cached slice OwnPrefixes hands
+// out, so a caller mutating its own result (none does today, but nothing
+// stops a future one) can never reach into the cache itself.
+func cloneOwnPrefixes(cached []netip.Prefix) []netip.Prefix {
+	if cached == nil {
+		return nil
+	}
+	out := make([]netip.Prefix, len(cached))
+	copy(out, cached)
 	return out
 }

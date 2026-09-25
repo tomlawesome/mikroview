@@ -74,6 +74,43 @@ describe('composeCommand', () => {
     expect(cmd).toContain('place-before=[find comment="drop \\"iot\\""]')
   })
 
+  // #1276: pasting the printed line twice must not leave two identical
+  // rules on the router -- the same paste-twice guard #1266/#1208 already
+  // give every other generated command (internal/droplist/setup.go).
+  it('is safe to paste twice: the add sits behind a find-guard, not bare', () => {
+    const cmd = composeCommand({ ...base, placeBefore: 'iot-to-lan-drop' })!
+    expect(cmd).not.toBeNull()
+    expect(cmd).toContain(':if ([:len [/ip firewall filter find comment="cam-porch → nas :445"]] = 0)')
+    const doIndex = cmd.indexOf('do={')
+    const addIndex = cmd.indexOf('/ip firewall filter add')
+    const elseIndex = cmd.indexOf('} else={')
+    const setIndex = cmd.indexOf('/ip firewall filter set [find comment=')
+    expect(doIndex).toBeGreaterThan(-1)
+    expect(addIndex).toBeGreaterThan(doIndex)
+    expect(addIndex).toBeLessThan(elseIndex)
+    expect(setIndex).toBeGreaterThan(elseIndex)
+    // Composing the same strand again -- the second paste -- prints the
+    // exact same guarded text, which is what makes the second paste a
+    // no-op set rather than a second identical rule.
+    expect(composeCommand({ ...base, placeBefore: 'iot-to-lan-drop' })).toBe(cmd)
+  })
+
+  it('place-before belongs to the add branch only -- a rule already on the router keeps its position', () => {
+    const cmd = composeCommand({ ...base, placeBefore: 'iot-to-lan-drop' })!
+    const elseIndex = cmd.indexOf('} else={')
+    const firstPlaceBefore = cmd.indexOf('place-before=')
+    expect(firstPlaceBefore).toBeGreaterThan(-1)
+    expect(firstPlaceBefore).toBeLessThan(elseIndex)
+    expect(cmd.indexOf('place-before=', elseIndex)).toBe(-1)
+  })
+
+  it('the set branch re-enables a rule the operator had disabled, as SchedulerAdd does', () => {
+    const cmd = composeCommand(base)!
+    const elseIndex = cmd.indexOf('} else={')
+    expect(cmd.indexOf('disabled=no', elseIndex)).toBeGreaterThan(elseIndex)
+    expect(cmd.indexOf('disabled=no')).toBeGreaterThan(elseIndex)
+  })
+
   it('refuses to compose when hostIp is not an address or CIDR', () => {
     const cmd = composeCommand({ ...base, hostIp: '1.2.3.4 dst-address=0.0.0.0/0' })
     expect(cmd).toBeNull()

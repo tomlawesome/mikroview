@@ -26,7 +26,7 @@ func vaultLockFixture(t *testing.T) (*Server, *httptest.Server, *http.Client, st
 	s.Vault = vaultWithOnePush(t)
 	ts := httptest.NewServer(s.Routes())
 	t.Cleanup(ts.Close)
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	gens := s.Vault.Generations("rb5009")
 	if len(gens) != 1 {
@@ -65,11 +65,12 @@ func lockStatus(t *testing.T, client *http.Client, ts *httptest.Server) vaultLoc
 }
 
 func TestVaultLockControlsAreAdminOnly(t *testing.T) {
-	_, ts, admin, _ := vaultLockFixture(t)
+	s, ts, admin, _ := vaultLockFixture(t)
 	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
 
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "operator") // #1253: needed before the vault-lock controls below
 
 	// Every control, removal included: taking the passphrase off is the
 	// most destructive of the four, so it is the last one that should be
@@ -144,12 +145,12 @@ func TestAnotherSessionOfTheSameAdminStillSeesALockedVault(t *testing.T) {
 	// admin" is another sign-in by the same person -- a second browser, or
 	// the phone in their pocket. That is the case worth pinning: the
 	// unlock belongs to the session that made it, not to the account.
-	second := &http.Client{Jar: mustCookieJar(t)}
-	login := postJSON(t, second, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"})
-	login.Body.Close()
-	if login.StatusCode != http.StatusOK {
-		t.Fatalf("second sign-in = %d, want 200", login.StatusCode)
-	}
+	// loggedInClient (not a bare login) because admin already holds a
+	// confirmed factor (vaultLockFixture's setUpAdmin) -- #1249 means the
+	// password alone only reaches the pending-login step now, and
+	// loggedInClient completes it from the fixture's own remembered
+	// secret.
+	second := loggedInClient(t, ts.URL, "admin", "password123")
 
 	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
 
@@ -423,8 +424,10 @@ func TestChangingAPasswordDropsAnotherSessionsVaultKey(t *testing.T) {
 	// from the second. That is the shape an operator acting on a
 	// suspected theft produces, and the old code locked nothing because
 	// the calling session was not the holder.
-	second := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, second, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	// loggedInClient, not a bare login -- see
+	// TestAnotherSessionOfTheSameAdminStillSeesALockedVault's own comment
+	// on why.
+	second := loggedInClient(t, ts.URL, "admin", "password123")
 	resp := postJSON(t, second, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password123", NewPassword: "password789"})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -495,6 +498,39 @@ func TestAnUnlockNobodyHoldsIsDropped(t *testing.T) {
 	}
 }
 
+// TestLockVaultIfHolderNeverDropsADifferentSessionsClaim is #1304's R4:
+// a decision that one session's unlock has gone stale must never drop a
+// *different* session's, even when the decision is enacted after the
+// swap has already happened. That is the real shape of the race: the
+// idle sweep (or a request whose own session just stopped validating)
+// reads who used to hold the unlock, and only later gets around to
+// acting on it -- and a vault unlocked again by a different session
+// fits in that gap as easily as anything else does.
+func TestLockVaultIfHolderNeverDropsADifferentSessionsClaim(t *testing.T) {
+	s, ts, admin, _ := vaultLockFixture(t)
+	setPassphrase(t, admin, ts, testVaultPassphrase).Body.Close()
+
+	holderA := s.vaultUnlock.holder()
+	if holderA == "" {
+		t.Fatal("setting the passphrase did not claim the unlock")
+	}
+
+	// Session B's own unlock claims the vault -- simulating it landing in
+	// the gap between a caller deciding A is stale and this call actually
+	// running.
+	s.vaultUnlock.claim("session-b", "user-b", time.Now())
+
+	if s.lockVaultIfHolder(holderA) {
+		t.Fatal("lockVaultIfHolder(A) reported success against B's claim")
+	}
+	if s.Vault.Locked() {
+		t.Fatal("a decision about session A's stale unlock locked the vault out from under session B's live one")
+	}
+	if got := s.vaultUnlock.holder(); got != "session-b" {
+		t.Fatalf("holder after the refused lock = %q, want session-b left untouched", got)
+	}
+}
+
 func TestUnlockingAVaultWithNoPassphraseIsNotAuditedAsAGuess(t *testing.T) {
 	s, ts, admin, _ := vaultLockFixture(t)
 	resp := postJSON(t, admin, ts.URL+"/api/router-backups/unlock", vaultPassphraseRequest{Passphrase: testVaultPassphrase})
@@ -532,6 +568,7 @@ func TestAUserRoleAccountCannotDropTheAdminsVaultUnlock(t *testing.T) {
 
 	user := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, user, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "operator") // #1253: needed before /api/auth/password and /api/auth/logout-all below
 
 	changed := postJSON(t, user, ts.URL+"/api/auth/password", changePasswordRequest{CurrentPassword: "password456", NewPassword: "password789"})
 	changed.Body.Close()

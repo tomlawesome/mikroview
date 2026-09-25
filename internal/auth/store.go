@@ -142,11 +142,92 @@ type User struct {
 	// the flag has to survive the login that redeems the code, outlive
 	// a restart (sessions do not), and be cleared in exactly one place.
 	MustChangePassword bool `json:"mustChangePassword,omitempty"`
+	// TOTPSecret is the shared secret behind the authenticator-app second
+	// factor (#1249), stored in the clear -- unlike a password or a
+	// recovery code, it has to be reversible: verifying a 30-second code
+	// means recomputing HMAC-SHA1 over it, not comparing a hash. It gets
+	// no separate at-rest mechanism of its own (no second file, no
+	// encryption layer): this store already persists the whole document
+	// as one JSON file behind normal file permissions, and TOTPSecret is
+	// just one more field in it, same as OIDCIssuer or Username.
+	//
+	// RFC 6238 code verification (reading this field, generating it,
+	// confirming it) lives in totp.go, not here -- this package only
+	// stores the secret and the replay counter below.
+	//
+	// A non-empty secret alone is not an active factor: see
+	// TOTPConfirmedAt and HasActiveTOTP.
+	TOTPSecret string `json:"totpSecret,omitempty"`
+	// TOTPConfirmedAt is when the account owner proved they could produce
+	// a valid code from TOTPSecret, which is what activates the factor.
+	// Zero means a secret exists but was never confirmed -- e.g. a QR
+	// code was shown mid-setup and the flow was abandoned -- and
+	// HasActiveTOTP is false until this is set, so an abandoned setup
+	// never gates a login the way a real second factor does.
+	TOTPConfirmedAt time.Time `json:"totpConfirmedAt,omitzero"`
+	// TOTPLastCounter is the RFC 6238 30-second time-step counter of the
+	// most recently accepted code, so that code (or an earlier one still
+	// inside the verification window) cannot be replayed. Unsigned, and
+	// the same width VerifyTOTP takes and returns, so the value moves
+	// between the verifier and this field without a conversion at each
+	// call site -- a signed round trip is where a replay guard quietly
+	// stops guarding. Advanced only through RecordTOTPCounter, which is
+	// the same replay-guard role a reset code's single-use hash fills
+	// for that credential.
+	TOTPLastCounter uint64 `json:"totpLastCounter,omitzero"`
+	// RecoveryCodes are the ten single-use fallback codes for signing in
+	// without the authenticator app -- hashed with HashPassword, the same
+	// Argon2id treatment a password gets, never stored in clear. See
+	// GenerateRecoveryCodes and BurnRecoveryCode in recoverycodes.go.
+	//
+	// Shared between the authenticator app and passkeys below (#1250):
+	// one set of ten covers whichever factors are active. See
+	// HasSecondFactor and ClearTOTP's doc comment for the clearing rule,
+	// and DeletePasskey/ClearPasskeys in passkeys.go for the same rule
+	// from the passkey side.
+	RecoveryCodes []RecoveryCode `json:"recoveryCodes,omitempty"`
+	// Passkeys are this account's registered WebAuthn credentials
+	// (#1250) -- zero or more, unlike TOTPSecret's single shared secret,
+	// because an account may reasonably hold more than one authenticator
+	// (a phone and a security key, say). See passkeys.go for the type
+	// and every method that touches this field; this package does not
+	// perform the WebAuthn ceremony itself, only stores what it produced
+	// -- internal/api/webauthn.go (a parallel #1250 slice) owns that.
+	Passkeys []Passkey `json:"passkeys,omitempty"`
 }
 
 // LocalPassword reports whether this account has a real, user-chosen
 // password that may be reset.
 func (u *User) LocalPassword() bool { return u.HasLocalPassword }
+
+// HasActiveTOTP reports whether u's authenticator-app factor is
+// confirmed and therefore active. A secret alone is not enough: a
+// generated-but-never-confirmed secret (TOTPSecret set, TOTPConfirmedAt
+// zero) is mid-setup, not something that should ever gate a sign-in --
+// see TOTPConfirmedAt's doc comment.
+func (u *User) HasActiveTOTP() bool {
+	return u.TOTPSecret != "" && !u.TOTPConfirmedAt.IsZero()
+}
+
+// HasSecondFactor reports whether u has any active second factor at
+// all -- authenticator app or at least one passkey. This is #1250's
+// widening of the single-factor question #1249 only had to ask:
+// everywhere that used to gate on HasActiveTOTP alone now gates on this
+// instead (handleAuthLogin's login-requires-a-second-step check chief
+// among them, internal/api, wave 2), and everywhere that decides
+// whether recovery codes may still be cleared (ClearTOTP below,
+// DeletePasskey and ClearPasskeys in passkeys.go) asks this rather than
+// re-deriving "any factor left" from TOTP and Passkeys separately.
+//
+// Every passkey counts here regardless of whether it's stale (the
+// design's "when publicUrl changes" section): staleness only affects
+// whether a passkey can complete a *login*, not whether the account is
+// considered to have a second factor at all. An account with only stale
+// passkeys still shows 2FA as on and its recovery codes still apply --
+// it just can't redeem them by presenting that passkey anymore.
+func (u *User) HasSecondFactor() bool {
+	return u.HasActiveTOTP() || len(u.Passkeys) > 0
+}
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
 // delimited string concatenation, so there's no theoretical risk of one
@@ -215,6 +296,20 @@ var (
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
 	ErrOIDCIdentityTaken = errors.New("auth: this SSO identity is already linked to a different account")
+	// ErrTOTPAlreadyActive is returned by SetPendingTOTPSecret when the
+	// account already holds a confirmed factor. Enrolling again would
+	// silently replace a factor its owner is still using -- and if they
+	// abandoned the new enrolment halfway, HasActiveTOTP would keep
+	// answering true against a secret their authenticator app no longer
+	// holds, locking them out of their own account. Turning a factor off
+	// is its own deliberate step (the password-gated route, or
+	// ClearTOTP), never a side effect of starting a new one.
+	ErrTOTPAlreadyActive = errors.New("auth: this account already has an authenticator app -- remove it before enrolling another")
+	// ErrNoPendingTOTP is returned by ConfirmTOTP when there is no
+	// unconfirmed secret to confirm: either enrolment never started, or
+	// it already finished. Confirming is what activates a factor, so
+	// there is nothing safe to do with a code that arrives without one.
+	ErrNoPendingTOTP = errors.New("auth: no authenticator-app enrolment is waiting to be confirmed")
 	// ErrPasswordTooShort is returned by createLocked/SetPassword for a
 	// password under minPasswordLength -- LoginLimiter meaningfully
 	// slows brute-forcing a weak password but doesn't prevent it, so
@@ -439,15 +534,34 @@ func (s *Store) reloadIfStale() {
 		}
 	}
 
+	// Captured before the unlocked disk read below, and compared against
+	// again once the write lock is held: the only safe way to detect a
+	// concurrent in-process write (persistLocked/tryPersistLocked) that
+	// landed while this call was reading without the lock. persist.
+	// FileBackend's version is a content hash (contentVersion's own
+	// comment), not a counter, so there is no "newer than" to compare --
+	// only "changed since I last looked". A version that moved at all
+	// between here and the write-lock check below means some other
+	// caller's write is now the authoritative state, and applying a
+	// snapshot read before it would silently revert that write -- the
+	// concurrent-passkey-login race this was found chasing: two
+	// RecordPasskeyAssertionIfFresh calls (passkeys.go) serialize
+	// correctly under s.mu on their own, but a reloadIfStale racing
+	// between them used to reinstall the pre-write SignCount anyway,
+	// letting a replayed assertion through a second time. The old
+	// re-check here (`if snap.Version == s.version { return }`) only
+	// caught the case where the two happened to match again; it let a
+	// merely *different* s.version -- exactly what a concurrent write
+	// produces -- fall through and overwrite it regardless.
+	s.mu.RLock()
+	beforeLoad := s.version
+	s.mu.RUnlock()
+
 	snap, err := s.backend.Load(ctx)
 	if err != nil || !snap.Exists {
 		return
 	}
-
-	s.mu.RLock()
-	stale := snap.Version != s.version
-	s.mu.RUnlock()
-	if !stale {
+	if snap.Version == beforeLoad {
 		return
 	}
 
@@ -458,10 +572,7 @@ func (s *Store) reloadIfStale() {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Re-checked under the write lock: another goroutine may have
-	// reloaded (or this store's own persistLocked may have run) while
-	// this call was reading without holding it.
-	if snap.Version == s.version {
+	if s.version != beforeLoad {
 		return
 	}
 	s.applyLoaded(file, snap.Version)
@@ -601,10 +712,23 @@ func (s *Store) DeleteUser(id string) (*User, error) {
 
 	delete(s.byID, id)
 	delete(s.byName, strings.ToLower(u.Username))
+	oidcKeyDeleted := oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}
 	if u.OIDCIssuer != "" {
-		delete(s.oidcIndex, oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject})
+		delete(s.oidcIndex, oidcKeyDeleted)
 	}
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A deletion that only exists in memory must not be reported as
+		// done: the caller would revoke the account's sessions and
+		// tokens and tell its operator the account is gone, and a
+		// restart before the next good write would bring it straight
+		// back -- with none of those revocations remembered.
+		s.byID[id] = u
+		s.byName[strings.ToLower(u.Username)] = u.ID
+		if u.OIDCIssuer != "" {
+			s.oidcIndex[oidcKeyDeleted] = u.ID
+		}
+		return nil, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	cp.PasswordHash = ""
@@ -770,7 +894,15 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 	}
 	s.byID[u.ID] = u
 	s.byName[key] = u.ID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// An account that only exists in memory must not be reported as
+		// created: Register/CreateUser's callers hand the operator a
+		// session or a success response for it, and a restart before
+		// the next good write would erase the account under them.
+		delete(s.byID, u.ID)
+		delete(s.byName, key)
+		return nil, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	return &cp, nil
@@ -833,6 +965,10 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 	key := oidcKey{issuer: issuer, subject: subject}
 	if id, ok := s.oidcIndex[key]; ok {
 		if u, ok := s.byID[id]; ok {
+			// LastLogin only -- a missed update here costs nothing
+			// worth failing an otherwise-successful SSO login over, so
+			// this keeps the log-and-carry-on write (same reasoning as
+			// Authenticate's ordinary-login path below).
 			u.LastLogin = now
 			s.persistLocked()
 			cp := *u
@@ -868,7 +1004,17 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 	s.byID[u.ID] = u
 	s.byName[strings.ToLower(u.Username)] = u.ID
 	s.oidcIndex[key] = u.ID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A JIT-provisioned account that only exists in memory must not
+		// be reported as created: the caller is about to sign this
+		// person in as though the account durably exists, and a restart
+		// before the next good write would erase it while sessions
+		// referencing its ID are still live.
+		delete(s.byID, u.ID)
+		delete(s.byName, strings.ToLower(u.Username))
+		delete(s.oidcIndex, key)
+		return nil, false, fmt.Errorf("saving accounts: %w", err)
+	}
 
 	cp := *u
 	return &cp, true, nil
@@ -925,7 +1071,7 @@ func unmatchablePasswordHash() (string, error) {
 
 // LinkOIDCIdentity attaches (issuer, subject) to an existing account,
 // converting it to SSO-only in the same operation -- unless the account
-// is the admin, which keeps its password.
+// is the admin, which keeps its password and its second factor.
 //
 // **For every role but admin, linking is destructive and one-way.** The
 // account's local password is replaced with a fresh unmatchable hash
@@ -936,14 +1082,31 @@ func unmatchablePasswordHash() (string, error) {
 // surface on an account that has supposedly moved past it, which
 // defeats the point of linking.
 //
-// **The admin keeps its local password, permanently** (owner,
-// 2026-09-18, #1252: "the admin must always be able to sign in, even
-// with the identity provider down"). mikroview holds exactly one admin
-// and never authenticates to the provider on its own behalf, so a
-// provider that cannot answer means nobody gets in at all -- the one
-// account that can end that outage is worth the attack surface the
-// paragraph above refuses everybody else. For the admin, SSO is an
-// additional way in rather than a replacement.
+// The same call also clears every local second factor -- TOTPSecret,
+// TOTPConfirmedAt, TOTPLastCounter, RecoveryCodes and Passkeys, the same
+// fields ClearAllSecondFactors (passkeys.go) zeroes for the CLI's
+// "I've lost everything" path, inlined here rather than called out to
+// because this write already holds s.mu and ClearAllSecondFactors takes
+// its own lock. This closes the gap #1249 shipped and #1253 (note
+// 22375) caught: leaving those fields untouched left a non-admin
+// holding a factor their SSO sign-in never asks for and which
+// DELETE /api/auth/totp -- password-gated -- could no longer reach,
+// since the password was already gone. Unconditional, not the
+// factor-remaining check ClearTOTP/ClearPasskeys make for a caller
+// removing one factor at a time: linking removes both local credentials
+// at once, so there is nothing left standing for either to guard.
+//
+// **The admin keeps its local password and its local second factor,
+// permanently** (owner, 2026-09-18, #1252: "the admin must always be
+// able to sign in, even with the identity provider down"). mikroview
+// holds exactly one admin and never authenticates to the provider on
+// its own behalf, so a provider that cannot answer means nobody gets in
+// at all -- the one account that can end that outage is worth the
+// attack surface the paragraph above refuses everybody else. For the
+// admin, SSO is an additional way in rather than a replacement, and
+// stripping its factor here would leave it unable to satisfy the
+// forced-enrolment door (requireAuth, internal/api) the moment its
+// linked session ends and it has to sign in locally again.
 //
 // Both halves live here, inside the store, rather than in the API
 // handler that calls it. A convention at the call site is one forgetful
@@ -952,9 +1115,9 @@ func unmatchablePasswordHash() (string, error) {
 // second caller.
 //
 // A role change afterwards does not re-run this: an admin demoted to
-// user keeps the password it had, and -transfer-admin's own rules
-// (main.go) decide what the new admin holds. Linking is the event this
-// method describes, not a standing property of the role.
+// user keeps the password and factor it had, and -transfer-admin's own
+// rules (main.go) decide what the new admin holds. Linking is the event
+// this method describes, not a standing property of the role.
 //
 // Idempotent for the same user. Fails with ErrOIDCIdentityTaken if that
 // identity is already linked to a *different* account -- which is what
@@ -997,11 +1160,29 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 		return ErrOIDCAlreadyLinked
 	}
 
+	prevIssuer, prevSubject := u.OIDCIssuer, u.OIDCSubject
+	prevHash, prevHasLocalPassword := u.PasswordHash, u.HasLocalPassword
+	prevPasswordChangedAt := u.PasswordChangedAt
+	prevTOTPSecret := u.TOTPSecret
+	prevTOTPConfirmedAt := u.TOTPConfirmedAt
+	prevTOTPLastCounter := u.TOTPLastCounter
+	prevRecoveryCodes := u.RecoveryCodes
+	prevPasskeys := u.Passkeys
+	_, hadIndexEntry := s.oidcIndex[key]
+
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
 	if u.Role != RoleAdmin {
 		u.PasswordHash = unmatchable
 		u.HasLocalPassword = false
+		// See the doc comment above: every non-admin loses both local
+		// credentials on linking, not just the password. Left alone,
+		// these fields are exactly the gap note 22375 on #1253 recorded.
+		u.TOTPSecret = ""
+		u.TOTPConfirmedAt = time.Time{}
+		u.TOTPLastCounter = 0
+		u.RecoveryCodes = nil
+		u.Passkeys = nil
 	}
 	// Invalidates every session issued before this point, including in
 	// another process -- the account's credentials just changed
@@ -1014,7 +1195,28 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	// this ends.
 	u.PasswordChangedAt = now
 	s.oidcIndex[key] = userID
-	s.persistLocked()
+	if err := s.tryPersistLocked(); err != nil {
+		// A link that only exists in memory must not be reported as
+		// done: for everyone but the admin this also destroyed the
+		// local password above, so the caller would tell its operator
+		// SSO is now the only way in when a restart could revert to a
+		// password nobody remembers is still live -- or, worse, leave
+		// the account's SSO index entry pointing nowhere durable.
+		u.OIDCIssuer, u.OIDCSubject = prevIssuer, prevSubject
+		u.PasswordHash, u.HasLocalPassword = prevHash, prevHasLocalPassword
+		u.PasswordChangedAt = prevPasswordChangedAt
+		u.TOTPSecret = prevTOTPSecret
+		u.TOTPConfirmedAt = prevTOTPConfirmedAt
+		u.TOTPLastCounter = prevTOTPLastCounter
+		u.RecoveryCodes = prevRecoveryCodes
+		u.Passkeys = prevPasskeys
+		if hadIndexEntry {
+			s.oidcIndex[key] = userID
+		} else {
+			delete(s.oidcIndex, key)
+		}
+		return fmt.Errorf("saving accounts: %w", err)
+	}
 	return nil
 }
 
@@ -1205,6 +1407,258 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	return nil
 }
 
+// HasActiveTOTP reports whether userID holds a confirmed authenticator-
+// app second factor -- both login (does this sign-in need a code?) and
+// the admin UI (does this account have 2FA on?) need the answer, and
+// "has a secret" is not the same question as "has an active factor" --
+// see User.HasActiveTOTP. An unknown user answers false rather than
+// erroring: this is a yes/no gate, not a lookup, and the false answer is
+// the same one a real account with no factor would give.
+func (s *Store) HasActiveTOTP(userID string) bool {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	u, ok := s.byID[userID]
+	return ok && u.HasActiveTOTP()
+}
+
+// SetPendingTOTPSecret stores a freshly generated, not-yet-confirmed
+// secret for userID, replacing any earlier enrolment that was started
+// and abandoned. The factor is not active afterwards: ConfirmTOTP is
+// what activates it, so an enrolment interrupted at the QR code leaves
+// the account signing in exactly as it did before.
+//
+// Refuses with ErrTOTPAlreadyActive when a confirmed factor is already
+// in place -- see that error for why replacing one silently is a
+// lockout waiting to happen.
+//
+// The replay counter is reset alongside the secret. A counter is only
+// meaningful against the secret it was accepted for: carried over to a
+// new secret it would refuse that secret's early codes for as long as
+// the old factor had been in use, which reads to the person enrolling
+// as an authenticator app that simply does not work.
+func (s *Store) SetPendingTOTPSecret(userID, encodedSecret string) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if u.HasActiveTOTP() {
+		return ErrTOTPAlreadyActive
+	}
+
+	prevSecret := u.TOTPSecret
+	prevCounter := u.TOTPLastCounter
+
+	u.TOTPSecret = encodedSecret
+	u.TOTPLastCounter = 0
+	if err := s.tryPersistLocked(); err != nil {
+		// An enrolment that only exists in memory must not be reported
+		// as started: the caller is about to show a QR code the user
+		// scans into their phone, and a restart before the next good
+		// write would leave the store with no secret to confirm that
+		// app's codes against.
+		u.TOTPSecret = prevSecret
+		u.TOTPLastCounter = prevCounter
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
+// ConfirmTOTP activates the pending secret for userID, recording when
+// its owner proved they could produce a code from it and the counter of
+// the code that proved it. Passing the matching counter rather than
+// starting the guard at zero closes the obvious replay: the code just
+// used to enrol must not also work as the first sign-in.
+//
+// Returns ErrNoPendingTOTP when there is nothing unconfirmed to
+// activate, which covers both "enrolment never started" and "already
+// confirmed" -- neither is a state where accepting a code should change
+// anything.
+//
+// Verifying the code is the caller's job (VerifyTOTP in totp.go); this
+// only records the outcome. The recovery codes that accompany a
+// confirmed factor are minted separately, by GenerateRecoveryCodes.
+func (s *Store) ConfirmTOTP(userID string, confirmedAt time.Time, matchedCounter uint64) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if u.TOTPSecret == "" || !u.TOTPConfirmedAt.IsZero() {
+		return ErrNoPendingTOTP
+	}
+
+	prevConfirmedAt := u.TOTPConfirmedAt
+	prevCounter := u.TOTPLastCounter
+
+	u.TOTPConfirmedAt = confirmedAt
+	u.TOTPLastCounter = matchedCounter
+	if err := s.tryPersistLocked(); err != nil {
+		// A confirmation that only exists in memory must not be
+		// reported as done: the caller is about to tell its user the
+		// factor is on and hand them recovery codes, and a restart
+		// would drop the account back to password-only underneath that
+		// claim.
+		u.TOTPConfirmedAt = prevConfirmedAt
+		u.TOTPLastCounter = prevCounter
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
+// RecordTOTPCounter advances userID's replay guard to the counter of a
+// code just accepted at sign-in. The caller reads User.TOTPLastCounter,
+// passes it to VerifyTOTP, and hands the matched counter back here;
+// without this call the guard never moves and every code stays usable
+// for its whole window.
+//
+// The counter only ever moves forward. A value at or below the stored
+// one is a no-op rather than an error: it means some other request for
+// the same account already recorded this code or a later one, and
+// writing it back would undo their guard -- the one outcome this method
+// exists to prevent. There is no failure for the caller to handle,
+// because nothing has gone wrong.
+func (s *Store) RecordTOTPCounter(userID string, matchedCounter uint64) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	if matchedCounter <= u.TOTPLastCounter {
+		return nil
+	}
+
+	prevCounter := u.TOTPLastCounter
+	u.TOTPLastCounter = matchedCounter
+	if err := s.tryPersistLocked(); err != nil {
+		// A guard that only advanced in memory must not be reported as
+		// advanced: the caller has already let this sign-in through, and
+		// a restart before the next good write would make the same code
+		// live again for whoever else presented it.
+		u.TOTPLastCounter = prevCounter
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
+// VerifyAndRecordTOTP checks code against userID's active TOTP secret
+// and, only when it matches, advances the replay counter -- both under
+// the same lock acquisition. Login (handleAuthLoginFactor, auth.go) is
+// the caller this exists for: checking with VerifyTOTP and recording
+// with RecordTOTPCounter as two separate calls left a window where two
+// concurrent submissions of the same code both verified against the
+// same not-yet-advanced counter and both won a session (reproduced 8 of
+// 15 runs). Doing both under one lock closes it -- whichever request
+// gets the lock second sees the first request's already-advanced
+// counter, so VerifyTOTP itself (its own doc comment: "any candidate
+// counter <= lastUsedCounter is skipped even when its code is correct")
+// refuses the replay.
+//
+// ok reports whether code matched; err is only ever a persistence
+// failure on a match, reported the same degraded-but-not-locked-out way
+// RecordTOTPCounter's own doc comment describes -- the code that just
+// matched earned the login regardless of whether the counter's advance
+// made it to disk.
+func (s *Store) VerifyAndRecordTOTP(userID, code string, now time.Time) (ok bool, err error) {
+	if !s.Persisted() {
+		return false, ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, found := s.byID[userID]
+	if !found {
+		return false, ErrUserNotFound
+	}
+
+	matched, matchedOK := VerifyTOTP(u.TOTPSecret, code, now, u.TOTPLastCounter)
+	if !matchedOK {
+		return false, nil
+	}
+
+	prevCounter := u.TOTPLastCounter
+	u.TOTPLastCounter = matched
+	if err := s.tryPersistLocked(); err != nil {
+		u.TOTPLastCounter = prevCounter
+		return true, fmt.Errorf("saving accounts: %w", err)
+	}
+	return true, nil
+}
+
+// ClearTOTP removes userID's authenticator-app factor entirely: the
+// secret, its confirmation and the replay counter, always. The
+// account's recovery codes went the same way unconditionally before
+// #1250; now they're cleared only if this was the account's last second
+// factor. Recovery codes are shared between the authenticator app and
+// passkeys (#1250): stripping them here while a passkey remains would
+// silently orphan that passkey's fallback, for a call this was never
+// asked to touch. See HasSecondFactor's doc comment for the shared
+// test, and DeletePasskey/ClearPasskeys in passkeys.go for the same
+// rule applied from the passkey side.
+func (s *Store) ClearTOTP(userID string) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+
+	prevSecret := u.TOTPSecret
+	prevConfirmedAt := u.TOTPConfirmedAt
+	prevCounter := u.TOTPLastCounter
+	prevCodes := u.RecoveryCodes
+
+	u.TOTPSecret = ""
+	u.TOTPConfirmedAt = time.Time{}
+	u.TOTPLastCounter = 0
+	if len(u.Passkeys) == 0 {
+		u.RecoveryCodes = nil
+	}
+	if err := s.tryPersistLocked(); err != nil {
+		// A clear that only exists in memory must not be reported as
+		// done: the caller tells its operator the authenticator app is
+		// off, and a restart before the next good write would silently
+		// bring back the old secret, counter and (if it was cleared)
+		// recovery codes underneath that claim.
+		u.TOTPSecret = prevSecret
+		u.TOTPConfirmedAt = prevConfirmedAt
+		u.TOTPLastCounter = prevCounter
+		u.RecoveryCodes = prevCodes
+		return fmt.Errorf("saving accounts: %w", err)
+	}
+	return nil
+}
+
 // List returns every user (without password hashes), sorted by
 // username -- used by the CLI recovery tool (`-list-users`) and the
 // admin-facing user list.
@@ -1221,6 +1675,25 @@ func (s *Store) List() []User {
 		// admin-facing API. Blanked for the same reason the password
 		// hash is, so neither can be serialized by accident.
 		cp.ResetCodeHash = ""
+		// TOTPSecret is worse than a verifier hash if it leaked -- it's
+		// the actual shared secret, good for minting valid codes
+		// indefinitely, not just checking one. RecoveryCodes are hashes
+		// only, same category as ResetCodeHash above. Neither belongs in
+		// an admin-facing account list.
+		cp.TOTPSecret = ""
+		cp.RecoveryCodes = nil
+		// Passkeys carries each credential's PublicKey -- not a secret
+		// the way a private key would be, but still credential material
+		// an admin-facing account list has no business serializing, same
+		// stance as the three fields above. Blanked wholesale rather
+		// than per-field, same as TOTPSecret: a caller that needs a
+		// count (the users list's passkeyCount, internal/api wave 2)
+		// must call PasskeyCount(userID) (passkeys.go) instead of
+		// reading len(this copy's Passkeys), which always reads zero
+		// now. #1249 shipped exactly this mistake once already, reading
+		// HasActiveTOTP off a List() copy whose TOTPSecret was blanked
+		// the same way -- see PasskeyCount's doc comment.
+		cp.Passkeys = nil
 		out = append(out, cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
@@ -1228,11 +1701,13 @@ func (s *Store) List() []User {
 }
 
 // tryPersistLocked is persistLocked's error-returning half, for the
-// handful of callers (IssueResetCode, TransferAdmin, SetPassword) that
-// change a credential or a role and so must not let the caller believe a
-// write happened when it didn't -- see each one's own restore-on-error
-// comment. Every other caller keeps using persistLocked below, which
-// keeps today's swallow-and-log behaviour.
+// callers (IssueResetCode, TransferAdmin, SetPassword, DeleteUser,
+// createLocked -- behind Register and CreateUser --,
+// FindOrCreateOIDCUser's new-account branch, LinkOIDCIdentity) that
+// change a credential, a role, or which accounts exist, and so must not
+// let the caller believe a write happened when it didn't -- see each
+// one's own restore-on-error comment. Every other caller keeps using
+// persistLocked below, which keeps today's swallow-and-log behaviour.
 func (s *Store) tryPersistLocked() error {
 	if s.backend == nil {
 		return nil
@@ -1269,6 +1744,10 @@ func (s *Store) tryPersistLocked() error {
 // uses: the in-memory state (which every read goes through) stays
 // correct either way, so a transient disk issue degrades to "won't
 // survive a restart right now" rather than failing the caller outright.
+// Kept by FindOrCreateOIDCUser's existing-login branch and
+// Authenticate's ordinary-login branch, both of which only touch
+// LastLogin -- a bookkeeping timestamp not worth failing an otherwise
+// successful login over.
 func (s *Store) persistLocked() {
 	if err := s.tryPersistLocked(); err != nil {
 		persistLog.Error(fmt.Sprintf("%v -- this change exists only in memory and will be lost on restart", err))

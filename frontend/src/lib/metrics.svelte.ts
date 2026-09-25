@@ -6,19 +6,30 @@
 // The record: "The choice is a per-user preference, persisted and
 // applied before first paint, never changed by the app on its own --
 // the same grammar as the rail's density states (#486)." That is
-// literally lib/rail.svelte.ts's shape, and this deliberately copies
+// literally lib/rail.svelte.ts's shape, and this deliberately copied
 // it: read synchronously at module load so the page never paints one
 // view and jumps to another, written only when the operator picks, and
 // never written by anything else.
+//
+// #1283 moves the write off localStorage onto the shared per-user
+// record, fetched from the server after sign-in -- which means the
+// "before first paint" half of that promise no longer holds exactly:
+// the view starts at DEFAULT_VIEW and is corrected to the operator's
+// saved choice once ensureLoaded() resolves, same as every other module
+// in this batch. A signed-out visitor, or one whose fetch hasn't landed
+// yet, still gets a sensible default rather than nothing.
 //
 // The cursor's minute rides alongside but is *not* persisted -- "the
 // cursor's selected minute survives every view switch" is a claim about
 // this session, and an hour-old minute restored from storage on a
 // reload would point at a minute that has since aged off the axis.
 
+import { preferencesState } from './preferences.svelte'
+
 export type MetricsView = 'seismograph' | 'register' | 'table'
 
-const STORAGE_KEY = 'mikroview-metrics-view'
+// #1283: was its own localStorage key ('mikroview-metrics-view').
+const PREFS_KEY = 'metrics'
 
 // Seismograph is the default, per the owner's ratified verdict ("I
 // think seismography wins overall, and should be the default").
@@ -41,25 +52,12 @@ function isView(v: unknown): v is MetricsView {
   return v === 'seismograph' || v === 'register' || v === 'table'
 }
 
-function loadInitial(): MetricsView {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return isView(raw) ? raw : DEFAULT_VIEW
-  } catch {
-    // storage unavailable (private browsing, etc.) -- metrics still
-    // works, it just forgets the choice between sessions
-    return DEFAULT_VIEW
-  }
-}
-
 export function viewLabel(v: MetricsView): string {
   return METRICS_VIEWS.find((o) => o.value === v)?.label ?? v
 }
 
-const initial = loadInitial()
-
 class MetricsPref {
-  view = $state<MetricsView>(initial)
+  view = $state<MetricsView>(DEFAULT_VIEW)
 
   // The selected minute, as its own ISO time rather than an axis index:
   // the axis slides every minute as new data arrives, so an index would
@@ -74,16 +72,17 @@ class MetricsPref {
   // and doubling the two would talk over the page.
   announcement = $state('')
 
+  constructor() {
+    preferencesState.register(PREFS_KEY, (value) => {
+      this.view = isView(value) ? value : DEFAULT_VIEW
+    })
+  }
+
   /** The header's view switch. The only thing that writes the preference. */
   setView(next: MetricsView) {
     if (this.view === next) return
     this.view = next
-    try {
-      localStorage.setItem(STORAGE_KEY, next)
-    } catch {
-      // as above -- an unwritable store costs the memory of the choice,
-      // nothing else
-    }
+    preferencesState.set(PREFS_KEY, next)
     this.announcement = `Metrics — ${viewLabel(next)}`
   }
 

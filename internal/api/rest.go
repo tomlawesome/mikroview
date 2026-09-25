@@ -321,6 +321,7 @@ func (s *Server) handleDeviceMACs(w http.ResponseWriter, r *http.Request) {
 // role GET /api/devices already plays for auto-discovered hosts. Not
 // admin-gated, same as GET /api/devices: this is read-only usage data,
 // not the entity records themselves (POST/DELETE /api/entities stay
+// user-tier, #653 -- see entities.go's own doc comments -- not
 // admin-only).
 //
 // recordingSince is issue #701's honesty bound for round 30's active

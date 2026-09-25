@@ -38,15 +38,29 @@ fi
 if [ -z "${MIKROVIEW_IMAGE:-}" ]; then
   echo "install.sh: pulling $image"
   docker pull "$image"
+  # #1282: name the exact bytes just pulled, and point at the verification
+  # story SECURITY.md already documents for them (cosign verify against
+  # this same digest). Never fail the install over this -- an inspect
+  # that errors or comes back empty (offline registry mirrors, older
+  # Docker) just means no line gets printed.
+  # #1309: a release carries two independent signatures and both must
+  # verify, so the line says two rather than sending the reader off
+  # expecting one.
+  digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$image" 2>/dev/null)" || digest=""
+  if [ -n "$digest" ]; then
+    echo "install.sh: pulled $digest -- before you trust it, see SECURITY.md and cosign verify that digest. A release carries two independent signatures and both must verify."
+  fi
 fi
 
 # Same line is the upgrade line, and running it twice is harmless
 # (#1240 then tells the operator what changed): stop and remove any
 # earlier container by this name, re-created below on the same volumes.
+removed_existing=0
 if docker container inspect "$name" >/dev/null 2>&1; then
   echo "install.sh: removing existing container $name (its volumes come back on the new one)"
   docker stop "$name" >/dev/null
   docker rm "$name" >/dev/null
+  removed_existing=1
 fi
 
 # Two named volumes: the data store, and the app folder #1243 taught the
@@ -76,6 +90,9 @@ echo "docker $*"
 if ! out=$(docker "$@" 2>&1); then
   docker rm -f "$name" >/dev/null 2>&1 || true
   echo "install.sh: $out" >&2
+  if [ "$removed_existing" -eq 1 ]; then
+    echo "install.sh: the previous $name container is already gone (removed above) -- its data is untouched in the $data_vol and $etc_vol volumes, and re-running this same command recreates it." >&2
+  fi
   case "$out" in
     *bind*|*"already allocated"*|*"permission denied"*)
       echo "install.sh: that looks like a port conflict -- ${https_port} may need root (rootless Docker can't bind under 1024), or something else already has it. Try:" >&2

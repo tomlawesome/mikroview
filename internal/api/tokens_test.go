@@ -10,18 +10,13 @@ import (
 	"testing"
 )
 
-// setUpAdmin registers the first (admin) account on s and returns a
-// cookie-jar client already logged in as that admin -- shared setup for
-// every token-management test below.
-func setUpAdmin(t *testing.T, ts *httptest.Server) *http.Client {
+// setUpAdmin is registerAdmin (sharedadmin_test.go) under the name the
+// token, device, droplist, vault and setup tests have always used for
+// it: a client signed in as the admin, past #1253's forced-enrolment
+// door.
+func setUpAdmin(t *testing.T, s *Server, ts *httptest.Server) *http.Client {
 	t.Helper()
-	client := &http.Client{Jar: mustCookieJar(t)}
-	resp := postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("expected registering the admin to succeed, got %d", resp.StatusCode)
-	}
-	return client
+	return registerAdmin(t, s, ts)
 }
 
 func TestTokensCreateRequiresAdmin(t *testing.T) {
@@ -29,11 +24,12 @@ func TestTokensCreateRequiresAdmin(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "viewer") // #1253: needed before /api/tokens below
 
 	resp := postJSON(t, viewerClient, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"})
 	defer resp.Body.Close()
@@ -60,12 +56,13 @@ func TestTokensListAdminOnly(t *testing.T) {
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
-	adminClient := setUpAdmin(t, ts)
+	adminClient := setUpAdmin(t, s, ts)
 	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "editor", Password: "password456", Role: "user"}).Body.Close()
 	postJSON(t, adminClient, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"}).Body.Close()
 
 	userClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "editor", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "editor") // #1253: needed before /api/tokens below
 
 	resp, err := userClient.Get(ts.URL + "/api/tokens")
 	if err != nil {
@@ -117,7 +114,7 @@ func TestAdminCanCreateListAndRevokeTokens(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	client := setUpAdmin(t, ts)
+	client := setUpAdmin(t, s, ts)
 
 	createResp := postJSON(t, client, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"})
 	defer createResp.Body.Close()
@@ -226,7 +223,7 @@ func TestBearerTokenGrantsReadOnlyAccess(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
 	for _, path := range []string{"/api/events", "/api/flags", "/api/stats", "/api/devices"} {
@@ -246,7 +243,7 @@ func TestBearerTokenCannotReachWriteEndpoint(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/does-not-exist/clear", nil)
@@ -276,7 +273,7 @@ func TestBearerTokenCannotReachAdminEndpoints(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
 	for _, path := range []string{"/api/definitions", "/api/tokens"} {
@@ -292,7 +289,7 @@ func TestBearerTokenInvalidValueRejected(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	setUpAdmin(t, ts)
+	setUpAdmin(t, s, ts)
 
 	resp := bearerGet(t, ts.URL+"/api/events", "not-a-real-token")
 	defer resp.Body.Close()
@@ -305,7 +302,7 @@ func TestBearerTokenRevokedRejected(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
-	admin := setUpAdmin(t, ts)
+	admin := setUpAdmin(t, s, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
 	// Look the token back up to revoke it via the store directly (same

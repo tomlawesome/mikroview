@@ -163,7 +163,7 @@ block, with a live token already filled in:
 /log info "mikroview-enrol <token>"
 ```
 
-<!-- shot: the wizard's Send logs step, showing the token line "Token good until HH:MM (15 minutes) · Reroll" -->
+![The wizard's Send logs step just after minting a token: the command block above, its last line blanked out, and the token's expiry beside a Reroll control beneath it](screenshots/setup-wizard-send-logs.png)
 
 Before it mints that token the wizard asks for the router's own address
 and for your password. The address is the only one MikroView opens the
@@ -268,12 +268,12 @@ and does not tick it for you.
 ### NAT rules (optional)
 
 The same `log=yes log-prefix="..."` convention works on `/ip firewall nat`
-rules too — no separate setup needed. Add the topic forward for NAT the
-same way as step 2 covers firewall/info, then tag the NAT rules you care
-about:
+rules too — no separate setup needed. NAT log lines carry the same
+`firewall`/`info` topics filter rules do, so step 2's forwarding rule
+above already covers them — nothing to add there. Just tag the NAT rules
+you care about:
 
 ```
-:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=firewall,info action=mikroview }
 /ip firewall nat set <rule-number> log=yes log-prefix="N|port-fwd|"
 ```
 
@@ -1188,7 +1188,7 @@ valid enrol line — so you can tell an unrecognised address apart from a
 router that simply is not sending yet. There is no control on it that
 accepts an address: a router is accepted only by presenting a token.
 
-<!-- shot: a refused-sender card beside the routers on Entities -->
+![A refused-sender card beside a router card on Entities: an address whose lines have no enrolled router, with no control that would accept it](screenshots/entities-refused-sender.png)
 
 **Run setup…** is unchanged: it still opens the first-run ledger with
 **Trust the certificate** in front.

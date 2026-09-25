@@ -29,6 +29,8 @@ func serveTCPForTest(t *testing.T, out chan RawMessage) (string, func()) {
 }
 
 func TestServeTCPFramesOnNewlines(t *testing.T) {
+	t.Parallel()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +70,8 @@ func TestServeTCPFramesOnNewlines(t *testing.T) {
 }
 
 func TestServeTCPHandlesMultipleConnections(t *testing.T) {
+	t.Parallel()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +147,10 @@ func TestServeTCPRejectsBeyondConnectionLimit(t *testing.T) {
 	// A rejected connection is closed immediately by the server; the
 	// client observes this as EOF on read (possibly after the write
 	// below succeeds into the OS send buffer before the close lands).
-	rejected.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// 500ms is this file's own established ceiling for "expect a prompt
+	// close" (see TestPerSourceConnectionCap below) -- ample margin over
+	// an immediate local close, not a sleep this test actually pays.
+	rejected.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	buf := make([]byte, 1)
 	_, readErr := rejected.Read(buf)
 	if readErr == nil {
@@ -174,8 +181,12 @@ func TestServeTCPClosesIdleConnection(t *testing.T) {
 	defer conn.Close()
 
 	// Send nothing and wait past the idle timeout -- the server should
-	// close its side, which this end observes as EOF.
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// close its side, which this end observes as EOF. 500ms is a 5x
+	// margin over the 100ms idle timeout set above, and (as with every
+	// SetReadDeadline in this file) only a ceiling on a Read that
+	// returns as soon as the server actually closes, not a sleep this
+	// test pays when things work.
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	buf := make([]byte, 1)
 	_, readErr := conn.Read(buf)
 	if readErr == nil {
@@ -214,8 +225,10 @@ func TestServeTCPDoesNotLeakGoroutinesOnOrdinaryDisconnect(t *testing.T) {
 		}
 		// Idle until the server closes its side (20ms timeout above),
 		// then close this end too -- an ordinary, non-adversarial
-		// disconnect, the routine case this bug affected.
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		// disconnect, the routine case this bug affected. 500ms is a
+		// generous ceiling over that 20ms, run n times below, so only
+		// paid at all if the server fails to close.
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		conn.Read(make([]byte, 1))
 		conn.Close()
 	}
@@ -395,6 +408,8 @@ func TestRejectedConfiguredHostsTracksAndBoundsRecentLockouts(t *testing.T) {
 // because they all fed newline-delimited input, which is what a
 // well-behaved sender does and not what RouterOS does.
 func TestTCPUnterminatedMessageIsIngested(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -424,6 +439,8 @@ func TestTCPUnterminatedMessageIsIngested(t *testing.T) {
 // conventional syslog sender does terminate its lines and may pack
 // several into one write; fixing RouterOS's shape must not regress it.
 func TestTCPNewlineDelimitedStillWorks(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -488,6 +505,8 @@ func readOneMessage(t *testing.T, addr string, out <-chan RawMessage, send func(
 // the 64KB buffer, so each landed as its own garbage event rather than
 // the read loop ever recognising a continuation.
 func TestTCPFragmentedMessageReassemblesAcrossPartialReads(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -680,6 +699,8 @@ func rfc3164Msg(ts time.Time, body string) string {
 // stored event with fields read from whichever embedded line the
 // parser's left-to-right scan happened to read last.
 func TestTCPBurstSplitsOnRFC3164Headers(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -738,6 +759,8 @@ func TestTCPBurstSplitsOnRFC3164Headers(t *testing.T) {
 // version that does not depend on timing at all is
 // TestTCPMessageEndsBeforeAPartiallyArrivedHeader, below.
 func TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -803,6 +826,8 @@ func TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader(t *testing.T) {
 // techniques already carry -- rather than a defect to fix here. See the
 // #614 issue comment's decided-fix note.
 func TestTCPHeaderSplitOnHeaderLikeContentIsAcceptedHeuristic(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -854,6 +879,8 @@ func TestTCPHeaderSplitOnHeaderLikeContentIsAcceptedHeuristic(t *testing.T) {
 // bracket and digits is not split on -- the whole blob stays one
 // message, same as before #614.
 func TestTCPHeaderSplitRejectsOutOfRangePRI(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -897,6 +924,8 @@ func TestTCPHeaderSplitRejectsOutOfRangePRI(t *testing.T) {
 // "real month name", and nothing here should second-guess it into a
 // looser match.
 func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
+	t.Parallel()
+
 	out := make(chan RawMessage, 8)
 	addr, stop := serveTCPForTest(t, out)
 	defer stop()
@@ -941,6 +970,8 @@ func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
 // header, only how much work deciding that costs: every case here must
 // return the same thing whether the scan is bounded or not.
 func TestRFC3164HeaderLenPRIBoundary(t *testing.T) {
+	t.Parallel()
+
 	ts := "Aug 29 20:52:44"
 	validTail := ts + " chr a-live-in input: message"
 	// All-lowercase and no further '<': nothing in here can itself look
@@ -1144,6 +1175,8 @@ func runScriptedConn(t *testing.T, steps ...scriptStep) []string {
 // can be taught to wait for. A split inside a message *body* is, and
 // remains, indistinguishable from a message that simply ended there.
 func TestTCPMessageEndsBeforeAPartiallyArrivedHeader(t *testing.T) {
+	t.Parallel()
+
 	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
 	first := rfc3164Msg(base, "A|live-in| input: first message")
 	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
@@ -1190,6 +1223,8 @@ func TestTCPMessageEndsBeforeAPartiallyArrivedHeader(t *testing.T) {
 // log lines, which must still resolve on quiescence as fast as they
 // always did.
 func TestRFC3164HeaderStillArriving(t *testing.T) {
+	t.Parallel()
+
 	arriving := []string{
 		// A header with no message behind it yet.
 		"<30>Aug 29 20:52:44",
@@ -1254,6 +1289,8 @@ func TestRFC3164HeaderStillArriving(t *testing.T) {
 // table test above covers; this only proves the wait cannot be used to
 // hold a connection open indefinitely by dribbling half a header.
 func TestTCPHeaderThatNeverArrivesIsNotWaitedForForever(t *testing.T) {
+	t.Parallel()
+
 	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
 	first := rfc3164Msg(base, "A|live-in| input: first message")
 	stump := "<30>Aug 29 20:52:4"
@@ -1599,6 +1636,8 @@ func TestLossOversizedDeclaredField(t *testing.T) {
 // "this router's setup is out of date", but a one-off, an address
 // nobody declared, or a run that has already gone quiet must not.
 func TestOversizedIsSetupDrift(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		declared bool

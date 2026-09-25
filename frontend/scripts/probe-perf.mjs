@@ -315,8 +315,12 @@ async function main() {
   await signIn(page)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
+  // Every local account holds a second factor now; live-env.sh enrols
+  // one for the admin and exports MV_TOTP_SECRET, and this finishes the
+  // login the same way live-browser.mjs's own session() does.
+  const { completeSecondFactor, dismissSetupWizard } = await import('./live-browser.mjs')
+  await completeSecondFactor(page)
   await page.waitForSelector('#main-content', { timeout: 15000 })
-  const { dismissSetupWizard } = await import('./live-browser.mjs')
   await dismissSetupWizard(page)
   await rollTo(page, 'The fall')
 

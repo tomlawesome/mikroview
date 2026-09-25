@@ -52,6 +52,8 @@ beforeEach(() => {
   authState.hasLocalPassword = true
   authState.ssoConnected = false
   authState.ssoAvailable = false
+  authState.hasTOTP = false
+  authState.passkeyCount = 0
 })
 
 // #1252: the admin keeps its password after connecting to SSO, so
@@ -78,6 +80,130 @@ describe('the single sign-on row (#1252)', () => {
     expect(screen.queryByRole('menuitem', { name: /use single sign-on/i })).toBeNull()
     // The password is still there, so changing it still is too.
     expect(screen.getByRole('menuitem', { name: /change password/i })).toBeTruthy()
+  })
+})
+
+// #1249: the Authenticator app row shares hasLocalPassword's gate with
+// Change password, since a factor guards a password an SSO-only account
+// no longer has -- but unlike that row, this one is asked to say so in
+// words rather than simply vanish.
+describe('the Authenticator app row (#1249)', () => {
+  it('is offered, with no "on" tag, while the account has a password and no factor', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = false
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /authenticator app/i })
+    expect(row).toBeTruthy()
+    expect(row.textContent?.trim()).toBe('Authenticator app')
+  })
+
+  it('carries an "on" tag once the account has a factor', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = true
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /authenticator app/i })
+    expect(row.textContent?.replace(/\s+/g, ' ').trim()).toBe('Authenticator app · on')
+  })
+
+  it('is replaced by an explanatory line, not simply absent, for an SSO-only account', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = false
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /authenticator app/i })).toBeNull()
+    expect(screen.getByText(/authenticator app.*not offered/i)).toBeTruthy()
+    expect(screen.getByText(/single sign-on/i)).toBeTruthy()
+  })
+
+  it('opens AuthenticatorOverlay on click', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('dialog', { name: /authenticator app/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /authenticator app/i }))
+    expect(screen.getByRole('dialog', { name: /authenticator app/i })).toBeTruthy()
+  })
+})
+
+// #1250: directly under Authenticator app, per the design's account-menu
+// composition call -- two rows, not a merged one, each with its own
+// count tag and its own overlay. Always present, even with no passkeys
+// and even when this deployment can't offer one right now -- the design
+// forbids the row silently vanishing (PasskeysOverlay itself says why).
+describe('the Passkeys row (#1250)', () => {
+  it('is offered, with no count tag, while the account has none', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.passkeyCount = 0
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /^passkeys/i })
+    expect(row).toBeTruthy()
+    expect(row.textContent?.trim()).toBe('Passkeys')
+  })
+
+  it('carries a count tag once the account has passkeys', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.passkeyCount = 2
+    render(AccountMenu)
+    await openMenu()
+
+    const row = screen.getByRole('menuitem', { name: /^passkeys/i })
+    expect(row.textContent?.replace(/\s+/g, ' ').trim()).toBe('Passkeys · 2')
+  })
+
+  it('is absent for an SSO-only account, same gate as Authenticator app', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = false
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /^passkeys/i })).toBeNull()
+  })
+
+  it('opens PasskeysOverlay on click', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('dialog', { name: /^passkeys$/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /^passkeys/i }))
+    expect(screen.getByRole('dialog', { name: /^passkeys$/i })).toBeTruthy()
+  })
+})
+
+// #1332: AuthenticatorOverlay used to open off authState.showAuthenticator,
+// a single flag shared by every mounted copy -- so the deck keeping
+// several cards (and several AccountMenus) mounted at once meant one
+// click opened every copy's dialog together, stacked with competing
+// focus traps. Reproduces that directly: two menus mounted side by
+// side, only one clicked.
+describe('two mounted account menus do not share the authenticator dialog (#1332)', () => {
+  it('opens the dialog in the clicked menu only, not in an unrelated mounted copy', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    render(AccountMenu)
+
+    const chips = screen.getAllByTitle('Account and operate pages')
+    await fireEvent.click(chips[0])
+    flushSync()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /authenticator app/i }))
+    flushSync()
+
+    expect(screen.getAllByRole('dialog', { name: /authenticator app/i })).toHaveLength(1)
   })
 })
 

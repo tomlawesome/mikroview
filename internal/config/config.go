@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/tomlawesome/mikroview/internal/baseline"
 )
@@ -144,16 +144,86 @@ func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 			}
 			continue
 		}
-		if p, err := netip.ParsePrefix(entry); err == nil {
-			out = append(out, p.Masked())
-			continue
-		}
-		addr, err := netip.ParseAddr(entry)
-		if err != nil {
+		p, ok := parseAddressEntry(entry)
+		if !ok {
 			return nil, fmt.Errorf("trusted proxy %q is neither an IP address nor a CIDR", entry)
 		}
-		addr = addr.Unmap()
-		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// parseAddressEntry turns one bare-IP-or-CIDR entry into a prefix. A
+// bare address becomes a single-host prefix, so "10.0.0.5" and
+// "10.0.0.5/32" mean the same thing wherever an operator writes a list
+// of addresses.
+//
+// Shared by ParseTrustedProxies and ParseUIAllow so the two lists
+// cannot start accepting subtly different spellings of the same
+// address. The Unmap matters: internal/api's clientIP reports an
+// IPv4-mapped IPv6 peer as plain IPv4, so a prefix written the mapped
+// way would never match the address it was meant to.
+func parseAddressEntry(entry string) (netip.Prefix, bool) {
+	if p, err := netip.ParsePrefix(entry); err == nil {
+		return p.Masked(), true
+	}
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	addr = addr.Unmap()
+	return netip.PrefixFrom(addr, addr.BitLen()), true
+}
+
+// UI holds settings for the browser-facing web interface itself, as
+// distinct from listen:'s ports (which the routers use too).
+//
+// There is exactly one key here and it is deliberately file-only: see
+// Allow.
+type UI struct {
+	// Allow limits which addresses may reach the web UI, as bare IPs or
+	// CIDRs (issue #1287). Empty or absent -- the default, and what
+	// every deployment before this key existed has -- means every
+	// address may, so an upgrade changes nothing.
+	//
+	// **This is a config-file setting and is never settable from the
+	// UI.** An admin editing an allow list from inside the screen the
+	// list governs can lock themselves out of it in one keystroke, with
+	// no way back in from the browser. Recovery is documented in
+	// docs/configuration.md and SECURITY.md: edit the file on the
+	// mikroview-etc volume and restart.
+	//
+	// The address judged is internal/api's resolved client address, so
+	// listen.trustedProxies decides whether a forwarding header counts.
+	// Behind a proxy with no trustedProxies set, every request carries
+	// the proxy's own address: the list would then admit everybody or
+	// nobody, which is why the two settings belong together.
+	//
+	// Router-facing paths are exempt -- see internal/api's
+	// uiAllowExemptPaths for the list and the reason each is on it.
+	Allow []string `yaml:"allow"`
+}
+
+// ParseUIAllow turns UI.Allow into prefixes for internal/api.
+//
+// Deliberately stricter than ParseTrustedProxies: there is no "private"
+// shorthand here. trustedProxies names infrastructure the operator
+// runs, where "the proxy is somewhere on my LAN" is a fair description;
+// this names the machines allowed to administer MikroView, and
+// "everything on the LAN, plus CGNAT, plus link-local" is not a list
+// anyone means to write for that.
+func ParseUIAllow(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, raw := range entries {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		p, ok := parseAddressEntry(entry)
+		if !ok {
+			return nil, fmt.Errorf("ui.allow entry %q is neither an IP address nor a CIDR", entry)
+		}
+		out = append(out, p)
 	}
 	return out, nil
 }
@@ -504,20 +574,6 @@ type Audit struct {
 // contract as Audit.StorePath: the wizard still works, the decisions
 // just don't survive a restart.
 type Setup struct {
-	StorePath string `yaml:"storePath"`
-}
-
-// ConfigDrift configures where the "N new settings are available"
-// notice's dismissal is remembered (#1218) -- which version an operator
-// has already dealt with the notice for, so it does not resurface for
-// that version again but does for the next one that actually adds
-// something new. Nothing else about the notice is persisted here: the
-// settings list itself is computed live from the running config and
-// this build's own example config on every read. StorePath left empty
-// is a fully supported, deliberate choice, same optional-persistence
-// contract as Setup.StorePath: the notice still works, a dismissal just
-// does not survive a restart.
-type ConfigDrift struct {
 	StorePath string `yaml:"storePath"`
 }
 
@@ -893,6 +949,16 @@ type Droplist struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Prefs configures internal/prefs's persisted store of per-user
+// preferences (issue #1283): one versioned JSON record per account,
+// read on sign-in and written on change, replacing what used to live in
+// the browser's localStorage. StorePath left empty is the same optional-
+// persistence contract as Droplist.StorePath above: preferences still
+// work for the running session, they just don't survive a restart.
+type Prefs struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // NetClass configures internal/netclass's local IP attribution: labelling
 // an address as a Tor exit, a commercial VPN, cloud/datacenter space, or
 // a privacy relay (issue #114). It adds context to a manual IP lookup,
@@ -1144,24 +1210,48 @@ type Backup struct {
 }
 
 type Config struct {
-	Listen         Listen         `yaml:"listen"`
-	Store          Store          `yaml:"store"`
-	Log            Log            `yaml:"log"`
-	GeoIP          GeoIP          `yaml:"geoip"`
-	Reputation     Reputation     `yaml:"reputation"`
-	Flags          Flags          `yaml:"flags"`
-	Auth           Auth           `yaml:"auth"`
-	Entities       Entities       `yaml:"entities"`
-	Coverage       Coverage       `yaml:"coverage"`
-	Hosts          Hosts          `yaml:"hosts"`
-	Seen           Seen           `yaml:"seen"`
-	Baseline       Baseline       `yaml:"baseline"`
-	Audit          Audit          `yaml:"audit"`
-	Setup          Setup          `yaml:"setup"`
-	ConfigDrift    ConfigDrift    `yaml:"configDrift"`
-	Watchlist      Watchlist      `yaml:"watchlist"`
-	Notify         Notify         `yaml:"notify"`
-	TLS            TLS            `yaml:"tls"`
+	Listen     Listen     `yaml:"listen"`
+	UI         UI         `yaml:"ui"`
+	Store      Store      `yaml:"store"`
+	Log        Log        `yaml:"log"`
+	GeoIP      GeoIP      `yaml:"geoip"`
+	Reputation Reputation `yaml:"reputation"`
+	Flags      Flags      `yaml:"flags"`
+	Auth       Auth       `yaml:"auth"`
+	Entities   Entities   `yaml:"entities"`
+	Coverage   Coverage   `yaml:"coverage"`
+	Hosts      Hosts      `yaml:"hosts"`
+	Seen       Seen       `yaml:"seen"`
+	Baseline   Baseline   `yaml:"baseline"`
+	Audit      Audit      `yaml:"audit"`
+	Setup      Setup      `yaml:"setup"`
+	Watchlist  Watchlist  `yaml:"watchlist"`
+	Notify     Notify     `yaml:"notify"`
+	TLS        TLS        `yaml:"tls"`
+	// PublicURL is the address people actually reach MikroView on, e.g.
+	// "https://mikroview.home.lan:8443" (issue #1250, passkeys as a
+	// second factor -- docs/plans/passkeys-second-factor.md). WebAuthn
+	// binds a passkey to the domain the browser saw at registration
+	// time and refuses outright to create one for a bare IP address, so
+	// this is the one place MikroView learns what that domain is --
+	// deliberately never inferred from a request's Host header, the
+	// same redirect_uri-confusion reasoning OIDC.PublicBaseURL's own
+	// doc comment gives.
+	//
+	// Never reused as, or backfilled from, oidc.publicBaseUrl below,
+	// even though the two usually hold the same value: changing one for
+	// its own reason (rotating an OIDC redirect, moving where passkeys
+	// are registered) must never silently move the other. validate.go
+	// only warns when oidc.publicBaseUrl is set and this isn't (see
+	// CFG-0104) -- it never sets this on the operator's behalf.
+	//
+	// Left empty -- the default -- MikroView starts and runs exactly as
+	// it always has; passkeys are simply unavailable. Validation here is
+	// warn-and-degrade, never fatal, same stance every other optional
+	// integration in this file takes: a monitor that refuses to start
+	// has cost the operator all visibility, which is worse than one
+	// login method staying off. See CFG-0100 through CFG-0103.
+	PublicURL      string         `yaml:"publicUrl"`
 	OIDC           OIDC           `yaml:"oidc"`
 	Postgres       Postgres       `yaml:"postgres"`
 	Devices        []Device       `yaml:"devices"`
@@ -1169,6 +1259,7 @@ type Config struct {
 	DeviceRegistry DeviceRegistry `yaml:"deviceRegistry"`
 	Blocklist      Blocklist      `yaml:"blocklist"`
 	Droplist       Droplist       `yaml:"droplist"`
+	Prefs          Prefs          `yaml:"prefs"`
 	NetClass       NetClass       `yaml:"netClass"`
 	OUI            OUI            `yaml:"oui"`
 	Engine         Engine         `yaml:"engine"`
@@ -1325,9 +1416,6 @@ func defaults() Config {
 		Setup: Setup{
 			StorePath: DefaultDataDir + "/setup.json",
 		},
-		ConfigDrift: ConfigDrift{
-			StorePath: DefaultDataDir + "/config-drift.json",
-		},
 		Watchlist: Watchlist{
 			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
 			MatchLogCapacity:     200_000,
@@ -1366,6 +1454,9 @@ func defaults() Config {
 		},
 		Droplist: Droplist{
 			StorePath: DefaultDataDir + "/droplist.json",
+		},
+		Prefs: Prefs{
+			StorePath: DefaultDataDir + "/preferences.json",
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here
@@ -1882,6 +1973,13 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
 		cfg.TLS.StorePath = v
 	}
+	// MIKROVIEW_PUBLIC_URL, not MV_PUBLIC_URL as issue #1250 first
+	// proposed -- every env var in this codebase is MIKROVIEW_*, so the
+	// issue's name loses to the convention (see the ratified design,
+	// docs/plans/passkeys-second-factor.md).
+	if v := os.Getenv("MIKROVIEW_PUBLIC_URL"); v != "" {
+		cfg.PublicURL = v
+	}
 	if v := os.Getenv("MIKROVIEW_OIDC_ISSUER_URL"); v != "" {
 		cfg.OIDC.IssuerURL = v
 	}
@@ -1925,6 +2023,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_DROPLIST_STORE_PATH"); v != "" {
 		cfg.Droplist.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_PREFS_STORE_PATH"); v != "" {
+		cfg.Prefs.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_OUI_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
@@ -2053,6 +2154,7 @@ explains when to reach for them.
   -recover-admin-account    set a new password for the admin account
   -generate-recovery-keys   mint the recovery keys those commands ask for
   -transfer-admin <user>    move admin to another account
+  -clear-second-factor <user>  clear a lost second factor (authenticator app, passkeys)
   -backup                   write every store to one encrypted file
   -restore                  read a backup back onto disk
   -migrate-data             move the data directory between a bind mount and a volume

@@ -432,7 +432,18 @@ check(
 )
 
 // --- The preference is persisted, and applied before first paint ---------
-const stored = await page.evaluate(() => localStorage.getItem('mikroview-metrics-view'))
+// On the server since #1283 (GET /api/me/preferences, key `metrics`),
+// not in localStorage -- and written on a 500ms debounce, so the record
+// is polled rather than read once.
+const stored = await page.evaluate(async () => {
+  for (let i = 0; i < 20; i++) {
+    const res = await fetch('/api/me/preferences', { cache: 'no-store' })
+    const body = res.ok ? await res.json() : {}
+    if (body?.prefs?.metrics === 'register') return 'register'
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  return null
+})
 check(stored === 'register', `the chosen view is persisted -- got ${JSON.stringify(stored)}`)
 
 // Load-only, kept deliberately: the claim under test is that the stored

@@ -15,7 +15,15 @@ import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { collectRepositoryPins, diffPolicy, extractActionPins, extractImagePins, loadPolicy } from "./pins-policy.mjs";
+import {
+  collectRepositoryPins,
+  diffGoVersionPins,
+  diffPolicy,
+  extractActionPins,
+  extractGoVersionPins,
+  extractImagePins,
+  loadPolicy,
+} from "./pins-policy.mjs";
 
 const scratchDirs = [];
 function scratchDir() {
@@ -105,6 +113,65 @@ describe("extractImagePins", () => {
   });
 });
 
+describe("extractGoVersionPins", () => {
+  it("reads all four Go pins (#1312) when they agree", () => {
+    const pins = extractGoVersionPins({
+      goMod: { file: "go.mod", text: "module example\n\ngo 1.27.1\n\nrequire (\n)\n" },
+      dockerfile: { file: "Dockerfile", text: "FROM golang:1.27.1-alpine AS backend\n" },
+      liveCheckDockerfile: { file: "live-check.Dockerfile", text: "ARG GO_VERSION=1.27.1\nARG GO_SHA256=deadbeef\n" },
+      gitlabCi: { file: ".gitlab-ci.yml", text: "lint:go:\n  image: golang:1.27.1\n" },
+    });
+    assert.equal(pins.size, 4);
+    assert.equal(new Set(pins.values()).size, 1, "all four locations should agree on one version");
+    assert.equal(pins.get("go.mod (go directive)"), "1.27.1");
+    assert.equal(pins.get("Dockerfile (FROM golang)"), "1.27.1");
+    assert.equal(pins.get("live-check.Dockerfile (GO_VERSION ARG)"), "1.27.1");
+  });
+
+  it("reports a floating .gitlab-ci.yml image tag distinctly from a patch pin", () => {
+    const pins = extractGoVersionPins({
+      gitlabCi: { file: ".gitlab-ci.yml", text: "lint:go:\n  image: golang:1.27\n" },
+    });
+    assert.equal(pins.get(".gitlab-ci.yml:2"), "1.27");
+  });
+
+  it("returns an empty map when none of the four inputs are given", () => {
+    assert.equal(extractGoVersionPins({}).size, 0);
+  });
+});
+
+describe("diffGoVersionPins", () => {
+  it("reports nothing when every location agrees", () => {
+    const pins = new Map([
+      ["go.mod (go directive)", "1.27.1"],
+      ["Dockerfile (FROM golang)", "1.27.1"],
+      ["live-check.Dockerfile (GO_VERSION ARG)", "1.27.1"],
+      [".gitlab-ci.yml:512", "1.27.1"],
+    ]);
+    assert.deepEqual(diffGoVersionPins(pins), []);
+  });
+
+  it("fails when go.mod and the Dockerfile disagree (the #1312 shape)", () => {
+    const pins = new Map([
+      ["go.mod (go directive)", "1.27.1"],
+      ["Dockerfile (FROM golang)", "1.27.0"],
+    ]);
+    const problems = diffGoVersionPins(pins);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /disagree/);
+    assert.match(problems[0], /go\.mod \(go directive\)=1\.27\.1/);
+    assert.match(problems[0], /Dockerfile \(FROM golang\)=1\.27\.0/);
+  });
+
+  it("fails when a floating .gitlab-ci.yml tag differs from the pinned patch elsewhere", () => {
+    const pins = new Map([
+      ["go.mod (go directive)", "1.27.1"],
+      [".gitlab-ci.yml:512", "1.27"],
+    ]);
+    assert.equal(diffGoVersionPins(pins).length, 1);
+  });
+});
+
 describe("diffPolicy", () => {
   const basePolicy = () => ({
     ciActions: [
@@ -186,6 +253,31 @@ describe("collectRepositoryPins", () => {
     );
     assert.deepEqual(imagePins.get("node:26-bookworm"), new Set(["live-check.Dockerfile"]));
   });
+
+  it("fails a deliberately mismatched copy of the four Go pins (#1312)", () => {
+    const dir = scratchDir();
+    writeFileSync(join(dir, "go.mod"), "module example\n\ngo 1.27.1\n", "utf8");
+    // Dockerfile deliberately left one patch behind go.mod, the drift #1312 found.
+    writeFileSync(join(dir, "Dockerfile"), "FROM golang:1.27.0-alpine AS backend\n", "utf8");
+    writeFileSync(join(dir, "live-check.Dockerfile"), "ARG GO_VERSION=1.27.1\nARG GO_SHA256=deadbeef\n", "utf8");
+    writeFileSync(join(dir, ".gitlab-ci.yml"), "lint:go:\n  image: golang:1.27\n", "utf8");
+
+    const { goVersionPins } = collectRepositoryPins(dir);
+    const problems = diffGoVersionPins(goVersionPins);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /disagree/);
+  });
+
+  it("passes when a copy of the four Go pins agrees", () => {
+    const dir = scratchDir();
+    writeFileSync(join(dir, "go.mod"), "module example\n\ngo 1.27.1\n", "utf8");
+    writeFileSync(join(dir, "Dockerfile"), "FROM golang:1.27.1-alpine AS backend\n", "utf8");
+    writeFileSync(join(dir, "live-check.Dockerfile"), "ARG GO_VERSION=1.27.1\nARG GO_SHA256=deadbeef\n", "utf8");
+    writeFileSync(join(dir, ".gitlab-ci.yml"), "lint:go:\n  image: golang:1.27.1\n", "utf8");
+
+    const { goVersionPins } = collectRepositoryPins(dir);
+    assert.deepEqual(diffGoVersionPins(goVersionPins), []);
+  });
 });
 
 describe("loadPolicy", () => {
@@ -196,8 +288,13 @@ describe("loadPolicy", () => {
     // tests applies just as much to a "policy" file as to a directory).
     const { collectRepositoryPins } = await import("./pins-policy.mjs");
     const policy = loadPolicy("supply-chain/pins-policy.json");
-    const problems = diffPolicy(policy, collectRepositoryPins());
-    assert.deepEqual(problems, []);
+    const repositoryPins = collectRepositoryPins();
+    assert.deepEqual(diffPolicy(policy, repositoryPins), []);
+    // #1312: the same real-tree check for the four Go pins agreeing --
+    // this is the regression guard, so it must run against the actual
+    // go.mod, Dockerfile, live-check.Dockerfile and .gitlab-ci.yml, not
+    // just the fixture text above.
+    assert.deepEqual(diffGoVersionPins(repositoryPins.goVersionPins), []);
   });
 
   it("rejects a policy with an unsupported schema version", () => {
