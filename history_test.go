@@ -121,12 +121,11 @@ func TestOpenHistoryWithoutAKeyIsOffAndSilentlyNormal(t *testing.T) {
 	}
 }
 
-// The switch off deletes what an earlier run retained. Off has to mean
-// the events are gone, or the setting is a lie.
-func TestOpenHistoryDeletesTheHistoryWhenSwitchedOff(t *testing.T) {
-	keyFile := writeKeyFile(t)
-	cfg := historyConfig(t, true, keyFile)
-
+// retainOneDay leaves one day of history on disk under cfg's directory,
+// written through a real store with cfg's key, and returns the directory.
+func retainOneDay(t *testing.T, cfg config.Config) string {
+	t.Helper()
+	cfg.History.Enabled = true
 	hist := openHistory(quietLog(), cfg)
 	if hist == nil {
 		t.Fatal("openHistory returned nothing with the switch on")
@@ -136,25 +135,76 @@ func TestOpenHistoryDeletesTheHistoryWhenSwitchedOff(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 	hist.Close()
-
 	dir := historyDirectory(cfg)
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) == 0 {
-		t.Fatalf("nothing was retained to begin with (%d entries, err %v)", len(entries), err)
+	if n := retainedDayCount(t, dir); n == 0 {
+		t.Fatal("nothing was retained to begin with")
 	}
+	return dir
+}
 
-	// Same deployment, same key, switch turned off.
+// capturedLog records what openHistory says, so a test can hold it to
+// telling the operator where the kept files are.
+func capturedLog() (*slog.Logger, *strings.Builder) {
+	var b strings.Builder
+	return slog.New(slog.NewTextHandler(&b, nil)), &b
+}
+
+// Off at startup keeps what an earlier run retained. A missing
+// history block reads exactly like enabled: false, so deleting on it
+// turned one lost line of config into a month of lost evidence.
+func TestOpenHistoryKeepsTheHistoryWhenSwitchedOff(t *testing.T) {
+	cfg := historyConfig(t, true, writeKeyFile(t))
+	dir := retainOneDay(t, cfg)
+
 	cfg.History.Enabled = false
-	if hist := openHistory(quietLog(), cfg); hist != nil {
+	log, out := capturedLog()
+	if hist := openHistory(log, cfg); hist != nil {
 		hist.Close()
 		t.Fatal("openHistory returned a store with the switch off")
 	}
-	entries, err = os.ReadDir(dir)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("reading the history directory: %v", err)
+	if n := retainedDayCount(t, dir); n != 1 {
+		t.Errorf("switching it off left %d day file(s), want the 1 retained -- nothing in the config may delete it", n)
 	}
-	if len(entries) != 0 {
-		t.Errorf("turning the switch off left %d file(s) behind", len(entries))
+	for _, want := range []string{"level=WARN", dir, "history.enabled: true"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the startup log does not mention %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// The same with the key file gone from the config: no key is not
+// permission to delete either.
+func TestOpenHistoryKeepsTheHistoryWithNoKey(t *testing.T) {
+	cfg := historyConfig(t, true, writeKeyFile(t))
+	dir := retainOneDay(t, cfg)
+
+	cfg.History.Enabled = false
+	cfg.History.KeyFile = ""
+	log, out := capturedLog()
+	if hist := openHistory(log, cfg); hist != nil {
+		hist.Close()
+		t.Fatal("openHistory returned a store with no key configured")
+	}
+	if n := retainedDayCount(t, dir); n != 1 {
+		t.Errorf("no key configured left %d day file(s), want the 1 retained -- nothing in the config may delete it", n)
+	}
+	for _, want := range []string{"level=WARN", dir, "history.enabled: true"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the startup log does not mention %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// Nothing on disk, nothing to warn about: the default install stays at
+// its one info line.
+func TestOpenHistoryOffWithNothingRetainedDoesNotWarn(t *testing.T) {
+	log, out := capturedLog()
+	if hist := openHistory(log, historyConfig(t, false, "")); hist != nil {
+		hist.Close()
+		t.Fatal("openHistory returned a store with no key configured")
+	}
+	if strings.Contains(out.String(), "level=WARN") {
+		t.Errorf("warned with nothing retained:\n%s", out.String())
 	}
 }
 
