@@ -16,6 +16,15 @@ rewritten.
 
 ## [Unreleased]
 
+### Removed
+
+- **The Theme button and its accent-colour picker are gone** (#1371,
+  owner's request; replacement is #492). Signal/Pulse/Nebula/Frequency/
+  Mono and the account menu's Theme control are removed wholesale — no
+  alias, no stored-preference migration. The app keeps the default
+  accent (Signal), styled directly in `:root` rather than through a
+  `[data-colorway]` switch.
+
 ### Fixed
 
 - **On-disk event history is no longer deleted just because it is off**
