@@ -749,7 +749,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   encryption layer there was not judged to add real value for this
   build.
 - **UI preferences follow the account, not the browser.** Saved filter
-  presets, top-talker widgets, column widths and visibility, colorway,
+  presets, top-talker widgets, column widths and visibility,
   the topography altitude stop, group-repeats, the live table's
   retention window, the metrics view and the deck's card order are one
   record per user on the server, fetched on sign-in and written back
