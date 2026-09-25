@@ -385,6 +385,86 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).not.toContain('still waiting for its enrolment token to arrive')
   })
 
+  // #1372: the address line under a router card's name -- acceptedIp
+  // when enrolled, else sourceIp, else an honest "no address yet".
+  describe('the address under the name (#1372)', () => {
+    it('shows acceptedIp on a registered card when the router has enrolled', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: 'rb5009',
+          configured: true,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '192.168.1.1',
+          acceptedIp: '192.168.1.5',
+          eventCount: 3,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      const card = container.querySelector('.fcard')
+      expect(card?.textContent).toContain('192.168.1.5')
+      expect(card?.textContent).not.toContain('192.168.1.1')
+    })
+
+    it('falls back to sourceIp on a registered card when nothing has enrolled', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: 'rb5009',
+          configured: true,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '192.168.1.1',
+          eventCount: 3,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('192.168.1.1')
+    })
+
+    it('says "no address yet" on a registered card when neither is known', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: 'rb5009',
+          configured: true,
+          status: 'never_seen',
+          lastSeen: '',
+          sourceIp: '',
+          eventCount: 0,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('no address yet')
+    })
+
+    it('carries the same address line on an unregistered, pushing-only card', async () => {
+      appState.devices = [
+        {
+          id: 'rb5009',
+          name: '',
+          configured: false,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '10.0.0.1',
+          acceptedIp: '10.0.0.1',
+          eventCount: 3,
+        },
+      ] as unknown as (typeof appState)['devices']
+      const { container } = render(Entities)
+      await settle()
+
+      expect(container.querySelector('.fcard.unreg')?.textContent).toContain('10.0.0.1')
+    })
+  })
+
   it('draws the empty berth as one more card at the end of the router row, saying what it does (#718, #1168)', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },

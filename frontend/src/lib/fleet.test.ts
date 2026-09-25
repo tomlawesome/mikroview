@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest'
-import { RECENT_WINDOW_MS, recentCount, setupEcho } from './fleet'
+import { RECENT_WINDOW_MS, recentCount, routerAddress, setupEcho } from './fleet'
 import type { ClientEvent, Device } from './types'
 
 function device(setup?: Device['setup']): Device {
@@ -101,5 +101,26 @@ describe('recentCount', () => {
     recentCount(events, 'never-seen', now)
 
     expect(reads).toBe(0)
+  })
+})
+
+// routerAddress (#1372): the card's under-the-name line. acceptedIp is
+// evidence a token was actually redeemed, so it outranks sourceIp, which
+// can be no more than a config.yaml claim or the first address a push
+// happened to arrive from.
+describe('routerAddress', () => {
+  it('prefers acceptedIp when the router has enrolled', () => {
+    const d = { ...device(), sourceIp: '192.168.1.1', acceptedIp: '192.168.1.5' }
+    expect(routerAddress(d)).toBe('192.168.1.5')
+  })
+
+  it('falls back to sourceIp when nothing has enrolled', () => {
+    const d = { ...device(), sourceIp: '192.168.1.1', acceptedIp: undefined }
+    expect(routerAddress(d)).toBe('192.168.1.1')
+  })
+
+  it('says "no address yet" when neither is known', () => {
+    const d = { ...device(), sourceIp: '', acceptedIp: undefined }
+    expect(routerAddress(d)).toBe('no address yet')
   })
 })

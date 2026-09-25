@@ -136,6 +136,19 @@ export function setupEcho(d: Device): string | null {
   }
 }
 
+// routerAddress (#1372) is the one line a card prints under a router's
+// name for "where is it": acceptedIp when the router has actually
+// enrolled (evidence, not merely a claim -- see device.Info.AcceptedIP's
+// own doc comment), otherwise sourceIp, the address its lines/pushes
+// have arrived from, otherwise the honest "no address yet" for a
+// declared router nothing has ever come from. Hoisted here for the same
+// no-drift reason as deviceState/setupEcho above: Fleet.svelte and
+// Entities.svelte's two router-card loops all read one function rather
+// than three copies of the same fallback chain.
+export function routerAddress(d: Device): string {
+  return d.acceptedIp || d.sourceIp || 'no address yet'
+}
+
 // unattributedLabel (#1170) names a syslog source the registry could not
 // attribute to any router: no configured devices[].sourceIp matches it,
 // and no router has enrolled from it (#1281). It reads as

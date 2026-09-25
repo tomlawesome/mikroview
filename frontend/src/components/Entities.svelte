@@ -103,6 +103,7 @@
   import {
     deviceState,
     multihomedEcho,
+    routerAddress,
     setupEcho,
     sortedDevices,
     ratePerSecond,
@@ -752,6 +753,10 @@
             {@const detail = routerDetail[d.id]}
             <div class="fcard" class:live={d.status === 'live'}>
               <div class="fhead"><b>{d.name}</b><span class="fstate {st.cls}">{st.mark} {st.text}</span></div>
+              <!-- #1372: the address under the name, same fallback chain
+                   Fleet.svelte's card reads (lib/fleet.ts's
+                   routerAddress) so the two surfaces cannot disagree. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
@@ -795,6 +800,8 @@
               <div class="fhead">
                 <b>{d.name || d.sourceIp}</b><span class="fstate warn">● PUSHING · UNREGISTERED</span>
               </div>
+              <!-- #1372: same address line as the registered cards above. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
@@ -1352,6 +1359,13 @@
 
   .fcard .frow {
     padding: 3px 0;
+  }
+
+  /* Same field as Fleet.svelte's own .mono (#1372): the address line
+     under a router card's name. */
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
   }
 
   /* --- the named-things table ------------------------------------------ */

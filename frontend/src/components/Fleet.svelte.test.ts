@@ -142,6 +142,36 @@ describe('Fleet deck identity (#657/#706)', () => {
     expect(container.textContent).toMatch(/seen on the wire, not in the devices config/)
   })
 
+  // #1372: the address line under the router's name -- acceptedIp when
+  // enrolled, else sourceIp, else an honest "no address yet".
+  describe('the address line under the name', () => {
+    it('shows acceptedIp when the router has enrolled', () => {
+      setDevices([device({ id: 'r1', name: 'alpha', sourceIp: '192.168.1.1', acceptedIp: '192.168.1.5' })])
+      const { container } = render(Fleet)
+      flushSync()
+
+      const card = container.querySelector('.fcard')
+      expect(card?.textContent).toContain('192.168.1.5')
+      expect(card?.textContent).not.toContain('192.168.1.1')
+    })
+
+    it('falls back to sourceIp when nothing has enrolled', () => {
+      setDevices([device({ id: 'r1', name: 'alpha', sourceIp: '192.168.1.1', acceptedIp: undefined })])
+      const { container } = render(Fleet)
+      flushSync()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('192.168.1.1')
+    })
+
+    it('says "no address yet" when neither is known', () => {
+      setDevices([device({ id: 'r1', name: 'alpha', sourceIp: '', acceptedIp: undefined })])
+      const { container } = render(Fleet)
+      flushSync()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('no address yet')
+    })
+  })
+
   // #442's echo: the fleet already shows the pair -- a declared router
   // that has sent nothing, an unregistered one streaming -- so the
   // configured-silent card carries one sentence pointing at the wizard,
