@@ -2,8 +2,8 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   //
   // The account menu (#633, slimmed by #647 round 23): the scene bar's
-  // account chip carries theme switching, Run setup…, sign out, and
-  // About & licence (AGPL 5(d)/13 -- the licence must stay reachable
+  // account chip carries Run setup…, sign out, and About & licence
+  // (AGPL 5(d)/13 -- the licence must stay reachable
   // from the running app). Settings, Entities and Audit log left the
   // menu once each had somewhere better to live -- Settings and
   // Entities joined the deck as cards of their own, and Audit log has
@@ -14,7 +14,6 @@
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { versionState } from '../lib/version.svelte'
-  import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
   import PasskeysOverlay from './PasskeysOverlay.svelte'
@@ -103,10 +102,6 @@
 
   {#if open}
     <div class="menu" role="menu">
-      <div class="row theme-row">
-        <ThemeMenu />
-      </div>
-      <div class="rule"></div>
       {#each operate.filter((r) => !r.admin || isAdmin) as row (row.label)}
         <button class="row" role="menuitem" class:on={row.view === appState.view} onclick={() => go(row)}>
           {row.label}
@@ -254,11 +249,6 @@
 
   .row.on {
     color: var(--fg);
-  }
-
-  .theme-row {
-    cursor: default;
-    justify-content: space-between;
   }
 
   /* The menu's foot, from round 37's `.whomenu .mg.foot`: the label on

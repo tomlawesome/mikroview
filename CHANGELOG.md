@@ -62,6 +62,22 @@ rewritten.
   does; the old ten stop working the instant the new ones are
   committed. Doesn't sign any session out — only a change to which
   factors protect the account does that.
+### Added
+
+- **The setup wizard warns about RouterOS upgrades that break pasted
+  commands** (#1344, owner ruling on #1343). Setup screen shows, per
+  connected router, every "from version X onward, this affects Y"
+  warning that applies to its reported version; first entry is 7.24.3's
+  removal of the GoDaddy Class 2 root from the router's trust store.
+
+### Removed
+
+- **The Theme button and its accent-colour picker are gone** (#1371,
+  owner's request; replacement is #492). Signal/Pulse/Nebula/Frequency/
+  Mono and the account menu's Theme control are removed wholesale — no
+  alias, no stored-preference migration. The app keeps the default
+  accent (Signal), styled directly in `:root` rather than through a
+  `[data-colorway]` switch.
 
 ### Fixed
 

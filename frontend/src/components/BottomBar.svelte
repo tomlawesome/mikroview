@@ -337,7 +337,7 @@
   }
 
   /* Same scrim/sheet visual language as the rest of the app's mobile
-     sheets (ThemeMenu, EventDetailSheet): translucent scrim, a rounded
+     sheets (e.g. EventDetailSheet): translucent scrim, a rounded
      panel rising from the bottom edge with a drag handle. */
   .scrim {
     position: fixed;

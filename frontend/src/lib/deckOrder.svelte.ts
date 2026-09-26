@@ -2,7 +2,7 @@
 //
 // The deck's card order (#633, rounds 23-25: "the order you keep them —
 // drag to reorder; sign-in lands on the first"). One small module per
-// preference (theme, colorway, retention each have theirs) -- kept in
+// preference (retention has its own, and so on) -- kept in
 // the shared per-user preferences record (#1283), not synced any other
 // way.
 

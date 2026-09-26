@@ -196,9 +196,8 @@
     height: var(--h-height);
     /* #1215 item 1: a spotlight, not chrome -- --tour-ring is its own
        fixed cyan (app.css), never the app's ordinary --accent, at full
-       opacity with a heavier border and a glow so it reads as unmistakable
-       even under the "frequency" colorway, whose own --accent is a
-       similar cyan. */
+       opacity with a heavier border and a glow so it reads as
+       unmistakable rather than blending into the chrome. */
     border: 2px solid var(--tour-ring);
     border-radius: 8px;
     box-shadow: 0 0 16px 2px color-mix(in srgb, var(--tour-ring) 55%, transparent);

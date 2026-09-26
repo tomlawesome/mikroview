@@ -166,9 +166,9 @@ import { persistenceState } from '../lib/persistence.svelte'
 import { emptyFilters } from '../lib/types'
 import { TOUR_HIGHLIGHTS } from '../lib/tourHighlights'
 
-// jsdom has neither matchMedia nor ResizeObserver -- SceneBar mounts
-// AccountMenu (ThemeMenu pulls in lib/viewport.svelte.ts, whose
-// ViewportState singleton calls matchMedia at module-load time) and
+// jsdom has neither matchMedia nor ResizeObserver -- several mounted
+// pieces (Flags, LiveTable, FilterBar, Whisper) read lib/viewport.svelte.ts,
+// whose ViewportState singleton calls matchMedia at module-load time, and
 // Fall/Metrics measure their own box with `bind:clientWidth`, compiled
 // to a ResizeObserver. Both polyfilled before the dynamic imports below
 // -- static imports are hoisted ahead of any plain statement in this

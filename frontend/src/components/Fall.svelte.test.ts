@@ -46,24 +46,6 @@ import { flagsState } from '../lib/flags.svelte'
 import { appState } from '../lib/state.svelte'
 import type { WatchlistEntry } from '../lib/types'
 
-// jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
-// pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
-// matchMedia at module-load time, so this has to land before the
-// dynamic import below (same fix AccountMenu.svelte.test.ts needed).
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList
-}
-
 // jsdom implements no ResizeObserver, and `bind:clientWidth` on `.rig`
 // (#722 -- the sizing policy needs to know its own real pixel width) is
 // compiled to one. A no-op stub is all this needs: jsdom reports every

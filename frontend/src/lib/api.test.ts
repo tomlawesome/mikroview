@@ -292,7 +292,7 @@ describe('fetchSetupCommands (#436)', () => {
   }
 
   const RESPONSE = {
-    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [], upgrades: [] },
     picked: null,
     routers: [],
     steps: {

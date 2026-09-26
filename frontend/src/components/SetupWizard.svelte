@@ -78,6 +78,7 @@
   import type { RouterosStanding } from '../lib/types'
   import CopyButton from './CopyButton.svelte'
   import MemoryControl from './MemoryControl.svelte'
+  import UpgradeWarnings from './UpgradeWarnings.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
   // runs every 20 minutes), so this polls rather than streaming -- and
@@ -862,6 +863,7 @@
         {/if}
       </p>
     {/each}
+    <UpgradeWarnings {commands} />
   {/if}
 {/snippet}
 
@@ -2218,6 +2220,13 @@
      outside the table's floor never blocks, but the note still reads as
      the loudest thing on the step. */
   .note.below-minimum {
+    border-left: 3px solid var(--log);
+    padding-left: 10px;
+  }
+
+  /* The RouterOS upgrade warning (#1344): the same amber left rule as
+     below-minimum above, no new colour -- see UpgradeWarnings.svelte. */
+  .note.upgrade {
     border-left: 3px solid var(--log);
     padding-left: 10px;
   }
