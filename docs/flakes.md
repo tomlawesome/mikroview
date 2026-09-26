@@ -6,6 +6,16 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## TestTheUnlockSweepSurvivesAPanicInOneTick: the sweeper never ran again after a tick panicked
+
+- 2026-09-26 · 442bc4f5 (feature/1331-recovery-codes, local) · `go test
+  ./...` full-suite run alongside every other package, host otherwise busy
+  · `the sweeper never ran again after a tick panicked` -- the test's own
+  5-second deadline expired before `s.Vault.Locked()` went true. The
+  branch touches `internal/api/auth.go`, `server.go` and two test files,
+  none of it router-backup-vault code; a lone re-run of `go test
+  ./internal/api/...` immediately afterward passed clean. First sighting.
+
 ## security:gosec: killed mid-scan, exit 137, no findings written
 
 - 2026-09-22 · 9b17fa39 (fix/chr-log-changed-paths) · pipeline 1461, job 19810
