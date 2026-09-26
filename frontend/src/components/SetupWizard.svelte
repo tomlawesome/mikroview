@@ -1683,6 +1683,21 @@
                   {/if}
                 </p>
               {/if}
+              {#if step.status.pasteBlock}
+                <!-- #1365: "add it to tls.hosts" named a file to edit
+                     but never the syntax. This is the whole resulting
+                     list, not just the missing address, so pasting it
+                     can only add coverage -- never drop an address
+                     already in config.yaml. -->
+                <pre>{step.status.pasteBlock}</pre>
+                <button type="button" class="copy" onclick={() => copy(step.status.pasteBlock ?? '', 'tls-hosts')}>
+                  {copied === 'tls-hosts' ? 'Copied' : 'Copy'}
+                </button>
+                <p class="note">
+                  Paste this into config.yaml's <code>tls:</code> section on the MikroView machine,
+                  replacing its <code>hosts:</code> line, then restart mikroview.
+                </p>
+              {/if}
               {#if step.status.shortfall}
                 <p class="observation shortfall">{step.status.shortfall}</p>
               {/if}
