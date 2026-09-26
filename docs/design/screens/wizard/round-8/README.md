@@ -141,4 +141,13 @@ applied mostly to AD but AC a bit too."
   and the colour note applies in full. AC: develop further, colour note
   applies lightly.
 
+**Owner, 2026-09-26 (verbatim),** on AC's done strip (screenshot
+`shots/owner-verdict-done-strip.png`: the bottom bar of chips with undo
+links, "start again", "Add another router", "Stay on the fall"):
+"This bar is weird and I don't like it. Also the text "Stay on the fall"
+is stupid, just say finish or something"
+
+- Round 9: rethink AC's finished state; the strip goes. The closing
+  button says "Finish" (or similar), not "Stay on the fall".
+
 Written by Fable 5.1, 2026-09-26.
