@@ -133,4 +133,12 @@ whilst still being clear about what ti means"
   MikroView's own colours, more vibrant, with greying out carrying
   meaning (done, not applicable), while still reading clearly.
 
+**Owner clarification, 2026-09-26 (verbatim):** on the AD line, "I just
+meant rethink the enrolment line." On the colour paragraph, "this line
+applied mostly to AD but AC a bit too."
+
+- Round 9 carries both AC and AD forward. AD: rethink the enrolment line,
+  and the colour note applies in full. AC: develop further, colour note
+  applies lightly.
+
 Written by Fable 5.1, 2026-09-26.
