@@ -448,15 +448,6 @@ export function sourceSplits(devices: Device[]): SourceSplit[] {
     .map((d) => ({ declared: d.sourceIp || d.id, arriving: d.multihomedCandidates ?? [] }))
 }
 
-// srcAddressCommand is the recommended remedy: the router keeps the
-// address it was declared under, so the token step 4 mints and the
-// tables it pushes need no reissuing. Assumes the logging action is
-// named mikroview -- step 2's own `add` created it under that name, the
-// same assumption every wizard command already makes.
-export function srcAddressCommand(declared: string): string {
-  return `/system logging action set mikroview src-address=${declared}`
-}
-
 // arrivingAddresses is every undeclared address across the splits, in
 // first-seen order and without repeats. The server pairs each silent
 // declared device with the same discovered set, so with two declared

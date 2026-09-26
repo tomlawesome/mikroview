@@ -18,6 +18,17 @@ rewritten.
 
 ### Fixed
 
+- **A router's HTTPS pushes no longer get refused because syslog was
+  pinned to a different address** (#1370). The Send logs block now
+  always sets `src-address=0.0.0.0` on the mikroview logging action, so
+  RouterOS picks the same address for syslog and for `/tool fetch`
+  pushes rather than a stale pin from an earlier paste holding syslog on
+  one address while pushes moved to another. The setup wizard and
+  routeros-setup.md no longer recommend pinning `src-address` anywhere —
+  the fix for a declared router that has gone silent is now to declare
+  the address it's actually arriving from, not to pin the router back
+  onto the old one.
+
 - **On-disk event history is no longer deleted just because it is off**
   (#1353). A config with the `history:` block missing, `enabled: false`,
   or no key file used to make MikroView delete every retained day at

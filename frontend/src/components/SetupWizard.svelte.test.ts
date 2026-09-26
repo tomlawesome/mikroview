@@ -443,13 +443,16 @@ describe('SetupWizard', () => {
     const body = container.querySelector('.split')?.textContent?.replace(/\s+/g, ' ') ?? ''
     expect(body).toContain("MikroView can't tell whether these are the same router")
     expect(body).toContain('You can tell.')
-    expect(body).toContain('Keep 192.168.88.1 (recommended). Run this on the router')
-    expect(body).toContain('Or keep 10.0.20.1: change sourceIp to 10.0.20.1 in config.yaml and restart.')
+    expect(body).toContain(
+      "tell MikroView the address it's actually using rather than pinning the router to another one",
+    )
+    expect(body).toContain('Change sourceIp to 10.0.20.1 in config.yaml and restart.')
     expect(body).toContain('If they are two different routers, nothing is wrong.')
     expect(body).toContain('this notice clears itself when 192.168.88.1 sends its first log.')
 
-    const pres = [...container.querySelectorAll('.split pre')].map((p) => p.textContent)
-    expect(pres).toEqual(['/system logging action set mikroview src-address=192.168.88.1'])
+    // No src-address command is ever printed -- pinning isn't the remedy.
+    expect(container.querySelector('.split pre')).toBeNull()
+    expect(container.textContent).not.toContain('src-address=')
 
     // The step list carries the split as its receipt.
     const rows = container.querySelectorAll('.steps .step-row')
