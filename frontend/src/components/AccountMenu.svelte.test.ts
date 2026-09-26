@@ -184,6 +184,65 @@ describe('the Passkeys row (#1250)', () => {
   })
 })
 
+// #1331: the row only makes sense once there's a factor for the codes
+// to stand behind -- the server refuses the route otherwise (recovery
+// codes are a spare key, not a substitute for one).
+describe('the New recovery codes… row (#1331)', () => {
+  it('is absent while the account has neither factor', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = false
+    authState.passkeyCount = 0
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /new recovery codes/i })).toBeNull()
+  })
+
+  it('is offered once the account has an authenticator app', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = true
+    authState.passkeyCount = 0
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.getByRole('menuitem', { name: /new recovery codes/i })).toBeTruthy()
+  })
+
+  it('is offered once the account has a passkey', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = false
+    authState.passkeyCount = 1
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.getByRole('menuitem', { name: /new recovery codes/i })).toBeTruthy()
+  })
+
+  it('is absent for an SSO-only account, same gate as the two factor rows', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = false
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('menuitem', { name: /new recovery codes/i })).toBeNull()
+  })
+
+  it('opens RecoveryCodesOverlay on click', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    authState.hasTOTP = true
+    render(AccountMenu)
+    await openMenu()
+
+    expect(screen.queryByRole('dialog', { name: /new recovery codes/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /new recovery codes/i }))
+    expect(screen.getByRole('dialog', { name: /new recovery codes/i })).toBeTruthy()
+  })
+})
+
 // #1332: AuthenticatorOverlay used to open off authState.showAuthenticator,
 // a single flag shared by every mounted copy -- so the deck keeping
 // several cards (and several AccountMenus) mounted at once meant one
