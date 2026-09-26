@@ -113,6 +113,24 @@ over it. "Stay on the fall" and "Add another router" are alerts.
 
 ## Verdicts
 
-None yet.
+**Owner, 2026-09-26 (verbatim),** answering question 2 of that session, after
+asking whether AC is meant to sit on top of the real fall (yes: a build
+mounts the real `Fall.svelte` under the panel), with the screenshot
+`shots/owner-verdict-enrol-line.png` (the four green ledger rows:
+certificate fetched, enrol line, first push, nightly backup):
+
+"AC should be developed further. AD - the enrolment line is a nice idea
+badly implemented. Use more mikroview colours. Try giving the 'succes'
+things a mix of mikroview colours instead. And just be a bit more vibrant
+instead, with greying out used to denote things. I'm not saying don't use
+green at all, I'm just saying try to be more playful with the colour
+whilst still being clear about what ti means"
+
+- **AC** kept: developed further in round 9.
+- **AD** dropped as a direction. Its enrolment line (the running record
+  of what the router has done) survives as an idea, to be redrawn.
+- Colour, for round 9: the success rows are all one green; use a mix of
+  MikroView's own colours, more vibrant, with greying out carrying
+  meaning (done, not applicable), while still reading clearly.
 
 Written by Fable 5.1, 2026-09-26.
