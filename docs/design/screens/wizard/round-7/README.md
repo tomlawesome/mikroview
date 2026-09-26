@@ -114,6 +114,37 @@ Reroll are drawn but not simulated.
 
 ## Verdicts
 
-None yet.
+**Owner, 2026-09-26 (verbatim):** "Z - The ledger - Not awesome inspiring
+in any way but, actually, this is a good implementation of the original
+wizard style, and I do like it. Well done.
+
+AA - awful, just so wildly bad. Totally unusable
+
+AB - some interesting ideas, but.... you're loading cards, inside a
+card, with a scrollable card inside the big card.....
+
+FWIW if we don't already, we should ensure that the router ip block
+rejects incorrect formatting for IPs.
+
+Z - this is a candidate. You may review it and see how you could improve
+it even more, polishing and refining it for an elegant experience. Try
+using more Mikroview colour and design language, if you can, and maybe
+just add some more interesting elements to it.
+
+I'd really like you to explore another full screen version that has
+more journey. More user story.
+
+The thing that _all_ of them fail on is the colour profile and Mikroview
+design language. Mikroview uses beautiful, elegantly delivered visuals
+for clear display, and colour to bring it alive. All of these mostlyjust
+use the boilerplate theme , green and blue."
+
+**Z survives as a candidate**; AA and AB dropped. Round 8: Z refined
+(more of the app's colour and design language, more interesting
+elements), plus a new full-screen concept with more journey and user
+story. The lesson across rounds 6–7: the wizard's own green/blue
+receipts are the boilerplate, not the identity — the identity is how the
+fall, the topography and the stream use colour to bring the picture
+alive.
 
 Written by Fable 5.1, 2026-09-26.
