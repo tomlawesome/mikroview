@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview wizard — round 4 — Direction T</title>
+<style>
+  /* ============================================================
+     WIZARD AS MODAL (#487) — ROUND 4 — DIRECTION T (#1374)
+     Carries round 2's accepted geometry, header, footer, step-list
+     and observation-flavour patterns verbatim (colours cross-checked
+     against frontend/src/app.css and the real SetupWizard.svelte,
+     dark only -- the app has no light theme). New this round: the
+     "Before we start" form, the told strip, the three-move step body,
+     the "Nothing yet?" drawer, undo, the reported-version amber line,
+     the Connect-the-router merge, and (owner, 2026-09-26) the lighter
+     visual weight of §8: folding command blocks, a slim step rail, no
+     boxed notes, one motion.
+     ============================================================ */
+  :root {
+    --void: #06080e;      /* frontend/src/app.css --bg, dark only */
+    --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13);   /* app.css --border */
+    --hair-2: rgba(160, 185, 230, 0.26); /* app.css --hair-2 */
+    --ink: #e9eefb;    /* app.css --fg */
+    --ink-2: #97a4c4;  /* app.css --fg-muted */
+    --ink-3: #55628a;  /* app.css --fg-dim */
+    --accent: #9db8e8; /* app.css --accent */
+    --ok: #3ecf7e;     /* app.css --accept */
+    --warn: #f28a1e;   /* app.css --warn */
+    --bad: #ef4444;    /* app.css --reject */
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--void); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3);
+    padding: 8px 24px; background: rgba(2,3,7,0.85);
+  }
+  .stage { display: flex; justify-content: center; align-items: flex-start; padding: 44px 20px 30px; }
+
+  /* ---- the modal: 940px, 224px step list -- carried verbatim ---- */
+  .wiz {
+    width: 940px; max-width: 96vw; display: flex; flex-direction: column;
+    background: rgba(10, 14, 24, 0.97); border: 1px solid var(--hair-2); border-radius: 14px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .whead { display: flex; align-items: baseline; gap: 12px; padding: 20px 26px 14px; border-bottom: 1px solid var(--hair); }
+  .whead .step { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .whead h3 { font-size: 18px; font-weight: 600; }
+  .whead .x {
+    margin-left: auto; align-self: center; width: 26px; height: 26px; border: 1px solid var(--hair-2);
+    border-radius: 7px; display: grid; place-items: center; color: var(--ink-2); font-size: 13px;
+    background: transparent; cursor: pointer; font-family: inherit;
+  }
+
+  /* told strip + amber line: under the header, every step and the ledger */
+  .told { padding: 10px 26px; font-size: 11.5px; color: var(--ink-3); border-bottom: 1px solid var(--hair); display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+  .amber { padding: 9px 26px; font-size: 11.5px; color: var(--warn); border-bottom: 1px solid var(--hair); background: rgba(242,138,30,0.06); }
+  .linkbtn { background: none; border: none; padding: 0; margin: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-decoration-color: rgba(157,184,232,0.35); }
+  .amber .linkbtn { color: var(--warn); text-decoration-color: rgba(242,138,30,0.4); }
+
+  .wbody { display: flex; min-height: 0; flex: 1; }
+
+  /* ---- slim rail (§8): number-in-ring, title, one short receipt line ---- */
+  .rail { width: 224px; flex: none; border-right: 1px solid var(--hair); padding: 18px 14px; }
+  .rl { display: flex; gap: 10px; align-items: flex-start; padding: 8px 8px; border-radius: 8px; font-size: 12px; color: var(--ink-3); border: 1px solid transparent; }
+  .rl .ring { width: 20px; height: 20px; flex: none; border-radius: 50%; border: 1px solid var(--hair-2); display: grid; place-items: center; font-size: 10px; margin-top: 1px; }
+  .rl .rlt { font-weight: 600; font-size: 12.5px; color: var(--ink-2); }
+  .rl .rlsub { display: block; font-size: 10px; font-family: var(--mono); color: var(--ink-3); margin-top: 2px; }
+  .rl.on { border-color: var(--hair-2); background: rgba(157,184,232,0.05); }
+  .rl.on .ring { border-color: var(--accent); color: var(--accent); }
+  .rl.on .rlt { color: var(--ink); }
+  .rl.done .ring { border-color: var(--ok); color: var(--ok); background: rgba(62,207,126,0.08); }
+  .rl.done .rlt { color: var(--ink-2); }
+  .rl.ledger { margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--hair); border-radius: 0; }
+  .rl.ledger .ring { border: none; color: var(--ink-3); font-size: 12px; }
+  .rl.ledger .rlt { font-weight: 600; }
+
+  /* ---- one reading column, ~640px, generous vertical space ---- */
+  .wmain { flex: 1; padding: 26px 30px 22px; min-width: 0; }
+  .wmain.full { max-width: none; }
+  .col { max-width: 640px; }
+  .intro { font-size: 13px; color: var(--ink-2); margin-bottom: 20px; }
+
+  .moves { display: flex; flex-direction: column; gap: 24px; }
+  .mh { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-bottom: 10px; }
+  .lead { font-size: 13.5px; color: var(--ink-2); line-height: 1.55; margin-bottom: 4px; }
+  .lead b { color: var(--ink); font-weight: 600; }
+  .lead2 { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
+
+  .move-done { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
+  .move-done .tick { color: var(--ok); font-size: 11px; }
+  .move-done time { margin-left: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  .move-dimmed { opacity: 0.45; }
+  .move-dimmed .mh { color: var(--ink-2); opacity: 0.9; }
+  .move-dimmed .mp { font-size: 11px; color: var(--ink-3); }
+
+  /* ---- folding command block: first line + "N more lines", Copy the one primary control ---- */
+  .foldbox { border: 1px solid var(--hair); border-radius: 9px; background: rgba(4,6,11,0.55); margin-top: 12px; overflow: hidden; }
+  .foldbox .firstline { font: 11.5px/1.6 var(--mono); color: var(--ink); padding: 12px 14px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .foldbox .moreline {
+    display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+    font: 11px var(--mono); color: var(--ink-3); padding: 4px 14px 12px;
+  }
+  .foldbox.expanded .cmdtext {
+    font: 11.3px/1.6 var(--mono); color: var(--ink-2); padding: 12px 14px; white-space: pre-wrap;
+    word-break: break-all; overflow-y: auto; overflow-x: hidden; max-height: 340px;
+  }
+  .foldbox .lessline { display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer; font: 11px var(--mono); color: var(--ink-3); padding: 4px 14px 12px; border-top: 1px solid var(--hair); }
+  .copyrow { margin-top: 10px; }
+  .btn {
+    font: 600 12.5px/1 var(--sans); border-radius: 8px; padding: 8px 18px; border: 1px solid var(--hair-2);
+    color: var(--ink-2); background: transparent; cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); color: var(--void); border-color: var(--accent); }
+  .btn.ghost { border-color: transparent; color: var(--ink-3); }
+  .btn.secondary { border-color: var(--bad); color: var(--bad); }
+  .caption { margin-top: 9px; font-size: 10.8px; color: var(--ink-3); line-height: 1.5; }
+  .caption b.paste-again { color: var(--warn); font-weight: 650; }
+
+  /* ---- observation / receipt: plain type on the background, no box ---- */
+  .observe { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
+  .observe .dot { font-size: 10px; color: var(--ink-3); }
+  .observe.waiting .dot { animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .observe time { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  .receiptline { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ok); }
+  .receiptline + .receiptline { margin-top: 7px; }
+  .receiptline time { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+
+  /* the one motion: waiting dot -> tick, receipt slides in. Instant under reduced motion. */
+  @keyframes tick-in { from { opacity: 0; transform: scale(0.5); } to { opacity: 1; transform: scale(1); } }
+  @keyframes receipt-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
+  .tick-anim { display: inline-block; animation: tick-in 300ms ease; }
+  .receipt-anim { animation: receipt-in 300ms ease; }
+  @media (prefers-reduced-motion: reduce) {
+    .tick-anim, .receipt-anim { animation: none !important; }
+    .observe.waiting .dot { animation: none !important; }
+  }
+
+  .undoopen { margin-top: 10px; background: none; }
+  .undopanel {
+    margin-top: 12px; border: 1px solid var(--hair); border-radius: 10px; padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .undopanel h5 { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-bottom: 7px; }
+  .undopanel p { font-size: 11.8px; color: var(--ink-2); line-height: 1.5; }
+  .undopanel .rmcmd { font: 11px/1.6 var(--mono); color: var(--ink-2); white-space: pre; overflow-x: auto; margin: 8px 0; }
+  .undopanel .note { font-size: 10.5px; color: var(--ink-3); margin-top: 6px; }
+
+  /* ---- the "Nothing yet?" drawer -- the one box open in Wait ---- */
+  .drawer { margin-top: 10px; }
+  .drawer > .handle { background: none; border: none; padding: 0; font: inherit; font-size: 11.5px; color: var(--ink-2); cursor: pointer; }
+  .drawer-body {
+    margin-top: 0; border: 1px solid var(--hair); border-radius: 9px; padding: 0 14px; background: rgba(4,6,11,0.5);
+    max-height: 0; opacity: 0; overflow: hidden; transition: max-height .32s ease, opacity .24s ease, margin-top .32s ease, padding .32s ease;
+  }
+  .drawer-body.open { max-height: 560px; opacity: 1; margin-top: 8px; padding: 12px 14px; }
+  @media (prefers-reduced-motion: reduce) { .drawer-body { transition: none; } }
+  .drawer-h { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin: 2px 0 7px; }
+  .drawer-h + .drawer-h { margin-top: 14px; }
+  .checklist { list-style: none; padding: 0; }
+  .checklist li { display: flex; gap: 8px; align-items: baseline; font-size: 11.8px; color: var(--ink-2); padding: 5px 0; }
+  .checklist .cs { flex: none; font-size: 11px; }
+  .checklist.ok-item .cs, .checklist li.ok .cs { color: var(--ok); }
+  .checklist li.bad .cs { color: var(--bad); }
+  .fix { display: block; margin-top: 3px; }
+  .qlist { list-style: none; padding: 0; }
+  .qlist li { font-size: 11.5px; color: var(--ink-2); padding: 6px 0; border-top: 1px solid var(--hair); }
+  .qlist li:first-child { border-top: none; }
+  .qlist code { font-family: var(--mono); font-size: 10.8px; color: var(--ink); }
+
+  .wfoot { display: flex; gap: 10px; align-items: center; padding: 16px 26px; border-top: 1px solid var(--hair); }
+  .wfoot .gap { margin-left: auto; }
+  .wfoot.before .primarycol { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .reasonrow { font-size: 10.8px; color: var(--ink-3); }
+
+  /* ---- Before-we-start form ---- */
+  .field { margin-bottom: 18px; }
+  .field label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--ink); margin-bottom: 7px; }
+  .tag { font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 650; padding: 1px 7px; border-radius: 4px; }
+  .tag.req { color: var(--accent); border: 1px solid rgba(157,184,232,0.4); }
+  .tag.opt { color: var(--ink-3); border: 1px solid var(--hair-2); }
+  .field input, .field select {
+    width: 100%; background: rgba(4,6,11,0.7); border: 1px solid var(--hair-2); border-radius: 8px;
+    padding: 9px 12px; font-size: 12.5px; color: var(--ink); font-family: var(--sans);
+  }
+  .field select.placeholder { color: var(--ink-3); }
+  .field .help { margin-top: 6px; font-size: 10.8px; color: var(--ink-3); line-height: 1.5; }
+  .switchrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .switch {
+    width: 38px; height: 22px; border-radius: 12px; border: 1px solid var(--hair-2); background: rgba(4,6,11,0.7);
+    position: relative; flex: none; cursor: pointer;
+  }
+  .switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--ink-3); transition: transform .18s ease, background .18s ease; }
+  .switch[aria-checked="true"] { background: rgba(157,184,232,0.22); border-color: var(--accent); }
+  .switch[aria-checked="true"] .knob { transform: translateX(16px); background: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .switch .knob { transition: none; } }
+
+  /* ---- finish pane: full receipts live here, carried-forward pattern ---- */
+  .fin .headline { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .fin .headline b { color: var(--ok); }
+  .finrow { border-left: 2px solid var(--ok); padding: 3px 0 3px 14px; margin-bottom: 14px; }
+  .finrow .fnum { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .finrow .freceipt { font-size: 11.5px; color: var(--ok); margin-top: 2px; }
+  .startagain { margin-top: 6px; display: inline-block; font-size: 12px; }
+
+  code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 4 — DIRECTION T</b> #1374 · gated version pick · one form up front · told strip · three-move steps · lighter visual weight (§8)
+  <span style="margin-left:auto"><a href="../round-3/README.md">← round 3: as built</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= T1 : BEFORE WE START, EMPTY ================= -->
+<section class="scene" id="t1">
+  <div class="scene-tag">t1 — Before we start, empty — the form; Begin disabled with its reason</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><h3>Before we start</h3></div>
+      <div class="wmain col">
+        <p class="intro">Three pastes and your router is talking to MikroView.</p>
+
+        <div class="field">
+          <label>RouterOS version <span class="tag req">Required</span></label>
+          <select class="placeholder" aria-label="RouterOS version">
+            <option value="" selected disabled>Pick your RouterOS version</option>
+            <option value="7.16.2">7.16.2</option>
+            <option value="7.16">7.16</option>
+            <option value="7.15.3">7.15.3</option>
+            <option value="6.49">6.49</option>
+          </select>
+          <p class="help">Every command below is written for this release, and MikroView checks it against the version the router reports later.</p>
+        </div>
+
+        <div class="field">
+          <label>Address the router reaches MikroView on <span class="tag req">Required</span></label>
+          <input type="text" aria-label="Address the router reaches MikroView on" value="192.168.13.15:8080">
+          <p class="help">The router has to reach this address — a proxy, a second interface or a mapped port all change it.</p>
+        </div>
+
+        <div class="field">
+          <label>Router name <span class="tag req">Required</span></label>
+          <input type="text" aria-label="Router name" placeholder="">
+          <p class="help">How the router appears everywhere in MikroView. Letters, digits, dashes.</p>
+        </div>
+
+        <div class="field">
+          <label>The router's own address <span class="tag req">Required</span></label>
+          <input type="text" aria-label="The router's own address" placeholder="">
+          <p class="help">MikroView opens the log port for this address only, until the router's first line arrives.</p>
+        </div>
+
+        <div class="field">
+          <label>Your password <span class="tag req">Required</span></label>
+          <input type="password" aria-label="Your password" placeholder="">
+          <p class="help">Opening that port is what asks who you are. Used now, never kept.</p>
+        </div>
+
+        <div class="field">
+          <div class="switchrow">
+            <label style="margin:0">Back up the router nightly <span class="tag opt">Optional</span></label>
+            <button type="button" class="switch" role="switch" aria-checked="false" aria-label="Back up the router nightly"><span class="knob"></span></button>
+          </div>
+          <p class="help">Needs a key file on the MikroView machine. Off leaves the backup step in the list as skipped.</p>
+        </div>
+      </div>
+      <div class="wfoot before">
+        <button type="button" class="btn ghost" aria-label="Close setup">✕</button>
+        <span class="gap"></span>
+        <div class="primarycol">
+          <button type="button" class="btn primary" disabled>Begin setup</button>
+          <p class="reasonrow">Pick a RouterOS version to begin</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T2 : BEFORE WE START, FILLED ================= -->
+<section class="scene" id="t2">
+  <div class="scene-tag">t2 — Before we start, filled — all Required filled, backup switch off; Begin enabled</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><h3>Before we start</h3></div>
+      <div class="wmain col">
+        <p class="intro">Three pastes and your router is talking to MikroView.</p>
+
+        <div class="field">
+          <label>RouterOS version <span class="tag req">Required</span></label>
+          <select aria-label="RouterOS version">
+            <option value="">Pick your RouterOS version</option>
+            <option value="7.16.2" selected>7.16.2</option>
+            <option value="7.16">7.16</option>
+            <option value="7.15.3">7.15.3</option>
+            <option value="6.49">6.49</option>
+          </select>
+          <p class="help">Every command below is written for this release, and MikroView checks it against the version the router reports later.</p>
+        </div>
+
+        <div class="field">
+          <label>Address the router reaches MikroView on <span class="tag req">Required</span></label>
+          <input type="text" aria-label="Address the router reaches MikroView on" value="192.168.13.15:8080">
+          <p class="help">The router has to reach this address — a proxy, a second interface or a mapped port all change it.</p>
+        </div>
+
+        <div class="field">
+          <label>Router name <span class="tag req">Required</span></label>
+          <input type="text" aria-label="Router name" value="rb5009">
+          <p class="help">How the router appears everywhere in MikroView. Letters, digits, dashes.</p>
+        </div>
+
+        <div class="field">
+          <label>The router's own address <span class="tag req">Required</span></label>
+          <input type="text" aria-label="The router's own address" value="192.168.13.1">
+          <p class="help">MikroView opens the log port for this address only, until the router's first line arrives.</p>
+        </div>
+
+        <div class="field">
+          <label>Your password <span class="tag req">Required</span></label>
+          <input type="password" aria-label="Your password" value="hunter22">
+          <p class="help">Opening that port is what asks who you are. Used now, never kept.</p>
+        </div>
+
+        <div class="field">
+          <div class="switchrow">
+            <label style="margin:0">Back up the router nightly <span class="tag opt">Optional</span></label>
+            <button type="button" class="switch" role="switch" aria-checked="false" aria-label="Back up the router nightly"><span class="knob"></span></button>
+          </div>
+          <p class="help">Needs a key file on the MikroView machine. Off leaves the backup step in the list as skipped.</p>
+        </div>
+      </div>
+      <div class="wfoot before">
+        <button type="button" class="btn ghost" aria-label="Close setup">✕</button>
+        <span class="gap"></span>
+        <div class="primarycol">
+          <button type="button" class="btn primary">Begin setup</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T3 : CONNECT · PASTE ================= -->
+<section class="scene" id="t3">
+  <div class="scene-tag">t3 — Connect the router · Paste — told strip; slim rail (four rows); move 1 open, block folded, Copy primary; moves 2–3 dimmed</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="wbody">
+        <div class="rail">
+          <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
+          <div class="rl"><span class="ring">2</span><span><span class="rlt">Tag firewall rules</span></span></div>
+          <div class="rl"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
+          <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
+          <div class="rl ledger"><span class="ring">→</span><span><button type="button" class="linkbtn" aria-label="Open where setup stands">Where setup stands</button></span></div>
+        </div>
+        <div class="wmain">
+          <div class="moves">
+            <div class="move-open">
+              <div class="mh">1 · Paste</div>
+              <p class="lead">Fetch MikroView's certificate, then point this router's logging here and mark the run as <b>rb5009</b>'s:</p>
+              <div class="foldbox">
+                <div class="firstline">/tool fetch url="https://192.168.13.15:8080/ca.crt" check-certificate=no dst-path=mikroview-ca.crt</div>
+                <button type="button" class="moreline" aria-label="Show all 5 lines of this command">… 4 more lines</button>
+              </div>
+              <p class="caption">Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal) · creates the mikroview logging action and its rule, then logs the enrol line</p>
+              <div class="copyrow"><button type="button" class="btn primary">Copy</button></div>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">2 · Wait</div>
+              <p class="mp">Needs the paste above.</p>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">3 · Receipt</div>
+              <p class="mp">Needs the certificate and the enrol line to arrive.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <button type="button" class="btn ghost">Skip this step</button>
+        <span class="gap"></span>
+        <button type="button" class="btn primary" aria-label="Next — you can always come back to this step">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T4 : CONNECT · WAIT ================= -->
+<section class="scene" id="t4">
+  <div class="scene-tag">t4 — Connect the router · Wait — move 1 collapsed to "Copied 14:02"; observation line; drawer closed</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="wbody">
+        <div class="rail">
+          <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
+          <div class="rl"><span class="ring">2</span><span><span class="rlt">Tag firewall rules</span></span></div>
+          <div class="rl"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
+          <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
+          <div class="rl ledger"><span class="ring">→</span><span><button type="button" class="linkbtn" aria-label="Open where setup stands">Where setup stands</button></span></div>
+        </div>
+        <div class="wmain">
+          <div class="moves">
+            <div class="move-done"><span class="tick tick-anim">✓</span><span>Copied</span><time>14:02</time></div>
+            <div class="move-open">
+              <div class="mh">2 · Wait</div>
+              <div class="observe waiting"><span class="dot">●</span><span>Waiting for the certificate fetch and the enrol line to arrive.</span><time>14:02:41</time></div>
+              <div class="drawer">
+                <button type="button" class="handle" aria-expanded="false" aria-controls="t4-drawer" aria-label="Open troubleshooting: nothing yet?">Nothing yet? ▸</button>
+                <div class="drawer-body" id="t4-drawer"></div>
+              </div>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">3 · Receipt</div>
+              <p class="mp">Needs the certificate and the enrol line to arrive.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <button type="button" class="btn ghost">Skip this step</button>
+        <span class="gap"></span>
+        <button type="button" class="btn primary" aria-label="Next — forces past this wait; you can still undo">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T5 : CONNECT · WAIT, DRAWER OPEN ================= -->
+<section class="scene" id="t5">
+  <div class="scene-tag">t5 — Connect the router · Wait, drawer open — the two lists of §4, with the 192.168.254.1 cross</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="wbody">
+        <div class="rail">
+          <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
+          <div class="rl"><span class="ring">2</span><span><span class="rlt">Tag firewall rules</span></span></div>
+          <div class="rl"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
+          <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
+          <div class="rl ledger"><span class="ring">→</span><span><button type="button" class="linkbtn" aria-label="Open where setup stands">Where setup stands</button></span></div>
+        </div>
+        <div class="wmain">
+          <div class="moves">
+            <div class="move-done"><span class="tick">✓</span><span>Copied</span><time>14:02</time></div>
+            <div class="move-open">
+              <div class="mh">2 · Wait</div>
+              <div class="observe waiting"><span class="dot">●</span><span>Waiting for the certificate fetch and the enrol line to arrive.</span><time>14:02:41</time></div>
+              <div class="drawer">
+                <button type="button" class="handle" aria-expanded="true" aria-controls="t5-drawer" aria-label="Close troubleshooting: nothing yet?">Nothing yet? ▾</button>
+                <div class="drawer-body open" id="t5-drawer">
+                  <div class="drawer-h">What MikroView checked</div>
+                  <ul class="checklist">
+                    <li class="ok"><span class="cs">✓</span><span>The certificate covers 192.168.13.15.</span></li>
+                    <li class="ok"><span class="cs">✓</span><span>The log port is open for 192.168.13.1 until 14:17.</span></li>
+                    <li class="bad"><span class="cs">✗</span><span>Lines are arriving from <b>192.168.254.1</b> and being refused. If that is rb5009, its logs leave from that address, not the one you told me → <button type="button" class="linkbtn fix" aria-label="Use 192.168.254.1 instead of 192.168.13.1">Use 192.168.254.1 instead</button></span></li>
+                  </ul>
+                  <div class="drawer-h">Only you can check</div>
+                  <ul class="qlist">
+                    <li>Did the paste go into the terminal, not System ▸ Scripts ▸ Source? (Scripts stores the text without running it.)</li>
+                    <li>Did the paste end with the <code>/log info "mikroview-enrol …"</code> line? (RouterOS accepts the earlier lines silently without it.)</li>
+                    <li>Has the token lapsed? Token good until 14:17 · <button type="button" class="linkbtn" aria-label="Reroll the enrolment token">Reroll</button></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">3 · Receipt</div>
+              <p class="mp">Needs the certificate and the enrol line to arrive.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <button type="button" class="btn ghost">Skip this step</button>
+        <span class="gap"></span>
+        <button type="button" class="btn primary" aria-label="Next — forces past this wait; you can still undo">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T6 : CONNECT · RECEIPT, UNDO OPEN ================= -->
+<section class="scene" id="t6">
+  <div class="scene-tag">t6 — Connect the router · Receipt, undo open — the two-line receipt; §5's two blocks</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Step 1 of 4</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="wbody">
+        <div class="rail">
+          <div class="rl on"><span class="ring">✓</span><span><span class="rlt">Connect the router</span><span class="rlsub">14:03 · 192.168.13.1</span></span></div>
+          <div class="rl"><span class="ring">2</span><span><span class="rlt">Tag firewall rules</span></span></div>
+          <div class="rl"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
+          <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
+          <div class="rl ledger"><span class="ring">→</span><span><button type="button" class="linkbtn" aria-label="Open where setup stands">Where setup stands</button></span></div>
+        </div>
+        <div class="wmain">
+          <div class="moves">
+            <div class="move-done"><span class="tick">✓</span><span>Copied</span><time>14:02</time></div>
+            <div class="move-done"><span class="tick">✓</span><span>Waited</span><time>62s</time></div>
+            <div class="move-open receipt-anim">
+              <div class="mh">3 · Receipt</div>
+              <div class="receiptline"><span class="tick">✓</span><span>Certificate fetched by 192.168.13.1.</span><time>14:02:58</time></div>
+              <div class="receiptline"><span class="tick">✓</span><span>Enrol line arrived from 192.168.13.1.</span><time>14:03:04</time></div>
+              <div class="undoopen">
+                <button type="button" class="linkbtn" aria-expanded="true" aria-controls="t6-undo" aria-label="Undo this step">Undo this step…</button>
+                <div class="undopanel" id="t6-undo">
+                  <div>
+                    <h5>On MikroView</h5>
+                    <p>Forgets rb5009's enrolment. Its logs are refused until it enrols again. Its name, tokens and tables stay.</p>
+                    <div class="copyrow"><button type="button" class="btn secondary">Undo</button></div>
+                  </div>
+                  <div>
+                    <h5>On the router</h5>
+                    <div class="rmcmd">/certificate remove [find name=mikroview-ca.crt]
+/system logging remove [find action=mikroview]
+/system logging action remove [find name=mikroview]</div>
+                    <p class="caption">Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal)</p>
+                    <div class="copyrow"><button type="button" class="btn">Copy</button></div>
+                    <p class="note">Optional: MikroView cannot tell whether it ran.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <button type="button" class="btn ghost">Skip this step</button>
+        <span class="gap"></span>
+        <button type="button" class="btn primary">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T7 : PUSH · PASTE, BLOCK EXPANDED ================= -->
+<section class="scene" id="t7">
+  <div class="scene-tag">t7 — Push · Paste, block expanded — the folded block opened by a click, token inside, one Copy, caption</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Step 3 of 4</span><h3>Push router state</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="wbody">
+        <div class="rail">
+          <div class="rl done"><span class="ring">✓</span><span><span class="rlt">Connect the router</span><span class="rlsub">14:03 · 192.168.13.1</span></span></div>
+          <div class="rl done"><span class="ring">✓</span><span><span class="rlt">Tag firewall rules</span><span class="rlsub">14:04 · 3 rules</span></span></div>
+          <div class="rl on"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
+          <div class="rl"><span class="ring">4</span><span><span class="rlt">Back up the router</span></span></div>
+          <div class="rl ledger"><span class="ring">→</span><span><button type="button" class="linkbtn" aria-label="Open where setup stands">Where setup stands</button></span></div>
+        </div>
+        <div class="wmain">
+          <div class="moves">
+            <div class="move-open">
+              <div class="mh">1 · Paste</div>
+              <p class="lead">Push router state on a schedule, so MikroView can name interfaces and rules instead of bare addresses:</p>
+              <div class="foldbox expanded">
+                <div class="cmdtext">:if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=":local ruleRecs [:toarray \"\"]
+:foreach i,v in=[/ip/firewall/filter print as-value] do={
+  :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"dstPort\"=(\$v->\"dst-port\"); \"protocol\"=(\$v->\"protocol\"); \"log\"=(\$v->\"log\"); \"dstAddress\"=(\$v->\"dst-address\"); \"srcAddress\"=(\$v->\"src-address\"); \"connectionState\"=(\$v->\"connection-state\"); \"inInterface\"=(\$v->\"in-interface\"); \"outInterface\"=(\$v->\"out-interface\"); \"disabled\"=(\$v->\"disabled\"); \"packets\"=(\$v->\"packets\"); \"bytes\"=(\$v->\"bytes\")}
+  :set ruleRecs (\$ruleRecs, {\$rec})
+}
+:local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$ruleRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none
+
+:local logRecs [:toarray \"\"]
+:foreach i,v in=[/system/logging/action print as-value] do={
+  :if ((\$v->\"name\") = \"mikroview\") do={
+    :local rec {\"type\"=\"action\"; \"name\"=(\$v->\"name\"); \"target\"=(\$v->\"target\"); \"remote\"=(\$v->\"remote\"); \"remotePort\"=(\$v->\"remote-port\"); \"remoteProtocol\"=(\$v->\"remote-protocol\"); \"remoteLogFormat\"=(\$v->\"remote-log-format\"); \"checkCertificate\"=(\$v->\"check-certificate\")}
+    :set logRecs (\$logRecs, {\$rec})
+  }
+}
+:foreach i,v in=[/system/logging print as-value] do={
+  :if ((\$v->\"action\") = \"mikroview\") do={
+    :local rec {\"type\"=\"rule\"; \"topics\"=(\$v->\"topics\"); \"action\"=(\$v->\"action\"); \"disabled\"=(\$v->\"disabled\")}
+    :set logRecs (\$logRecs, {\$rec})
+  }
+}
+:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$logRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none" } else={ /system script set [find name=mv-push] policy=read,test source=":local ruleRecs [:toarray \"\"]
+:foreach i,v in=[/ip/firewall/filter print as-value] do={
+  :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"dstPort\"=(\$v->\"dst-port\"); \"protocol\"=(\$v->\"protocol\"); \"log\"=(\$v->\"log\"); \"dstAddress\"=(\$v->\"dst-address\"); \"srcAddress\"=(\$v->\"src-address\"); \"connectionState\"=(\$v->\"connection-state\"); \"inInterface\"=(\$v->\"in-interface\"); \"outInterface\"=(\$v->\"out-interface\"); \"disabled\"=(\$v->\"disabled\"); \"packets\"=(\$v->\"packets\"); \"bytes\"=(\$v->\"bytes\")}
+  :set ruleRecs (\$ruleRecs, {\$rec})
+}
+:local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$ruleRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none
+
+:local logRecs [:toarray \"\"]
+:foreach i,v in=[/system/logging/action print as-value] do={
+  :if ((\$v->\"name\") = \"mikroview\") do={
+    :local rec {\"type\"=\"action\"; \"name\"=(\$v->\"name\"); \"target\"=(\$v->\"target\"); \"remote\"=(\$v->\"remote\"); \"remotePort\"=(\$v->\"remote-port\"); \"remoteProtocol\"=(\$v->\"remote-protocol\"); \"remoteLogFormat\"=(\$v->\"remote-log-format\"); \"checkCertificate\"=(\$v->\"check-certificate\")}
+    :set logRecs (\$logRecs, {\$rec})
+  }
+}
+:foreach i,v in=[/system/logging print as-value] do={
+  :if ((\$v->\"action\") = \"mikroview\") do={
+    :local rec {\"type\"=\"rule\"; \"topics\"=(\$v->\"topics\"); \"action\"=(\$v->\"action\"); \"disabled\"=(\$v->\"disabled\")}
+    :set logRecs (\$logRecs, {\$rec})
+  }
+}
+:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$logRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none" }
+:if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
+/system script run mv-push</div>
+                <button type="button" class="lessline" aria-label="Show fewer lines of this command">Show fewer lines ▴</button>
+              </div>
+              <p class="caption">Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal) · carries this router's push token, so keep the paste to this router</p>
+              <div class="copyrow"><button type="button" class="btn primary">Copy</button></div>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">2 · Wait</div>
+              <p class="mp">Needs the paste above.</p>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">3 · Receipt</div>
+              <p class="mp">Needs the first push to arrive.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <button type="button" class="btn ghost">Skip this step</button>
+        <span class="gap"></span>
+        <button type="button" class="btn primary" aria-label="Next — you can always come back to this step">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T8 : WHERE SETUP STANDS ================= -->
+<section class="scene" id="t8">
+  <div class="scene-tag">t8 — Where setup stands — four-row ledger with the §6 amber line; primary Confirm rb5009 is set up, secondary Take me to the fall; Start setup again… at the foot</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Setup</span><h3>Where setup stands</h3><button type="button" class="x" aria-label="Close setup">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="amber">You told me 7.16.2; rb5009 reports 7.24.4. Upgrade warnings were re-checked — 1 applies to Send logs · <button type="button" class="linkbtn" aria-label="Show the upgrade warning on Connect the router">Show</button></div>
+      <div class="wbody">
+        <div class="wmain full col" style="max-width:720px">
+          <div class="fin">
+            <p class="headline"><b>Logs are flowing.</b> Four steps stand on evidence.</p>
+            <div class="finrow">
+              <div class="fnum">1. Connect the router</div>
+              <div class="freceipt">certificate fetched · 14:02 · enrol line arrived · 14:03</div>
+            </div>
+            <div class="finrow">
+              <div class="fnum">2. Tag firewall rules</div>
+              <div class="freceipt">3 rules decoding · fwd-drop · wan-in · nat</div>
+            </div>
+            <div class="finrow">
+              <div class="fnum">3. Push router state</div>
+              <div class="freceipt">first push · 14:05</div>
+            </div>
+            <div class="finrow">
+              <div class="fnum">4. Back up the router</div>
+              <div class="freceipt">scheduled nightly · next run 03:00</div>
+            </div>
+            <button type="button" class="linkbtn startagain" aria-label="Start setup again">Start setup again…</button>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <span class="gap"></span>
+        <button type="button" class="btn ghost">Take me to the fall</button>
+        <button type="button" class="btn primary">Confirm rb5009 is set up</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= T9 : BEFORE WE START, BACKUP OFF -> STEP LIST ================= -->
+<section class="scene" id="t9">
+  <div class="scene-tag">t9 — Before we start, backup off → step list — three rows plus Where setup stands, nothing dimmed for the switched-off backup</div>
+  <div class="stage">
+    <div class="wiz">
+      <div class="whead"><span class="step">Step 1 of 3</span><h3>Connect the router</h3><button type="button" class="x" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</button></div>
+      <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
+      <div class="wbody">
+        <div class="rail">
+          <div class="rl on"><span class="ring">1</span><span><span class="rlt">Connect the router</span></span></div>
+          <div class="rl"><span class="ring">2</span><span><span class="rlt">Tag firewall rules</span></span></div>
+          <div class="rl"><span class="ring">3</span><span><span class="rlt">Push router state</span></span></div>
+          <div class="rl ledger"><span class="ring">→</span><span><button type="button" class="linkbtn" aria-label="Open where setup stands">Where setup stands</button></span></div>
+        </div>
+        <div class="wmain">
+          <div class="moves">
+            <div class="move-open">
+              <div class="mh">1 · Paste</div>
+              <p class="lead">Fetch MikroView's certificate, then point this router's logging here and mark the run as <b>rb5009</b>'s:</p>
+              <div class="foldbox">
+                <div class="firstline">/tool fetch url="https://192.168.13.15:8080/ca.crt" check-certificate=no dst-path=mikroview-ca.crt</div>
+                <button type="button" class="moreline" aria-label="Show all 5 lines of this command">… 4 more lines</button>
+              </div>
+              <p class="caption">Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal) · creates the mikroview logging action and its rule, then logs the enrol line</p>
+              <div class="copyrow"><button type="button" class="btn primary">Copy</button></div>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">2 · Wait</div>
+              <p class="mp">Needs the paste above.</p>
+            </div>
+            <div class="move-dimmed">
+              <div class="mh">3 · Receipt</div>
+              <p class="mp">Needs the certificate and the enrol line to arrive.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wfoot">
+        <button type="button" class="btn ghost">Back</button>
+        <button type="button" class="btn ghost">Skip this step</button>
+        <span class="gap"></span>
+        <button type="button" class="btn primary" aria-label="Next — you can always come back to this step">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>
