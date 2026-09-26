@@ -127,8 +127,8 @@ green at all, I'm just saying try to be more playful with the colour
 whilst still being clear about what ti means"
 
 - **AC** kept: developed further in round 9.
-- **AD** dropped as a direction. Its enrolment line (the running record
-  of what the router has done) survives as an idea, to be redrawn.
+- **AD** kept too, not dropped (owner correction, verbatim: "? AD is not
+  dropped at all"). Its enrolment line is a good idea to redraw.
 - Colour, for round 9: the success rows are all one green; use a mix of
   MikroView's own colours, more vibrant, with greying out carrying
   meaning (done, not applicable), while still reading clearly.
