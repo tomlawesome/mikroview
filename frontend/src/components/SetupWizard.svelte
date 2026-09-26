@@ -1734,9 +1734,8 @@
                   </p>
                   <p class="note">
                     <strong>If they are the same router</strong>, tell MikroView the address it's
-                    actually using rather than pinning the router to another one: the router picks the
-                    address its logs and its pushes leave from, and that choice can't be told to hold
-                    still for syslog alone.
+                    actually using. The router picks that address itself, for its logs and its pushes
+                    alike, so MikroView has to follow it rather than the other way round.
                   </p>
                   {#each splits as split (split.declared)}
                     <p class="note">
