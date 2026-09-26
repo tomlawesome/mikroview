@@ -147,7 +147,7 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
 
-## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio
+## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio — #1376
 
 - 2026-09-26 · 18eb8dad (fix/1362-enrol-403, local `go test ./...`, this host with nine agents' builds and test runs alongside) · the same ratio assertion tripped; passed alone straight afterwards. Second sighting.
 
