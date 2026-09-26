@@ -920,11 +920,11 @@ type Engine struct {
 // full menu, why it's a fixed menu rather than an arbitrary URL field,
 // and how the refresh cadence/entry-count cap were decided.
 //
-// On by default with Spamhaus's DROP list -- the issue's own
-// recommended starting point: small, free, no registration, and
-// curated specifically to only include netblocks Spamhaus is confident
-// are entirely malicious-controlled, a safe "flag on sight" default
-// unlike a larger, noisier aggregated list would be. Set sources to an
+// On by default with both feeds on the menu, Spamhaus's DROP list and
+// Emerging Threats' compromised-IPs list (owner decision, 2026-09-25,
+// #1359) -- see internal/blocklist.DefaultSources for why. An operator
+// who sets sources explicitly here keeps exactly the list they wrote;
+// this default only applies when the key is absent. Set sources to an
 // empty list (`sources: []`) to disable local blocklist matching
 // entirely. Refresh cadence is intentionally not configurable here --
 // see internal/blocklist.RefreshInterval's doc comment.
@@ -1449,8 +1449,13 @@ func defaults() Config {
 			// internal/detect.Config's own defaults.
 			// EDROP is deliberately absent: Spamhaus merged it into
 			// DROP on 2024-04-10 and the endpoint now serves no ranges
-			// at all.
-			Sources: []string{"spamhaus_drop"},
+			// at all. TestBlocklistDefaultMatchesBlocklistPackage pins
+			// this literal to internal/blocklist.DefaultSources, the
+			// same drift guard TestNetClassDefaultMatchesNetclassPackage
+			// gives NetClass.Sources below, after that exact drift
+			// (config missing a source netclass.New was wired with)
+			// shipped once already.
+			Sources: []string{"spamhaus_drop", "emerging_threats_compromised"},
 		},
 		Droplist: Droplist{
 			StorePath: DefaultDataDir + "/droplist.json",
