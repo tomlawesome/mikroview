@@ -763,20 +763,25 @@ One block of the push script is not router data at all. It reports back
 what the setup wizard left on this router, so MikroView can tell when a
 router is running an out-of-date copy of it.
 
-It sends exactly two things, once per push:
+It sends, once per push:
 
-- the `mikroview` logging action — where it sends logs (`remote`,
-  `remote-port`), how (`target`, `remote-protocol`,
-  `remote-log-format`, `check-certificate`);
-- every `/system logging` rule pointing at that action — its `topics`,
-  and whether it is disabled.
+- every logging action still pointed at this MikroView instance — not
+  only one named `mikroview`. Where it sends logs (`remote`,
+  `remote-port`, `src-address`), how (`target`, `remote-protocol`,
+  `remote-log-format`, `check-certificate`) (#1373: an older setup's
+  action, or one of RouterOS's own built-ins repointed here, still
+  counts — anything sending logs to this instance is reported, whatever
+  it is named);
+- every `/system logging` rule pointing at one of those actions — its
+  `topics`, and whether it is disabled.
 
 Plus one number: which version of the wizard wrote the script you
 pasted.
 
-Nothing else from your logging configuration is sent. Your other
-logging actions, your other rules, and everything else the router logs
-stay on the router — MikroView asks only about its own setup.
+Nothing else from your logging configuration is sent. Any action not
+pointed at this instance, your other rules, and everything else the
+router logs stay on the router — MikroView asks only about what is
+sending logs here.
 
 Why it needs telling: the script on your router is a copy, and MikroView
 never connects to a router to look at it (that is a design rule, not a
@@ -791,15 +796,21 @@ has. With the report, each router's card in MikroView says one of:
 - `setup never reported` — the script predates this report entirely, so
   the router has never said.
 
-Only four things count as a mismatch: where the logs are sent
-(`remote`, `remote-port`), the format they are sent in
-(`remote-log-format`), and the rules' `topics`. Anything else you have
-changed on the action is yours, and MikroView leaves it alone.
+Only four things count as a mismatch on the `mikroview` action itself:
+where the logs are sent (`remote`, `remote-port`), the format they are
+sent in (`remote-log-format`), and the rules' `topics`. Anything else
+you have changed on that action is yours, and MikroView leaves it
+alone.
 
 The fix in every case is the same: **your account menu ▸ Run setup…**,
 and paste the blocks again. The logging block updates what is already
 there rather than adding a second copy of it, so re-pasting a router
 that is already correct changes nothing.
+
+Any *other* action still sending logs here is a different kind of
+finding — not a mismatch on `mikroview`'s own setup, but a leftover from
+an earlier one — and gets its own line and its own fix; see "Cleaning
+up an earlier setup" near the end of this guide.
 
 ## 5. Verify
 
@@ -1209,3 +1220,42 @@ accepts an address: a router is accepted only by presenting a token.
 Working from this document instead of the wizard: repeat steps 1–3
 above for the new router, and give it whatever name you use when you
 declare it under `devices:` in `config.yaml` (see step 4b).
+
+## Cleaning up an earlier setup
+
+MikroView has changed what it puts on a router more than once (`src-address`
+pinned to `0.0.0.0` since #1370; before that, the plain-format action). Every
+router you upgraded across one of those changes may still be running
+whatever the *old* setup left, alongside the new one, unless something
+told you to remove it — and until #1373, nothing did. This is not
+hypothetical: one router carried the built-in `memory` and `remote`
+actions, both quietly repointed at MikroView by an old setup and both
+still sending from an address the current wizard never uses, while the
+router's own `memory` log sat empty and every line from those two
+actions showed up as an unexplained "refused" sender.
+
+Since #1373, the push script (step 4c) reports every logging action still
+pointed at this instance, not only the one named `mikroview` — see "4f.
+What the script tells MikroView about your own setup" above. Anything
+else it finds gets its own line on that router's card, plus the exact
+commands to fix it, in a box captioned "Paste into the router's
+terminal":
+
+- **another action of MikroView's own, from an earlier setup** — its
+  rules are removed, then the action itself;
+- **a RouterOS built-in (`memory`, `remote`, `disk`, `echo`) repointed
+  here** — reset to its factory target, never removed: RouterOS creates
+  these at boot and refuses to remove them;
+- **a `src-address` other than `0.0.0.0`**, or **the old UDP/514 or
+  plain-TCP syslog** — named alongside whichever of the two findings
+  above applies, since the fix is the same paste either way.
+
+A refused-sender card (see "Adding another router" above) also says so
+when the address is one of an enrolled router's own — the same
+repointed-built-in case, seen from the other side.
+
+**Whoever changes what the wizard sets on a router ships this file's own
+rule with it**: a change to what step 1–4 pastes is not finished until
+the cleanup for whatever it replaces is written too, here and in the
+detector behind the router card. The promote-to-main checklist carries
+this as its own line.

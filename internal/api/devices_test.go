@@ -17,6 +17,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
@@ -264,6 +265,44 @@ func TestDevicesRefusedListsAndBoundsAddresses(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Address != "10.10.0.9" {
 		t.Fatalf("Refused list = %+v, want the one refused address", got)
+	}
+}
+
+// TestDevicesRefusedNamesAnEnrolledRoutersOtherAddress is #1373's card
+// fix: a refused sender is not always a stranger. When its address
+// appears in an enrolled router's own pushed /ip/address table, the
+// card should say whose other address it is, rather than leave it as
+// an unexplained "refused" -- the owner's own case, where a repointed
+// built-in action kept sending from an address the wizard never uses.
+func TestDevicesRefusedNamesAnEnrolledRoutersOtherAddress(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	pushingRouter(t, s, "core", "203.0.113.9/24")
+	pushIPAddresses(t, s, "core",
+		ingest.IPAddressEntry{Address: "203.0.113.9/24"},
+		ingest.IPAddressEntry{Address: "192.168.254.1/24"},
+	)
+	s.Devices.Refuse("192.168.254.1", []byte("junk"))
+	s.Devices.Refuse("198.51.100.5", []byte("junk"))
+
+	resp, err := admin.Get(ts.URL + "/api/devices/refused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var got []refusedView
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	byAddr := map[string]refusedView{}
+	for _, v := range got {
+		byAddr[v.Address] = v
+	}
+	if note := byAddr["192.168.254.1"].Note; !strings.Contains(note, "core") {
+		t.Errorf("192.168.254.1's note = %q, want it to name core as the owning router", note)
+	}
+	if note := byAddr["198.51.100.5"].Note; note != "" {
+		t.Errorf("198.51.100.5's note = %q, want empty -- it is not any router's pushed address", note)
 	}
 }
 
