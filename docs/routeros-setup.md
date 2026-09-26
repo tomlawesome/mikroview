@@ -78,7 +78,9 @@ MikroView's only syslog listener speaks `remote-protocol=tls` (RFC
 `deploy/docker-compose.yml`) — confidentiality for firewall log traffic
 on the wire, and MikroView authenticating itself to the router.
 Replace `203.0.113.10` with the IP of the Docker host running
-MikroView, and `mikroview-host` with its hostname or IP.
+MikroView, and `<mikroview-host:port>` with its hostname or IP and
+port — the same one shown in your browser's address bar when you open
+MikroView (leave off `:port` only when it is 443).
 
 **Requires RouterOS 7.18 or later.** `remote-protocol=tls` is rejected
 on older releases (verified against booted CHR images: 6.49.18 and
@@ -101,7 +103,7 @@ firewall logs to *anything* claiming to be MikroView is not a router
 you want. Import the certificate once:
 
 ```
-/tool fetch url="https://<mikroview-host>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+/tool fetch url="https://<mikroview-host:port>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
 /certificate import file-name=mikroview-ca.crt passphrase=""
 ```
 
@@ -448,7 +450,7 @@ Read it into a variable instead, and send the body on standard input:
 
 ```
 read -rsp 'mikroview password: ' MV_PASS && echo
-curl -k -c jar -X POST https://<mikroview-host>/api/auth/login \
+curl -k -c jar -X POST https://<mikroview-host:port>/api/auth/login \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
   --data-binary @- <<JSON
 {"username":"<your-admin-username>","password":"$MV_PASS"}
@@ -462,7 +464,7 @@ certificate the machine trusts in front of MikroView — see
 [the TLS section](configuration.md#tls).
 
 ```
-curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
+curl -k -b <your session cookie> -X POST https://<mikroview-host:port>/api/tokens \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
   -d '{"name":"office-router","kind":"ingest","device":"office-router"}'
 ```
@@ -494,7 +496,7 @@ real RouterOS 7.23.3 router before writing this down:
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$recs}]
-/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
 
 **Update MikroView before you update this script.** MikroView refuses a
@@ -598,7 +600,7 @@ this reaches MikroView correctly either way, named or not.
   :set leaseRecs ($leaseRecs, {$rec})
 }
 :local leasePayload [:serialize to=json value={"kind"="dhcp-lease"; "page"=1; "pages"=1; "records"=$leaseRecs}]
-/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$leasePayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$leasePayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 
 :local arpRecs [:toarray ""]
 :foreach i,v in=[/ip/arp print as-value] do={
@@ -606,7 +608,7 @@ this reaches MikroView correctly either way, named or not.
   :set arpRecs ($arpRecs, {$rec})
 }
 :local arpPayload [:serialize to=json value={"kind"="arp"; "page"=1; "pages"=1; "records"=$arpRecs}]
-/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$arpPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$arpPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
 
 Each block uses its own variable names (`leaseRecs`/`leasePayload`,
@@ -751,7 +753,7 @@ mention, and its defaults are not the CLI's:
   Count incrementing tells you the script ran — it does *not* tell
   you the pushes landed, which is what step 5 checks.
 
-And paste the source with `<mikroview-host>` and the token already
+And paste the source with `<mikroview-host:port>` and the token already
 filled in — the dialog saves placeholders without complaint, and the
 failure only surfaces later as `failure:` lines in `/log print`.
 
@@ -811,7 +813,7 @@ Then check MikroView picked it up — either watch the live view in the
 browser, or:
 
 ```
-curl -k https://<mikroview-host>/api/devices
+curl -k https://<mikroview-host:port>/api/devices
 ```
 
 (`-k` skips certificate verification — expected against MikroView's
@@ -828,7 +830,7 @@ that rule's comment and RouterOS ordinal instead of "no data pushed
 yet". `/system script run mv-push` with no output means it worked;
 `/tool fetch` failing prints a `failure:` line to the console the same
 way step 4a's own certificate check does, including the same
-untrusted-CA text if step 4a was skipped or the `<mikroview-host>`
+untrusted-CA text if step 4a was skipped or the `<mikroview-host:port>`
 placeholder wasn't replaced consistently between the two.
 
 If you also set up 4c-ii, check **Expect ▸ Watchlist ▸ Suggestions**: a named device
@@ -1092,7 +1094,7 @@ To paste it by hand instead:
 :local bakSize [/file get mv-backup.backup size]
 :local bakTotalSlices (($bakSize + 32767) / 32768)
 :local bakBegin [:serialize to=json value={"op"="begin"; "kind"="backup"; "totalBytes"=$bakSize; "totalSlices"=$bakTotalSlices}]
-:local bakBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$bakBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
+:local bakBeginResp [/tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$bakBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
 :local bakTransferId (([:deserialize from=json ($bakBeginResp->"data")])->"transferId")
 :local bakSent 0
 :local bakIndex 0
@@ -1102,7 +1104,7 @@ To paste it by hand instead:
   :local bakChunk [/file read file=mv-backup.backup offset=$bakSent chunk-size=$bakTake as-value]
   :local bakData64 [:convert ($bakChunk->"data") from=raw to=base64]
   :local bakSlice [:serialize to=json value={"op"="slice"; "transferId"=$bakTransferId; "index"=$bakIndex; "data"=$bakData64}]
-  /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$bakSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+  /tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$bakSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
   :set bakSent ($bakSent + $bakTake)
   :set bakIndex ($bakIndex + 1)
 }
@@ -1111,7 +1113,7 @@ To paste it by hand instead:
 :local rscSize [/file get mv-export.rsc size]
 :local rscTotalSlices (($rscSize + 32767) / 32768)
 :local rscBegin [:serialize to=json value={"op"="begin"; "kind"="rsc"; "totalBytes"=$rscSize; "totalSlices"=$rscTotalSlices}]
-:local rscBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
+:local rscBeginResp [/tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
 :local rscTransferId (([:deserialize from=json ($rscBeginResp->"data")])->"transferId")
 :local rscSent 0
 :local rscIndex 0
@@ -1121,7 +1123,7 @@ To paste it by hand instead:
   :local rscChunk [/file read file=mv-export.rsc offset=$rscSent chunk-size=$rscTake as-value]
   :local rscData64 [:convert ($rscChunk->"data") from=raw to=base64]
   :local rscSlice [:serialize to=json value={"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64}]
-  /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+  /tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
   :set rscSent ($rscSent + $rscTake)
   :set rscIndex ($rscIndex + 1)
 }
