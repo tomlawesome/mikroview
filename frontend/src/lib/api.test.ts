@@ -21,6 +21,7 @@ import {
   finishPasskeyRegistration,
   login,
   mintDroplistKey,
+  regenerateRecoveryCodes,
   renamePasskey,
   replayDefinition,
   revokeDroplistKey,
@@ -659,6 +660,46 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ disabled: true }) })))
     const result = await disableTOTP('hunter2')
     expect(result).toEqual({ signedOut: false })
+  })
+})
+
+// #1331: regenerating recovery codes without touching either factor.
+describe('regenerateRecoveryCodes (#1331)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the password and returns the fresh ten on success', async () => {
+    const codes = Array.from({ length: 10 }, (_, i) => `code-${i}`)
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ recoveryCodes: codes }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await regenerateRecoveryCodes('hunter2')
+
+    expect(result).toEqual(codes)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/recovery-codes')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  it('returns the server refusal as a string on a wrong password', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    const result = await regenerateRecoveryCodes('wrong')
+    expect(result).toBe('incorrect password')
+  })
+
+  it('refuses with the account has no second factor message when none exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 409, text: async () => 'this account has no second factor yet' })),
+    )
+    const result = await regenerateRecoveryCodes('hunter2')
+    expect(result).toBe('this account has no second factor yet')
   })
 })
 
