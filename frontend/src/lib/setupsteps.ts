@@ -43,6 +43,12 @@ export interface StepStatus {
   // shortfall set means there was no arrival to word -- one warning box
   // and nothing above it.
   shortfall?: string
+  // A ready-to-paste config.yaml snippet for a 'blocked' step whose fix
+  // is a config edit rather than a router command (#1365) -- caStep's
+  // only user so far. Set only where the detail names an edit to make;
+  // "add it to tls.hosts" is not something an operator can act on
+  // without seeing the syntax.
+  pasteBlock?: string
 }
 
 // hostname strips a port. Certificate names never carry one, so this is
@@ -96,6 +102,18 @@ export function deviceStanza(sourceIp: string, name: string): string {
   return [`devices:`, `  - sourceIp: "${sourceIp}"`, `    name: "${name || 'my-router'}"`].join('\n')
 }
 
+// tlsHostsBlock is caStep's own pasteBlock (#1365): the whole resulting
+// tls.hosts list, not just the address that is missing -- an operator
+// told only "add 192.168.13.15" has to go and remember what else was
+// already in that list, and a block that only ever adds is safer than
+// one that could be pasted over something wider. Never drops an
+// existing entry, and never lists the missing address twice if it is
+// somehow already there.
+export function tlsHostsBlock(existingHosts: string[], missing: string): string {
+  const hosts = existingHosts.includes(missing) ? existingHosts : [...existingHosts, missing]
+  return `hosts: [${hosts.map((h) => JSON.stringify(h)).join(', ')}]`
+}
+
 // --- Step status --------------------------------------------------------
 
 export function caStep(status: SetupStatus, address: string): StepStatus {
@@ -110,8 +128,10 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
       state: 'blocked',
       detail:
         `MikroView's certificate does not cover ${shown}, so the router will refuse it ` +
-        `("name verification failed"). Add ${shown} to tls.hosts in config.yaml and restart, ` +
-        `then come back — the router needs no change, the same CA signs the new certificate.`,
+        `("name verification failed"). Paste the block below into config.yaml's tls: section, ` +
+        `replacing its tls.hosts line, and restart mikroview, then come back — the router needs ` +
+        `no change, the same CA signs the new certificate.`,
+      pasteBlock: tlsHostsBlock(status.instance.hosts, shown),
     }
   }
   if (status.sources.some((s) => s.caFetchedAt)) {

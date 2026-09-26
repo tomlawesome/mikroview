@@ -102,7 +102,8 @@ func explainHandshake(peer, raw string) (explanation, cause string) {
 		return peer + " says our certificate has expired -- check the clock on both ends, then renew", "expired-cert"
 	case strings.Contains(raw, "certificate is not valid for any names"),
 		strings.Contains(raw, "certificate is valid for"):
-		return peer + " reached us by a name our certificate does not cover -- add it to tls.hosts and restart", "wrong-name"
+		return peer + " reached us by a name our certificate does not cover -- add hosts: [\"" + peer +
+			"\"] under tls: in config.yaml (keeping any hosts already there) and restart", "wrong-name"
 	case strings.Contains(raw, "first record does not look like a TLS handshake"):
 		return peer + " spoke plain HTTP to the HTTPS port -- use https:// for this address", "plaintext"
 	case strings.Contains(raw, "unsupported versions"), strings.Contains(raw, "protocol version not supported"):
