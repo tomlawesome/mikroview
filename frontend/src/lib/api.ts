@@ -432,6 +432,18 @@ export async function burnEnrolment(device: string): Promise<string | null> {
   return (await res.text()) || `burnEnrolment: ${res.status}`
 }
 
+// deleteDevice removes a router this registry itself created -- Create
+// or a pushing ingest token, never a config.yaml declaration, which the
+// server refuses with ErrDeviceConfigured (#1369). Clears its enrolled
+// address and any pending enrolment token along with it; its events are
+// untouched. Same null-on-success, message-on-failure shape as
+// burnEnrolment above.
+export async function deleteDevice(device: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/devices/${encodeURIComponent(device)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteDevice: ${res.status}`
+}
+
 // fetchRefusedSenders reads the addresses whose lines were dropped for
 // not being any router's enrolled address (#1281). Read by the wizard's
 // Send logs step while it waits, and by the fleet's own strip.

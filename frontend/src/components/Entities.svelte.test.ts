@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity, Flag, FlagType, RefusedSender, RuleUsage, UnattributedSource } from '../lib/types'
+import type { Device, Entity, Flag, FlagType, RefusedSender, RuleUsage, UnattributedSource } from '../lib/types'
 import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
@@ -40,11 +40,19 @@ const fetchUnattributedSources = vi.fn(async (): Promise<UnattributedSource[]> =
 // deck answers the fleet view with this card and never draws that one
 // (deckCards.ts, #785), and the endpoint behind it is admin-only.
 const fetchRefusedSenders = vi.fn(async (): Promise<RefusedSender[]> => [])
+// #1369: Remove…'s DELETE call and the refresh it triggers on success
+// (appState.refreshDevicesAndStats -- fetchDevices/fetchStats).
+const deleteDevice = vi.fn(async (_id: string): Promise<string | null> => null)
+const fetchDevices = vi.fn(async (): Promise<Device[]> => [])
+const fetchStats = vi.fn(async () => ({ total: 0, byAction: {}, topRules: [], timeline: [] }) as unknown)
 
 vi.mock('../lib/api', () => ({
   fetchEntities: () => fetchEntities(),
   upsertEntity: (e: Entity) => upsertEntity(e),
   deleteEntity: vi.fn(),
+  deleteDevice: (id: string) => deleteDevice(id),
+  fetchDevices: () => fetchDevices(),
+  fetchStats: () => fetchStats(),
   fetchDeviceMACs: vi.fn(async () => []),
   fetchRouterRules: () => fetchRouterRules(),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
@@ -120,6 +128,9 @@ beforeEach(() => {
   fetchRules.mockResolvedValue([])
   fetchRouterRules.mockResolvedValue({ available: false, rules: [] })
   fetchUnattributedSources.mockResolvedValue([])
+  deleteDevice.mockResolvedValue(null)
+  fetchDevices.mockResolvedValue([])
+  fetchStats.mockResolvedValue({ total: 0, byAction: {}, topRules: [], timeline: [] } as unknown)
   appState.devices = []
   appState.events = []
   appState.initialLoadDone = true
@@ -462,6 +473,99 @@ describe('Entities router cards (#675)', () => {
       await settle()
 
       expect(container.querySelector('.fcard.unreg')?.textContent).toContain('10.0.0.1')
+    })
+  })
+
+  // #1369: Remove… (DELETE /api/devices/{id}). Offered admin-only, only
+  // on a card whose device the server will actually let go -- a
+  // config.yaml-declared device gets the note instead, since the server
+  // refuses that delete (ErrDeviceConfigured).
+  describe('Remove… (#1369)', () => {
+    function unregisteredDevice(overrides: Partial<Device> = {}): Device {
+      return {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: false,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        firstSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+        ...overrides,
+      } as Device
+    }
+
+    it('offers Remove… to an admin on a router that is not declared in config.yaml', async () => {
+      appState.devices = [unregisteredDevice()]
+      const { getByLabelText } = render(Entities)
+      await settle()
+
+      expect(getByLabelText(/Remove rb5009/)).toBeTruthy()
+    })
+
+    it('does not offer Remove… to a non-admin', async () => {
+      authState.role = 'user'
+      appState.devices = [unregisteredDevice()]
+      const { queryByText } = render(Entities)
+      await settle()
+
+      expect(queryByText('Remove…')).toBeNull()
+    })
+
+    it('shows the config.yaml note instead of Remove… on a declared device', async () => {
+      appState.devices = [
+        {
+          id: 'core',
+          name: 'core',
+          configured: true,
+          status: 'live',
+          lastSeen: new Date().toISOString(),
+          sourceIp: '192.168.1.1',
+          eventCount: 3,
+        } as Device,
+      ]
+      const { container, queryByText } = render(Entities)
+      await settle()
+
+      expect(container.textContent).toContain('declared in config.yaml — remove it there')
+      expect(queryByText('Remove…')).toBeNull()
+    })
+
+    it('opens a confirm step naming what goes and what stays, then calls deleteDevice and refreshes on success', async () => {
+      appState.devices = [unregisteredDevice({ acceptedIp: '10.0.0.1', enrolment: { pending: true } })]
+      const { getByLabelText, getByText, container } = render(Entities)
+      await settle()
+
+      getByLabelText(/Remove rb5009/).click()
+      flushSync()
+
+      expect(container.textContent).toContain('its enrolled address 10.0.0.1')
+      expect(container.textContent).toContain('its pending enrolment')
+      expect(container.textContent).toContain('Its events stay')
+
+      getByText('Remove it').click()
+      await settle()
+
+      expect(deleteDevice).toHaveBeenCalledTimes(1)
+      expect(deleteDevice).toHaveBeenCalledWith('rb5009')
+      // The list refresh (#1369's "on success refresh the device list").
+      expect(fetchDevices).toHaveBeenCalled()
+      expect(container.textContent).not.toContain('Remove it')
+    })
+
+    it('shows the server’s error and stays in the confirm step on failure', async () => {
+      deleteDevice.mockResolvedValue('device: this device is declared in config.yaml; remove it there instead')
+      appState.devices = [unregisteredDevice()]
+      const { getByLabelText, getByText, container } = render(Entities)
+      await settle()
+
+      getByLabelText(/Remove rb5009/).click()
+      flushSync()
+      getByText('Remove it').click()
+      await settle()
+
+      expect(container.textContent).toContain('declared in config.yaml; remove it there instead')
+      expect(getByText('Remove it')).toBeTruthy()
     })
   })
 

@@ -9,6 +9,7 @@ import {
   clearUserPasskeys,
   clearUserTOTP,
   confirmTOTP,
+  deleteDevice,
   deleteDroplistEntry,
   disablePasskey,
   disableTOTP,
@@ -420,6 +421,40 @@ describe('deleteDroplistEntry (#1225)', () => {
     expect(url).toBe('/api/droplist/203.0.113.0%2F24')
     expect(init?.method).toBe('DELETE')
     expect(init?.body).toBeUndefined()
+  })
+})
+
+// The server registers DELETE /api/devices/{id} (internal/api/devices.go,
+// #1369). Same null-on-success, message-on-failure shape as burnEnrolment.
+describe('deleteDevice (#1369)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('DELETEs the device by id and resolves null on success', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 204, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteDevice('rb5009')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/devices/rb5009')
+    expect(init?.method).toBe('DELETE')
+    expect(result).toBeNull()
+  })
+
+  it('resolves the server’s message on failure, e.g. a config.yaml-declared device', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => 'device: this device is declared in config.yaml; remove it there instead',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteDevice('rb5009')
+
+    expect(result).toBe('device: this device is declared in config.yaml; remove it there instead')
   })
 })
 
