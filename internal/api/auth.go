@@ -23,6 +23,31 @@ var authLog = logging.New("auth-api")
 
 const sessionCookieName = "mikroview_session"
 
+// forcedAuthGateHeader marks a 403 that means "sign-in worked, but this
+// session is stuck at a door" (MustChangePassword or the missing-second-
+// factor gate below) rather than an ordinary refusal (wrong role, missing
+// CSRF header). #1362: the frontend used to have no way to tell these
+// apart from any other 403 except by matching the prose in the body, so
+// an open tab across an upgrade that turned an existing session into one
+// of these just showed the refusal as an error instead of routing to the
+// door that gets it out. Read once, in api.ts's shared fetch wrapper, and
+// matched on this header's value -- never on the message text below,
+// which stays free to reword.
+const forcedAuthGateHeader = "X-Mikroview-Auth-Gate"
+
+const (
+	forcedAuthGateMustChangePassword = "must-change-password"
+	forcedAuthGateMustEnrolFactor    = "must-enrol-factor"
+)
+
+// writeForcedAuthGate is writeUnauthorized's (rest.go) sibling for this
+// pair of doors: sets the machine-readable header before the human-
+// readable body, same shape as that helper's WWW-Authenticate header.
+func writeForcedAuthGate(w http.ResponseWriter, gate, msg string) {
+	w.Header().Set(forcedAuthGateHeader, gate)
+	http.Error(w, msg, http.StatusForbidden)
+}
+
 // changePasswordPath is the one route a session flagged
 // MustChangePassword may reach (#1251) -- named once here rather than
 // written as a literal in requireAuth, so the gate and the route table
@@ -371,7 +396,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// which is exactly what a reset-code session does not have yet
 		// -- it 403s like everything else until the password is changed.
 		if user.MustChangePassword && r.URL.Path != changePasswordPath {
-			http.Error(w, "an administrator reset this account -- set a new password before going any further", http.StatusForbidden)
+			writeForcedAuthGate(w, forcedAuthGateMustChangePassword, "an administrator reset this account -- set a new password before going any further")
 			return
 		}
 		// The forced-enrolment door (#1253): a second factor is mandatory
@@ -415,7 +440,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// could ever get it out of MustChangePassword, a deadlock no
 		// request from that account could ever escape.
 		if !user.MustChangePassword && user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
-			http.Error(w, "this account has no second factor -- enrol one before going any further", http.StatusForbidden)
+			writeForcedAuthGate(w, forcedAuthGateMustEnrolFactor, "this account has no second factor -- enrol one before going any further")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
