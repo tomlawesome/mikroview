@@ -48,9 +48,18 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatLastHeard } from '../lib/format'
-  import { deviceState, multihomedEcho, routerAddress, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import {
+    deviceState,
+    loggingLeftovers,
+    multihomedEcho,
+    routerAddress,
+    setupEcho,
+    sortedDevices,
+    ratePerSecond,
+  } from '../lib/fleet'
   import { wizardState } from '../lib/wizard.svelte'
   import GhostRows from './GhostRows.svelte'
+  import LoggingLeftovers from './LoggingLeftovers.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
 
@@ -159,6 +168,10 @@
                      upgrade notice is #1240's. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: what else is still sending logs here from a
+                   setup this instance's wizard has moved past. The fix
+                   commands are admin-only, same as Re-enrol… below. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               {#if !d.configured}
                 <div class="frow dim">seen on the wire, not in the <span class="mono">devices</span> config</div>
               {/if}

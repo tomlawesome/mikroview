@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest'
-import { RECENT_WINDOW_MS, recentCount, routerAddress, setupEcho } from './fleet'
-import type { ClientEvent, Device } from './types'
+import { leftoverFixCommands, loggingLeftovers, RECENT_WINDOW_MS, recentCount, routerAddress, setupEcho } from './fleet'
+import type { ClientEvent, Device, LoggingLeftover } from './types'
 
 function device(setup?: Device['setup']): Device {
   return {
@@ -39,6 +39,39 @@ describe('setupEcho', () => {
 
   it('says nothing when the server served no setup answer', () => {
     expect(setupEcho(device())).toBeNull()
+  })
+})
+
+// #1373: another action, or a built-in RouterOS action, still sending
+// logs here from a setup this instance's wizard has moved past.
+describe('loggingLeftovers and leftoverFixCommands', () => {
+  const memory: LoggingLeftover = {
+    name: 'memory',
+    builtin: true,
+    description: 'The built-in `memory` action was repointed here.',
+    commands: ['/system logging action set [find name=memory] target=memory'],
+  }
+  const remote: LoggingLeftover = {
+    name: 'remote',
+    builtin: true,
+    description: 'The built-in `remote` action was repointed here.',
+    commands: ['/system logging action set [find name=remote] target=remote remote=0.0.0.0 src-address=0.0.0.0'],
+  }
+
+  it('reads the empty list when the server named none', () => {
+    expect(loggingLeftovers(device())).toEqual([])
+  })
+
+  it('passes through what the server found', () => {
+    const d = { ...device(), loggingLeftovers: [memory] }
+    expect(loggingLeftovers(d)).toEqual([memory])
+  })
+
+  it('joins every leftover into one paste-ready block, in order', () => {
+    expect(leftoverFixCommands([memory, remote])).toBe(
+      '/system logging action set [find name=memory] target=memory\n' +
+        '/system logging action set [find name=remote] target=remote remote=0.0.0.0 src-address=0.0.0.0',
+    )
   })
 })
 

@@ -16,6 +16,20 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **A router's card names what an earlier setup left behind, with the exact
+  fix** (#1373). The push script now reports every logging action still
+  sending to this MikroView instance, not only the one named `mikroview` --
+  so another of MikroView's own actions from an earlier setup, or a
+  RouterOS built-in (`memory`, `remote`, `disk`, `echo`) repointed here by
+  one, shows up. Each gets a line on the router's card and, for an admin,
+  the exact commands in a "paste into the router's terminal" box: reset for
+  a repointed built-in, remove for anything else. The upgrade notice counts
+  routers with a leftover, and a refused sender's card says whose other
+  address it is when that address belongs to an enrolled router. See
+  docs/routeros-setup.md's "Cleaning up an earlier setup".
+
 ### Fixed
 
 - **On-disk event history is no longer deleted just because it is off**

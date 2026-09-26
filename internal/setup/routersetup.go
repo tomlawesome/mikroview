@@ -3,7 +3,9 @@
 package setup
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/ingest"
@@ -127,7 +129,8 @@ func sameEntry(a, b ingest.LoggingEntry) bool {
 	if a.Type != b.Type || a.Name != b.Name || a.Target != b.Target ||
 		a.Remote != b.Remote || a.RemotePort != b.RemotePort ||
 		a.RemoteProtocol != b.RemoteProtocol || a.RemoteLogFormat != b.RemoteLogFormat ||
-		a.CheckCertificate != b.CheckCertificate || a.Action != b.Action || a.Disabled != b.Disabled {
+		a.CheckCertificate != b.CheckCertificate || a.Action != b.Action || a.Disabled != b.Disabled ||
+		a.SrcAddress != b.SrcAddress {
 		return false
 	}
 	if len(a.Topics) != len(b.Topics) {
@@ -222,6 +225,101 @@ func driftsFrom(report LoggingReport, want routeros.LoggingSetup) bool {
 		}
 	}
 	return actions == 0 || rules == 0
+}
+
+// LoggingLeftover is one action found on a device's last logging page
+// that is still sending logs to this instance but is not the
+// "mikroview" action the current wizard writes (#1373) -- another
+// action of mikroview's own from an earlier setup, or one of RouterOS's
+// built-ins (memory, remote, disk, echo) repointed here. Standing above
+// answers "is mikroview's own setup current"; this answers "what else
+// is still sending logs here that an earlier setup left behind".
+type LoggingLeftover struct {
+	// Name is the RouterOS action's own name.
+	Name string `json:"name"`
+	// Builtin is true for one of RouterOS's four built-in actions --
+	// these are reset, never removed, because RouterOS creates them at
+	// boot and refuses to remove them.
+	Builtin bool `json:"builtin"`
+	// Description names what was found, for the operator's card.
+	Description string `json:"description"`
+	// Commands are the RouterOS commands that fix it, ready to paste.
+	Commands []string `json:"commands"`
+}
+
+// LoggingLeftovers reports every action in device's last logging page
+// that points at this instance's address but is not the "mikroview"
+// action the current wizard writes (#1373). want.Remote empty (this
+// instance does not know its own address yet) means nothing to compare
+// against, the same rule RouterSetup follows -- and for the same
+// reason: inventing an address would report leftovers against a
+// question mikroview has not answered itself.
+func (s *Store) LoggingLeftovers(device string, want routeros.LoggingSetup) []LoggingLeftover {
+	if want.Remote == "" {
+		return nil
+	}
+	s.mu.RLock()
+	report, ok := s.reports[device]
+	s.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return loggingLeftoversFrom(report, want)
+}
+
+// loggingLeftoversFrom is LoggingLeftovers without the store lock, for
+// callers -- currently only its own test -- that already have the
+// report in hand.
+func loggingLeftoversFrom(report LoggingReport, want routeros.LoggingSetup) []LoggingLeftover {
+	var out []LoggingLeftover
+	for _, rec := range report.Records {
+		if rec.Type != ingest.LoggingTypeAction || rec.Name == "mikroview" {
+			continue
+		}
+		if rec.Target != "remote" || rec.Remote != want.Remote {
+			continue
+		}
+		out = append(out, describeLeftover(rec))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// describeLeftover renders one leftover action's operator-facing line
+// and its fix. The line names what makes it a leftover beyond simply
+// being pointed here -- an insecure transport, a src-address other than
+// 0.0.0.0 -- when the page said so; a router still on a script that
+// predates one of those fields (empty string) says nothing about it
+// rather than a false claim.
+func describeLeftover(rec ingest.LoggingEntry) LoggingLeftover {
+	builtin := routeros.BuiltinLoggingActions[rec.Name]
+
+	var notes []string
+	switch {
+	case rec.RemoteProtocol == "udp" || string(rec.RemotePort) == "514":
+		notes = append(notes, "unencrypted syslog on UDP/514")
+	case rec.RemoteProtocol != "" && rec.RemoteProtocol != "tls":
+		notes = append(notes, fmt.Sprintf("plain %s, not TLS", rec.RemoteProtocol))
+	}
+	if rec.SrcAddress != "" && rec.SrcAddress != "0.0.0.0" {
+		notes = append(notes, fmt.Sprintf("src-address=%s", rec.SrcAddress))
+	}
+
+	var desc string
+	var commands []string
+	if builtin {
+		desc = fmt.Sprintf("The built-in `%s` action was repointed here from an earlier setup", rec.Name)
+		commands = []string{routeros.ResetBuiltinLoggingAction(rec.Name)}
+	} else {
+		desc = fmt.Sprintf("The `%s` action is still sending logs here from an earlier setup", rec.Name)
+		commands = routeros.RemoveLoggingActionCommands(rec.Name)
+	}
+	if len(notes) > 0 {
+		desc += " (" + strings.Join(notes, ", ") + ")"
+	}
+	desc += "."
+
+	return LoggingLeftover{Name: rec.Name, Builtin: builtin, Description: desc, Commands: commands}
 }
 
 // sameTopics compares two topic sets as sets: RouterOS prints them in

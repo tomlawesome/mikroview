@@ -140,6 +140,25 @@ export interface Device {
   // fleet tells a finished setup from one someone walked away from part
   // way through.
   registeredAt?: string
+  // loggingLeftovers (#1373) is what else this router last reported
+  // sending logs to MikroView from -- another action, or a RouterOS
+  // built-in (memory, remote, disk, echo) repointed here -- left running
+  // by a setup MikroView's own wizard has since moved past. Empty or
+  // absent means nothing was found; setup above answers a different
+  // question ("is mikroview's own action current"), so a router can
+  // carry a leftover here while setup reads "current".
+  loggingLeftovers?: LoggingLeftover[]
+}
+
+// Mirrors internal/setup.LoggingLeftover (#1373): one action still
+// sending logs to this instance from an earlier setup, and the exact
+// RouterOS commands that fix it -- reset for one of RouterOS's four
+// built-ins, remove (rules first) for anything else.
+export interface LoggingLeftover {
+  name: string
+  builtin: boolean
+  description: string
+  commands: string[]
 }
 
 // DeviceEnrolment is the enrolment token's standing as GET /api/devices
@@ -168,6 +187,11 @@ export interface RefusedSender {
   firstSeen: string
   lastSeen: string
   lines: number
+  // note (#1373) is set only when this address belongs to an enrolled
+  // router -- it appears in that router's own pushed /ip/address table
+  // -- so the card can say whose other address this is rather than
+  // leave it as an unexplained "refused".
+  note?: string
 }
 
 // Mirrors internal/setup.RouterSetup (#1241). scriptVersion is what the
