@@ -865,6 +865,26 @@
   {/if}
 {/snippet}
 
+<!-- terminalHint (#1368): every copy box the wizard hands the operator
+     for the ROUTER says, right next to the box, where it goes. Before
+     this, a box was only ever named ("the push scheduling script"),
+     never placed -- and RouterOS's own Scripts window has a Source box
+     that looks exactly like one of these, so a plausible wrong guess
+     existed with nothing here to rule it out. One snippet rather than
+     one sentence per step, so the wording cannot drift between them. -->
+{#snippet terminalHint()}
+  <p class="note terminal-hint">
+    Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal).
+  </p>
+{/snippet}
+
+<!-- hostHint (#1368): the history-key commands run on the MikroView
+     machine's own shell, never the router's -- said plainly so a box
+     that looks like the router ones above it is not pasted there too. -->
+{#snippet hostHint()}
+  <p class="note host-hint">Run this on the MikroView machine, not the router.</p>
+{/snippet}
+
 <!-- Step 6's one choice (#955): how the router hands its backup over.
      Drawn as the pair the wizard already uses for a two-way choice --
      the answer in ink, the alternative as the link that switches to it
@@ -1134,6 +1154,11 @@
                     >
                       {copied === 'ca' ? 'Copied' : 'Copy'}
                     </button>
+                    {@render terminalHint()}
+                    <p class="note">
+                      Fetches MikroView's certificate and imports it, so the router will trust the
+                      connection everything else here relies on.
+                    </p>
                     {#if wizardState.commands?.steps.caTrust.note}
                       <p class="note">{wizardState.commands.steps.caTrust.note}</p>
                     {/if}
@@ -1217,6 +1242,11 @@
                     >
                       {copied === 'syslog' ? 'Copied' : 'Copy'}
                     </button>
+                    {@render terminalHint()}
+                    <p class="note">
+                      Points the router's firewall logging at MikroView over syslog, so its filter
+                      rules' log lines start arriving here.
+                    </p>
                     {#if syslogAddressChanged}
                       <p class="note">{SYSLOG_ADDRESS_CHANGED_NOTE}</p>
                     {/if}
@@ -1256,6 +1286,11 @@
                 >
                   {copied === 'rules' ? 'Copied' : 'Copy'}
                 </button>
+                {@render terminalHint()}
+                <p class="note">
+                  Tags existing firewall rules by action, so MikroView can tell accept, drop, reject
+                  and log rules apart in the log lines they produce.
+                </p>
                 {#if wizardState.commands?.steps.ruleTagging.note}
                   <p class="note">{wizardState.commands.steps.ruleTagging.note}</p>
                 {/if}
@@ -1342,10 +1377,10 @@
                         onclick={() =>
                           (expandedPaste = {
                             key: 'script',
-                            label: 'the push scheduling script',
+                            label: 'the push commands',
                             text: wizardState.commands?.steps.schedule.commands ?? '',
                           })}
-                        aria-label="Read the push scheduling script in full"
+                        aria-label="Read the push commands in full"
                       >
                         ‹
                       </button>
@@ -1356,8 +1391,13 @@
                     class="copy"
                     onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'script')}
                   >
-                    {copied === 'script' ? 'Copied' : 'Copy script'}
+                    {copied === 'script' ? 'Copied' : 'Copy commands'}
                   </button>
+                  {@render terminalHint()}
+                  <p class="note">
+                    Creates the <code>mv-push</code> script and its 20-minute schedule, then runs it
+                    once.
+                  </p>
                   {#if wizardState.commands?.steps.schedule.note}
                     <p class="note">{wizardState.commands.steps.schedule.note}</p>
                   {/if}
@@ -1433,6 +1473,7 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_SAVE_COMMAND, 'keysave')}>
                     {copied === 'keysave' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render hostHint()}
                   <p class="note">
                     Paste the key at the prompt, then press Ctrl-D. It goes in on standard input, so
                     it never reaches your shell history or a process list.
@@ -1442,6 +1483,7 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_MOUNT_COMMAND, 'keymount')}>
                     {copied === 'keymount' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render hostHint()}
                   <p class="note">Running MikroView directly on the host instead? Skip this one.</p>
                   <p class="note">
                     There is nothing to set: MikroView reads
@@ -1456,6 +1498,7 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_RESTART_COMMAND, 'keyrestart')}>
                     {copied === 'keyrestart' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render hostHint()}
                   <p class="note">
                     The key is read once, at startup. This step notices on its own and prints the
                     router script ·
@@ -1551,10 +1594,10 @@
                         onclick={() =>
                           (expandedPaste = {
                             key: 'backup',
-                            label: 'the backup script',
+                            label: 'the backup commands',
                             text: wizardState.commands?.steps.backup.commands ?? '',
                           })}
-                        aria-label="Read the backup script in full"
+                        aria-label="Read the backup commands in full"
                       >
                         ‹
                       </button>
@@ -1565,8 +1608,12 @@
                     class="copy"
                     onclick={() => copy(wizardState.commands?.steps.backup.commands ?? '', 'backup')}
                   >
-                    {copied === 'backup' ? 'Copied' : 'Copy script'}
+                    {copied === 'backup' ? 'Copied' : 'Copy commands'}
                   </button>
+                  {@render terminalHint()}
+                  <p class="note">
+                    Creates the <code>mv-backup</code> script that sends this router's backup here.
+                  </p>
                   {#if wizardState.commands?.steps.backup.note}
                     <p class="note">{wizardState.commands.steps.backup.note}</p>
                   {/if}
@@ -1579,6 +1626,7 @@
                   >
                     {copied === 'backupsched' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render terminalHint()}
                 {/if}
               {:else if step.key === 'register'}
                 <!-- #1291: the ledger's last step. There is no
