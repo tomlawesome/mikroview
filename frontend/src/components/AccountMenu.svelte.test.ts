@@ -22,24 +22,6 @@ vi.mock('../lib/api', () => ({
 
 import { authState } from '../lib/auth.svelte'
 
-// jsdom has no window.matchMedia -- AccountMenu mounts ThemeMenu, which
-// pulls in lib/viewport.svelte.ts; its ViewportState singleton calls
-// matchMedia at module-load time, so this has to land before the
-// dynamic import below (same fix Flags.svelte.test.ts already needed).
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList
-}
-
 const { default: AccountMenu } = await import('./AccountMenu.svelte')
 
 async function openMenu() {

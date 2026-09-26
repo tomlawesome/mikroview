@@ -5,8 +5,10 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -227,8 +229,78 @@ func TestHandleSetupCommandsListsRoutersWithKnownVersions(t *testing.T) {
 	if r.ID != "core" || r.RouterOSVersion != "7.24" || r.Standing != "reviewed" {
 		t.Errorf("Routers[0] = %+v, want core at 7.24, reviewed", r)
 	}
-	if !strings.Contains(r.Note, "find") {
-		t.Errorf("Routers[0].Note = %q, want 7.24's find-lookup-bug note carried per-router", r.Note)
+}
+
+// TestHandleSetupCommandsUpgradeWarnings covers #1344's contract: the
+// catalogue rides along on RouterOS.Upgrades, and both a known router
+// and the operator's own pick carry only the IDs that apply to their
+// version, always as a present-but-possibly-empty slice.
+func TestHandleSetupCommandsUpgradeWarnings(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	// core at 7.24 -- before the change -- gets no warning, and the
+	// contract needs this asserted on the raw body: present, empty, and
+	// "[]" rather than "null".
+	p, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.24","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rawBody, err := json.Marshal(setupCommandsRequest{Address: "mv.example.net:8443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/setup/commands", "application/json", bytes.NewReader(rawBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawOut, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out setupCommandsResponse
+	if err := json.Unmarshal(rawOut, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(out.RouterOS.Upgrades, routeros.Upgrades) {
+		t.Errorf("RouterOS.Upgrades = %+v, want routeros.Upgrades verbatim", out.RouterOS.Upgrades)
+	}
+	if len(out.Routers) != 1 || !slicesEqual(out.Routers[0].Upgrades, []string{}) {
+		t.Errorf("Routers[0].Upgrades (7.24) = %+v, want []", out.Routers)
+	}
+	if !strings.Contains(string(rawOut), `"upgrades":[]`) {
+		t.Errorf("raw body has no empty-but-present upgrades array: %s", rawOut)
+	}
+
+	// core moves to 7.24.4 -- at or past cert-store-7.24.3's From --
+	// which must now carry that ID.
+	p2, err := ingest.DecodePayload(strings.NewReader(
+		`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.24.4","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", p2, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	out = postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "mv.example.net:8443", Version: "7.24.3"})
+	if len(out.Routers) != 1 || !slicesEqual(out.Routers[0].Upgrades, []string{"cert-store-7.24.3"}) {
+		t.Errorf("Routers[0].Upgrades (7.24.4) = %+v, want [cert-store-7.24.3]", out.Routers)
+	}
+	if out.Picked == nil || !slicesEqual(out.Picked.Upgrades, []string{"cert-store-7.24.3"}) {
+		t.Errorf("Picked.Upgrades = %+v, want [cert-store-7.24.3] for version 7.24.3", out.Picked)
+	}
+
+	below := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "mv.example.net:8443", Version: "7.24.2"})
+	if below.Picked == nil || !slicesEqual(below.Picked.Upgrades, []string{}) {
+		t.Errorf("Picked.Upgrades for 7.24.2 = %+v, want []", below.Picked)
 	}
 }
 

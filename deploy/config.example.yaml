@@ -1,9 +1,283 @@
+# ======================================================================
+#  HEADER -- DO NOT DELETE OR EDIT THIS BLOCK
+# ======================================================================
+# mikroview-config: version=0.6.1 layout=1
+#
+# This is a MikroView configuration file, written for MikroView 0.6.1,
+# layout 1. The full reference for every setting is docs/configuration.md.
+#
+# Do not delete or edit this block. Upgrades read the mikroview-config
+# line to tell which version wrote this file, and so which settings it
+# should have and which need adding.
+
 # Copy this file to config.yaml (git-ignored) and edit for your setup:
 #   cp deploy/config.example.yaml deploy/config.yaml
 #
 # See docs/configuration.md for the full precedence rules and
 # docs/routeros-setup.md for the RouterOS-side commands that make devices
 # show up here.
+
+# ======================================================================
+#  REQUIRED -- set these for your install
+# ======================================================================
+# MikroView starts with no config at all; the one thing it cannot guess
+# is which router is which, so name yours under devices: below.
+# Behind a reverse proxy only, also set listen.trustedProxies (in the
+# defaults section at the bottom).
+
+# Devices are matched by the syslog source IP MikroView sees them from.
+# Sources not listed here still appear in the UI, auto-discovered and
+# labelled with their IP -- add them here once you know which is which.
+devices:
+  - id: core-router
+    name: "Core Router"
+    sourceIp: 192.168.1.1
+  # - id: branch-office
+  #   name: "Branch Office"
+  #   sourceIp: 203.0.113.5
+
+# ======================================================================
+#  OPTIONAL FEATURES -- uncomment a block to use it
+# ======================================================================
+
+# Which addresses may reach the web UI (issue #1287). Leave it out and
+# every address may, which is what every deployment before this key
+# existed has -- so upgrading changes nothing.
+#
+# Bare IPs or CIDRs. There is no "private" shorthand here, unlike
+# trustedProxies below: this says who may administer MikroView, and the
+# whole LAN plus CGNAT plus link-local is not what anyone means by that.
+#
+# Behind a reverse proxy, set listen.trustedProxies as well -- otherwise
+# every request carries the proxy's own address and this list admits
+# everybody or nobody.
+#
+# Routers are exempt: /ca.crt, the two push endpoints and the drop-list
+# feed still answer, since a router cannot be listed in a file it never
+# reads and each already has a tighter gate of its own.
+#
+# THIS IS A FILE-ONLY SETTING. It is deliberately not editable from
+# inside the app -- one slip on the screen the list governs would lock
+# you out of it. If that happens anyway, edit this file on the
+# mikroview-etc volume and restart; docs/configuration.md and
+# SECURITY.md show the exact command for a container with no shell.
+# ui:
+#   allow: ["192.168.1.20", "10.0.0.0/24"]
+
+# Optional: shows a country flag next to public IPs in the UI. Requires
+# your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
+# unset, no flags are shown; this is never required. The .mmdb file is
+# mounted in, so it must be readable by the container's user (uid 1000);
+# it is not a secret, so `chmod 644 GeoLite2-Country.mmdb` is enough.
+# geoip:
+#   dbPath: /etc/mikroview/GeoLite2-Country.mmdb
+
+# Optional: enables AbuseIPDB in the "investigate this IP" popover
+# (Shodan InternetDB is always used, no key needed). Free tier: 1000
+# lookups/day. AbuseIPDB's abuse score also feeds the confidence floor
+# of behavioral flags raised against the same source IP -- see
+# docs/configuration.md's "IP reputation lookup" section.
+# reputation:
+#   abuseIPDBKey: your-abuseipdb-api-key
+
+# On-disk event history (issue #856, optional): one encrypted, compressed
+# file per day holding the same events the in-memory ring below holds --
+# a separate setting from store.retention, which only bounds what a
+# live query can see in memory. Off by default, and staying off is a
+# first-class choice, not a missing step. There is no unencrypted mode:
+# this needs both enabled and a keyFile pointing at a key mounted
+# outside this data directory (never inside it, and never in this
+# file). Generate one with:
+#   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
+# The key file has to be readable by the container's user (uid 1000),
+# the same rule as every other file you mount in -- if it is not,
+# MikroView refuses to start with "permission denied":
+#   sudo chown 1000:1000 mikroview-history.key && chmod 600 mikroview-history.key
+# Off (or this block missing) keeps what was already retained on disk
+# and just stops adding to it; MikroView warns where the files are. See
+# docs/configuration.md's "On-disk event history" section for what the
+# encryption does and doesn't protect against.
+# history:
+#   enabled: false
+#   keyFile: /run/secrets/mikroview-history.key   # must be outside the data directory
+#   days: 30
+#   maxBytes: 1073741824   # 1 GiB
+#   dir: /var/lib/mikroview/history   # default: beside the data directory
+
+# RouterOS config backups over SFTP (issue #394, optional): a small
+# write-only SFTP drop box a router's own scheduled script pushes its
+# `/system backup save` and `/export` into. Off by default -- a second
+# listening port, opened only once you turn it on -- and turning it on
+# here is not enough on its own: also uncomment the matching port in
+# docker-compose.yml's `ports:`, or the router can never reach it
+# (#1220). Login is the device
+# name and that device's ingest token (no separate credential to
+# invent); a login can only write into its own folder and cannot list,
+# read, delete, rename or overwrite anything. Every pair is encrypted
+# under history.keyFile above -- the same "no key, no storage" rule:
+# with no key configured the drop box refuses every login rather than
+# keeping anything unencrypted. 10 generations kept per router, 16 MiB
+# per file, oldest dropped first. Port 47022 is a fixed, deliberately
+# unconventional default (not 22 or 2222, which draw scanner traffic).
+# The setup wizard's step 6 prints the exact router-side script once a
+# key is mounted and this is turned on. See docs/configuration.md's
+# "Router backups" section and SECURITY.md for the on-path caveat:
+# RouterOS never verifies this server's host key.
+# backup:
+#   enabled: false
+#   listen: ":47022"
+#   vaultDir: /var/lib/mikroview/router-backups   # default: beside the data directory
+
+# Local IP/CIDR blocklist matching (issue #113 Part B): raises a
+# known_bad_ip flag directly when a source IP falls inside a CIDR range
+# from one of the vetted feeds below -- independent of any behavioral
+# threshold, and also reinforces the confidence floor of any other
+# active flag for that same source IP. On by default with both feeds on
+# the menu: Spamhaus's DROP list (small, free, no registration, curated
+# to only include netblocks Spamhaus is confident are entirely
+# malicious-controlled) and Emerging Threats' compromised-IPs list
+# (larger, faster-changing, individual-IP; on by default since #1359).
+# This is a fixed, vetted menu, not an arbitrary URL field -- see
+# internal/blocklist's doc comment and docs/configuration.md for the
+# full menu, why, and how the refresh cadence/entry-count cap were
+# decided. Refresh is a fixed daily cycle, not configurable. Set sources
+# to an empty list to disable this feature entirely, or list just one
+# feed to drop the other.
+# blocklist:
+#   sources:
+#     - spamhaus_drop
+#     - emerging_threats_compromised
+
+# Optional (on by default): local IP attribution for the manual IP-lookup
+# popover -- labels an address as a Tor exit, commercial VPN,
+# cloud/datacenter, or privacy relay. Never raises a flag by itself for
+# any category; a Tor or VPN match on an *inbound* source additionally
+# reinforces an already-raised flag's confidence (direction-aware --
+# your own outbound traffic through a VPN or Private Relay never
+# contributes). Datacenter/privacy-relay stay display-only always. A
+# fixed, vetted menu fetched at runtime (no range data ships in the
+# image), refreshed daily. Default is the high-precision lists only: the
+# broad datacenter/cloud feeds cover >10% of routable IPv4, so they
+# attach a label to ordinary traffic and are opt-in. Set sources to an
+# empty list to disable attribution (and the reinforcement) entirely.
+# See docs/configuration.md for the full menu and the per-source
+# trade-offs.
+# netClass:
+#   sources:
+#     - tor                  # Tor Project's own exit list -- tiny, first-party
+#     - apple_private_relay  # Apple's own egress list -- keeps Private Relay traffic out of the VPN category below
+#     - x4b_vpn              # X4BNet commercial-VPN list (MIT) -- high precision
+#     # - x4b_datacenter  # opt-in: broad, ~10% of IPv4, noisy as a signal
+#     # - aws             # opt-in: official AWS ranges, with region detail
+#     # - gcp             # opt-in: official Google Cloud ranges
+
+# Optional (on by default): MAC vendor lookups, from IEEE's own MA-L
+# registry. It turns the first three octets of a hardware address into
+# the organisation that registered them, for the device dossier
+# (issue #410) -- and, just as usefully, says when there is no vendor to
+# find at all, because the address is locally administered (a VM,
+# container, or a phone randomising its Wi-Fi MAC).
+#
+# The registry is fetched at runtime from IEEE and cached under the data
+# directory: no vendor data ships in the image. IEEE publishes the file
+# for direct download at no charge with no licence or usage conditions
+# attached; there is no permission to redistribute it, which is why your
+# instance fetches its own copy rather than receiving one from us. Until
+# the first fetch completes, the dossier says vendor data is not
+# available yet rather than guessing. Refresh is a fixed daily
+# conditional request, not configurable.
+#
+# There is no source setting: IEEE is the only publisher of this
+# registry, the same way the two feeds above take a vetted menu rather
+# than an arbitrary URL.
+# oui:
+#   enabled: true
+#   cachePath: /var/lib/mikroview/oui-registry.json
+
+# Optional: friendly display names shown in place of a raw RouterOS rule
+# label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
+# and CSV export. Filtering/grouping still uses the raw value -- these
+# are display-only. See docs/configuration.md.
+# ruleNames:
+#   r13: "Block known scanners"
+# hostNames:
+#   192.168.1.50: "Living room NAS"
+
+# Optional, and needed only for passkeys (issue #1250): the address
+# people actually reach MikroView on. WebAuthn refuses to bind a passkey
+# to a bare IP address, so an install with no hostname -- the default --
+# keeps working exactly as it does today, it just can't offer passkeys.
+# Never falls back to oidc.publicBaseUrl below even when the two would
+# match -- see docs/configuration.md's "Public URL" section.
+# publicUrl: "https://mikroview.example.com:8443"
+
+# Optional: email/push alerting on newly-raised behavioral flags,
+# batched rather than one message per flag. See docs/configuration.md's
+# "Notifications" section for the full field reference and the
+# reasoning behind batchWindow being a fixed interval, not a debounce.
+# notify:
+#   batchWindow: 60s
+#   # Any HTTP endpoint -- the batch is POSTed as JSON. headers is for
+#   # whatever the receiver needs to authenticate the call.
+#   webhook:
+#     url: ""
+#     headers: {}
+#   smtp:
+#     host: ""
+#     port: 587
+#     username: ""
+#     password: ""
+#     tlsMode: "starttls"
+#     from: ""
+#     to: []
+#   pushover:
+#     token: ""
+#     user: ""
+
+# Optional: sign in with your own identity provider instead of (or
+# alongside) MikroView's local account. See docs/configuration.md's
+# "Single sign-on (OIDC)" section -- publicBaseUrl is the one field
+# people get wrong, and it must match the redirect URI registered with
+# the provider exactly.
+# oidc:
+#   issuerUrl: "https://id.example.com"
+#   clientId: ""
+#   clientSecret: ""
+#   publicBaseUrl: "https://mikroview.example.com"
+#   scopes: ["openid", "profile", "email"]
+#   # Everything below is an access policy. With none of it set, anyone
+#   # your provider will authenticate can sign in -- which is only what
+#   # you want on a provider that exists solely for this.
+#   allowedGroups: []
+#   groupsClaim: "groups"        # Azure commonly needs "roles"
+#   allowedEmails: []
+#   allowedEmailDomains: []
+#   requiredClaims: {}
+
+# Optional: keep accounts, flags, tokens and the rest in Postgres rather
+# than in JSON files on this host. The only reason to do this is to get
+# the data OFF this machine -- read docs/configuration.md's "Postgres"
+# section first, because MOVING TO POSTGRES IS A ONE-WAY CHOICE.
+#
+# There is no `dsn` field, deliberately: a connection string carries a
+# password, so it is read from a file you control the permissions of.
+# The file must be readable by uid 1000 (the container's user -- the
+# first account on most Linux hosts, so probably you already):
+#   sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
+# postgres:
+#   dsnFile: /run/secrets/mikroview-postgres-dsn
+
+# ======================================================================
+# ======================================================================
+# ==                                                                  ==
+# ==  DEFAULTS -- ONLY UNCOMMENT A SETTING BELOW TO CHANGE IT         ==
+# ==                                                                  ==
+# ==  Everything from here down restates a built-in default. The live ==
+# ==  listen: and store: blocks do too: leaving them as they are, or  ==
+# ==  deleting them, changes nothing.                                 ==
+# ==                                                                  ==
+# ======================================================================
+# ======================================================================
 
 listen:
   # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port) --
@@ -41,30 +315,6 @@ listen:
   # balancers; change it for a proxy that sets something else.
   # clientIpHeader: "X-Forwarded-For"
 
-# Which addresses may reach the web UI (issue #1287). Leave it out and
-# every address may, which is what every deployment before this key
-# existed has -- so upgrading changes nothing.
-#
-# Bare IPs or CIDRs. There is no "private" shorthand here, unlike
-# trustedProxies above: this says who may administer MikroView, and the
-# whole LAN plus CGNAT plus link-local is not what anyone means by that.
-#
-# Behind a reverse proxy, set listen.trustedProxies as well -- otherwise
-# every request carries the proxy's own address and this list admits
-# everybody or nobody.
-#
-# Routers are exempt: /ca.crt, the two push endpoints and the drop-list
-# feed still answer, since a router cannot be listed in a file it never
-# reads and each already has a tighter gate of its own.
-#
-# THIS IS A FILE-ONLY SETTING. It is deliberately not editable from
-# inside the app -- one slip on the screen the list governs would lock
-# you out of it. If that happens anyway, edit this file on the
-# mikroview-etc volume and restart; docs/configuration.md and
-# SECURITY.md show the exact command for a container with no shell.
-# ui:
-#   allow: ["192.168.1.20", "10.0.0.0/24"]
-
 store:
   retention: 24h
   # A memory budget, not an event count -- see docs/configuration.md's
@@ -96,22 +346,6 @@ store:
 # to change it. One of debug/info/warn/error.
 # log:
 #   level: info
-
-# Optional: shows a country flag next to public IPs in the UI. Requires
-# your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
-# unset, no flags are shown; this is never required. The .mmdb file is
-# mounted in, so it must be readable by the container's user (uid 1000);
-# it is not a secret, so `chmod 644 GeoLite2-Country.mmdb` is enough.
-# geoip:
-#   dbPath: /etc/mikroview/GeoLite2-Country.mmdb
-
-# Optional: enables AbuseIPDB in the "investigate this IP" popover
-# (Shodan InternetDB is always used, no key needed). Free tier: 1000
-# lookups/day. AbuseIPDB's abuse score also feeds the confidence floor
-# of behavioral flags raised against the same source IP -- see
-# docs/configuration.md's "IP reputation lookup" section.
-# reputation:
-#   abuseIPDBKey: your-abuseipdb-api-key
 
 # Behavioral flags (port scans, activity spikes, critical-port attempts,
 # volume spikes) are always on with sensible defaults -- nothing below is
@@ -229,7 +463,7 @@ store:
 
 # The device registry's own enrolments (issue #1281): an enrolled
 # device's acceptedIp/enrolledAt, and the identity of any device declared
-# through the API rather than below under devices:, survive a restart
+# through the API rather than above under devices:, survive a restart
 # through this file. storePath already defaults to
 # /var/lib/mikroview/device-registry.json -- only uncomment this block to
 # move that path.
@@ -277,74 +511,6 @@ store:
 #   keep: 6                            # generations kept, oldest deleted first
 #   dir: /var/lib/mikroview/snapshots   # default: beside the data directory
 
-# On-disk event history (issue #856, optional): one encrypted, compressed
-# file per day holding the same events the in-memory ring above holds --
-# a separate setting from store.retention, which only bounds what a
-# live query can see in memory. Off by default, and staying off is a
-# first-class choice, not a missing step. There is no unencrypted mode:
-# this needs both enabled and a keyFile pointing at a key mounted
-# outside this data directory (never inside it, and never in this
-# file). Generate one with:
-#   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
-# The key file has to be readable by the container's user (uid 1000),
-# the same rule as every other file you mount in -- if it is not,
-# MikroView refuses to start with "permission denied":
-#   sudo chown 1000:1000 mikroview-history.key && chmod 600 mikroview-history.key
-# Off (or this block missing) keeps what was already retained on disk
-# and just stops adding to it; MikroView warns where the files are. See
-# docs/configuration.md's "On-disk event history" section for what the
-# encryption does and doesn't protect against.
-# history:
-#   enabled: false
-#   keyFile: /run/secrets/mikroview-history.key   # must be outside the data directory
-#   days: 30
-#   maxBytes: 1073741824   # 1 GiB
-#   dir: /var/lib/mikroview/history   # default: beside the data directory
-
-# RouterOS config backups over SFTP (issue #394, optional): a small
-# write-only SFTP drop box a router's own scheduled script pushes its
-# `/system backup save` and `/export` into. Off by default -- a second
-# listening port, opened only once you turn it on -- and turning it on
-# here is not enough on its own: also uncomment the matching port in
-# docker-compose.yml's `ports:`, or the router can never reach it
-# (#1220). Login is the device
-# name and that device's ingest token (no separate credential to
-# invent); a login can only write into its own folder and cannot list,
-# read, delete, rename or overwrite anything. Every pair is encrypted
-# under history.keyFile above -- the same "no key, no storage" rule:
-# with no key configured the drop box refuses every login rather than
-# keeping anything unencrypted. 10 generations kept per router, 16 MiB
-# per file, oldest dropped first. Port 47022 is a fixed, deliberately
-# unconventional default (not 22 or 2222, which draw scanner traffic).
-# The setup wizard's step 6 prints the exact router-side script once a
-# key is mounted and this is turned on. See docs/configuration.md's
-# "Router backups" section and SECURITY.md for the on-path caveat:
-# RouterOS never verifies this server's host key.
-# backup:
-#   enabled: false
-#   listen: ":47022"
-#   vaultDir: /var/lib/mikroview/router-backups   # default: beside the data directory
-
-# Local IP/CIDR blocklist matching (issue #113 Part B): raises a
-# known_bad_ip flag directly when a source IP falls inside a CIDR range
-# from one of the vetted feeds below -- independent of any behavioral
-# threshold, and also reinforces the confidence floor of any other
-# active flag for that same source IP. On by default with both feeds on
-# the menu: Spamhaus's DROP list (small, free, no registration, curated
-# to only include netblocks Spamhaus is confident are entirely
-# malicious-controlled) and Emerging Threats' compromised-IPs list
-# (larger, faster-changing, individual-IP; on by default since #1359).
-# This is a fixed, vetted menu, not an arbitrary URL field -- see
-# internal/blocklist's doc comment and docs/configuration.md for the
-# full menu, why, and how the refresh cadence/entry-count cap were
-# decided. Refresh is a fixed daily cycle, not configurable. Set sources
-# to an empty list to disable this feature entirely, or list just one
-# feed to drop the other.
-# blocklist:
-#   sources:
-#     - spamhaus_drop
-#     - emerging_threats_compromised
-
 # The drop list (issue #1223/#1224/#1225, the design ratified on #461):
 # operator-authored ranges to block, typed in directly or raised from a
 # flag's drawer -- unrelated to the fetched blocklist feeds above.
@@ -365,61 +531,6 @@ store:
 # docs/configuration.md's "Preferences" section.
 # prefs:
 #   storePath: /var/lib/mikroview/preferences.json
-
-# Optional (on by default): local IP attribution for the manual IP-lookup
-# popover -- labels an address as a Tor exit, commercial VPN,
-# cloud/datacenter, or privacy relay. Never raises a flag by itself for
-# any category; a Tor or VPN match on an *inbound* source additionally
-# reinforces an already-raised flag's confidence (direction-aware --
-# your own outbound traffic through a VPN or Private Relay never
-# contributes). Datacenter/privacy-relay stay display-only always. A
-# fixed, vetted menu fetched at runtime (no range data ships in the
-# image), refreshed daily. Default is the high-precision lists only: the
-# broad datacenter/cloud feeds cover >10% of routable IPv4, so they
-# attach a label to ordinary traffic and are opt-in. Set sources to an
-# empty list to disable attribution (and the reinforcement) entirely.
-# See docs/configuration.md for the full menu and the per-source
-# trade-offs.
-# netClass:
-#   sources:
-#     - tor                  # Tor Project's own exit list -- tiny, first-party
-#     - apple_private_relay  # Apple's own egress list -- keeps Private Relay traffic out of the VPN category below
-#     - x4b_vpn              # X4BNet commercial-VPN list (MIT) -- high precision
-#     # - x4b_datacenter  # opt-in: broad, ~10% of IPv4, noisy as a signal
-#     # - aws             # opt-in: official AWS ranges, with region detail
-#     # - gcp             # opt-in: official Google Cloud ranges
-
-# Optional (on by default): MAC vendor lookups, from IEEE's own MA-L
-# registry. It turns the first three octets of a hardware address into
-# the organisation that registered them, for the device dossier
-# (issue #410) -- and, just as usefully, says when there is no vendor to
-# find at all, because the address is locally administered (a VM,
-# container, or a phone randomising its Wi-Fi MAC).
-#
-# The registry is fetched at runtime from IEEE and cached under the data
-# directory: no vendor data ships in the image. IEEE publishes the file
-# for direct download at no charge with no licence or usage conditions
-# attached; there is no permission to redistribute it, which is why your
-# instance fetches its own copy rather than receiving one from us. Until
-# the first fetch completes, the dossier says vendor data is not
-# available yet rather than guessing. Refresh is a fixed daily
-# conditional request, not configurable.
-#
-# There is no source setting: IEEE is the only publisher of this
-# registry, the same way the two feeds above take a vetted menu rather
-# than an arbitrary URL.
-# oui:
-#   enabled: true
-#   cachePath: /var/lib/mikroview/oui-registry.json
-
-# Optional: friendly display names shown in place of a raw RouterOS rule
-# label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
-# and CSV export. Filtering/grouping still uses the raw value -- these
-# are display-only. See docs/configuration.md.
-# ruleNames:
-#   r13: "Block known scanners"
-# hostNames:
-#   192.168.1.50: "Living room NAS"
 
 # Optional: the live, UI-managed counterpart to ruleNames/hostNames
 # above (Admin -> Entities, admin-only) -- a label/tags record per
@@ -536,16 +647,8 @@ store:
 #   # recoveryPepperPath only if you want the pepper off that volume
 #   # entirely, so a stolen backup of the volume does not carry the one
 #   # value the recovery-key hashes are useless without.
-#   recoveryKeysPath: /var/lib/mikroview/recovery.json
-#   recoveryPepperPath: /var/lib/mikroview/recovery-pepper
-
-# Optional, and needed only for passkeys (issue #1250): the address
-# people actually reach MikroView on. WebAuthn refuses to bind a passkey
-# to a bare IP address, so an install with no hostname -- the default --
-# keeps working exactly as it does today, it just can't offer passkeys.
-# Never falls back to oidc.publicBaseUrl below even when the two would
-# match -- see docs/configuration.md's "Public URL" section.
-# publicUrl: "https://mikroview.example.com:8443"
+#   recoveryKeysPath: /var/lib/mikroview/recovery-keys.json
+#   recoveryPepperPath: /var/lib/mikroview/recovery-pepper.key
 
 # TLS is on by default and needs no configuration to work -- MikroView
 # generates its own local CA + certificate on first start, already
@@ -564,70 +667,3 @@ store:
 #   keyFile: ""
 #   hosts: []
 #   storePath: /var/lib/mikroview/tls
-
-# Optional: email/push alerting on newly-raised behavioral flags,
-# batched rather than one message per flag. See docs/configuration.md's
-# "Notifications" section for the full field reference and the
-# reasoning behind batchWindow being a fixed interval, not a debounce.
-# notify:
-#   batchWindow: 60s
-#   # Any HTTP endpoint -- the batch is POSTed as JSON. headers is for
-#   # whatever the receiver needs to authenticate the call.
-#   webhook:
-#     url: ""
-#     headers: {}
-#   smtp:
-#     host: ""
-#     port: 587
-#     username: ""
-#     password: ""
-#     tlsMode: "starttls"
-#     from: ""
-#     to: []
-#   pushover:
-#     token: ""
-#     user: ""
-
-# Optional: sign in with your own identity provider instead of (or
-# alongside) MikroView's local account. See docs/configuration.md's
-# "Single sign-on (OIDC)" section -- publicBaseUrl is the one field
-# people get wrong, and it must match the redirect URI registered with
-# the provider exactly.
-# oidc:
-#   issuerUrl: "https://id.example.com"
-#   clientId: ""
-#   clientSecret: ""
-#   publicBaseUrl: "https://mikroview.example.com"
-#   scopes: ["openid", "profile", "email"]
-#   # Everything below is an access policy. With none of it set, anyone
-#   # your provider will authenticate can sign in -- which is only what
-#   # you want on a provider that exists solely for this.
-#   allowedGroups: []
-#   groupsClaim: "groups"        # Azure commonly needs "roles"
-#   allowedEmails: []
-#   allowedEmailDomains: []
-#   requiredClaims: {}
-
-# Optional: keep accounts, flags, tokens and the rest in Postgres rather
-# than in JSON files on this host. The only reason to do this is to get
-# the data OFF this machine -- read docs/configuration.md's "Postgres"
-# section first, because MOVING TO POSTGRES IS A ONE-WAY CHOICE.
-#
-# There is no `dsn` field, deliberately: a connection string carries a
-# password, so it is read from a file you control the permissions of.
-# The file must be readable by uid 1000 (the container's user -- the
-# first account on most Linux hosts, so probably you already):
-#   sudo chown 1000:1000 postgres-dsn && chmod 600 postgres-dsn
-# postgres:
-#   dsnFile: /run/secrets/mikroview-postgres-dsn
-
-# Devices are matched by the syslog source IP MikroView sees them from.
-# Sources not listed here still appear in the UI, auto-discovered and
-# labelled with their IP -- add them here once you know which is which.
-devices:
-  - id: core-router
-    name: "Core Router"
-    sourceIp: 192.168.1.1
-  # - id: branch-office
-  #   name: "Branch Office"
-  #   sourceIp: 203.0.113.5

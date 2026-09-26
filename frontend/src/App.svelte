@@ -3,7 +3,6 @@
   import { appState } from './lib/state.svelte'
   import { subscribe as subscribeVisibility } from './lib/visibility'
   import { liveSocket } from './lib/ws'
-  import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
   import { authState, wireForcedAuthGate } from './lib/auth.svelte'
@@ -150,10 +149,6 @@
   // error -- see wireForcedAuthGate's own doc comment for why this
   // lives here rather than at auth.svelte.ts's module load.
   wireForcedAuthGate()
-
-  $effect(() => {
-    colorwayState.apply()
-  })
 
   // Runs once on mount, unconditionally -- everything else in this file
   // waits on its result (authState.state) before doing anything that
