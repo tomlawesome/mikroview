@@ -18,6 +18,20 @@ rewritten.
 
 ### Fixed
 
+- **The setup wizard now says where each copy box goes** (#1368). Every
+  block meant for the router — trust the certificate, send logs, tag
+  rules, push router state, back up — carries "Paste into the router's
+  terminal (WinBox: New Terminal; WebFig: Terminal)" next to it, and a
+  one-line note on what it does. The history-key commands say plainly
+  they run on the MikroView machine instead. Labels that used to call a
+  terminal block "a script" ("the push scheduling script", "the backup
+  script") no longer do — an operator had pasted one into RouterOS's
+  Scripts window because that box has a Source field too, and nothing
+  said the block was terminal commands rather than a script to save.
+  `docs/routeros-setup.md`'s `<mikroview-host>` placeholder is now
+  `<mikroview-host:port>` throughout, with a note that the port is the
+  one in your browser's address bar.
+
 - **A router's HTTPS pushes no longer get refused because syslog was
   pinned to a different address** (#1370). The Send logs block now
   always sets `src-address=0.0.0.0` on the mikroview logging action, so
