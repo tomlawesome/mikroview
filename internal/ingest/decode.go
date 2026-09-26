@@ -526,6 +526,9 @@ func (e LoggingEntry) validate() error {
 	if err := validateFieldText("remoteLogFormat", e.RemoteLogFormat); err != nil {
 		return err
 	}
+	if err := validateFieldText("srcAddress", e.SrcAddress); err != nil {
+		return err
+	}
 	if err := validateFieldText("checkCertificate", string(e.CheckCertificate)); err != nil {
 		return err
 	}

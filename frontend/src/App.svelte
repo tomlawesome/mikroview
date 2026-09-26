@@ -5,7 +5,7 @@
   import { liveSocket } from './lib/ws'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
-  import { authState } from './lib/auth.svelte'
+  import { authState, wireForcedAuthGate } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { isCancelledFetch } from './lib/cancelled'
   import { filtersFromSearchParams } from './lib/types'
@@ -143,6 +143,12 @@
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
   authState.consumeSSOLinkedFromURL()
+  // #1362: registers the handler that routes a mid-app 403 (a session
+  // that lost its second factor, or was forced to change its password)
+  // to the matching door instead of letting it surface as a plain
+  // error -- see wireForcedAuthGate's own doc comment for why this
+  // lives here rather than at auth.svelte.ts's module load.
+  wireForcedAuthGate()
 
   // Runs once on mount, unconditionally -- everything else in this file
   // waits on its result (authState.state) before doing anything that

@@ -48,9 +48,18 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatLastHeard } from '../lib/format'
-  import { deviceState, multihomedEcho, setupEcho, sortedDevices, ratePerSecond } from '../lib/fleet'
+  import {
+    deviceState,
+    loggingLeftovers,
+    multihomedEcho,
+    routerAddress,
+    setupEcho,
+    sortedDevices,
+    ratePerSecond,
+  } from '../lib/fleet'
   import { wizardState } from '../lib/wizard.svelte'
   import GhostRows from './GhostRows.svelte'
+  import LoggingLeftovers from './LoggingLeftovers.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
 
@@ -123,6 +132,13 @@
             {@const st = deviceState(d, appState.now)}
             <div class="fcard" class:live={d.status === 'live'}>
               <div class="fhead"><b>{d.name}</b><span class="fstate {st.cls}">{st.mark} {st.text}</span></div>
+              <!-- #1372: the address under the name -- acceptedIp when
+                   enrolled, else the address its lines arrive from, else
+                   an honest "no address yet". Same fallback chain as
+                   Entities' router cards (lib/fleet.ts's routerAddress),
+                   so the two surfaces cannot read a router's address
+                   differently. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
               </div>
@@ -152,9 +168,10 @@
                      upgrade notice is #1240's. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
-              {#if d.sourceIp}
-                <div class="frow dim">syslog from <span class="mono">{d.sourceIp}</span></div>
-              {/if}
+              <!-- #1373: what else is still sending logs here from a
+                   setup this instance's wizard has moved past. The fix
+                   commands are admin-only, same as Re-enrol… below. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               {#if !d.configured}
                 <div class="frow dim">seen on the wire, not in the <span class="mono">devices</span> config</div>
               {/if}

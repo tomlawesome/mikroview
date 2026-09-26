@@ -22,6 +22,12 @@ export interface UpgradeRouters {
   total: number
   /** Routers that have sent their setup page at all, whatever it said. */
   reported: number
+  // staleLogging (#1373) counts routers with at least one leftover --
+  // another action, or a RouterOS built-in repointed here -- still
+  // sending logs from a setup this instance's wizard has moved past.
+  // Independent of `behind`: a router can report the current wizard's
+  // own setup and still carry one.
+  staleLogging: number
 }
 
 export interface Upgrade {
@@ -109,10 +115,19 @@ class UpgradeState {
     const u = this.upgrade
     if (!u) return ''
     const r = u.routers
+    let line: string
     if (r.total > 0 && r.behind > 0) {
-      return `upgraded from ${u.previous} · ${r.behind} of ${r.total} routers still on the old setup · paste ${TITLES.ca} again on each`
+      line = `upgraded from ${u.previous} · ${r.behind} of ${r.total} routers still on the old setup · paste ${TITLES.ca} again on each`
+    } else {
+      line = `upgraded from ${u.previous} · paste ${TITLES.ca} again on each router`
     }
-    return `upgraded from ${u.previous} · paste ${TITLES.ca} again on each router`
+    // #1373: named beside the crossing, not as a reason to show the
+    // banner on its own -- a router's card carries the actual fix, this
+    // only says one is waiting there.
+    if (r.staleLogging > 0) {
+      line += ` · ${r.staleLogging} router${r.staleLogging === 1 ? '' : 's'} ${r.staleLogging === 1 ? 'has' : 'have'} an old logging setup · show the fix on its card`
+    }
+    return line
   }
 }
 

@@ -850,7 +850,7 @@ func TestDecodeLoggingPageTakesAYesNoFieldInEitherShape(t *testing.T) {
 // /system logging: anything else the router might send about its logging
 // is refused, like every other kind's unknown field.
 func TestDecodeLoggingPageRefusesAFieldTheWizardNeverSends(t *testing.T) {
-	decodeErr(t, `{"kind":"logging","page":1,"pages":1,"records":[{"type":"action","name":"mikroview","srcAddress":"192.168.1.1"}]}`)
+	decodeErr(t, `{"kind":"logging","page":1,"pages":1,"records":[{"type":"action","name":"mikroview","comment":"not part of the page"}]}`)
 }
 
 // A script predating the stamp sends no wizardVersion at all, which

@@ -296,6 +296,18 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   survive removing a *different* passkey, or an authenticator app that
   isn't the account's last factor standing, and must not survive the
   account actually going back to password-only.
+- **A fresh set of ten can be drawn on its own, without touching either
+  factor (#1331).** `POST /api/auth/recovery-codes`, password-gated the
+  same way `DELETE /api/auth/totp` is and refused outright on an account
+  with no second factor at all, replaces the existing set atomically --
+  the old ten stop verifying the instant the new ten are committed, and
+  a write that fails to persist leaves the old set intact, the same
+  restore-on-failure contract `GenerateRecoveryCodes` keeps everywhere
+  else. Audited as `account.recovery_codes_regenerated`. Unlike
+  confirming a factor or removing an account's last one, this does
+  **not** end any other session: the set of factors protecting the
+  account hasn't changed, so there is nothing for another session to
+  have gotten away with.
 - **A factor is removed three ways, each guarded differently.** The
   account's own owner turns it off with their current password
   (`DELETE /api/auth/totp` for the authenticator app,
@@ -645,12 +657,19 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 ## Data handling
 
-- **No persistence for events.** Events live in an in-memory ring buffer
-  only — there is no database. Restarting, redeploying, or crashing the
-  process discards all retained history. MikroView is a live/recent-
-  history view, not a log archive; if you need durable logs, forward
-  RouterOS's syslog output to a second, dedicated logging destination as
-  well.
+- **Events: memory always, encrypted disk too when a key is mounted.**
+  The live ring buffer holds the most recent events in memory only,
+  windowed by `store.retention` — gone on restart, redeploy or crash
+  regardless of anything below. Since #1357, `history.enabled` is also
+  on by default: with a key mounted (`history.keyFile` — `install.sh`
+  mints one on a fresh install; Compose and the bare `docker run` in
+  docs/install.md do not, so mount one yourself if you want this),
+  the same events are additionally written to one encrypted, compressed
+  file per day. There is no unencrypted fallback — with no key mounted,
+  MikroView stays memory-only, exactly as it always has. Either way,
+  MikroView is a live/recent-history view, not a full log archive; if
+  you need durable logs kept somewhere else too, forward RouterOS's
+  syslog output to a second, dedicated logging destination as well.
 - **What a warm restart saves, and what it does not.** So that a restart
   does not silently reset every counter to zero, MikroView writes a
   small snapshot of its *derived* state every few minutes and reads the

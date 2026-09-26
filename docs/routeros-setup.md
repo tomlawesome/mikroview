@@ -78,7 +78,9 @@ MikroView's only syslog listener speaks `remote-protocol=tls` (RFC
 `deploy/docker-compose.yml`) — confidentiality for firewall log traffic
 on the wire, and MikroView authenticating itself to the router.
 Replace `203.0.113.10` with the IP of the Docker host running
-MikroView, and `mikroview-host` with its hostname or IP.
+MikroView, and `<mikroview-host:port>` with its hostname or IP and
+port — the same one shown in your browser's address bar when you open
+MikroView (leave off `:port` only when it is 443).
 
 **Requires RouterOS 7.18 or later.** `remote-protocol=tls` is rejected
 on older releases (verified against booted CHR images: 6.49.18 and
@@ -101,7 +103,7 @@ firewall logs to *anything* claiming to be MikroView is not a router
 you want. Import the certificate once:
 
 ```
-/tool fetch url="https://<mikroview-host>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+/tool fetch url="https://<mikroview-host:port>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
 /certificate import file-name=mikroview-ca.crt passphrase=""
 ```
 
@@ -120,10 +122,17 @@ deployment uses your own certificate rather than the self-generated one
 (see [configuration.md](configuration.md#tls)), skip this step — your
 CA is presumably already trusted some other way.
 
+RouterOS's own list of trusted public roots changes between releases:
+7.24.3 removed GoDaddy Class 2. If you rely on a bought certificate
+rather than importing MikroView's, check its chain before upgrading a
+router past that release. The wizard says this beside the commands for
+each router that reports a version at or past 7.24.3, and names the
+steps it touches.
+
 Then point the router's logging at MikroView:
 
 ```
-:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
+:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 src-address=0.0.0.0 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 src-address=0.0.0.0 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
 ```
 
 This block is safe to paste again — a second run updates the existing
@@ -141,6 +150,19 @@ matching traffic, one connection attempt logged from two different rules
 — rather than only when RouterOS happens to send them far enough apart.
 Without it, a fast-enough burst can be read as a single garbled line and
 the traffic in it silently mismatched (#614).
+
+`src-address=0.0.0.0` tells RouterOS to pick the source address itself,
+the same way it already does for the `/tool fetch` pushes elsewhere in
+this script — so syslog and HTTPS always leave from the same address.
+Pasting this block always sets it, even over a `src-address` a previous
+setup left behind: MikroView enrols a router from one address, and a
+stale `src-address` pinning syslog to a different one is exactly what
+made an owner's own router's pushes get refused after every earlier
+paste enrolled it from the address `0.0.0.0` would have chosen anyway
+(#1370). MikroView expects the router to pick its own address and to be
+told what that address is, not the other way round: don't re-pin
+`src-address` afterwards for a reason of your own — declare and enrol
+whichever address the router actually arrives from instead.
 
 ## 2. Forward firewall log events to it
 
@@ -411,16 +433,14 @@ check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
 address is the most likely cause. The setup wizard's Send logs step names it
 when it sees it (a declared router that has sent nothing while an
-undeclared address streams) and prints the fix. Keeping the declared
-address is the recommended one, because the token and the tables it
-pushes follow that identity, so nothing has to be reissued:
-
-```
-/system logging action set mikroview src-address=<the address you declared as sourceIp>
-```
-
-The alternative is changing `sourceIp` to the arriving address and
-restarting — then reissue any token minted for the old identity.
+undeclared address streams). The fix is changing `sourceIp` in
+`config.yaml` to the address that's actually arriving, then restarting
+and reissuing any token minted for the old identity. Pinning the
+router's `src-address` to force it back onto the declared address isn't
+the fix any more (#1370): the Send logs block now always sets
+`src-address=0.0.0.0` — RouterOS picks the address itself, the same way
+`/tool fetch` already does for the HTTPS pushes — so a pinned value only
+survives until the block is pasted again.
 
 Or via the API. Minting a token is an admin action, so the call has to
 carry an admin's browser session: `<your session cookie>` is the
@@ -437,7 +457,7 @@ Read it into a variable instead, and send the body on standard input:
 
 ```
 read -rsp 'mikroview password: ' MV_PASS && echo
-curl -k -c jar -X POST https://<mikroview-host>/api/auth/login \
+curl -k -c jar -X POST https://<mikroview-host:port>/api/auth/login \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
   --data-binary @- <<JSON
 {"username":"<your-admin-username>","password":"$MV_PASS"}
@@ -451,7 +471,7 @@ certificate the machine trusts in front of MikroView — see
 [the TLS section](configuration.md#tls).
 
 ```
-curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
+curl -k -b <your session cookie> -X POST https://<mikroview-host:port>/api/tokens \
   -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
   -d '{"name":"office-router","kind":"ingest","device":"office-router"}'
 ```
@@ -483,7 +503,7 @@ real RouterOS 7.23.3 router before writing this down:
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$recs}]
-/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
 
 **Update MikroView before you update this script.** MikroView refuses a
@@ -522,9 +542,11 @@ them as a float, which MikroView's decoder already expects.
 router, not a rule) is the router telling MikroView which RouterOS it is
 running, so MikroView can warn when a command it shows you was written
 against a different version. It is read straight from
-`[/system/resource get version]`. Nothing warns yet; the field is what
-that warning will be derived from, and deriving it is why MikroView
-never has to ask you. Leave it out and everything still works — you just
+`[/system/resource get version]`. The wizard uses it to warn you: when a
+router's release is outside the range these commands were checked
+against, and when a release changed something these commands depend on
+(7.24.3's root-certificate change is the first). Leave it out and
+everything still works — you just
 get no version-mismatch warning later.
 
 `dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
@@ -587,7 +609,7 @@ this reaches MikroView correctly either way, named or not.
   :set leaseRecs ($leaseRecs, {$rec})
 }
 :local leasePayload [:serialize to=json value={"kind"="dhcp-lease"; "page"=1; "pages"=1; "records"=$leaseRecs}]
-/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$leasePayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$leasePayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 
 :local arpRecs [:toarray ""]
 :foreach i,v in=[/ip/arp print as-value] do={
@@ -595,7 +617,7 @@ this reaches MikroView correctly either way, named or not.
   :set arpRecs ($arpRecs, {$rec})
 }
 :local arpPayload [:serialize to=json value={"kind"="arp"; "page"=1; "pages"=1; "records"=$arpRecs}]
-/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$arpPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+/tool fetch url="https://<mikroview-host:port>/api/ingest/routeros" http-method=post http-data=$arpPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
 
 Each block uses its own variable names (`leaseRecs`/`leasePayload`,
@@ -740,7 +762,7 @@ mention, and its defaults are not the CLI's:
   Count incrementing tells you the script ran — it does *not* tell
   you the pushes landed, which is what step 5 checks.
 
-And paste the source with `<mikroview-host>` and the token already
+And paste the source with `<mikroview-host:port>` and the token already
 filled in — the dialog saves placeholders without complaint, and the
 failure only surfaces later as `failure:` lines in `/log print`.
 
@@ -750,20 +772,25 @@ One block of the push script is not router data at all. It reports back
 what the setup wizard left on this router, so MikroView can tell when a
 router is running an out-of-date copy of it.
 
-It sends exactly two things, once per push:
+It sends, once per push:
 
-- the `mikroview` logging action — where it sends logs (`remote`,
-  `remote-port`), how (`target`, `remote-protocol`,
-  `remote-log-format`, `check-certificate`);
-- every `/system logging` rule pointing at that action — its `topics`,
-  and whether it is disabled.
+- every logging action still pointed at this MikroView instance — not
+  only one named `mikroview`. Where it sends logs (`remote`,
+  `remote-port`, `src-address`), how (`target`, `remote-protocol`,
+  `remote-log-format`, `check-certificate`) (#1373: an older setup's
+  action, or one of RouterOS's own built-ins repointed here, still
+  counts — anything sending logs to this instance is reported, whatever
+  it is named);
+- every `/system logging` rule pointing at one of those actions — its
+  `topics`, and whether it is disabled.
 
 Plus one number: which version of the wizard wrote the script you
 pasted.
 
-Nothing else from your logging configuration is sent. Your other
-logging actions, your other rules, and everything else the router logs
-stay on the router — MikroView asks only about its own setup.
+Nothing else from your logging configuration is sent. Any action not
+pointed at this instance, your other rules, and everything else the
+router logs stay on the router — MikroView asks only about what is
+sending logs here.
 
 Why it needs telling: the script on your router is a copy, and MikroView
 never connects to a router to look at it (that is a design rule, not a
@@ -778,15 +805,21 @@ has. With the report, each router's card in MikroView says one of:
 - `setup never reported` — the script predates this report entirely, so
   the router has never said.
 
-Only four things count as a mismatch: where the logs are sent
-(`remote`, `remote-port`), the format they are sent in
-(`remote-log-format`), and the rules' `topics`. Anything else you have
-changed on the action is yours, and MikroView leaves it alone.
+Only four things count as a mismatch on the `mikroview` action itself:
+where the logs are sent (`remote`, `remote-port`), the format they are
+sent in (`remote-log-format`), and the rules' `topics`. Anything else
+you have changed on that action is yours, and MikroView leaves it
+alone.
 
 The fix in every case is the same: **your account menu ▸ Run setup…**,
 and paste the blocks again. The logging block updates what is already
 there rather than adding a second copy of it, so re-pasting a router
 that is already correct changes nothing.
+
+Any *other* action still sending logs here is a different kind of
+finding — not a mismatch on `mikroview`'s own setup, but a leftover from
+an earlier one — and gets its own line and its own fix; see "Cleaning
+up an earlier setup" near the end of this guide.
 
 ## 5. Verify
 
@@ -800,7 +833,7 @@ Then check MikroView picked it up — either watch the live view in the
 browser, or:
 
 ```
-curl -k https://<mikroview-host>/api/devices
+curl -k https://<mikroview-host:port>/api/devices
 ```
 
 (`-k` skips certificate verification — expected against MikroView's
@@ -817,7 +850,7 @@ that rule's comment and RouterOS ordinal instead of "no data pushed
 yet". `/system script run mv-push` with no output means it worked;
 `/tool fetch` failing prints a `failure:` line to the console the same
 way step 4a's own certificate check does, including the same
-untrusted-CA text if step 4a was skipped or the `<mikroview-host>`
+untrusted-CA text if step 4a was skipped or the `<mikroview-host:port>`
 placeholder wasn't replaced consistently between the two.
 
 If you also set up 4c-ii, check **Expect ▸ Watchlist ▸ Suggestions**: a named device
@@ -1081,7 +1114,7 @@ To paste it by hand instead:
 :local bakSize [/file get mv-backup.backup size]
 :local bakTotalSlices (($bakSize + 32767) / 32768)
 :local bakBegin [:serialize to=json value={"op"="begin"; "kind"="backup"; "totalBytes"=$bakSize; "totalSlices"=$bakTotalSlices}]
-:local bakBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$bakBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
+:local bakBeginResp [/tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$bakBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
 :local bakTransferId (([:deserialize from=json ($bakBeginResp->"data")])->"transferId")
 :local bakSent 0
 :local bakIndex 0
@@ -1091,7 +1124,7 @@ To paste it by hand instead:
   :local bakChunk [/file read file=mv-backup.backup offset=$bakSent chunk-size=$bakTake as-value]
   :local bakData64 [:convert ($bakChunk->"data") from=raw to=base64]
   :local bakSlice [:serialize to=json value={"op"="slice"; "transferId"=$bakTransferId; "index"=$bakIndex; "data"=$bakData64}]
-  /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$bakSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+  /tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$bakSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
   :set bakSent ($bakSent + $bakTake)
   :set bakIndex ($bakIndex + 1)
 }
@@ -1100,7 +1133,7 @@ To paste it by hand instead:
 :local rscSize [/file get mv-export.rsc size]
 :local rscTotalSlices (($rscSize + 32767) / 32768)
 :local rscBegin [:serialize to=json value={"op"="begin"; "kind"="rsc"; "totalBytes"=$rscSize; "totalSlices"=$rscTotalSlices}]
-:local rscBeginResp [/tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
+:local rscBeginResp [/tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$rscBegin http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes as-value output=user]
 :local rscTransferId (([:deserialize from=json ($rscBeginResp->"data")])->"transferId")
 :local rscSent 0
 :local rscIndex 0
@@ -1110,7 +1143,7 @@ To paste it by hand instead:
   :local rscChunk [/file read file=mv-export.rsc offset=$rscSent chunk-size=$rscTake as-value]
   :local rscData64 [:convert ($rscChunk->"data") from=raw to=base64]
   :local rscSlice [:serialize to=json value={"op"="slice"; "transferId"=$rscTransferId; "index"=$rscIndex; "data"=$rscData64}]
-  /tool fetch url="https://<mikroview-host>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+  /tool fetch url="https://<mikroview-host:port>/api/ingest/router-backup" http-method=post http-data=$rscSlice http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
   :set rscSent ($rscSent + $rscTake)
   :set rscIndex ($rscIndex + 1)
 }
@@ -1196,3 +1229,42 @@ accepts an address: a router is accepted only by presenting a token.
 Working from this document instead of the wizard: repeat steps 1–3
 above for the new router, and give it whatever name you use when you
 declare it under `devices:` in `config.yaml` (see step 4b).
+
+## Cleaning up an earlier setup
+
+MikroView has changed what it puts on a router more than once (`src-address`
+pinned to `0.0.0.0` since #1370; before that, the plain-format action). Every
+router you upgraded across one of those changes may still be running
+whatever the *old* setup left, alongside the new one, unless something
+told you to remove it — and until #1373, nothing did. This is not
+hypothetical: one router carried the built-in `memory` and `remote`
+actions, both quietly repointed at MikroView by an old setup and both
+still sending from an address the current wizard never uses, while the
+router's own `memory` log sat empty and every line from those two
+actions showed up as an unexplained "refused" sender.
+
+Since #1373, the push script (step 4c) reports every logging action still
+pointed at this instance, not only the one named `mikroview` — see "4f.
+What the script tells MikroView about your own setup" above. Anything
+else it finds gets its own line on that router's card, plus the exact
+commands to fix it, in a box captioned "Paste into the router's
+terminal":
+
+- **another action of MikroView's own, from an earlier setup** — its
+  rules are removed, then the action itself;
+- **a RouterOS built-in (`memory`, `remote`, `disk`, `echo`) repointed
+  here** — reset to its factory target, never removed: RouterOS creates
+  these at boot and refuses to remove them;
+- **a `src-address` other than `0.0.0.0`**, or **the old UDP/514 or
+  plain-TCP syslog** — named alongside whichever of the two findings
+  above applies, since the fix is the same paste either way.
+
+A refused-sender card (see "Adding another router" above) also says so
+when the address is one of an enrolled router's own — the same
+repointed-built-in case, seen from the other side.
+
+**Whoever changes what the wizard sets on a router ships this file's own
+rule with it**: a change to what step 1–4 pastes is not finished until
+the cleanup for whatever it replaces is written too, here and in the
+detector behind the router card. The promote-to-main checklist carries
+this as its own line.

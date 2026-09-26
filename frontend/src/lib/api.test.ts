@@ -9,17 +9,21 @@ import {
   clearUserPasskeys,
   clearUserTOTP,
   confirmTOTP,
+  deleteDevice,
   deleteDroplistEntry,
   disablePasskey,
   disableTOTP,
   enrolTOTP,
   fetchAuditLog,
+  fetchDevices,
   fetchEventsWindow,
   fetchPasskeys,
   fetchSetupCommands,
   finishPasskeyRegistration,
   login,
   mintDroplistKey,
+  onForcedAuthGate,
+  regenerateRecoveryCodes,
   renamePasskey,
   replayDefinition,
   revokeDroplistKey,
@@ -288,7 +292,7 @@ describe('fetchSetupCommands (#436)', () => {
   }
 
   const RESPONSE = {
-    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [], upgrades: [] },
     picked: null,
     routers: [],
     steps: {
@@ -420,6 +424,40 @@ describe('deleteDroplistEntry (#1225)', () => {
     expect(url).toBe('/api/droplist/203.0.113.0%2F24')
     expect(init?.method).toBe('DELETE')
     expect(init?.body).toBeUndefined()
+  })
+})
+
+// The server registers DELETE /api/devices/{id} (internal/api/devices.go,
+// #1369). Same null-on-success, message-on-failure shape as burnEnrolment.
+describe('deleteDevice (#1369)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('DELETEs the device by id and resolves null on success', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 204, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteDevice('rb5009')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/devices/rb5009')
+    expect(init?.method).toBe('DELETE')
+    expect(result).toBeNull()
+  })
+
+  it('resolves the server’s message on failure, e.g. a config.yaml-declared device', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => 'device: this device is declared in config.yaml; remove it there instead',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteDevice('rb5009')
+
+    expect(result).toBe('device: this device is declared in config.yaml; remove it there instead')
   })
 })
 
@@ -627,6 +665,46 @@ describe('the TOTP enrol/confirm/disable calls (#1249)', () => {
   })
 })
 
+// #1331: regenerating recovery codes without touching either factor.
+describe('regenerateRecoveryCodes (#1331)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the password and returns the fresh ten on success', async () => {
+    const codes = Array.from({ length: 10 }, (_, i) => `code-${i}`)
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ recoveryCodes: codes }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await regenerateRecoveryCodes('hunter2')
+
+    expect(result).toEqual(codes)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/auth/recovery-codes')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ password: 'hunter2' })
+  })
+
+  it('returns the server refusal as a string on a wrong password', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'incorrect password' })))
+    const result = await regenerateRecoveryCodes('wrong')
+    expect(result).toBe('incorrect password')
+  })
+
+  it('refuses with the account has no second factor message when none exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 409, text: async () => 'this account has no second factor yet' })),
+    )
+    const result = await regenerateRecoveryCodes('hunter2')
+    expect(result).toBe('this account has no second factor yet')
+  })
+})
+
 describe('submitLoginFactor and clearUserTOTP (#1249)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -774,5 +852,98 @@ describe('the passkey calls (#1250)', () => {
     expect(url).toBe('/api/auth/users/u-42/passkeys')
     expect(init?.method).toBe('DELETE')
     expect(init?.body).toBeUndefined()
+  })
+})
+
+// #1362: an open tab across an upgrade (or a warm-started session) can
+// hold a real session that internal/api/auth.go's requireAuth now
+// refuses on every route but a few, because the account has no second
+// factor or owes a forced password change. Before this fix, that 403 was
+// indistinguishable from any other and every view just showed it as an
+// error -- these pin the shared fetch path in api.ts that fixes it,
+// without any view needing its own handling.
+describe('the forced-auth-gate 403 (#1362)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubWithGateHeader(gate: string | null) {
+    return vi.fn(async (url: string) => {
+      if (url === '/api/auth/session') {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({ authenticated: true, mustEnrolSecondFactor: gate === 'must-enrol-factor', mustChangePassword: gate === 'must-change-password', ssoAvailable: false }),
+        }
+      }
+      return {
+        ok: false,
+        status: 403,
+        headers: { get: (name: string) => (name === 'X-Mikroview-Auth-Gate' ? gate : null) },
+        text: async () => 'this account has no second factor -- enrol one before going any further',
+      }
+    })
+  }
+
+  it('still throws for the caller -- the view is expected to unmount once the state flips, not to swallow this', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-enrol-factor'))
+    await expect(fetchDevices()).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('calls the registered handler with a fresh session when the header says must-enrol-factor', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-enrol-factor'))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      // The recheck is fired off from inside the failed call, not
+      // awaited by it -- give the microtask queue a turn.
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).toHaveBeenCalledWith('must-enrol-factor', expect.objectContaining({ mustEnrolSecondFactor: true }))
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('calls the registered handler with must-change-password the same way', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-change-password'))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).toHaveBeenCalledWith('must-change-password', expect.objectContaining({ mustChangePassword: true }))
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('does not call the handler for an ordinary 403 with no gate header', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader(null))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('de-dupes a burst of 403s into a single session recheck', async () => {
+    const fetchMock = stubWithGateHeader('must-enrol-factor')
+    vi.stubGlobal('fetch', fetchMock)
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await Promise.allSettled([fetchDevices(), fetchDevices(), fetchDevices()])
+      await new Promise((r) => setTimeout(r, 0))
+      const sessionCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/auth/session')
+      expect(sessionCalls).toHaveLength(1)
+    } finally {
+      onForcedAuthGate(() => {})
+    }
   })
 })

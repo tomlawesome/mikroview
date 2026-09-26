@@ -23,6 +23,31 @@ var authLog = logging.New("auth-api")
 
 const sessionCookieName = "mikroview_session"
 
+// forcedAuthGateHeader marks a 403 that means "sign-in worked, but this
+// session is stuck at a door" (MustChangePassword or the missing-second-
+// factor gate below) rather than an ordinary refusal (wrong role, missing
+// CSRF header). #1362: the frontend used to have no way to tell these
+// apart from any other 403 except by matching the prose in the body, so
+// an open tab across an upgrade that turned an existing session into one
+// of these just showed the refusal as an error instead of routing to the
+// door that gets it out. Read once, in api.ts's shared fetch wrapper, and
+// matched on this header's value -- never on the message text below,
+// which stays free to reword.
+const forcedAuthGateHeader = "X-Mikroview-Auth-Gate"
+
+const (
+	forcedAuthGateMustChangePassword = "must-change-password"
+	forcedAuthGateMustEnrolFactor    = "must-enrol-factor"
+)
+
+// writeForcedAuthGate is writeUnauthorized's (rest.go) sibling for this
+// pair of doors: sets the machine-readable header before the human-
+// readable body, same shape as that helper's WWW-Authenticate header.
+func writeForcedAuthGate(w http.ResponseWriter, gate, msg string) {
+	w.Header().Set(forcedAuthGateHeader, gate)
+	http.Error(w, msg, http.StatusForbidden)
+}
+
 // changePasswordPath is the one route a session flagged
 // MustChangePassword may reach (#1251) -- named once here rather than
 // written as a literal in requireAuth, so the gate and the route table
@@ -371,7 +396,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// which is exactly what a reset-code session does not have yet
 		// -- it 403s like everything else until the password is changed.
 		if user.MustChangePassword && r.URL.Path != changePasswordPath {
-			http.Error(w, "an administrator reset this account -- set a new password before going any further", http.StatusForbidden)
+			writeForcedAuthGate(w, forcedAuthGateMustChangePassword, "an administrator reset this account -- set a new password before going any further")
 			return
 		}
 		// The forced-enrolment door (#1253): a second factor is mandatory
@@ -415,7 +440,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// could ever get it out of MustChangePassword, a deadlock no
 		// request from that account could ever escape.
 		if !user.MustChangePassword && user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
-			http.Error(w, "this account has no second factor -- enrol one before going any further", http.StatusForbidden)
+			writeForcedAuthGate(w, forcedAuthGateMustEnrolFactor, "this account has no second factor -- enrol one before going any further")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
@@ -1863,6 +1888,89 @@ func (s *Server) handleTOTPDelete(w http.ResponseWriter, r *http.Request) {
 
 	s.Audit.Record(user.Username, "account.totp_disabled", user.Username, "removed by account owner")
 	writeJSON(w, http.StatusOK, map[string]any{"disabled": true, "signedOut": signedOut})
+}
+
+type recoveryCodesRegenerateRequest struct {
+	Password string `json:"password"`
+}
+
+type recoveryCodesRegenerateResponse struct {
+	// RecoveryCodes is the fresh ten, in clear, exactly once -- the same
+	// one-shot contract totpConfirmResponse.RecoveryCodes documents.
+	// Nothing on this account can show them again once this response is
+	// gone.
+	RecoveryCodes []string `json:"recoveryCodes"`
+}
+
+// handleRecoveryCodesRegenerate mints a fresh set of ten recovery codes
+// for the signed-in caller's own account, replacing whichever set stood
+// before (#1331). Before this route the only way to a fresh set was
+// removing a factor and adding it back -- tolerable for one authenticator
+// app, but #1250 clears the shared set only when the *last* factor goes,
+// so an account with several passkeys had to strip all of them to get
+// here. Password-gated exactly like handleTOTPDelete above, and refused
+// outright when the account has no second factor at all: recovery codes
+// stand in for one, not for a password alone.
+//
+// Design lead ruling, 2026-09-26: unlike ConfirmTOTP and a first passkey
+// registration, this does not end other sessions. Those moments end
+// sessions because the set of factors protecting the account just
+// changed and a session elsewhere might predate that change; regenerating
+// codes changes nothing about which factors are active, so there is
+// nothing for another session to have gotten away with. The codes are a
+// spare key, not the lock.
+func (s *Server) handleRecoveryCodesRegenerate(w http.ResponseWriter, r *http.Request) {
+	user := userFromContext(r)
+	if user == nil {
+		writeUnauthorized(w, "sign in first")
+		return
+	}
+
+	var req recoveryCodesRegenerateRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	// Same passwordRecheckLimiterKey bucket and reasoning as
+	// handleTOTPDelete just above: a caller who already holds a session
+	// is exactly the position a stolen-cookie attacker is in, so this
+	// cannot be left as an unthrottled password oracle behind a cookie.
+	userKey := passwordRecheckLimiterKey(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	current, err := s.Auth.Authenticate(user.Username, req.Password, now)
+	if err != nil {
+		writeUnauthorized(w, "incorrect password")
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
+
+	// Re-checked against the freshly-authenticated copy, not the
+	// context snapshot -- same reasoning handleTOTPConfirm's header
+	// comment gives for re-reading rather than trusting userFromContext.
+	if !current.HasSecondFactor() {
+		http.Error(w, "this account has no second factor yet -- recovery codes stand in for one, not for a password alone", http.StatusConflict)
+		return
+	}
+
+	codes, err := s.Auth.GenerateRecoveryCodes(user.ID, now)
+	if err != nil {
+		// GenerateRecoveryCodes' own restore-on-failure contract already
+		// left the old set intact and reported nothing as issued -- this
+		// is a clean refusal, not a half-done one. writeAuthError logs
+		// the real error server-side (it isn't in authErrorMessages, so
+		// the caller gets the generic message).
+		writeAuthError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	s.Audit.Record(user.Username, "account.recovery_codes_regenerated", user.Username, "")
+
+	writeJSON(w, http.StatusOK, recoveryCodesRegenerateResponse{RecoveryCodes: codes})
 }
 
 // handleTOTPAdminClear lets an admin remove another user's authenticator-

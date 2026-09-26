@@ -4,6 +4,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -378,6 +379,18 @@ func (s *Server) handleDeviceEnrolmentDelete(w http.ResponseWriter, r *http.Requ
 // that have never proven anything about themselves, which is closer to
 // GET /api/audit's "who has been probing this instance" than to the
 // fleet's own read.
+// refusedView is device.Refused plus #1373's own-address note: when the
+// address belongs to a router MikroView has already enrolled -- it
+// appears in that router's own pushed /ip/address table -- the refused
+// sender is not an unexplained stranger, it is that router's other
+// address, still sending logs from a setup MikroView's own wizard has
+// moved past (the owner's own case: a repointed built-in action kept
+// sending from a src-address the wizard never uses).
+type refusedView struct {
+	device.Refused
+	Note string `json:"note,omitempty"`
+}
+
 func (s *Server) handleDevicesRefused(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -387,8 +400,49 @@ func (s *Server) handleDevicesRefused(w http.ResponseWriter, r *http.Request) {
 	if s.Devices != nil {
 		refused = s.Devices.Refused()
 	}
-	if refused == nil {
-		refused = []device.Refused{}
+	owners := s.refusedAddressOwners()
+	views := make([]refusedView, 0, len(refused))
+	for _, ref := range refused {
+		v := refusedView{Refused: ref}
+		if name, ok := owners[ref.Address]; ok {
+			v.Note = fmt.Sprintf("this is %s's other address — a logging action is still sending from it", name)
+		}
+		views = append(views, v)
 	}
-	writeJSON(w, http.StatusOK, refused)
+	writeJSON(w, http.StatusOK, views)
+}
+
+// refusedAddressOwners maps every address in an enrolled router's own
+// pushed /ip/address table to that router's display name (#1373): the
+// evidence a refused sender's address is not a stranger's but an
+// enrolled router's other interface.
+func (s *Server) refusedAddressOwners() map[string]string {
+	out := map[string]string{}
+	if s.RouterState == nil || s.Devices == nil {
+		return out
+	}
+	names := make(map[string]string)
+	for _, info := range s.Devices.List() {
+		names[info.ID] = info.Name
+	}
+	for _, id := range s.RouterState.Devices() {
+		entries, _, ok := s.RouterState.IPAddresses(id)
+		if !ok {
+			continue
+		}
+		name := names[id]
+		if name == "" {
+			name = id
+		}
+		for _, e := range entries {
+			host := e.Address
+			if i := strings.IndexByte(host, '/'); i != -1 {
+				host = host[:i]
+			}
+			if host != "" {
+				out[host] = name
+			}
+		}
+	}
+	return out
 }

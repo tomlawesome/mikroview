@@ -10,7 +10,7 @@
 // "fleet" (round 23's verdict) -- this module is the "internal
 // code/state" the record allows to keep the name.
 import { prose, TITLES } from './setupsteps'
-import type { ClientEvent, Device, UnattributedSource } from './types'
+import type { ClientEvent, Device, LoggingLeftover, UnattributedSource } from './types'
 
 export const RECENT_WINDOW_MS = 5 * 60 * 1000
 
@@ -134,6 +134,51 @@ export function setupEcho(d: Device): string | null {
     default:
       return null
   }
+}
+
+// loggingLeftovers (#1373) is what else this router last reported
+// sending logs to MikroView from -- another action, or a RouterOS
+// built-in repointed here -- left by a setup this instance's wizard has
+// since moved past. Absence and an empty list read the same: nothing
+// found. Kept as its own function, the same reason setupEcho is, so
+// Fleet.svelte and Entities.svelte's router cards read one answer.
+export function loggingLeftovers(d: Device): LoggingLeftover[] {
+  return d.loggingLeftovers ?? []
+}
+
+// leftoverFixCommands joins every leftover's own commands into one
+// paste-ready block, in the order they were reported -- a router with
+// more than one thing to clean up gets one paste, not one per row.
+export function leftoverFixCommands(leftovers: LoggingLeftover[]): string {
+  return leftovers.flatMap((l) => l.commands).join('\n')
+}
+
+// routerAddress (#1372) is the one line a card prints under a router's
+// name for "where is it": acceptedIp when the router has actually
+// enrolled (evidence, not merely a claim -- see device.Info.AcceptedIP's
+// own doc comment), otherwise sourceIp, the address its lines/pushes
+// have arrived from, otherwise the honest "no address yet" for a
+// declared router nothing has ever come from. Hoisted here for the same
+// no-drift reason as deviceState/setupEcho above: Fleet.svelte and
+// Entities.svelte's two router-card loops all read one function rather
+// than three copies of the same fallback chain.
+export function routerAddress(d: Device): string {
+  return d.acceptedIp || d.sourceIp || 'no address yet'
+}
+
+// deleteContract (#1369) is the confirm step's own sentence for
+// Remove…: what goes (the device's name, its enrolled address if it has
+// one, a still-pending enrolment token if one is minted) and what stays
+// (its events -- device.Registry.Delete never touches the event store,
+// only the registry entry, the accepted address and any pending
+// token). Never offered for a configured: true device -- the server
+// refuses that with ErrDeviceConfigured, since config.yaml rebuilds it
+// every boot -- so the card shows a note instead of this button.
+export function deleteContract(d: Device): string {
+  const going = [d.name || d.id]
+  if (d.acceptedIp) going.push(`its enrolled address ${d.acceptedIp}`)
+  if (d.enrolment?.pending) going.push('its pending enrolment')
+  return `Removes ${prose(going)}. Its events stay.`
 }
 
 // unattributedLabel (#1170) names a syslog source the registry could not

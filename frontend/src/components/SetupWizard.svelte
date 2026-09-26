@@ -63,9 +63,9 @@
     prose,
     sourceSplits,
     arrivingAddresses,
-    srcAddressCommand,
     refusedWarning,
     SKIP_CONSEQUENCES,
+    SYSLOG_ADDRESS_CHANGED_NOTE,
     tokenExpired,
     tokenLine,
     TOKEN_EXPIRED_LINE,
@@ -78,6 +78,7 @@
   import type { RouterosStanding } from '../lib/types'
   import CopyButton from './CopyButton.svelte'
   import MemoryControl from './MemoryControl.svelte'
+  import UpgradeWarnings from './UpgradeWarnings.svelte'
 
   // Steps land seconds to minutes apart (the documented push scheduler
   // runs every 20 minutes), so this polls rather than streaming -- and
@@ -661,6 +662,12 @@
   }
 
   async function copy(text: string, label: string) {
+    // #1370: what the syslog block prints for gets remembered the
+    // moment the operator presses Copy, not after the clipboard write
+    // settles -- the point is what they now have on their clipboard to
+    // paste, and that is decided here whether or not the browser's own
+    // write succeeds.
+    if (label === 'syslog') wizardState.syslogCopiedAddress = wizardState.address
     try {
       await navigator.clipboard.writeText(text)
       copied = label
@@ -670,6 +677,15 @@
       // The block stays selectable either way.
     }
   }
+
+  // syslogAddressChanged is #1370's drift check: the operator copied the
+  // Send logs block for one address and the header field now reads a
+  // different one, so the paste they are holding (or already made) no
+  // longer matches what the wizard would print today. null means never
+  // copied -- nothing to compare, and nothing to warn about.
+  const syslogAddressChanged = $derived(
+    wizardState.syslogCopiedAddress !== null && wizardState.syslogCopiedAddress !== wizardState.address,
+  )
 
   // Next runs the check where one exists. Arrived proceeds; waiting
   // hands the body to the heavy warning instead of moving. Steps that
@@ -847,7 +863,28 @@
         {/if}
       </p>
     {/each}
+    <UpgradeWarnings {commands} />
   {/if}
+{/snippet}
+
+<!-- terminalHint (#1368): every copy box the wizard hands the operator
+     for the ROUTER says, right next to the box, where it goes. Before
+     this, a box was only ever named ("the push scheduling script"),
+     never placed -- and RouterOS's own Scripts window has a Source box
+     that looks exactly like one of these, so a plausible wrong guess
+     existed with nothing here to rule it out. One snippet rather than
+     one sentence per step, so the wording cannot drift between them. -->
+{#snippet terminalHint()}
+  <p class="note terminal-hint">
+    Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal).
+  </p>
+{/snippet}
+
+<!-- hostHint (#1368): the history-key commands run on the MikroView
+     machine's own shell, never the router's -- said plainly so a box
+     that looks like the router ones above it is not pasted there too. -->
+{#snippet hostHint()}
+  <p class="note host-hint">Run this on the MikroView machine, not the router.</p>
 {/snippet}
 
 <!-- Step 6's one choice (#955): how the router hands its backup over.
@@ -1119,6 +1156,11 @@
                     >
                       {copied === 'ca' ? 'Copied' : 'Copy'}
                     </button>
+                    {@render terminalHint()}
+                    <p class="note">
+                      Fetches MikroView's certificate and imports it, so the router will trust the
+                      connection everything else here relies on.
+                    </p>
                     {#if wizardState.commands?.steps.caTrust.note}
                       <p class="note">{wizardState.commands.steps.caTrust.note}</p>
                     {/if}
@@ -1202,6 +1244,14 @@
                     >
                       {copied === 'syslog' ? 'Copied' : 'Copy'}
                     </button>
+                    {@render terminalHint()}
+                    <p class="note">
+                      Points the router's firewall logging at MikroView over syslog, so its filter
+                      rules' log lines start arriving here.
+                    </p>
+                    {#if syslogAddressChanged}
+                      <p class="note">{SYSLOG_ADDRESS_CHANGED_NOTE}</p>
+                    {/if}
                     {#if wizardState.enrolment}
                       <!-- One plain line under the block: how long the
                            token in it is good for, and the one control --
@@ -1238,6 +1288,11 @@
                 >
                   {copied === 'rules' ? 'Copied' : 'Copy'}
                 </button>
+                {@render terminalHint()}
+                <p class="note">
+                  Tags existing firewall rules by action, so MikroView can tell accept, drop, reject
+                  and log rules apart in the log lines they produce.
+                </p>
                 {#if wizardState.commands?.steps.ruleTagging.note}
                   <p class="note">{wizardState.commands.steps.ruleTagging.note}</p>
                 {/if}
@@ -1324,10 +1379,10 @@
                         onclick={() =>
                           (expandedPaste = {
                             key: 'script',
-                            label: 'the push scheduling script',
+                            label: 'the push commands',
                             text: wizardState.commands?.steps.schedule.commands ?? '',
                           })}
-                        aria-label="Read the push scheduling script in full"
+                        aria-label="Read the push commands in full"
                       >
                         ‹
                       </button>
@@ -1338,8 +1393,13 @@
                     class="copy"
                     onclick={() => copy(wizardState.commands?.steps.schedule.commands ?? '', 'script')}
                   >
-                    {copied === 'script' ? 'Copied' : 'Copy script'}
+                    {copied === 'script' ? 'Copied' : 'Copy commands'}
                   </button>
+                  {@render terminalHint()}
+                  <p class="note">
+                    Creates the <code>mv-push</code> script and its 20-minute schedule, then runs it
+                    once.
+                  </p>
                   {#if wizardState.commands?.steps.schedule.note}
                     <p class="note">{wizardState.commands.steps.schedule.note}</p>
                   {/if}
@@ -1415,6 +1475,7 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_SAVE_COMMAND, 'keysave')}>
                     {copied === 'keysave' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render hostHint()}
                   <p class="note">
                     Paste the key at the prompt, then press Ctrl-D. It goes in on standard input, so
                     it never reaches your shell history or a process list.
@@ -1424,6 +1485,7 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_MOUNT_COMMAND, 'keymount')}>
                     {copied === 'keymount' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render hostHint()}
                   <p class="note">Running MikroView directly on the host instead? Skip this one.</p>
                   <p class="note">
                     There is nothing to set: MikroView reads
@@ -1438,6 +1500,7 @@
                   <button type="button" class="copy" onclick={() => copy(KEY_RESTART_COMMAND, 'keyrestart')}>
                     {copied === 'keyrestart' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render hostHint()}
                   <p class="note">
                     The key is read once, at startup. This step notices on its own and prints the
                     router script ·
@@ -1533,10 +1596,10 @@
                         onclick={() =>
                           (expandedPaste = {
                             key: 'backup',
-                            label: 'the backup script',
+                            label: 'the backup commands',
                             text: wizardState.commands?.steps.backup.commands ?? '',
                           })}
-                        aria-label="Read the backup script in full"
+                        aria-label="Read the backup commands in full"
                       >
                         ‹
                       </button>
@@ -1547,8 +1610,12 @@
                     class="copy"
                     onclick={() => copy(wizardState.commands?.steps.backup.commands ?? '', 'backup')}
                   >
-                    {copied === 'backup' ? 'Copied' : 'Copy script'}
+                    {copied === 'backup' ? 'Copied' : 'Copy commands'}
                   </button>
+                  {@render terminalHint()}
+                  <p class="note">
+                    Creates the <code>mv-backup</code> script that sends this router's backup here.
+                  </p>
                   {#if wizardState.commands?.steps.backup.note}
                     <p class="note">{wizardState.commands.steps.backup.note}</p>
                   {/if}
@@ -1561,6 +1628,7 @@
                   >
                     {copied === 'backupsched' ? 'Copied' : 'Copy'}
                   </button>
+                  {@render terminalHint()}
                 {/if}
               {:else if step.key === 'register'}
                 <!-- #1291: the ledger's last step. There is no
@@ -1664,6 +1732,21 @@
                   {/if}
                 </p>
               {/if}
+              {#if step.status.pasteBlock}
+                <!-- #1365: "add it to tls.hosts" named a file to edit
+                     but never the syntax. This is the whole resulting
+                     list, not just the missing address, so pasting it
+                     can only add coverage -- never drop an address
+                     already in config.yaml. -->
+                <pre>{step.status.pasteBlock}</pre>
+                <button type="button" class="copy" onclick={() => copy(step.status.pasteBlock ?? '', 'tls-hosts')}>
+                  {copied === 'tls-hosts' ? 'Copied' : 'Copy'}
+                </button>
+                <p class="note">
+                  Paste this into config.yaml's <code>tls:</code> section on the MikroView machine,
+                  replacing its <code>hosts:</code> line, then restart mikroview.
+                </p>
+              {/if}
               {#if step.status.shortfall}
                 <p class="observation shortfall">{step.status.shortfall}</p>
               {/if}
@@ -1715,33 +1798,17 @@
                     this instance. You can tell.
                   </p>
                   <p class="note">
-                    <strong>If they are the same router</strong>, pick the address it should be known
-                    by here:
+                    <strong>If they are the same router</strong>, tell MikroView the address it's
+                    actually using. The router picks that address itself, for its logs and its pushes
+                    alike, so MikroView has to follow it rather than the other way round.
                   </p>
                   {#each splits as split (split.declared)}
                     <p class="note">
-                      <strong>Keep {split.declared}</strong> (recommended). Run this on the router — it
-                      makes the logs arrive from the address you declared:
-                    </p>
-                    <pre>{srcAddressCommand(split.declared)}</pre>
-                    <button
-                      type="button"
-                      class="copy"
-                      onclick={() => copy(srcAddressCommand(split.declared), `src-${split.declared}`)}
-                    >
-                      {copied === `src-${split.declared}` ? 'Copied' : 'Copy'}
-                    </button>
-                    <p class="note">
-                      Recommended because everything else — the token step 4 mints, the tables it
-                      pushes — follows the declared identity, so nothing has to be reissued.
-                    </p>
-                    <p class="note">
                       {#if arriving.length === 1}
-                        <strong>Or keep {arriving[0]}</strong>: change <code>sourceIp</code> to
-                        {arriving[0]} in config.yaml and restart.
+                        Change <code>sourceIp</code> to {arriving[0]} in config.yaml and restart.
                       {:else}
-                        <strong>Or keep the arriving address</strong>: change <code>sourceIp</code> to
-                        whichever of {prose(arriving)} this router is, in config.yaml, and restart.
+                        Change <code>sourceIp</code> to whichever of {prose(arriving)} this router is,
+                        in config.yaml, and restart.
                       {/if}
                       MikroView then matches what actually arrives. If a token was already minted for
                       {split.declared}, reissue it afterwards — a token keeps the identity it was minted
@@ -2153,6 +2220,13 @@
      outside the table's floor never blocks, but the note still reads as
      the loudest thing on the step. */
   .note.below-minimum {
+    border-left: 3px solid var(--log);
+    padding-left: 10px;
+  }
+
+  /* The RouterOS upgrade warning (#1344): the same amber left rule as
+     below-minimum above, no new colour -- see UpgradeWarnings.svelte. */
+  .note.upgrade {
     border-left: 3px solid var(--log);
     padding-left: 10px;
   }

@@ -43,6 +43,12 @@ export interface StepStatus {
   // shortfall set means there was no arrival to word -- one warning box
   // and nothing above it.
   shortfall?: string
+  // A ready-to-paste config.yaml snippet for a 'blocked' step whose fix
+  // is a config edit rather than a router command (#1365) -- caStep's
+  // only user so far. Set only where the detail names an edit to make;
+  // "add it to tls.hosts" is not something an operator can act on
+  // without seeing the syntax.
+  pasteBlock?: string
 }
 
 // hostname strips a port. Certificate names never carry one, so this is
@@ -96,6 +102,18 @@ export function deviceStanza(sourceIp: string, name: string): string {
   return [`devices:`, `  - sourceIp: "${sourceIp}"`, `    name: "${name || 'my-router'}"`].join('\n')
 }
 
+// tlsHostsBlock is caStep's own pasteBlock (#1365): the whole resulting
+// tls.hosts list, not just the address that is missing -- an operator
+// told only "add 192.168.13.15" has to go and remember what else was
+// already in that list, and a block that only ever adds is safer than
+// one that could be pasted over something wider. Never drops an
+// existing entry, and never lists the missing address twice if it is
+// somehow already there.
+export function tlsHostsBlock(existingHosts: string[], missing: string): string {
+  const hosts = existingHosts.includes(missing) ? existingHosts : [...existingHosts, missing]
+  return `hosts: [${hosts.map((h) => JSON.stringify(h)).join(', ')}]`
+}
+
 // --- Step status --------------------------------------------------------
 
 export function caStep(status: SetupStatus, address: string): StepStatus {
@@ -110,8 +128,10 @@ export function caStep(status: SetupStatus, address: string): StepStatus {
       state: 'blocked',
       detail:
         `MikroView's certificate does not cover ${shown}, so the router will refuse it ` +
-        `("name verification failed"). Add ${shown} to tls.hosts in config.yaml and restart, ` +
-        `then come back — the router needs no change, the same CA signs the new certificate.`,
+        `("name verification failed"). Paste the block below into config.yaml's tls: section, ` +
+        `replacing its tls.hosts line, and restart mikroview, then come back — the router needs ` +
+        `no change, the same CA signs the new certificate.`,
+      pasteBlock: tlsHostsBlock(status.instance.hosts, shown),
     }
   }
   if (status.sources.some((s) => s.caFetchedAt)) {
@@ -299,6 +319,17 @@ export const NO_COMMAND_HEADING = 'no commands yet'
 export const NO_ADDRESS_LINE =
   'no address has been given yet — answer "What address can your router reach MikroView on?" above, at the top of this wizard, and this fills in.'
 
+// SYSLOG_ADDRESS_CHANGED_NOTE (#1370): the Send logs block embeds the
+// wizard's address at the moment it is copied. Editing the address
+// afterwards -- the header field the operator can change at any time --
+// leaves an already-pasted or already-copied block naming the old one,
+// with nothing telling the operator it no longer matches. Tracked
+// client-side (wizardState.syslogCopiedAddress, set when the Copy button
+// is pressed) rather than server-side: it is a fact about what this
+// browser has done, not about the router or the instance.
+export const SYSLOG_ADDRESS_CHANGED_NOTE =
+  'The address changed since you copied this block — paste it again on the router.'
+
 // --- The backup step's no-script state (#1217) --------------------------
 //
 // commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)
@@ -435,15 +466,6 @@ export function sourceSplits(devices: Device[]): SourceSplit[] {
   return devices
     .filter((d) => d.configured && (d.multihomedCandidates?.length ?? 0) > 0)
     .map((d) => ({ declared: d.sourceIp || d.id, arriving: d.multihomedCandidates ?? [] }))
-}
-
-// srcAddressCommand is the recommended remedy: the router keeps the
-// address it was declared under, so the token step 4 mints and the
-// tables it pushes need no reissuing. Assumes the logging action is
-// named mikroview -- step 2's own `add` created it under that name, the
-// same assumption every wizard command already makes.
-export function srcAddressCommand(declared: string): string {
-  return `/system logging action set mikroview src-address=${declared}`
 }
 
 // arrivingAddresses is every undeclared address across the splits, in
@@ -641,6 +663,20 @@ export const TITLES: Record<StepKey, string> = {
 export const STEP_TITLES: readonly string[] = [...SETUP_STEPS]
   .sort((a, b) => RECORD_NUMBERS[a] - RECORD_NUMBERS[b])
   .map((k) => TITLES[k])
+
+// UPGRADE_STEP_LABELS maps a routeros.Upgrade's Steps key (#1344) to what
+// UpgradeWarnings.svelte's "Affects ..." sentence names it as. Three of
+// the four are TITLES' own step names -- syslog/push/backup are all
+// steps in this wizard -- and droplist is not a wizard step at all, so it
+// gets its own phrase pointing at where that scheduler actually lives.
+// An unknown key falls back to itself in the component, never here, so a
+// new Go key can never blank the sentence.
+export const UPGRADE_STEP_LABELS: Record<string, string> = {
+  syslog: TITLES.syslog,
+  push: TITLES.push,
+  backup: TITLES.backup,
+  droplist: 'the drop list scheduler in Settings ▸ Engine room',
+}
 
 export const STEP_COUNT = SETUP_STEPS.length
 

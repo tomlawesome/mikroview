@@ -167,7 +167,14 @@ func CaTrustCommands(address, dialect string) string {
 // compares against -- but the doc comment above is unconditional about
 // what triggers a bump, and re-pasting step 2 is exactly what an
 // operator should be nudged to do once this ships.
-const WizardVersion = 3
+//
+// Bumped to 4 by issue #1373: loggingPushBlock now reports every
+// target=remote action pointed at this instance's address (plus its own
+// src-address), not only the one named "mikroview", so a leftover from
+// an earlier setup -- another action, or a built-in repointed here --
+// shows up. A router whose script still reports only "mikroview" is
+// reporting a stale script, and the fix is the same paste.
+const WizardVersion = 4
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
@@ -251,7 +258,19 @@ func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 	// header, so a burst of matching lines arriving at once is read as
 	// separate lines rather than one garbled one (#614). Keep this
 	// identical to docs/routeros-setup.md's block.
-	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
+	//
+	// src-address=0.0.0.0 is RouterOS's "let the router pick" value
+	// (#1370). Pasting this block a second time used to leave an
+	// earlier setup's src-address untouched, which is how one owner's
+	// router ended up pinned to the address an older wizard run had
+	// used for syslog while HTTPS pushes left from whichever address
+	// routing chose for them -- two different source addresses for one
+	// router, so it enrolled under one and every push was refused from
+	// the other. mikroview cannot know an operator's deliberate
+	// src-address (the push script's /tool fetch has no such field to
+	// carry it), so the wizard always sets both to the router's own
+	// routing choice rather than risk them drifting apart again.
+	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s src-address=0.0.0.0 remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
 	lines := []string{
 		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
 		fmt.Sprintf(`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=%s action=mikroview }`, strings.Join(want.Topics, ",")),
@@ -448,10 +467,22 @@ func PushScript(address, token string, kinds []string, dialect string) string {
 // commands and has never imported the schema they feed.
 const loggingKind = "logging"
 
-// loggingPushBlock renders #1241's setup report: the mikroview logging
-// action and every /system logging rule pointing at it, in one page of
-// the same shape as the table blocks above, stamped with the wizard
-// version that wrote this script.
+// loggingPushBlock renders #1241's setup report, widened by #1373: every
+// /system logging action still pointed at this instance -- not only the
+// one named "mikroview" -- and every /system logging rule feeding one of
+// them, in one page of the same shape as the table blocks above, stamped
+// with the wizard version that wrote this script.
+//
+// "Pointed at this instance" is target=remote with remote equal to this
+// instance's own address (want.Remote below) -- the same test an
+// operator's eye would apply, and the only one this script can apply
+// without knowing any action's name in advance. That is deliberately
+// wider than "named mikroview": #1373 is exactly the case where an
+// earlier setup's action -- built-in (memory, remote, disk, echo) or a
+// leftover of its own -- was repointed at this instance and left
+// sending logs here under its old name after mikroview's own setup moved
+// on. A router with nothing else pointed here still reports one record,
+// the mikroview action itself.
 //
 // Both menus are printed whole and filtered in the script with :if,
 // rather than with a `print ... where` predicate. `print as-value` and
@@ -460,23 +491,35 @@ const loggingKind = "logging"
 // predicate that silently matched nothing would push an empty page,
 // which reads exactly like a router with no mikroview logging at all.
 //
-// Nothing else from /system logging is sent -- not the other actions,
-// not the rules feeding them. What the operator logs elsewhere is not
-// mikroview's business, and the only question this page answers is
-// whether the wizard's own setup is still what the wizard would write.
+// matchNames collects the name of every action the first loop matched,
+// wrapped in commas ("...,mikroview,memory,...") so the second loop's
+// `~` match cannot mistake "memory" for a substring of some other
+// action's longer name. The second loop then sends the rule for any
+// action this page already decided to report -- never a name it has not
+// seen -- so the two menus can never disagree about which actions this
+// report is about.
+//
+// Nothing else from /system logging is sent -- not another action this
+// instance is not the target of, not the rules feeding one. What the
+// operator logs elsewhere is not mikroview's business; the only
+// question this page answers is what is sending logs to this instance
+// and under what setup.
 func loggingPushBlock(address, token, dialect string) string {
+	want := WizardLogging(address, "", dialect)
 	return strings.Join([]string{
+		`:local matchNames ""`,
 		`:local logRecs [:toarray ""]`,
 		`:foreach i,v in=[/system/logging/action print as-value] do={`,
-		`  :if (($v->"name") = "mikroview") do={`,
+		fmt.Sprintf(`  :if (($v->"target") = "remote" and ($v->"remote") = "%s") do={`, want.Remote),
 		`    :local rec {"type"="action"; "name"=($v->"name"); "target"=($v->"target"); "remote"=($v->"remote"); ` +
 			`"remotePort"=($v->"remote-port"); "remoteProtocol"=($v->"remote-protocol"); ` +
-			`"remoteLogFormat"=($v->"remote-log-format"); "checkCertificate"=($v->"check-certificate")}`,
+			`"remoteLogFormat"=($v->"remote-log-format"); "checkCertificate"=($v->"check-certificate"); "srcAddress"=($v->"src-address")}`,
 		`    :set logRecs ($logRecs, {$rec})`,
+		`    :set matchNames ($matchNames . "," . ($v->"name") . ",")`,
 		`  }`,
 		`}`,
 		`:foreach i,v in=[/system/logging print as-value] do={`,
-		`  :if (($v->"action") = "mikroview") do={`,
+		`  :if ($matchNames ~ (",".($v->"action").",")) do={`,
 		`    :local rec {"type"="rule"; "topics"=($v->"topics"); "action"=($v->"action"); "disabled"=($v->"disabled")}`,
 		`    :set logRecs ($logRecs, {$rec})`,
 		`  }`,
@@ -487,6 +530,55 @@ func loggingPushBlock(address, token, dialect string) string {
 		// quote() rather than being relied on to already be well-formed.
 		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$logPayload http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), quote(token)),
 	}, "\n")
+}
+
+// BuiltinLoggingActions are RouterOS's log actions that exist on every
+// router from the factory and cannot be removed, only reset (#1373).
+// A wizard, or an earlier MikroView setup, can repoint one of these at
+// this instance the same way it can any other action -- the fix for one
+// is different (reset it, never remove it) from the fix for an action
+// mikroview itself created, so a leftover check must be able to tell
+// the two apart by name.
+var BuiltinLoggingActions = map[string]bool{
+	"memory": true,
+	"remote": true,
+	"disk":   true,
+	"echo":   true,
+}
+
+// ResetBuiltinLoggingAction is the RouterOS command that returns a
+// built-in logging action to its factory target, for one an earlier
+// setup repointed at this instance (#1373). Built-ins are reset, not
+// removed -- RouterOS creates them at boot and refuses `action remove`
+// on one.
+//
+// Only "remote" carries the remote/src-address fields a repointing
+// could have changed, so only its reset line clears them back to the
+// RouterOS default (`remote=0.0.0.0 src-address=0.0.0.0`, the same
+// "let the router pick" reading src-address=0.0.0.0 already has
+// elsewhere in this package). "memory", "disk" and "echo" have no such
+// fields; their factory target is their own name, and resetting target
+// is the whole fix -- verified against docs; not confirmed on a live
+// router by this change, since mikroview never connects to one.
+func ResetBuiltinLoggingAction(name string) string {
+	if name == "remote" {
+		return `/system logging action set [find name=remote] remote=0.0.0.0 src-address=0.0.0.0`
+	}
+	return fmt.Sprintf(`/system logging action set [find name=%s] target=%s`, name, name)
+}
+
+// RemoveLoggingActionCommands is the fix for a non-built-in action still
+// sending logs to this instance (#1373): remove the rules that feed it
+// before removing the action itself, since RouterOS refuses to remove
+// an action a rule still references. `[find action=name]`/`[find
+// name=name]` match the router's own copy however many rules or none
+// point at it, the same guarded-lookup shape every other command in
+// this package uses rather than assuming a fixed id.
+func RemoveLoggingActionCommands(name string) []string {
+	return []string{
+		fmt.Sprintf(`/system logging remove [find action=%s]`, name),
+		fmt.Sprintf(`/system logging action remove [find name=%s]`, name),
+	}
 }
 
 // PushScriptPolicy is the policy mv-push is saved and scheduled under:
