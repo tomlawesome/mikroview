@@ -1258,7 +1258,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     // cap is a CSS max-height, never a shorter copy of the script.
     expect(container.querySelector('pre.script')?.textContent).toBe(longLine)
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
 
     const reader = container.querySelector('.reader-pre')
     expect(reader).toBeTruthy()
@@ -1272,7 +1272,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Close and return to this step' }))
@@ -1293,7 +1293,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -1310,7 +1310,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
     wizardState.pane = PANE.ca
@@ -2017,8 +2017,173 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
 
     await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
     expect(container.querySelector('.no-script')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Copy script' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy commands' })).toBeTruthy()
     expect(container.querySelector('.lead')?.textContent ?? '').toContain('already in the script')
+  })
+})
+
+// #1368: an operator pasted the push-state block into the router's
+// Scripts window because nothing said it was a terminal command, not a
+// script to save there. Every router-side box now carries the same
+// hint next to it, and no router block's own label calls itself a
+// "script" -- that word is reserved for describing what the pasted
+// commands create on the router, never for naming the box itself.
+describe('SetupWizard -- copy boxes say where they go (#1368)', () => {
+  const TERMINAL_HINT = "Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal)."
+  const HOST_HINT = 'Run this on the MikroView machine, not the router.'
+
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  it('tells the operator where to paste the CA step', async () => {
+    wizardState.pane = PANE.ca
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('CA_TRUST_COMMANDS'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+  })
+
+  it('tells the operator where to paste the Send logs step', async () => {
+    wizardState.pane = PANE.syslog
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('SYSLOG_COMMANDS'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+  })
+
+  it('tells the operator where to paste the rule-tagging step', async () => {
+    wizardState.pane = PANE.rules
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('RULE_TAGGING_COMMANDS'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+  })
+
+  it('tells the operator where to paste the push-state script, and does not call the box a script', async () => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('SCRIPT_ADD_WITH_THE_BODY_IN_IT'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+    expect(container.textContent?.replace(/\s+/g, ' ')).toContain(
+      'Creates the mv-push script and its 20-minute schedule, then runs it once.',
+    )
+    expect(screen.getByRole('button', { name: 'Copy commands' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Copy script/ })).toBeNull()
+  })
+
+  it('tells the operator where to paste both backup boxes, and does not call either a script', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    const hints = container.textContent?.split(TERMINAL_HINT).length ?? 0
+    // One next to the backup script, one next to its schedule.
+    expect(hints - 1).toBe(2)
+    expect(screen.getByRole('button', { name: 'Copy commands' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Copy script/ })).toBeNull()
+  })
+
+  it('labels the history-key commands as host commands, not router ones, and never a script', async () => {
+    wizardState.pane = PANE.backup
+    wizardState.devices = []
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.keymint')).toBeTruthy())
+    const hostHints = container.textContent?.split(HOST_HINT).length ?? 0
+    // Once each for the save, mount and restart commands.
+    expect(hostHints - 1).toBe(3)
+    expect(container.textContent).not.toContain(TERMINAL_HINT)
+  })
+
+  // The wording rule itself: a router block's own label -- what names
+  // the box to the operator, not the sentence describing what it does
+  // on the router -- never uses "script" as its noun. "Copy commands"
+  // and "the push/backup commands" replaced "Copy script" and "the push
+  // scheduling script" / "the backup script" for exactly this reason.
+  it('never labels a router block with the word "script"', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    const labels = [
+      ...[...container.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? ''),
+      ...[...container.querySelectorAll('[aria-label]')].map((el) => el.getAttribute('aria-label') ?? ''),
+    ]
+    for (const label of labels) {
+      expect(label.toLowerCase()).not.toMatch(/\bscript\b/)
+    }
   })
 })
 
