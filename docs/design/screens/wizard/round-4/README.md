@@ -154,7 +154,7 @@ told, the ledger (step list and finish pane) gains one amber line
 under the Told strip:
 
 > You told me 7.16.2; rb5009 reports 7.24.4. Upgrade warnings were
-> re-checked — 1 applies to Send logs · **Show**
+> re-checked — 1 applies to Connect the router · **Show**
 
 A warning, never a stop. **Show** opens that step at its Paste move
 with the #1344 warning above the block.
