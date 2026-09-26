@@ -149,6 +149,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio
 
 - 2026-09-23 · 1c0eef18 (feature/m19-second-factor, local `go test ./... -count=1`, this sandboxed container) · one test of 4055 · `nextHeaderStart: 256 KiB 2.273977ms, 1 MiB 24.022903ms, ratio 10.6 ... want about 4x -- the per-offset '>' scan looks unbounded again`, the assertion failing above a ratio of 10. Re-run alone on the same commit immediately afterwards: passed, ratio 3.7 (256 KiB 2.39ms, 1 MiB 8.73ms). The test measures wall-clock scan time at two buffer sizes and compares the ratio, so it reads whatever else the machine was doing; the run that tripped it was the full 55-package suite on a container also hosting other work. Nothing in the branch touches `internal/syslog`. If it recurs, the question is whether the threshold can be made to measure work rather than elapsed time, since a ratio guard on a loaded box will keep doing this.
+- 2026-09-26 · 763e1dee (feature/1359-et-default, local `go test ./... -count=1`, this sandboxed container) · `nextHeaderStart: 256 KiB 1.983303ms, 1 MiB 36.079013ms, ratio 18.2 (linear ~4, quadratic ~16)`. Re-run alone on the same commit immediately afterwards: passed, ratio 3.5 (256 KiB 2.32ms, 1 MiB 8.10ms). The branch only touches `internal/blocklist` and `internal/config`. Second sighting.
 
 ## live-connection-states: content does not return to its pre-loss position after the banner clears
 

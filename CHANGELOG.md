@@ -16,6 +16,28 @@ rewritten.
 
 ## [Unreleased]
 
+### Changed
+
+- **Emerging Threats' compromised-IPs list is now on by default
+  alongside Spamhaus DROP** (#1359, owner decision 2026-09-25). Both
+  are enabled unless `blocklist.sources` says otherwise; an existing
+  config.yaml that already sets `sources` explicitly keeps exactly the
+  list it wrote. To go back to Spamhaus DROP alone, set:
+
+  ```yaml
+  blocklist:
+    sources:
+      - spamhaus_drop
+  ```
+
+  Checked the feed's licence and update-frequency guidance before
+  flipping the default: `compromised-ips.txt` ships under the same
+  BSD-3-Clause grant as the rest of the ET Open ruleset, and Emerging
+  Threats' own download instructions recommend configuring an updater
+  for unattended daily fetching — see docs/configuration.md's
+  "Local IP/CIDR blocklist matching" section for the clauses and dates
+  checked.
+
 ### Fixed
 
 - **A router's HTTPS pushes no longer get refused because syslog was
