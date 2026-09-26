@@ -79,6 +79,27 @@ rewritten.
   accent (Signal), styled directly in `:root` rather than through a
   `[data-colorway]` switch.
 
+### Changed
+
+- **On-disk event history is on by default** (#1357, owner's decision).
+  `history.enabled` now defaults to `true`, and `install.sh` gives a
+  fresh install a key for it (`keys/history.key` in the app folder
+  volume, written by a throwaway helper container before mikroview
+  starts — never on this script's own command line or in its output),
+  so a plain `curl | sh` install keeps history with no setup step.
+  **If you upgrade:** with no `history:` block in your config and no
+  key mounted, MikroView still comes up exactly as before, memory-only
+  — the only new thing is a CFG-0080 warning at startup saying so and
+  how to mount a key if you want history now. But if you already mount
+  a key for the state store (#853's flags/entities/watchlist encryption, or
+  an earlier history key) and never wrote `history.enabled: false`
+  explicitly, this upgrade turns the on-disk event log on too — set
+  `history.enabled: false` first if you want to keep using that key for
+  the state store alone. Installing with Compose, or with the bare
+  `docker run` in docs/install.md, does not run `install.sh`: history
+  stays off there until you mount a key yourself (one command, in
+  docs/install.md and docs/configuration.md).
+
 ### Fixed
 
 - **The setup wizard now says where each copy box goes** (#1368). Every

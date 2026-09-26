@@ -4,11 +4,15 @@
 # The one-line pastable install (#1242):
 #   curl -fsSL https://raw.githubusercontent.com/tomlawesome/mikroview/main/install.sh | sh
 #
-# It runs exactly one `docker run`, and shows it first -- the whole
-# effect fits on one screen, which is the trust story: no checksum step,
-# because the script is short enough to read instead. Not a Compose
-# writer: docs/install.md's "no-script form" is this same line, for
-# anyone who would rather paste it by hand.
+# It runs one `docker run` for mikroview itself, and shows it first --
+# the whole effect fits on one screen, which is the trust story: no
+# checksum step, because the script is short enough to read instead. Not
+# a Compose writer: docs/install.md's "no-script form" is this same
+# line, for anyone who would rather paste it by hand.
+#
+# Two more, throwaway `docker run`s (#1357) come before it on a fresh
+# install, to give on-disk event history -- on by default since #1357 --
+# a key to encrypt under. See the comment above that step.
 #
 # MIKROVIEW_IMAGE and MIKROVIEW_CONTAINER are deliberately undocumented
 # for users -- they exist only for scripts/install.test.sh and the CI
@@ -63,20 +67,52 @@ if docker container inspect "$name" >/dev/null 2>&1; then
   removed_existing=1
 fi
 
+# On-disk event history is on by default (#1357), and there is no
+# unencrypted mode -- it needs a key mounted at keys/history.key in the
+# app folder volume, or it simply stays off (docs/configuration.md).
+# Give a fresh install one, the same way docs/configuration.md tells an
+# operator to make one by hand, but generated inside a throwaway helper
+# container rather than on this shell: the key material then never
+# exists on the command line, in this script's own output, or on the
+# host running it, only inside the volume. Never overwrites one already
+# there, so an upgrade (this is also the upgrade line, above) leaves
+# whatever key it is already encrypted under alone.
+#
+# Two docker runs rather than one -- check, then create -- because the
+# check's own exit code is the "does it already exist" answer: nothing
+# printed by either has to be parsed to find out.
+if docker run --rm -v "${etc_vol}:/etc/mikroview:ro" alpine:3.24 \
+  test -e /etc/mikroview/keys/history.key >/dev/null 2>&1; then
+  : # already there -- told about it on an earlier run
+elif docker run --rm -v "${etc_vol}:/etc/mikroview" alpine:3.24 sh -c '
+    set -e
+    mkdir -p /etc/mikroview/keys
+    head -c 32 /dev/urandom | base64 > /etc/mikroview/keys/history.key
+    chown 1000:1000 /etc/mikroview/keys/history.key
+    chmod 600 /etc/mikroview/keys/history.key
+  '; then
+  echo "install.sh: on-disk event history is on by default -- a key for it now lives in the ${etc_vol} volume at keys/history.key. Back it up: losing it makes the retained history unreadable."
+else
+  echo "install.sh: could not create a history encryption key in ${etc_vol} -- mikroview will start with on-disk history off until one is mounted (see docs/configuration.md)" >&2
+fi
+
 # Two named volumes: the data store, and the app folder #1243 taught the
 # binary to read config, GeoIP and a certificate pair from -- see
 # docs/install.md for putting a file there once you want one. Not with
 # docker cp: the same folder is mounted :ro below, and Docker refuses a
 # copy into it with "mounted volume is marked read-only". A helper
-# container writing to the volume, or a bind-mount swap, is the way.
+# container writing to the volume, or a bind-mount swap, is the way --
+# the history key above just did exactly that.
 #
 # Hardening (#1286): the same flags deploy/docker-compose.yml's hardening
 # block applies, kept in sync by scripts/check-release-surfaces.sh so the
 # two can't drift apart again. The app folder is mounted read-only, as
 # Compose has always mounted it and as internal/config/appfolder.go
 # describes it ("a folder an operator mounts read-only... nothing else
-# writes to it"): config, the GeoIP database, the history key and the
-# certificate are put there by the operator, never by mikroview. No memory or CPU cap here on purpose --
+# writes to it"): config, the GeoIP database and the certificate are put
+# there by the operator; the history key above is the one exception,
+# made by this script rather than by hand, so a fresh install needs no
+# separate setup step for it. No memory or CPU cap here on purpose --
 # both depend on the host this runs on, a wrong one is a silent outage on
 # a small box, and Compose (where an operator already sets the rest of
 # their deployment) is the right place to choose one.
