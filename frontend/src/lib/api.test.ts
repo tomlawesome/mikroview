@@ -15,12 +15,14 @@ import {
   disableTOTP,
   enrolTOTP,
   fetchAuditLog,
+  fetchDevices,
   fetchEventsWindow,
   fetchPasskeys,
   fetchSetupCommands,
   finishPasskeyRegistration,
   login,
   mintDroplistKey,
+  onForcedAuthGate,
   renamePasskey,
   replayDefinition,
   revokeDroplistKey,
@@ -809,5 +811,98 @@ describe('the passkey calls (#1250)', () => {
     expect(url).toBe('/api/auth/users/u-42/passkeys')
     expect(init?.method).toBe('DELETE')
     expect(init?.body).toBeUndefined()
+  })
+})
+
+// #1362: an open tab across an upgrade (or a warm-started session) can
+// hold a real session that internal/api/auth.go's requireAuth now
+// refuses on every route but a few, because the account has no second
+// factor or owes a forced password change. Before this fix, that 403 was
+// indistinguishable from any other and every view just showed it as an
+// error -- these pin the shared fetch path in api.ts that fixes it,
+// without any view needing its own handling.
+describe('the forced-auth-gate 403 (#1362)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubWithGateHeader(gate: string | null) {
+    return vi.fn(async (url: string) => {
+      if (url === '/api/auth/session') {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({ authenticated: true, mustEnrolSecondFactor: gate === 'must-enrol-factor', mustChangePassword: gate === 'must-change-password', ssoAvailable: false }),
+        }
+      }
+      return {
+        ok: false,
+        status: 403,
+        headers: { get: (name: string) => (name === 'X-Mikroview-Auth-Gate' ? gate : null) },
+        text: async () => 'this account has no second factor -- enrol one before going any further',
+      }
+    })
+  }
+
+  it('still throws for the caller -- the view is expected to unmount once the state flips, not to swallow this', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-enrol-factor'))
+    await expect(fetchDevices()).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('calls the registered handler with a fresh session when the header says must-enrol-factor', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-enrol-factor'))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      // The recheck is fired off from inside the failed call, not
+      // awaited by it -- give the microtask queue a turn.
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).toHaveBeenCalledWith('must-enrol-factor', expect.objectContaining({ mustEnrolSecondFactor: true }))
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('calls the registered handler with must-change-password the same way', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader('must-change-password'))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).toHaveBeenCalledWith('must-change-password', expect.objectContaining({ mustChangePassword: true }))
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('does not call the handler for an ordinary 403 with no gate header', async () => {
+    vi.stubGlobal('fetch', stubWithGateHeader(null))
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await expect(fetchDevices()).rejects.toBeTruthy()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      onForcedAuthGate(() => {})
+    }
+  })
+
+  it('de-dupes a burst of 403s into a single session recheck', async () => {
+    const fetchMock = stubWithGateHeader('must-enrol-factor')
+    vi.stubGlobal('fetch', fetchMock)
+    const handler = vi.fn()
+    onForcedAuthGate(handler)
+    try {
+      await Promise.allSettled([fetchDevices(), fetchDevices(), fetchDevices()])
+      await new Promise((r) => setTimeout(r, 0))
+      const sessionCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/auth/session')
+      expect(sessionCalls).toHaveLength(1)
+    } finally {
+      onForcedAuthGate(() => {})
+    }
   })
 })
