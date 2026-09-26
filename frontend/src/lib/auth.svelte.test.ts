@@ -3,6 +3,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from './types'
 
+// #1362: holds whatever auth.svelte.ts registers via api.ts's
+// onForcedAuthGate -- vi.hoisted because the vi.mock factory below runs
+// before an ordinary module-scope `let` would be initialised.
+const { getCapturedForcedAuthGateHandler, setCapturedForcedAuthGateHandler } = vi.hoisted(() => {
+  let handler: ((gate: string, session: AuthSession) => void) | null = null
+  return {
+    getCapturedForcedAuthGateHandler: () => handler,
+    setCapturedForcedAuthGateHandler: (h: (gate: string, session: AuthSession) => void) => {
+      handler = h
+    },
+  }
+})
+
 // auth.svelte.ts talks to the backend exclusively through these
 // lib/api.ts functions -- mock the whole module so tests exercise only
 // AuthState's own state-transition logic, never a real fetch().
@@ -10,6 +23,13 @@ vi.mock('./api', () => ({
   fetchAuthSession: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  // #1362: auth.svelte.ts registers its forced-auth-gate handler at
+  // module load -- capturing it here (rather than a bare vi.fn()) is
+  // what lets the tests below invoke it directly, the same way api.ts's
+  // shared fetch wrapper would once it detects the gate header.
+  onForcedAuthGate: vi.fn((handler: (gate: string, session: AuthSession) => void) => {
+    setCapturedForcedAuthGateHandler(handler)
+  }),
   register: vi.fn(),
   setNewPasswordAfterReset: vi.fn(),
   signOutEverywhere: vi.fn(),
@@ -50,7 +70,7 @@ import {
   saveMyPreferences,
 } from './api'
 import { loginWithPasskey } from './passkeys.svelte'
-import { authState, pageReload } from './auth.svelte'
+import { authState, pageReload, wireForcedAuthGate } from './auth.svelte'
 import { appState } from './state.svelte'
 import { flagsState } from './flags.svelte'
 import { watchlistState } from './watchlist.svelte'
@@ -64,6 +84,12 @@ import { configProblemsState } from './configProblems.svelte'
 import { configUpgradeState } from './configUpgrade.svelte'
 import { preferencesState } from './preferences.svelte'
 import { emptyFilters, type ApiToken, type AuditEntry, type Device, type Flag, type RouterBackupsResponse, type Stats, type UserSummary, type WatchlistEntry } from './types'
+
+// #1362: App.svelte is what calls this in real use -- called once here,
+// directly, so the tests further down can drive the handler it
+// registers (captured by the mocked onForcedAuthGate above) the same
+// way api.ts's shared fetch wrapper would.
+wireForcedAuthGate()
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
@@ -253,6 +279,53 @@ describe('AuthState wires preferencesState to sign-in (#1283)', () => {
     await preferencesState.ensureLoaded()
 
     expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
+  })
+})
+
+// #1362: an open tab across an upgrade (or a warm-started session) can
+// hold a real session that internal/api/auth.go's requireAuth now
+// refuses on every route but a few. api.ts's shared fetch wrapper
+// detects that 403 and calls whatever auth.svelte.ts registered via
+// onForcedAuthGate -- these drive that registered handler directly, the
+// same call api.ts would make, to pin what AuthState does with it.
+describe('AuthState wires onForcedAuthGate to apply() (#1362)', () => {
+  it('moves an authenticated session to must-enrol-factor', () => {
+    authState.state = 'authenticated'
+    authState.username = 'bilbo'
+    authState.role = 'user'
+
+    const handler = getCapturedForcedAuthGateHandler()
+    expect(handler).not.toBeNull()
+    handler?.('must-enrol-factor', session({ authenticated: true, username: 'bilbo', role: 'user', mustEnrolSecondFactor: true }))
+
+    expect(authState.state).toBe('must-enrol-factor')
+    expect(authState.mustEnrolSecondFactor).toBe(true)
+  })
+
+  it('moves an authenticated session to must-change-password', () => {
+    authState.state = 'authenticated'
+    authState.username = 'bilbo'
+    authState.role = 'user'
+
+    const handler = getCapturedForcedAuthGateHandler()
+    handler?.('must-change-password', session({ authenticated: true, username: 'bilbo', role: 'user', mustChangePassword: true }))
+
+    expect(authState.state).toBe('must-change-password')
+    expect(authState.mustChangePassword).toBe(true)
+  })
+
+  it('trusts the fresh session over the gate name -- a factor enrolled from another tab during the recheck wins', () => {
+    authState.state = 'authenticated'
+    authState.username = 'bilbo'
+    authState.role = 'user'
+
+    const handler = getCapturedForcedAuthGateHandler()
+    // The 403 that triggered this said must-enrol-factor, but by the
+    // time the recheck came back the account had already enrolled one
+    // elsewhere -- apply() reads the fresh session, not the gate name.
+    handler?.('must-enrol-factor', session({ authenticated: true, username: 'bilbo', role: 'user', mustEnrolSecondFactor: false }))
+
+    expect(authState.state).toBe('authenticated')
   })
 })
 

@@ -67,6 +67,57 @@ func TestSecondFactorDoorBlocksALocalAccountWithNoFactor(t *testing.T) {
 	}
 }
 
+// TestSecondFactorDoorRefusalCarriesMachineReadableSignal (#1362): the
+// frontend's shared fetch path (frontend/src/lib/api.ts) tells this 403
+// apart from an ordinary refusal by this header, never by matching the
+// prose above -- so the header has to actually be there, with the exact
+// value api.ts matches on.
+func TestSecondFactorDoorRefusalCarriesMachineReadableSignal(t *testing.T) {
+	_, ts, c := unenrolledUser(t)
+
+	resp, err := c.Get(ts.URL + "/api/flags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("/api/flags for an account with no second factor = %d, want 403", resp.StatusCode)
+	}
+	if got := resp.Header.Get(forcedAuthGateHeader); got != forcedAuthGateMustEnrolFactor {
+		t.Errorf("%s = %q, want %q", forcedAuthGateHeader, got, forcedAuthGateMustEnrolFactor)
+	}
+}
+
+// TestOrdinaryForbiddenRefusalCarriesNoForcedAuthGateHeader is this
+// test's negative: a refusal that has nothing to do with either forced
+// door (here, a non-admin reaching an admin-only route) must not carry
+// the header, or the frontend would bounce a viewer who was correctly
+// refused to the enrolment screen instead of showing the refusal.
+func TestOrdinaryForbiddenRefusalCarriesNoForcedAuthGateHeader(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	admin := registerAdmin(t, s, ts)
+	postJSON(t, admin, ts.URL+"/api/auth/users",
+		createUserRequest{Username: "viewer1", Password: "password12345", Role: "viewer"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login",
+		credentialsRequest{Username: "viewer1", Password: "password12345"}).Body.Close()
+	seedFactor(t, s, ts, "viewer1")
+
+	resp := postJSON(t, viewerClient, ts.URL+"/api/auth/users",
+		createUserRequest{Username: "another", Password: "password789", Role: "user"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a viewer creating a user = %d, want 403", resp.StatusCode)
+	}
+	if got := resp.Header.Get(forcedAuthGateHeader); got != "" {
+		t.Errorf("%s = %q on an ordinary refusal, want unset", forcedAuthGateHeader, got)
+	}
+}
+
 // TestSecondFactorDoorAdmitsEveryEnrolmentRoute is the other half of
 // the gate, and the one that actually matters: a door nobody can get
 // through is not a door. Each of the four routes on
