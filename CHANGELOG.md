@@ -16,6 +16,19 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **Recovery codes can be regenerated without removing a second factor**
+  (#1331). Before this, the only way to a fresh set of ten was removing
+  a factor and adding it back — tolerable for a single authenticator
+  app, but an account holding several passkeys had to strip all of them
+  first, since the shared set is only cleared when the last factor
+  goes. The account menu's new **New recovery codes…** asks for your
+  password, then shows a fresh ten the same way setting up a factor
+  does; the old ten stop working the instant the new ones are
+  committed. Doesn't sign any session out — only a change to which
+  factors protect the account does that.
+
 ### Fixed
 
 - **A router's HTTPS pushes no longer get refused because syslog was
