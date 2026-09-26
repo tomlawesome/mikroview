@@ -2404,7 +2404,7 @@ export interface DecommissionResponse {
 // #1283: the one per-user preferences record, GET/PATCH at /api/me/preferences.
 // The server stores prefs whole and never looks inside it -- lib/preferences.svelte.ts
 // owns the keys within it (one per preference module: presets, topTalkers,
-// colorway, altitudeStop, columns, groupMode, retention, metrics, deckOrder).
+// altitudeStop, columns, groupMode, retention, metrics, deckOrder).
 // A missing record reads as version 1 with an empty prefs object, never a
 // 404. A PATCH's prefs carries only the keys that changed, not the whole
 // record (the server merges them in).

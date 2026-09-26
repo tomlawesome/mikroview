@@ -33,24 +33,6 @@ import { metricsPref } from '../lib/metrics.svelte'
 import { preferencesState } from '../lib/preferences.svelte'
 import { emptyFilters } from '../lib/types'
 
-// jsdom has no window.matchMedia -- AccountMenu (mounted by SceneBar)
-// pulls in ThemeMenu -> lib/viewport.svelte.ts, whose ViewportState
-// singleton calls matchMedia at module-load time (same fix
-// AccountMenu.svelte.test.ts and Flags.svelte.test.ts already needed).
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: () => {},
-      removeListener: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      dispatchEvent: () => false,
-    }) as unknown as MediaQueryList
-}
-
 const { default: SceneBar } = await import('./SceneBar.svelte')
 
 beforeEach(() => {

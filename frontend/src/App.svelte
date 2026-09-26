@@ -3,7 +3,6 @@
   import { appState } from './lib/state.svelte'
   import { subscribe as subscribeVisibility } from './lib/visibility'
   import { liveSocket } from './lib/ws'
-  import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
   import { authState } from './lib/auth.svelte'
@@ -144,10 +143,6 @@
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
   authState.consumeSSOLinkedFromURL()
-
-  $effect(() => {
-    colorwayState.apply()
-  })
 
   // Runs once on mount, unconditionally -- everything else in this file
   // waits on its result (authState.state) before doing anything that

@@ -2,7 +2,7 @@
 //
 // Which altitude stop the slider remembers across visits (#869): a
 // standing preference kept in the shared per-user record (#1283), like
-// colorway and retention -- its own small module rather than growing
+// retention -- its own small module rather than growing
 // appState.
 import { ALTITUDE_LABELS, type AltitudeLabel } from './altitude'
 import { preferencesState } from './preferences.svelte'

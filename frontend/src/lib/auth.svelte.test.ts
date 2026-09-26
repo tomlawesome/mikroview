@@ -224,13 +224,13 @@ describe('AuthState wires preferencesState to sign-in (#1283)', () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(
       session({ authenticated: true, username: 'tom', role: 'admin' }),
     )
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'pulse' } })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { demoPref: 'pulse' } })
 
     await authState.check()
     await preferencesState.ensureLoaded()
 
     expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
-    expect(preferencesState.get('colorway')).toBe('pulse')
+    expect(preferencesState.get('demoPref')).toBe('pulse')
   })
 
   it('does not load preferences for a forced password change -- that session cannot reach the app', async () => {
@@ -499,7 +499,7 @@ describe('AuthState.logout', () => {
     authState.state = 'authenticated'
     vi.mocked(logout).mockResolvedValue(null)
     preferencesState.seedForTest({})
-    preferencesState.set('colorway', 'nebula')
+    preferencesState.set('demoPref', 'nebula')
 
     const order: string[] = []
     vi.mocked(saveMyPreferences).mockImplementation(async () => {
@@ -545,7 +545,7 @@ describe('AuthState.signOutAfterFactorRemoved', () => {
   it('flushes any pending preference write first, the same as logout()', async () => {
     authState.state = 'authenticated'
     preferencesState.seedForTest({})
-    preferencesState.set('colorway', 'nebula')
+    preferencesState.set('demoPref', 'nebula')
     vi.mocked(saveMyPreferences).mockResolvedValue(null)
 
     await authState.signOutAfterFactorRemoved()
@@ -1005,17 +1005,17 @@ describe('AuthState.logout clears the previous session state (#1083)', () => {
   // must call ensureLoaded() again rather than see the previous
   // account's cached record.
   it('drops preferencesState from memory and re-fetches on the next ensureLoaded()', async () => {
-    preferencesState.seedForTest({ colorway: 'nebula' })
-    expect(preferencesState.get('colorway')).toBe('nebula')
+    preferencesState.seedForTest({ demoPref: 'nebula' })
+    expect(preferencesState.get('demoPref')).toBe('nebula')
 
     await authState.logout()
 
-    expect(preferencesState.get('colorway')).toBeUndefined()
+    expect(preferencesState.get('demoPref')).toBeUndefined()
 
-    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { colorway: 'frequency' } })
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: { demoPref: 'frequency' } })
     await preferencesState.ensureLoaded()
     expect(fetchMyPreferences).toHaveBeenCalledTimes(1)
-    expect(preferencesState.get('colorway')).toBe('frequency')
+    expect(preferencesState.get('demoPref')).toBe('frequency')
   })
 })
 
@@ -1030,7 +1030,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     watchlistState.loaded = true
     tokensState.list = [fixtureApiToken()]
     tokensState.justCreated = fixtureApiToken()
-    preferencesState.seedForTest({ colorway: 'nebula' })
+    preferencesState.seedForTest({ demoPref: 'nebula' })
 
     authState.handleUnauthorized()
 
@@ -1042,7 +1042,7 @@ describe('AuthState.handleUnauthorized clears the previous session state (#1083)
     expect(watchlistState.loaded).toBe(false)
     expect(tokensState.list).toEqual([])
     expect(tokensState.justCreated).toBeNull()
-    expect(preferencesState.get('colorway')).toBeUndefined()
+    expect(preferencesState.get('demoPref')).toBeUndefined()
   })
 
   it('leaves every store untouched when the session was not authenticated', () => {
