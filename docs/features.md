@@ -14,13 +14,14 @@
   responsible rule visible at all.
 - **Storage**: by default, events live in a fixed block of memory — a
   ring buffer that overwrites the oldest event once full, windowed to
-  `store.retention` (default 24h) and gone on restart. An optional
-  on-disk history (`history:` in config.yaml, off by default) writes
-  the same events to one encrypted, compressed file per day and keeps
+  `store.retention` (default 24h) and gone on restart. An on-disk
+  history (`history:` in config.yaml, on by default) writes the same
+  events to one encrypted, compressed file per day and keeps
   `history.days` of them, so flag thresholds can be judged against
-  weeks of real traffic rather than just what the ring still holds.
-  See
-  [docs/configuration.md](configuration.md#on-disk-event-history-optional-off-by-default).
+  weeks of real traffic rather than just what the ring still holds; it
+  needs a key, which a fresh install's `install.sh` generates on its
+  own. See
+  [docs/configuration.md](configuration.md#on-disk-event-history-on-by-default).
   Behavioral flags (see below) can still persist to a small JSON file
   as before, since they're meant to stay visible until a human clears
   them.

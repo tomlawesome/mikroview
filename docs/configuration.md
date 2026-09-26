@@ -24,7 +24,7 @@ chmod 600 the-file
 
 That is the rule for **every** file you mount in: `config.yaml`, the
 [Postgres DSN file](#postgres-optional),
-[`history.keyFile`](#on-disk-event-history-optional-off-by-default), your
+[`history.keyFile`](#on-disk-event-history-on-by-default), your
 own [TLS `certFile`/`keyFile`](#tls), and the
 [GeoIP database](#geoip-country-flags-optional). A file only MikroView
 reads (the DSN, the history key, a TLS private key) should stay `600`; a
@@ -299,27 +299,32 @@ hour after a restart the hourline and the docket say
 `restored to 13:14 · live since 13:18`, or `counting since 13:18 —
 nothing before` if it started cold.
 
-### On-disk event history (optional, off by default)
+### On-disk event history (on by default)
 
 Everything described so far -- `store.retention`, `store.maxMemory` -- is
 the in-memory ring: a fixed block of memory holding the most recent
 events, gone on restart or once the ring wraps. `history:` is a
-separate, optional feature that writes the same events to one
-encrypted, compressed file per day, so a threshold can be loosened
-against weeks of real traffic instead of whatever the ring still holds.
-These are two different settings answering two different questions:
-`store.retention` is how far back a live query into memory can reach;
-`history.days` is how many days of files exist on disk at all. Neither
-setting changes the other.
+separate feature that writes the same events to one encrypted,
+compressed file per day, so a threshold can be loosened against weeks
+of real traffic instead of whatever the ring still holds. These are two
+different settings answering two different questions: `store.retention`
+is how far back a live query into memory can reach; `history.days` is
+how many days of files exist on disk at all. Neither setting changes
+the other.
 
-**Off by default, and staying off is a first-class choice.** An
-operator who wants nothing about traffic on disk is choosing that, not
-missing a setup step:
+**On by default (#1357), and staying off is still a real, supported
+choice.** There is no unencrypted mode, so "on" needs a key too:
+[`install.sh`](../install.sh) generates one for a fresh install, so
+history just works with no setup step there. Installing with Compose, or
+with the bare `docker run` in [docs/install.md](install.md), skips that
+step -- mount a key yourself (below) to turn history on, or leave it
+unmounted and MikroView stays memory-only, exactly as it did before
+#1357:
 
 ```yaml
 history:
-  enabled: false
-  keyFile: ""
+  enabled: true
+  keyFile: ""     # empty: MikroView looks for mikroview/keys/history.key
   days: 30
   maxBytes: 1073741824   # 1 GiB
   dir: ""
@@ -341,16 +346,21 @@ MikroView first sees that value in the file you mount, which is also why
 the wizard says it can never show it to you again.
 
 - `history.enabled` — the switch, and the initial position of the one in
-  Settings. **Off in the file stops retaining; nothing in the config file
-  ever deletes what was already retained.** At startup with history off
-  (`enabled: false`, the `history:` block missing, or no key file
-  configured) MikroView keeps the files it finds, writes nothing new, and
-  logs a warning naming the directory, and how to turn history back on
-  (`history.enabled: true` with the `history.keyFile` they were written
-  under). An admin can delete the files from Settings. Turning it off
-  from the control in Settings is different: that asks first ("delete N
-  days · keep them") and, once confirmed, deletes the files before the
-  change shows on screen.
+  Settings. **On by default (#1357).** `false` in the file stops
+  retaining; nothing in the config file ever deletes what was already
+  retained. A missing `history:` block reads as `true` now, the same as
+  the default -- so if a key is already mounted for some other reason
+  (the state store's own key, #853, or one left from an earlier install)
+  upgrading also turns the event log on, unless `history.enabled: false`
+  is set explicitly. At startup with no usable key -- none configured,
+  one that can't be read, or `enabled: false` -- MikroView keeps the
+  files it finds, writes nothing new, and logs a warning naming the
+  directory, and how to turn history back on (`history.enabled: true`
+  with the `history.keyFile` they were written under). An admin can
+  delete the files from Settings. Turning it off from the control in
+  Settings is different: that asks first ("delete N days · keep them")
+  and, once confirmed, deletes the files before the change shows on
+  screen.
 - `history.keyFile` — path to a master key file that you generate.
   **Put it at `mikroview/keys/history.key` and restart** — MikroView
   finds it there with nothing else set:
@@ -359,6 +369,13 @@ the wizard says it can never show it to you again.
   mkdir -p mikroview/keys
   head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
   ```
+
+  `install.sh` does exactly this for you on a fresh install, in a
+  throwaway helper container so the key never touches its own command
+  line or output — see [docs/install.md](install.md). Installing with
+  Compose, or with install.md's bare `docker run` line, skips that step;
+  run the two lines above yourself into `mikroview/keys/` first if you
+  want history on from the first start.
 
   Mounted files have to be readable by the user MikroView runs as, or it
   refuses to start with `permission denied` — see
@@ -470,7 +487,7 @@ nowhere safe to keep; Settings' `router backups` group says so plainly.
 There is no separate key for this feature and no unencrypted fallback.
 The wizard's step 6 is the shortest way out of that state: with no key
 mounted it generates one in the browser and prints the steps to put it in
-place (see [`history.keyFile`](#on-disk-event-history-optional-off-by-default)
+place (see [`history.keyFile`](#on-disk-event-history-on-by-default)
 above), then prints the router script once it is.
 
 **Login is the device, not a new credential.** Username is the router's
@@ -621,7 +638,7 @@ accounts, tokens and recovery keys keep surviving a restart either way,
 so `docker compose up` alone is still enough to keep your admin login. If
 you also want flags, entities, watchlist entries and definitions to
 survive a restart, mount a key (see
-[On-disk event history](#on-disk-event-history-optional-off-by-default)
+[On-disk event history](#on-disk-event-history-on-by-default)
 above for how to generate one) even if you have no interest in the event
 log itself and leave `history.enabled` off.
 
@@ -1155,7 +1172,7 @@ snapshot:
 `history.enabled` is on but `history.keyFile` is empty. There is no
 unencrypted mode, so nothing would be retained — MikroView turns
 retention back off rather than write anything unprotected. See
-[On-disk event history](#on-disk-event-history-optional-off-by-default).
+[On-disk event history](#on-disk-event-history-on-by-default).
 
 ```yaml
 history:
@@ -4510,7 +4527,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_SNAPSHOT_INTERVAL` | `snapshot.interval` -- how often a warm-restart snapshot is written (see [Warm restart](#warm-restart-what-survives-a-restart)); anything under 30s falls back to the default |
 | `MIKROVIEW_SNAPSHOT_KEEP` | `snapshot.keep` -- how many snapshot generations to keep; anything under 1 falls back to the default |
 | `MIKROVIEW_SNAPSHOT_DIR` | `snapshot.dir` -- where the snapshot files live. A file path even on a Postgres deployment: a snapshot is derived counters, not custody data |
-| `MIKROVIEW_HISTORY_KEY_FILE` | `history.keyFile` -- path to the master key file, mounted outside the data directory (see [On-disk event history](#on-disk-event-history-optional-off-by-default)); no variable carries the key itself. Also gates the state store and warm-restart snapshots (#853) regardless of `history.enabled` — see [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853) below |
+| `MIKROVIEW_HISTORY_KEY_FILE` | `history.keyFile` -- path to the master key file, mounted outside the data directory (see [On-disk event history](#on-disk-event-history-on-by-default)); no variable carries the key itself. Also gates the state store and warm-restart snapshots (#853) regardless of `history.enabled` — see [The state store](#the-state-store-encrypted-when-a-key-is-mounted-memory-only-otherwise-except-the-hashed-stores-853) below |
 | `MIKROVIEW_HISTORY_ENABLED` | `history.enabled` |
 | `MIKROVIEW_HISTORY_DAYS` | `history.days` -- below 1 the 30-day default is applied |
 | `MIKROVIEW_HISTORY_MAX_BYTES` | `history.maxBytes` -- below 1 MiB the 1 GiB default is applied |

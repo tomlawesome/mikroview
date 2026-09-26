@@ -657,12 +657,19 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 
 ## Data handling
 
-- **No persistence for events.** Events live in an in-memory ring buffer
-  only — there is no database. Restarting, redeploying, or crashing the
-  process discards all retained history. MikroView is a live/recent-
-  history view, not a log archive; if you need durable logs, forward
-  RouterOS's syslog output to a second, dedicated logging destination as
-  well.
+- **Events: memory always, encrypted disk too when a key is mounted.**
+  The live ring buffer holds the most recent events in memory only,
+  windowed by `store.retention` — gone on restart, redeploy or crash
+  regardless of anything below. Since #1357, `history.enabled` is also
+  on by default: with a key mounted (`history.keyFile` — `install.sh`
+  mints one on a fresh install; Compose and the bare `docker run` in
+  docs/install.md do not, so mount one yourself if you want this),
+  the same events are additionally written to one encrypted, compressed
+  file per day. There is no unencrypted fallback — with no key mounted,
+  MikroView stays memory-only, exactly as it always has. Either way,
+  MikroView is a live/recent-history view, not a full log archive; if
+  you need durable logs kept somewhere else too, forward RouterOS's
+  syslog output to a second, dedicated logging destination as well.
 - **What a warm restart saves, and what it does not.** So that a restart
   does not silently reset every counter to zero, MikroView writes a
   small snapshot of its *derived* state every few minutes and reads the
