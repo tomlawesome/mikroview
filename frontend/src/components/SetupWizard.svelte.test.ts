@@ -131,9 +131,14 @@ function commandsFixture(over: Partial<SetupCommandsResponse> = {}): SetupComman
         },
         { from: '7.24.1', to: '7.24.1', dialect: 'a', verifiedBy: 'release notes read 2026-08-29', note: '' },
       ],
+      // Empty by default (#1344): tests that care about the upgrade-
+      // warnings block override this, so every other test here renders
+      // none, same as the real catalogue would with no ID any router
+      // or pick carries.
+      upgrades: [],
     },
     picked: null,
-    routers: [{ id: 'edge-1', name: 'edge-1', routerosVersion: '7.16', standing: 'below-minimum', note: '' }],
+    routers: [{ id: 'edge-1', name: 'edge-1', routerosVersion: '7.16', standing: 'below-minimum', upgrades: [] }],
     steps: {
       caTrust: { commands: 'CA_TRUST_COMMANDS', note: '' },
       syslog: { commands: 'SYSLOG_COMMANDS', note: '' },
@@ -959,7 +964,7 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
 
   it('warns for the operator\'s own picked version too, worded "Your picked version"', async () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
-      commandsFixture({ picked: { version: '7.25', standing: 'ahead-of-review', dialect: 'a' }, routers: [] }),
+      commandsFixture({ picked: { version: '7.25', standing: 'ahead-of-review', dialect: 'a', upgrades: [] }, routers: [] }),
     )
     const { container } = render(SetupWizard)
 
@@ -980,8 +985,8 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
       commandsFixture({
         routers: [
-          { id: 'core', name: 'core', routerosVersion: '7.20', standing: 'reviewed', note: '' },
-          { id: 'edge-2', name: 'edge-2', routerosVersion: '', standing: 'unknown', note: '' },
+          { id: 'core', name: 'core', routerosVersion: '7.20', standing: 'reviewed', upgrades: [] },
+          { id: 'edge-2', name: 'edge-2', routerosVersion: '', standing: 'unknown', upgrades: [] },
         ],
       }),
     )
@@ -989,6 +994,34 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
     expect(container.querySelector('.note.below-minimum')).toBeNull()
     expect(container.textContent).not.toContain('runs RouterOS')
+  })
+
+  // #1344: proves commandsHead actually wires UpgradeWarnings.svelte in
+  // -- rendered on Trust the certificate (the wizard's default pane
+  // here), carrying the same amber left rule as below-minimum but as
+  // its own class, so the two counts must move independently.
+  it('shows a RouterOS upgrade warning on Trust the certificate, with the amber rule', async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        routeros: {
+          ...commandsFixture().routeros,
+          upgrades: [
+            {
+              id: 'cert-store-7.24.3',
+              from: '7.24.3',
+              steps: ['syslog'],
+              heading: 'RouterOS 7.24.3 changed something.',
+              body: 'Check it.',
+            },
+          ],
+        },
+        routers: [{ id: 'core', name: 'core', routerosVersion: '7.24.4', standing: 'reviewed', upgrades: ['cert-store-7.24.3'] }],
+      }),
+    )
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.note.upgrade')).toBeTruthy())
+    expect(container.querySelectorAll('.note.upgrade').length).toBe(1)
+    expect(container.querySelectorAll('.note.below-minimum').length).toBe(0)
   })
 
   // #1181: the four versions rendered identical command blocks and the

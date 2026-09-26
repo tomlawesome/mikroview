@@ -1905,30 +1905,47 @@ export interface RouterosRow {
   note: string
 }
 
+// RouterosUpgrade is one "from version X onward, this affects Y" warning
+// (#1344): a RouterOS change that persists from a release onward,
+// whatever dialect row that release falls in. Separate axis from
+// RouterosRow -- a row is a version range that renders the same
+// commands, an upgrade is a change routers at or past From all carry.
+export interface RouterosUpgrade {
+  id: string
+  from: string
+  steps: string[]
+  heading: string
+  body: string
+}
+
 export interface RouterosTable {
   minimum: string
   newest: string
   rows: RouterosRow[]
+  upgrades: RouterosUpgrade[]
 }
 
 // PickedVersion is the operator's version pick echoed back with its
 // standing, once the server has matched it against a row -- null when no
-// version was sent (routeros.picked in the contract).
+// version was sent (routeros.picked in the contract). upgrades is the
+// IDs from RouterosUpgrade that apply to this version (#1344).
 export interface PickedVersion {
   version: string
   standing: RouterosStanding
   dialect: string
+  upgrades: string[]
 }
 
 // RouterosWarningRouter is one router the response carries a version for
 // (only those the server knows a version for at all), what it reports,
-// and how that compares to the table.
+// how that compares to the table, and which upgrade warnings (#1344)
+// apply to it.
 export interface RouterosWarningRouter {
   id: string
   name: string
   routerosVersion: string
   standing: RouterosStanding
-  note: string
+  upgrades: string[]
 }
 
 // CommandStep is one rendered block: the commands themselves, and any

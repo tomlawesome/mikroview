@@ -16,6 +16,14 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **The setup wizard warns about RouterOS upgrades that break pasted
+  commands** (#1344, owner ruling on #1343). Setup screen shows, per
+  connected router, every "from version X onward, this affects Y"
+  warning that applies to its reported version; first entry is 7.24.3's
+  removal of the GoDaddy Class 2 root from the router's trust store.
+
 ### Removed
 
 - **The Theme button and its accent-colour picker are gone** (#1371,
