@@ -902,6 +902,20 @@ describe('SetupWizard -- the address field (#1213)', () => {
     await waitFor(() => expect(container.textContent).toContain('no commands yet'))
     expect(container.querySelector('pre.script')).toBeNull()
   })
+
+  // #1365: the owner asked "how? what should the syntax be?" -- naming
+  // tls.hosts was not enough. The blocked certificate step now shows a
+  // copyable block with the whole resulting list.
+  it('shows a copyable tls.hosts block on the blocked certificate step, naming where it goes', async () => {
+    wizardState.address = '192.168.13.15'
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.textContent).toContain('does not cover'))
+
+    expect(container.querySelector('pre')?.textContent).toBe('hosts: ["localhost", "192.168.13.15"]')
+    expect(container.textContent).toContain("config.yaml's")
+    expect(container.textContent).toContain('restart mikroview')
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
 })
 
 // #1370: a src-address an earlier wizard run left on the router pinned
