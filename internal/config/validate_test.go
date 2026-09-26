@@ -14,6 +14,14 @@ func validCfg() Config {
 	c.Auth.SessionTTL = 24 * time.Hour
 	c.Auth.SecureCookie = true
 	c.TLS.Enabled = true
+	// History.Enabled defaults to true (#1357), and Validate is pure --
+	// it never checks whether this path is actually readable -- so a
+	// non-empty one here is enough to keep CFG-0080 quiet for a config
+	// that is otherwise a fully-specified, working deployment. Real
+	// startup answers "does the file actually exist" itself; a config
+	// with no keyFile at all is exactly the case CFG-0080 exists for,
+	// covered by TestHistoryEnabledWithNoKeyWarnsAndTurnsOff below.
+	c.History.KeyFile = "/run/secrets/mikroview-history.key"
 	return c
 }
 
@@ -146,6 +154,13 @@ func TestWarningsClampRatherThanRefuse(t *testing.T) {
 			func(c *Config) bool {
 				return c.Watchlist.MatchLogRetention == defaults().Watchlist.MatchLogRetention
 			}},
+		// History.Enabled defaults to true (#1357): this is the shape
+		// an upgrade with no history: block and no key mounted lands
+		// in -- validCfg's own keyFile removed, everything else left
+		// alone. It must come up on defaults, not stay refused.
+		{"history enabled with no key", "CFG-0080",
+			func(c *Config) { c.History.KeyFile = "" },
+			func(c *Config) bool { return c.History.Enabled == false }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := validCfg()
