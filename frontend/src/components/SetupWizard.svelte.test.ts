@@ -444,7 +444,7 @@ describe('SetupWizard', () => {
     expect(body).toContain("MikroView can't tell whether these are the same router")
     expect(body).toContain('You can tell.')
     expect(body).toContain(
-      "tell MikroView the address it's actually using rather than pinning the router to another one",
+      "tell MikroView the address it's actually using",
     )
     expect(body).toContain('Change sourceIp to 10.0.20.1 in config.yaml and restart.')
     expect(body).toContain('If they are two different routers, nothing is wrong.')
