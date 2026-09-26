@@ -149,6 +149,21 @@ export function routerAddress(d: Device): string {
   return d.acceptedIp || d.sourceIp || 'no address yet'
 }
 
+// deleteContract (#1369) is the confirm step's own sentence for
+// Remove…: what goes (the device's name, its enrolled address if it has
+// one, a still-pending enrolment token if one is minted) and what stays
+// (its events -- device.Registry.Delete never touches the event store,
+// only the registry entry, the accepted address and any pending
+// token). Never offered for a configured: true device -- the server
+// refuses that with ErrDeviceConfigured, since config.yaml rebuilds it
+// every boot -- so the card shows a note instead of this button.
+export function deleteContract(d: Device): string {
+  const going = [d.name || d.id]
+  if (d.acceptedIp) going.push(`its enrolled address ${d.acceptedIp}`)
+  if (d.enrolment?.pending) going.push('its pending enrolment')
+  return `Removes ${prose(going)}. Its events stay.`
+}
+
 // unattributedLabel (#1170) names a syslog source the registry could not
 // attribute to any router: no configured devices[].sourceIp matches it,
 // and no router has enrolled from it (#1281). It reads as

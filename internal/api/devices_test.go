@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -156,6 +157,33 @@ func TestDeviceDeleteClearsItAndRefusesAConfiguredOne(t *testing.T) {
 	defer refused.Body.Close()
 	if refused.StatusCode != http.StatusBadRequest {
 		t.Errorf("deleting a config.yaml device: status = %d, want 400", refused.StatusCode)
+	}
+}
+
+// #1369: the frontend's Remove… confirm step reads this from GET
+// /api/audit like every other admin mutation logged here -- proven
+// directly against s.Audit.Query rather than through that endpoint,
+// the same way TestDeviceDeleteClearsItAndRefusesAConfiguredOne proves
+// the registry side directly against s.Devices.
+func TestDeviceDeleteRecordsAnAuditEntry(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	resp := deleteNoBody(t, admin, ts.URL+"/api/devices/hap-ax3")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	entries := s.Audit.Query(audit.Query{}).Entries
+	var found *audit.Entry
+	for i := range entries {
+		if entries[i].Action == "device.removed" && entries[i].Target == "hap-ax3" {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no device.removed audit entry for hap-ax3 in %+v", entries)
 	}
 }
 
