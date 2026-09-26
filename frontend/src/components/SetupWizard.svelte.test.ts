@@ -901,6 +901,37 @@ describe('SetupWizard -- the address field (#1213)', () => {
   })
 })
 
+// #1370: a src-address an earlier wizard run left on the router pinned
+// syslog to an address HTTPS pushes had stopped using -- fixed by always
+// setting src-address=0.0.0.0 in the pasted block, but the block itself
+// can still go stale the same way pushes did: copied for one address,
+// then the header field edited, with nothing telling the operator the
+// clipboard no longer matches.
+describe('SetupWizard -- the Send logs block notices a changed address (#1370)', () => {
+  it('shows the note once the address changes after a copy, and clears it on a fresh copy', async () => {
+    wizardState.pane = PANE.syslog
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('SYSLOG_COMMANDS'))
+
+    expect(container.textContent).not.toContain('The address changed since you copied this block')
+
+    // Copying with nothing changed yet: no note.
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(container.textContent).not.toContain('The address changed since you copied this block')
+
+    // Editing the header field afterwards is what makes the copy stale.
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(container.textContent).toContain(
+      'The address changed since you copied this block — paste it again on the router.',
+    )
+
+    // Copying the now-current block again clears it.
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(container.textContent).not.toContain('The address changed since you copied this block')
+  })
+})
+
 // #436: the wizard stopped generating RouterOS syntax itself and now
 // renders what POST /api/setup/commands sends back -- these pin the
 // request it sends, the pick-list it builds from routeros.rows, and the
