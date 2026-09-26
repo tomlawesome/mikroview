@@ -93,6 +93,24 @@ assume the tune-logging analyser can run on the pushed table alone;
 
 ## Verdicts
 
-None yet.
+**Owner, 2026-09-26 (verbatim):** "Have to say that I am quite
+disappointed by the mockups over all. The analyser was kind of fun, but
+all three user the same style of forms and entry. None of them really
+told a story, or pulled the user through an exciting journey. Not one
+single version even tried to tie in with Mikroview's visual identidy and
+existing design language. The blue print is clever and conceptually cool
+for some other project but how does it relate to Mikroview in any way
+shape or form? It's also mostly a rehashed themed version of one of the
+previous concepts. Not something uniquely new or distinct. It's three
+hashed together versions of the same theme."
+
+All three dropped as drawn. What survives as a feature idea: the
+Analyzer's lanes coming up one by one as each proof arrives ("kind of
+fun"). What round 7 must do that this round did not: start from
+MikroView's own visual identity and design language, not a fresh theme;
+tell a story and pull the operator through a journey; vary the entry
+itself, not only the dressing around one form; and be three genuinely
+distinct concepts, not one theme in three coats. The Blueprint's drawing
+sheet is a rework of an earlier drawn-from-evidence concept, not new.
 
 Written by Fable 5.1, 2026-09-26.
