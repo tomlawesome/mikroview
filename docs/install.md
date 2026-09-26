@@ -31,6 +31,14 @@ docker run -d --name mikroview --restart unless-stopped \
     ghcr.io/tomlawesome/mikroview:latest
 ```
 
+This is the one `docker run` `install.sh` shows you before running, but not
+the two throwaway helper-container runs (#1357) it makes ahead of it to give
+a fresh install a history-encryption key. Running the line above yourself
+skips that: on-disk event history (on by default -- see
+[docs/configuration.md](configuration.md#on-disk-event-history-on-by-default))
+stays memory-only until you mount `keys/history.key` in `mikroview-etc`
+yourself, the same way Compose installs do below.
+
 The `mikroview-etc` volume is the app folder #1243 introduced: an empty
 folder is fine, and dropping a config file, GeoIP database or
 certificate pair into it is picked up at the next restart with no other
@@ -150,6 +158,16 @@ mikroview/
 ```
 
 The bare `docker run` in the README's quickstart runs on defaults with a named volume and no folder at all, so there is nothing to set up for a first try there. **The Compose form is no different**: neither this example nor `deploy/docker-compose.yml` sets `MIKROVIEW_CONFIG`, so the app folder's own `config.yaml` is what decides, and an empty folder starts on defaults just as the `docker run` above does. Copy `deploy/config.example.yaml` in as `config.yaml` when you want to change something -- you do not need it to start. This follows the same shape as [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) -- same ports, hardening and app-folder mount, local `build:` swapped for the prebuilt `image:` -- but leaves out the RouterOS-backup port and the less commonly moved store-path variables; see that file itself for the complete, fully-commented version.
+
+**Compose does not run `install.sh`, so nothing mints `keys/history.key` for you here.** On-disk event history is on by default (#1357), but with no key mounted it stays memory-only and MikroView says so once at startup -- nothing refuses to start over it. Put one there yourself before your first `up` if you want history on from the start:
+
+```sh
+mkdir -p mikroview/keys
+head -c 32 /dev/urandom | base64 > mikroview/keys/history.key
+sudo chown 1000:1000 mikroview/keys/history.key && chmod 600 mikroview/keys/history.key
+```
+
+See [docs/configuration.md](configuration.md#on-disk-event-history-on-by-default) for what the encryption does and doesn't protect against.
 
 ## Which ports to publish, and to whom
 
