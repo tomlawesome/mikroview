@@ -1542,7 +1542,9 @@ router on its own, with nothing to re-paste. The firewall rule is what
 actually drops the traffic; without it the address list fills but
 nothing is blocked. Two more commands are rendered alongside these, for
 undoing either one without retyping: one disables the rule, the other
-empties the address list.
+empties the address list. The fetch uses `check-certificate=yes`, so it
+needs the same trust as the wizard's Trust the certificate step, and the
+wizard's RouterOS upgrade warnings cover it.
 
 The fetched script never rewrites the live `mikroview-drop` address list
 directly. It builds the new generation entirely in a staging list

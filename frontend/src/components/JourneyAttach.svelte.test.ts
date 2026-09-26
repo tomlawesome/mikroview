@@ -25,7 +25,7 @@ import JourneyAttach from './JourneyAttach.svelte'
 beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(fetchSetupCommands).mockResolvedValue({
-    routeros: { minimum: '7.18', newest: '7.24.1', rows: [] },
+    routeros: { minimum: '7.18', newest: '7.24.1', rows: [], upgrades: [] },
     picked: null,
     routers: [],
     steps: {

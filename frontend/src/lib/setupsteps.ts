@@ -642,6 +642,20 @@ export const STEP_TITLES: readonly string[] = [...SETUP_STEPS]
   .sort((a, b) => RECORD_NUMBERS[a] - RECORD_NUMBERS[b])
   .map((k) => TITLES[k])
 
+// UPGRADE_STEP_LABELS maps a routeros.Upgrade's Steps key (#1344) to what
+// UpgradeWarnings.svelte's "Affects ..." sentence names it as. Three of
+// the four are TITLES' own step names -- syslog/push/backup are all
+// steps in this wizard -- and droplist is not a wizard step at all, so it
+// gets its own phrase pointing at where that scheduler actually lives.
+// An unknown key falls back to itself in the component, never here, so a
+// new Go key can never blank the sentence.
+export const UPGRADE_STEP_LABELS: Record<string, string> = {
+  syslog: TITLES.syslog,
+  push: TITLES.push,
+  backup: TITLES.backup,
+  droplist: 'the drop list scheduler in Settings ▸ Engine room',
+}
+
 export const STEP_COUNT = SETUP_STEPS.length
 
 // arrived reports whether a step's evidence has landed. 'partial' counts:

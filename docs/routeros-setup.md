@@ -120,6 +120,13 @@ deployment uses your own certificate rather than the self-generated one
 (see [configuration.md](configuration.md#tls)), skip this step — your
 CA is presumably already trusted some other way.
 
+RouterOS's own list of trusted public roots changes between releases:
+7.24.3 removed GoDaddy Class 2. If you rely on a bought certificate
+rather than importing MikroView's, check its chain before upgrading a
+router past that release. The wizard says this beside the commands for
+each router that reports a version at or past 7.24.3, and names the
+steps it touches.
+
 Then point the router's logging at MikroView:
 
 ```
@@ -522,9 +529,11 @@ them as a float, which MikroView's decoder already expects.
 router, not a rule) is the router telling MikroView which RouterOS it is
 running, so MikroView can warn when a command it shows you was written
 against a different version. It is read straight from
-`[/system/resource get version]`. Nothing warns yet; the field is what
-that warning will be derived from, and deriving it is why MikroView
-never has to ask you. Leave it out and everything still works — you just
+`[/system/resource get version]`. The wizard uses it to warn you: when a
+router's release is outside the range these commands were checked
+against, and when a release changed something these commands depend on
+(7.24.3's root-certificate change is the first). Leave it out and
+everything still works — you just
 get no version-mismatch warning later.
 
 `dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
