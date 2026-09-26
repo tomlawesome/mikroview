@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — AD · The ledger, refined</title>
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="fall.css">
+<style>
+/* AD — The ledger, refined (round 7's Z, kept by the owner). Same modal,
+   same one-question body; what is added is the app's own colour and
+   language where the wizard touches the fall: the push question shows
+   the boundary header the push makes; tagging is done on those columns;
+   arrivals land on a NOW ruler; the ledger wears the boundary strip.
+   Round 7's own comment follows.
+   Z — The ledger asks. The ratified modal, unchanged: header, 224px step
+   list, body, footer. What changes is what the body holds: one question
+   at a time, and nothing the question does not need. Each answer writes
+   a receipt into its step row in the decision ink (--log, dashed for
+   "not now"); the block appears only when every question is answered;
+   after the paste the same rows flip to --accept as each proof arrives. */
+.kick { font: 600 9.5px var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-muted); }
+.kick b { color: var(--fg); font-weight: 800; }
+.frag { align-self: stretch; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.frag .cap { font: 600 9.5px var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim); }
+.frag .cols { gap: 10px; }
+.frag .fallbody { height: 150px; }
+.sofar { align-self: stretch; display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+.ruler { align-self: stretch; height: 84px; }
+.ruler svg { width: 100%; height: 100%; display: block; }
+.ruler .tk { font: 11px var(--font-mono); fill: var(--fg-dim); }
+.ruler .ev { font: 700 10.5px var(--font-mono); fill: var(--accept); }
+.ruler .ev.wait { fill: var(--fg-dim); font-weight: 400; }
+.ruler .base { stroke: var(--hair-2); stroke-width: 1; }
+.ruler .dot { fill: var(--accept); } .ruler .dot.wait { fill: none; stroke: var(--fg-dim); stroke-dasharray: 2 2; }
+.ruler .nowl { stroke: var(--now); stroke-width: 1.6; } .ruler .nowc { font: 700 11px var(--font-mono); fill: var(--now); }
+.ask { align-self: stretch; display: flex; flex-direction: column; gap: 10px; max-width: 620px; }
+.ask h3 { margin: 4px 0 0; font-size: 19px; font-weight: 600; line-height: 1.35; color: var(--fg); }
+.ask .hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--fg-muted); }
+.ask .ctl { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.ask input { width: 320px; font-size: 14px; padding: 9px 12px; }
+.ask input.bad { border-color: var(--warn); }
+.ask .problem { margin: 0; min-height: 1.4em; font-size: 12.5px; color: var(--warn); }
+.gives { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; color: var(--fg-muted); margin-top: 4px; }
+.gives b { font-weight: 600; color: var(--fg-muted); }
+.gives .y { color: var(--accept); } .gives .n { color: var(--fg-muted); }
+.answered { align-self: stretch; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--fg-muted); }
+.answered b { color: var(--log); font-weight: 600; }
+.sec { color: var(--fg-dim); user-select: none; }
+.proofs { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
+.obs small { margin-left: auto; color: inherit; opacity: 0.8; font-family: var(--font-mono); font-size: 11.5px; }
+.rules { align-self: stretch; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.rules label { display: grid; grid-template-columns: 22px 70px 60px 1fr 1fr 90px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.rules label:first-child { border-top: 0; }
+.rules label:hover { background: var(--bg-hover); }
+.rules .h { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; cursor: default; }
+.rules .h:hover { background: none; }
+.rules .why { color: var(--fg-muted); }
+.rules .pre { font-family: var(--font-mono); color: var(--log); }
+.rules .act.drop { color: var(--drop); } .rules .act.accept { color: var(--accept); }
+.ledger { align-self: stretch; display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: 6px; }
+.ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.ledger .row:first-child { border-top: 0; }
+.ledger .row .r { font-size: 12px; }
+.ledger .row .u { font-size: 12px; }
+.ledger .undo { grid-column: 1 / -1; }
+.ledger .undo pre { font-size: 12px; }
+.stream { align-self: stretch; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; max-height: 120px; overflow: hidden; }
+.stream .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stream .l b { font-weight: 500; color: var(--log); }
+.stream .l.new b { color: var(--accept); }
+</style>
+</head>
+<body>
+<div class="shell" aria-hidden="true">
+  <nav class="rail"><div class="brand">MikroView</div><div>The fall</div><div>Topography</div><div>Metrics</div><div>Stream</div><div>Entities</div><div class="on">Admin ▸ Run setup…</div></nav>
+  <div class="ghost"><i style="width:40%"></i><i style="width:70%"></i><i style="width:55%"></i><i style="width:80%"></i><i style="width:35%"></i></div>
+</div>
+<div class="veil">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ttl">
+    <header><span class="crumb" id="crumb">Set up a router</span><h2 id="ttl">New router</h2><span class="crumb" id="stepof"></span><button type="button" class="close" aria-label="Close setup — Run setup… reopens it here" data-act="leave">✕</button></header>
+    <div class="middle">
+      <nav class="steps" aria-label="Setup steps"><ol id="steps"></ol></nav>
+      <div class="body" id="body"></div>
+    </div>
+    <footer id="foot"></footer>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script src="fall.js"></script>
+<script>
+const $ = s => document.querySelector(s); const esc = MV.esc; const Q = MV.questions; const S = MV.story;
+const stepDefs = () => [
+  ...Q.map(q => ({ id: q.id, title: q.title })),
+  { id: 'paste', title: 'Paste once' }, { id: 'tune', title: 'Tag firewall rules' }, { id: 'stand', title: 'Where setup stands' },
+];
+function rowState(s, id) {
+  const st = s.stage; const a = { cls: '', receipt: 'not yet asked', rc: 'gap' };
+  const t = k => MV.ev(k) ? MV.ev(k).t : '';
+  switch (id) {
+    case 'name': if (s.name) { a.cls = MV.has('enrol') ? 'done' : 'chosen'; a.receipt = 'named ' + s.name; a.rc = ''; } else if (st === 'ask' && s.q === 0) { a.receipt = 'asking'; } break;
+    case 'addr': if (MV.has('enrol')) { a.cls = 'done'; a.receipt = `enrolled at ${MV.from()} · ${t('enrol')}`; a.rc = ''; } else if (s.refused) { a.cls = 'chosen'; a.receipt = `lines from ${MV.story.other} refused`; a.rc = 'consequence'; } else if (s.addr) { a.cls = 'chosen'; a.receipt = s.addr + (st === 'watch' ? ' · waiting for the enrol line' : ''); a.rc = ''; } else if (st === 'ask' && s.q === 1) a.receipt = 'asking'; break;
+    case 'push': if (s.push === false) { a.cls = 'skipped'; a.receipt = 'not now · the fall stays address-only'; a.rc = 'consequence'; } else if (MV.has('push')) { a.cls = 'done'; a.receipt = `first push ${t('push')} · RouterOS ${s.version}`; a.rc = s.standing === 'ahead' ? 'forcedish' : ''; } else if (s.push) { a.cls = 'chosen'; a.receipt = 'every 20 minutes' + (st === 'watch' && MV.has('enrol') ? ' · waiting for the first push' : ''); a.rc = ''; } else if (st === 'ask' && s.q === 2) a.receipt = 'asking'; break;
+    case 'backup': if (s.backup === false) { a.cls = 'skipped'; a.receipt = 'not now · no backups kept here'; a.rc = 'consequence'; } else if (MV.has('backup')) { a.cls = 'done'; a.receipt = `scheduled 03:00 · ${t('backup')}`; a.rc = ''; } else if (s.backup) { a.cls = 'chosen'; a.receipt = 'nightly at 03:00'; a.rc = ''; } else if (st === 'ask' && s.q === 3) a.receipt = 'asking'; break;
+    case 'pass': if (s.pass) { a.cls = 'chosen'; a.receipt = `token good until ${MV.story.tokenUntil}`; a.rc = ''; } else if (st === 'ask' && s.q === 4) a.receipt = 'asking'; break;
+    case 'paste': if (MV.has('cert')) { a.cls = 'done'; a.receipt = `certificate fetched · ${t('cert')}`; a.rc = ''; } else if (s.copied) { a.receipt = 'copied · waiting for the certificate fetch'; a.rc = ''; } else if (st === 'paste') a.receipt = 'one block, ' + MV.pasteLines() + ' lines'; else a.receipt = 'after the questions'; break;
+    case 'tune': if (s.push === false) { a.receipt = 'needs the push'; } else if (s.tagged) { a.cls = 'done'; a.receipt = `${s.chosen.size} rules tagged · ${s.tunedAt}`; a.rc = ''; } else if (s.tuneSkipped) { a.cls = 'skipped'; a.receipt = 'skipped · 5 boundaries log nothing'; a.rc = 'consequence'; } else if (st === 'tune') a.receipt = 'proposed from the push'; else a.receipt = 'after the first push'; break;
+    case 'stand': a.cls = st === 'done' ? 'done' : ''; a.receipt = ''; break;
+  }
+  return a;
+}
+function currentId(s) { return s.stage === 'ask' ? Q[s.q].id : s.stage === 'watch' ? 'paste' : s.stage === 'done' ? 'stand' : s.stage; }
+function renderSteps(s) {
+  const cur = currentId(s); const defs = stepDefs();
+  $('#steps').innerHTML = defs.map((d, i) => { const r = rowState(s, d.id); const goto = i < Q.length && (s.stage === 'ask' || s.stage === 'paste'); return `<li><button type="button" class="step-row ${r.cls} ${cur === d.id ? 'current' : ''}" ${goto ? `data-act="goto" data-q="${i}"` : 'disabled style="opacity:1;cursor:default"'} aria-current="${cur === d.id ? 'step' : 'false'}"><span class="step-n">${d.id === 'stand' ? '✓' : i + 1}</span><span class="step-text"><span class="step-title">${d.title}</span>${r.receipt ? `<span class="step-receipt ${r.rc}">${esc(r.receipt)}</span>` : ''}</span></button></li>`; }).join('');
+  const n = defs.findIndex(d => d.id === cur) + 1; $('#stepof').textContent = cur === 'stand' ? '' : `step ${n} of ${defs.length - 1}`;
+  $('#ttl').textContent = s.name || 'New router';
+}
+function askBody(s) {
+  const q = Q[s.q];
+  let ctl = '';
+  if (q.kind === 'text') { const prob = q.id === 'addr' ? MV.addrProblem(s.addr) : ''; ctl = `<div class="ctl"><input type="text" data-field="${q.field}" value="${esc(s[q.field])}" placeholder="${q.placeholder}" autocomplete="off" aria-label="${esc(q.title)}" aria-invalid="${prob ? 'true' : 'false'}" class="${prob ? 'bad' : ''}"><button type="button" class="primary" data-act="next" ${MV.answered(q) ? '' : 'disabled'}>Next</button><span class="note">or <kbd>Enter</kbd></span></div><p class="problem" data-problem aria-live="polite">${esc(prob)}</p>`; }
+  else if (q.kind === 'password') ctl = `<div class="ctl"><input type="password" data-field="pass" value="${esc(s.pass)}" placeholder="password" aria-label="Your password"><button type="button" class="primary" data-act="next" ${s.pass ? '' : 'disabled'}>Mint the token</button></div>`;
+  else ctl = `<div class="ctl"><button type="button" class="primary" data-act="yes">${q.yes}</button><button type="button" data-act="no">${q.no}</button></div><div class="gives"><b class="y">Yes</b><span>${q.gives}</span><b class="n">Not now</b><span>${q.without}</span></div>`;
+  const prev = Q.slice(0, s.q).filter(MV.answered);
+  const frag = q.id === 'push' ? `<div class="frag"><span class="cap">What the push makes of the fall — ${S.boundaries.length} boundaries, ${S.boundaries.filter(b => b.logs.length).length} watched, ${S.boundaries.filter(b => !b.logs.length).length} dark</span>${FALL.strip(FALL.states(s, 'preview'))}<div class="cols" style="grid-template-columns:repeat(${S.boundaries.length},1fr)">${FALL.states(s, 'preview').map(([b, st]) => FALL.header(b, st)).join('')}</div><span class="note">Without the push: one grey column, "${esc(s.name || 'your router')} · all traffic".</span></div>` : '';
+  const chips = prev.length ? `<div class="sofar">${prev.map(p => `<span class="att dec"><i></i>${esc(p.kind === 'yesno' ? (s[p.id] ? (p.id === 'push' ? 'push · 20 min' : 'backup · 03:00') : p.title.toLowerCase() + ' · not now') : p.kind === 'password' ? 'token · until ' + S.tokenUntil : s[p.field])}</span>`).join('')}<span class="att"><i></i>nothing on the router yet</span></div>` : '';
+  return `<div class="ask"><span class="kick"><b>Question ${s.q + 1}</b> of ${Q.length}</span><h3>${esc(q.ask)}</h3><p class="hint">${esc(q.hint)}</p>${ctl}${frag}</div>${chips}`;
+}
+function blockHtml() { return MV.sections().filter(x => x.on).map((x, i) => `<span class="sec"># ${i + 1} · ${x.title}</span>\n${x.lines.map(esc).join('\n')}`).join('\n'); }
+function pasteBody(s) {
+  const secs = MV.sections().filter(x => x.on);
+  return `<p class="lead">One paste. ${secs.length} parts, in order — ${secs.map(x => x.title.toLowerCase()).join(', ')} — and the enrol line last. Paste it into the router’s <b>terminal</b> (WinBox ▸ New Terminal, or ssh), not into a script.</p>
+  <pre class="script ${s.copied ? '' : ''}" aria-label="The block to paste">${blockHtml()}</pre>
+  <div class="copyrow"><button type="button" class="primary" data-act="copy" ${s.copied ? 'disabled' : ''}>${s.copied ? 'Copied' : 'Copy'}</button><span class="token-life">Token good until ${MV.story.tokenUntil} (15 minutes) · <button type="button" class="linkish" data-act="reroll">Reroll</button></span></div>
+  <div class="obs waiting">${s.copied ? 'Copied. Waiting for the router — the certificate fetch comes first.' : 'Nothing has arrived yet. Copy, paste, and this line will say what the router did.'}</div>`;
+}
+function proofLine(k, waitText, s) {
+  const e = MV.ev(k);
+  if (e) return `<div class="obs arrived">${esc(e.h)}<small>${e.t}</small></div>`;
+  return `<div class="obs waiting">${waitText}</div>`;
+}
+function watchBody(s) {
+  const proofs = [proofLine('cert', 'Waiting for a router to download /ca.crt.', s)];
+  if (MV.has('cert') || s.refused) proofs.push(s.refused ? '' : proofLine('enrol', `Waiting for the enrol line from ${MV.from()}.`, s));
+  if (MV.has('enrol') && s.push) proofs.push(proofLine('push', 'Waiting for the first push — the script runs once at the end of the block.', s));
+  if (MV.has('enrol') && s.backup && (!s.push || MV.has('push'))) proofs.push(proofLine('backup', 'Waiting for the backup schedule.', s));
+  const refused = s.refused ? `<div class="warnbox"><span><b>Lines from ${MV.story.other} arrived without the enrol line and were refused.</b> If that is this router, its logging action is sending from another address — usually an older <span class="mono">remote</span> action, or a <span class="mono">src-address</span> left from a previous setup (the wizard cannot see which). Fix it on the router, then paste the last line of the block again:</span><pre>${esc(MV.fixSrc())}\n${esc(MV.sections().at(-1).lines[0])}</pre><span>Or, if ${MV.story.other} is the address it should send from: <button type="button" class="linkish" data-act="use-other">enrol at ${MV.story.other} instead</button>.</span></div>` : '';
+  const ahead = MV.has('push') && s.standing === 'ahead' ? `<div class="cautionbox"><b>RouterOS ${s.version} is newer than these commands were reviewed on (${MV.story.reviewed}).</b> They ran and the push arrived. If anything below reads wrong, this is the first suspect; a reviewed set will say so here.</div>` : '';
+  const stream = MV.has('enrol') ? `<div class="stream" aria-label="Lines arriving">${s.tail.slice(-6).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join('')}</div>` : '';
+  const lead = MV.arrivedAll() ? `<p class="lead"><b>${esc(s.name)} is sending.</b> Everything you chose has arrived and stands on evidence below.</p>` : `<p class="lead">The block is on the router. Each part answers in its own time; nothing here is a guess — every mark below is something that arrived.</p>`;
+  return `${lead}${ruler(s)}<div class="proofs">${proofs.join('')}</div>${refused}${ahead}${stream}`;
+}
+function ruler(s) {
+  const W = 640, span = 45, x = sec => 70 + (Math.min(sec, span) / span) * (W - 140);
+  const exp = [['copy', 0, 'copied'], ['cert', S.at.cert, 'certificate'], ['enrol', S.at.enrol, 'enrol line'], ...(s.push ? [['push', S.at.push, 'first push']] : []), ...(s.backup ? [['backup', S.at.backup + (s.push ? 0 : -25), 'backup']] : [])];
+  const clock = Math.min(s.clock, span);
+  let g = `<line class="base" x1="70" y1="44" x2="${W - 70}" y2="44"/>`;
+  for (let k = 0; k <= 3; k++) g += `<text class="tk" x="${x(k * 15)}" y="70" text-anchor="middle">+${k * 15}s</text>`;
+  exp.forEach(([k, at, label], i) => { const e = k === 'copy' ? { t: MV.hms(S.t0) } : MV.ev(k); const px = x(at); const up = i % 2 === 0; g += `<circle class="dot ${e ? '' : 'wait'}" cx="${px}" cy="44" r="4"/><text class="ev ${e ? '' : 'wait'}" x="${px}" y="${up ? 30 : 60}" text-anchor="${i === 0 ? 'start' : 'middle'}">${label}${e ? ' · ' + e.t.slice(-5) : ''}</text>`; });
+  const nx = x(clock), right = nx > W - 150; g += `<line class="nowl" x1="${nx}" y1="18" x2="${nx}" y2="52"/><text class="nowc" x="${right ? nx - 5 : nx + 5}" y="16" text-anchor="${right ? 'end' : 'start'}">NOW · ${MV.hms(MV.now())}</text>`;
+  return `<div class="ruler" aria-hidden="true"><svg viewBox="0 0 ${W} 80" preserveAspectRatio="none">${g}</svg></div>`;
+}
+function tuneBody(s) {
+  const sug = MV.story.suggestions;
+  const obs = s.tagged ? `<div class="obs counting">${s.chosen.size} boundaries lit · first new line ${s.tunedAt}<small>${s.lines.toLocaleString()} lines</small></div>` : s.tuneCopied ? `<div class="obs waiting">Waiting for the first line carrying a new prefix — the tagged columns turn on as it lands.</div>` : `<div class="obs quiet">Nothing to wait for until you paste — the rule table is already here.</div>`;
+  const st = FALL.states(s, s.tuneCopied ? 'live' : 'pick');
+  const dark = S.boundaries.filter(b => !b.logs.length).length;
+  return `<p class="lead">The push named <b>${S.boundaries.length} boundaries</b>; ${dark} are dark — a rule, but no log line. Touch a dark column to tag its rule; this is the only second paste.</p>
+  <div class="frag"><span class="cap">The fall, as the push drew it</span>${FALL.strip(st)}<div class="cols" style="grid-template-columns:repeat(${st.length},1fr)">${st.map(([b, x]) => FALL.header(b, x, { pick: !s.tuneCopied && (x === 'proposed' || x === 'armed'), chosen: x === 'armed' && !s.tuneCopied, attrs: b.sug !== null && !b.logs.length && !s.tuneCopied ? `data-act="toggle" data-i="${b.sug}" role="checkbox" aria-checked="${x === 'armed'}" tabindex="0"` : '' })).join('')}</div><div class="fallbody">${FALL.body(st, s, 640, 150, { pxPerSec: 1.4 })}</div></div>
+  <pre class="script" aria-label="Tagging block">${esc(MV.tagBlock()) || '<span class="sec"># nothing ticked</span>'}</pre>
+  <div class="copyrow"><button type="button" class="primary" data-act="tune-copy" ${s.tuneCopied || !s.chosen.size ? 'disabled' : ''}>${s.tuneCopied ? 'Copied' : 'Copy'}</button><span class="note">Safe to paste again; it sets, never adds.</span></div>${obs}`;
+}
+function doneBody(s) {
+  const t = k => MV.ev(k) ? MV.ev(k).t : '';
+  const rows = [
+    { k: 'cert', cls: 'done', t: 'Certificate trusted', r: `fetched by ${MV.from()} · ${t('cert')}`, u: 'cert' },
+    { k: 'logs', cls: 'done', t: 'Logs flowing', r: `enrolled at ${MV.from()} · ${t('enrol')} · ${s.lines.toLocaleString()} lines`, u: 'logs' },
+    s.push ? { cls: 'done', t: 'Router state pushed', r: `every 20 minutes · first ${t('push')} · RouterOS ${s.version}`, u: 'push' } : { cls: 'skipped', t: 'Router state', r: 'not now · the fall stays address-only', u: null },
+    s.backup ? { cls: 'done', t: 'Nightly backup', r: `03:00 · scheduled ${t('backup')}`, u: 'backup' } : { cls: 'skipped', t: 'Backup', r: 'not now · no backups kept here', u: null },
+    s.push ? (s.tagged ? { cls: 'done', t: 'Rules tagged', r: `${s.chosen.size} rules log · since ${s.tunedAt}`, u: 'tune' } : { cls: 'skipped', t: 'Rules', r: 'skipped · 5 boundaries log nothing', u: null }) : null,
+  ].filter(Boolean);
+  const n = rows.filter(r => r.cls === 'done').length, k = rows.length - n;
+  const undoAll = s.showUndoAll ? `<pre>${esc([...MV.undoLines.cert, ...MV.undoLines.logs, ...(s.push ? MV.undoLines.push : []), ...(s.backup ? MV.undoLines.backup : []), ...(s.tagged ? MV.undoLines.tune() : [])].join('\n'))}</pre><p class="note">Then <button type="button" class="linkish" data-act="reset">forget ${esc(s.name)} on MikroView</button> — its token, its enrolment and its record.</p>` : '';
+  const st = s.push ? FALL.states(s) : null;
+  const fallDone = st ? `<div class="frag"><span class="cap">The fall now — ${st.filter(([, x]) => x === 'watched').length} watched, ${st.filter(([, x]) => x !== 'watched').length} dark</span>${FALL.strip(st)}<div class="cols" style="grid-template-columns:repeat(${st.length},1fr)">${st.map(([b, x]) => FALL.header(b, x)).join('')}</div></div>` : '';
+  return `<p class="headline"><b>${esc(s.name)} is sending.</b> ${n} ${n === 1 ? 'step stands' : 'steps stand'} on evidence${k ? `; ${k} ${k === 1 ? 'was' : 'were'} set aside` : ''}.</p>${fallDone}
+  <div class="ledger">${rows.map(r => `<div class="row"><span class="step-n ${r.cls}" style="${r.cls === 'done' ? 'border-color:var(--accept);color:var(--accept)' : 'border-style:dashed;border-color:var(--log);color:var(--log)'}">${r.cls === 'done' ? '✓' : '–'}</span><span>${r.t}<div class="r ${r.cls === 'done' ? 'ok' : 'dec'}">${esc(r.r)}</div></span>${r.u ? `<button type="button" class="linkish u" data-act="undo" data-u="${r.u}">${s.undoOpen === r.u ? 'Hide' : 'Undo'}</button>` : '<span></span>'}${s.undoOpen === r.u && r.u ? `<div class="undo"><pre>${esc((typeof MV.undoLines[r.u] === 'function' ? MV.undoLines[r.u]() : MV.undoLines[r.u]).join('\n'))}</pre><p class="note">Paste on the router. MikroView notices when the lines stop and this row goes back to waiting.</p></div>` : ''}</div>`).join('')}</div>
+  <p class="note">Run setup… reopens this ledger any time. To start again from nothing, <button type="button" class="linkish" data-act="undo-all">${s.showUndoAll ? 'hide the undo lines' : 'undo everything on the router first'}</button>.</p>${undoAll}`;
+}
+function renderFoot(s) {
+  let l = '', r = '', hint = '';
+  if (s.stage === 'ask') { const q = Q[s.q]; l = `<button type="button" data-act="back" ${s.q ? '' : 'disabled'}>Back</button>`; if (q.kind === 'yesno') { hint = 'Answer above — Yes or Not now'; } else { r = `<button type="button" class="primary" data-act="next" ${MV.answered(q) ? '' : 'disabled'}>${q.kind === 'password' ? 'Mint the token' : 'Next'}</button>`; } }
+  else if (s.stage === 'paste') { l = `<button type="button" data-act="back">Back</button>`; hint = 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="next" disabled>Next</button>`; }
+  else if (s.stage === 'watch') { hint = MV.arrivedAll() ? '' : 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="to-tune" ${MV.arrivedAll() ? '' : 'disabled'}>Next</button>`; }
+  else if (s.stage === 'tune') { r = `<button type="button" data-act="tune-skip">Skip this step</button><button type="button" class="primary" data-act="to-done" ${s.tagged ? '' : 'disabled'}>Next</button>`; hint = s.tagged ? '' : 'Next checks what has arrived'; }
+  else if (s.stage === 'done') { l = `<button type="button" data-act="another">Add another router</button>`; r = `<button type="button" class="primary" data-act="fall">Open the fall</button>`; }
+  $('#foot').innerHTML = `${l}<span class="hint">${hint}</span>${r}`;
+}
+function render(s) {
+  renderSteps(s);
+  const b = $('#body');
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null;
+  b.innerHTML = s.stage === 'ask' ? askBody(s) : s.stage === 'paste' ? pasteBody(s) : s.stage === 'watch' ? watchBody(s) : s.stage === 'tune' ? tuneBody(s) : doneBody(s);
+  renderFoot(s);
+  const inp = b.querySelector('input[data-field]'); if (inp && (!focused || focused === inp.dataset.field)) { inp.focus(); const v = inp.value; inp.value = ''; inp.value = v; }
+}
+function field(f, s) { const q = Q[s.q]; document.querySelectorAll('[data-act=next]').forEach(b => b.disabled = !MV.answered(q)); if (f === 'addr') { const p = MV.addrProblem(s.addr); const el = $('[data-problem]'); if (el) el.textContent = p; const inp = $('[data-field=addr]'); if (inp) { inp.classList.toggle('bad', !!p); inp.setAttribute('aria-invalid', p ? 'true' : 'false'); } } if (f === 'name') $('#ttl').textContent = s.name || 'New router'; }
+let lastTick = 0;
+function tick(s) { if (s.stage !== 'watch' && s.stage !== 'tune') return; const t = Date.now(); if (t - lastTick < 400) return; lastTick = t; const r = document.querySelector('.ruler'); if (r) r.outerHTML = ruler(s); const fb = document.querySelector('.frag .fallbody'); if (fb && s.stage === 'tune') fb.innerHTML = FALL.body(FALL.states(s, s.tuneCopied ? 'live' : 'pick'), s, 640, 150, { pxPerSec: 1.4 }); const st = document.querySelector('.stream'); if (st) st.innerHTML = s.tail.slice(-6).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join(''); const c = document.querySelector('.obs.counting small'); if (c) c.textContent = s.lines.toLocaleString() + ' lines'; }
+function key(e, s) { if (e.target.matches('input')) return; if (s.stage === 'tune' && (e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.act === 'toggle') { e.preventDefault(); MV.act('toggle', e.target.dataset); } }
+MV.boot({ render, field, tick, key });
+</script>
+</body>
+</html>
