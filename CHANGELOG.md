@@ -29,6 +29,15 @@ rewritten.
   the address it's actually arriving from, not to pin the router back
   onto the old one.
 
+- **The blocked certificate step now shows the exact `tls.hosts` line to
+  paste** (#1365). It used to say "add 192.168.13.15 to tls.hosts in
+  config.yaml and restart" without ever showing the syntax. The step now
+  prints a copyable `hosts: [...]` line carrying every host already
+  configured plus the missing one, so pasting it can only add coverage —
+  never drop an address already there — and says where it goes
+  (config.yaml's `tls:` section on the MikroView machine, then restart).
+  The equivalent server log line (a router reaching MikroView by a name
+  its certificate does not cover) now gives the same one-line example.
 - **On-disk event history is no longer deleted just because it is off**
   (#1353). A config with the `history:` block missing, `enabled: false`,
   or no key file used to make MikroView delete every retained day at

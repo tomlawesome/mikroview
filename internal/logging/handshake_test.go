@@ -54,6 +54,11 @@ func TestExplainHandshakeSaysWhoRejectedWhom(t *testing.T) {
 			[]string{"hung up during the handshake", "did not trust our certificate"}, "hung-up"},
 		{"read tcp 1.2.3.4:1: read: connection reset by peer",
 			[]string{"went away before finishing"}, "went-away"},
+		// #1365: "add it to tls.hosts" never said the syntax. The line now
+		// gives the exact hosts: entry to add, naming the peer, and says
+		// to keep whatever is already there.
+		{"x509: certificate is valid for 192.0.2.10, not 1.2.3.4",
+			[]string{"a name our certificate does not cover", `hosts: ["1.2.3.4"]`, "keeping any hosts already there"}, "wrong-name"},
 	}
 	for _, c := range cases {
 		got, cause := explainHandshake("1.2.3.4", c.raw)
