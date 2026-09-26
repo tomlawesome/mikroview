@@ -29,7 +29,6 @@ import {
   sourceSplitReceipt,
   sourceSplitShortfall,
   sourceSplits,
-  srcAddressCommand,
   syslogReceipt,
   syslogStep,
   tokenExpired,
@@ -382,12 +381,6 @@ describe('the source-address split', () => {
       '192.168.88.1, which you declared in config.yaml, has sent nothing.',
     )
     expect(sourceSplitReceipt(splits)).toBe('syslog from 10.0.20.1, 10.0.30.1 · declared 192.168.88.1 silent')
-  })
-
-  // The remedy keeps the declared address: the command needs only that
-  // one value, and it is printed, never run.
-  it('prints the src-address command with the declared address filled in', () => {
-    expect(srcAddressCommand('192.168.88.1')).toBe('/system logging action set mikroview src-address=192.168.88.1')
   })
 
   // Only a declared device with a pairing is a split. An undeclared

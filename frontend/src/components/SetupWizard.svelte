@@ -63,7 +63,6 @@
     prose,
     sourceSplits,
     arrivingAddresses,
-    srcAddressCommand,
     refusedWarning,
     SKIP_CONSEQUENCES,
     SYSLOG_ADDRESS_CHANGED_NOTE,
@@ -1734,33 +1733,18 @@
                     this instance. You can tell.
                   </p>
                   <p class="note">
-                    <strong>If they are the same router</strong>, pick the address it should be known
-                    by here:
+                    <strong>If they are the same router</strong>, tell MikroView the address it's
+                    actually using rather than pinning the router to another one: the router picks the
+                    address its logs and its pushes leave from, and that choice can't be told to hold
+                    still for syslog alone.
                   </p>
                   {#each splits as split (split.declared)}
                     <p class="note">
-                      <strong>Keep {split.declared}</strong> (recommended). Run this on the router — it
-                      makes the logs arrive from the address you declared:
-                    </p>
-                    <pre>{srcAddressCommand(split.declared)}</pre>
-                    <button
-                      type="button"
-                      class="copy"
-                      onclick={() => copy(srcAddressCommand(split.declared), `src-${split.declared}`)}
-                    >
-                      {copied === `src-${split.declared}` ? 'Copied' : 'Copy'}
-                    </button>
-                    <p class="note">
-                      Recommended because everything else — the token step 4 mints, the tables it
-                      pushes — follows the declared identity, so nothing has to be reissued.
-                    </p>
-                    <p class="note">
                       {#if arriving.length === 1}
-                        <strong>Or keep {arriving[0]}</strong>: change <code>sourceIp</code> to
-                        {arriving[0]} in config.yaml and restart.
+                        Change <code>sourceIp</code> to {arriving[0]} in config.yaml and restart.
                       {:else}
-                        <strong>Or keep the arriving address</strong>: change <code>sourceIp</code> to
-                        whichever of {prose(arriving)} this router is, in config.yaml, and restart.
+                        Change <code>sourceIp</code> to whichever of {prose(arriving)} this router is,
+                        in config.yaml, and restart.
                       {/if}
                       MikroView then matches what actually arrives. If a token was already minted for
                       {split.declared}, reissue it afterwards — a token keeps the identity it was minted

@@ -150,8 +150,10 @@ setup left behind: MikroView enrols a router from one address, and a
 stale `src-address` pinning syslog to a different one is exactly what
 made an owner's own router's pushes get refused after every earlier
 paste enrolled it from the address `0.0.0.0` would have chosen anyway
-(#1370). If you rely on a multi-homed router's `src-address` for a
-reason of your own, re-paste it after this block.
+(#1370). MikroView expects the router to pick its own address and to be
+told what that address is, not the other way round: don't re-pin
+`src-address` afterwards for a reason of your own — declare and enrol
+whichever address the router actually arrives from instead.
 
 ## 2. Forward firewall log events to it
 
@@ -422,16 +424,14 @@ check whether the device id the token is scoped to actually matches the
 `deviceId` on the events you're looking at — a mismatched source
 address is the most likely cause. The setup wizard's Send logs step names it
 when it sees it (a declared router that has sent nothing while an
-undeclared address streams) and prints the fix. Keeping the declared
-address is the recommended one, because the token and the tables it
-pushes follow that identity, so nothing has to be reissued:
-
-```
-/system logging action set mikroview src-address=<the address you declared as sourceIp>
-```
-
-The alternative is changing `sourceIp` to the arriving address and
-restarting — then reissue any token minted for the old identity.
+undeclared address streams). The fix is changing `sourceIp` in
+`config.yaml` to the address that's actually arriving, then restarting
+and reissuing any token minted for the old identity. Pinning the
+router's `src-address` to force it back onto the declared address isn't
+the fix any more (#1370): the Send logs block now always sets
+`src-address=0.0.0.0` — RouterOS picks the address itself, the same way
+`/tool fetch` already does for the HTTPS pushes — so a pinned value only
+survives until the block is pasted again.
 
 Or via the API. Minting a token is an admin action, so the call has to
 carry an admin's browser session: `<your session cookie>` is the
