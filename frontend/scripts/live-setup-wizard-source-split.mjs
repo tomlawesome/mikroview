@@ -94,18 +94,14 @@ check(
 
 const body = ((await page.locator('.setup-wizard .split').textContent()) ?? '').replace(/\s+/g, ' ')
 check(/MikroView can't tell whether these are the same router/.test(body), 'the body hands the operator the one fact only they hold')
-check(/Keep 192\.168\.88\.1 \(recommended\)/.test(body), 'keeping the declared address is the recommended remedy')
-check(/Or keep 10\.0\.20\.1: change sourceIp to 10\.0\.20\.1/.test(body), 'changing sourceIp is offered as the alternative')
+check(/tell MikroView the address it's actually using/.test(body), 'the remedy is telling mikroview the arriving address, not pinning the router (#1370)')
+check(/Change sourceIp to 10\.0\.20\.1 in config\.yaml and restart/.test(body), 'changing sourceIp to the arriving address is the one path offered')
 check(/If they are two different routers, nothing is wrong\./.test(body), 'two routers is a non-error')
 
-// The command is printed, never run, with the declared address filled
-// in -- the wizard never renders a placeholder.
-const commands = await page.$$eval('.setup-wizard .split pre', (els) => els.map((e) => e.textContent.trim()))
-check(
-  commands.length === 1 && commands[0] === '/system logging action set mikroview src-address=192.168.88.1',
-  `the src-address command carries the declared address (${JSON.stringify(commands)})`,
-)
-check((await page.locator('.setup-wizard .split button.copy').count()) === 1, 'the command has its Copy control')
+// No src-address command is printed any more (#1370): the Send logs block
+// always sets src-address=0.0.0.0, so a pin would not survive a re-paste.
+check((await page.locator('.setup-wizard .split pre').count()) === 0, 'no src-address command is printed')
+check((await page.locator('.setup-wizard .split button.copy').count()) === 0, 'and so there is nothing to copy')
 
 // The step list carries the split as the receipt.
 const receipt = ((await page.locator('.setup-wizard .steps li:nth-child(3) .step-receipt').textContent()) ?? '').trim()
