@@ -586,7 +586,39 @@
   :set ruleRecs (\$ruleRecs, {\$rec})
 }
 :local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$ruleRecs}]
-/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local alRecs [:toarray \"\"]
+:foreach i,v in=[/ip/firewall/address-list print as-value] do={
+  :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=(\$v->\"dynamic\")}
+  :set alRecs (\$alRecs, {\$rec})
+}
+:local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$alRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$alPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local leaseRecs [:toarray \"\"]
+:foreach i,v in=[/ip/dhcp-server/lease print as-value] do={
+  :local rec {\"hostname\"=(\$v->\"host-name\"); \"mac\"=(\$v->\"mac-address\"); \"address\"=(\$v->\"address\")}
+  :set leaseRecs (\$leaseRecs, {\$rec})
+}
+:local leasePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$leaseRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local arpRecs [:toarray \"\"]
+:foreach i,v in=[/ip/arp print as-value] do={
+  :local rec {\"address\"=(\$v->\"address\"); \"mac\"=(\$v->\"mac-address\")}
+  :set arpRecs (\$arpRecs, {\$rec})
+}
+:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$arpRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local addrRecs [:toarray \"\"]
+:foreach i,v in=[/ip/address print as-value] do={
+  :local rec {\"address\"=(\$v->\"address\"); \"network\"=(\$v->\"network\"); \"interface\"=(\$v->\"interface\"); \"comment\"=(\$v->\"comment\")}
+  :set addrRecs (\$addrRecs, {\$rec})
+}
+:local addrPayload [:serialize to=json value={\"kind\"=\"ip-address\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$addrRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$addrPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local logRecs [:toarray \"\"]
 :foreach i,v in=[/system/logging/action print as-value] do={
@@ -602,13 +634,45 @@
   }
 }
 :local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$logRecs}]
-/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none" } else={ /system script set [find name=mv-push] policy=read,test source=":local ruleRecs [:toarray \"\"]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none" } else={ /system script set [find name=mv-push] policy=read,test source=":local ruleRecs [:toarray \"\"]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
   :local rec {\"ordinal\"=\$i; \"comment\"=(\$v->\"comment\"); \"chain\"=(\$v->\"chain\"); \"action\"=(\$v->\"action\"); \"srcAddressList\"=(\$v->\"src-address-list\"); \"logPrefix\"=(\$v->\"log-prefix\"); \"dstPort\"=(\$v->\"dst-port\"); \"protocol\"=(\$v->\"protocol\"); \"log\"=(\$v->\"log\"); \"dstAddress\"=(\$v->\"dst-address\"); \"srcAddress\"=(\$v->\"src-address\"); \"connectionState\"=(\$v->\"connection-state\"); \"inInterface\"=(\$v->\"in-interface\"); \"outInterface\"=(\$v->\"out-interface\"); \"disabled\"=(\$v->\"disabled\"); \"packets\"=(\$v->\"packets\"); \"bytes\"=(\$v->\"bytes\")}
   :set ruleRecs (\$ruleRecs, {\$rec})
 }
 :local rulePayload [:serialize to=json value={\"kind\"=\"filter-rule\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$ruleRecs}]
-/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$rulePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local alRecs [:toarray \"\"]
+:foreach i,v in=[/ip/firewall/address-list print as-value] do={
+  :local rec {\"list\"=(\$v->\"list\"); \"address\"=(\$v->\"address\"); \"comment\"=(\$v->\"comment\"); \"dynamic\"=(\$v->\"dynamic\")}
+  :set alRecs (\$alRecs, {\$rec})
+}
+:local alPayload [:serialize to=json value={\"kind\"=\"address-list\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$alRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$alPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local leaseRecs [:toarray \"\"]
+:foreach i,v in=[/ip/dhcp-server/lease print as-value] do={
+  :local rec {\"hostname\"=(\$v->\"host-name\"); \"mac\"=(\$v->\"mac-address\"); \"address\"=(\$v->\"address\")}
+  :set leaseRecs (\$leaseRecs, {\$rec})
+}
+:local leasePayload [:serialize to=json value={\"kind\"=\"dhcp-lease\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$leaseRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$leasePayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local arpRecs [:toarray \"\"]
+:foreach i,v in=[/ip/arp print as-value] do={
+  :local rec {\"address\"=(\$v->\"address\"); \"mac\"=(\$v->\"mac-address\")}
+  :set arpRecs (\$arpRecs, {\$rec})
+}
+:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$arpRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
+
+:local addrRecs [:toarray \"\"]
+:foreach i,v in=[/ip/address print as-value] do={
+  :local rec {\"address\"=(\$v->\"address\"); \"network\"=(\$v->\"network\"); \"interface\"=(\$v->\"interface\"); \"comment\"=(\$v->\"comment\")}
+  :set addrRecs (\$addrRecs, {\$rec})
+}
+:local addrPayload [:serialize to=json value={\"kind\"=\"ip-address\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$addrRecs}]
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$addrPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none
 
 :local logRecs [:toarray \"\"]
 :foreach i,v in=[/system/logging/action print as-value] do={
@@ -624,7 +688,7 @@
   }
 }
 :local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=\$logRecs}]
-/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f2c9b41ae06d5f3\") check-certificate=yes output=none" }
+/tool fetch url=\"https://192.168.13.15:8080/api/ingest/routeros\" http-method=post http-data=\$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer mvt-8f19c2e0b6d4a1c8\") check-certificate=yes output=none" }
 :if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event="/system script run mv-push" disabled=no }
 /system script run mv-push</div>
                 <button type="button" class="lessline" aria-label="Show fewer lines of this command">Show fewer lines ▴</button>
@@ -660,7 +724,7 @@
     <div class="wiz">
       <div class="whead"><span class="step">Setup</span><h3>Where setup stands</h3><button type="button" class="x" aria-label="Close setup">✕</button></div>
       <div class="told">Told: RouterOS 7.16.2 · MikroView at 192.168.13.15:8080 · rb5009 at 192.168.13.1 · <button type="button" class="linkbtn" aria-label="Change what MikroView was told">Change…</button></div>
-      <div class="amber">You told me 7.16.2; rb5009 reports 7.24.4. Upgrade warnings were re-checked — 1 applies to Send logs · <button type="button" class="linkbtn" aria-label="Show the upgrade warning on Connect the router">Show</button></div>
+      <div class="amber">You told me 7.16.2; rb5009 reports 7.24.4. Upgrade warnings were re-checked — 1 applies to Connect the router · <button type="button" class="linkbtn" aria-label="Show the upgrade warning on Connect the router">Show</button></div>
       <div class="wbody">
         <div class="wmain full col" style="max-width:720px">
           <div class="fin">
