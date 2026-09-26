@@ -18,6 +18,16 @@ rewritten.
 
 ### Fixed
 
+- **An account that lost its second factor, or was forced to change its
+  password, mid-session no longer sees bare "403" errors** (#1362).
+  Upgrading past 0.6.1 with a tab already open -- or any other route to a
+  live session on an account that now needs a second factor or a new
+  password -- used to leave every view showing the refusal as an
+  ordinary error ("Could not read the pushed rule tables: fetchDevices:
+  403") instead of the second-factor or change-password screen that
+  actually gets the account out. The frontend now recognises that
+  specific 403 and moves to the right screen on its own.
+
 - **On-disk event history is no longer deleted just because it is off**
   (#1353). A config with the `history:` block missing, `enabled: false`,
   or no key file used to make MikroView delete every retained day at

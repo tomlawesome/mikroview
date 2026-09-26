@@ -297,6 +297,11 @@ func TestForcedChangeTakesOnlyTheNewPasswordAndOpensTheApp(t *testing.T) {
 	if blocked.StatusCode != http.StatusForbidden {
 		t.Errorf("a flagged session got %d from /api/flags, want 403", blocked.StatusCode)
 	}
+	// #1362: the frontend's shared fetch path matches this on the
+	// header, never the prose below -- see auth.go's writeForcedAuthGate.
+	if got := blocked.Header.Get(forcedAuthGateHeader); got != forcedAuthGateMustChangePassword {
+		t.Errorf("%s = %q, want %q", forcedAuthGateHeader, got, forcedAuthGateMustChangePassword)
+	}
 
 	// No current password supplied -- there is none to supply.
 	resp := postJSON(t, client, ts.URL+"/api/auth/password",

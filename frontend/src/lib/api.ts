@@ -85,6 +85,76 @@ export class ApiError extends Error {
   }
 }
 
+// #1362: an open tab across an upgrade (or a warm-started session) can
+// have a real, signed-in session that requireAuth (internal/api/auth.go)
+// now refuses on every route but a handful, because the account has no
+// second factor or is stuck at a forced password change. Before this,
+// every such call just threw its 403 and each view showed it as an
+// ordinary error -- "Could not read the pushed rule tables: fetchDevices:
+// 403" instead of routing to the screen that actually gets the account
+// out. Detected here, in the one fetch path every call in this file goes
+// through, on the header requireAuth sets (forcedAuthGateHeader in
+// auth.go) -- never on the prose body, which stays free to reword and
+// stays indistinguishable from a genuine "you're not allowed to do that"
+// 403 (a viewer on an admin route) otherwise.
+export type ForcedAuthGate = 'must-change-password' | 'must-enrol-factor'
+
+const FORCED_AUTH_GATE_HEADER = 'X-Mikroview-Auth-Gate'
+
+// Registered once by auth.svelte.ts, which is the only thing that knows
+// what to do with a fresh session -- api.ts deliberately never imports
+// it (see ApiError's own comment above for why that direction has to
+// stay one-way).
+let forcedAuthGateHandler: ((gate: ForcedAuthGate, session: AuthSession) => void) | null = null
+
+export function onForcedAuthGate(handler: (gate: ForcedAuthGate, session: AuthSession) => void): void {
+  forcedAuthGateHandler = handler
+}
+
+// De-dupes a burst of calls that all hit the gate in the same tick (a
+// poll and a load firing together) into a single re-check, rather than
+// one GET /api/auth/session per failed call.
+let forcedAuthGateRecheck: Promise<void> | null = null
+
+function triggerForcedAuthGateRecheck(gate: ForcedAuthGate): void {
+  if (forcedAuthGateRecheck) return
+  forcedAuthGateRecheck = (async () => {
+    try {
+      const session = await fetchAuthSession()
+      forcedAuthGateHandler?.(gate, session)
+    } catch {
+      // Can't even reach /api/auth/session -- leave the call that
+      // triggered this to surface its own 403 as an ordinary error
+      // rather than hiding a real outage behind silence.
+    } finally {
+      forcedAuthGateRecheck = null
+    }
+  })()
+}
+
+// Every request this file makes goes through this -- shadowing the
+// global name rather than adding a wrapper call at each of this file's
+// fetch call sites, so a route added later gets the same guard for free
+// without anyone having to remember it. globalThis.fetch is looked up
+// fresh on every call rather than bound once here, so a test that
+// vi.stubGlobal('fetch', ...) after this module is already imported
+// still takes effect.
+async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const res = await globalThis.fetch(input, init)
+  // res.headers is a plain field on plenty of this file's own test
+  // stubs (a bare { ok, status, json, text } object standing in for a
+  // real fetch Response), never populated because nothing before this
+  // needed it -- optional chaining here rather than assuming every
+  // caller's stub carries a real Headers.
+  if (res.status === 403) {
+    const gate = res.headers?.get?.(FORCED_AUTH_GATE_HEADER)
+    if (gate === 'must-change-password' || gate === 'must-enrol-factor') {
+      triggerForcedAuthGateRecheck(gate)
+    }
+  }
+  return res
+}
+
 // #1162: what the operator reads when a request fails.
 //
 // The throwing functions below used to carry only their own name and a
