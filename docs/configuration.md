@@ -1430,6 +1430,7 @@ parameter; it simply has no entry on the watchers station yet.
 blocklist:
   sources:
     - spamhaus_drop
+    - emerging_threats_compromised
 ```
 
 - **`sources`** — which feeds from the vetted menu to enable. This is
@@ -1451,12 +1452,26 @@ blocklist:
     (hijacked/stolen allocations, bulletproof hosting), which fits
     "safe to flag on sight, no behavioral corroboration needed" far
     better than a larger, noisier aggregated list would.
-  - **`emerging_threats_compromised`** (opt-in, not part of the
-    default) — [Emerging Threats' compromised-IPs
+  - **`emerging_threats_compromised`** (on by default alongside
+    Spamhaus DROP, owner decision 2026-09-25, #1359) — [Emerging
+    Threats' compromised-IPs
     list](https://rules.emergingthreats.net/blockrules/compromised-ips.txt):
     also free and requiring no registration, but a much larger,
     faster-changing list of individual compromised hosts rather than
-    curated netblocks.
+    curated netblocks. Licence checked 2026-09-26 against the ET Open
+    ruleset distribution (the same one this file is served from):
+    `rules/LICENSE` in
+    [the tarball](https://rules.emergingthreats.net/open/suricata-5.0.0/emerging.rules.tar.gz)
+    places `compromised-ips.txt` under a BSD-3-Clause grant ("Rules
+    ... are from Emerging Threats and are covered under the BSD
+    License ... Redistribution and use in source and binary forms,
+    with or without modification, are permitted"), and the [download
+    instructions page](https://rules.emergingthreats.net/OPEN_download_instructions.html)
+    itself recommends unattended daily fetching ("ET is updated once
+    daily on weekdays ... We recommend that you configure your
+    updater to download the ruleset once daily") — exactly this
+    package's fixed `RefreshInterval`. Nothing in either document
+    restricts automated or every-install use.
 
 **Refresh** is a fixed daily cycle, deliberately not configurable — an
 explicit decision to avoid over-polling Spamhaus/Emerging Threats' free
