@@ -6,14 +6,17 @@ h1 { font-size: 22px; margin: 0 0 6px; } p { color: #97a4c4; max-width: 720px; }
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1200px; margin-top: 26px; }
 a.card { display: block; border: 1px solid rgba(160,185,230,0.2); border-radius: 10px; overflow: hidden; color: inherit; text-decoration: none; background: #0f1422; }
 a.card:hover { border-color: #9db8e8; }
+a.card.dropped { opacity: 0.35; filter: grayscale(1); }
+a.card.kept { border-color: #3ecf7e; }
 a.card img { width: 100%; display: block; aspect-ratio: 16/10; object-fit: cover; object-position: top; }
 a.card .b { padding: 14px 16px; } a.card b { display: block; font-size: 16px; } a.card span { color: #97a4c4; font-size: 13px; }
 </style></head><body>
+<p style="margin:0 0 18px;padding:10px 20px;background:#102a18;color:#b0f0c0;font:13px sans-serif">Verdict 2026-09-26 — Z kept as a candidate ("a good implementation of the original wizard style, and I do like it"); AA and AB dropped. All three: "boilerplate theme, green and blue". Full verdict in README.md; round 8 follows.</p>
 <h1>Setup wizard — round 7</h1>
 <p>Three ways to ask the five questions, one block to paste, the router answering one proof at a time. All three live in the ratified modal with the app's own tokens; what differs is how you answer. Answer, Copy, watch. The dashed strip switches scenario and speed.</p>
 <div class="grid">
-  <a class="card" href="z-ledger.html"><img src="shots/z-ledger-03-push-asked.png" alt=""><div class="b"><b>Z · The ledger asks</b><span>The ratified wizard, one question per step; rows light up as proofs arrive.</span></div></a>
-  <a class="card" href="aa-block.html"><img src="shots/aa-block-03-push-asked.png" alt=""><div class="b"><b>AA · The block writes itself</b><span>Answer inside the script; the block is the ledger, start to finish.</span></div></a>
-  <a class="card" href="ab-sitting.html"><img src="shots/ab-sitting-03-push-asked.png" alt=""><div class="b"><b>AB · The sitting</b><span>Entities' dealt cards — Enter says yes, Space says not now, the router deals the rest.</span></div></a>
+  <a class="card kept" href="z-ledger.html"><img src="shots/z-ledger-03-push-asked.png" alt=""><div class="b"><b>Z · The ledger asks</b><span>The ratified wizard, one question per step; rows light up as proofs arrive.</span></div></a>
+  <a class="card dropped" href="aa-block.html"><img src="shots/aa-block-03-push-asked.png" alt=""><div class="b"><b>AA · The block writes itself</b><span>Answer inside the script; the block is the ledger, start to finish.</span></div></a>
+  <a class="card dropped" href="ab-sitting.html"><img src="shots/ab-sitting-03-push-asked.png" alt=""><div class="b"><b>AB · The sitting</b><span>Entities' dealt cards — Enter says yes, Space says not now, the router deals the rest.</span></div></a>
 </div>
 </body></html>
