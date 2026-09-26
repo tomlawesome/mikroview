@@ -119,6 +119,15 @@ Numbered in the session's reply, recorded here when answered.
 
 ## Verdicts
 
-None yet.
+**Owner, 2026-09-26 (verbatim):** "Yeah... it's more creative, more
+inventive...but it's not what I'm after. It's a bit clumsy, inelegant.
+The prose driven stuff.. entry as a sentence it's a bit... childish
+almost."
+
+Dropped as drawn. What survives into round 6: the structure (version
+learned from the push, one paste, tuning proposed after the push, the
+picture drawn from evidence, the evidence ledger with Undo). What goes:
+the sentence-form entry, the chatty headlines and leads, the oversized
+controls, the "First light" flourish.
 
 Written by Fable 5.1, 2026-09-26.
