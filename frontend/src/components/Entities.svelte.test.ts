@@ -669,6 +669,53 @@ describe('Entities router cards (#675)', () => {
   })
 })
 
+// #1373: another action, or a built-in RouterOS action, still sending
+// logs here from a setup this instance's wizard has moved past. The
+// description shows to anyone; the paste-ready fix is admin-only.
+describe('Entities logging leftovers (#1373)', () => {
+  const leftover = {
+    name: 'memory',
+    builtin: true,
+    description: 'The built-in `memory` action was repointed here.',
+    commands: ['/system logging action set [find name=memory] target=memory'],
+  }
+
+  function routerWithLeftovers() {
+    return {
+      id: 'rb5009',
+      name: 'rb5009',
+      configured: true,
+      status: 'live',
+      lastSeen: new Date().toISOString(),
+      sourceIp: '10.0.0.1',
+      eventCount: 3,
+      loggingLeftovers: [leftover],
+    } as unknown as Device
+  }
+
+  it('gives an admin the paste-ready commands on a registered router card', async () => {
+    appState.devices = [routerWithLeftovers()]
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).toContain('The built-in `memory` action was repointed here.')
+    expect(container.querySelector('pre')?.textContent).toBe(
+      '/system logging action set [find name=memory] target=memory',
+    )
+    expect(container.textContent).toContain("Paste into the router's terminal")
+  })
+
+  it('names the leftover but offers a read-only viewer no fix commands', async () => {
+    authState.role = 'viewer'
+    appState.devices = [routerWithLeftovers()]
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.textContent).toContain('The built-in `memory` action was repointed here.')
+    expect(container.querySelector('pre')).toBeNull()
+  })
+})
+
 describe('Entities named-things table (#675)', () => {
   it('renders name · zone · address · mac · first seen · last seen · marks', async () => {
     const { container } = render(Entities)

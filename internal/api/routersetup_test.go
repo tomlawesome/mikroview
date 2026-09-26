@@ -50,7 +50,15 @@ func setupReportServer(t *testing.T) *Server {
 
 func noteReport(t *testing.T, s *Server, device string, wizardVersion int, topics string) {
 	t.Helper()
-	p, err := ingest.DecodePayload(strings.NewReader(loggingPushBody(wizardVersion, topics)))
+	noteReportBody(t, s, device, loggingPushBody(wizardVersion, topics))
+}
+
+// noteReportBody is noteReport for a caller -- #1373's leftover tests --
+// that needs a page shaped differently from loggingPushBody's single
+// mikroview action and rule.
+func noteReportBody(t *testing.T, s *Server, device, body string) {
+	t.Helper()
+	p, err := ingest.DecodePayload(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("DecodePayload: %v", err)
 	}
@@ -163,5 +171,66 @@ func TestIngestLoggingPageRecordsTheRouterSetup(t *testing.T) {
 	// about itself -- the same rule every other pushed kind follows.
 	if got := s.Setup.RouterSetup("core", want); got.Standing != setup.StandingNeverReported {
 		t.Errorf("core's standing = %q, want %q -- router-1's token may not report for it", got.Standing, setup.StandingNeverReported)
+	}
+}
+
+// deviceLeftovers is devicesSetup's twin for #1373's leftover list.
+func deviceLeftovers(t *testing.T, s *Server) map[string][]setup.LoggingLeftover {
+	t.Helper()
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID               string                  `json:"id"`
+			LoggingLeftovers []setup.LoggingLeftover `json:"loggingLeftovers"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]setup.LoggingLeftover{}
+	for _, d := range body.Devices {
+		out[d.ID] = d.LoggingLeftovers
+	}
+	return out
+}
+
+// TestHandleDevicesReportsTheOwnersLoggingLeftovers is #1373's
+// reproduction through the real API: the owner's own router, with the
+// built-in "memory" and "remote" actions repointed at mikroview from an
+// earlier setup, both still sending from 192.168.254.1.
+func TestHandleDevicesReportsTheOwnersLoggingLeftovers(t *testing.T) {
+	s := setupReportServer(t)
+	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":3,
+ "records":[
+  {"type":"action","name":"memory","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"192.168.254.1","remoteLogFormat":"default","remoteProtocol":"tls","checkCertificate":"no"},
+  {"type":"action","name":"remote","target":"remote","remote":"10.0.0.5","remotePort":"514","srcAddress":"192.168.254.1","remoteLogFormat":"default","remoteProtocol":"udp"},
+  {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"0.0.0.0","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},
+  {"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}
+ ]}`
+	p, err := ingest.DecodePayload(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	s.Setup.NoteLoggingReport("core", p, time.Now())
+
+	got := deviceLeftovers(t, s)["core"]
+	if len(got) != 2 {
+		t.Fatalf("core's leftovers = %+v, want 2 (memory, remote) and no complaint about mikroview", got)
+	}
+	for _, l := range got {
+		if !l.Builtin {
+			t.Errorf("leftover %q.Builtin = false, want true -- both are RouterOS built-ins", l.Name)
+		}
+		if len(l.Commands) == 0 {
+			t.Errorf("leftover %q carried no fix commands", l.Name)
+		}
 	}
 }
