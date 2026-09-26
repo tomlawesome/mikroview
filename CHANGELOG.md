@@ -27,6 +27,16 @@ rewritten.
 
 ### Fixed
 
+- **GitHub's preview-image and RouterOS-freshness workflows build with the
+  right Go patch again** (#1356). `#1312` moved Go to 1.27.1 everywhere it
+  knew about, but `.github/workflows/docker.yml` and
+  `.github/workflows/routeros-freshness.yml` still pinned `actions/setup-go`
+  to 1.27.0, so every GitHub-side preview push failed `go.mod`'s minimum-Go
+  check and the mirrored `latest` promotion then failed too. Both now match
+  `go.mod`, `tools/supply-chain/pins-policy.mjs` reads every workflow's
+  `go-version` and fails the drift check if one disagrees, and Renovate's
+  "go toolchain" group now also tracks that pin so a future bump moves it
+  with the rest.
 - **On-disk event history is no longer deleted just because it is off**
   (#1353). A config with the `history:` block missing, `enabled: false`,
   or no key file used to make MikroView delete every retained day at
