@@ -185,8 +185,10 @@ func (b *recoveryCodesSaveBudgetBackend) Save(ctx context.Context, payload []byt
 	return expect + 1, nil
 }
 
-func (b *recoveryCodesSaveBudgetBackend) Close() error     { return nil }
-func (b *recoveryCodesSaveBudgetBackend) Describe() string { return "recovery-codes save-budget test backend" }
+func (b *recoveryCodesSaveBudgetBackend) Close() error { return nil }
+func (b *recoveryCodesSaveBudgetBackend) Describe() string {
+	return "recovery-codes save-budget test backend"
+}
 
 // TestRecoveryCodesRegenerateFailedWriteLeavesOldSetIntact is the
 // handler-level half of GenerateRecoveryCodes' restore-on-failure
