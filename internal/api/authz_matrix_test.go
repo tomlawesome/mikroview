@@ -438,6 +438,11 @@ var authzMatrix = []routeExpectation{
 	{http.MethodDelete, "/api/auth/totp", accessViewer,
 		"turns the caller's OWN factor off, gated by their own password inside the handler -- same tier as the two " +
 			"rows above for the same reason; the password check is the real protection, not the role"},
+	{http.MethodPost, "/api/auth/recovery-codes", accessViewer,
+		"mints a fresh set of recovery codes for the caller's OWN account (#1331), gated by their own password " +
+			"inside the handler -- same tier and same reasoning as DELETE /api/auth/totp above; refused separately, " +
+			"inside the handler, for an account with no second factor at all (409) -- that is not this row's " +
+			"concern, since it still gets past the gate"},
 	{http.MethodGet, "/api/auth/passkeys", accessViewer,
 		"lists the caller's OWN passkeys (#1250) -- same reasoning as the TOTP rows above: the target is always " +
 			"the session's own account, so even the lowest tier must be able to see what can sign in as them"},

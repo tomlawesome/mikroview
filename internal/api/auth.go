@@ -1865,6 +1865,89 @@ func (s *Server) handleTOTPDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"disabled": true, "signedOut": signedOut})
 }
 
+type recoveryCodesRegenerateRequest struct {
+	Password string `json:"password"`
+}
+
+type recoveryCodesRegenerateResponse struct {
+	// RecoveryCodes is the fresh ten, in clear, exactly once -- the same
+	// one-shot contract totpConfirmResponse.RecoveryCodes documents.
+	// Nothing on this account can show them again once this response is
+	// gone.
+	RecoveryCodes []string `json:"recoveryCodes"`
+}
+
+// handleRecoveryCodesRegenerate mints a fresh set of ten recovery codes
+// for the signed-in caller's own account, replacing whichever set stood
+// before (#1331). Before this route the only way to a fresh set was
+// removing a factor and adding it back -- tolerable for one authenticator
+// app, but #1250 clears the shared set only when the *last* factor goes,
+// so an account with several passkeys had to strip all of them to get
+// here. Password-gated exactly like handleTOTPDelete above, and refused
+// outright when the account has no second factor at all: recovery codes
+// stand in for one, not for a password alone.
+//
+// Design lead ruling, 2026-09-26: unlike ConfirmTOTP and a first passkey
+// registration, this does not end other sessions. Those moments end
+// sessions because the set of factors protecting the account just
+// changed and a session elsewhere might predate that change; regenerating
+// codes changes nothing about which factors are active, so there is
+// nothing for another session to have gotten away with. The codes are a
+// spare key, not the lock.
+func (s *Server) handleRecoveryCodesRegenerate(w http.ResponseWriter, r *http.Request) {
+	user := userFromContext(r)
+	if user == nil {
+		writeUnauthorized(w, "sign in first")
+		return
+	}
+
+	var req recoveryCodesRegenerateRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	// Same passwordRecheckLimiterKey bucket and reasoning as
+	// handleTOTPDelete just above: a caller who already holds a session
+	// is exactly the position a stolen-cookie attacker is in, so this
+	// cannot be left as an unthrottled password oracle behind a cookie.
+	userKey := passwordRecheckLimiterKey(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	current, err := s.Auth.Authenticate(user.Username, req.Password, now)
+	if err != nil {
+		writeUnauthorized(w, "incorrect password")
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
+
+	// Re-checked against the freshly-authenticated copy, not the
+	// context snapshot -- same reasoning handleTOTPConfirm's header
+	// comment gives for re-reading rather than trusting userFromContext.
+	if !current.HasSecondFactor() {
+		http.Error(w, "this account has no second factor yet -- recovery codes stand in for one, not for a password alone", http.StatusConflict)
+		return
+	}
+
+	codes, err := s.Auth.GenerateRecoveryCodes(user.ID, now)
+	if err != nil {
+		// GenerateRecoveryCodes' own restore-on-failure contract already
+		// left the old set intact and reported nothing as issued -- this
+		// is a clean refusal, not a half-done one. writeAuthError logs
+		// the real error server-side (it isn't in authErrorMessages, so
+		// the caller gets the generic message).
+		writeAuthError(w, r, err, http.StatusInternalServerError)
+		return
+	}
+
+	s.Audit.Record(user.Username, "account.recovery_codes_regenerated", user.Username, "")
+
+	writeJSON(w, http.StatusOK, recoveryCodesRegenerateResponse{RecoveryCodes: codes})
+}
+
 // handleTOTPAdminClear lets an admin remove another user's authenticator-
 // app factor from the Users group -- the path for a lost phone when the
 // account owner still has their password (if they don't either, that's
