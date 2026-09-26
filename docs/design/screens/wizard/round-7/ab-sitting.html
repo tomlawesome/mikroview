@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — AB · The sitting</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+/* AB — The sitting. Entities already has a one-at-a-time flow the owner
+   ratified: "Begin the sitting" deals each unnamed thing as a dossier
+   card, Enter names it and deals the next, Space sets it aside, Esc
+   closes with nothing lost. Setup borrows it whole: each feature is
+   dealt as a card that shows, in the app's own fragments, what saying
+   yes gets you; Enter says yes, Space says not now; answered cards
+   become slips in a row above the deck. The block is the last card
+   dealt; then the router deals its own cards as each proof arrives, and
+   the deck runs dry on the ledger — "the census is complete". */
+.body { align-items: center; padding-top: 14px; }
+.slips { align-self: stretch; display: flex; gap: 6px; flex-wrap: wrap; min-height: 26px; }
+.slip { font-size: 11.5px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border); color: var(--fg-muted); background: transparent; }
+.slip.chosen { border-color: var(--log); color: var(--log); }
+.slip.decision { border-style: dashed; border-color: var(--log); color: var(--log); }
+.slip.done { border-color: var(--accept); color: var(--accept); }
+.slip.todo { color: var(--fg-dim); border-style: dashed; }
+.slip.waiting { color: var(--fg-muted); border-style: dashed; border-color: var(--hair-2); }
+.stage { position: relative; width: 660px; max-width: 100%; margin-top: 18px; flex: none; }
+.deck { position: absolute; inset: 0; pointer-events: none; }
+.deck i { position: absolute; left: 10px; right: 10px; top: 0; bottom: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); transform: translateY(8px); }
+.deck i + i { left: 20px; right: 20px; transform: translateY(16px); opacity: 0.6; }
+.card { position: relative; background: var(--bg-elevated); border: 1px solid var(--hair-2); border-radius: 8px; padding: 18px 22px 16px; display: flex; flex-direction: column; gap: 10px; animation: deal 180ms ease-out; box-shadow: 0 16px 40px -18px rgba(0,0,0,0.6); }
+@keyframes deal { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+.card .kicker { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); display: flex; gap: 10px; }
+.card .kicker b { color: var(--fg-muted); font-weight: 600; letter-spacing: 0.06em; }
+.card h3 { margin: 0; font-size: 19px; font-weight: 600; line-height: 1.3; }
+.card .hint { margin: 0; font-size: 13px; color: var(--fg-muted); line-height: 1.55; }
+.card .frag { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); padding: 10px 12px; font-size: 12px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 6px; }
+.card .frag .cap { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.card .keys { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.card .keys .k { display: flex; align-items: center; gap: 8px; }
+.card input[type=text], .card input[type=password] { width: 300px; font-size: 14px; padding: 8px 12px; }
+.card .honest { font-size: 11.5px; color: var(--fg-dim); border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px; }
+/* fragments: the app's own surfaces, small */
+.bands { display: flex; flex-direction: column; gap: 4px; font-family: var(--font-mono); font-size: 11px; }
+.band { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: center; }
+.band .n { color: var(--fg-muted); text-align: right; } .band .n.u { color: var(--fg-dim); font-style: italic; }
+.band .d { height: 10px; display: flex; gap: 2px; }
+.band .d i { display: block; width: 6px; height: 10px; background: var(--fall-drop); border-radius: 1px; opacity: 0.85; }
+.band .d i.a { background: var(--fall-accept); } .band .d i.o { background: var(--fall-other); }
+.row { font-family: var(--font-mono); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
+.row b { color: var(--log); font-weight: 500; } .row .who { color: var(--fg); }
+.badge { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 10.5px; }
+.badge.drop { background: var(--drop-bg); color: var(--drop); } .badge.accept { background: var(--accept-bg); color: var(--accept); }
+.rcard { display: flex; gap: 12px; align-items: center; font-size: 12px; }
+.rcard .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accept); }
+.rcard .dot.q { background: none; border: 1px dashed var(--fg-dim); }
+.rcard .nm { color: var(--fg); font-weight: 600; } .rcard .ip { font-family: var(--font-mono); color: var(--fg-muted); }
+.rcard.ref { color: var(--fg-dim); } .rcard.ref .nm { color: var(--fg-muted); font-weight: 500; }
+.card pre { max-height: calc(11 * 1.6em + 24px); overflow-y: auto; }
+.card .rules { border: 1px solid var(--border); border-radius: 6px; }
+.card .rules label { display: grid; grid-template-columns: 20px 62px 52px 1fr 80px; gap: 8px; align-items: center; padding: 6px 10px; border-top: 1px solid var(--border); font-size: 12px; cursor: pointer; }
+.card .rules label:first-child { border-top: 0; } .card .rules .pre { font-family: var(--font-mono); color: var(--log); }
+.card .rules .act.drop { color: var(--drop); } .card .rules .act.accept { color: var(--accept); }
+.ledger { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.ledger .r { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.ledger .r:first-child { border-top: 0; } .ledger .r small { font-size: 12px; display: block; } .ledger .u { grid-column: 1 / -1; }
+.arrival { display: flex; align-items: baseline; gap: 12px; }
+.arrival .when { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--accept); }
+.stream { align-self: stretch; margin-top: 16px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; max-height: 96px; overflow: hidden; width: 660px; max-width: 100%; }
+.stream .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .stream .l b { font-weight: 500; color: var(--log); }
+.count { font-size: 11.5px; color: var(--fg-dim); margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+</style>
+</head>
+<body>
+<div class="shell" aria-hidden="true">
+  <nav class="rail"><div class="brand">MikroView</div><div>The fall</div><div>Topography</div><div>Metrics</div><div>Stream</div><div>Entities</div><div class="on">Admin ▸ Run setup…</div></nav>
+  <div class="ghost"><i style="width:40%"></i><i style="width:70%"></i><i style="width:55%"></i><i style="width:80%"></i><i style="width:35%"></i></div>
+</div>
+<div class="veil">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ttl">
+    <header><span class="crumb">Set up a router</span><h2 id="ttl">New router</h2><span class="crumb" id="stepof"></span><button type="button" class="close" aria-label="Close setup — nothing is lost; Run setup… deals the next card" data-act="leave">✕</button></header>
+    <div class="middle"><div class="body" id="body"></div></div>
+    <footer id="foot"></footer>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script>
+const $ = s => document.querySelector(s); const esc = MV.esc; const Q = MV.questions; const S = MV.story;
+const t = k => MV.ev(k) ? MV.ev(k).t : '';
+const dashes = (n, cls) => Array.from({ length: n }, (_, i) => `<i class="${cls[i % cls.length]}"></i>`).join('');
+const frags = {
+  name: () => `<div class="frag"><span class="cap">Where it shows — the stream</span><div class="row"><span class="dim">14:02:58</span> <span class="who">‹name›</span> <b>fwd-drop</b> forward 203.0.113.7 → 192.168.13.40:445 <span class="badge drop">drop</span></div><div class="row"><span class="dim">14:02:59</span> <span class="who">‹name›</span> <b>in-ssh</b> input 45.155.205.99 → 81.2.69.140:22 <span class="badge drop">drop</span></div></div>`,
+  addr: () => `<div class="frag"><span class="cap">Where it shows — Entities, routers</span><div class="rcard"><span class="dot q"></span><span class="nm">${esc(MV.state.name || '‹name›')}</span><span class="ip">${esc(MV.state.addr || '‹address›')}</span><span class="dim">waiting for the enrol line</span></div><div class="rcard ref"><span class="dot q"></span><span class="nm">refused · 192.168.254.1</span><span class="dim">what a router sending from any other address becomes</span></div></div>`,
+  push: () => `<div class="frag"><span class="cap">What changes — the fall's bands</span><div class="bands"><div class="band"><span class="n">fwd-drop</span><span class="d">${dashes(38, ['', '', 'a', '', '', 'a', ''])}</span></div><div class="band"><span class="n">wan-in</span><span class="d">${dashes(22, ['', '', '', 'a'])}</span></div><div class="band"><span class="n u">other traffic</span><span class="d">${dashes(30, ['o'])}</span></div></div><span class="dim">With the push, bands wear your rules' names. Without it, everything is the grey band.</span></div>`,
+  backup: () => `<div class="frag"><span class="cap">What you get — Backups</span><div class="row"><span class="who">${esc(MV.state.name || '‹name›')}</span> · 2026-09-27 03:00 · mv.backup · 41 KB · <span class="ok">encrypted under your key file</span></div><div class="row"><span class="who">${esc(MV.state.name || '‹name›')}</span> · 2026-09-26 03:00 · mv.rsc · 18 KB</div><span class="dim">The router sends; MikroView never fetches.</span></div>`,
+  pass: () => `<div class="frag"><span class="cap">What it mints — the last line of the block</span><div class="row">/log info "mikroview-enrol <span class="dim">‹token — good for 15 minutes›</span>"</div><span class="dim">The log port opens for ${esc(MV.state.addr || 'that address')} alone, until ${S.tokenUntil}.</span></div>`,
+};
+function askCard(s) {
+  const q = Q[s.q];
+  let keys;
+  if (q.kind === 'yesno') keys = `<div class="keys"><span class="k"><kbd>Enter</kbd><button type="button" class="primary" data-act="yes">${q.yes}</button></span><span class="k"><kbd>Space</kbd><button type="button" data-act="no">${q.no}</button></span></div>`;
+  else if (q.kind === 'password') keys = `<div class="keys"><input type="password" data-field="pass" value="${esc(s.pass)}" placeholder="password" aria-label="Your password"><span class="k"><kbd>Enter</kbd><button type="button" class="primary" data-act="next" ${s.pass ? '' : 'disabled'}>Mint the token</button></span></div>`;
+  else keys = `<div class="keys"><input type="text" data-field="${q.field}" value="${esc(s[q.field])}" placeholder="${q.placeholder}" autocomplete="off" aria-label="${esc(q.title)}"><span class="k"><kbd>Enter</kbd><span class="note">deals the next card</span></span></div>`;
+  return `<div class="card" role="group" aria-label="Card ${s.q + 1} of ${Q.length}: ${esc(q.title)}"><div class="kicker"><b>Card ${s.q + 1} of ${Q.length}</b><span>${q.kind === 'yesno' ? 'a feature' : q.kind === 'password' ? 'the act' : 'a fact'}</span></div><h3>${esc(q.ask)}</h3><p class="hint">${esc(q.hint)}</p>${frags[q.id]()}${keys}<div class="honest">Nothing is sent to the router by answering. One block is dealt at the end; you paste it.</div></div>`;
+}
+function pasteCard(s) {
+  const secs = MV.sections().filter(x => x.on);
+  return `<div class="card"><div class="kicker"><b>The block</b><span>${secs.length} parts · ${MV.pasteLines()} lines</span></div><h3>One paste.</h3><p class="hint">${secs.map(x => x.title).join(' · ')} — the enrol line last. Paste it into the router’s <b>terminal</b> (WinBox ▸ New Terminal, or ssh), not into a script.</p><pre class="script">${esc(MV.pasteBlock())}</pre><div class="copyrow"><button type="button" class="primary" data-act="copy" ${s.copied ? 'disabled' : ''}>${s.copied ? 'Copied' : 'Copy'}</button><span class="token-life">Token good until ${S.tokenUntil} (15 minutes) · <button type="button" class="linkish" data-act="reroll">Reroll</button></span></div><div class="obs waiting">${s.copied ? 'Copied. The router deals the next card when the certificate fetch arrives.' : 'Nothing has arrived yet. The next card is the router’s to deal.'}</div></div>`;
+}
+function arrivalCard(s) {
+  const last = s.evidence[s.evidence.length - 1];
+  const pending = [];
+  if (!MV.has('cert')) pending.push('the certificate fetch'); else if (!MV.has('enrol') && !s.refused) pending.push('the enrol line');
+  else if (s.push && !MV.has('push')) pending.push('the first push'); else if (s.backup && !MV.has('backup')) pending.push('the backup schedule');
+  if (s.refused) return `<div class="card"><div class="kicker"><b>Dealt by the router</b><span>refused sender</span></div><h3>Lines from ${S.other} arrived without the enrol line.</h3><div class="warnbox"><span>They were refused. If that is this router, its logging action is sending from another address — an older <span class="mono">remote</span> action, or a <span class="mono">src-address</span> left from a previous setup. Fix it on the router, then paste the last line again:</span><pre>${esc(MV.fixSrc())}\n${esc(MV.sections().at(-1).lines[0])}</pre><span>Or, if ${S.other} is right: <button type="button" class="linkish" data-act="use-other">enrol at ${S.other} instead</button>.</span></div></div>`;
+  if (!last) return `<div class="card"><div class="kicker"><b>The router's turn</b></div><h3>Waiting for ${pending[0]}.</h3><div class="obs waiting">MikroView never connects to the router; it can only say what arrived. The next card is dealt when it does.</div></div>`;
+  const ahead = last.k === 'push' && s.standing === 'ahead' ? `<div class="cautionbox"><b>RouterOS ${s.version} is newer than these commands were reviewed on (${S.reviewed}).</b> They ran and the push arrived. If anything reads wrong, this is the first suspect.</div>` : '';
+  const detail = last.k === 'push' ? `<p class="hint">RouterOS ${s.version} · ${S.rules} filter rules · ${S.alreadyLog.length} already logging · ${S.leases} leases · ${S.peers} WireGuard peers.</p>` : last.k === 'enrol' ? `<p class="hint">The log port is now ${MV.from()}’s alone. Lines are arriving.</p>` : last.k === 'backup' ? `<p class="hint">First backup lands at 03:00 tonight.</p>` : `<p class="hint">The router trusts MikroView’s certificate; the TLS stream can open.</p>`;
+  const next = MV.arrivedAll() ? `<div class="obs arrived">Everything you chose has arrived.<span style="margin-left:auto"><kbd>Enter</kbd> deals ${s.push ? 'the rule card' : 'the ledger'}</span></div>` : `<div class="obs waiting">Waiting for ${pending[0]}.</div>`;
+  return `<div class="card"><div class="kicker"><b>Dealt by the router</b><span>${s.evidence.length} of ${2 + (s.push ? 1 : 0) + (s.backup ? 1 : 0)}</span></div><div class="arrival"><h3>${esc(last.h)}.</h3><span class="when">${last.t}</span></div>${detail}${ahead}${next}</div>`;
+}
+function tuneCard(s) {
+  const sug = S.suggestions;
+  const obs = s.tagged ? `<div class="obs counting">${s.chosen.size} rules now log · first new line ${s.tunedAt}<span style="margin-left:auto"><kbd>Enter</kbd> deals the ledger</span></div>` : s.tuneCopied ? `<div class="obs waiting">Waiting for the first line carrying a new prefix.</div>` : `<div class="obs quiet">Nothing to wait for until you paste — the rule table is already here.</div>`;
+  return `<div class="card"><div class="kicker"><b>Dealt by the push</b><span>the only second paste</span></div><h3>Five boundaries log nothing.</h3><p class="hint">${S.rules} rules came in; ${S.alreadyLog.length} log. Tick the ones to tag, copy, paste. <kbd>Space</kbd> sets the card aside.</p><div class="rules">${sug.map((r, i) => `<label><input type="checkbox" data-act="toggle" data-i="${i}" ${s.chosen.has(i) ? 'checked' : ''}><span class="mono">${r.chain}</span><span class="act ${r.action}">${r.action}</span><span>${esc(r.comment)} <span class="dim">· ${esc(r.why)}</span></span><span class="pre">${r.prefix}</span></label>`).join('')}</div><pre>${esc(MV.tagBlock()) || '# nothing ticked'}</pre><div class="copyrow"><button type="button" class="primary" data-act="tune-copy" ${s.tuneCopied || !s.chosen.size ? 'disabled' : ''}>${s.tuneCopied ? 'Copied' : 'Copy'}</button><span class="note">Sets, never adds — safe to paste again.</span></div>${obs}</div>`;
+}
+function doneCard(s) {
+  const rows = [
+    { cls: 'done', t: 'Certificate trusted', r: `fetched by ${MV.from()} · ${t('cert')}`, u: 'cert' },
+    { cls: 'done', t: 'Logs flowing', r: `enrolled at ${MV.from()} · ${t('enrol')} · ${s.lines.toLocaleString()} lines`, u: 'logs' },
+    s.push ? { cls: 'done', t: 'Router state pushed', r: `every 20 minutes · first ${t('push')} · RouterOS ${s.version}`, u: 'push' } : { cls: 'skipped', t: 'Router state', r: 'not now · the fall stays address-only' },
+    s.backup ? { cls: 'done', t: 'Nightly backup', r: `03:00 · scheduled ${t('backup')}`, u: 'backup' } : { cls: 'skipped', t: 'Backup', r: 'not now · no backups kept here' },
+    s.push ? (s.tagged ? { cls: 'done', t: 'Rules tagged', r: `${s.chosen.size} rules log · since ${s.tunedAt}`, u: 'tune' } : { cls: 'skipped', t: 'Rules', r: 'set aside · 5 boundaries log nothing' }) : null,
+  ].filter(Boolean);
+  const n = rows.filter(r => r.cls === 'done').length, k = rows.length - n;
+  const undoAll = s.showUndoAll ? `<pre>${esc([...MV.undoLines.cert, ...MV.undoLines.logs, ...(s.push ? MV.undoLines.push : []), ...(s.backup ? MV.undoLines.backup : []), ...(s.tagged ? MV.undoLines.tune() : [])].join('\n'))}</pre><p class="note">Then <button type="button" class="linkish" data-act="reset">forget ${esc(s.name)} on MikroView</button>.</p>` : '';
+  return `<div class="card"><div class="kicker"><b>The deck is empty</b><span>setup stands on evidence</span></div><h3>${esc(s.name)} is sending.</h3><p class="hint">${n} ${n === 1 ? 'step stands' : 'steps stand'} on evidence${k ? `; ${k} set aside` : ''}. A new arrival deals itself a card; Run setup… reopens the deck any time.</p><div class="ledger">${rows.map(r => `<div class="r"><span class="step-n" style="${r.cls === 'done' ? 'border-color:var(--accept);color:var(--accept)' : 'border-style:dashed;border-color:var(--log);color:var(--log)'}">${r.cls === 'done' ? '✓' : '–'}</span><span>${r.t}<small class="${r.cls === 'done' ? 'ok' : 'dec'}">${esc(r.r)}</small></span>${r.u ? `<button type="button" class="linkish" data-act="undo" data-u="${r.u}" style="font-size:12px">${s.undoOpen === r.u ? 'Hide' : 'Undo'}</button>` : '<span></span>'}${r.u && s.undoOpen === r.u ? `<div class="u"><pre>${esc((typeof MV.undoLines[r.u] === 'function' ? MV.undoLines[r.u]() : MV.undoLines[r.u]).join('\n'))}</pre><p class="note">Paste on the router. MikroView notices when it stops and deals that card again.</p></div>` : ''}</div>`).join('')}</div><p class="note">To start again from nothing, <button type="button" class="linkish" data-act="undo-all">${s.showUndoAll ? 'hide the undo lines' : 'undo everything on the router first'}</button>.</p>${undoAll}</div>`;
+}
+function slips(s) {
+  const asking = s.stage === 'ask';
+  const items = Q.map((q, i) => {
+    const a = MV.answered(q); let cls = 'todo', text = q.title;
+    if (a) {
+      cls = 'chosen';
+      if (q.id === 'name') text = s.name;
+      else if (q.id === 'addr') { text = MV.from(); if (MV.has('enrol')) cls = 'done'; else if (s.stage === 'watch') cls = 'waiting'; }
+      else if (q.kind === 'yesno') { if (s[q.id]) { text = q.id === 'push' ? 'push · 20 min' : 'backup · 03:00'; if (MV.has(q.id)) cls = 'done'; else if (s.stage === 'watch' || s.stage === 'tune' || s.stage === 'done') cls = 'waiting'; } else { text = q.title.toLowerCase() + ' · not now'; cls = 'decision'; } }
+      else text = 'token · until ' + S.tokenUntil;
+    } else if (asking && i === s.q) { cls = 'todo'; text = q.title + ' · asking'; }
+    const go = asking || s.stage === 'paste';
+    return `<${go ? 'button type="button" data-act="goto" data-q="' + i + '"' : 'span'} class="slip ${cls}">${esc(text)}</${go ? 'button' : 'span'}>`;
+  });
+  items.push(`<span class="slip ${MV.has('cert') ? 'done' : s.copied ? 'waiting' : 'todo'}">${MV.has('cert') ? 'certificate · ' + t('cert') : 'the block'}</span>`);
+  if (s.push) items.push(`<span class="slip ${s.tagged ? 'done' : s.tuneSkipped ? 'decision' : 'todo'}">${s.tagged ? s.chosen.size + ' rules tagged' : s.tuneSkipped ? 'rules · set aside' : 'rules'}</span>`);
+  return `<div class="slips" aria-label="Cards dealt so far">${items.join('')}</div>`;
+}
+function render(s) {
+  const card = s.stage === 'ask' ? askCard(s) : s.stage === 'paste' ? pasteCard(s) : s.stage === 'watch' ? arrivalCard(s) : s.stage === 'tune' ? tuneCard(s) : doneCard(s);
+  const left = s.stage === 'ask' ? Q.length - s.q - 1 + 1 : s.stage === 'paste' ? 1 : s.stage === 'watch' ? Math.max(0, (2 + (s.push ? 1 : 0) + (s.backup ? 1 : 0)) - s.evidence.length) : s.stage === 'tune' ? 1 : 0;
+  const deck = `<div class="deck">${left >= 1 ? '<i></i>' : ''}${left >= 2 ? '<i></i>' : ''}</div>`;
+  const stream = MV.has('enrol') && s.stage === 'watch' ? `<div class="stream">${s.tail.slice(-4).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join('')}</div>` : '';
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null;
+  $('#body').innerHTML = `${slips(s)}<div class="stage">${deck}${card}</div>${stream}<div class="count">${s.stage === 'ask' ? `${Q.length - s.q - 1} more card${Q.length - s.q - 1 === 1 ? '' : 's'}, then the block` : s.stage === 'watch' && !MV.arrivedAll() ? 'the router deals the rest' : ''}</div>`;
+  $('#ttl').textContent = s.name || 'New router';
+  $('#stepof').textContent = s.stage === 'ask' ? `card ${s.q + 1} of ${Q.length}` : s.stage === 'paste' ? 'the block' : s.stage === 'watch' ? 'the router’s turn' : s.stage === 'tune' ? 'the rule card' : '';
+  renderFoot(s);
+  const inp = $('input[data-field]'); if (inp && (!focused || focused === inp.dataset.field)) { inp.focus(); const v = inp.value; inp.value = ''; inp.value = v; }
+}
+function renderFoot(s) {
+  let l = '', r = '', hint = '';
+  if (s.stage === 'ask') { l = `<button type="button" data-act="back" ${s.q ? '' : 'disabled'}>Back</button>`; hint = '<kbd>Esc</kbd> closes — nothing is lost'; }
+  else if (s.stage === 'paste') { l = `<button type="button" data-act="back">Back</button>`; hint = 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="next" disabled>Next</button>`; }
+  else if (s.stage === 'watch') { hint = MV.arrivedAll() ? '' : 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="to-tune" ${MV.arrivedAll() ? '' : 'disabled'}>Next</button>`; }
+  else if (s.stage === 'tune') { r = `<button type="button" data-act="tune-skip">Set aside</button><button type="button" class="primary" data-act="to-done" ${s.tagged ? '' : 'disabled'}>Next</button>`; hint = s.tagged ? '' : 'Next checks what has arrived'; }
+  else { l = `<button type="button" data-act="another">Add another router</button>`; r = `<button type="button" class="primary" data-act="fall">Open the fall</button>`; }
+  $('#foot').innerHTML = `${l}<span class="hint">${hint}</span>${r}`;
+}
+function field(f, s) { document.querySelectorAll('[data-act=next]').forEach(b => b.disabled = !MV.answered(Q[s.q])); if (f === 'name') $('#ttl').textContent = s.name || 'New router'; }
+function key(e, s) {
+  if (e.target.matches('input, select, textarea')) return;
+  if (s.stage === 'ask' && Q[s.q].kind === 'yesno') { if (e.key === 'Enter') { e.preventDefault(); MV.act('yes'); } else if (e.key === ' ') { e.preventDefault(); MV.act('no'); } }
+  else if (s.stage === 'watch' && e.key === 'Enter' && MV.arrivedAll()) MV.act('to-tune');
+  else if (s.stage === 'tune') { if (e.key === 'Enter' && s.tagged) MV.act('to-done'); else if (e.key === ' ') { e.preventDefault(); MV.act('tune-skip'); } }
+}
+let lastTick = 0;
+function tick(s) { const t0 = Date.now(); if (t0 - lastTick < 400) return; lastTick = t0; const st = $('.stream'); if (st) st.innerHTML = s.tail.slice(-4).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join(''); }
+MV.boot({ render, field, tick, key });
+</script>
+</body>
+</html>
