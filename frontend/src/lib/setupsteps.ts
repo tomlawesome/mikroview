@@ -299,6 +299,17 @@ export const NO_COMMAND_HEADING = 'no commands yet'
 export const NO_ADDRESS_LINE =
   'no address has been given yet — answer "What address can your router reach MikroView on?" above, at the top of this wizard, and this fills in.'
 
+// SYSLOG_ADDRESS_CHANGED_NOTE (#1370): the Send logs block embeds the
+// wizard's address at the moment it is copied. Editing the address
+// afterwards -- the header field the operator can change at any time --
+// leaves an already-pasted or already-copied block naming the old one,
+// with nothing telling the operator it no longer matches. Tracked
+// client-side (wizardState.syslogCopiedAddress, set when the Copy button
+// is pressed) rather than server-side: it is a fact about what this
+// browser has done, not about the router or the instance.
+export const SYSLOG_ADDRESS_CHANGED_NOTE =
+  'The address changed since you copied this block — paste it again on the router.'
+
 // --- The backup step's no-script state (#1217) --------------------------
 //
 // commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)

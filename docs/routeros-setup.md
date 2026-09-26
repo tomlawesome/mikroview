@@ -123,7 +123,7 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
+:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 src-address=0.0.0.0 remote-protocol=tls remote-log-format=syslog check-certificate=yes } else={ /system logging action set [find name=mikroview] target=remote remote=203.0.113.10 remote-port=6514 src-address=0.0.0.0 remote-protocol=tls remote-log-format=syslog check-certificate=yes }
 ```
 
 This block is safe to paste again — a second run updates the existing
@@ -141,6 +141,17 @@ matching traffic, one connection attempt logged from two different rules
 — rather than only when RouterOS happens to send them far enough apart.
 Without it, a fast-enough burst can be read as a single garbled line and
 the traffic in it silently mismatched (#614).
+
+`src-address=0.0.0.0` tells RouterOS to pick the source address itself,
+the same way it already does for the `/tool fetch` pushes elsewhere in
+this script — so syslog and HTTPS always leave from the same address.
+Pasting this block always sets it, even over a `src-address` a previous
+setup left behind: MikroView enrols a router from one address, and a
+stale `src-address` pinning syslog to a different one is exactly what
+made an owner's own router's pushes get refused after every earlier
+paste enrolled it from the address `0.0.0.0` would have chosen anyway
+(#1370). If you rely on a multi-homed router's `src-address` for a
+reason of your own, re-paste it after this block.
 
 ## 2. Forward firewall log events to it
 

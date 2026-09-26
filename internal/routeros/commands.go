@@ -251,7 +251,19 @@ func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 	// header, so a burst of matching lines arriving at once is read as
 	// separate lines rather than one garbled one (#614). Keep this
 	// identical to docs/routeros-setup.md's block.
-	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
+	//
+	// src-address=0.0.0.0 is RouterOS's "let the router pick" value
+	// (#1370). Pasting this block a second time used to leave an
+	// earlier setup's src-address untouched, which is how one owner's
+	// router ended up pinned to the address an older wizard run had
+	// used for syslog while HTTPS pushes left from whichever address
+	// routing chose for them -- two different source addresses for one
+	// router, so it enrolled under one and every push was refused from
+	// the other. mikroview cannot know an operator's deliberate
+	// src-address (the push script's /tool fetch has no such field to
+	// carry it), so the wizard always sets both to the router's own
+	// routing choice rather than risk them drifting apart again.
+	actionArgs := fmt.Sprintf(`target=remote remote=%s remote-port=%s src-address=0.0.0.0 remote-protocol=tls remote-log-format=%s check-certificate=yes`, want.Remote, want.RemotePort, want.RemoteLogFormat)
 	lines := []string{
 		fmt.Sprintf(`:if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview %s } else={ /system logging action set [find name=mikroview] %s }`, actionArgs, actionArgs),
 		fmt.Sprintf(`:if ([:len [/system logging find action=mikroview]] = 0) do={ /system logging add topics=%s action=mikroview }`, strings.Join(want.Topics, ",")),

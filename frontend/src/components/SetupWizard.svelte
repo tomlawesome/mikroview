@@ -66,6 +66,7 @@
     srcAddressCommand,
     refusedWarning,
     SKIP_CONSEQUENCES,
+    SYSLOG_ADDRESS_CHANGED_NOTE,
     tokenExpired,
     tokenLine,
     TOKEN_EXPIRED_LINE,
@@ -661,6 +662,12 @@
   }
 
   async function copy(text: string, label: string) {
+    // #1370: what the syslog block prints for gets remembered the
+    // moment the operator presses Copy, not after the clipboard write
+    // settles -- the point is what they now have on their clipboard to
+    // paste, and that is decided here whether or not the browser's own
+    // write succeeds.
+    if (label === 'syslog') wizardState.syslogCopiedAddress = wizardState.address
     try {
       await navigator.clipboard.writeText(text)
       copied = label
@@ -670,6 +677,15 @@
       // The block stays selectable either way.
     }
   }
+
+  // syslogAddressChanged is #1370's drift check: the operator copied the
+  // Send logs block for one address and the header field now reads a
+  // different one, so the paste they are holding (or already made) no
+  // longer matches what the wizard would print today. null means never
+  // copied -- nothing to compare, and nothing to warn about.
+  const syslogAddressChanged = $derived(
+    wizardState.syslogCopiedAddress !== null && wizardState.syslogCopiedAddress !== wizardState.address,
+  )
 
   // Next runs the check where one exists. Arrived proceeds; waiting
   // hands the body to the heavy warning instead of moving. Steps that
@@ -1202,6 +1218,9 @@
                     >
                       {copied === 'syslog' ? 'Copied' : 'Copy'}
                     </button>
+                    {#if syslogAddressChanged}
+                      <p class="note">{SYSLOG_ADDRESS_CHANGED_NOTE}</p>
+                    {/if}
                     {#if wizardState.enrolment}
                       <!-- One plain line under the block: how long the
                            token in it is good for, and the one control --

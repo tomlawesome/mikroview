@@ -77,6 +77,34 @@ func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
 	}
 }
 
+// TestSyslogCommandsSetsSrcAddressToRouterChoice is #1370: a src-address
+// an earlier setup left on the mikroview action used to survive a
+// re-paste, since the set branch only ever touched target/remote/
+// remote-port/remote-protocol/remote-log-format/check-certificate. That
+// let syslog stay pinned to an address HTTPS pushes had stopped using,
+// so the router enrolled from one address and every push was refused
+// from the other. The wizard now sets src-address=0.0.0.0 -- RouterOS's
+// "let the router pick" value, the same choice /tool fetch already makes
+// for the pushes -- on both the add and the set branch, so a stale
+// non-zero value from an older paste is always overwritten rather than
+// left in place.
+func TestSyslogCommandsSetsSrcAddressToRouterChoice(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
+	if n := strings.Count(cmd, "src-address=0.0.0.0"); n != 2 {
+		t.Fatalf("syslogCommands set src-address=0.0.0.0 %d times, want 2 (add and set branches): %s", n, cmd)
+	}
+	addBranch, setBranch, found := strings.Cut(cmd, "} else={")
+	if !found {
+		t.Fatalf("syslogCommands' action line has no add/set split: %s", cmd)
+	}
+	if !strings.Contains(addBranch, "src-address=0.0.0.0") {
+		t.Errorf("syslogCommands' add branch is missing src-address=0.0.0.0: %s", addBranch)
+	}
+	if !strings.Contains(setBranch, "src-address=0.0.0.0") {
+		t.Errorf("syslogCommands' set branch is missing src-address=0.0.0.0 -- a stale src-address from an earlier paste would survive: %s", setBranch)
+	}
+}
+
 func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote=192.0.2.10") {
