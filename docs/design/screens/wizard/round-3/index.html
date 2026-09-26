@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mikroview wizard — round 3 (built component)</title>
+<style>
+  body { background: #10162b; color: #e9eefb; font: 14px/1.6 system-ui, sans-serif; max-width: 1400px; margin: 40px auto; padding: 0 20px 60px; }
+  h1 { font-size: 18px; letter-spacing: 0.06em; }
+  h1 em { color: #9db8e8; font-style: normal; }
+  a { color: #9db8e8; }
+  p.lede { color: #97a4c4; font-size: 13px; max-width: 900px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 24px; }
+  caption { text-align: left; font-size: 15px; margin-bottom: 8px; color: #e9eefb; }
+  .step-row td { vertical-align: top; padding: 10px 10px 22px; border-bottom: 1px solid rgba(160,185,230,0.15); }
+  .step-label { width: 130px; font-size: 13px; color: #9db8e8; font-weight: 600; padding-top: 4px; }
+  .cells { display: flex; flex-wrap: wrap; gap: 14px; }
+  .cell { width: 260px; }
+  .cell a { display: block; border: 1px solid rgba(160,185,230,0.25); border-radius: 8px; overflow: hidden; }
+  .cell img { display: block; width: 100%; height: auto; }
+  .cell .cap { font-size: 12px; color: #97a4c4; margin-top: 6px; }
+  .cell .state { display: block; color: #e9eefb; font-size: 12.5px; font-weight: 600; }
+  code { background: rgba(160,185,230,0.12); padding: 0 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<h1>MIKRO<em>VIEW</em> · setup wizard, the built component · round 3 (<a href="https://gitlab.tomlawson.io/ai/mikroview/-/issues/1374">#1374</a>)</h1>
+<p class="lede">
+  Not mockups: the real <code>SetupWizard.svelte</code>, rendered in Chromium against a small fake
+  HTTP server (<code>fake-api.mjs</code>) that answers only the routes the app shell and the wizard
+  call. Dark only — the app has had no light theme since #708 retired it. Full details, the scenario
+  table and the "could not reach" list are in <a href="README.md">README.md</a>.
+</p>
+
+<table>
+<tbody>
+<tr class="step-row"><td class="step-label">1 · Trust the certificate</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/ca-waiting-dark.png"><img src="shots/ca-waiting-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting</span>fresh-install: nothing answered yet, browser's own host shown as the guessed address.</div></div>
+    <div class="cell"><a href="shots/ca-blocked-dark.png"><img src="shots/ca-blocked-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">blocked</span>ca-blocked: address saved as 192.168.13.15:8080, tls.hosts still only localhost/127.0.0.1.</div></div>
+    <div class="cell"><a href="shots/ca-done-dark.png"><img src="shots/ca-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>mostly-done: ca.crt already fetched by 192.168.13.1, 9 hours ago.</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">2 · Name your router</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/name-quiet-dark.png"><img src="shots/name-quiet-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">quiet</span>fresh-install: nothing named this walk.</div></div>
+    <div class="cell"><a href="shots/name-quiet-existing-router-dark.png"><img src="shots/name-quiet-existing-router-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">quiet, router exists</span>mostly-done: rb5009 is already on the fleet, but this walk (opened fresh from the account menu) never named it — the row stays quiet regardless. Real behaviour, not a bug; see README.</div></div>
+    <div class="cell"><a href="shots/name-done-dark.png"><img src="shots/name-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>walkthrough: typed "rb5009" and pressed Next, which creates the router live.</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">3 · Send logs</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/syslog-waiting-dark.png"><img src="shots/syslog-waiting-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting</span>walkthrough: router named, mint-ask form showing, no token minted yet.</div></div>
+    <div class="cell"><a href="shots/syslog-partial-split-dark.png"><img src="shots/syslog-partial-split-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">partial — source split</span>source-split: rb5009 declared at 192.168.13.1 stays silent while 192.168.254.1, undeclared, sends logs instead (#442).</div></div>
+    <div class="cell"><a href="shots/syslog-token-fresh-dark.png"><img src="shots/syslog-token-fresh-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — token minted</span>walkthrough: real mint against 192.168.13.1, token good for ~15 more minutes.</div></div>
+    <div class="cell"><a href="shots/syslog-token-expired-dark.png"><img src="shots/syslog-token-expired-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — token expired</span>walkthrough-expired-token: fixture mints a token already in the past, so "Reroll to mint another" shows immediately.</div></div>
+    <div class="cell"><a href="shots/syslog-refused-senders-dark.png"><img src="shots/syslog-refused-senders-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — refused senders</span>walkthrough-refused: fixture always reports 192.168.254.1 as refused since the mint, with the one-click "point the window at it" link.</div></div>
+    <div class="cell"><a href="shots/syslog-done-dark.png"><img src="shots/syslog-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>mostly-done: a router has an open syslog connection (fleet-wide reading, no router chosen this walk).</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">4 · Tag firewall rules</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/rules-waiting-dark.png"><img src="shots/rules-waiting-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting</span>fresh-install: connected, but no events yet.</div></div>
+    <div class="cell"><a href="shots/rules-partial-undecoded-dark.png"><img src="shots/rules-partial-undecoded-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">partial — none decoded</span>rules-partial-undecoded: 15234 events, 0 carry an action — no log-prefix convention yet.</div></div>
+    <div class="cell"><a href="shots/rules-partial-some-dark.png"><img src="shots/rules-partial-some-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">partial — some decoded</span>rules-partial-some: 6031 of 15234 events carry an action, the rest still untagged.</div></div>
+    <div class="cell"><a href="shots/rules-done-dark.png"><img src="shots/rules-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>mostly-done: all 15234 events carry a decoded action.</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">5 · Push router state</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/push-no-token-dark.png"><img src="shots/push-no-token-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — no token</span>fresh-install: no router named yet, so the picker has nothing to offer.</div></div>
+    <div class="cell"><a href="shots/push-with-token-dark.png"><img src="shots/push-with-token-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — with token</span>walkthrough: the one known router (rb5009) auto-mints a push token on arrival.</div></div>
+    <div class="cell"><a href="shots/push-no-address-dark.png"><img src="shots/push-no-address-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — no address</span>walkthrough: token already minted, then the header address field is cleared — the block comes back blank with "no address" rather than a stale one.</div></div>
+    <div class="cell"><a href="shots/push-done-dark.png"><img src="shots/push-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>mostly-done: every table (arp, filter-rule, ip-address) has been pushed.</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">6 · Back up the router</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/backup-no-token-dark.png"><img src="shots/backup-no-token-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — no token</span>fresh-install: same empty picker as push, no router named yet.</div></div>
+    <div class="cell"><a href="shots/backup-normal-with-token-dark.png"><img src="shots/backup-normal-with-token-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">waiting — with token</span>walkthrough: auto-minted token, script ready, no backup has arrived yet.</div></div>
+    <div class="cell"><a href="shots/backup-blocked-dark.png"><img src="shots/backup-blocked-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">blocked</span>backup-blocked: no retention key mounted, so the step mints one in-browser rather than describing one twice.</div></div>
+    <div class="cell"><a href="shots/backup-lost-router-dark.png"><img src="shots/backup-lost-router-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">lost router</span>lost-router: reached via Settings ▸ router backups' own "is it gone?" link (rb5009, 6 missed pushes), not Run setup….</div></div>
+    <div class="cell"><a href="shots/backup-done-dark.png"><img src="shots/backup-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>mostly-done: 2 pairs kept, the newest 9 hours ago.</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">7 · Register the router</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/register-error-dark.png"><img src="shots/register-error-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">quiet — error</span>fresh-install: "Register this router" clicked with no router named this walk — "Name the router first."</div></div>
+    <div class="cell"><a href="shots/register-quiet-existing-router-dark.png"><img src="shots/register-quiet-existing-router-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">quiet, router exists</span>mostly-done: rb5009 is already registered in the story, but this walk stays quiet — registering is this session's own confirmation, not a fact read back from elsewhere.</div></div>
+    <div class="cell"><a href="shots/register-done-dark.png"><img src="shots/register-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">done</span>walkthrough: clicked "Register this router" for rb5009, named earlier in the same walk.</div></div>
+  </div>
+</td></tr>
+
+<tr class="step-row"><td class="step-label">Finish — the ledger</td><td>
+  <div class="cells">
+    <div class="cell"><a href="shots/finish-fresh-dark.png"><img src="shots/finish-fresh-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">nothing done</span>fresh-install: every step still open, no evidence anywhere.</div></div>
+    <div class="cell"><a href="shots/finish-mostly-done-dark.png"><img src="shots/finish-mostly-done-dark.png" loading="lazy"></a>
+      <div class="cap"><span class="state">mostly done</span>mostly-done: 5 of 7 steps stand on evidence; name and register stay open because this walk never named or registered a router (see the note on step 2/7 above).</div></div>
+  </div>
+</td></tr>
+
+</tbody>
+</table>
+</body>
+</html>
