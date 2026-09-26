@@ -80,25 +80,27 @@ devices:
 # reputation:
 #   abuseIPDBKey: your-abuseipdb-api-key
 
-# On-disk event history (issue #856, optional): one encrypted, compressed
-# file per day holding the same events the in-memory ring below holds --
-# a separate setting from store.retention, which only bounds what a
-# live query can see in memory. Off by default, and staying off is a
-# first-class choice, not a missing step. There is no unencrypted mode:
-# this needs both enabled and a keyFile pointing at a key mounted
+# On-disk event history (issue #856, on by default since #1357): one
+# encrypted, compressed file per day holding the same events the
+# in-memory ring below holds -- a separate setting from store.retention,
+# which only bounds what a live query can see in memory. There is no
+# unencrypted mode: "on" needs a keyFile too, pointing at a key mounted
 # outside this data directory (never inside it, and never in this
-# file). Generate one with:
+# file). install.sh generates one for you on a fresh install. With this
+# block commented out (as here) or missing entirely, and no key
+# mounted, MikroView still comes up -- memory-only, saying so once at
+# startup. Generate your own key with:
 #   head -c 32 /dev/urandom | base64 > /run/secrets/mikroview-history.key
 # The key file has to be readable by the container's user (uid 1000),
 # the same rule as every other file you mount in -- if it is not,
 # MikroView refuses to start with "permission denied":
 #   sudo chown 1000:1000 mikroview-history.key && chmod 600 mikroview-history.key
-# Off (or this block missing) keeps what was already retained on disk
-# and just stops adding to it; MikroView warns where the files are. See
-# docs/configuration.md's "On-disk event history" section for what the
-# encryption does and doesn't protect against.
+# Off keeps what was already retained on disk and just stops adding to
+# it; MikroView warns where the files are. See docs/configuration.md's
+# "On-disk event history" section for what the encryption does and
+# doesn't protect against.
 # history:
-#   enabled: false
+#   enabled: true
 #   keyFile: /run/secrets/mikroview-history.key   # must be outside the data directory
 #   days: 30
 #   maxBytes: 1073741824   # 1 GiB
@@ -132,19 +134,21 @@ devices:
 # known_bad_ip flag directly when a source IP falls inside a CIDR range
 # from one of the vetted feeds below -- independent of any behavioral
 # threshold, and also reinforces the confidence floor of any other
-# active flag for that same source IP. On by default with Spamhaus's
-# DROP list (small, free, no registration, curated to only
-# include netblocks Spamhaus is confident are entirely
-# malicious-controlled). This is a fixed, vetted menu, not an arbitrary
-# URL field -- see internal/blocklist's doc comment and
-# docs/configuration.md for the full menu, why, and how the refresh
-# cadence/entry-count cap were decided. Refresh is a fixed daily cycle,
-# not configurable. Set sources to an empty list to disable this
-# feature entirely.
+# active flag for that same source IP. On by default with both feeds on
+# the menu: Spamhaus's DROP list (small, free, no registration, curated
+# to only include netblocks Spamhaus is confident are entirely
+# malicious-controlled) and Emerging Threats' compromised-IPs list
+# (larger, faster-changing, individual-IP; on by default since #1359).
+# This is a fixed, vetted menu, not an arbitrary URL field -- see
+# internal/blocklist's doc comment and docs/configuration.md for the
+# full menu, why, and how the refresh cadence/entry-count cap were
+# decided. Refresh is a fixed daily cycle, not configurable. Set sources
+# to an empty list to disable this feature entirely, or list just one
+# feed to drop the other.
 # blocklist:
 #   sources:
 #     - spamhaus_drop
-#     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
+#     - emerging_threats_compromised
 
 # Optional (on by default): local IP attribution for the manual IP-lookup
 # popover -- labels an address as a Tor exit, commercial VPN,

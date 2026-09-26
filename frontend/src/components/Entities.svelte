@@ -88,6 +88,7 @@
   import { zonesState } from '../lib/zones.svelte'
   import { familyOf } from '../lib/flagPalette'
   import {
+    deleteDevice,
     fetchDeviceMACs,
     fetchRouterRules,
     fetchRouterAddresses,
@@ -101,8 +102,11 @@
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatLastHeard, formatSpacedAge, formatHM } from '../lib/format'
   import {
+    deleteContract,
     deviceState,
+    loggingLeftovers,
     multihomedEcho,
+    routerAddress,
     setupEcho,
     sortedDevices,
     ratePerSecond,
@@ -111,7 +115,9 @@
   } from '../lib/fleet'
   import { REFUSED_STRIP_LEAD } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
+  import LoggingLeftovers from './LoggingLeftovers.svelte'
   import type {
+    Device,
     EntityType,
     MACRegistryEntry,
     RefusedSender,
@@ -217,6 +223,46 @@
   // enrolment already stands, so nothing here mints a fresh token.
   function finishRegistering(deviceId: string) {
     wizardState.openRegister(deviceId)
+  }
+
+  // Remove… (#1369): DELETE /api/devices/{id}. Only ever offered on a
+  // card whose device is not configured: true -- a config.yaml-declared
+  // device is rebuilt from that file every boot, so the server refuses
+  // it (ErrDeviceConfigured) and the card shows a note instead of this
+  // control (see the config-declared branch in the template below).
+  //
+  // The confirm state lives on the page, one device id at a time --
+  // DecommissionCard's own force-remove is the same shape (a card
+  // turning into its own confirmation rather than a separate dialog),
+  // asking what goes before it goes.
+  let deletingId = $state<string | null>(null)
+  let deleteError = $state<string | null>(null)
+  let deleteBusy = $state(false)
+
+  function startDelete(deviceId: string) {
+    deletingId = deviceId
+    deleteError = null
+  }
+
+  function cancelDelete() {
+    deletingId = null
+    deleteError = null
+  }
+
+  async function confirmDelete(deviceId: string) {
+    deleteBusy = true
+    deleteError = null
+    try {
+      const err = await deleteDevice(deviceId)
+      if (err) {
+        deleteError = err
+        return
+      }
+      deletingId = null
+      await appState.refreshDevicesAndStats().catch(() => {})
+    } finally {
+      deleteBusy = false
+    }
   }
 
   // Renaming is an edit, so the viewer tier does not get the affordance
@@ -742,6 +788,42 @@
   </button>
 {/snippet}
 
+{#snippet removeButton(d: Device)}
+  <!-- Remove… (#1369): DELETE /api/devices/{id}, admin-only like every
+       other device-identity write, next to Re-enrol… on the same card.
+       Only ever rendered for a device that is not configured: true --
+       see the config-declared note in the templates below for the
+       other case. -->
+  <button
+    type="button"
+    class="row-action"
+    onclick={() => startDelete(d.id)}
+    aria-label="Remove {d.name || d.sourceIp} — delete this router from mikroview"
+  >
+    Remove…
+  </button>
+{/snippet}
+
+{#snippet removeConfirm(d: Device)}
+  <!-- The confirm step: what goes and what stays, in the card itself
+       rather than a separate dialog, the same reason DecommissionCard's
+       own force-remove confirm stays on the card -- the evidence (here,
+       the router's own name/address/enrolment) has to be visible at the
+       moment of the decision. -->
+  <div class="frow dim">{deleteContract(d)}</div>
+  {#if deleteError}<p class="rename-error">{deleteError}</p>{/if}
+  <button
+    type="button"
+    class="row-action reject"
+    disabled={deleteBusy}
+    onclick={() => confirmDelete(d.id)}
+    aria-label="Confirm removing {d.name || d.sourceIp}"
+  >
+    Remove it
+  </button>
+  <button type="button" class="row-action" disabled={deleteBusy} onclick={cancelDelete}>cancel</button>
+{/snippet}
+
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
     <div class="og">
@@ -752,6 +834,10 @@
             {@const detail = routerDetail[d.id]}
             <div class="fcard" class:live={d.status === 'live'}>
               <div class="fhead"><b>{d.name}</b><span class="fstate {st.cls}">{st.mark} {st.text}</span></div>
+              <!-- #1372: the address under the name, same fallback chain
+                   Fleet.svelte's card reads (lib/fleet.ts's
+                   routerAddress) so the two surfaces cannot disagree. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
@@ -783,9 +869,17 @@
                      router reports of the wizard's own logging setup. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: another action, or a built-in, still sending
+                   logs here from a setup the wizard has moved past. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
               {#if isAdmin}
                 {@render reEnrolButton(d.id, d.name)}
+                <!-- #1369: this card's device is always configured: true
+                     (registeredRouters filters on it), so DELETE always
+                     refuses it (ErrDeviceConfigured) -- a note instead
+                     of a button that could only ever fail. -->
+                <div class="frow dim">declared in config.yaml — remove it there</div>
               {/if}
             </div>
           {/each}
@@ -795,6 +889,8 @@
               <div class="fhead">
                 <b>{d.name || d.sourceIp}</b><span class="fstate warn">● PUSHING · UNREGISTERED</span>
               </div>
+              <!-- #1372: same address line as the registered cards above. -->
+              <div class="frow dim mono">{routerAddress(d)}</div>
               <div class="frow">
                 {d.routerosVersion ? `RouterOS ${d.routerosVersion}` : 'RouterOS version not yet reported'}
                 · pushing since {formatHM(d.firstSeen)} · {ratePerSecond(appState.events, d.id, appState.now)} events/s now
@@ -807,6 +903,8 @@
                      off here hid the one card most likely to need it. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: same as the registered cards above. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
@@ -842,6 +940,11 @@
                      config.yaml, so every router the wizard itself adds
                      is drawn here rather than above. -->
                 {@render reEnrolButton(d.id, d.name || d.sourceIp)}
+                {#if deletingId === d.id}
+                  {@render removeConfirm(d)}
+                {:else}
+                  {@render removeButton(d)}
+                {/if}
               {/if}
             </div>
           {/each}
@@ -887,6 +990,13 @@
               <div class="frow dim">
                 {r.lines} line{r.lines === 1 ? '' : 's'} · first seen {formatHM(r.firstSeen)} · last seen {formatHM(r.lastSeen)}
               </div>
+              {#if r.note}
+                <!-- #1373: this address is not a stranger's -- it is an
+                     enrolled router's own pushed /ip/address table, so a
+                     logging action from an earlier setup is almost
+                     certainly still sending from it. -->
+                <div class="frow dim">{r.note}</div>
+              {/if}
               <div class="frow dim">{REFUSED_STRIP_LEAD} Re-enrol the router it belongs to, or add it as a new one.</div>
             </div>
           {/each}
@@ -1262,6 +1372,20 @@
     outline-offset: 2px;
   }
 
+  /* Remove it (#1369): the one destructive control on this card, in the
+     same reject ink .rename-error already carries elsewhere on this
+     page -- no new colour, just this button reading as the one that
+     actually deletes something. */
+  .row-action.reject {
+    color: var(--reject);
+    border-color: color-mix(in srgb, var(--reject) 45%, transparent);
+  }
+
+  .row-action.reject:hover {
+    color: var(--reject);
+    border-color: var(--reject);
+  }
+
   /* The empty berth (#718): a further grid cell in .fcards, same
      minmax(280px, 1fr) track as a real router card, so with no routers
      at all it alone fills the row -- the correct first-run read. Closed,
@@ -1352,6 +1476,13 @@
 
   .fcard .frow {
     padding: 3px 0;
+  }
+
+  /* Same field as Fleet.svelte's own .mono (#1372): the address line
+     under a router card's name. */
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
   }
 
   /* --- the named-things table ------------------------------------------ */

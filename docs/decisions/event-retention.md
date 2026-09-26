@@ -2,6 +2,15 @@
 
 **Status:** Decided (owner and Fable 5, 2026-09-02). Build tracked on #798.
 
+**Update, 2026-09-26 (#1357, owner's decision): point 3's "is the
+default" no longer holds.** `history.enabled` now defaults to `true`,
+and `install.sh` gives a fresh install a key so it actually retains
+something from the start. The mechanism below is unchanged: there is
+still no unencrypted mode, so memory-only is exactly what an install
+with no key mounted gets, on the same terms this document always
+described -- only which state a bare install with no config file lands
+on has changed.
+
 ## Context
 
 The replay corpus is the in-memory ring only (`internal/engine/corpus.go`,

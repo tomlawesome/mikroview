@@ -16,6 +16,60 @@ rewritten.
 
 ## [Unreleased]
 
+### Changed
+
+- **Emerging Threats' compromised-IPs list is now on by default
+  alongside Spamhaus DROP** (#1359, owner decision 2026-09-25). Both
+  are enabled unless `blocklist.sources` says otherwise; an existing
+  config.yaml that already sets `sources` explicitly keeps exactly the
+  list it wrote. To go back to Spamhaus DROP alone, set:
+
+  ```yaml
+  blocklist:
+    sources:
+      - spamhaus_drop
+  ```
+
+  Checked the feed's licence and update-frequency guidance before
+  flipping the default: `compromised-ips.txt` ships under the same
+  BSD-3-Clause grant as the rest of the ET Open ruleset, and Emerging
+  Threats' own download instructions recommend configuring an updater
+  for unattended daily fetching — see docs/configuration.md's
+  "Local IP/CIDR blocklist matching" section for the clauses and dates
+  checked.
+### Added
+
+- **A router's card names what an earlier setup left behind, with the exact
+  fix** (#1373). The push script now reports every logging action still
+  sending to this MikroView instance, not only the one named `mikroview` --
+  so another of MikroView's own actions from an earlier setup, or a
+  RouterOS built-in (`memory`, `remote`, `disk`, `echo`) repointed here by
+  one, shows up. Each gets a line on the router's card and, for an admin,
+  the exact commands in a "paste into the router's terminal" box: reset for
+  a repointed built-in, remove for anything else. The upgrade notice counts
+  routers with a leftover, and a refused sender's card says whose other
+  address it is when that address belongs to an enrolled router. See
+  docs/routeros-setup.md's "Cleaning up an earlier setup".
+### Added
+
+- **Recovery codes can be regenerated without removing a second factor**
+  (#1331). Before this, the only way to a fresh set of ten was removing
+  a factor and adding it back — tolerable for a single authenticator
+  app, but an account holding several passkeys had to strip all of them
+  first, since the shared set is only cleared when the last factor
+  goes. The account menu's new **New recovery codes…** asks for your
+  password, then shows a fresh ten the same way setting up a factor
+  does; the old ten stop working the instant the new ones are
+  committed. Doesn't sign any session out — only a change to which
+  factors protect the account does that.
+### Added
+
+- **The setup wizard warns about RouterOS upgrades that break pasted
+  commands** (#1344, owner ruling on #1343). Setup screen shows, per
+  connected router, every "from version X onward, this affects Y"
+  warning that applies to its reported version; first entry is 7.24.3's
+  removal of the GoDaddy Class 2 root from the router's trust store.
+
 ### Removed
 
 - **The Theme button and its accent-colour picker are gone** (#1371,
@@ -25,8 +79,83 @@ rewritten.
   accent (Signal), styled directly in `:root` rather than through a
   `[data-colorway]` switch.
 
+### Changed
+
+- **On-disk event history is on by default** (#1357, owner's decision).
+  `history.enabled` now defaults to `true`, and `install.sh` gives a
+  fresh install a key for it (`keys/history.key` in the app folder
+  volume, written by a throwaway helper container before mikroview
+  starts — never on this script's own command line or in its output),
+  so a plain `curl | sh` install keeps history with no setup step.
+  **If you upgrade:** with no `history:` block in your config and no
+  key mounted, MikroView still comes up exactly as before, memory-only
+  — the only new thing is a CFG-0080 warning at startup saying so and
+  how to mount a key if you want history now. But if you already mount
+  a key for the state store (#853's flags/entities/watchlist encryption, or
+  an earlier history key) and never wrote `history.enabled: false`
+  explicitly, this upgrade turns the on-disk event log on too — set
+  `history.enabled: false` first if you want to keep using that key for
+  the state store alone. Installing with Compose, or with the bare
+  `docker run` in docs/install.md, does not run `install.sh`: history
+  stays off there until you mount a key yourself (one command, in
+  docs/install.md and docs/configuration.md).
+
 ### Fixed
 
+- **The setup wizard now says where each copy box goes** (#1368). Every
+  block meant for the router — trust the certificate, send logs, tag
+  rules, push router state, back up — carries "Paste into the router's
+  terminal (WinBox: New Terminal; WebFig: Terminal)" next to it, and a
+  one-line note on what it does. The history-key commands say plainly
+  they run on the MikroView machine instead. Labels that used to call a
+  terminal block "a script" ("the push scheduling script", "the backup
+  script") no longer do — an operator had pasted one into RouterOS's
+  Scripts window because that box has a Source field too, and nothing
+  said the block was terminal commands rather than a script to save.
+  `docs/routeros-setup.md`'s `<mikroview-host>` placeholder is now
+  `<mikroview-host:port>` throughout, with a note that the port is the
+  one in your browser's address bar.
+
+- **A router's HTTPS pushes no longer get refused because syslog was
+  pinned to a different address** (#1370). The Send logs block now
+  always sets `src-address=0.0.0.0` on the mikroview logging action, so
+  RouterOS picks the same address for syslog and for `/tool fetch`
+  pushes rather than a stale pin from an earlier paste holding syslog on
+  one address while pushes moved to another. The setup wizard and
+  routeros-setup.md no longer recommend pinning `src-address` anywhere —
+  the fix for a declared router that has gone silent is now to declare
+  the address it's actually arriving from, not to pin the router back
+  onto the old one.
+
+- **The blocked certificate step now shows the exact `tls.hosts` line to
+  paste** (#1365). It used to say "add 192.168.13.15 to tls.hosts in
+  config.yaml and restart" without ever showing the syntax. The step now
+  prints a copyable `hosts: [...]` line carrying every host already
+  configured plus the missing one, so pasting it can only add coverage —
+  never drop an address already there — and says where it goes
+  (config.yaml's `tls:` section on the MikroView machine, then restart).
+  The equivalent server log line (a router reaching MikroView by a name
+  its certificate does not cover) now gives the same one-line example.
+- **An account that lost its second factor, or was forced to change its
+  password, mid-session no longer sees bare "403" errors** (#1362).
+  Upgrading past 0.6.1 with a tab already open -- or any other route to a
+  live session on an account that now needs a second factor or a new
+  password -- used to leave every view showing the refusal as an
+  ordinary error ("Could not read the pushed rule tables: fetchDevices:
+  403") instead of the second-factor or change-password screen that
+  actually gets the account out. The frontend now recognises that
+  specific 403 and moves to the right screen on its own.
+
+- **GitHub's preview-image and RouterOS-freshness workflows build with the
+  right Go patch again** (#1356). `#1312` moved Go to 1.27.1 everywhere it
+  knew about, but `.github/workflows/docker.yml` and
+  `.github/workflows/routeros-freshness.yml` still pinned `actions/setup-go`
+  to 1.27.0, so every GitHub-side preview push failed `go.mod`'s minimum-Go
+  check and the mirrored `latest` promotion then failed too. Both now match
+  `go.mod`, `tools/supply-chain/pins-policy.mjs` reads every workflow's
+  `go-version` and fails the drift check if one disagrees, and Renovate's
+  "go toolchain" group now also tracks that pin so a future bump moves it
+  with the rest.
 - **On-disk event history is no longer deleted just because it is off**
   (#1353). A config with the `history:` block missing, `enabled: false`,
   or no key file used to make MikroView delete every retained day at

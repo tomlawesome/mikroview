@@ -77,6 +77,34 @@ func TestSyslogCommandsSetsRemoteLogFormat(t *testing.T) {
 	}
 }
 
+// TestSyslogCommandsSetsSrcAddressToRouterChoice is #1370: a src-address
+// an earlier setup left on the mikroview action used to survive a
+// re-paste, since the set branch only ever touched target/remote/
+// remote-port/remote-protocol/remote-log-format/check-certificate. That
+// let syslog stay pinned to an address HTTPS pushes had stopped using,
+// so the router enrolled from one address and every push was refused
+// from the other. The wizard now sets src-address=0.0.0.0 -- RouterOS's
+// "let the router pick" value, the same choice /tool fetch already makes
+// for the pushes -- on both the add and the set branch, so a stale
+// non-zero value from an older paste is always overwritten rather than
+// left in place.
+func TestSyslogCommandsSetsSrcAddressToRouterChoice(t *testing.T) {
+	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
+	if n := strings.Count(cmd, "src-address=0.0.0.0"); n != 2 {
+		t.Fatalf("syslogCommands set src-address=0.0.0.0 %d times, want 2 (add and set branches): %s", n, cmd)
+	}
+	addBranch, setBranch, found := strings.Cut(cmd, "} else={")
+	if !found {
+		t.Fatalf("syslogCommands' action line has no add/set split: %s", cmd)
+	}
+	if !strings.Contains(addBranch, "src-address=0.0.0.0") {
+		t.Errorf("syslogCommands' add branch is missing src-address=0.0.0.0: %s", addBranch)
+	}
+	if !strings.Contains(setBranch, "src-address=0.0.0.0") {
+		t.Errorf("syslogCommands' set branch is missing src-address=0.0.0.0 -- a stale src-address from an earlier paste would survive: %s", setBranch)
+	}
+}
+
 func TestSyslogCommandsSendsHostWithoutWebPort(t *testing.T) {
 	cmd := SyslogCommands("192.0.2.10:8080", ":6514", "a", "")
 	if !strings.Contains(cmd, "remote=192.0.2.10") {
@@ -995,7 +1023,7 @@ func TestPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // a normal token's rendered output is byte-for-byte identical.
 func TestPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := PushBlock("192.0.2.10:8080", "tok-123_ABC", "arp", "a")
-	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local arpRecs [:toarray \"\"]\n:foreach i,v in=[/ip/arp print as-value] do={\n  :local rec {\"address\"=($v->\"address\"); \"mac\"=($v->\"mac-address\")}\n  :set arpRecs ($arpRecs, {$rec})\n}\n:local arpPayload [:serialize to=json value={\"kind\"=\"arp\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=4; \"records\"=$arpRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$arpPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("PushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1027,7 +1055,7 @@ func TestLoggingPushBlockEscapesQuotedAndDollarToken(t *testing.T) {
 // loggingPushBlock: captured before quote() was added to token.
 func TestLoggingPushBlockNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := loggingPushBlock("192.0.2.10:8080", "tok-123_ABC", "a")
-	want := ":local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"name\") = \"mikroview\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if (($v->\"action\") = \"mikroview\") do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=3; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
+	want := ":local matchNames \"\"\n:local logRecs [:toarray \"\"]\n:foreach i,v in=[/system/logging/action print as-value] do={\n  :if (($v->\"target\") = \"remote\" and ($v->\"remote\") = \"192.0.2.10\") do={\n    :local rec {\"type\"=\"action\"; \"name\"=($v->\"name\"); \"target\"=($v->\"target\"); \"remote\"=($v->\"remote\"); \"remotePort\"=($v->\"remote-port\"); \"remoteProtocol\"=($v->\"remote-protocol\"); \"remoteLogFormat\"=($v->\"remote-log-format\"); \"checkCertificate\"=($v->\"check-certificate\"); \"srcAddress\"=($v->\"src-address\")}\n    :set logRecs ($logRecs, {$rec})\n    :set matchNames ($matchNames . \",\" . ($v->\"name\") . \",\")\n  }\n}\n:foreach i,v in=[/system/logging print as-value] do={\n  :if ($matchNames ~ (\",\".($v->\"action\").\",\")) do={\n    :local rec {\"type\"=\"rule\"; \"topics\"=($v->\"topics\"); \"action\"=($v->\"action\"); \"disabled\"=($v->\"disabled\")}\n    :set logRecs ($logRecs, {$rec})\n  }\n}\n:local logPayload [:serialize to=json value={\"kind\"=\"logging\"; \"page\"=1; \"pages\"=1; \"routerosVersion\"=[/system/resource get version]; \"wizardVersion\"=4; \"records\"=$logRecs}]\n/tool fetch url=\"https://192.0.2.10:8080/api/ingest/routeros\" http-method=post http-data=$logPayload http-header-field=(\"Content-Type: application/json,Authorization: Bearer tok-123_ABC\") check-certificate=yes output=none"
 	if got != want {
 		t.Errorf("loggingPushBlock with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
@@ -1040,14 +1068,15 @@ func TestPushBlockSendsTheMikroviewLoggingSetup(t *testing.T) {
 	block := PushBlock("h", "t", "logging", "a")
 	for _, want := range []string{
 		`/system/logging/action print as-value`,
-		`:if (($v->"name") = "mikroview")`,
+		`:if (($v->"target") = "remote" and ($v->"remote") = "h")`,
 		`"type"="action"`,
 		`"remotePort"=($v->"remote-port")`,
 		`"remoteProtocol"=($v->"remote-protocol")`,
 		`"remoteLogFormat"=($v->"remote-log-format")`,
 		`"checkCertificate"=($v->"check-certificate")`,
+		`"srcAddress"=($v->"src-address")`,
 		`/system/logging print as-value`,
-		`:if (($v->"action") = "mikroview")`,
+		`:if ($matchNames ~ (",".($v->"action").","))`,
 		`"type"="rule"`,
 		`"topics"=($v->"topics")`,
 		`"disabled"=($v->"disabled")`,

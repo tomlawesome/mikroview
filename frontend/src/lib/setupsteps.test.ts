@@ -29,9 +29,9 @@ import {
   sourceSplitReceipt,
   sourceSplitShortfall,
   sourceSplits,
-  srcAddressCommand,
   syslogReceipt,
   syslogStep,
+  tlsHostsBlock,
   tokenExpired,
   tokenLine,
 } from './setupsteps'
@@ -147,6 +147,37 @@ describe('step status', () => {
     expect(s.detail).toContain('tls.hosts')
   })
 
+  // #1365: the owner asked "how? what should the syntax be?" -- naming
+  // tls.hosts is not enough, the blocked step has to hand over the
+  // exact line to paste, keeping the address(es) already configured.
+  it('gives the blocked CA step a pasteBlock with the whole resulting hosts list', () => {
+    const s = caStep(status({ instance: { ...status().instance, hosts: ['192.0.2.10'] } }), '192.0.2.99:8080')
+    expect(s.state).toBe('blocked')
+    expect(s.pasteBlock).toBe('hosts: ["192.0.2.10", "192.0.2.99"]')
+  })
+})
+
+describe('tlsHostsBlock', () => {
+  it('keeps hosts already configured, adding the missing one', () => {
+    expect(tlsHostsBlock(['192.0.2.10', 'localhost'], '192.0.2.99')).toBe(
+      'hosts: ["192.0.2.10", "localhost", "192.0.2.99"]',
+    )
+  })
+
+  it('handles an empty existing list', () => {
+    expect(tlsHostsBlock([], '192.0.2.99')).toBe('hosts: ["192.0.2.99"]')
+  })
+
+  it('handles an IPv6 address', () => {
+    expect(tlsHostsBlock(['192.0.2.10'], '2001:db8::1')).toBe('hosts: ["192.0.2.10", "2001:db8::1"]')
+  })
+
+  it('does not duplicate a host already present', () => {
+    expect(tlsHostsBlock(['192.0.2.10', '192.0.2.99'], '192.0.2.99')).toBe('hosts: ["192.0.2.10", "192.0.2.99"]')
+  })
+})
+
+describe('step status', () => {
   // #1213: an empty address is "not answered yet", not a wrong answer --
   // reporting it as a certificate mismatch would send the operator to
   // edit tls.hosts for a problem that is really the header field above
@@ -382,12 +413,6 @@ describe('the source-address split', () => {
       '192.168.88.1, which you declared in config.yaml, has sent nothing.',
     )
     expect(sourceSplitReceipt(splits)).toBe('syslog from 10.0.20.1, 10.0.30.1 · declared 192.168.88.1 silent')
-  })
-
-  // The remedy keeps the declared address: the command needs only that
-  // one value, and it is printed, never run.
-  it('prints the src-address command with the declared address filled in', () => {
-    expect(srcAddressCommand('192.168.88.1')).toBe('/system logging action set mikroview src-address=192.168.88.1')
   })
 
   // Only a declared device with a pairing is a split. An undeclared

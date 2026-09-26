@@ -131,9 +131,14 @@ function commandsFixture(over: Partial<SetupCommandsResponse> = {}): SetupComman
         },
         { from: '7.24.1', to: '7.24.1', dialect: 'a', verifiedBy: 'release notes read 2026-08-29', note: '' },
       ],
+      // Empty by default (#1344): tests that care about the upgrade-
+      // warnings block override this, so every other test here renders
+      // none, same as the real catalogue would with no ID any router
+      // or pick carries.
+      upgrades: [],
     },
     picked: null,
-    routers: [{ id: 'edge-1', name: 'edge-1', routerosVersion: '7.16', standing: 'below-minimum', note: '' }],
+    routers: [{ id: 'edge-1', name: 'edge-1', routerosVersion: '7.16', standing: 'below-minimum', upgrades: [] }],
     steps: {
       caTrust: { commands: 'CA_TRUST_COMMANDS', note: '' },
       syslog: { commands: 'SYSLOG_COMMANDS', note: '' },
@@ -443,13 +448,16 @@ describe('SetupWizard', () => {
     const body = container.querySelector('.split')?.textContent?.replace(/\s+/g, ' ') ?? ''
     expect(body).toContain("MikroView can't tell whether these are the same router")
     expect(body).toContain('You can tell.')
-    expect(body).toContain('Keep 192.168.88.1 (recommended). Run this on the router')
-    expect(body).toContain('Or keep 10.0.20.1: change sourceIp to 10.0.20.1 in config.yaml and restart.')
+    expect(body).toContain(
+      "tell MikroView the address it's actually using",
+    )
+    expect(body).toContain('Change sourceIp to 10.0.20.1 in config.yaml and restart.')
     expect(body).toContain('If they are two different routers, nothing is wrong.')
     expect(body).toContain('this notice clears itself when 192.168.88.1 sends its first log.')
 
-    const pres = [...container.querySelectorAll('.split pre')].map((p) => p.textContent)
-    expect(pres).toEqual(['/system logging action set mikroview src-address=192.168.88.1'])
+    // No src-address command is ever printed -- pinning isn't the remedy.
+    expect(container.querySelector('.split pre')).toBeNull()
+    expect(container.textContent).not.toContain('src-address=')
 
     // The step list carries the split as its receipt.
     const rows = container.querySelectorAll('.steps .step-row')
@@ -899,6 +907,51 @@ describe('SetupWizard -- the address field (#1213)', () => {
     await waitFor(() => expect(container.textContent).toContain('no commands yet'))
     expect(container.querySelector('pre.script')).toBeNull()
   })
+
+  // #1365: the owner asked "how? what should the syntax be?" -- naming
+  // tls.hosts was not enough. The blocked certificate step now shows a
+  // copyable block with the whole resulting list.
+  it('shows a copyable tls.hosts block on the blocked certificate step, naming where it goes', async () => {
+    wizardState.address = '192.168.13.15'
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.textContent).toContain('does not cover'))
+
+    expect(container.querySelector('pre')?.textContent).toBe('hosts: ["localhost", "192.168.13.15"]')
+    expect(container.textContent).toContain("config.yaml's")
+    expect(container.textContent).toContain('restart mikroview')
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
+})
+
+// #1370: a src-address an earlier wizard run left on the router pinned
+// syslog to an address HTTPS pushes had stopped using -- fixed by always
+// setting src-address=0.0.0.0 in the pasted block, but the block itself
+// can still go stale the same way pushes did: copied for one address,
+// then the header field edited, with nothing telling the operator the
+// clipboard no longer matches.
+describe('SetupWizard -- the Send logs block notices a changed address (#1370)', () => {
+  it('shows the note once the address changes after a copy, and clears it on a fresh copy', async () => {
+    wizardState.pane = PANE.syslog
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('SYSLOG_COMMANDS'))
+
+    expect(container.textContent).not.toContain('The address changed since you copied this block')
+
+    // Copying with nothing changed yet: no note.
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(container.textContent).not.toContain('The address changed since you copied this block')
+
+    // Editing the header field afterwards is what makes the copy stale.
+    const input = screen.getByLabelText(/What address can your router reach MikroView on/) as HTMLInputElement
+    await fireEvent.input(input, { target: { value: '192.168.1.9:8443' } })
+    expect(container.textContent).toContain(
+      'The address changed since you copied this block — paste it again on the router.',
+    )
+
+    // Copying the now-current block again clears it.
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(container.textContent).not.toContain('The address changed since you copied this block')
+  })
 })
 
 // #436: the wizard stopped generating RouterOS syntax itself and now
@@ -959,7 +1012,7 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
 
   it('warns for the operator\'s own picked version too, worded "Your picked version"', async () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
-      commandsFixture({ picked: { version: '7.25', standing: 'ahead-of-review', dialect: 'a' }, routers: [] }),
+      commandsFixture({ picked: { version: '7.25', standing: 'ahead-of-review', dialect: 'a', upgrades: [] }, routers: [] }),
     )
     const { container } = render(SetupWizard)
 
@@ -980,8 +1033,8 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(
       commandsFixture({
         routers: [
-          { id: 'core', name: 'core', routerosVersion: '7.20', standing: 'reviewed', note: '' },
-          { id: 'edge-2', name: 'edge-2', routerosVersion: '', standing: 'unknown', note: '' },
+          { id: 'core', name: 'core', routerosVersion: '7.20', standing: 'reviewed', upgrades: [] },
+          { id: 'edge-2', name: 'edge-2', routerosVersion: '', standing: 'unknown', upgrades: [] },
         ],
       }),
     )
@@ -989,6 +1042,34 @@ describe('SetupWizard -- RouterOS version-aware commands (#436)', () => {
     await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
     expect(container.querySelector('.note.below-minimum')).toBeNull()
     expect(container.textContent).not.toContain('runs RouterOS')
+  })
+
+  // #1344: proves commandsHead actually wires UpgradeWarnings.svelte in
+  // -- rendered on Trust the certificate (the wizard's default pane
+  // here), carrying the same amber left rule as below-minimum but as
+  // its own class, so the two counts must move independently.
+  it('shows a RouterOS upgrade warning on Trust the certificate, with the amber rule', async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        routeros: {
+          ...commandsFixture().routeros,
+          upgrades: [
+            {
+              id: 'cert-store-7.24.3',
+              from: '7.24.3',
+              steps: ['syslog'],
+              heading: 'RouterOS 7.24.3 changed something.',
+              body: 'Check it.',
+            },
+          ],
+        },
+        routers: [{ id: 'core', name: 'core', routerosVersion: '7.24.4', standing: 'reviewed', upgrades: ['cert-store-7.24.3'] }],
+      }),
+    )
+    const { container } = render(SetupWizard)
+    await waitFor(() => expect(container.querySelector('.note.upgrade')).toBeTruthy())
+    expect(container.querySelectorAll('.note.upgrade').length).toBe(1)
+    expect(container.querySelectorAll('.note.below-minimum').length).toBe(0)
   })
 
   // #1181: the four versions rendered identical command blocks and the
@@ -1224,7 +1305,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     // cap is a CSS max-height, never a shorter copy of the script.
     expect(container.querySelector('pre.script')?.textContent).toBe(longLine)
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
 
     const reader = container.querySelector('.reader-pre')
     expect(reader).toBeTruthy()
@@ -1238,7 +1319,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Close and return to this step' }))
@@ -1259,7 +1340,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -1276,7 +1357,7 @@ describe('SetupWizard -- the paste-block reader (#1219)', () => {
     const { container } = render(SetupWizard)
 
     await waitFor(() => expect(container.querySelector('pre.script')).toBeTruthy())
-    await fireEvent.click(screen.getByRole('button', { name: 'Read the push scheduling script in full' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Read the push commands in full' }))
     expect(container.querySelector('.reader')).toBeTruthy()
 
     wizardState.pane = PANE.ca
@@ -1983,8 +2064,173 @@ describe('SetupWizard -- step 6, no script yet (#1217)', () => {
 
     await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
     expect(container.querySelector('.no-script')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Copy script' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy commands' })).toBeTruthy()
     expect(container.querySelector('.lead')?.textContent ?? '').toContain('already in the script')
+  })
+})
+
+// #1368: an operator pasted the push-state block into the router's
+// Scripts window because nothing said it was a terminal command, not a
+// script to save there. Every router-side box now carries the same
+// hint next to it, and no router block's own label calls itself a
+// "script" -- that word is reserved for describing what the pasted
+// commands create on the router, never for naming the box itself.
+describe('SetupWizard -- copy boxes say where they go (#1368)', () => {
+  const TERMINAL_HINT = "Paste into the router's terminal (WinBox: New Terminal; WebFig: Terminal)."
+  const HOST_HINT = 'Run this on the MikroView machine, not the router.'
+
+  function edge1(): Device {
+    return {
+      id: 'edge-1',
+      name: 'edge-1',
+      sourceIp: '192.0.2.1',
+      configured: true,
+      firstSeen: '2026-08-23T09:00:00Z',
+      lastSeen: '2026-09-02T09:00:00Z',
+      eventCount: 10,
+      status: 'live',
+    } as Device
+  }
+
+  it('tells the operator where to paste the CA step', async () => {
+    wizardState.pane = PANE.ca
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('CA_TRUST_COMMANDS'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+  })
+
+  it('tells the operator where to paste the Send logs step', async () => {
+    wizardState.pane = PANE.syslog
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('SYSLOG_COMMANDS'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+  })
+
+  it('tells the operator where to paste the rule-tagging step', async () => {
+    wizardState.pane = PANE.rules
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe('RULE_TAGGING_COMMANDS'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+  })
+
+  it('tells the operator where to paste the push-state script, and does not call the box a script', async () => {
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    wizardState.pane = PANE.push
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('SCRIPT_ADD_WITH_THE_BODY_IN_IT'))
+    expect(container.textContent).toContain(TERMINAL_HINT)
+    expect(container.textContent?.replace(/\s+/g, ' ')).toContain(
+      'Creates the mv-push script and its 20-minute schedule, then runs it once.',
+    )
+    expect(screen.getByRole('button', { name: 'Copy commands' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Copy script/ })).toBeNull()
+  })
+
+  it('tells the operator where to paste both backup boxes, and does not call either a script', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    const hints = container.textContent?.split(TERMINAL_HINT).length ?? 0
+    // One next to the backup script, one next to its schedule.
+    expect(hints - 1).toBe(2)
+    expect(screen.getByRole('button', { name: 'Copy commands' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Copy script/ })).toBeNull()
+  })
+
+  it('labels the history-key commands as host commands, not router ones, and never a script', async () => {
+    wizardState.pane = PANE.backup
+    wizardState.devices = []
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('.keymint')).toBeTruthy())
+    const hostHints = container.textContent?.split(HOST_HINT).length ?? 0
+    // Once each for the save, mount and restart commands.
+    expect(hostHints - 1).toBe(3)
+    expect(container.textContent).not.toContain(TERMINAL_HINT)
+  })
+
+  // The wording rule itself: a router block's own label -- what names
+  // the box to the operator, not the sentence describing what it does
+  // on the router -- never uses "script" as its noun. "Copy commands"
+  // and "the push/backup commands" replaced "Copy script" and "the push
+  // scheduling script" / "the backup script" for exactly this reason.
+  it('never labels a router block with the word "script"', async () => {
+    vi.mocked(fetchRouterBackups).mockResolvedValue(backupsFixture({ enabled: true }))
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-edge-1',
+      kind: 'ingest',
+      device: 'edge-1',
+      value: 'mvt-shown-once',
+      createdAt: '2026-09-02T09:00:00Z',
+    })
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      commandsFixture({
+        steps: {
+          ...commandsFixture().steps,
+          push: { commands: 'PUSH_SCRIPT_BODY', note: '' },
+          schedule: { commands: 'SCRIPT_ADD_WITH_THE_BODY_IN_IT', note: '' },
+          backup: { commands: 'BACKUP_SCRIPT', note: '' },
+          backupSchedule: { commands: 'BACKUP_SCHEDULE', note: '' },
+        },
+      }),
+    )
+    vi.mocked(fetchDevices).mockResolvedValue([edge1()])
+    wizardState.pane = PANE.backup
+    wizardState.devices = [edge1()]
+    const { container } = render(SetupWizard)
+
+    await waitFor(() => expect(container.querySelector('pre.script')?.textContent).toBe('BACKUP_SCRIPT'))
+    const labels = [
+      ...[...container.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? ''),
+      ...[...container.querySelectorAll('[aria-label]')].map((el) => el.getAttribute('aria-label') ?? ''),
+    ]
+    for (const label of labels) {
+      expect(label.toLowerCase()).not.toMatch(/\bscript\b/)
+    }
   })
 })
 

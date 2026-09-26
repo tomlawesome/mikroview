@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest'
-import { RECENT_WINDOW_MS, recentCount, setupEcho } from './fleet'
-import type { ClientEvent, Device } from './types'
+import { leftoverFixCommands, loggingLeftovers, RECENT_WINDOW_MS, recentCount, routerAddress, setupEcho } from './fleet'
+import type { ClientEvent, Device, LoggingLeftover } from './types'
 
 function device(setup?: Device['setup']): Device {
   return {
@@ -39,6 +39,39 @@ describe('setupEcho', () => {
 
   it('says nothing when the server served no setup answer', () => {
     expect(setupEcho(device())).toBeNull()
+  })
+})
+
+// #1373: another action, or a built-in RouterOS action, still sending
+// logs here from a setup this instance's wizard has moved past.
+describe('loggingLeftovers and leftoverFixCommands', () => {
+  const memory: LoggingLeftover = {
+    name: 'memory',
+    builtin: true,
+    description: 'The built-in `memory` action was repointed here.',
+    commands: ['/system logging action set [find name=memory] target=memory'],
+  }
+  const remote: LoggingLeftover = {
+    name: 'remote',
+    builtin: true,
+    description: 'The built-in `remote` action was repointed here.',
+    commands: ['/system logging action set [find name=remote] target=remote remote=0.0.0.0 src-address=0.0.0.0'],
+  }
+
+  it('reads the empty list when the server named none', () => {
+    expect(loggingLeftovers(device())).toEqual([])
+  })
+
+  it('passes through what the server found', () => {
+    const d = { ...device(), loggingLeftovers: [memory] }
+    expect(loggingLeftovers(d)).toEqual([memory])
+  })
+
+  it('joins every leftover into one paste-ready block, in order', () => {
+    expect(leftoverFixCommands([memory, remote])).toBe(
+      '/system logging action set [find name=memory] target=memory\n' +
+        '/system logging action set [find name=remote] target=remote remote=0.0.0.0 src-address=0.0.0.0',
+    )
   })
 })
 
@@ -101,5 +134,26 @@ describe('recentCount', () => {
     recentCount(events, 'never-seen', now)
 
     expect(reads).toBe(0)
+  })
+})
+
+// routerAddress (#1372): the card's under-the-name line. acceptedIp is
+// evidence a token was actually redeemed, so it outranks sourceIp, which
+// can be no more than a config.yaml claim or the first address a push
+// happened to arrive from.
+describe('routerAddress', () => {
+  it('prefers acceptedIp when the router has enrolled', () => {
+    const d = { ...device(), sourceIp: '192.168.1.1', acceptedIp: '192.168.1.5' }
+    expect(routerAddress(d)).toBe('192.168.1.5')
+  })
+
+  it('falls back to sourceIp when nothing has enrolled', () => {
+    const d = { ...device(), sourceIp: '192.168.1.1', acceptedIp: undefined }
+    expect(routerAddress(d)).toBe('192.168.1.1')
+  })
+
+  it('says "no address yet" when neither is known', () => {
+    const d = { ...device(), sourceIp: '', acceptedIp: undefined }
+    expect(routerAddress(d)).toBe('no address yet')
   })
 })

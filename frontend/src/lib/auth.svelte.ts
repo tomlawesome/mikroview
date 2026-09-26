@@ -4,6 +4,7 @@ import {
   fetchAuthSession,
   login,
   logout,
+  onForcedAuthGate,
   PENDING_LOGIN_EXPIRED,
   register,
   setNewPasswordAfterReset,
@@ -315,7 +316,13 @@ class AuthState {
     }
   }
 
-  private apply(session: AuthSession) {
+  // #1362: no longer private -- api.ts's forced-auth-gate handler
+  // (registered below) calls this straight off a fresh
+  // GET /api/auth/session the moment a 403 comes back carrying that
+  // signal, the same call check() above makes, so a session that just
+  // lost its second factor or was forced to a password change lands on
+  // the matching door without waiting for the next poll or a reload.
+  apply(session: AuthSession) {
     this.ssoAvailable = session.ssoAvailable;
     if (session.setupRequired) {
       this.state = "setup-required";
@@ -543,3 +550,24 @@ class AuthState {
 }
 
 export const authState = new AuthState();
+
+// #1362: called once by App.svelte, alongside consumeSSOErrorFromURL --
+// never at this module's own load, since that module is imported (for
+// the authState singleton alone) by dozens of component tests that never
+// mount App and would otherwise all have to know about api.ts's
+// forced-auth-gate registration too. From here on, every fetch anywhere
+// in the app -- a poll, a view's own load, whatever hit the gate -- ends
+// up at apply() through api.ts's shared fetch wrapper, rather than each
+// view needing its own catch for this. `gate` itself is not read: the
+// fresh session apply() is handed is the source of truth, and it may no
+// longer agree (the factor was enrolled from another tab in the time
+// this recheck took), in which case apply() correctly lands back on
+// 'authenticated'.
+let forcedAuthGateWired = false;
+export function wireForcedAuthGate(): void {
+  if (forcedAuthGateWired) return;
+  forcedAuthGateWired = true;
+  onForcedAuthGate((_gate, session) => {
+    authState.apply(session);
+  });
+}

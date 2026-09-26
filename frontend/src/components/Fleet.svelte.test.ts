@@ -142,6 +142,36 @@ describe('Fleet deck identity (#657/#706)', () => {
     expect(container.textContent).toMatch(/seen on the wire, not in the devices config/)
   })
 
+  // #1372: the address line under the router's name -- acceptedIp when
+  // enrolled, else sourceIp, else an honest "no address yet".
+  describe('the address line under the name', () => {
+    it('shows acceptedIp when the router has enrolled', () => {
+      setDevices([device({ id: 'r1', name: 'alpha', sourceIp: '192.168.1.1', acceptedIp: '192.168.1.5' })])
+      const { container } = render(Fleet)
+      flushSync()
+
+      const card = container.querySelector('.fcard')
+      expect(card?.textContent).toContain('192.168.1.5')
+      expect(card?.textContent).not.toContain('192.168.1.1')
+    })
+
+    it('falls back to sourceIp when nothing has enrolled', () => {
+      setDevices([device({ id: 'r1', name: 'alpha', sourceIp: '192.168.1.1', acceptedIp: undefined })])
+      const { container } = render(Fleet)
+      flushSync()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('192.168.1.1')
+    })
+
+    it('says "no address yet" when neither is known', () => {
+      setDevices([device({ id: 'r1', name: 'alpha', sourceIp: '', acceptedIp: undefined })])
+      const { container } = render(Fleet)
+      flushSync()
+
+      expect(container.querySelector('.fcard')?.textContent).toContain('no address yet')
+    })
+  })
+
   // #442's echo: the fleet already shows the pair -- a declared router
   // that has sent nothing, an unregistered one streaming -- so the
   // configured-silent card carries one sentence pointing at the wizard,
@@ -205,6 +235,55 @@ describe('Fleet deck identity (#657/#706)', () => {
     flushSync()
 
     expect(container.querySelector('.flag-door')).toBeNull()
+  })
+})
+
+// #1373: another action, or a built-in RouterOS action, still sending
+// logs here from a setup this instance's wizard has moved past. The
+// description shows to anyone; the paste-ready fix is admin-only, the
+// same line Re-enrol… and Add a router already draw.
+describe('Fleet -- logging leftovers (#1373)', () => {
+  const leftover = {
+    name: 'memory',
+    builtin: true,
+    description: 'The built-in `memory` action was repointed here.',
+    commands: ['/system logging action set [find name=memory] target=memory'],
+  }
+
+  beforeEach(() => {
+    appState.initialLoadDone = true
+    flagsState.list = []
+  })
+
+  it('names the leftover and offers a viewer no fix commands', () => {
+    authState.role = 'viewer'
+    setDevices([device({ loggingLeftovers: [leftover] })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.textContent).toContain('The built-in `memory` action was repointed here.')
+    expect(container.querySelector('pre')).toBeNull()
+  })
+
+  it('gives an admin the paste-ready commands', () => {
+    authState.role = 'admin'
+    setDevices([device({ loggingLeftovers: [leftover] })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.querySelector('pre')?.textContent).toBe(
+      '/system logging action set [find name=memory] target=memory',
+    )
+    expect(container.textContent).toContain("Paste into the router's terminal")
+  })
+
+  it('draws nothing when there is nothing to report', () => {
+    authState.role = 'admin'
+    setDevices([device({ loggingLeftovers: [] })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.querySelector('pre')).toBeNull()
   })
 })
 

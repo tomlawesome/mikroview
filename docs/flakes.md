@@ -6,6 +6,16 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## TestTheUnlockSweepSurvivesAPanicInOneTick: the sweeper never ran again after a tick panicked
+
+- 2026-09-26 · 442bc4f5 (feature/1331-recovery-codes, local) · `go test
+  ./...` full-suite run alongside every other package, host otherwise busy
+  · `the sweeper never ran again after a tick panicked` -- the test's own
+  5-second deadline expired before `s.Vault.Locked()` went true. The
+  branch touches `internal/api/auth.go`, `server.go` and two test files,
+  none of it router-backup-vault code; a lone re-run of `go test
+  ./internal/api/...` immediately afterward passed clean. First sighting.
+
 ## security:gosec: killed mid-scan, exit 137, no findings written
 
 - 2026-09-22 · 9b17fa39 (fix/chr-log-changed-paths) · pipeline 1461, job 19810
@@ -137,19 +147,32 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-20 · 3744d7fe (dev, remote gate `scripts/gate-remote.sh --browser firefox --shards 4`, the suite's first Firefox run) · one shard of four · `FAIL no console errors` with `Failed to load 'http://127.0.0.1:PORT/favicon.svg'. A ServiceWorker intercepted the request and encountered an unexpected error.` raised from `workbox-*.js`. Every other check in the script passed. Re-run four times locally on the same commit under Firefox (`MV_BROWSER=firefox node scripts/live-sw-navigation.mjs`) and it passed every time, so the code is not what changed. Only Firefox surfaces a worker fetch failure as a page console error; Chromium and WebKit log it inside the worker where the harness never sees it, so if it recurs it recurs under Firefox only. Worth an issue on the third sighting about what workbox does with the favicon on a cold cache.
 
-## npm run test (frontend): a different handful of unrelated tests fails on each full local run
+## npm run test (frontend): a different handful of unrelated tests fails on each full local run (#1375)
 
 - 2026-09-23 · 9a920057 (feature/m19-second-factor, local `npm run test -- --run`, this sandboxed container) · full suite, 156 files / 3134 tests · 5 failures across four unrelated files, each `Test timed out in 5000ms`: `LiveTable.svelte.test.ts` ("does not cost dramatically more than linearly per row as the mount count grows"), `MetricsTable.svelte.test.ts` ("shows the server-reported winner for a minute the buffer fully covers"), `Topography.svelte.test.ts` ("lane 1's edge to anywhere clears its own limb, whichever slot the lane holds"), `Watchlist.svelte.test.ts` ("keeps set-aside suggestions out of the list until \"show them\" is clicked..."), plus a fifth whose header was lost to a `tail -60` on the captured output -- not re-identified. None of the four touch #1332's diff (`AccountMenu.svelte`, `AuthenticatorOverlay.svelte`, `auth.svelte.ts`). Rerun of just those four files alone, unchanged code: 403/403 passed in 52s.
 - 2026-09-23 · 9a920057 (feature/m19-second-factor, local `npm run test -- --run`, same container, immediately after the sighting above) · full suite · 2 failures this time, both `#1332`'s own new/edited tests in `AccountMenu.svelte.test.ts` ("opens AuthenticatorOverlay on click", "opens the dialog in the clicked menu only, not in an unrelated mounted copy"): the account chip's own menu never opened (`aria-expanded="false"`) despite an `await fireEvent.click` + `flushSync()` sequence identical to this file's own `openMenu()` helper, which the other 12 tests in the same run used successfully. 8 further isolated runs of `AccountMenu.svelte.test.ts` alone, unchanged code: 14/14 passed every time. A different file failed each full run (LiveTable and friends the first time, AccountMenu the second), which points at contention from running 3134 tests in one process on this container rather than a fault in any one file.
+- 2026-09-26 · 09bb07fe (fix/1368-paste-where, `npx vitest run` in `frontend/`, shared runner also busy with unrelated full test/build runs from other worktrees per `ps aux`) · full suite, 160 files / 3281 tests · 1 failure: `LiveTable.svelte.test.ts` ("keeps the flat stripes when events arrive during a round trip through group mode"), `Test timed out in 30000ms`. Not touched by #1368's diff (`SetupWizard.svelte`/`.test.ts`, `docs/routeros-setup.md`, `CHANGELOG.md`). Isolated re-run of just that file, unchanged code: 70/70 passed in 28s. Third sighting under this heading; filed as #1375.
+- 2026-09-26 · 2352eed4 (feature/m25-routers-signin, local `npx vitest run`, host running several agents' suites) · `LiveTable.svelte.test.ts` "keeps the flat stripes when events arrive during a round trip through group mode" timed out at 30000ms in the full run (1 of 3323); the file alone passed 70/70. Fourth sighting, see #1375.
+## npm run test (frontend): a different handful of unrelated tests fails on each full local run (#1379)
+- 2026-09-26 · cbe3b689 (feature/1357-history-default, local `npx vitest run`, this sandboxed container, work for #1357 in progress and not yet committed) · full suite, 159 files / 3254 tests · 1 failure: `LiveTable.svelte.test.ts` > "a new row does not restripe the rows below it (#1308)" > "keeps the flat stripes when events arrive during a round trip through group mode" -- `Test timed out in 30000ms`. The branch touches `internal/config` defaults, `install.sh` and docs only, nothing in `LiveTable.svelte` or its test. Isolated rerun of that file alone, unchanged code: 70/70 passed in 43s. Third sighting -- filed as #1379.
 
 ## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
 
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
 
-## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio
+## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio — #1376
+
+- 2026-09-26 · 18eb8dad (fix/1362-enrol-403, local `go test ./...`, this host with nine agents' builds and test runs alongside) · the same ratio assertion tripped; passed alone straight afterwards. Second sighting.
 
 - 2026-09-23 · 1c0eef18 (feature/m19-second-factor, local `go test ./... -count=1`, this sandboxed container) · one test of 4055 · `nextHeaderStart: 256 KiB 2.273977ms, 1 MiB 24.022903ms, ratio 10.6 ... want about 4x -- the per-offset '>' scan looks unbounded again`, the assertion failing above a ratio of 10. Re-run alone on the same commit immediately afterwards: passed, ratio 3.7 (256 KiB 2.39ms, 1 MiB 8.73ms). The test measures wall-clock scan time at two buffer sizes and compares the ratio, so it reads whatever else the machine was doing; the run that tripped it was the full 55-package suite on a container also hosting other work. Nothing in the branch touches `internal/syslog`. If it recurs, the question is whether the threshold can be made to measure work rather than elapsed time, since a ratio guard on a loaded box will keep doing this.
+- 2026-09-26 · 09bb07fe (fix/1368-paste-where, local `go test ./...`, shared runner also busy with unrelated full test/build runs from other worktrees per `ps aux`) · `nextHeaderStart: 256 KiB 2.014817ms, 1 MiB 25.092056ms, ratio 12.5 ... want about 4x`. Re-run alone immediately after, unchanged code: passed, ratio 7.8. Nothing in #1368's diff touches `internal/syslog`. Second sighting.
+- 2026-09-26 · 763e1dee (feature/1359-et-default, local `go test ./... -count=1`, this sandboxed container) · `nextHeaderStart: 256 KiB 1.983303ms, 1 MiB 36.079013ms, ratio 18.2 (linear ~4, quadratic ~16)`. Re-run alone on the same commit immediately afterwards: passed, ratio 3.5 (256 KiB 2.32ms, 1 MiB 8.10ms). The branch only touches `internal/blocklist` and `internal/config`. Second sighting.
+
 
 ## live-connection-states: content does not return to its pre-loss position after the banner clears
 
 - 2026-09-24 · 4c0217c6 (fix/v061-audit, !1094) · pipeline 1631, `gate:scenarios 1/4`, job 22799 · `FAIL content returns to its pre-loss position once the banner clears -- got 0, expected ~-12`. The retry on the same commit (job 22873) passed and the pipeline went green. The branch touches no banner, connection or layout code.
+
+## frontend state.svelte.test.ts: "costs about the same to append" (#1304 E2) timing test
+
+- 2026-09-26 · 18eb8dad (fix/1362-enrol-403, local `npx vitest run`, this host under nine parallel agents) · the append-cost comparison failed in the full run and passed alone on the same commit. The branch touches api.ts and auth state, not the store the test measures. Like the syslog ratio test, it compares elapsed time, so it reads host load. First sighting.
