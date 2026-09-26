@@ -323,6 +323,17 @@ Index: http://192.168.11.30:8309/screens/wizard/round-4/index.html
 
 ## Verdicts
 
-None yet.
+**Owner, 2026-09-26 (verbatim), on both T and U:** "Yeah.... these are
+_extremely_ underwhelming, lack creativity and have zero ambition to do
+something incredible."
+
+Both directions dropped. Owner's follow-up the same session: "I'd like
+you to make it a live mockup this time actually, not just screen grabs."
+Round 5 is a clickable prototype, not a screenshot set.
+
+What survives as a feature idea, whatever round 5 looks like: the
+"Nothing yet?" drawer's two lists (§4), Undo this step / Start again (§5),
+the reported-version check (§6), Connect the router as one paste (§7),
+the folded block with one prominent Copy (§8).
 
 Written by Fable 5.1, 2026-09-26.
