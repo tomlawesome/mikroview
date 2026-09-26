@@ -296,6 +296,18 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   survive removing a *different* passkey, or an authenticator app that
   isn't the account's last factor standing, and must not survive the
   account actually going back to password-only.
+- **A fresh set of ten can be drawn on its own, without touching either
+  factor (#1331).** `POST /api/auth/recovery-codes`, password-gated the
+  same way `DELETE /api/auth/totp` is and refused outright on an account
+  with no second factor at all, replaces the existing set atomically --
+  the old ten stop verifying the instant the new ten are committed, and
+  a write that fails to persist leaves the old set intact, the same
+  restore-on-failure contract `GenerateRecoveryCodes` keeps everywhere
+  else. Audited as `account.recovery_codes_regenerated`. Unlike
+  confirming a factor or removing an account's last one, this does
+  **not** end any other session: the set of factors protecting the
+  account hasn't changed, so there is nothing for another session to
+  have gotten away with.
 - **A factor is removed three ways, each guarded differently.** The
   account's own owner turns it off with their current password
   (`DELETE /api/auth/totp` for the authenticator app,

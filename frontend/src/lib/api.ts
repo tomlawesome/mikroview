@@ -1075,6 +1075,22 @@ export async function disableTOTP(password: string): Promise<DisableFactorResult
   return { signedOut: body?.signedOut === true }
 }
 
+// regenerateRecoveryCodes mints a fresh ten recovery codes for the
+// signed-in caller's own account, password-gated exactly like
+// disableTOTP above (#1331). Unlike confirmTOTP/finishPasskeyRegistration,
+// which end every other session, this never does -- see the server's own
+// handleRecoveryCodesRegenerate comment: the set of factors protecting
+// the account hasn't changed, only the spare key that stands in for one
+// of them.
+export async function regenerateRecoveryCodes(password: string): Promise<string[] | string> {
+  const res = await postJSON('/api/auth/recovery-codes', { password })
+  if (res.ok) {
+    const body = await res.json()
+    return body.recoveryCodes ?? []
+  }
+  return (await res.text()) || `regenerateRecoveryCodes: ${res.status}`
+}
+
 // clearUserTOTP is the admin's side of a lost phone (#1249): DELETE
 // /api/auth/users/{id}/totp turns someone else's factor off with no
 // password, audited server-side. Refused on the admin's own id -- see
