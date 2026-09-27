@@ -46,6 +46,16 @@ rewritten.
   for unattended daily fetching — see docs/configuration.md's
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
+
+### Security
+
+- `VerifyPassword` now refuses, before hashing, a stored hash whose
+  cost settings or lengths are outside what this module writes (with
+  4x headroom) (#1388). A corrupt or tampered hash could previously
+  crash the check and leave a hashing slot taken, so enough of them
+  stalled every later login, or force an unbounded Argon2id
+  computation.
+
 ### Added
 
 - **A router's card names what an earlier setup left behind, with the exact
