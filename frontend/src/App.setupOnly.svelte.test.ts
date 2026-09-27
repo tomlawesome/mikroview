@@ -36,7 +36,7 @@ vi.mock('./lib/api', async (importOriginal) => {
     fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
     openConfigEditor: vi.fn(),
     validateConfig: vi.fn(async () => ({ problems: [] })),
-    fetchConfigSnapshots: vi.fn(async () => []),
+    fetchConfigSnapshots: vi.fn(async () => ({ snapshots: [], keep: 5 })),
   }
 })
 

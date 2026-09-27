@@ -8,22 +8,30 @@
   // Two columns in EngineRoom's .stsection.wide grid, the same as
   // DiskControl: a sentence on the left, the rows on the right in the
   // .orow grammar. What the file says about itself (its path, header and
-  // schema) only arrives with the password-gated open call -- the API
-  // has no ungated read of it -- so until the editor has been opened
-  // once those rows say so rather than guess.
+  // schema) comes from GET /api/config/editor/summary, an ungated read
+  // fetched on mount -- nothing in it is secret, only facts about the
+  // file -- so the card shows it before the editor has ever been opened.
+  // Once the editor has been opened, its own answer (configEditorState.file)
+  // takes over, since it is at least as fresh.
   import { onMount } from 'svelte'
   import { configEditorState } from '../lib/configEditor.svelte'
   import PasswordAgain from './PasswordAgain.svelte'
 
   onMount(() => {
     void configEditorState.refreshSnapshots()
+    void configEditorState.refreshSummary()
   })
 
   let asking = $state(false)
   let opening = $state(false)
   let openError = $state<string | null>(null)
 
-  const file = $derived(configEditorState.file)
+  const file = $derived(configEditorState.file ?? configEditorState.summary)
+  const fileLine = $derived.by(() => {
+    if (file) return null
+    if (configEditorState.summaryError) return 'unknown — the server did not answer'
+    return '…'
+  })
 
   function startOpen() {
     asking = true
@@ -54,7 +62,7 @@
     if (configEditorState.snapshotsError) return 'unknown — the server did not answer'
     if (!configEditorState.snapshotsLoaded) return '…'
     const n = configEditorState.snapshots.length
-    return n === 0 ? 'none yet' : `${n} kept (the last five are kept)`
+    return n === 0 ? 'none yet' : `${n} kept (the last ${configEditorState.snapshotsKeep} are kept)`
   })
 </script>
 
@@ -68,13 +76,13 @@
 <div class="wrows">
   <div class="orow">
     <span>file</span>
-    <span class="ov" class:dim={!file}>{file ? file.path : 'shown once the editor has been opened'}</span>
+    <span class="ov" class:dim={!file}>{file ? file.path : fileLine}</span>
   </div>
   <div class="orow">
     <span>written by</span>
     <span class="ov" class:dim={!file}>
       {#if !file}
-        shown once the editor has been opened
+        {fileLine}
       {:else if file.header}
         {file.header.writtenBy}
       {:else}
@@ -86,7 +94,7 @@
     <span>schema</span>
     <span class="ov" class:dim={!file}>
       {#if !file}
-        shown once the editor has been opened
+        {fileLine}
       {:else if file.header}
         {file.header.schema} · this version reads {file.runningSchema}
       {:else}

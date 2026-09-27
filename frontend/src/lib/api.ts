@@ -7,8 +7,9 @@ import type {
   ApiToken,
   ConfigCarryForwardResult,
   ConfigEditorOpen,
+  ConfigEditorSummary,
   ConfigSnapshot,
-  ConfigSnapshotSummary,
+  ConfigSnapshotsList,
   ConfigValidateResult,
   AuditResult,
   AuthSession,
@@ -2638,6 +2639,14 @@ export async function openConfigEditor(password: string): Promise<ConfigEditorOp
   return serverSaid(res)
 }
 
+// No password and no unlock: nothing this returns is secret, only facts
+// about the file. What the Config card shows before the editor is opened.
+export async function configEditorSummary(): Promise<ConfigEditorSummary | string> {
+  const res = await fetch('/api/config/editor/summary')
+  if (res.ok) return res.json()
+  return serverSaid(res)
+}
+
 // Throws, like the other reads: the editor's Problems rail shows a
 // failed check as its own line rather than as "no problems".
 export async function validateConfig(text: string): Promise<ConfigValidateResult> {
@@ -2700,14 +2709,16 @@ export async function revealConfigSecrets(): Promise<{ secrets: Record<string, s
   return { secrets: body?.secrets && typeof body.secrets === 'object' ? body.secrets : {} }
 }
 
-// The list is read either as a bare array or as {snapshots: [...]}:
-// the issue names the route but not the envelope.
-export async function fetchConfigSnapshots(): Promise<ConfigSnapshotSummary[]> {
+// {available, reason, keep, snapshots} -- keep is how many of them
+// MikroView keeps, for the card's and the panel's "the last N are kept".
+export async function fetchConfigSnapshots(): Promise<ConfigSnapshotsList> {
   const res = await fetch('/api/config/snapshots')
   if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
   const body = await res.json()
-  if (Array.isArray(body)) return body
-  return Array.isArray(body?.snapshots) ? body.snapshots : []
+  return {
+    keep: typeof body?.keep === 'number' ? body.keep : 0,
+    snapshots: Array.isArray(body?.snapshots) ? body.snapshots : [],
+  }
 }
 
 export async function createConfigSnapshot(text: string, note: string): Promise<string | null> {
