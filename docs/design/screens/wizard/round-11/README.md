@@ -110,6 +110,37 @@ is a short crossfade; the door's rain hangs still as the real one does.
 
 ## Verdicts
 
-None yet.
+Owner, 2026-09-27 (verbatim):
+
+> They're all kind of the same to be honest. SUPER disappointed that I
+> gave you free reign to do whatever you wanted to do and you did the
+> same thing with a bit of a swirl.
+>
+> I'd like to kind of combine the slide and the swell.. we start to slide
+> down the fall, then the sweel comes in, but the white flash is removed,
+> as it's really cheesey. But we need something that comes after the
+> swell rather than just a fade, and the elements on the wizard screen
+> need to come in in sections maybe, or in groups, I don't know.. but not
+> just 'slap' and the full screen is there.
+>
+> Ohhh - when the animation starts, the logo doesn't disappear. It moves
+> centre screen and actually gets 50% larger. The yellow box around the
+> outside wiggles around in an organic way and changes colour and the
+> letters flicker at random to match the colour of the rain. The line
+> grows out of each side of the box until its all the way across the
+> screen horizontally and it starts to catch the rain, before wiping up
+> the screen and away.
+>
+> Try that.
+
+And, while round 12 was being drawn: "Don't overdo the letter flicker.
+Just enough, is enough".
+
+Read as: the storm (AJ) is dropped; the slide (AH) and the swell (AI)
+are combined into one journey, with the swell's white wash removed and
+the wordmark's box made the protagonist — it stays, grows, wobbles,
+takes the rain's colours, grows a line that catches the rain and wipes
+the screen up and away; the wizard then arrives in groups. Round 12
+(`../round-12/`) draws it as one direction, AK.
 
 Written by Fable 5.1, 2026-09-27.
