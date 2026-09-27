@@ -24,11 +24,10 @@ chmod 600 the-file
 
 That is the rule for **every** file you mount in: `config.yaml`, the
 [Postgres DSN file](#postgres-optional),
-[`history.keyFile`](#on-disk-event-history-on-by-default), your
-own [TLS `certFile`/`keyFile`](#tls), and the
-[GeoIP database](#geoip-country-flags-optional). A file only MikroView
+[`history.keyFile`](#on-disk-event-history-on-by-default),
+and your own [TLS `certFile`/`keyFile`](#tls). A file only MikroView
 reads (the DSN, the history key, a TLS private key) should stay `600`; a
-certificate or a GeoIP database is not a secret and `644` is fine.
+certificate is not a secret and `644` is fine.
 
 A whole *directory* you bind-mount — the data directory — is the same
 idea with `-R`: `sudo chown -R 1000:1000 ./data`, described in
@@ -356,11 +355,18 @@ the wizard says it can never show it to you again.
   one that can't be read, or `enabled: false` -- MikroView keeps the
   files it finds, writes nothing new, and logs a warning naming the
   directory, and how to turn history back on (`history.enabled: true`
-  with the `history.keyFile` they were written under). An admin can
-  delete the files from Settings. Turning it off from the control in
-  Settings is different: that asks first ("delete N days · keep them")
-  and, once confirmed, deletes the files before the change shows on
-  screen.
+  with the `history.keyFile` they were written under). Turning it off
+  from the control in Settings keeps the files too (#1354): it stops
+  writing and deletes nothing.
+
+  **Deleting retained history is a UI action, admin only, behind your
+  password.** While history is off and files are still on disk, the
+  admin sees a notice in the banner at the top of the app and a
+  **Delete history files** action on the disk card in Settings. Click
+  it once to arm it, again to confirm, then enter your password. The
+  deletion is recorded in the audit log as `history.delete`. The notice
+  stays until the files are deleted or history is turned back on. No
+  config setting deletes history.
 - `history.keyFile` — path to a master key file that you generate.
   **Put it at `mikroview/keys/history.key` and restart** — MikroView
   finds it there with nothing else set:
@@ -824,7 +830,9 @@ MikroView treats two kinds of mistake differently.
 would be unsafe or would mean MikroView isn't doing its job — an
 unreadable listen address, a session that never expires, or session
 cookies without the `Secure` flag while TLS is on. The error names the
-setting so you know what to fix.
+setting so you know what to fix. MikroView then comes up in
+[setup-only mode](#setup-only-mode-when-the-config-is-refused): you can
+sign in and fix the file in the config editor, and nothing else runs.
 
 **Everything else starts anyway, using a sensible default.** A negative
 retention or a zero event limit would mean nothing is kept at all, so
@@ -842,6 +850,130 @@ and hostnames.
 If `config.yaml` isn't readable by that user, the container will fail to
 start with a permission error. `chmod 644 deploy/config.yaml` after
 editing it is the simplest fix here, since a config file is not a secret.
+
+### The header: which version a config was written for
+
+Every config file MikroView writes starts with four comment lines, and so
+does `deploy/config.example.yaml`:
+
+```
+# MikroView configuration -- keep these four lines; MikroView reads them.
+# schema: 7            (which settings this file should have; goes up when keys change)
+# written-by: mikroview v0.6.1
+# layout: 1            (the order and banners below)
+```
+
+- **schema** is the set of settings the file was written for. It goes up
+  by one in any release that adds, removes or renames a setting:
+  v0.1.0 is 1, v0.2.0 is 2, v0.3.x is 3, v0.4.0 is 4, v0.5.x is 5, v0.6.0
+  is 6 and v0.6.1 is 7.
+- **written-by** is the MikroView release that wrote the file.
+- **layout** is the order the file is in: the header, the settings you
+  must set, the optional features, then -- under a large banner --
+  everything that only restates a default and only needs uncommenting to
+  change.
+
+They are comments, so a file carrying them still loads on every release,
+including ones from before the header existed. Keep them: they are how
+you (and MikroView) can tell at a glance which settings a file should
+have. A file without them is read anyway; the config editor works out
+which release it most likely came from by the settings it uses, and
+shows you that guess.
+
+### The config editor
+
+**Engine Room ▸ Config** opens your running `config.yaml` in a full-screen
+editor, with the same checks `-validate-config` runs shown beside it as
+you type, each on its line. It is for admins only, and opening it asks
+for your password again. That unlocks it for **15 minutes**; showing the
+secrets, downloading, and opening a snapshot all need the unlock, and
+after it lapses they ask for the password again.
+
+**MikroView never writes your config file.** What the editor gives you
+is a download, named after the release it is for --
+`config.v0.6.1.yaml` -- and you put it on the host yourself. Keep your
+previous file beside it rather than overwriting it: going back to the
+previous release after a bad upgrade means starting that release with
+that file.
+
+- **The text is the file as it is on disk now**, comments and all. If it
+  has changed since MikroView started, the editor says so: the running
+  instance is still on the version it read at start-up until it is
+  restarted.
+- **Secrets are masked.** The eleven settings that hold a secret or the
+  path to one are listed in one place in the code
+  (`internal/config/editor_secrets.go`). The six that hold the secret
+  itself -- `reputation.abuseIPDBKey`, `notify.smtp.password`,
+  `notify.pushover.token`, `notify.pushover.user`, every
+  `notify.webhook.headers` value and `oidc.clientSecret` -- show as
+  `<<secret:oidc.clientSecret>>`. Leave a placeholder as it is and the
+  download carries the real value; type over it and the download carries
+  what you typed. **Show** reveals them, within the unlock. The five that
+  hold a *path* to a secret file (`postgres.dsnFile`, `tls.keyFile`,
+  `history.keyFile`, `auth.recoveryPepperPath`,
+  `auth.recoveryKeysPath`) are not masked: a path is not the secret.
+- **Carry forward** rewrites the text for this release: settings a
+  release removed are dropped (each with the reason, as the start-up
+  refusal gives it), renamed ones get their new name, every section moves
+  into its place in the layout, and the header is written. Your values
+  and your comments stay, including a comment that was above a removed
+  setting. Every change is listed beside the text, with the line it was
+  on. Before it rewrites anything it keeps a snapshot of the text as it
+  was.
+- **Snapshots**: the last five copies are kept -- ones you take, and the
+  one taken before each Carry forward -- with when, by whom, which
+  schema and release the text was for, and a note. The newest
+  before-Carry-forward snapshot is never the one pushed out by a new one,
+  so the copy a rollback needs survives five more. Each can be downloaded
+  or loaded back into the editor. They hold whole config files, secrets
+  included, so they are only ever kept sealed under the retention key
+  (`history.keyFile`), in `config-snapshots.json` beside the accounts
+  store, and they travel in `-backup`. With no retention key there are no
+  snapshots, and the editor says so; everything else still works.
+
+Opening the editor, downloading, taking a snapshot and deleting one each
+write an audit log entry (`config.editor.open`, `config.download`,
+`config.snapshot`, `config.snapshot.delete`) -- never with a value in it.
+
+### Setup-only mode: when the config is refused
+
+When start-up refuses the config -- a setting it will not start with, a
+setting it no longer knows, or a file that will not parse -- MikroView
+no longer just exits. It logs why, then:
+
+```
+config refused (3 problems) -- serving the config editor only at https://mikroview.home.lan:8080; nothing else is running until the config is fixed and MikroView restarted
+```
+
+and serves only the web UI, sign-in (`/api/auth/*`), `/api/healthz`
+(which reports `"mode": "setup-only"`) and the config editor. Nothing is
+ingested, no syslog or backup listener starts, nothing runs in the
+background, and every other API route answers `503` with
+`MikroView is in setup-only mode: fix the config and restart`. After you
+sign in the UI goes straight to the editor, with a banner saying why.
+Fix the file, put it on the host, and restart.
+
+- **Signing in**: local accounts always work. Single sign-on stays on
+  when the `oidc` block itself is fine, and is off only when the problem
+  is inside it.
+- **Where it listens, and which accounts**: every section of the refused
+  file that reads cleanly on its own is used; a section that does not
+  falls back to its default. So a problem inside `auth:` means the
+  default accounts store, `/var/lib/mikroview/users.json`.
+- **When it refuses to start at all**, as a refused config always did:
+  the accounts store cannot be opened or holds no account (there would
+  be nobody to sign in, and the first-run screen would hand the admin
+  account to whoever reached the port first); `ui:` cannot be read or
+  `ui.allow` is invalid (who may reach the editor could not be honoured);
+  this deployment keeps its accounts in Postgres (only a file accounts
+  store is read here); the data directory was written by a newer
+  release; or a restore is part-way through. A bad command-line flag
+  still stops it too -- that is not something the editor can fix.
+- **Nothing is upgraded in this mode.** The data directory is checked,
+  never migrated, so starting the previous release on it with the
+  previous config still works.
+- The container's `-healthcheck` still reports unhealthy while the
+  config is refused -- truthfully: MikroView is not monitoring anything.
 
 ### Problem codes
 
@@ -1365,30 +1497,92 @@ only the real server-start path.
 
 ## GeoIP country flags (optional)
 
-MikroView can show a country flag next to public source/destination
-addresses, using a MaxMind GeoLite2 (or paid GeoIP2) **Country** or
-**City** database. This is entirely opt-in: MikroView doesn't bundle a
-database or call out to MaxMind at runtime, since their license requires
-you to create your own free account to obtain one.
+MikroView shows a country flag next to public source and destination
+addresses, and -- with an IPinfo token -- the network that owns an
+address ("AS13335 Cloudflare") in the IP popover, the host dossier and
+the flag's tooltip. **Flags work with no setup.** Nothing ships in the
+image: your instance downloads the data itself and keeps it at
+`cachePath`.
 
-1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
-   and download `GeoLite2-Country.mmdb` (or generate a license key and use
-   their `geoipupdate` tool to keep it current).
-2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
-   MikroView finds it there with nothing else set. It has to be readable
-   by the user MikroView runs as — see
-   [Files you mount into the container](#files-you-mount-into-the-container).
-   A GeoIP database is not a secret, so `chmod 644` is fine here.
+```yaml
+geoip:
+  cachePath: /var/lib/mikroview/geoip
+```
 
-   Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
-   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development
-   — works and keeps working; it wins over the folder.
+`cachePath` is a directory. MikroView writes one `.mmdb` file per source
+there, plus a small `state.json` recording when each was fetched, all
+`0600` in a `0700` directory. Empty keeps the databases in memory only,
+so every start downloads them again. The cache is someone else's
+public data, not MikroView's own state, so it is left out of backups and
+of `-migrate-data` -- the next refresh fetches it back. Override with
+`MIKROVIEW_GEOIP_CACHE_PATH`.
 
-If the path is unset, empty, or the file can't be opened/parsed, MikroView
-logs a note at startup and simply shows no flags — this is never a fatal
-error. The UI says so too rather than leaving a reader to guess why every
-flag is blank: the country filter's select carries a disabled "no GeoIP
-database" row, and Settings ▸ ingest states the same fact in one line.
+Three sources, used in a fixed order -- there is no picker:
+
+| Source | Needs | Gives | Refresh |
+|---|---|---|---|
+| **IPinfo Lite** | a free [IPinfo](https://ipinfo.io/lite) token | country and network owner | daily |
+| **MaxMind GeoLite2-Country** | a free [MaxMind](https://www.maxmind.com/en/geolite2/signup) account ID and licence key | country | daily |
+| **DB-IP IP-to-Country Lite** | nothing | country | monthly |
+
+IPinfo beats MaxMind, which beats DB-IP. DB-IP is what you get out of
+the box. Enter a key and MikroView fetches that source straight away and
+switches to it once the file has arrived; remove the key and it falls
+back at once. Only the source in use answers: an address it has no
+entry for gets no flag rather than one borrowed from a lower source.
+
+**Keys are entered in the web UI only**, on the Engine Room's "Country
+and network owner" card (admins only), never in `config.yaml` -- one
+place to set them, no second source of truth. The card shows "key set"
+and a Remove button, never the key again. Keys are stored sealed under
+[`history.keyFile`](#on-disk-event-history-on-by-default), the same key
+and scheme router backups use, and they travel in `-backup` files in
+that sealed form -- so a backup restored onto an instance with a
+different `history.keyFile` needs them entered again. **With no
+`history.keyFile` mounted, key entry is refused**: MikroView will not
+keep an API key in the clear, and DB-IP stays in use. Keys never appear
+in logs; IPinfo's token travels in its download URL, so every error
+MikroView records for that source has the URL's query string removed.
+
+Every download goes through the same guard as the other feeds (no
+connection to a private, loopback or reserved address, redirects
+included), is capped at 128 MiB, uses a conditional request where the
+provider allows it, and must open as a valid database before it
+replaces the one in use. A failed refresh keeps the last good file and
+tries again an hour later (a day later if the provider refused the key).
+Data older than 45 days keeps being used, with a warning in the log.
+DB-IP publishes a new file each month; early in a month, before it is
+out, MikroView keeps last month's and checks again daily.
+
+If no source has loaded yet -- the first minute after a fresh start, or
+a host with no internet access -- flags are simply blank, never an
+error. `GET /api/healthz` says so: `geoip` is whether flags are
+available, `geoSource` which source is in use (`dbip`, `ipinfo`,
+`maxmind`, or `null`).
+
+Credits, because each source asks for one: IPinfo and MaxMind are
+credited in About. DB-IP asks for a link on the page that shows its
+results, so while DB-IP is the source in use a small "IP Geolocation by
+DB-IP" link sits at the foot of the stream; it goes once IPinfo or
+MaxMind is set up.
+
+Earlier releases used `geoip.dbPath` instead: a MaxMind file you
+downloaded and mounted yourself. That key, its `-geoip-db` flag,
+`MIKROVIEW_GEOIP_DB_PATH` and the app folder's `GeoLite2-Country.mmdb`
+are gone -- a config that still sets `dbPath` refuses to start and says
+so. Enter the MaxMind account ID and licence key on the card instead.
+
+**Settings ▸ country and network owner** (admins only) shows which source
+the flags come from right now, and one row per source: DB-IP Lite needs no
+key; IPinfo Lite takes a token; MaxMind GeoLite2 takes your account ID and
+licence key. Each row shows when its data was last fetched, when it will
+be fetched next, and the last download error, if any. A key is entered
+once: afterwards the row reads "key set", who set it and when, and offers
+remove (click twice to confirm). The key itself is never shown again.
+Setting a key switches the source — IPinfo, then MaxMind, then DB-IP — and
+removing one falls back to the next. IPinfo also knows who runs each
+network, shown as "Network · AS13335 Cloudflare, Inc." in the address
+popover, the host dossier and a flag's tooltip.
 
 ## IP reputation lookup (optional)
 
@@ -2337,9 +2531,28 @@ is genuinely missing.
 The reverse direction -- a key your config sets that this version no
 longer understands -- is issue #1207's unknown-key check: it refuses to
 start rather than silently ignoring the key, naming what replaced it
-when something did. That happens before this notice (or anything else
-in the app) could ever show it, so there is nothing for this screen to
-add on that side.
+when something did. That happens before this notice could ever show it;
+MikroView comes up in
+[setup-only mode](#setup-only-mode-when-the-config-is-refused) instead,
+where the config editor's Carry forward drops or renames those keys for
+you.
+
+### The config editor (issue #1347)
+
+**Settings ▸ config** shows the file MikroView was started with, which
+version wrote it and how many snapshots are kept. **Open the editor**
+asks for your password again, then shows the file full-screen. As you
+type, MikroView checks the text and lists any problems on the right,
+each with its line; click one to jump to it. **Carry forward** rewrites
+the file for this version: removed settings are dropped, renamed ones
+are moved, and your values and comments are kept, with every change
+listed. Secrets are hidden until you press **Show secrets**.
+**Download** (or Ctrl+S) gives you the finished file to put in place
+yourself -- MikroView never changes the file on disk -- and asks for
+your password again if it has been more than 15 minutes. Keep your
+previous file beside the new one rather than overwriting it. **Snapshot**
+keeps a copy of the text (the last five are kept); Carry forward keeps
+one of the old file before it changes anything.
 
 ## Watchlist (optional)
 
@@ -3392,7 +3605,7 @@ the router-backup vault (`backup.vaultDir`, #394) — every generation
 still encrypted exactly as it sits on disk, so a restore never needs the
 retention key to move it.
 
-Three things are deliberately left out, and always have been:
+Three things are deliberately left out:
 
 - **The TLS certificate and key material** (`tls.storePath`) — a
   directory of generated key material, not a single document like every
@@ -3403,9 +3616,10 @@ Three things are deliberately left out, and always have been:
 - **The recovery pepper** (`auth.recoveryPepperPath`) — the secret mixed
   into every recovery-key digest. Keeping it out means a stolen backup
   carries the digests and nothing able to verify them against.
-- **The GeoIP database** (`geoip.dbPath`) — a file you downloaded from
-  MaxMind yourself, not something MikroView wrote. A fresh download
-  replaces it exactly.
+- **The country data cache** (`geoip.cachePath`) — somebody else's
+  public databases, which the next refresh downloads again. The API
+  keys that fetch them are in the backup, inside the settings store and
+  still sealed under `history.keyFile`.
 
 **It contains your credentials.** That is deliberate — a backup that
 leaves them out cannot restore a working system, and you would find that
@@ -4428,7 +4642,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_MEMORY` | `store.maxMemory` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
-| `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
+| `MIKROVIEW_GEOIP_CACHE_PATH` | `geoip.cachePath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |
 | `MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD` | `flags.portScanThreshold` |
@@ -4752,7 +4966,7 @@ before it could reach a database at all.
 ## CLI flags (local development)
 
 `-version`, `-syslog-tls`, `-http`,
-`-http-redirect`, `-retention`, `-max-memory`, `-geoip-db` — see
+`-http-redirect`, `-retention`, `-max-memory` — see
 `go run . -h`. Devices,
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
@@ -4768,7 +4982,7 @@ starting the server. `mikroview -h` lists them too. See
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/healthz` | liveness/uptime/version check |
+| `GET /api/healthz` | liveness/uptime/version check; carries `"mode": "setup-only"` when the config was refused (see [Setup-only mode](#setup-only-mode-when-the-config-is-refused)) |
 | `GET /ca.crt` | MikroView's self-generated CA certificate, unauthenticated -- present whenever MikroView generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
@@ -4866,6 +5080,16 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
+| `POST /api/config/editor/open` | admin-only (#1347): given `{"password": "..."}`, re-checks it and unlocks the config editor for this session for 15 minutes. Returns `{text, path, changedSinceStart, header, schemaGuess, runningVersion, runningSchema}` -- `text` is the running config file as it is on disk now, with secret values masked as `<<secret:<key>>>`; `header` is `{schema, writtenBy, layout}` or `null`. 400 for a missing body, 401 for a wrong password, 429 after repeated wrong ones. Audited as `config.editor.open` |
+| `GET /api/config/editor/summary` | admin-only, no password or unlock (nothing secret in it): `{path, header, schemaGuess, runningVersion, runningSchema, snapshotCount, changedSinceStart}` for the Engine Room's Config card -- facts about the running config file, never its text |
+| `GET /api/config/editor/reveal` | admin-only, within the unlock: `{"secrets": {"<key>": "<value>"}}`, each value exactly as written in the file, quotes included, so it can replace its placeholder. 401 `{"reauth": true}` once the unlock has lapsed |
+| `POST /api/config/validate` | admin-only: given `{"text": "..."}`, the same checks start-up runs -- `{"problems": [{line, key, severity, message}]}`, `severity` `fatal` or `warning`, `line` 0 when a problem is not about one line |
+| `POST /api/config/carry-forward` | admin-only: given `{"text": "..."}`, rewrites it for this release -- `{text, changes: [{kind, key, to, line, note}], problems}`. `kind` is `header`, `removed`, `renamed`, `moved` or `snapshot` (the snapshot taken of the text before the rewrite, or why none could be) |
+| `POST /api/config/download` | admin-only, within the unlock: given `{"text": "..."}`, returns the file with secrets put back and the header written, as an attachment named `config.v<release>.yaml`. 400 when a placeholder has no value to put back; 401 `{"reauth": true}` once the unlock has lapsed. Audited as `config.download` |
+| `GET /api/config/snapshots` | admin-only: `{available, reason, keep, snapshots: [{id, when, by, schema, version, why, note}]}`, newest first, `why` `manual` or `before-carry-forward`, `note` null when there is none; `available` is false with no retention key, and `reason` (otherwise null) says why |
+| `POST /api/config/snapshots` | admin-only: given `{"text": "...", "note": "..."}`, keeps a snapshot (secrets put back) and returns its metadata (the list's shape), 201. 503 with no retention key. Audited as `config.snapshot` |
+| `GET /api/config/snapshots/{id}` | admin-only, within the unlock: one snapshot in the list's shape plus its `text`, secrets masked (their values become the ones this session's placeholders stand for). 404 for an unknown id; 401 `{"reauth": true}` once the unlock has lapsed |
+| `DELETE /api/config/snapshots/{id}` | admin-only: deletes one snapshot, 204. Audited as `config.snapshot.delete` |
 | `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
 | `POST /api/router-backups/{device}/{generation}/protect` | admin-only: mark a generation kept, given `{"comment": "..."}` -- required, one line, 1 to 120 characters, control characters refused. Moves it out of the ten-generation cycle into a pool of its own for that router, with no limit on how many it holds. 400 for a missing or over-length comment, 404 if the vault holds no such router or generation, 409 if it is already kept. Answers with the router's whole block (both lists), so the screen renders what the vault now holds. Audited as `router_backup.protected` |
@@ -4885,7 +5109,8 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
-| `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; **turning it off deletes every retained file before the response is written**. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
+| `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; turning it off stops writing and keeps every retained file (#1354) -- deleting them is the route below. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
+| `DELETE /api/settings/history/files` | admin-only: delete every retained history file while history is off (#1354) -- the only way retained history is deleted wholesale. Body `{"password": "<your password>"}`, re-checked like the other password prompts and rate-limited with them: a wrong one is a 401 (`incorrect password`). Refused with a 409 while history is on. Answers with the same shape `GET` returns. Audit-logged as `history.delete`, with the days, bytes and date range deleted |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see

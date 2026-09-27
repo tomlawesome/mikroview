@@ -16,6 +16,35 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **Country flags work with no setup, and IPinfo adds the network owner**
+  (#1352, owner decision 2026-09-27). MikroView now downloads its own
+  country data at runtime and caches it under `geoip.cachePath`
+  (default `/var/lib/mikroview/geoip`); nothing ships in the image.
+  Three sources, in a fixed order: IPinfo Lite (country and network
+  owner, free token) beats MaxMind GeoLite2-Country (free account ID and
+  licence key) beats DB-IP IP-to-Country Lite (no account, the default).
+  Keys are entered on the Engine Room's "Country and network owner"
+  card only -- never in `config.yaml` -- stored sealed under
+  `history.keyFile` the way router backups are, and never shown again,
+  logged or returned by any API. With no `history.keyFile` mounted, key
+  entry is refused and DB-IP stays in use. New API: `GET
+  /api/settings/geo`, `PUT`/`DELETE /api/settings/geo/ipinfo` and
+  `/api/settings/geo/maxmind` (admin), `GET /api/geo/lookup?ip=` (any
+  signed-in user), and `geoSource` on `/api/healthz`. See
+  docs/configuration.md's "GeoIP country flags".
+
+### Removed
+
+- **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
+  `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
+  `GeoLite2-Country.mmdb`. MikroView downloads MaxMind's file itself
+  now: enter your MaxMind account ID and licence key on the Engine
+  Room's "Country and network owner" card instead, and delete the
+  mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
+  refuses to start and names the card. Remove the key.
+
 ### Changed
 
 - **`scripts/gate-remote.sh` prunes the second host's Docker cache after
@@ -23,6 +52,16 @@ rewritten.
   cache go, the tagged `mv-gate:local` image stays, and `gate-run.log`
   says what it reclaimed. Fixes the disk filling up and failing unrelated
   CI jobs with "no space left on device".
+
+- **Turning history off keeps the files; deleting them is a separate,
+  password-gated action** (#1354, owner decision 2026-09-25). The
+  switch in Settings stops writing and deletes nothing. While history is
+  off with files still on disk, an admin sees a banner notice and a
+  **Delete history files** action on the disk card: two clicks, then
+  their password (`DELETE /api/settings/history/files`, audited as
+  `history.delete`). The notice goes when the files are deleted or
+  history is turned back on.
+
 - **Emerging Threats' compromised-IPs list is now on by default
   alongside Spamhaus DROP** (#1359, owner decision 2026-09-25). Both
   are enabled unless `blocklist.sources` says otherwise; an existing
@@ -46,7 +85,56 @@ rewritten.
   four-release gap meant a green scan reflected a vulnerability database
   from June, not today's; `renovate.json` now tracks every `go install
   …@vX.Y.Z` pin in `.gitlab-ci.yml` so this can't happen silently again.
+
+### Security
+
+- `VerifyPassword` now refuses, before hashing, a stored hash whose
+  cost settings or lengths are outside what this module writes (with
+  4x headroom) (#1388). A corrupt or tampered hash could previously
+  crash the check and leave a hashing slot taken, so enough of them
+  stalled every later login, or force an unbounded Argon2id
+  computation.
+
+- `requireAuth`'s four path-exemption checks (bootstrap, general,
+  forced-password-change, forced-second-factor-enrolment) now compare
+  the request's *escaped* path, matching how `next`'s `http.ServeMux`
+  actually routes it (#1389). Before this, a request whose escaped and
+  decoded paths differed -- e.g. an anonymous `GET
+  /api/auth%2Fsession`, which decodes to the exempt
+  `/api/auth/session` but escapes to something a wildcard route
+  further down the mux would serve -- could be classified as exempt by
+  one string and dispatched by another, reaching a handler it should
+  never have been let past the gate for.
+
+- `RestrictToAllowList`'s `uiAllowExemptPaths` check now compares the
+  request's *escaped* path too, the same fix as `requireAuth`'s above
+  (#1390). Before this, the same escaped-vs-decoded mismatch let a
+  request outside `ui.allow` reach a route it merely decoded to look
+  like an exempt one, rather than the route it actually dispatched to.
+
 ### Added
+
+- **A config editor, and a refused config no longer stops MikroView
+  dead** (#1347). Admins can open the running `config.yaml` in the UI
+  (password again; a 15-minute unlock covers showing secrets and
+  downloading), see start-up's own checks on each line as they type, and
+  press **Carry forward** to rewrite an old file for this release:
+  removed settings dropped with the reason, sections moved into the
+  example's layout, values and comments kept. The result is a download
+  named `config.v<release>.yaml` -- MikroView never writes the config
+  file; keep the previous one beside it. Secrets are masked in the
+  editor and put back in the download. The last five snapshots of the
+  text are kept, sealed under the retention key and carried by
+  `-backup`, including one taken before every Carry forward. When
+  start-up refuses the config it now comes up in **setup-only mode**:
+  sign-in, `/api/healthz` (`"mode": "setup-only"`) and the editor, with
+  every other route answering 503 and nothing else running. It still
+  exits as before when there is no account to sign in with, when
+  `ui.allow` cannot be honoured, or when the accounts live in Postgres.
+  Every config MikroView writes, and `deploy/config.example.yaml`, now
+  opens with four header lines naming the schema (the settings it should
+  have: v0.6.1 is 7), the release that wrote it and its layout. See
+  docs/configuration.md's "The config editor" and "Setup-only mode".
 
 - **A router's card names what an earlier setup left behind, with the exact
   fix** (#1373). The push script now reports every logging action still
@@ -184,6 +272,11 @@ rewritten.
   to turn history back on. Nothing in the config file deletes retained
   history any more; deleting is only ever an admin choice made from
   Settings. Turning history off from Settings still asks, then deletes.
+
+- **The header-scan linearity test no longer flakes on a busy host**
+  (#1376). `TestNextHeaderStartScalesLinearlyOnLongLTRun` now counts the
+  bytes `nextHeaderStart`'s scan actually visits instead of timing it, so
+  the ratio it checks can't be thrown off by other load on the machine.
 
 ## [0.6.1] - 2026-09-24
 

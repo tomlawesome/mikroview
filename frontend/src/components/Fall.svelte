@@ -32,6 +32,8 @@
     type FallBoundary,
   } from '../lib/fall.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { geoipState } from '../lib/geoip.svelte'
+  import { DBIP_URL } from '../lib/geo'
   import { fetchEventsWindow } from '../lib/api'
   import { isCancelledFetch } from '../lib/cancelled'
   import { formatHM, formatRelative } from '../lib/format'
@@ -73,6 +75,18 @@
   // all, and that is the window-cap chip in the fall's head below, not
   // this caption.
   const WINDOW_RANGE_CAPTION_ENABLED: boolean = false
+
+  // DB-IP's credit (#1352): DB-IP Lite's licence asks for a link, and the
+  // owner settled where it goes -- a subtle line at the foot of the fall,
+  // only while DB-IP is the source in use. Once an admin sets up IPinfo
+  // or MaxMind it goes; it is never in About. Gated on the live source
+  // the same way the caption above is gated on its const, so nothing is
+  // drawn at all rather than drawn and hidden. /api/healthz says which
+  // source is live, read once and shared (lib/geoip.svelte.ts).
+  const dbipCreditShown = $derived(geoipState.source === 'dbip')
+  $effect(() => {
+    geoipState.ensureLoaded().catch(() => {})
+  })
 
   // The fall's own event budget, and the number the window-cap chip
   // states. Named rather than written into the fetch below so the chip
@@ -1600,6 +1614,9 @@
         title="How to read the fall — full explanation in the docs"
         aria-label="How to read the fall (opens the docs)">i</a
       >
+      {#if dbipCreditShown}
+        <a class="geo-credit" href={DBIP_URL} target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a>
+      {/if}
       {#if WINDOW_RANGE_CAPTION_ENABLED}
         <span class="window-caption">
           {#if windowHasMore}showing the most recent 5,000 events; more exist ·
@@ -2196,6 +2213,20 @@
   .ibtn:hover {
     color: var(--accent);
     border-color: var(--accent);
+  }
+  /* DB-IP's credit: small and dim, on the (i)'s own line at the right,
+     so its coming and going moves nothing -- the foot is already as tall
+     as the (i). */
+  .geo-credit {
+    font-size: 10.5px;
+    line-height: 1;
+    color: var(--o-ink3);
+    opacity: 0.8;
+    text-decoration: none;
+  }
+  .geo-credit:hover {
+    color: var(--accent);
+    opacity: 1;
   }
   .window-caption {
     margin: 0;

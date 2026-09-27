@@ -49,14 +49,30 @@ await goTo(page, 'Settings')
 
 // --- The page is the groups, with keys and people mounted in place ------
 
-// #394 (round 44) added the router-backups group straight after disk,
-// and #1225 the drop list straight after that -- memory, disk, router
-// backups, drop list is the order EngineRoom.svelte's own comment
-// states, and this list is a copy of the DOM order, not an independent
-// decision, so it has to keep up with what the page mounts.
-const GROUP_ORDER = ['ingest', 'new settings', 'keys', 'detection', 'memory', 'disk', 'router backups', 'drop list', 'account', 'people']
-// Router backups and the drop list mount only once their own GET has
-// answered (EngineRoom.svelte's `{#if routerBackups}` and its twin), so
+// #394 (round 44) added the router-backups group after disk, #1225 the
+// drop list straight after that, #1352 the country group beside disk, and
+// #1347 the config group straight after "new settings" -- memory, disk,
+// country and network owner, router backups, drop list is the order
+// EngineRoom.svelte's own comments state, and this list is a copy of the
+// DOM order, not an independent decision, so it has to keep up with what
+// the page mounts.
+const GROUP_ORDER = [
+  'ingest',
+  'new settings',
+  'config',
+  'keys',
+  'detection',
+  'memory',
+  'disk',
+  'country and network owner',
+  'router backups',
+  'drop list',
+  'account',
+  'people',
+]
+// Router backups, the drop list and the country group mount only once
+// their own GET has answered (EngineRoom.svelte's `{#if routerBackups}`
+// and its twins), so
 // straight after arrival the page can honestly hold eight groups for a
 // beat. Reading the order then compared a half-loaded page: WebKit on a
 // loaded shard lost that race once (2026-09-20) where Chromium never had.

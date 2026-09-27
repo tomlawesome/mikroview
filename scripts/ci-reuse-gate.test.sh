@@ -43,6 +43,21 @@ printf 'package main\n' > "$GATE_REPO/internal/main.go"
 echo 'module example' > "$GATE_REPO/go.mod"
 echo '<svelte/>' > "$GATE_REPO/frontend/App.svelte"
 echo '# readme' > "$GATE_REPO/README.md"
+
+# #1350: jobInputHash's default listScenarios shells out to
+# scripts/run-scenarios.sh --list, so a scratch tree exercising a
+# gate:scenarios hash needs a real copy of it plus enough live-*.mjs
+# stand-ins for a real plan() -- one family per shard, so N=4 gives each
+# shard exactly one script (frontend/scripts/live-<family>.mjs, family
+# being the first '-'-delimited word).
+cp "$REPO_ROOT/scripts/run-scenarios.sh" "$GATE_REPO/scripts/run-scenarios.sh"
+chmod +x "$GATE_REPO/scripts/run-scenarios.sh"
+mkdir -p "$GATE_REPO/frontend/scripts"
+echo '// shared helper, excluded from --list' > "$GATE_REPO/frontend/scripts/live-browser.mjs"
+for family in alpha bravo charlie delta; do
+  echo "// $family scenario" > "$GATE_REPO/frontend/scripts/live-$family.mjs"
+done
+
 git -C "$GATE_REPO" add -A
 git -C "$GATE_REPO" commit -q -m "seed"
 
@@ -82,9 +97,31 @@ else
   echo "ok - test:postgres hash moves when the Go tree changes"
 fi
 
-scenarios_1="$(hash_for 'gate:scenarios 1/4')"
-scenarios_4="$(hash_for 'gate:scenarios 4/4')"
-check "$scenarios_1" "$scenarios_4" "the four gate:scenarios shards share one hash for one tree"
+# #1350: each shard's hash is now name-aware -- editing shard 2's own
+# script (live-bravo.mjs) moves only 2/4's hash, not its siblings'.
+scenarios_1_before="$(hash_for 'gate:scenarios 1/4')"
+scenarios_2_before="$(hash_for 'gate:scenarios 2/4')"
+scenarios_4_before="$(hash_for 'gate:scenarios 4/4')"
+echo '// bravo, edited' > "$GATE_REPO/frontend/scripts/live-bravo.mjs"
+git -C "$GATE_REPO" -c user.email=test@example.invalid -c user.name=test commit -aqm "edit shard 2's own script"
+scenarios_1_after="$(hash_for 'gate:scenarios 1/4')"
+scenarios_2_after="$(hash_for 'gate:scenarios 2/4')"
+scenarios_4_after="$(hash_for 'gate:scenarios 4/4')"
+check "$scenarios_1_before" "$scenarios_1_after" "editing shard 2's script leaves shard 1's hash unchanged"
+check "$scenarios_4_before" "$scenarios_4_after" "editing shard 2's script leaves shard 4's hash unchanged"
+if [ "$scenarios_2_before" = "$scenarios_2_after" ]; then
+  echo "FAIL - editing shard 2's own script should move shard 2's hash"
+  fail=1
+else
+  echo "ok - editing shard 2's own script moves shard 2's hash"
+fi
+
+# The own-script list is logged (#1350's build notes), on both gate and
+# evidence.
+( cd "$GATE_REPO" && env CI_PIPELINE_SOURCE=merge_request_event node "$SCRIPT" gate 'gate:scenarios 2/4' ) >"$TMP/gate-out" 2>&1 || true
+grep -q "gate:scenarios 2/4: own scripts: frontend/scripts/live-bravo.mjs" "$TMP/gate-out" \
+  && echo "ok - gate logs the shard's own scripts" \
+  || { echo "FAIL - gate should log the shard's own scripts"; cat "$TMP/gate-out"; fail=1; }
 
 before_ci="$(hash_for gate:image)"
 printf 'stages: [lint, test]\n' > "$GATE_REPO/.gitlab-ci.yml"
@@ -103,5 +140,10 @@ expected_pg_hash="$(hash_for test:postgres)"
 ( cd "$GATE_REPO" && env CI_PIPELINE_ID=555 CI_JOB_ID=777 node "$SCRIPT" evidence test:postgres ) >/dev/null
 recorded="$(python3 -c "import json;print(json.load(open('$GATE_REPO/ci-reuse-evidence/test_postgres.json'))['inputs'])")"
 check "$recorded" "$expected_pg_hash" "evidence records the same hash the CLI computes"
+
+# #1350: evidence gains `commit`, the SHA the gate ran on.
+recorded_commit="$(python3 -c "import json;print(json.load(open('$GATE_REPO/ci-reuse-evidence/test_postgres.json'))['commit'])")"
+expected_commit="$(git -C "$GATE_REPO" rev-parse HEAD)"
+check "$recorded_commit" "$expected_commit" "evidence records the commit it ran on"
 
 exit "$fail"

@@ -39,7 +39,7 @@ check "$([ -f "$web_dist/index.html" ] && echo true || echo false)" \
 
 echo
 if [ "$fails" -ne 0 ]; then
-  echo "live-web-dist.test.sh: $fails check(s) failed"
+  echo "RESULT: FAIL"
   exit 1
 fi
-echo "live-web-dist.test.sh: all checks passed"
+echo "PASS: web/dist rebuild copies frontend/dist and keeps .gitkeep."

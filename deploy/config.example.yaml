@@ -1,14 +1,7 @@
-# ======================================================================
-#  HEADER -- DO NOT DELETE OR EDIT THIS BLOCK
-# ======================================================================
-# mikroview-config: version=0.6.1 layout=1
-#
-# This is a MikroView configuration file, written for MikroView 0.6.1,
-# layout 1. The full reference for every setting is docs/configuration.md.
-#
-# Do not delete or edit this block. Upgrades read the mikroview-config
-# line to tell which version wrote this file, and so which settings it
-# should have and which need adding.
+# MikroView configuration -- keep these four lines; MikroView reads them.
+# schema: 7            (which settings this file should have; goes up when keys change)
+# written-by: mikroview v0.6.1
+# layout: 1            (the order and banners below)
 
 # Copy this file to config.yaml (git-ignored) and edit for your setup:
 #   cp deploy/config.example.yaml deploy/config.yaml
@@ -64,13 +57,18 @@ devices:
 # ui:
 #   allow: ["192.168.1.20", "10.0.0.0/24"]
 
-# Optional: shows a country flag next to public IPs in the UI. Requires
-# your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
-# unset, no flags are shown; this is never required. The .mmdb file is
-# mounted in, so it must be readable by the container's user (uid 1000);
-# it is not a secret, so `chmod 644 GeoLite2-Country.mmdb` is enough.
+# Country flags next to public IPs, on with no setup. Your instance
+# fetches DB-IP's free IP-to-Country Lite database itself (monthly, no
+# account) and caches it at cachePath; nothing ships in the image. For
+# better data -- and the network owner (ASN) with IPinfo -- enter an
+# IPinfo Lite token or a MaxMind GeoLite2 account ID and licence key on
+# the Engine Room's "Country and network owner" card. Keys are entered
+# there only, never in this file; storing one needs history.keyFile (the
+# key router backups are sealed with). See docs/configuration.md,
+# "GeoIP country flags". cachePath is a directory; empty keeps the databases
+# in memory and re-downloads them on every start.
 # geoip:
-#   dbPath: /etc/mikroview/GeoLite2-Country.mmdb
+#   cachePath: /var/lib/mikroview/geoip
 
 # Optional: enables AbuseIPDB in the "investigate this IP" popover
 # (Shodan InternetDB is always used, no key needed). Free tier: 1000

@@ -65,6 +65,10 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"match_log":       {"watchlist", "matchLogPath"},
 		"droplist":        {"droplist", "storePath"},
 		"prefs":           {"prefs", "storePath"},
+		// The config editor's snapshots (#1347) have no key of their
+		// own: they live beside the accounts store (configSnapshotsPath),
+		// so the block's auth.storePath is what places them.
+		"config_snapshots": {"auth", "storePath"},
 	}
 
 	sections := parseStoreBlock(text)
@@ -172,6 +176,8 @@ func TestEveryLiveCheckIsRun(t *testing.T) {
 		"scripts/live-routeros.sh":                "boots the CHR; driven by make live-routeros-container",
 		"scripts/live-routeros-step0.sh":          "a probe driven by live-routeros.sh, not a standalone check",
 		"scripts/live-rule-coverage-probe.sh":     "a probe driven by live-routeros.sh, not a standalone check",
+		"scripts/live-web-dist.sh":                "sourced by the checks and by its own test, never run standalone (#1337)",
+		"scripts/live-web-dist.test.sh":           "a plain bash unit test with no server involved, run by gate:scripts instead (#1337)",
 	}
 
 	runners := map[string]string{

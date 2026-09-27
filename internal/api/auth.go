@@ -308,8 +308,22 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	ingest := s.ingestRoutes()
 	droplistPull := s.droplistPullRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every path-membership check below (bootstrapExemptPaths here,
+		// then exemptPaths, changePasswordPath and secondFactorEnrolPaths
+		// further down) keys off r.URL.EscapedPath(), not r.URL.Path
+		// (#1389). next -- s.mux(), a real *http.ServeMux -- routes on
+		// the escaped path too (net/http's wildcard-pattern matching
+		// works on request-line bytes, not the decoded string), so a
+		// request whose escaped and decoded forms differ -- an
+		// unauthenticated `GET /api/auth%2Fsession` decodes to the
+		// exempt "/api/auth/session" but escapes to something a
+		// wildcard route further down the mux would actually serve --
+		// used to be classified by one string and dispatched by another.
+		// Comparing the same string requireAuth's next.ServeHTTP hands
+		// off to closes that gap; an ordinary unescaped path is
+		// identical either way, so normal requests see no change.
 		if s.Auth.Count() == 0 {
-			if !bootstrapExemptPaths[r.URL.Path] {
+			if !bootstrapExemptPaths[r.URL.EscapedPath()] {
 				http.Error(w, "setup required", http.StatusServiceUnavailable)
 				return
 			}
@@ -369,7 +383,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			http.Error(w, "missing required header", http.StatusForbidden)
 			return
 		}
-		if exemptPaths[r.URL.Path] {
+		if exemptPaths[r.URL.EscapedPath()] {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -395,7 +409,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// session but this one needs to trust whose sessions they are,
 		// which is exactly what a reset-code session does not have yet
 		// -- it 403s like everything else until the password is changed.
-		if user.MustChangePassword && r.URL.Path != changePasswordPath {
+		if user.MustChangePassword && r.URL.EscapedPath() != changePasswordPath {
 			writeForcedAuthGate(w, forcedAuthGateMustChangePassword, "an administrator reset this account -- set a new password before going any further")
 			return
 		}
@@ -439,7 +453,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		// path and be refused that too -- 403 on the only route that
 		// could ever get it out of MustChangePassword, a deadlock no
 		// request from that account could ever escape.
-		if !user.MustChangePassword && user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.Path] {
+		if !user.MustChangePassword && user.LocalPassword() && !user.HasSecondFactor() && !secondFactorEnrolPaths[r.URL.EscapedPath()] {
 			writeForcedAuthGate(w, forcedAuthGateMustEnrolFactor, "this account has no second factor -- enrol one before going any further")
 			return
 		}

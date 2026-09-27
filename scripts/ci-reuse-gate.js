@@ -51,7 +51,15 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { candidateJobs, jobInputHash, parseTreeListing } = require('./ci-reuse-inputs');
+const {
+  candidateJobs,
+  jobInputHash,
+  parseTreeListing,
+  matchScenarioShard,
+  defaultListScenarios,
+  globsFor,
+  selects,
+} = require('./ci-reuse-inputs');
 
 const EVIDENCE_DIR = 'ci-reuse-evidence';
 const MAX_PIPELINES = 10;
@@ -82,6 +90,48 @@ function readTreeListing() {
 
 function computeHash(job) {
   return jobInputHash(job, readTreeListing());
+}
+
+// #1350: a scenario shard's own script list, straight from the same
+// lister jobInputHash uses -- printed so a job log says which slice of
+// the suite this reuse decision (or run) actually concerns, not just the
+// combined hash. Never throws: a lister failure here is logged and
+// leaves the real jobInputHash call (which does throw) to decide whether
+// the job runs.
+function logShardScripts(job) {
+  const shard = matchScenarioShard(job);
+  if (!shard) return;
+  try {
+    const own = defaultListScenarios(shard);
+    log(`${job}: own scripts: ${own.length ? own.join(', ') : '(none)'}`);
+  } catch (error) {
+    log(`${job}: could not list its own scripts (${error.message})`);
+  }
+}
+
+function currentCommit() {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch (error) {
+    return null;
+  }
+}
+
+// `git diff --name-only <commit> HEAD` -- what moved since the evidence
+// being compared against was recorded, or null if that cannot be
+// answered (an evidence file from before #1350 has no `commit`, the
+// commit is no longer reachable, a shallow clone, ...). Injectable so
+// findReusableRun's tests never touch git.
+function defaultDiffSince(commit) {
+  try {
+    const output = execFileSync('git', ['diff', '--name-only', commit, 'HEAD'], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return output.split('\n').filter((line) => line.length > 0);
+  } catch (error) {
+    return null;
+  }
 }
 
 // Everything a merge-request pipeline needs in order to even attempt a
@@ -132,7 +182,18 @@ function newestSuccess(jobs, job) {
 // evidence file -- is logged and read as "no match", which reruns the
 // job. `fetchImpl` is injectable so a unit test can hand this a fake
 // fetch and never touch a network.
-async function findReusableRun({ base, token, projectId, mergeRequestIid, pipelineId, job, hash, fetchImpl, log: logFn }) {
+async function findReusableRun({
+  base,
+  token,
+  projectId,
+  mergeRequestIid,
+  pipelineId,
+  job,
+  hash,
+  fetchImpl,
+  log: logFn,
+  diffImpl = defaultDiffSince,
+}) {
   const options = { token, fetchImpl };
 
   let pipelines;
@@ -184,7 +245,16 @@ async function findReusableRun({ base, token, projectId, mergeRequestIid, pipeli
       continue;
     }
     if (!evidence || evidence.inputs !== hash) {
-      logFn(`job ${candidate.id} in pipeline ${pipeline.id} ran on different inputs`);
+      // #1350: name what moved, when the evidence says which commit it
+      // ran on -- filtered to this job's own inputs, so an unrelated
+      // change elsewhere in the same commit range never shows up here.
+      const changed = evidence && evidence.commit ? diffImpl(evidence.commit) : null;
+      const relevant = Array.isArray(changed) ? changed.filter((changedPath) => selects(globsFor(job) || [], changedPath)) : null;
+      if (relevant && relevant.length > 0) {
+        logFn(`${job}: running: changed since job ${candidate.id}: ${relevant.join(', ')}`);
+      } else {
+        logFn(`job ${candidate.id} in pipeline ${pipeline.id} ran on different inputs`);
+      }
       continue;
     }
     return { jobId: Number(candidate.id), pipelineId: Number(pipeline.id) };
@@ -198,6 +268,7 @@ async function gate(job, env, fetchImpl) {
     log(`${job} is not in ci-reuse-inputs.js's JOB_INPUTS: running`);
     return 1;
   }
+  logShardScripts(job);
 
   const prereq = lookupPrerequisites(env);
   if (!prereq.ok) {
@@ -238,6 +309,7 @@ function writeEvidence(job, env) {
     log(`${job} is not in ci-reuse-inputs.js's JOB_INPUTS: no evidence to record`);
     return;
   }
+  logShardScripts(job);
   let hash;
   try {
     hash = computeHash(job);
@@ -249,6 +321,7 @@ function writeEvidence(job, env) {
   const record = {
     job,
     inputs: hash,
+    commit: currentCommit(),
     pipeline: Number(env.CI_PIPELINE_ID) || null,
     job_id: Number(env.CI_JOB_ID) || null,
   };

@@ -130,6 +130,50 @@ test('findReusableRun: a network error is swallowed as "no match", never thrown'
   assert.equal(result, null);
 });
 
+test('findReusableRun: a hash mismatch with evidence.commit logs which of the job\'s inputs changed since (#1350)', async () => {
+  const logs = [];
+  const fetchImpl = async (url) => {
+    if (url.includes('/pipelines') && !url.includes('/jobs')) return jsonResponse([{ id: 50 }]);
+    if (url.includes('/jobs?')) return jsonResponse([{ id: 500, name: JOB, status: 'success' }]);
+    if (url.includes('/artifacts/')) return jsonResponse({ job: JOB, inputs: 'something-else', commit: 'abc123' });
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const diffImpl = (commit) => {
+    assert.equal(commit, 'abc123');
+    // test:postgres' globs (IMAGE_PATHS) match the .go file but not the
+    // README -- the log line must only ever name the former.
+    return ['internal/persist/store.go', 'README.md'];
+  };
+  const result = await findReusableRun({
+    base: BASE, token: 't', projectId: '1', mergeRequestIid: '2', pipelineId: 99,
+    job: JOB, hash: HASH, fetchImpl, diffImpl, log: (message) => logs.push(message),
+  });
+  assert.equal(result, null);
+  const line = logs.find((message) => message.includes('running: changed since job 500'));
+  assert.ok(line, logs.join('\n'));
+  assert.ok(line.includes('internal/persist/store.go'), line);
+  assert.ok(!line.includes('README.md'), line);
+});
+
+test('findReusableRun: a mismatch with no evidence.commit (pre-#1350 evidence) falls back to the plain message', async () => {
+  const logs = [];
+  const fetchImpl = async (url) => {
+    if (url.includes('/pipelines') && !url.includes('/jobs')) return jsonResponse([{ id: 50 }]);
+    if (url.includes('/jobs?')) return jsonResponse([{ id: 500, name: JOB, status: 'success' }]);
+    if (url.includes('/artifacts/')) return jsonResponse({ job: JOB, inputs: 'something-else' });
+    throw new Error(`unexpected request: ${url}`);
+  };
+  const diffImpl = () => {
+    throw new Error('must not be called without a commit');
+  };
+  const result = await findReusableRun({
+    base: BASE, token: 't', projectId: '1', mergeRequestIid: '2', pipelineId: 99,
+    job: JOB, hash: HASH, fetchImpl, diffImpl, log: (message) => logs.push(message),
+  });
+  assert.equal(result, null);
+  assert.ok(logs.some((message) => message.includes('ran on different inputs')), logs.join('\n'));
+});
+
 test('gate() returns 1 (run for real) for a job outside JOB_INPUTS', async () => {
   const code = await gate('no-such-job', { CI_PIPELINE_SOURCE: 'merge_request_event' }, async () => jsonResponse([]));
   assert.equal(code, 1);

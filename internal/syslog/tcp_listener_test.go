@@ -1019,40 +1019,37 @@ func TestRFC3164HeaderLenPRIBoundary(t *testing.T) {
 
 // TestNextHeaderStartScalesLinearlyOnLongLTRun guards the sec2 fix
 // that bounded rfc3164HeaderLen's '>' scan: with the bound, a buffer
-// of nothing but '<' costs time proportional to its length; without
+// of nothing but '<' costs work proportional to its length; without
 // it every offset rescans the rest, so quadrupling the input costs
-// about sixteen times as long. The check is the ratio between two
-// sizes, not a wall-clock budget -- under -race on a shared CI runner
-// the fixed 1 MiB case took 2.2 s where it takes 11 ms here, and an
-// absolute budget failed on that (pipeline 1264, 2026-09-18). A ratio
-// cancels machine speed and the race detector alike.
+// about sixteen times as much. It measures work directly -- bytes the
+// '>' search examines, via headerScanWorkCount -- rather than elapsed
+// time, so a busy host changing how fast the work happens can't flake
+// the check the way wall-clock timing did (pipeline 1264, 2026-09-18,
+// and again docs/flakes.md 2026-09-23/26): the ratio between two sizes
+// is the same regardless of machine speed or the race detector.
 func TestNextHeaderStartScalesLinearlyOnLongLTRun(t *testing.T) {
 	if testing.Short() {
-		t.Skip("quadratic-time regression check; skipped under -short")
+		t.Skip("quadratic-work regression check; skipped under -short")
 	}
 
-	timeScan := func(n int) time.Duration {
+	countWork := func(n int) int64 {
 		data := bytes.Repeat([]byte{'<'}, n) // no '>' anywhere, no '\n'
-		best := time.Duration(1<<63 - 1)
-		for i := 0; i < 3; i++ {
-			start := time.Now()
-			if got := nextHeaderStart(data, 0); got != -1 {
-				t.Fatalf("nextHeaderStart = %d, want -1 (no '>' anywhere in data)", got)
-			}
-			if d := time.Since(start); d < best {
-				best = d
-			}
+		headerScanWorkCount.Store(0)
+		headerScanWorkCounting.Store(true)
+		defer headerScanWorkCounting.Store(false)
+		if got := nextHeaderStart(data, 0); got != -1 {
+			t.Fatalf("nextHeaderStart = %d, want -1 (no '>' anywhere in data)", got)
 		}
-		return best
+		return headerScanWorkCount.Load()
 	}
 
-	small := timeScan(1 << 18) // 256 KiB
-	large := timeScan(1 << 20) // 1 MiB, four times as much
-	ratio := float64(large) / float64(max(small, time.Microsecond))
-	t.Logf("nextHeaderStart: 256 KiB %s, 1 MiB %s, ratio %.1f (linear ~4, quadratic ~16)", small, large, ratio)
+	small := countWork(1 << 18) // 256 KiB
+	large := countWork(1 << 20) // 1 MiB, four times as much
+	ratio := float64(large) / float64(max(small, 1))
+	t.Logf("nextHeaderStart: 256 KiB %d bytes scanned, 1 MiB %d bytes scanned, ratio %.1f (linear ~4, quadratic ~16)", small, large, ratio)
 
 	if ratio > 10 {
-		t.Errorf("1 MiB took %.1fx the 256 KiB case, want about 4x -- the per-offset '>' scan looks unbounded again", ratio)
+		t.Errorf("1 MiB did %.1fx the work of the 256 KiB case, want about 4x -- the per-offset '>' scan looks unbounded again", ratio)
 	}
 }
 

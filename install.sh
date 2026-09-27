@@ -109,8 +109,8 @@ fi
 # two can't drift apart again. The app folder is mounted read-only, as
 # Compose has always mounted it and as internal/config/appfolder.go
 # describes it ("a folder an operator mounts read-only... nothing else
-# writes to it"): config, the GeoIP database and the certificate are put
-# there by the operator; the history key above is the one exception,
+# writes to it"): config and the certificate are put there by
+# the operator; the history key above is the one exception,
 # made by this script rather than by hand, so a fresh install needs no
 # separate setup step for it. No memory or CPU cap here on purpose --
 # both depend on the host this runs on, a wrong one is a silent outage on
