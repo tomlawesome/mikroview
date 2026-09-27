@@ -21,10 +21,17 @@
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { droplistNavState } from '../lib/droplistNav.svelte'
   import { wizardState } from '../lib/wizard.svelte'
-  import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
+  import {
+    createDroplistEntry,
+    deleteDroplistEntry,
+    mintDroplistKey,
+    revokeDroplistKey,
+    fetchSetupCommands,
+  } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { formatRelative } from '../lib/format'
-  import type { DroplistResponse } from '../lib/types'
+  import type { DroplistResponse, SetupCommandsResponse } from '../lib/types'
+  import UpgradeWarnings from './UpgradeWarnings.svelte'
 
   let {
     resp,
@@ -109,6 +116,25 @@
   let setupOpen = $state(false)
   let copiedLabel = $state<string | null>(null)
   let copiedTimer: ReturnType<typeof setTimeout> | undefined
+
+  // upgradeCommands (#1378): this card never fetched POST
+  // /api/setup/commands before -- it prints its own four blocks
+  // (scheduler, drop rule, the two emergency ones) from `resp` alone --
+  // so the wizard's upgrade-breaks-a-command warning (#1344) never
+  // reached an operator who only ever opens this card. Fetched once, the
+  // first time the card is opened, rather than on mount: the card starts
+  // closed (see the test below), and a request nobody will see yet is
+  // wasted work. wizardState.address is the same operator-saved answer
+  // mintKey above already reads -- the least this needs, since this card
+  // has no device or token of its own to send.
+  let upgradeCommands = $state<SetupCommandsResponse | null>(null)
+  $effect(() => {
+    if (!setupOpen || upgradeCommands) return
+    fetchSetupCommands({ address: wizardState.address }).then((result) => {
+      if (typeof result === 'string') return
+      upgradeCommands = result
+    })
+  })
 
   async function copyBlock(key: string, text: string) {
     const ok = await copyToClipboard(text)
@@ -288,6 +314,9 @@
   {#if setupOpen}
     <div class="setupcard">
       <p class="oghint">printed, never applied — paste these on the router yourself</p>
+      {#if upgradeCommands}
+        <UpgradeWarnings commands={upgradeCommands} />
+      {/if}
       <div class="setupblock">
         <span class="sblab">scheduler</span>
         <code>{resp.setup.scheduler}</code>

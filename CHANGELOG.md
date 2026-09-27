@@ -47,6 +47,15 @@ rewritten.
 
 ### Changed
 
+- **Turning history off keeps the files; deleting them is a separate,
+  password-gated action** (#1354, owner decision 2026-09-25). The
+  switch in Settings stops writing and deletes nothing. While history is
+  off with files still on disk, an admin sees a banner notice and a
+  **Delete history files** action on the disk card: two clicks, then
+  their password (`DELETE /api/settings/history/files`, audited as
+  `history.delete`). The notice goes when the files are deleted or
+  history is turned back on.
+
 - **Emerging Threats' compromised-IPs list is now on by default
   alongside Spamhaus DROP** (#1359, owner decision 2026-09-25). Both
   are enabled unless `blocklist.sources` says otherwise; an existing
@@ -120,6 +129,17 @@ rewritten.
   connected router, every "from version X onward, this affects Y"
   warning that applies to its reported version; first entry is 7.24.3's
   removal of the GoDaddy Class 2 root from the router's trust store.
+
+### Added
+
+- **The RouterOS upgrade warning also shows on the drop-list setup card
+  and the account-creation journey** (#1378, follow-up to #1344). Both
+  now fetch the setup commands the warning is drawn from -- the
+  drop-list card once its own setup section is opened, the journey
+  screen that already fetched them for its two-line command block --
+  and show it in the same place relative to the commands, above them.
+  Still not shown on the Engine Room's clipboard-only "copy for
+  RouterOS" (#1344's own ruling).
 
 ### Removed
 

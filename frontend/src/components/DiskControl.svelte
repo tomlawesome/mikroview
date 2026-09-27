@@ -13,7 +13,12 @@
   // that names the deletion is taken -- `delete 13 days · keep all 27`
   // -- the memory slider's own shrink idiom (round 39, MemoryControl).
   // Turning on deletes nothing, so it is immediate: it takes what memory
-  // already holds and every day after (owner, 2026-09-03).
+  // already holds and every day after (owner, 2026-09-03). Turning off
+  // deletes nothing either since #1354, so it is immediate too: the
+  // files stay, the off state shows them, and `Delete history files`
+  // deletes them -- armed by a first click (EngineRoom's armedRemove
+  // idiom), then an inline password field (PasskeysOverlay's
+  // removePassword idiom). Admin only; a reader sees neither.
   //
   // Without a key there is no control at all: the group is two
   // statements and a link to the guide, the ingest group's `plain syslog
@@ -29,25 +34,27 @@
   // the <h3>) is EngineRoom's, so the card's own grid and dividers apply
   // to it; this component renders the two columns inside and publishes
   // which of the round's states it is in through `phase`.
-  import { setHistorySettings } from '../lib/api'
+  import { deleteHistoryFiles, setHistorySettings } from '../lib/api'
   import { TRACK_X0, TRACK_X1, formatSize } from '../lib/memory'
   import {
     DAYS_MAX,
     DAYS_MIN,
     DAY_TICKS,
+    DELETE_FILES_LABEL,
     HOW_TO_MOUNT_URL,
     barLabel,
     bytesOfMib,
     capMark,
     dayX,
     daysAtX,
+    deleteArmedLabel,
+    deletePasswordLabel,
     heldRow,
     memoryHint,
     mibOf,
     pageStepDays,
     proposeCap,
     proposeDays,
-    proposeOff,
     stepDays,
     type DiskPhase,
     type DiskProposal,
@@ -78,19 +85,40 @@
     onchanged?: (next: HistorySettings) => void
   } = $props()
 
-  // One proposal at a time: days from the track, a cap from the field,
-  // or off from its link. Opening one closes the others.
+  // One proposal at a time: days from the track or a cap from the
+  // field. Opening one closes the other.
   let proposedDays = $state<number | null>(null)
   let capEditing = $state(false)
   let capText = $state('')
-  let offProposed = $state(false)
   let applying = $state(false)
   let error = $state<string | null>(null)
   let dragging = $state(false)
   let capInput = $state<HTMLInputElement | null>(null)
 
+  // The delete action (#1354): at rest, armed by a first click, then
+  // asking for the password after a second. A click anywhere else
+  // disarms it; once asking, only its own `keep them` or a success
+  // closes the field, so a mistyped password can be tried again.
+  let deleteArmed = $state(false)
+  let deleteAsking = $state(false)
+  let deletePassword = $state('')
+  let deleting = $state(false)
+  let deleteError = $state<string | null>(null)
+  let passwordInput = $state<HTMLInputElement | null>(null)
+
+  const keptDays = $derived(!settings.enabled && settings.held ? settings.held.days : 0)
+
+  $effect(() => {
+    if (deleteAsking) passwordInput?.focus()
+  })
+
+  // Nothing held any more (deleted, or turned back on elsewhere): the
+  // action has nothing to act on, so it goes back to rest.
+  $effect(() => {
+    if (keptDays === 0) resetDelete()
+  })
+
   const proposal = $derived.by<DiskProposal | null>(() => {
-    if (offProposed) return proposeOff(settings)
     if (proposedDays !== null) return proposeDays(settings, proposedDays)
     if (capEditing) {
       const bytes = bytesOfMib(capText)
@@ -154,7 +182,6 @@
 
   function openDays(days: number) {
     capEditing = false
-    offProposed = false
     proposedDays = days
     error = null
   }
@@ -213,7 +240,6 @@
 
   function openCap() {
     proposedDays = null
-    offProposed = false
     capText = String(mibOf(settings.maxBytes))
     capEditing = true
     error = null
@@ -254,7 +280,6 @@
   function keep() {
     proposedDays = null
     capEditing = false
-    offProposed = false
     error = null
   }
 
@@ -265,17 +290,71 @@
   }
 
   async function turnOff() {
-    proposedDays = null
-    capEditing = false
-    error = null
-    if (proposeOff(settings) === null) {
-      // Nothing on disk to delete, so, like turning on, not a proposal.
-      await send({ enabled: false, days: settings.days, maxBytes: settings.maxBytes })
+    // Keeps the files (#1354), so, like turning on, not a proposal.
+    keep()
+    await send({ enabled: false, days: settings.days, maxBytes: settings.maxBytes })
+  }
+
+  function onDeleteClick(event: MouseEvent) {
+    // Stopped so the window's own click, which disarms, does not undo
+    // the arming this click just did.
+    event.stopPropagation()
+    if (deleteArmed) {
+      deleteArmed = false
+      deleteAsking = true
+      deleteError = null
       return
     }
-    offProposed = true
+    deleteArmed = true
+  }
+
+  function disarmDelete() {
+    deleteArmed = false
+  }
+
+  function resetDelete() {
+    deleteArmed = false
+    deleteAsking = false
+    deletePassword = ''
+    deleteError = null
+  }
+
+  async function submitDelete() {
+    if (deleting || !deletePassword) return
+    deleting = true
+    deleteError = null
+    let result: HistorySettings | string
+    try {
+      result = await deleteHistoryFiles(deletePassword)
+    } catch {
+      // An unreadable answer: the delete may or may not have happened,
+      // so say so and let the card's own refresh show which.
+      result = 'the server answered, but not in a form this page could read -- reload to see what is on disk'
+    } finally {
+      deleting = false
+    }
+    if (typeof result === 'string') {
+      // The server's own words -- "incorrect password", "turn history
+      // off first" -- and the field stays open for another try.
+      deleteError = result
+      return
+    }
+    resetDelete()
+    onchanged?.(result)
+  }
+
+  function onPasswordKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      submitDelete()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      resetDelete()
+    }
   }
 </script>
+
+<svelte:window onclick={disarmDelete} />
 
 {#snippet track()}
   <line x1={TRACK_X0} y1="24" x2={TRACK_X1} y2="24" class="mrail" />
@@ -344,7 +423,34 @@
     {#if settings.enabled}
       <p class="oghint">one encrypted file a day; the oldest day lets go when the days or the cap is reached, whichever first</p>
     {:else}
-      <p class="oghint">{memoryHint(memoryReach)}</p>
+      <p class="oghint">{memoryHint(memoryReach, keptDays > 0)}</p>
+    {/if}
+    {#if canEdit && keptDays > 0}
+      <div class="delfiles">
+        {#if deleteAsking}
+          <label class="pwlabel">
+            {deletePasswordLabel(keptDays)}
+            <input
+              class="oin pw"
+              type="password"
+              autocomplete="current-password"
+              bind:this={passwordInput}
+              bind:value={deletePassword}
+              onkeydown={onPasswordKeyDown}
+            />
+          </label>
+          <button class="olink" disabled={deleting || !deletePassword} onclick={submitDelete}>{deleting ? 'deleting…' : 'submit'}</button>
+          ·
+          <button class="olink" disabled={deleting} onclick={resetDelete}>keep them</button>
+        {:else}
+          <button class="olink delete" class:armed={deleteArmed} onclick={onDeleteClick}>
+            {deleteArmed ? deleteArmedLabel(keptDays) : DELETE_FILES_LABEL}
+          </button>
+        {/if}
+      </div>
+      {#if deleteError}
+        <p class="oghint err" role="alert">{deleteError}</p>
+      {/if}
     {/if}
 
     <!-- An admin drags it; everyone else reads it. No lock icon and no
@@ -418,7 +524,7 @@
         {:else}
           {formatSize(settings.maxBytes)}
         {/if}
-        {#if offProposed || (!settings.enabled && !canEdit)}
+        {#if !settings.enabled && !canEdit}
           · <span class="dim">off</span>
         {:else if !settings.enabled}
           · <button class="olink" disabled={applying} onclick={turnOn}>turn on</button>
@@ -611,6 +717,32 @@
   .olink:disabled {
     cursor: default;
     opacity: 0.6;
+  }
+
+  /* The delete action (#1354): quiet at rest, the alarm colour once
+     armed, as EngineRoom's armed remove is. */
+  .delfiles {
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+  }
+
+  .olink.delete {
+    color: var(--fg-dim);
+  }
+
+  .olink.delete.armed {
+    color: var(--alarm);
+  }
+
+  .pwlabel {
+    margin-right: 6px;
+  }
+
+  .oin.pw {
+    width: 16ch;
+    text-align: left;
+    margin-left: 6px;
   }
 
   /* The cap's own field, in the row where the figure was. */
