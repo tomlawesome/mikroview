@@ -4,6 +4,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"fmt"
 	"strings"
 	"time"
@@ -224,11 +225,14 @@ func (s *Store) GenerateRecoveryCodesIfAbsent(userID string, now time.Time) (cod
 // error, since a login flow only reaches this after already resolving
 // the account.
 //
-// Every unused code is checked even after a match is found, rather than
-// stopping at the first: the same reasoning RecoveryStore.Redeem's doc
-// comment gives for the separate host-recovery-key store -- the time a
-// check takes should not tell an observer which of the ten codes (by
-// position) just matched.
+// Every slot is checked, spent ones included, even after a match is
+// found: the same reasoning RecoveryStore.Redeem's doc comment gives for
+// the separate host-recovery-key store -- the time a check takes should
+// not tell an observer which of the ten codes (by position) just
+// matched, nor how many are already spent. Skipping spent slots, as
+// this once did, made a wrong code about one Argon2id derivation faster
+// to reject per code already used (#1345 SEC-A2-F1). A match on a spent
+// slot is computed and then discarded, without a branch on either.
 func (s *Store) BurnRecoveryCode(userID, code string, now time.Time) (bool, error) {
 	normalised := NormaliseRecoveryCode(code)
 
@@ -245,12 +249,14 @@ func (s *Store) BurnRecoveryCode(userID, code string, now time.Time) (bool, erro
 	matchIdx := -1
 	for i := range u.RecoveryCodes {
 		rc := &u.RecoveryCodes[i]
-		if !rc.UsedAt.IsZero() {
-			continue
-		}
+		hit, unused := 0, 0
 		if VerifyPassword(normalised, rc.Hash) {
-			matchIdx = i
+			hit = 1
 		}
+		if rc.UsedAt.IsZero() {
+			unused = 1
+		}
+		matchIdx = subtle.ConstantTimeSelect(hit&unused, i, matchIdx)
 	}
 	if matchIdx == -1 {
 		return false, nil
