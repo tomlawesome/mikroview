@@ -36,11 +36,11 @@
   const marks = $derived.by(() => {
     const m = new Map<number, string>()
     for (const p of ed.problems) {
-      if (m.get(p.line) !== 'error') m.set(p.line, p.severity === 'error' ? 'error' : 'warning')
+      if (m.get(p.line) !== 'error') m.set(p.line, p.severity === 'fatal' ? 'error' : 'warning')
     }
     return m
   })
-  const errorCount = $derived(ed.problems.filter((p) => p.severity === 'error').length)
+  const errorCount = $derived(ed.problems.filter((p) => p.severity === 'fatal').length)
 
   // --- the in-editor questions: at most one bar at a time ------------------
 
@@ -401,9 +401,9 @@
           <ul class="plist">
             {#each ed.problems as p, i (i)}
               <li>
-                <button type="button" class="row {p.severity === 'error' ? 'error' : 'warning'}" onclick={() => goToLine(p.line)}>
+                <button type="button" class="row {p.severity === 'fatal' ? 'error' : 'warning'}" onclick={() => goToLine(p.line)}>
                   <span class="where">line {p.line}</span>
-                  <span class="sev">{p.severity === 'error' ? 'must fix' : 'check'}</span>
+                  <span class="sev">{p.severity === 'fatal' ? 'must fix' : 'warning'}</span>
                   <span class="what">{p.message}</span>
                 </button>
               </li>
@@ -423,7 +423,7 @@
               <li class="snap">
                 <div class="sline">
                   <span>{whenLabel(s.when)}</span>
-                  <span class="dim">· {s.by} · {whyLabel(s.why)} · schema {s.schema}</span>
+                  <span class="dim">· {s.by} · {whyLabel(s.why)} · schema {s.schema}{s.version ? ` · ${s.version}` : ''}</span>
                 </div>
                 {#if s.note}<div class="snote">{s.note}</div>{/if}
                 <div class="sacts">

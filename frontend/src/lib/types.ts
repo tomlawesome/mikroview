@@ -2487,13 +2487,27 @@ export interface ConfigEditorOpen {
   runningSchema: number
 }
 
+/** GET /api/config/editor/summary's answer -- the same file facts as
+ *  ConfigEditorOpen, minus the text, plus the snapshot count. No
+ *  password and no unlock: this is what the Config card shows before
+ *  the editor has ever been opened. */
+export interface ConfigEditorSummary {
+  path: string
+  header: ConfigHeader | null
+  schemaGuess: number
+  runningVersion: string
+  runningSchema: number
+  snapshotCount: number
+  changedSinceStart: boolean
+}
+
 /** One line the validator has something to say about. Named apart from
  *  configProblems.svelte.ts's ConfigProblem, which is the start-up
  *  banner's different shape. */
 export interface ConfigEditorProblem {
   line: number
   key: string
-  severity: 'error' | 'warning' | string
+  severity: 'fatal' | 'warning'
   message: string
 }
 
@@ -2522,6 +2536,8 @@ export interface ConfigSnapshotSummary {
   when: string
   by: string
   schema: number
+  /** The release its header named it for, "" for a headerless snapshot. */
+  version: string
   /** 'manual' or 'before-carry-forward'. */
   why: string
   note?: string
@@ -2530,4 +2546,11 @@ export interface ConfigSnapshotSummary {
 /** GET /api/config/snapshots/{id}: the summary plus the text itself. */
 export interface ConfigSnapshot extends ConfigSnapshotSummary {
   text: string
+}
+
+/** GET /api/config/snapshots' envelope: the list plus how many of them
+ *  MikroView keeps. */
+export interface ConfigSnapshotsList {
+  keep: number
+  snapshots: ConfigSnapshotSummary[]
 }

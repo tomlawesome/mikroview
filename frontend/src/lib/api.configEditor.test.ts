@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  configEditorSummary,
   createConfigSnapshot,
   deleteConfigSnapshot,
   downloadConfig,
@@ -75,12 +76,31 @@ describe('config editor API (#1347)', () => {
     await expect(validateConfig('x')).rejects.toThrow('the server could not do that (500)')
   })
 
-  it('lists snapshots from a bare array or a {snapshots} envelope', async () => {
-    const one = { id: 'a', when: '2026-09-27T10:00:00Z', by: 'tom', schema: 7, why: 'manual' }
-    stub(new Response(JSON.stringify([one]), { status: 200 }))
-    expect(await fetchConfigSnapshots()).toEqual([one])
-    stub(new Response(JSON.stringify({ snapshots: [one] }), { status: 200 }))
-    expect(await fetchConfigSnapshots()).toEqual([one])
+  it('reads the snapshot list envelope, keep and all', async () => {
+    const one = { id: 'a', when: '2026-09-27T10:00:00Z', by: 'tom', schema: 7, version: 'mikroview v0.6.1', why: 'manual' }
+    stub(new Response(JSON.stringify({ available: true, reason: null, keep: 5, snapshots: [one] }), { status: 200 }))
+    expect(await fetchConfigSnapshots()).toEqual({ keep: 5, snapshots: [one] })
+  })
+
+  it('reads the ungated summary route', async () => {
+    stub(
+      new Response(
+        JSON.stringify({
+          path: '/etc/mikroview/config.yaml',
+          header: { schema: 7, writtenBy: 'mikroview v0.6.1', layout: 1 },
+          schemaGuess: 7,
+          runningVersion: 'v0.7.0',
+          runningSchema: 8,
+          snapshotCount: 2,
+          changedSinceStart: false,
+        }),
+        { status: 200 },
+      ),
+    )
+    const res = await configEditorSummary()
+    if (typeof res === 'string') throw new Error('expected the summary')
+    expect(res.path).toBe('/etc/mikroview/config.yaml')
+    expect(res.snapshotCount).toBe(2)
   })
 
   it('keeps and deletes snapshots at the contract\'s routes', async () => {

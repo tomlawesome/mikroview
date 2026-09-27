@@ -63,8 +63,8 @@ function opened(overrides: Partial<ConfigEditorOpen> = {}): ConfigEditorOpen {
 }
 
 const SNAPS: ConfigSnapshotSummary[] = [
-  { id: 's1', when: '2026-09-27T10:00:00Z', by: 'tom', schema: 7, why: 'manual', note: 'before the move' },
-  { id: 's2', when: '2026-09-26T10:00:00Z', by: 'tom', schema: 7, why: 'before-carry-forward' },
+  { id: 's1', when: '2026-09-27T10:00:00Z', by: 'tom', schema: 7, version: 'mikroview v0.6.1', why: 'manual', note: 'before the move' },
+  { id: 's2', when: '2026-09-26T10:00:00Z', by: 'tom', schema: 7, version: '', why: 'before-carry-forward' },
 ]
 
 async function settle() {
@@ -91,7 +91,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   configEditorState.reset()
   vi.mocked(validateConfig).mockResolvedValue({ problems: [] })
-  vi.mocked(fetchConfigSnapshots).mockResolvedValue([])
+  vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: [], keep: 5 })
 })
 
 afterEach(() => {
@@ -120,7 +120,7 @@ describe('the text and the Problems rail', () => {
     vi.mocked(validateConfig).mockClear()
     vi.mocked(validateConfig).mockResolvedValue({
       problems: [
-        { line: 6, key: 'listen.htp', severity: 'error', message: 'listen.htp is not a setting MikroView knows' },
+        { line: 6, key: 'listen.htp', severity: 'fatal', message: 'listen.htp is not a setting MikroView knows' },
         { line: 2, key: '', severity: 'warning', message: 'schema 7 is older than this version' },
       ],
     })
@@ -138,15 +138,17 @@ describe('the text and the Problems rail', () => {
     const rows = Array.from(document.querySelectorAll('.plist button.row')).map((b) => b.textContent?.replace(/\s+/g, ' ').trim())
     expect(rows).toEqual([
       'line 6 must fix listen.htp is not a setting MikroView knows',
-      'line 2 check schema 7 is older than this version',
+      'line 2 warning schema 7 is older than this version',
     ])
     expect(document.querySelector('.gutter .ln.error')?.textContent).toBe('6')
     expect(document.querySelector('.gutter .ln.warning')?.textContent).toBe('2')
+    // The fatal problem is counted as "must be fixed"; the warning is not.
+    expect(document.querySelector('h3 .count')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('2 · 1 must be fixed')
   })
 
   it('moves the caret to a problem\'s line when it is clicked', async () => {
     vi.mocked(validateConfig).mockResolvedValue({
-      problems: [{ line: 6, key: 'listen.http', severity: 'error', message: 'bad port' }],
+      problems: [{ line: 6, key: 'listen.http', severity: 'fatal', message: 'bad port' }],
     })
     await openEditor()
     await fireEvent.click(screen.getByText('bad port'))
@@ -317,16 +319,19 @@ describe('Download', () => {
 })
 
 describe('snapshots', () => {
-  it('lists them with when, by, why and schema', async () => {
-    vi.mocked(fetchConfigSnapshots).mockResolvedValue(SNAPS)
+  it('lists them with when, by, why, schema and version', async () => {
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
     await openEditor()
     const rows = Array.from(document.querySelectorAll('.snap .sline .dim')).map((el) => el.textContent?.trim())
-    expect(rows).toEqual(['· tom · kept by hand · schema 7', '· tom · before Carry forward · schema 7'])
+    expect(rows).toEqual([
+      '· tom · kept by hand · schema 7 · mikroview v0.6.1',
+      '· tom · before Carry forward · schema 7',
+    ])
     expect(screen.getByText('before the move')).toBeTruthy()
   })
 
   it('deletes only on the second click, and a click elsewhere disarms', async () => {
-    vi.mocked(fetchConfigSnapshots).mockResolvedValue(SNAPS)
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
     vi.mocked(deleteConfigSnapshot).mockResolvedValue(null)
     await openEditor()
 
@@ -358,7 +363,7 @@ describe('snapshots', () => {
   })
 
   it('loads one into the editor, asking first when there are unsaved edits', async () => {
-    vi.mocked(fetchConfigSnapshots).mockResolvedValue(SNAPS)
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
     vi.mocked(fetchConfigSnapshot).mockResolvedValue({ ...SNAPS[0], text: 'from the snapshot' })
     await openEditor()
     await type(TEXT + '\n# unsaved')
@@ -374,7 +379,7 @@ describe('snapshots', () => {
   })
 
   it('downloads one through the download route, so the server fills in the secrets', async () => {
-    vi.mocked(fetchConfigSnapshots).mockResolvedValue(SNAPS)
+    vi.mocked(fetchConfigSnapshots).mockResolvedValue({ snapshots: SNAPS, keep: 5 })
     vi.mocked(fetchConfigSnapshot).mockResolvedValue({ ...SNAPS[1], text: 'old text' })
     const blob = new Blob(['x'])
     vi.mocked(downloadConfig).mockResolvedValue({ filename: 'config.v0.7.0.yaml', blob })

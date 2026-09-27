@@ -2,6 +2,7 @@
 
 import {
   carryForwardConfig,
+  configEditorSummary,
   createConfigSnapshot,
   deleteConfigSnapshot,
   downloadConfig,
@@ -16,6 +17,7 @@ import type {
   ConfigChange,
   ConfigEditorOpen,
   ConfigEditorProblem,
+  ConfigEditorSummary,
   ConfigSnapshotSummary,
 } from './types'
 
@@ -54,6 +56,13 @@ class ConfigEditorState {
   file = $state<ConfigFileSummary | null>(null)
   changedSinceStart = $state(false)
 
+  /** The file facts from the ungated summary route, for the Config card
+   *  before the editor has ever been opened. Superseded by `file` once
+   *  it has. */
+  summary = $state<ConfigEditorSummary | null>(null)
+  summaryError = $state<string | null>(null)
+  summaryLoaded = $state(false)
+
   text = $state('')
   /** The text as it was last opened, loaded, downloaded or snapshotted --
    *  anything else counts as edits that closing would lose. */
@@ -84,6 +93,8 @@ class ConfigEditorState {
   unlocking = $state(false)
 
   snapshots = $state<ConfigSnapshotSummary[]>([])
+  /** How many snapshots MikroView keeps, from the list route's own answer. */
+  snapshotsKeep = $state(0)
   snapshotsLoaded = $state(false)
   snapshotsError = $state<string | null>(null)
   snapshotting = $state(false)
@@ -352,13 +363,34 @@ class ConfigEditorState {
 
   async refreshSnapshots(): Promise<void> {
     try {
-      const list = await fetchConfigSnapshots()
-      this.snapshots = [...list].sort((a, b) => (a.when < b.when ? 1 : a.when > b.when ? -1 : 0))
+      const { snapshots, keep } = await fetchConfigSnapshots()
+      this.snapshots = [...snapshots].sort((a, b) => (a.when < b.when ? 1 : a.when > b.when ? -1 : 0))
+      this.snapshotsKeep = keep
       this.snapshotsError = null
     } catch (err) {
       this.snapshotsError = errorText(err)
     } finally {
       this.snapshotsLoaded = true
+    }
+  }
+
+  // --- the summary (before the editor is opened) -------------------------
+
+  /** GET /api/config/editor/summary: what the Config card shows before
+   *  the password has ever been typed. */
+  async refreshSummary(): Promise<void> {
+    try {
+      const res = await configEditorSummary()
+      if (typeof res === 'string') {
+        this.summaryError = res
+        return
+      }
+      this.summary = res
+      this.summaryError = null
+    } catch (err) {
+      this.summaryError = errorText(err)
+    } finally {
+      this.summaryLoaded = true
     }
   }
 
@@ -449,7 +481,11 @@ class ConfigEditorState {
     this.file = null
     this.changedSinceStart = false
     this.guessConfirmed = false
+    this.summary = null
+    this.summaryError = null
+    this.summaryLoaded = false
     this.snapshots = []
+    this.snapshotsKeep = 0
     this.snapshotsLoaded = false
     this.snapshotsError = null
   }
