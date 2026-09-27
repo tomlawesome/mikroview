@@ -523,6 +523,7 @@ lint:script-tests:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash scripts/ci-changed-paths-guard.test.sh
     - bash scripts/ci-reuse-gate.test.sh
+    - bash scripts/coverage-floor.test.sh
 
 lint:go:
   stage: lint
@@ -627,6 +628,10 @@ test:go:
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
     - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
+    # #1333: the ratchet against supply-chain/coverage-floors.yml. Runs as
+    # root (back from `su` above), which is fine -- coverage.out is
+    # ci-test-owned but world-readable, and nothing below writes to it.
+    - python3 scripts/coverage-floor.py coverage.out
   # The runner reuses its build directory between pipelines, so leaving the
   # checkout owned by ci-test hands the next pipeline's root-run jobs a
   # repository git will not touch. Give it back (#908).
