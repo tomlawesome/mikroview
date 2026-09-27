@@ -1017,6 +1017,17 @@ func rfc3164HeaderLen(data []byte) int {
 			limit = maxPRIWidth
 		}
 		end := bytes.IndexByte(data[:limit], '>')
+		if headerScanWorkCounting.Load() {
+			// Bytes the '>' search actually examined: all of limit if
+			// it wasn't found, or up to and including the match. Lets
+			// a test measure the scan's work directly instead of
+			// timing it -- see headerScanWorkCounting.
+			if end < 0 {
+				headerScanWorkCount.Add(int64(limit))
+			} else {
+				headerScanWorkCount.Add(int64(end + 1))
+			}
+		}
 		if end <= 0 || end > 4 {
 			return -1
 		}
@@ -1090,6 +1101,17 @@ func looksLikeBSDTimestamp(data []byte) bool {
 // rescanning pending's already-checked prefix each time (see
 // headerScanned in its own read loop), so a large message built from
 // many small reads is scanned once in total, not once per read.
+// headerScanWorkCounting and headerScanWorkCount let a test measure the
+// PRI '>' scan's work (bytes examined) instead of its wall-clock time --
+// nil-cost in production: one atomic load per rfc3164HeaderLen call,
+// false unless a test turns counting on. See the ratio test in
+// tcp_listener_test.go, which does the O(n) vs O(n^2) regression check
+// this way so a busy host can't make it flake on scheduling noise.
+var (
+	headerScanWorkCounting atomic.Bool
+	headerScanWorkCount    atomic.Int64
+)
+
 func nextHeaderStart(data []byte, from int) int {
 	for i := from; i < len(data); i++ {
 		if rfc3164HeaderLen(data[i:]) >= 0 {
