@@ -523,6 +523,7 @@ lint:script-tests:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash scripts/ci-changed-paths-guard.test.sh
     - bash scripts/ci-reuse-gate.test.sh
+    - bash scripts/coverage-floor.test.sh
 
 lint:go:
   stage: lint
@@ -626,11 +627,15 @@ test:go:
     - scripts/fetch-upgrade-fixtures.sh
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
-    # #1392: -timeout 20m, not the 10m default. internal/api alone takes
-    # 430-590s under -race on the shared runner and crossed 600s on
-    # 2026-09-27; the timeout is here to catch a hang, not to time the
-    # suite. #1392 owns bringing internal/api back under 5 minutes.
+    # #1392: -timeout 20m, not the 10m default. internal/api reached
+    # 430-600s under -race on the shared runner before #1392 cut its
+    # password-hashing cost; the timeout is here to catch a hang, not to
+    # time the suite.
     - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -timeout 20m -coverprofile=coverage.out"
+    # #1333: the ratchet against supply-chain/coverage-floors.yml. Runs as
+    # root (back from `su` above), which is fine -- coverage.out is
+    # ci-test-owned but world-readable, and nothing below writes to it.
+    - python3 scripts/coverage-floor.py coverage.out
   # The runner reuses its build directory between pipelines, so leaving the
   # checkout owned by ci-test hands the next pipeline's root-run jobs a
   # repository git will not touch. Give it back (#908).
@@ -653,7 +658,9 @@ test:frontend:
   script:
     - cd frontend
     - npm ci
-    - npm test
+    # #1333: --coverage turns on vitest.config.ts's coverage.thresholds,
+    # so a regression below the measured ratchet fails this job.
+    - npm test -- --coverage
 
 # The checks that need the frontend actually built, moved here from GitHub's
 # ci.yml `test` job (#935 step 7). Each one's reason is in the script it

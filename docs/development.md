@@ -53,6 +53,8 @@ see `../.claude/skills/live-check/SKILL.md`.
 - Anything touching `internal/auth` or `internal/api/auth.go` should be
   run with `-race` locally — the CI security job does this too, but
   catching it locally is faster.
+- Go coverage is gated per package by a ratchet — see
+  [docs/testing.md](testing.md).
 
 ## Security
 
