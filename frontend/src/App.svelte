@@ -42,12 +42,12 @@
   // scoped to whichever scene's own bar renders it, and this overlay
   // outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
-  // The setup wizard is a modal over the shell, not a page (#487) -- so
-  // it is mounted here with the other overlays rather than reached
-  // through appState.view. Its "Run setup…" row lives in the account
-  // menu (desktop) and the bottom bar (mobile), both of which call
-  // wizardState.launch() directly.
-  import SetupWizard from './components/SetupWizard.svelte'
+  // The setup wizard is a full screen over the shell, not a page
+  // (#1381, after #487's modal) -- so it is mounted here with the other
+  // overlays rather than reached through appState.view. Its "Run
+  // setup…" row lives in the account menu (desktop) and the bottom bar
+  // (mobile), both of which call wizardState.launch() directly.
+  import Wizard from './components/wizard/Wizard.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
@@ -390,7 +390,7 @@
   <HostDossier />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
-  <SetupWizard />
+  <Wizard />
   <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
        beat 6 (the tour) rings the deck's own cards -- both stay mounted
        alongside the shell above rather than replacing it, since the
