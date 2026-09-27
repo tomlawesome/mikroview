@@ -300,17 +300,21 @@ type Log struct {
 	Level string `yaml:"level"`
 }
 
-// GeoIP is entirely optional -- see internal/geoip. Left empty, the
-// country-flag feature just doesn't show anything; there is no default
-// database bundled or fetched, since MaxMind requires a free account to
-// obtain one.
+// GeoIP configures internal/geoip's country flags and network-owner
+// lookups (#1352). On with no setup: DB-IP Lite needs no account, and
+// the two keyed sources (IPinfo Lite, MaxMind GeoLite2) are switched on
+// by entering their keys in the Engine Room -- never here. API keys are
+// deliberately not config fields (owner, 2026-09-27: "one source of
+// truth"); they live sealed in the settings store.
+//
+// There is no source or URL setting, for the reason OUI below gives: an
+// operator enabling a feed is trusting MikroView's vetting of it.
 type GeoIP struct {
-	// DBPath is kept out of the backup set (#372) on purpose: it names an
-	// external MaxMind database file the operator downloads themselves,
-	// not a store mikroview writes -- there is nothing here for a
-	// restore to reproduce that a fresh download would not already give
-	// back. See backup_cli.go's excludedFromBackup.
-	DBPath string `yaml:"dbPath"`
+	// CachePath is the directory the fetched databases are kept in
+	// between restarts, so flags are there on the first event rather
+	// than after the first download. Empty keeps them in memory only
+	// (every start fetches afresh).
+	CachePath string `yaml:"cachePath"`
 }
 
 // Reputation is entirely optional -- see internal/reputation. Shodan's
@@ -671,7 +675,7 @@ type TLS struct {
 // internal/auth.Store.FindOrCreateOIDCUser for identity storage/JIT
 // provisioning. Empty IssuerURL means OIDC is not configured, the same
 // "empty means opt-out, no separate enabled bool" contract
-// Reputation.AbuseIPDBKey/GeoIP.DBPath already use -- there's no
+// Reputation.AbuseIPDBKey already uses -- there's no
 // scenario where a fully-populated OIDC block should be silently
 // inert, unlike Notify's SMTP/Pushover (each independently optional
 // *within* one shared block), so a bare bool would be redundant here.
@@ -1481,6 +1485,9 @@ func defaults() Config {
 			Enabled:   true,
 			CachePath: DefaultDataDir + "/oui-registry.json",
 		},
+		GeoIP: GeoIP{
+			CachePath: DefaultDataDir + "/geoip",
+		},
 		Snapshot: Snapshot{
 			Interval: defaultSnapshotInterval,
 			Keep:     defaultSnapshotKeep,
@@ -1655,9 +1662,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
-	}
-	if v := os.Getenv("MIKROVIEW_GEOIP_DB_PATH"); v != "" {
-		cfg.GeoIP.DBPath = v
 	}
 	if v := os.Getenv("MIKROVIEW_ABUSEIPDB_KEY"); v != "" {
 		cfg.Reputation.AbuseIPDBKey = v
@@ -2046,6 +2050,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_OUI_CACHE_PATH"); v != "" {
 		cfg.OUI.CachePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_GEOIP_CACHE_PATH"); v != "" {
+		cfg.GeoIP.CachePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
 		cfg.Engine.StorePath = v
 	}
@@ -2185,7 +2192,6 @@ func applyFlags(cfg *Config, args []string) error {
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
 	maxMemory := cfg.Store.MaxMemory
 	fs.Var(&maxMemory, "max-memory", "memory budget for the event ring buffer, e.g. 120MiB (see docs/configuration.md)")
-	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
 
 	// The flag package's own usage, with OtherCommands after it: the
 	// standalone modes never reach this FlagSet, so nothing else can
@@ -2205,6 +2211,5 @@ func applyFlags(cfg *Config, args []string) error {
 	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
 	cfg.Store.MaxMemory = maxMemory
-	cfg.GeoIP.DBPath = *geoipDB
 	return nil
 }

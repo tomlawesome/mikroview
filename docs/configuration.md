@@ -24,11 +24,10 @@ chmod 600 the-file
 
 That is the rule for **every** file you mount in: `config.yaml`, the
 [Postgres DSN file](#postgres-optional),
-[`history.keyFile`](#on-disk-event-history-on-by-default), your
-own [TLS `certFile`/`keyFile`](#tls), and the
-[GeoIP database](#geoip-country-flags-optional). A file only MikroView
+[`history.keyFile`](#on-disk-event-history-on-by-default),
+and your own [TLS `certFile`/`keyFile`](#tls). A file only MikroView
 reads (the DSN, the history key, a TLS private key) should stay `600`; a
-certificate or a GeoIP database is not a secret and `644` is fine.
+certificate is not a secret and `644` is fine.
 
 A whole *directory* you bind-mount — the data directory — is the same
 idea with `-R`: `sudo chown -R 1000:1000 ./data`, described in
@@ -1365,30 +1364,80 @@ only the real server-start path.
 
 ## GeoIP country flags (optional)
 
-MikroView can show a country flag next to public source/destination
-addresses, using a MaxMind GeoLite2 (or paid GeoIP2) **Country** or
-**City** database. This is entirely opt-in: MikroView doesn't bundle a
-database or call out to MaxMind at runtime, since their license requires
-you to create your own free account to obtain one.
+MikroView shows a country flag next to public source and destination
+addresses, and -- with an IPinfo token -- the network that owns an
+address ("AS13335 Cloudflare") in the IP popover, the host dossier and
+the flag's tooltip. **Flags work with no setup.** Nothing ships in the
+image: your instance downloads the data itself and keeps it at
+`cachePath`.
 
-1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
-   and download `GeoLite2-Country.mmdb` (or generate a license key and use
-   their `geoipupdate` tool to keep it current).
-2. **Put the file at `mikroview/GeoLite2-Country.mmdb` and restart** —
-   MikroView finds it there with nothing else set. It has to be readable
-   by the user MikroView runs as — see
-   [Files you mount into the container](#files-you-mount-into-the-container).
-   A GeoIP database is not a secret, so `chmod 644` is fine here.
+```yaml
+geoip:
+  cachePath: /var/lib/mikroview/geoip
+```
 
-   Naming the path explicitly instead — `MIKROVIEW_GEOIP_DB_PATH`,
-   `geoip.dbPath` in `config.yaml`, or `-geoip-db` for local development
-   — works and keeps working; it wins over the folder.
+`cachePath` is a directory. MikroView writes one `.mmdb` file per source
+there, plus a small `state.json` recording when each was fetched, all
+`0600` in a `0700` directory. Empty keeps the databases in memory only,
+so every start downloads them again. The cache is someone else's
+public data, not MikroView's own state, so it is left out of backups and
+of `-migrate-data` -- the next refresh fetches it back. Override with
+`MIKROVIEW_GEOIP_CACHE_PATH`.
 
-If the path is unset, empty, or the file can't be opened/parsed, MikroView
-logs a note at startup and simply shows no flags — this is never a fatal
-error. The UI says so too rather than leaving a reader to guess why every
-flag is blank: the country filter's select carries a disabled "no GeoIP
-database" row, and Settings ▸ ingest states the same fact in one line.
+Three sources, used in a fixed order -- there is no picker:
+
+| Source | Needs | Gives | Refresh |
+|---|---|---|---|
+| **IPinfo Lite** | a free [IPinfo](https://ipinfo.io/lite) token | country and network owner | daily |
+| **MaxMind GeoLite2-Country** | a free [MaxMind](https://www.maxmind.com/en/geolite2/signup) account ID and licence key | country | daily |
+| **DB-IP IP-to-Country Lite** | nothing | country | monthly |
+
+IPinfo beats MaxMind, which beats DB-IP. DB-IP is what you get out of
+the box. Enter a key and MikroView fetches that source straight away and
+switches to it once the file has arrived; remove the key and it falls
+back at once. Only the source in use answers: an address it has no
+entry for gets no flag rather than one borrowed from a lower source.
+
+**Keys are entered in the web UI only**, on the Engine Room's "Country
+and network owner" card (admins only), never in `config.yaml` -- one
+place to set them, no second source of truth. The card shows "key set"
+and a Remove button, never the key again. Keys are stored sealed under
+[`history.keyFile`](#on-disk-event-history-on-by-default), the same key
+and scheme router backups use, and they travel in `-backup` files in
+that sealed form -- so a backup restored onto an instance with a
+different `history.keyFile` needs them entered again. **With no
+`history.keyFile` mounted, key entry is refused**: MikroView will not
+keep an API key in the clear, and DB-IP stays in use. Keys never appear
+in logs; IPinfo's token travels in its download URL, so every error
+MikroView records for that source has the URL's query string removed.
+
+Every download goes through the same guard as the other feeds (no
+connection to a private, loopback or reserved address, redirects
+included), is capped at 128 MiB, uses a conditional request where the
+provider allows it, and must open as a valid database before it
+replaces the one in use. A failed refresh keeps the last good file and
+tries again an hour later (a day later if the provider refused the key).
+Data older than 45 days keeps being used, with a warning in the log.
+DB-IP publishes a new file each month; early in a month, before it is
+out, MikroView keeps last month's and checks again daily.
+
+If no source has loaded yet -- the first minute after a fresh start, or
+a host with no internet access -- flags are simply blank, never an
+error. `GET /api/healthz` says so: `geoip` is whether flags are
+available, `geoSource` which source is in use (`dbip`, `ipinfo`,
+`maxmind`, or `null`).
+
+Credits, because each source asks for one: IPinfo and MaxMind are
+credited in About. DB-IP asks for a link on the page that shows its
+results, so while DB-IP is the source in use a small "IP Geolocation by
+DB-IP" link sits at the foot of the stream; it goes once IPinfo or
+MaxMind is set up.
+
+Earlier releases used `geoip.dbPath` instead: a MaxMind file you
+downloaded and mounted yourself. That key, its `-geoip-db` flag,
+`MIKROVIEW_GEOIP_DB_PATH` and the app folder's `GeoLite2-Country.mmdb`
+are gone -- a config that still sets `dbPath` refuses to start and says
+so. Enter the MaxMind account ID and licence key on the card instead.
 
 ## IP reputation lookup (optional)
 
@@ -3392,7 +3441,7 @@ the router-backup vault (`backup.vaultDir`, #394) — every generation
 still encrypted exactly as it sits on disk, so a restore never needs the
 retention key to move it.
 
-Three things are deliberately left out, and always have been:
+Three things are deliberately left out:
 
 - **The TLS certificate and key material** (`tls.storePath`) — a
   directory of generated key material, not a single document like every
@@ -3403,9 +3452,10 @@ Three things are deliberately left out, and always have been:
 - **The recovery pepper** (`auth.recoveryPepperPath`) — the secret mixed
   into every recovery-key digest. Keeping it out means a stolen backup
   carries the digests and nothing able to verify them against.
-- **The GeoIP database** (`geoip.dbPath`) — a file you downloaded from
-  MaxMind yourself, not something MikroView wrote. A fresh download
-  replaces it exactly.
+- **The country data cache** (`geoip.cachePath`) — somebody else's
+  public databases, which the next refresh downloads again. The API
+  keys that fetch them are in the backup, inside the settings store and
+  still sealed under `history.keyFile`.
 
 **It contains your credentials.** That is deliberate — a backup that
 leaves them out cannot restore a working system, and you would find that
@@ -4428,7 +4478,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_MEMORY` | `store.maxMemory` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
-| `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
+| `MIKROVIEW_GEOIP_CACHE_PATH` | `geoip.cachePath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |
 | `MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD` | `flags.portScanThreshold` |
@@ -4752,7 +4802,7 @@ before it could reach a database at all.
 ## CLI flags (local development)
 
 `-version`, `-syslog-tls`, `-http`,
-`-http-redirect`, `-retention`, `-max-memory`, `-geoip-db` — see
+`-http-redirect`, `-retention`, `-max-memory` — see
 `go run . -h`. Devices,
 rule/host names, and auth config can only be set via YAML/env, not
 flags.

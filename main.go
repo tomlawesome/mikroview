@@ -661,7 +661,7 @@ func main() {
 	// One line per optional file the app folder was asked for, found or
 	// not, naming the path (#1243). Said out loud at every boot because
 	// the whole contract is "drop the file in and restart": an operator
-	// who put the GeoIP database one directory too deep otherwise has
+	// who put the history key one directory too deep otherwise has
 	// only a feature that stayed off and nothing to compare against.
 	// Nothing is printed for a setting config or the environment
 	// already named -- the folder was not consulted for it.
@@ -736,22 +736,6 @@ func main() {
 	}
 	syslog.SetConfiguredSources(configuredSources)
 	h := hub.New()
-	geoLog := logging.New("geoip")
-	geo, err := geoip.Open(cfg.GeoIP.DBPath)
-	if err != nil {
-		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
-	}
-	// One info line on every start, not just on a failed open (#1198): the
-	// unset and the opened-fine cases were both silent before this, so the
-	// owner had no way to tell from the logs whether geoip.dbPath had
-	// actually taken. A failed open still gets the Warn above as well --
-	// this line only adds the two cases that previously said nothing.
-	if geo.Configured() {
-		geoLog.Info(fmt.Sprintf("%s opened", cfg.GeoIP.DBPath))
-	} else if cfg.GeoIP.DBPath == "" {
-		geoLog.Info("no database configured (country flags off)")
-	}
-	defer geo.Close()
 	// rep: always built (AbuseIPDBKey empty just means that one source
 	// inside it stays inert; Shodan InternetDB is free/keyless and
 	// always queried).
@@ -778,6 +762,27 @@ func main() {
 	// and who lowered it in the UI precisely because of that, would find
 	// the instance still failing to start on the figure they replaced.
 	storeMaxMemory, storeCapacity, settingsStore := openStoreSettings(bootCtx, persistence, cfg)
+
+	// Country flags and network owners (#1352): three runtime-fetched
+	// sources, IPinfo > MaxMind > DB-IP, with the two keyed ones' keys
+	// sealed in the settings store under the same retention key the
+	// router-backup vault uses. Built after the settings store because
+	// it reads the stored keys; no network I/O here -- the refresh loop
+	// below does that. Cached files are opened now, so flags are on
+	// from the first event after a restart.
+	geoLog := logging.New("geoip")
+	geo := geoip.New(geoip.Options{
+		CacheDir: cfg.GeoIP.CachePath,
+		Keys:     settingsStore,
+		Sealer:   persistence.key,
+		Log:      geoLog,
+	})
+	defer geo.Close()
+	if src := geo.Source(); src != "" {
+		geoLog.Info("country flags: serving " + src + " from the local cache until the first refresh")
+	} else {
+		geoLog.Info("country flags: no data cached yet -- DB-IP Lite is fetched shortly after start")
+	}
 	st := store.New(storeCapacity, cfg.Store.Retention)
 
 	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
@@ -1399,7 +1404,7 @@ func main() {
 	// Notify (issues #30/#31/#96): alerting on newly-raised flags outside the
 	// UI, through whichever channels are configured -- each independently
 	// enabled by its own identifying field being set (same "empty means
-	// off" convention as Reputation.AbuseIPDBKey/GeoIP.DBPath), sharing
+	// off" convention as Reputation.AbuseIPDBKey), sharing
 	// one Dispatcher/BatchWindow. No dispatcher goroutine is started at
 	// all if nothing is configured.
 	var notifiers []notify.Notifier
@@ -1667,6 +1672,20 @@ func main() {
 	// registry is already serving lookups by then; a cold start with no
 	// cache reports "no vendor data yet" until it lands, which is the
 	// honest state and not an error.
+	// Country data refresh (#1352): same jitter reasoning as OUI above,
+	// but a cold start (nothing cached) waits at most a minute rather
+	// than an hour -- flags are meant to work with no setup, and an
+	// hour of blank flags on a fresh install reads as broken. The loop
+	// also runs straight away whenever a key is set in the Engine Room.
+	go func() {
+		defer logging.Recover(geoLog)
+		jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+		if !geo.Available() {
+			jitter = time.Duration(rand.Int64N(int64(time.Minute)))
+		}
+		geo.Run(ctx, jitter)
+	}()
+
 	if ouiRegistry.Enabled() {
 		go func() {
 			defer logging.Recover(ouiLog)
@@ -1951,7 +1970,7 @@ func main() {
 		OIDCPolicy:            oidcPolicy,
 		StartTime:             time.Now(),
 		Version:               version,
-		GeoIP:                 geo.Configured(),
+		Geo:                   geo,
 		ThirdPartyNotices:     thirdPartyNotices,
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
@@ -3129,7 +3148,7 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Manager, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
@@ -3147,7 +3166,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Manager, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
