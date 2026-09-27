@@ -50,14 +50,16 @@ await goTo(page, 'Settings')
 // --- The page is the groups, with keys and people mounted in place ------
 
 // #394 (round 44) added the router-backups group after disk, #1225 the
-// drop list straight after that, and #1352 the country group beside disk
-// -- memory, disk, country and network owner, router backups, drop list
-// is the order EngineRoom.svelte's own comments state, and this list is
-// a copy of the DOM order, not an independent decision, so it has to
-// keep up with what the page mounts.
+// drop list straight after that, #1352 the country group beside disk, and
+// #1347 the config group straight after "new settings" -- memory, disk,
+// country and network owner, router backups, drop list is the order
+// EngineRoom.svelte's own comments state, and this list is a copy of the
+// DOM order, not an independent decision, so it has to keep up with what
+// the page mounts.
 const GROUP_ORDER = [
   'ingest',
   'new settings',
+  'config',
   'keys',
   'detection',
   'memory',
