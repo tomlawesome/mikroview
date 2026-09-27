@@ -1554,7 +1554,7 @@ security:govulncheck:
   image: golang:1.27.1
   <<: [*dev_or_mr_code, *git_safe]
   script:
-    - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
     - govulncheck -format=json ./... > govulncheck.json
     # The JSON run above exits 0 whatever it finds -- that is how -format
     # json behaves -- so on its own this job could only ever pass. The

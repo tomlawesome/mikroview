@@ -35,6 +35,13 @@
       "matchStrings": ["go-version:\\s*'(?<currentValue>\\d+\\.\\d+\\.\\d+)'"],
       "datasourceTemplate": "golang-version",
       "depNameTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "`go install <module>@vX.Y.Z` in .gitlab-ci.yml (#1321) pins tool versions in shell commands, which no built-in manager reads -- gitlabci only sees `image:` references. Tracked here as plain go modules so Renovate opens an MR whenever govulncheck, go-licenses or any future tool installed this way moves.",
+      "managerFilePatterns": ["/^\\.gitlab-ci\\.yml$/"],
+      "matchStrings": ["go install (?<depName>[^@\\s]+)@(?<currentValue>v[0-9][^\\s'\"]*)"],
+      "datasourceTemplate": "go"
     }
   ],
   "packageRules": [
