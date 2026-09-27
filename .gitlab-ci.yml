@@ -1963,6 +1963,14 @@ record:upgrade-fixture:
     # postgresql-client: pg_dump runs inside the Postgres container
     # itself, so the client is always the server's own major version.
     - apk add --no-cache bash coreutils curl python3 >/dev/null
+    # Q6-F3: this wait loop is copied (not shared) in
+    # scripts/sign-release-digest.sh's `sign:release-digest` job below,
+    # same shape and default budget, waiting on the same GHCR image. The
+    # two deliberately disagree on what exhausting it means: here it exits
+    # 75, tolerated by allow_failure above, because a tag already cut must
+    # not go red over best-effort fixture recording; there it fails the
+    # job outright, because a release signature is not best-effort. If you
+    # change this loop's shape or budget, check that copy too.
     - |
       image="ghcr.io/tomlawesome/mikroview:$CI_COMMIT_TAG"
       echo "waiting for $image on GHCR (every 60s, up to 45 minutes)"
