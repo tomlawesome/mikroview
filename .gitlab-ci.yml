@@ -783,11 +783,22 @@ test:postgres:
     # internal/matchlog alongside internal/persist (#243 slice 6): its
     # Postgres backend is a second, independent SQL sink with its own
     # table and needs the same real-database coverage.
-    - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
+    #
+    # #1290: -coverprofile, now that this job owns these two packages'
+    # coverage outright -- test:go's own profile never runs their
+    # Postgres-backed statements (see supply-chain/coverage-floors.yml's
+    # header), and this run, with MIKROVIEW_TEST_POSTGRES set above, is a
+    # strict superset of what test:go covers for them.
+    - go test -race -count=1 -coverprofile=coverage-postgres.out ./internal/persist/... ./internal/matchlog/...
+    # The ratchet against postgres-floors: in supply-chain/coverage-floors.yml
+    # -- the same mechanism test:go's coverage-floor.py call uses, scoped to
+    # just the two packages this job measures.
+    - python3 scripts/coverage-floor.py --section postgres-floors coverage-postgres.out
     - *reuse_evidence
   artifacts:
     paths:
       - ci-reuse-evidence/
+      - coverage-postgres.out
     expire_in: 1 week
 
 # Container smoke test, ported from GitHub's ci.yml (#942, the second
@@ -1972,6 +1983,43 @@ record:upgrade-fixture:
     # know that it has not, and a spare dump costs kilobytes, while a
     # missing one costs a hand step nobody will remember.
     - bash scripts/record-upgrade-fixture.sh --postgres "$CI_COMMIT_TAG"
+
+# #1358 item 3: record:upgrade-fixture above only ever runs on a v* tag,
+# against the image GitHub Actions has already published -- so the one
+# time the recorder's scripted session first runs against a real image is
+# after the release is cut. That is exactly how #1358 happened: v0.6.1
+# added a second-factor enrolment step the session did not do, and
+# nothing caught it before the tag because nothing exercised the session
+# any earlier.
+#
+# There is no published image to point at on a dev -> preview merge
+# request -- GitHub's `docker` workflow only builds preview's image after
+# this MR merges (.github/workflows/docker.yml: `on: push: branches:
+# [preview]`), and dev deliberately publishes nothing. So this job builds
+# its own throwaway image from the same Dockerfile and checkout
+# test:container above builds from -- content-identical to what preview
+# will publish once this MR lands -- and hands it to
+# scripts/record-upgrade-fixture.sh --check, which runs the same session
+# against it and never uploads (enforced in the script itself, not just
+# by omitting a flag here). Nothing here pushes the image anywhere, and
+# nothing commits a fixture; a red job is only ever "the session broke."
+check:upgrade-fixture-recorder:
+  stage: test
+  tags: [light]
+  image: docker:29-cli
+  needs: []
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "preview"'
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    APP: mikroview-upgrade-check-$CI_JOB_ID
+  timeout: 20m
+  script:
+    - apk add --no-cache bash coreutils python3 >/dev/null
+    - docker build --tag "$APP" .
+    - bash scripts/record-upgrade-fixture.sh --check "$APP"
+  after_script:
+    - docker image rm "$APP" >/dev/null 2>&1 || true
 
 # The GitLab half of #1309's two signatures, and the automatic one: this
 # job runs on every v* tag pipeline and adds a key-based signature from a
