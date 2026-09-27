@@ -67,6 +67,12 @@ rewritten.
   one string and dispatched by another, reaching a handler it should
   never have been let past the gate for.
 
+- `RestrictToAllowList`'s `uiAllowExemptPaths` check now compares the
+  request's *escaped* path too, the same fix as `requireAuth`'s above
+  (#1390). Before this, the same escaped-vs-decoded mismatch let a
+  request outside `ui.allow` reach a route it merely decoded to look
+  like an exempt one, rather than the route it actually dispatched to.
+
 ### Added
 
 - **A router's card names what an earlier setup left behind, with the exact
