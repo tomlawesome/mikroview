@@ -124,8 +124,8 @@
 /* step 1: the router, one form */
 .wiz .form { align-self: stretch; display: grid; grid-template-columns: 180px 1fr; gap: 14px 18px; align-items: start; max-width: 720px; margin-top: 6px; }
 .wiz .form.single { grid-template-columns: auto; }
-.wiz .form label.k { padding-top: 9px; font-size: 13.5px; color: var(--fg); }
-.wiz .form label.k small { display: block; font-size: 12px; color: var(--fg-dim); line-height: 1.4; margin-top: 2px; }
+.wiz .form .k { padding-top: 9px; font-size: 13.5px; color: var(--fg); }
+.wiz .form .k small { display: block; font-size: 12px; color: var(--fg-dim); line-height: 1.4; margin-top: 2px; }
 .wiz .form .v { display: flex; flex-direction: column; gap: 4px; }
 .wiz .form .v input { width: 320px; }
 .wiz .form .problem { margin: 0; min-height: 1.3em; font-size: 12.5px; color: var(--warn); }

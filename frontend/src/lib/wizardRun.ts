@@ -102,11 +102,16 @@ export function freshAnswers(): RunAnswers {
   }
 }
 
-// A router address is a dotted quad, nothing else: no port, no name,
-// no prefix length (owner, round 7: "the router ip block rejects
-// incorrect formatting for IPs"). The wording is the record's own.
+// A router address is a bare address and nothing else: no port, no
+// name, no prefix length (owner, round 7: "the router ip block rejects
+// incorrect formatting for IPs"). The wording is the record's own
+// (#1380). The server's rule is netip.ParseAddr (internal/device/
+// enrolment.go, validateExpectedAddress), so whatever passes here must
+// parse there too: a dotted quad without leading zeros, or an IPv6
+// literal. The check is a courtesy; the server keeps rejecting.
 export function addrProblem(v: string): string {
   if (!v) return ''
+  if (v.includes(':') && !v.includes('.') && isIPv6(v)) return ''
   if (/[:/]/.test(v)) {
     return v.includes(':')
       ? 'No port here — just the address. The port is MikroView’s side.'
@@ -114,8 +119,23 @@ export function addrProblem(v: string): string {
   }
   if (/[^0-9.]/.test(v)) return 'A name will not do: the enrolment window binds to an address.'
   const p = v.split('.')
-  if (p.length !== 4 || p.some((x) => x === '' || Number(x) > 255)) return 'Four numbers, 0–255, separated by dots.'
+  if (p.length !== 4 || p.some((x) => !/^(0|[1-9][0-9]{0,2})$/.test(x) || Number(x) > 255)) {
+    return 'Four numbers, 0–255, separated by dots.'
+  }
   return ''
+}
+
+// isIPv6 is the shape netip.ParseAddr accepts for a plain IPv6 literal:
+// eight hex groups of up to four digits, or fewer with one "::". Zones
+// and embedded IPv4 tails are left to the server -- the client accepting
+// less than the server is the safe direction.
+function isIPv6(v: string): boolean {
+  if (!/^[0-9a-fA-F:]+$/.test(v)) return false
+  const halves = v.split('::')
+  if (halves.length > 2) return false
+  const groups = halves.flatMap((h) => (h === '' ? [] : h.split(':')))
+  if (groups.some((g) => g === '' || g.length > 4)) return false
+  return halves.length === 2 ? groups.length <= 7 : groups.length === 8
 }
 
 export function routerDone(s: RunAnswers): boolean {
