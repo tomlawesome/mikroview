@@ -284,6 +284,25 @@ test('install.sh moves test:install-line\'s hash but not test:container\'s (#124
   assert.equal(jobInputHash('test:container', before), jobInputHash('test:container', after));
 });
 
+// #1290: test:postgres now ratchets internal/persist and internal/matchlog
+// against supply-chain/coverage-floors.yml's postgres-floors: section, so a
+// floor change there must not be skipped as reused. Both files are
+// IMAGE_PATHS' own addition (coverage-floor.py already matched
+// SCENARIOS_PATHS' scripts/**, but is named explicitly too), so this
+// should move every IMAGE_PATHS job's hash and, being outside
+// SCENARIOS_PATHS, leave every gate:scenarios shard's hash alone.
+test('supply-chain/coverage-floors.yml moves every IMAGE_PATHS job\'s hash but no gate:scenarios shard\'s (#1290)', () => {
+  const before = [{ path: 'supply-chain/coverage-floors.yml', sha: 'a' }];
+  const after = [{ path: 'supply-chain/coverage-floors.yml', sha: 'b' }];
+  for (const job of ['gate:image', 'test:container', 'test:postgres', 'test:install-line']) {
+    assert.notEqual(jobInputHash(job, before), jobInputHash(job, after), job);
+  }
+  assert.equal(
+    jobInputHash('gate:scenarios 1/4', before, NO_SCENARIOS),
+    jobInputHash('gate:scenarios 1/4', after, NO_SCENARIOS),
+  );
+});
+
 test('jobInputHash throws on an unknown job rather than hashing nothing', () => {
   assert.throws(() => jobInputHash('no-such-job', []), /no job named no-such-job/);
 });
