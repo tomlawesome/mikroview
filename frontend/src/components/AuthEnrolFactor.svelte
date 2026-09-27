@@ -43,6 +43,15 @@
   let codesCopied = $state(false)
   let error = $state<string | null>(null)
   let busy = $state(false)
+  // FR2-F1: a non-401 failure from confirm()/addPasskey() is ambiguous by
+  // status alone (a passkey ceremony failure is also a plain error), so
+  // the session is the signal -- re-checked after the failure, and
+  // mustEnrolSecondFactor now false means the factor committed and only
+  // the recovery codes failed to save. No retry is possible from here
+  // (begin's excludeCredentials already lists the new passkey; confirmTOTP
+  // would need a fresh secret), so the door offers Enter instead of the
+  // form's ordinary submit.
+  let codesLost = $state(false)
 
   // The design's rule (PasskeysOverlay's own, restated by round 61):
   // passkeys unusable is a named state, never a hidden row -- the key
@@ -74,6 +83,7 @@
 
   async function chooseTOTP() {
     error = null
+    codesLost = false
     busy = true
     // enrolTOTP throws instead of returning text on a 401 -- this door
     // has no cancel, skip or sign-out, so a session that died mid-
@@ -106,6 +116,7 @@
 
   function choosePasskey() {
     error = null
+    codesLost = false
     name = ''
     stage = 'passkey'
   }
@@ -122,12 +133,21 @@
     e.preventDefault()
     if (!code) return
     error = null
+    codesLost = false
     busy = true
     // Same reasoning as chooseTOTP above -- confirmTOTP throws on a 401.
     try {
       const result = await confirmTOTP(code)
       if (typeof result === 'string') {
-        error = result
+        // FR2-F1: tell a ceremony refusal apart from "the factor is on,
+        // the codes aren't" by re-reading the session -- see codesLost's
+        // own comment above.
+        await authState.check()
+        if (!authState.mustEnrolSecondFactor) {
+          codesLost = true
+        } else {
+          error = result
+        }
         return
       }
       authState.hasTOTP = true
@@ -156,6 +176,7 @@
   async function addPasskey(e: Event) {
     e.preventDefault()
     error = null
+    codesLost = false
     busy = true
     // Same reasoning as chooseTOTP above -- registerPasskey forwards
     // beginPasskeyRegistration/finishPasskeyRegistration's own 401 throw
@@ -163,7 +184,13 @@
     try {
       const result = await registerPasskey(name.trim())
       if (typeof result === 'string') {
-        error = result
+        // FR2-F1: same reasoning as confirm() above.
+        await authState.check()
+        if (!authState.mustEnrolSecondFactor) {
+          codesLost = true
+        } else {
+          error = result
+        }
         return
       }
       authState.passkeyCount += 1
@@ -309,10 +336,20 @@
               <p class="aside">Confirming turns this on and signs out everywhere
                 else this account is currently signed in. You&rsquo;ll stay signed
                 in here.</p>
-              {#if error}<p class="error">{error}</p>{/if}
-              <button class="enter" type="submit" disabled={busy || !code}>
-                {busy ? 'Confirming…' : 'Confirm'}
-              </button>
+              {#if codesLost}
+                <!-- FR2-F1: the factor is already on -- confirmTOTP can't
+                     be retried (it would need a fresh secret), so the
+                     only way past this is in. -->
+                <p class="error">Your second step is on, but the recovery codes
+                  couldn&rsquo;t be saved. Go in, then get a set from the account
+                  menu &mdash; New recovery codes&hellip;</p>
+                <button class="enter" type="button" onclick={enter}>Enter</button>
+              {:else}
+                {#if error}<p class="error">{error}</p>{/if}
+                <button class="enter" type="submit" disabled={busy || !code}>
+                  {busy ? 'Confirming…' : 'Confirm'}
+                </button>
+              {/if}
             </form>
           </div>
           {#if passkeyUsable}
@@ -336,12 +373,24 @@
             <input id="enrol-name" type="text" placeholder="this laptop" bind:value={name} />
             <p class="aside">Adding it turns this on and signs out everywhere else
               this account is currently signed in. You&rsquo;ll stay signed in here.</p>
-            {#if error}<p class="error">{error}</p>{/if}
-            <div class="center">
-              <button class="enter" type="submit" disabled={busy}>
-                {busy ? 'Waiting…' : 'Add passkey'}
-              </button>
-            </div>
+            {#if codesLost}
+              <!-- FR2-F1: the factor is already on -- registerPasskey
+                   can't be retried (begin's excludeCredentials already
+                   lists it), so the only way past this is in. -->
+              <p class="error">Your second step is on, but the recovery codes
+                couldn&rsquo;t be saved. Go in, then get a set from the account
+                menu &mdash; New recovery codes&hellip;</p>
+              <div class="center">
+                <button class="enter" type="button" onclick={enter}>Enter</button>
+              </div>
+            {:else}
+              {#if error}<p class="error">{error}</p>{/if}
+              <div class="center">
+                <button class="enter" type="submit" disabled={busy}>
+                  {busy ? 'Waiting…' : 'Add passkey'}
+                </button>
+              </div>
+            {/if}
           </form>
           <!-- Same reason as the passkey link above: chooseTOTP awaits
                enrolTOTP(), so a second click before that settles must
