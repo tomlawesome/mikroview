@@ -16,6 +16,35 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **Country flags work with no setup, and IPinfo adds the network owner**
+  (#1352, owner decision 2026-09-27). MikroView now downloads its own
+  country data at runtime and caches it under `geoip.cachePath`
+  (default `/var/lib/mikroview/geoip`); nothing ships in the image.
+  Three sources, in a fixed order: IPinfo Lite (country and network
+  owner, free token) beats MaxMind GeoLite2-Country (free account ID and
+  licence key) beats DB-IP IP-to-Country Lite (no account, the default).
+  Keys are entered on the Engine Room's "Country and network owner"
+  card only -- never in `config.yaml` -- stored sealed under
+  `history.keyFile` the way router backups are, and never shown again,
+  logged or returned by any API. With no `history.keyFile` mounted, key
+  entry is refused and DB-IP stays in use. New API: `GET
+  /api/settings/geo`, `PUT`/`DELETE /api/settings/geo/ipinfo` and
+  `/api/settings/geo/maxmind` (admin), `GET /api/geo/lookup?ip=` (any
+  signed-in user), and `geoSource` on `/api/healthz`. See
+  docs/configuration.md's "GeoIP country flags".
+
+### Removed
+
+- **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
+  `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
+  `GeoLite2-Country.mmdb`. MikroView downloads MaxMind's file itself
+  now: enter your MaxMind account ID and licence key on the Engine
+  Room's "Country and network owner" card instead, and delete the
+  mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
+  refuses to start and names the card. Remove the key.
+
 ### Changed
 
 - **Emerging Threats' compromised-IPs list is now on by default

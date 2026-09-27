@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -251,5 +252,60 @@ func TestNegativeStoredHistoryRefusesToOpen(t *testing.T) {
 		if _, err := Open(path); err == nil {
 			t.Errorf("%s opened cleanly", doc)
 		}
+	}
+}
+
+// #1352: the country data sources' sealed keys ride in this document
+// beside the other settings -- each change must leave the rest intact,
+// survive a reopen, and a removal must stick.
+func TestGeoKeysSurviveAReopenAndLeaveTheRestAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMaxMemory(480 << 20); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	if err := s.SetGeoKey("ipinfo", GeoKey{Sealed: []byte{1, 2, 3}, SetAt: at, SetBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetGeoKey("maxmind", GeoKey{Sealed: []byte{4, 5}, SetAt: at, SetBy: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearGeoKey("maxmind"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClearGeoKey("never-set"); err != nil {
+		t.Errorf("clearing an absent key: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, ok := reopened.GeoKey("ipinfo")
+	if !ok || string(k.Sealed) != "\x01\x02\x03" || !k.SetAt.Equal(at) || k.SetBy != "admin" {
+		t.Errorf("ipinfo after a reopen = %+v, %v", k, ok)
+	}
+	if _, ok := reopened.GeoKey("maxmind"); ok {
+		t.Error("a removed key came back after a reopen")
+	}
+	if got, ok := reopened.MaxMemory(); !ok || got != 480<<20 {
+		t.Errorf("the event-buffer figure was lost: %d, %v", got, ok)
+	}
+	if err := s.SetGeoKey("ipinfo", GeoKey{}); err == nil {
+		t.Error("a key with no ciphertext was accepted")
+	}
+}
+
+func TestEmptySealedGeoKeyRefusesToOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"store":{},"history":{},"geo":{"ipinfo":{"sealed":""}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Error("a geo entry with no ciphertext opened as if it were a key")
 	}
 }
