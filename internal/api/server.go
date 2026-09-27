@@ -344,6 +344,17 @@ type Server struct {
 	// config.MissingSettings -- and served as-is by handleConfigUpgrade.
 	ConfigUpgradeSettings []config.MissingSetting
 
+	// ConfigEditor is the config editor's setup (#1347, configeditor.go):
+	// the running config's path and start-up bytes, the release to name
+	// a download after, and the snapshot store. Nil on a Server built
+	// without one (most tests), in which case every editor route answers
+	// 503 rather than pretending.
+	ConfigEditor *ConfigEditor
+	// editor is each session's editor unlock and remembered secret
+	// values. Unexported and lazily built, so a zero-valued Server needs
+	// no setup.
+	editor editorState
+
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
 	// unpersisted store) -- mikroview stays fully open as long as it has
@@ -557,6 +568,13 @@ func (s *Server) routes() []route {
 }
 
 func (s *Server) apiRoutes() []route {
+	// The config editor (#1347) is appended from its own table rather
+	// than listed here, because setup-only mode serves the same table
+	// (see setuponly.go) and the two must never drift apart.
+	return append(s.coreRoutes(), s.configEditorRoutes()...)
+}
+
+func (s *Server) coreRoutes() []route {
 	return []route{
 		{http.MethodGet, "/api/healthz", s.handleHealthz},
 		{http.MethodGet, "/api/events", s.handleEvents},

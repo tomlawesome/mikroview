@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -21,6 +22,14 @@ import (
 type removedKey struct {
 	Version string
 	Why     string
+	// RenamedTo is the key's new full dotted path when the value carries
+	// over unchanged under a new name -- the one case the config editor's
+	// Carry forward (#1347) can move rather than drop. Empty for every
+	// entry today: each removal so far either retired the setting or
+	// replaced it with one of a different shape (a count became a byte
+	// budget, two plaintext listeners became one TLS one), where moving
+	// the old value across would carry a wrong value, not a right one.
+	RenamedTo string
 }
 
 // removedOrRenamedKeys is every configuration key CHANGELOG.md records
@@ -139,30 +148,45 @@ func yamlPathPrefixes() map[reflect.Type]string {
 	return paths
 }
 
-// explainYAMLError turns a yaml.v3 decode error into one that names the
-// offending key by its full dotted path, the line it's on, and -- for a
-// key removedOrRenamedKeys knows about -- what changed and what to use
-// instead. Every other decode error (a type mismatch, bad indentation,
-// and so on) passes through unchanged: this only rewrites the specific
-// "field not found" shape KnownFields(true) produces.
-func explainYAMLError(path string, err error) error {
-	typeErr, ok := err.(*yaml.TypeError)
-	if !ok {
-		// Not the KnownFields(true) shape -- a syntax error or a type
-		// mismatch. The caller (load) already wraps this in "loading
-		// config file %s: %w", so leave it as-is rather than naming the
-		// path twice.
-		return err
-	}
+// keyIssue is one decode problem yaml.v3 reported, pulled apart so the
+// start-up refusal (explainYAMLError) and the config editor's Problems
+// rail (ValidateText, #1347) word it identically: the rail adds the line
+// as a field, the refusal as a "path line N:" prefix.
+type keyIssue struct {
+	// Line is the 1-based line yaml.v3 named, 0 when it named none.
+	Line int
+	// Key is the full dotted path of an unknown key, empty for any
+	// other kind of decode error.
+	Key string
+	// Msg is the explanation without any path or line prefix.
+	Msg string
+	// Raw marks a decode error passed through as the library worded it
+	// (a type mismatch, say), which the refusal prints unprefixed.
+	Raw bool
+}
 
+// yamlLinePattern pulls the line number out of any yaml.v3 message
+// shaped "line N: ...", which both its TypeError entries and its syntax
+// errors ("yaml: line N: ...") use.
+var yamlLinePattern = regexp.MustCompile(`line (\d+):`)
+
+// keyIssues explains every entry of a *yaml.TypeError: an unknown key by
+// its full dotted path, and -- for a key removedOrRenamedKeys knows
+// about -- what changed and what to use instead. Every other entry
+// passes through as the library worded it.
+func keyIssues(typeErr *yaml.TypeError) []keyIssue {
 	prefixes := yamlPathPrefixes()
-	var lines []string
+	var issues []keyIssue
 	for _, e := range typeErr.Errors {
 		m := unknownFieldPattern.FindStringSubmatch(e)
 		if m == nil {
 			// Some other *yaml.TypeError shape (a type mismatch, for
 			// instance) -- pass it through rather than guess at it.
-			lines = append(lines, e)
+			issue := keyIssue{Msg: e, Raw: true}
+			if lm := yamlLinePattern.FindStringSubmatch(e); lm != nil {
+				issue.Line, _ = strconv.Atoi(lm[1])
+			}
+			issues = append(issues, issue)
 			continue
 		}
 		lineNo, field, goType := m[1], m[2], m[3]
@@ -179,17 +203,43 @@ func explainYAMLError(path string, err error) error {
 		if found && prefix != "" {
 			key = prefix + "." + field
 		}
+		line, _ := strconv.Atoi(lineNo)
 
 		if removed, ok := removedOrRenamedKeys[key]; ok {
-			lines = append(lines, fmt.Sprintf(
-				"%s line %s: unknown key %q -- %s was removed in %s: %s",
-				path, lineNo, key, key, removed.Version, removed.Why))
+			issues = append(issues, keyIssue{Line: line, Key: key, Msg: fmt.Sprintf(
+				"unknown key %q -- %s was removed in %s: %s", key, key, removed.Version, removed.Why)})
 			continue
 		}
-		lines = append(lines, fmt.Sprintf(
-			"%s line %s: unknown key %q -- not a recognised mikroview configuration key; check for a typo or a stale key from an old release "+
-				"(see CHANGELOG.md, or run mikroview -validate-config after removing it)",
-			path, lineNo, key))
+		issues = append(issues, keyIssue{Line: line, Key: key, Msg: fmt.Sprintf(
+			"unknown key %q -- not a recognised mikroview configuration key; check for a typo or a stale key from an old release "+
+				"(see CHANGELOG.md, or run mikroview -validate-config after removing it)", key)})
+	}
+	return issues
+}
+
+// explainYAMLError turns a yaml.v3 decode error into one that names the
+// offending key by its full dotted path, the line it's on, and -- for a
+// key removedOrRenamedKeys knows about -- what changed and what to use
+// instead. Every other decode error (a type mismatch, bad indentation,
+// and so on) passes through unchanged: this only rewrites the specific
+// "field not found" shape KnownFields(true) produces.
+func explainYAMLError(path string, err error) error {
+	typeErr, ok := err.(*yaml.TypeError)
+	if !ok {
+		// Not the KnownFields(true) shape -- a syntax error or a type
+		// mismatch. The caller (load) already wraps this in "loading
+		// config file %s: %w", so leave it as-is rather than naming the
+		// path twice.
+		return err
+	}
+
+	var lines []string
+	for _, issue := range keyIssues(typeErr) {
+		if issue.Raw {
+			lines = append(lines, issue.Msg)
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s line %d: %s", path, issue.Line, issue.Msg))
 	}
 	return fmt.Errorf("%s", strings.Join(lines, "; "))
 }

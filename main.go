@@ -651,6 +651,27 @@ func main() {
 		} else {
 			configLog.Error(err.Error() + "\n" + config.CheckHint)
 		}
+		// #1347: a config refused for what it says -- a problem in it,
+		// or a file that would not read or parse -- starts setup-only
+		// mode instead of exiting, so the admin can sign in and fix it
+		// in the editor. A bad command-line flag or an app-folder
+		// mix-up is not something the editor can fix, and still exits.
+		if len(configResult.Fatal) > 0 || strings.HasPrefix(err.Error(), "loading config file") {
+			problems := len(configResult.Fatal)
+			if problems == 0 {
+				// A file that would not load reports as one error;
+				// the editor's own check counts what is in it.
+				for _, p := range config.ValidateText(string(readRawConfigYAML(configResult.ConfigPath))) {
+					if p.Severity == config.SeverityFatal.String() {
+						problems++
+					}
+				}
+			}
+			if problems == 0 {
+				problems = 1
+			}
+			os.Exit(runSetupOnly(configResult, problems))
+		}
 		os.Exit(1)
 	}
 	// Every component logger created before this point (configLog above)
@@ -1720,70 +1741,7 @@ func main() {
 	// than exiting -- the same degrade-not-crash contract GeoIP/Flags/
 	// Auth/Definitions already have above for their own optional
 	// persistence/integrations.
-	var oidcClient *oidc.Client
-	var oidcState *oidc.StateCodec
-	oidcLog := logging.New("oidc")
-	oidcPolicy := oidc.Policy{
-		AllowedGroups:       cfg.OIDC.AllowedGroups,
-		GroupsClaim:         cfg.OIDC.GroupsClaim,
-		AllowedEmails:       cfg.OIDC.AllowedEmails,
-		AllowedEmailDomains: cfg.OIDC.AllowedEmailDomains,
-		RequiredClaims:      cfg.OIDC.RequiredClaims,
-	}
-
-	switch {
-	case cfg.OIDC.IssuerURL == "":
-		// Not configured -- no log line, same as every other disabled-
-		// by-default optional integration (GeoIP, Reputation, Notify).
-	case cfg.OIDC.PublicBaseURL == "":
-		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
-	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
-		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
-	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
-		// Refused outright, not warned about, and deliberately not
-		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
-		// off is the fail-closed outcome; local login is unaffected.
-		oidcLog.Error(fmt.Sprintf(
-			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
-				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
-				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
-			cfg.OIDC.IssuerURL))
-	default:
-		client, err := oidc.New(ctx, oidc.Config{
-			IssuerURL:    cfg.OIDC.IssuerURL,
-			ClientID:     cfg.OIDC.ClientID,
-			ClientSecret: cfg.OIDC.ClientSecret,
-			// PublicBaseURL, not a request's Host header -- see
-			// config.OIDC.PublicBaseURL's doc comment for why deriving
-			// this from client-influenced input would be a real
-			// redirect_uri-confusion vulnerability.
-			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
-			Scopes:      cfg.OIDC.Scopes,
-		})
-		if err != nil {
-			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
-		} else if state, err := oidc.NewStateCodec(); err != nil {
-			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
-		} else {
-			oidcClient, oidcState = client, state
-			if oidcPolicy.Restricted() {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
-			} else {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
-			}
-			// "SSO is additive; keep a local admin" (#1252). Said out
-			// loud at every start while it is untrue, because the day it
-			// matters is the day the provider is down and nobody is
-			// reading the docs. Not a refusal: turning SSO off here
-			// would leave a deployment whose admin already signs in
-			// through the provider with no way in at all, which is the
-			// lock-out this rule exists to prevent.
-			if authStore.Count() > 0 && !authStore.HasLocalAdmin() {
-				oidcLog.Warn("no MikroView admin has a local password, so SSO is the only way in -- if the provider goes down, " +
-					"signing in needs `mikroview -transfer-admin <username>` at the command line. See SECURITY.md, \"SSO is additive\"")
-			}
-		}
-	}
+	oidcClient, oidcState, oidcPolicy := startOIDC(ctx, cfg, authStore)
 
 	// A bad trusted-proxy entry is a security-relevant misconfiguration,
 	// not a typo to paper over: silently ignoring it would leave the
@@ -1976,6 +1934,7 @@ func main() {
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
 		RelyingParty:          relyingParty,
+		ConfigEditor:          newConfigEditor(configLog, persistence, cfg, configResult.ConfigPath),
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
@@ -2018,27 +1977,8 @@ func main() {
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
-	if frontend, err := web.DistFS(); err != nil {
-		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
-	} else {
-		// A binary can compile with an empty dist/ -- that is what the
-		// committed .gitkeep is for -- and http.FileServer would then
-		// answer / with a directory listing of that one placeholder,
-		// which reads as a broken install rather than a build step that
-		// was skipped. Say which it is, in the log and in the response
-		// (#353). The API is mounted above and keeps working either way.
-		//
-		// Either way it goes out through staticCacheHeaders (#347), so
-		// the "no frontend" page is itself revalidated rather than kept
-		// by a browser after a proper build is deployed.
-		var ui http.Handler = http.FileServer(http.FS(frontend))
-		if !web.HasUI() {
-			logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
-			ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
-			})
-		}
-		rootMux.Handle("/", staticCacheHeaders(ui))
+	if ui := frontendHandler(); ui != nil {
+		rootMux.Handle("/", ui)
 	}
 
 	httpServer := &http.Server{
@@ -2291,6 +2231,107 @@ func main() {
 	if listenFailed.Load() {
 		os.Exit(1)
 	}
+}
+
+// startOIDC builds the SSO client from cfg's oidc block, or leaves it off
+// with the reason logged -- see the call site in main for the
+// degrade-not-crash contract. Shared with setup-only mode (#1347), which
+// turns SSO on only when the oidc block itself validated.
+func startOIDC(ctx context.Context, cfg config.Config, authStore *auth.Store) (*oidc.Client, *oidc.StateCodec, oidc.Policy) {
+	var oidcClient *oidc.Client
+	var oidcState *oidc.StateCodec
+	oidcLog := logging.New("oidc")
+	oidcPolicy := oidc.Policy{
+		AllowedGroups:       cfg.OIDC.AllowedGroups,
+		GroupsClaim:         cfg.OIDC.GroupsClaim,
+		AllowedEmails:       cfg.OIDC.AllowedEmails,
+		AllowedEmailDomains: cfg.OIDC.AllowedEmailDomains,
+		RequiredClaims:      cfg.OIDC.RequiredClaims,
+	}
+
+	switch {
+	case cfg.OIDC.IssuerURL == "":
+		// Not configured -- no log line, same as every other disabled-
+		// by-default optional integration (GeoIP, Reputation, Notify).
+	case cfg.OIDC.PublicBaseURL == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
+	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
+	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
+		// Refused outright, not warned about, and deliberately not
+		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
+		// off is the fail-closed outcome; local login is unaffected.
+		oidcLog.Error(fmt.Sprintf(
+			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
+				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
+				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
+			cfg.OIDC.IssuerURL))
+	default:
+		client, err := oidc.New(ctx, oidc.Config{
+			IssuerURL:    cfg.OIDC.IssuerURL,
+			ClientID:     cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret,
+			// PublicBaseURL, not a request's Host header -- see
+			// config.OIDC.PublicBaseURL's doc comment for why deriving
+			// this from client-influenced input would be a real
+			// redirect_uri-confusion vulnerability.
+			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
+			Scopes:      cfg.OIDC.Scopes,
+		})
+		if err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else if state, err := oidc.NewStateCodec(); err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else {
+			oidcClient, oidcState = client, state
+			if oidcPolicy.Restricted() {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
+			} else {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
+			}
+			// "SSO is additive; keep a local admin" (#1252). Said out
+			// loud at every start while it is untrue, because the day it
+			// matters is the day the provider is down and nobody is
+			// reading the docs. Not a refusal: turning SSO off here
+			// would leave a deployment whose admin already signs in
+			// through the provider with no way in at all, which is the
+			// lock-out this rule exists to prevent.
+			if authStore.Count() > 0 && !authStore.HasLocalAdmin() {
+				oidcLog.Warn("no MikroView admin has a local password, so SSO is the only way in -- if the provider goes down, " +
+					"signing in needs `mikroview -transfer-admin <username>` at the command line. See SECURITY.md, \"SSO is additive\"")
+			}
+		}
+	}
+	return oidcClient, oidcState, oidcPolicy
+}
+
+// frontendHandler is the embedded UI, served with staticCacheHeaders,
+// or nil when the binary could not open it (logged). Shared with
+// setup-only mode (#1347), which serves the same UI shell.
+func frontendHandler() http.Handler {
+	frontend, err := web.DistFS()
+	if err != nil {
+		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
+		return nil
+	}
+	// A binary can compile with an empty dist/ -- that is what the
+	// committed .gitkeep is for -- and http.FileServer would then
+	// answer / with a directory listing of that one placeholder,
+	// which reads as a broken install rather than a build step that
+	// was skipped. Say which it is, in the log and in the response
+	// (#353). The API is mounted above and keeps working either way.
+	//
+	// Either way it goes out through staticCacheHeaders (#347), so
+	// the "no frontend" page is itself revalidated rather than kept
+	// by a browser after a proper build is deployed.
+	var ui http.Handler = http.FileServer(http.FS(frontend))
+	if !web.HasUI() {
+		logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
+		ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
+		})
+	}
+	return staticCacheHeaders(ui)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
