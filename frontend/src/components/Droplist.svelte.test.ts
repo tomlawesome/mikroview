@@ -7,7 +7,7 @@
 // remove, the setup card's four blocks, and #1225's flag-drawer draft
 // handoff.
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
@@ -15,9 +15,17 @@ vi.mock('../lib/api', () => ({
   deleteDroplistEntry: vi.fn(),
   mintDroplistKey: vi.fn(),
   revokeDroplistKey: vi.fn(),
+  fetchSetupCommands: vi.fn(),
 }))
 
-import { createDroplistEntry, deleteDroplistEntry, mintDroplistKey, revokeDroplistKey } from '../lib/api'
+import {
+  createDroplistEntry,
+  deleteDroplistEntry,
+  mintDroplistKey,
+  revokeDroplistKey,
+  fetchSetupCommands,
+} from '../lib/api'
+import type { SetupCommandsResponse } from '../lib/types'
 import { droplistNavState } from '../lib/droplistNav.svelte'
 import { wizardState } from '../lib/wizard.svelte'
 import Droplist from './Droplist.svelte'
@@ -46,9 +54,28 @@ const entry = {
   reason: 'ssh brute force',
 }
 
+function setupCommands(over: Partial<SetupCommandsResponse> = {}): SetupCommandsResponse {
+  return {
+    routeros: { minimum: '7.18', newest: '7.24.4', rows: [], upgrades: [] },
+    picked: null,
+    routers: [],
+    steps: {
+      caTrust: { commands: '', note: '' },
+      syslog: { commands: '', note: '' },
+      ruleTagging: { commands: '', note: '' },
+      push: { commands: '', note: '' },
+      schedule: { commands: '', note: '' },
+      backup: { commands: '', note: '' },
+      backupSchedule: { commands: '', note: '' },
+    },
+    ...over,
+  }
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   droplistNavState.pendingDraft = null
+  vi.mocked(fetchSetupCommands).mockResolvedValue(setupCommands())
 })
 
 describe('entries', () => {
@@ -218,6 +245,46 @@ describe('the setup card', () => {
     expect(screen.getByText('drop rule')).toBeTruthy()
     expect(screen.getByText('emergency: disable the rule')).toBeTruthy()
     expect(screen.getByText('emergency: empty the list')).toBeTruthy()
+  })
+})
+
+describe('upgrade warnings on the setup card (#1378)', () => {
+  it('shows the block once the card is opened when the setup commands response carries one', async () => {
+    vi.mocked(fetchSetupCommands).mockResolvedValue(
+      setupCommands({
+        routeros: {
+          minimum: '7.18',
+          newest: '7.24.4',
+          rows: [],
+          upgrades: [
+            {
+              id: 'cert-store-7.24.3',
+              from: '7.24.3',
+              steps: ['droplist'],
+              heading: 'RouterOS 7.24.3 stopped trusting one public root certificate, GoDaddy Class 2.',
+              body: 'Check the chain your certificate uses.',
+            },
+          ],
+        },
+        routers: [
+          { id: 'core', name: 'core', routerosVersion: '7.24.4', standing: 'reviewed', upgrades: ['cert-store-7.24.3'] },
+        ],
+      }),
+    )
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn() } })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'setup ▸' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/core \(7\.24\.4\) runs RouterOS 7\.24\.3 or later\./)).toBeTruthy()
+    })
+  })
+
+  it('renders no block when the response carries no upgrade for any router', async () => {
+    render(Droplist, { props: { resp: resp(), onrefresh: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'setup ▸' }))
+    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalled())
+    expect(document.querySelector('.note.upgrade')).toBeNull()
   })
 })
 
