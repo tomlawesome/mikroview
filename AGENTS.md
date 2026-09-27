@@ -262,6 +262,13 @@ gate failure) if another run already holds it (#809); run
 frees instead of refusing (#811). If the holder looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
 
+The script prunes `mvagent`'s Docker cache after every run, pass or fail
+(#1387): dangling images and the whole build cache go, but the tagged
+`mv-gate:local` image stays, so the next run is still cached. A hand
+prune from another account, same rootless daemon:
+`sudo -u mvagent env DOCKER_HOST=unix:///run/user/1001/docker.sock docker builder prune -af`
+(and the same with `docker image prune -af` for images).
+
 **No loop runs here (#831), and none runs anywhere since 2026-09-08.**
 This host also carries GitLab CI, so a `scripts/gate-dev-loop.sh` run
 landing here fought CI for the same CPU and a scenario lost to that

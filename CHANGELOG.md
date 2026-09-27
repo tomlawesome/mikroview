@@ -18,6 +18,11 @@ rewritten.
 
 ### Changed
 
+- **`scripts/gate-remote.sh` prunes the second host's Docker cache after
+  every run** (#1387), pass or fail: dangling images and the whole build
+  cache go, the tagged `mv-gate:local` image stays, and `gate-run.log`
+  says what it reclaimed. Fixes the disk filling up and failing unrelated
+  CI jobs with "no space left on device".
 - **Emerging Threats' compromised-IPs list is now on by default
   alongside Spamhaus DROP** (#1359, owner decision 2026-09-25). Both
   are enabled unless `blocklist.sources` says otherwise; an existing
