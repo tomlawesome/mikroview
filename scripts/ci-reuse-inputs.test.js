@@ -13,7 +13,7 @@ const {
   candidateJobs,
 } = require('./ci-reuse-inputs');
 
-test('candidateJobs names the jobs #1066 and #1242 cover', () => {
+test('candidateJobs names the jobs #1066, #1242 and #1350 cover', () => {
   assert.deepEqual(
     [...candidateJobs()].sort(),
     [
@@ -22,11 +22,63 @@ test('candidateJobs names the jobs #1066 and #1242 cover', () => {
       'gate:scenarios 2/4',
       'gate:scenarios 3/4',
       'gate:scenarios 4/4',
+      'gate:scenarios:firefox 1/4',
+      'gate:scenarios:firefox 2/4',
+      'gate:scenarios:firefox 3/4',
+      'gate:scenarios:firefox 4/4',
+      'gate:scenarios:webkit 1/4',
+      'gate:scenarios:webkit 2/4',
+      'gate:scenarios:webkit 3/4',
+      'gate:scenarios:webkit 4/4',
       'test:container',
       'test:install-line',
       'test:postgres',
     ].sort(),
   );
+});
+
+// #1350: the Firefox and WebKit scenario shards used to be absent from
+// JOB_INPUTS entirely, so scripts/ci-reuse-gate.js's `candidateJobs().
+// includes(job)` check always failed for them and every dev -> preview
+// pipeline reran all eight non-Chromium shards regardless of what
+// changed. These prove each engine now has its own entry, keyed by its
+// own job name, with the same reuse behaviour Chromium's shards already
+// had.
+test('gate:scenarios:firefox and :webkit shards are registered like Chromium\'s', () => {
+  for (const engine of ['firefox', 'webkit']) {
+    for (let i = 1; i <= 4; i += 1) {
+      assert.doesNotThrow(() => jobInputHash(`gate:scenarios:${engine} ${i}/4`, []));
+    }
+  }
+});
+
+test('an unchanged-inputs Firefox shard hashes the same as its earlier pass (reusable)', () => {
+  const entries = [{ path: 'frontend/src/App.svelte', sha: 'x' }];
+  const before = jobInputHash('gate:scenarios:firefox 2/4', entries);
+  const after = jobInputHash('gate:scenarios:firefox 2/4', entries);
+  assert.equal(before, after);
+});
+
+test('a changed input moves a Firefox shard\'s hash, so it reruns rather than reusing a stale pass', () => {
+  const before = jobInputHash('gate:scenarios:firefox 2/4', [{ path: 'frontend/src/App.svelte', sha: 'x' }]);
+  const after = jobInputHash('gate:scenarios:firefox 2/4', [{ path: 'frontend/src/App.svelte', sha: 'y' }]);
+  assert.notEqual(before, after);
+});
+
+// Reuse across pipelines is matched in scripts/ci-reuse-gate.js by exact
+// job-name equality (newestSuccess's `entry?.name !== job`), which this
+// file feeds via JOB_INPUTS' keys and scripts/ci-reuse-gate.js's
+// `candidateJobs()` gate. A Chromium pass named "gate:scenarios 2/4" can
+// therefore never satisfy a lookup for "gate:scenarios:firefox 2/4" or
+// "gate:scenarios:webkit 2/4", and vice versa -- proven here at the level
+// this file controls: each engine's shard is its own distinct key, not
+// an alias or a shared entry.
+test('each engine\'s shard at a given index is a distinct JOB_INPUTS key (never cross-engine reusable)', () => {
+  for (let i = 1; i <= 4; i += 1) {
+    const keys = [`gate:scenarios ${i}/4`, `gate:scenarios:firefox ${i}/4`, `gate:scenarios:webkit ${i}/4`];
+    assert.equal(new Set(keys).size, keys.length, keys.join(', '));
+    for (const key of keys) assert.ok(candidateJobs().includes(key), key);
+  }
 });
 
 test('a plain glob matches only its own path', () => {

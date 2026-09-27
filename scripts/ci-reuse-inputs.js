@@ -19,7 +19,24 @@
 // same live-check image over the same binary, so a change anywhere in
 // it can move any shard's result. Splitting the shards' inputs to match
 // run-scenarios.sh's plan() (contiguous slices) is future work, not
-// required by #1066.
+// required by #1066 or by #1350 -- see #1350's notes for why: plan()'s
+// slice boundaries move with the total scenario count
+// (scripts/run-scenarios.sh's `k * NR / n`), so a script's shard is only
+// stable while no live-*.mjs file is added, removed or renamed, and
+// reusing narrower than that needs plan() re-derived in this file, not
+// just a smaller glob list.
+//
+// #1306/#1350: the same shard script also runs under Firefox and WebKit
+// (`gate:scenarios:firefox N/4`, `gate:scenarios:webkit N/4`), on
+// dev -> preview merge requests. Each engine gets its own JOB_INPUTS
+// entry, keyed by its own job name alongside gate:scenarios' Chromium
+// entries -- the same SCENARIOS_PATHS, since a code change can move any
+// engine's result the same way. Reuse across pipelines is matched by
+// this exact job-name string (scripts/ci-reuse-gate.js's
+// `entry?.name !== job` in newestSuccess), so a Firefox job can only
+// ever stand on a Firefox pass and never on a Chromium or WebKit one --
+// distinct keys are what makes that true, not anything in the hash
+// itself.
 //
 // gate:image, test:container and test:postgres share one group too: the
 // first builds live-check.Dockerfile, the second builds the product
@@ -47,6 +64,14 @@ const JOB_INPUTS = {
   'gate:scenarios 2/4': SCENARIOS_PATHS,
   'gate:scenarios 3/4': SCENARIOS_PATHS,
   'gate:scenarios 4/4': SCENARIOS_PATHS,
+  'gate:scenarios:firefox 1/4': SCENARIOS_PATHS,
+  'gate:scenarios:firefox 2/4': SCENARIOS_PATHS,
+  'gate:scenarios:firefox 3/4': SCENARIOS_PATHS,
+  'gate:scenarios:firefox 4/4': SCENARIOS_PATHS,
+  'gate:scenarios:webkit 1/4': SCENARIOS_PATHS,
+  'gate:scenarios:webkit 2/4': SCENARIOS_PATHS,
+  'gate:scenarios:webkit 3/4': SCENARIOS_PATHS,
+  'gate:scenarios:webkit 4/4': SCENARIOS_PATHS,
   'gate:image': IMAGE_PATHS,
   'test:container': IMAGE_PATHS,
   'test:postgres': IMAGE_PATHS,

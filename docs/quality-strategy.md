@@ -56,6 +56,7 @@ not stop at the first red job.
 | Job(s)                                              | Stands on a match of |
 |------------------------------------------------------|-----------------------|
 | `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml` |
+| `gate:scenarios:firefox 1/4` … `4/4`, `gate:scenarios:webkit 1/4` … `4/4` | the same as `gate:scenarios`, kept as a separate entry per engine (#1350) |
 | `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` and `live-check.Dockerfile` |
 | `test:install-line`                                  | the above, plus `install.sh` (#1242 -- root-level, so none of the other lists' globs see it) |
 | `test:go`, `test:frontend`                           | not covered -- already cheap enough (#1066) |
@@ -67,6 +68,35 @@ binary, so a change anywhere in that set can move any shard's result.
 Splitting the shards' own inputs to match `plan()`'s contiguous slices is
 future work, not required by #1066 -- today a scenario-only change still
 reruns all four shards, just not the rest of the pipeline.
+
+`gate:scenarios:firefox` and `gate:scenarios:webkit` (#1306) run the
+identical shard script under a different `MV_BROWSER`, on `dev` ->
+`preview` merge requests only. #1350 gave each engine's four shards their
+own `JOB_INPUTS` entry, so a shard whose inputs have not changed stands on
+its own earlier pass rather than never being reused at all (the gap
+before #1350: their job names were simply absent from `JOB_INPUTS`, so
+`candidateJobs().includes(job)` always failed and every non-Chromium shard
+ran on every pipeline). Reuse across pipelines is matched by
+`scripts/ci-reuse-gate.js`'s exact job-name lookup
+(`CI_JOB_NAME`, e.g. `gate:scenarios:firefox 2/4`), so a Firefox pass can
+never stand in for a Chromium or WebKit shard, or vice versa -- the engine
+is part of the job name, not a separate field this file has to track.
+
+#1350 also asked whether a fix to one scenario script could rerun only
+the shard(s) that run it, rather than all four per engine. It cannot, not
+without a larger change: `plan()`'s slice boundaries are cut by *count*
+(`k * NR / n` in `scripts/run-scenarios.sh`), so which shard a given
+script lands in depends on the total number of `live-*.mjs` files, not
+just that file's own path. A script's shard is stable only while no
+scenario file is added, removed or renamed elsewhere in the same change;
+reusing narrower than "all four shards" safely would mean re-deriving
+`plan()`'s assignment in `scripts/ci-reuse-inputs.js` (or shelling out to
+`run-scenarios.sh --list`) for both the candidate commit and the run being
+compared against, and checking the two assignments agree -- a genuine
+redesign of this file's shape (from static per-job glob lists to a
+computed partition), not a contained change to the reuse-inputs logic.
+Left as future work, same as the note above; this file still treats one
+whole scenario shard as the reusable unit.
 
 `gate:image`, `test:container` and `test:postgres` share one combined,
 deliberately over-broad list rather than three narrow ones: the first
