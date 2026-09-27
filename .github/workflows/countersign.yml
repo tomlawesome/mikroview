@@ -62,56 +62,14 @@ jobs:
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Each refusal below is explicit and named, not a fall-through:
-      #   - absence:  cosign reports no matching signatures at all.
-      #   - expiry:   the digest no longer resolves in the registry (the
-      #               registry does not carry it -- expired, pruned by
-      #               retention, or never pushed).
-      #   - mismatch: cosign reports failure for any other reason, i.e. a
-      #               signature exists but does not verify against
-      #               cosign.pub.
-      #   - ambiguous: cosign verifies successfully but returns other
-      #               than exactly one matching signature.
+      # The classification below (absence / expiry / mismatch / ambiguous,
+      # each explicit and named, never a fall-through) lives in
+      # scripts/verify-release-signature.sh, tested by
+      # scripts/verify-release-signature.test.sh (Q6-F1) -- this step used
+      # to inline the same shell here, untested except by a manual,
+      # owner-triggered run of this workflow.
       - name: Verify GitLab's key-based signature
-        run: |
-          # stdout and stderr are captured separately and never merged.
-          # cosign writes its "Verification for ..." banner and the
-          # checks-performed list to *stderr* even on success, so a 2>&1
-          # here would prepend prose to the JSON and make the jq below
-          # fail on the path that is supposed to succeed.
-          set +e
-          output="$(cosign verify --key cosign.pub --output json "${IMAGE}@${DIGEST}" 2>"$RUNNER_TEMP/cosign.err")"
-          status=$?
-          set -e
-          errors="$(cat "$RUNNER_TEMP/cosign.err")"
-
-          if [ "$status" -ne 0 ]; then
-            if grep -qiE 'no matching signatures' <<< "$errors"; then
-              echo "::error::no key-based signature found for ${DIGEST} -- refusing (absence)"
-            elif grep -qiE 'MANIFEST_UNKNOWN|manifest unknown|NAME_UNKNOWN|404 Not Found' <<< "$errors"; then
-              echo "::error::${DIGEST} does not resolve in ${IMAGE} (expired, pruned, or never pushed) -- refusing (expiry)"
-            else
-              echo "::error::the key-based signature on ${DIGEST} does not verify against cosign.pub -- refusing (mismatch)"
-            fi
-            echo "$errors" >&2
-            exit 1
-          fi
-
-          # A refusal is also the right answer to output that is not the
-          # JSON array this expects -- never a fall-through to signing.
-          if ! count="$(jq -e 'if type == "array" then length else error("not an array") end' <<< "$output")"; then
-            echo "::error::could not read cosign's verification output for ${DIGEST} -- refusing"
-            echo "$output" >&2
-            echo "$errors" >&2
-            exit 1
-          fi
-          if [ "$count" -ne 1 ]; then
-            echo "::error::${DIGEST} resolved to ${count} verified key-based signatures, expected exactly 1 -- refusing (ambiguous)"
-            echo "$output" >&2
-            exit 1
-          fi
-
-          echo "Verified exactly one key-based signature on ${DIGEST} against cosign.pub."
+        run: scripts/verify-release-signature.sh "${IMAGE}@${DIGEST}"
 
       - name: Countersign keyless
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
