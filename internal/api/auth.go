@@ -1815,31 +1815,36 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 	// once) both saw no codes yet and both minted, the second silently
 	// replacing what the first had already shown. See
 	// GenerateRecoveryCodesIfAbsent's doc comment (recoverycodes.go).
-	codes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(user.ID, now)
-	if err != nil {
-		// The factor is active at this point regardless -- ConfirmTOTP
-		// already committed. Logged rather than swallowed (R6), and
-		// told to the caller plainly rather than reported as a clean
-		// success: they are about to be shown nothing to fall back on
-		// if the app is ever lost. Recovering from here is
-		// DELETE /api/auth/totp followed by enrolling again, same as
-		// any other abandoned enrolment.
-		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
-		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
-		return
-	}
+	codes, alreadyIssued, mintErr := s.Auth.GenerateRecoveryCodesIfAbsent(user.ID, now)
 	detail := "authenticator app confirmed"
-	if alreadyIssued {
+	switch {
+	case mintErr != nil:
+		detail += "; recovery codes could not be saved"
+	case alreadyIssued:
 		detail += "; existing recovery codes unchanged"
-	} else {
+	default:
 		detail += "; recovery codes issued"
 	}
 
+	// Rotation and the audit record happen whether or not the mint
+	// worked: ConfirmTOTP above already committed, so the factor is
+	// live either way, and no retry could do them later -- confirming
+	// again needs a fresh secret (#1394).
 	s.Sessions.RevokeAllForUser(user.ID)
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
 
 	s.Audit.Record(user.Username, "account.totp_enabled", user.Username, detail)
+
+	if mintErr != nil {
+		// Logged rather than swallowed (R6), and told to the caller
+		// plainly rather than reported as a clean success: they are
+		// about to be shown nothing to fall back on if the app is ever
+		// lost.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, mintErr))
+		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, http.StatusOK, totpConfirmResponse{Enabled: true, RecoveryCodes: codes, AlreadyIssued: alreadyIssued})
 }

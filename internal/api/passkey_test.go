@@ -933,6 +933,32 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 	})
 }
 
+// TestPasskeyRegisterWhoseRecoveryCodesFailStillRotatesAndAudits
+// (#1394): a first-factor registration whose recovery-code mint fails
+// after AddPasskey committed still answers 500, but the passkey is
+// live, so sessions are rotated and account.passkey_added is recorded
+// exactly as on success -- no retry can do it later, since begin now
+// lists this passkey in excludeCredentials. mintFailServer and
+// checkFirstFactorRotatedDespiteMintFailure are in totp_test.go.
+func TestPasskeyRegisterWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
+	s, ts, browser, otherDevice, budget := mintFailServer(t)
+	fake := NewFakeAuthenticator(s.RelyingParty.RPID, s.RelyingParty.Origin)
+	creation := passkeyRegisterBegin(t, browser, ts)
+
+	budget.left = 1 // AddPasskey's own save, then nothing
+	resp := passkeyRegisterFinishRaw(t, browser, ts, fake, creation, "YubiKey")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	budget.left = 1000
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("register/finish with a failing mint returned %d, want 500: %s", resp.StatusCode, body)
+	}
+	if u, ok := s.Auth.Get(passkeyBilboID(t, s)); !ok || len(u.Passkeys) != 1 {
+		t.Fatal("the passkey was not added -- the save budget failed AddPasskey itself, so this test proves nothing")
+	}
+	checkFirstFactorRotatedDespiteMintFailure(t, s, ts, resp, browser, otherDevice, "account.passkey_added")
+}
+
 // TestPasskeyClearConditionalKeepsRecoveryCodes covers both directions
 // of #1250's shared-recovery-codes clearing rule: removing one factor
 // while the other remains active must not strip the codes backing it.
