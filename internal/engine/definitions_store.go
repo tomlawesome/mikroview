@@ -781,7 +781,7 @@ func (s *DefinitionsStore) tryPersistLocked() error {
 	doc := definitionsDocument{Version: definitionsDocumentVersion, Definitions: s.raw}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
-		return fmt.Errorf("%w: encoding the definitions store failed: %v", ErrPersistFailed, err)
+		return fmt.Errorf("%w: encoding the definitions store failed: %w", ErrPersistFailed, err)
 	}
 	s.wb.MarkDirty(data)
 	return nil

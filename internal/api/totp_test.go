@@ -267,7 +267,7 @@ func findAuditEntry(t *testing.T, admin *http.Client, ts *httptest.Server, actio
 }
 
 // findAuditEntryForTarget is findAuditEntry narrowed to one target -- #1253
-// makes registerAdmin (entities_test.go) itself enrol and confirm a TOTP
+// makes registerAdmin (sharedadmin_test.go) itself enrol and confirm a TOTP
 // factor for the admin so it can pass the forced-enrolment door, which
 // means totpTestServer's admin now emits its own "account.totp_enabled"
 // entry ahead of whatever bilbo does in the test body. findAuditEntry's

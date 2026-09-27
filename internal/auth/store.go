@@ -1703,9 +1703,14 @@ func (s *Store) List() []User {
 // tryPersistLocked is persistLocked's error-returning half, for the
 // callers (IssueResetCode, TransferAdmin, SetPassword, DeleteUser,
 // createLocked -- behind Register and CreateUser --,
-// FindOrCreateOIDCUser's new-account branch, LinkOIDCIdentity) that
-// change a credential, a role, or which accounts exist, and so must not
-// let the caller believe a write happened when it didn't -- see each
+// FindOrCreateOIDCUser's new-account branch, LinkOIDCIdentity,
+// Authenticate's reset-code-spend branch, SetPendingTOTPSecret,
+// ConfirmTOTP, RecordTOTPCounter, VerifyAndRecordTOTP, ClearTOTP,
+// AddPasskey, RenamePasskey, DeletePasskey, RecordPasskeyAssertion,
+// RecordPasskeyAssertionIfFresh, ClearPasskeys, ClearAllSecondFactors,
+// GenerateRecoveryCodes, GenerateRecoveryCodesIfAbsent, BurnRecoveryCode)
+// that change a credential, a role, or which accounts exist, and so must
+// not let the caller believe a write happened when it didn't -- see each
 // one's own restore-on-error comment. Every other caller keeps using
 // persistLocked below, which keeps today's swallow-and-log behaviour.
 func (s *Store) tryPersistLocked() error {
