@@ -104,7 +104,16 @@ func (s *Server) RestrictToAllowList(next http.Handler) http.Handler {
 		// request rather than once at wrap time so the middleware's
 		// behaviour does not depend on the order main.go builds things
 		// in.
-		if len(s.UIAllow) == 0 || uiAllowExemptPaths[r.URL.Path] {
+		//
+		// uiAllowExemptPaths is keyed off r.URL.EscapedPath(), not
+		// r.URL.Path (#1390, the same fix requireAuth's exempt-path
+		// checks got in auth.go for #1389): next -- ultimately the same
+		// *http.ServeMux -- routes on the escaped path, so a request
+		// whose escaped and decoded forms differ must be classified by
+		// the same string it is dispatched by. An ordinary unescaped
+		// path is identical either way, so normal requests see no
+		// change.
+		if len(s.UIAllow) == 0 || uiAllowExemptPaths[r.URL.EscapedPath()] {
 			next.ServeHTTP(w, r)
 			return
 		}
