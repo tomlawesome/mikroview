@@ -121,6 +121,14 @@ type deviceView struct {
 	// reported" is itself an answer, never an absence, so a client must
 	// not read a missing field as one.
 	Setup *setup.RouterSetup `json:"setup,omitempty"`
+	// LoggingLeftovers is #1373's list of what else is still sending
+	// logs to this instance from an earlier setup -- another action, or
+	// a built-in RouterOS action repointed here -- each with the exact
+	// commands to remove or reset it. Omitted when there is nothing to
+	// report, the same reason Setup is a pointer: nil means "no setup
+	// store", not "nothing found", so this is only ever non-nil beside a
+	// non-nil Setup.
+	LoggingLeftovers []setup.LoggingLeftover `json:"loggingLeftovers,omitempty"`
 	// Enrolment is issue #1281's pending-token state for this device --
 	// AcceptedIP/EnrolledAt above (on the embedded Info) are the
 	// finished state; this is what is in flight. Always present, never
@@ -247,6 +255,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if s.Setup != nil {
 			reported := s.Setup.RouterSetup(info.ID, wantLogging)
 			v.Setup = &reported
+			v.LoggingLeftovers = s.Setup.LoggingLeftovers(info.ID, wantLogging)
 		}
 		if version, ok := s.effectiveRouterOSVersion(info); ok {
 			v.RouterOSVersion = version

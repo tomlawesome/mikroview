@@ -855,6 +855,14 @@ func (s *Server) apiRoutes() []route {
 		{http.MethodPost, "/api/auth/login/factor", s.handleAuthLoginFactor},
 		{http.MethodDelete, "/api/auth/users/{id}/totp", s.handleTOTPAdminClear},
 
+		// Recovery codes, regenerated on their own (#1331) -- password-
+		// gated the same way DELETE /api/auth/totp is, and the account
+		// owner's own route: there is no admin equivalent, since an
+		// admin's clear paths (users/{id}/totp, users/{id}/passkeys) drop
+		// the shared codes only as a side effect of clearing every
+		// factor, never mint a fresh set on their own.
+		{http.MethodPost, "/api/auth/recovery-codes", s.handleRecoveryCodesRegenerate},
+
 		// Passkeys (#1250, wave 2 slice D) -- see passkey.go's own header
 		// comment for the shape of each handler. The list/register/
 		// rename/delete four are the account owner's own passkey

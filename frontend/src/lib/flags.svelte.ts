@@ -130,8 +130,8 @@ export function buildCampaigns(
 // Behavioral flags (port scans, activity spikes, critical-port attempts,
 // global volume spikes -- see internal/detect) raised server-side and
 // reviewed/cleared by a human here. Kept as its own small module rather
-// than folded into appState, matching how theme/colorway/retention/
-// presets each get their own state module in this codebase.
+// than folded into appState, matching how retention/presets and the
+// rest each get their own state module in this codebase.
 class FlagsState {
   list = $state<Flag[]>([])
   // Last hour of newly-raised-episode counts by type at 1-minute

@@ -27,6 +27,14 @@
       "matchStrings": ["ARG GO_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "golang"
+    },
+    {
+      "customType": "regex",
+      "description": "actions/setup-go's go-version in .github/workflows/*.yml (#1356) isn't seen either: enabledManagers above has no github-actions entry, so nothing manages that pin natively -- tracked here as the same go dep as go.mod so the packageRule below groups it with the rest.",
+      "managerFilePatterns": ["/^\\.github/workflows/.*\\.ya?ml$/"],
+      "matchStrings": ["go-version:\\s*'(?<currentValue>\\d+\\.\\d+\\.\\d+)'"],
+      "datasourceTemplate": "golang-version",
+      "depNameTemplate": "go"
     }
   ],
   "packageRules": [
@@ -67,7 +75,7 @@
       "matchDepNames": ["go", "golang"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "go toolchain",
-      "description": "go.mod's go directive, the golang image in Dockerfile and .gitlab-ci.yml, and live-check.Dockerfile's GO_VERSION ARG move together, so the four Go pins #1312 found drifted cannot drift apart again"
+      "description": "go.mod's go directive, the golang image in Dockerfile and .gitlab-ci.yml, live-check.Dockerfile's GO_VERSION ARG, and (#1356) actions/setup-go's go-version in .github/workflows/*.yml move together, so the Go pins #1312 and #1356 found drifted cannot drift apart again"
     }
   ]
 }

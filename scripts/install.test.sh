@@ -66,6 +66,12 @@ EOF
   # STUB_RUN_ERR is what `docker run` prints to stderr when it fails, so
   # a test can exercise install.sh's port-conflict-hint pattern match
   # against real-looking daemon text instead of an empty message.
+  #
+  # STUB_KEY_EXISTS_RC answers install.sh's #1357 "does a key already
+  # exist" check on its own, ahead of (and regardless of) STUB_RUN_RC --
+  # unset means "no", so the default across every test below is a fresh
+  # install that goes on to create one, the same as it would against a
+  # freshly created real volume.
   cat >"$dir/docker" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$DOCKER_LOG"
@@ -76,6 +82,9 @@ case "$1" in
   container) [ "$2" = "inspect" ] && { [ "${STUB_EXISTS:-0}" = "1" ] && exit 0 || exit 1; }; exit 0 ;;
   stop|rm) exit 0 ;;
   run)
+    case "$*" in
+      *"test -e /etc/mikroview/keys/history.key"*) exit "${STUB_KEY_EXISTS_RC:-1}" ;;
+    esac
     rc="${STUB_RUN_RC:-0}"
     [ "$rc" = "0" ] || { [ -z "${STUB_RUN_ERR:-}" ] || echo "${STUB_RUN_ERR}" >&2; }
     exit "$rc"
@@ -218,6 +227,26 @@ run healthz-never-answers
 check "$([ "$rc" -eq 0 ] && echo true || echo false)" "a healthz that never answers is a warning, not a failure (rc=$rc)"
 check "$(case "$out" in *"healthz did not answer within 30s"*) echo true;; *) echo false;; esac)" \
   "and says so, pointing at docker logs"
+
+# --- #1357: a fresh install gets a history key before mikroview starts -----
+ARGS=(); ENV_VARS=(); WITH_DOCKER=true
+run fresh-history-key
+check "$(case "$calls" in *"run --rm -v mikroview-etc:/etc/mikroview:ro alpine:3.24 test -e /etc/mikroview/keys/history.key"*) echo true;; *) echo false;; esac)" \
+  "install.sh checks for an existing key before doing anything about it"
+check "$(case "$calls" in *"run --rm -v mikroview-etc:/etc/mikroview alpine:3.24 sh -c"*"history.key"*) echo true;; *) echo false;; esac)" \
+  "and, finding none, runs a helper container to create one -- writable, not :ro"
+check "$(case "$calls" in *"history.key"*"run -d --name mikroview"*) echo true;; *) echo false;; esac)" \
+  "the key check/create happen before mikroview's own run -d line"
+check "$(case "$out" in *"a key for it now lives"*"keys/history.key"*"Back it up"*) echo true;; *) echo false;; esac)" \
+  "the operator is told the key exists, where, and to back it up"
+
+# --- #1357: an already-mounted key is left alone and not re-announced ------
+ARGS=(); ENV_VARS=(STUB_KEY_EXISTS_RC=0); WITH_DOCKER=true
+run existing-history-key
+check "$(case "$calls" in *"head -c 32"*) echo false;; *) echo true;; esac)" \
+  "an existing key is never regenerated (no create call reaches the helper script)"
+check "$(case "$out" in *"Back it up"*) echo false;; *) echo true;; esac)" \
+  "and nothing is printed about it -- it was told on an earlier run"
 
 # --- missing docker refuses plainly with a non-zero exit -------------------
 ARGS=(); ENV_VARS=(); WITH_DOCKER=false

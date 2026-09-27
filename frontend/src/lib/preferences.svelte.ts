@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // #1283: the one place every per-user preference lives now. Before this,
-// each of presets/topTalkers/colorway/altitudeStop/columns/groupMode/
+// each of presets/topTalkers/altitudeStop/columns/groupMode/
 // retention/metrics/deckOrder read and wrote its own localStorage key
 // directly -- which meant a shared machine handed the next person to
 // sign in the previous operator's saved filters and top-talker widgets
 // (the two keys that carry account content), and every layout choice
 // besides. This module is the one thing that talks to
-// GET/PATCH /api/me/preferences; the nine modules above keep their own
+// GET/PATCH /api/me/preferences; the eight modules above keep their own
 // shape and public API, but read/write their slice of the shared record
 // through get()/set() below instead of localStorage.
 //
@@ -218,7 +218,7 @@ class PreferencesState {
 
 export const preferencesState = new PreferencesState()
 
-// Every legacy key this issue moves off localStorage. All nine start
+// Every legacy key this issue moves off localStorage. All eight start
 // with 'mikroview' (as either 'mikroview-' or 'mikroview:'), which is
 // also the sweep clearLegacyLocalPreferences() below uses -- listed here
 // individually only because migrateLegacyLocalPreferences needs to read
@@ -226,7 +226,6 @@ export const preferencesState = new PreferencesState()
 const LEGACY_KEYS = {
   presets: 'mikroview-filter-presets',
   topTalkers: 'mikroview-top-talker-widgets',
-  colorway: 'mikroview-colorway',
   altitudeStop: 'mikroview:topography-altitude',
   columnWidths: 'mikroview-column-widths-v8',
   columnVisibility: 'mikroview-column-visibility-v1',
@@ -325,9 +324,6 @@ function migrateLegacyLocalPreferences(userID: string | undefined): Record<strin
 
   const topTalkers = readJSON(LEGACY_KEYS.topTalkers)
   if (topTalkers !== undefined) prefs.topTalkers = topTalkers
-
-  const colorway = readRaw(LEGACY_KEYS.colorway)
-  if (colorway !== undefined) prefs.colorway = colorway
 
   const altitudeStop = readRaw(LEGACY_KEYS.altitudeStop)
   if (altitudeStop !== undefined) prefs.altitudeStop = altitudeStop

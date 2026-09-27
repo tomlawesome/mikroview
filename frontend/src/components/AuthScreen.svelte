@@ -200,9 +200,9 @@
 <!-- data-void: the door is always the void (#645). The ratified scene
      -- round 29's door, "the fall rains over the whole void" -- was
      accepted against the dark ground, and the sign-in is the one screen
-     whose job is that identity: night outside, the operator's own theme
+     whose job is that identity: night outside, the operator's own view
      once they enter. app.css's [data-void] rule re-declares the dark
-     token block on this subtree under any theme or colorway. -->
+     token block on this subtree. -->
 <div class="screen" class:reverse={reverseBeat} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
        over the login elements: the shared layer's `door` mask carves

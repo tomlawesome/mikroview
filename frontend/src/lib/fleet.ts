@@ -10,7 +10,7 @@
 // "fleet" (round 23's verdict) -- this module is the "internal
 // code/state" the record allows to keep the name.
 import { prose, TITLES } from './setupsteps'
-import type { ClientEvent, Device, UnattributedSource } from './types'
+import type { ClientEvent, Device, LoggingLeftover, UnattributedSource } from './types'
 
 export const RECENT_WINDOW_MS = 5 * 60 * 1000
 
@@ -134,6 +134,23 @@ export function setupEcho(d: Device): string | null {
     default:
       return null
   }
+}
+
+// loggingLeftovers (#1373) is what else this router last reported
+// sending logs to MikroView from -- another action, or a RouterOS
+// built-in repointed here -- left by a setup this instance's wizard has
+// since moved past. Absence and an empty list read the same: nothing
+// found. Kept as its own function, the same reason setupEcho is, so
+// Fleet.svelte and Entities.svelte's router cards read one answer.
+export function loggingLeftovers(d: Device): LoggingLeftover[] {
+  return d.loggingLeftovers ?? []
+}
+
+// leftoverFixCommands joins every leftover's own commands into one
+// paste-ready block, in the order they were reported -- a router with
+// more than one thing to clean up gets one paste, not one per row.
+export function leftoverFixCommands(leftovers: LoggingLeftover[]): string {
+  return leftovers.flatMap((l) => l.commands).join('\n')
 }
 
 // routerAddress (#1372) is the one line a card prints under a router's

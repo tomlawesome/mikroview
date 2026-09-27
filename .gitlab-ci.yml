@@ -1226,6 +1226,12 @@ gate:scripts:
     - scripts/install.test.sh
     - scripts/ensure-cosign.test.sh
     - scripts/sign-release-digest.test.sh
+    # #1358: these four existed but nothing ran them, so the recorder's
+    # scripted session broke on v0.6.1 with every test still green.
+    - scripts/record-upgrade-fixture.test.sh
+    - scripts/upgrade-fixture-session.test.sh
+    - scripts/check-upgrade-fixtures-recorded.test.sh
+    - scripts/live-web-dist.test.sh
   artifacts:
     when: always
     paths:

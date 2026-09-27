@@ -43,6 +43,12 @@ type upgradeRouters struct {
 	Behind   int `json:"behind"`
 	Total    int `json:"total"`
 	Reported int `json:"reported"`
+	// StaleLogging counts declared routers with at least one #1373
+	// leftover -- another action, or a built-in repointed here -- still
+	// sending logs from an earlier setup. Independent of Behind: a
+	// router can report the current wizard's own setup and still carry
+	// a leftover an even earlier one left running.
+	StaleLogging int `json:"staleLogging"`
 }
 
 // upgradeResponse is what GET /api/upgrade serves.
@@ -149,6 +155,9 @@ func (s *Server) upgradeRouterStanding() upgradeRouters {
 			out.Behind++
 		default:
 			out.Behind++
+		}
+		if len(s.Setup.LoggingLeftovers(info.ID, want)) > 0 {
+			out.StaleLogging++
 		}
 	}
 	return out

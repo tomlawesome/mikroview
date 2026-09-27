@@ -152,6 +152,107 @@ func TestLoggingReportSurvivesAReopen(t *testing.T) {
 	}
 }
 
+// TestLoggingLeftoversFindsTheOwnersOwnRouter is #1373's reproduction:
+// the owner's own router, set up across several MikroView versions,
+// still had the built-in "memory" and "remote" actions repointed at
+// mikroview from an older setup, each still sending from
+// 192.168.254.1 -- one over TLS/6514 (so it looked, on the wire, like a
+// second copy of the real thing), the other over plain UDP/514. The
+// current "mikroview" action was already correct (src-address=0.0.0.0)
+// and must not be named as a leftover of itself.
+func TestLoggingLeftoversFindsTheOwnersOwnRouter(t *testing.T) {
+	s := New()
+	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":3,
+ "records":[
+  {"type":"action","name":"memory","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"192.168.254.1","remoteLogFormat":"default","remoteProtocol":"tls","checkCertificate":"no"},
+  {"type":"action","name":"remote","target":"remote","remote":"10.0.0.5","remotePort":"514","srcAddress":"192.168.254.1","remoteLogFormat":"default","remoteProtocol":"udp"},
+  {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"0.0.0.0","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},
+  {"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}
+ ]}`
+	p, err := ingest.DecodePayload(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	s.NoteLoggingReport("core", p, time.Now())
+
+	got := s.LoggingLeftovers("core", wantFor())
+	if len(got) != 2 {
+		t.Fatalf("leftovers = %+v, want exactly 2 (memory, remote) -- and no complaint about mikroview", got)
+	}
+	byName := map[string]LoggingLeftover{got[0].Name: got[0], got[1].Name: got[1]}
+
+	memory, ok := byName["memory"]
+	if !ok {
+		t.Fatalf("no leftover named %q in %+v", "memory", got)
+	}
+	if !memory.Builtin {
+		t.Errorf("memory leftover.Builtin = false, want true")
+	}
+	if want := `/system logging action set [find name=memory] target=memory`; len(memory.Commands) != 1 || memory.Commands[0] != want {
+		t.Errorf("memory leftover.Commands = %v, want [%q]", memory.Commands, want)
+	}
+
+	remote, ok := byName["remote"]
+	if !ok {
+		t.Fatalf("no leftover named %q in %+v", "remote", got)
+	}
+	if !remote.Builtin {
+		t.Errorf("remote leftover.Builtin = false, want true")
+	}
+	if want := `/system logging action set [find name=remote] remote=0.0.0.0 src-address=0.0.0.0`; len(remote.Commands) != 1 || remote.Commands[0] != want {
+		t.Errorf("remote leftover.Commands = %v, want [%q]", remote.Commands, want)
+	}
+
+	for _, l := range got {
+		if l.Name == "mikroview" {
+			t.Errorf("leftovers named the current mikroview action itself: %+v", got)
+		}
+	}
+}
+
+// A non-built-in action left pointed at this instance is removed
+// entirely, rules first -- RouterOS refuses to remove an action a rule
+// still references.
+func TestLoggingLeftoversRemovesANonBuiltinAction(t *testing.T) {
+	s := New()
+	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":3,
+ "records":[
+  {"type":"action","name":"old-syslog","target":"remote","remote":"10.0.0.5","remotePort":"514","srcAddress":"0.0.0.0","remoteProtocol":"udp","remoteLogFormat":"syslog"},
+  {"type":"rule","topics":"firewall","action":"old-syslog","disabled":"no"}
+ ]}`
+	p, err := ingest.DecodePayload(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	s.NoteLoggingReport("core", p, time.Now())
+
+	got := s.LoggingLeftovers("core", wantFor())
+	if len(got) != 1 {
+		t.Fatalf("leftovers = %+v, want exactly 1", got)
+	}
+	if got[0].Builtin {
+		t.Errorf("old-syslog leftover.Builtin = true, want false")
+	}
+	want := []string{
+		`/system logging remove [find action=old-syslog]`,
+		`/system logging action remove [find name=old-syslog]`,
+	}
+	if len(got[0].Commands) != 2 || got[0].Commands[0] != want[0] || got[0].Commands[1] != want[1] {
+		t.Errorf("old-syslog leftover.Commands = %v, want %v", got[0].Commands, want)
+	}
+}
+
+// An instance that does not know its own address has nothing to check
+// leftovers against, the same rule RouterSetup follows.
+func TestLoggingLeftoversDoesNotCompareAnAddressTheInstanceDoesNotKnow(t *testing.T) {
+	s := New()
+	s.NoteLoggingReport("core", loggingPage(t, routeros.WizardVersion, "firewall,info"), time.Now())
+
+	if got := s.LoggingLeftovers("core", routeros.WizardLogging("", "", "a")); got != nil {
+		t.Errorf("leftovers = %+v, want nil -- nothing known to compare against", got)
+	}
+}
+
 // The marks and the address the ledger already persisted must survive a
 // report being written beside them -- the two halves share one document.
 func TestLoggingReportDoesNotDisturbTheLedgersOtherHalves(t *testing.T) {

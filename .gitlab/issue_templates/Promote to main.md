@@ -24,6 +24,7 @@
 - [ ] `make release-surfaces` passes locally (same check `policy:release-surfaces` runs on the preview -> main merge request)
 - [ ] the previous release's review record in `docs/reviews/` lists its deferred security findings with fix commits -- no `pending-disclosure` marker left (`make release-surfaces` checks this)
 - [ ] every operator step named on this promote issue (host scripts, config, secrets) is done and verified
+- [ ] any change since the last release to what the wizard sets on a router shipped with the cleanup for what it replaces (docs/routeros-setup.md's "Cleaning up an earlier setup" -- #1373)
 - [ ] `dev -> preview` merged green, `preview -> main` merged green, tag `v<version>` pushed, GitHub release run green, image pullable
 - [ ] back-merge `main -> dev` merged (`main -> preview` is refused by `policy:promotion-hop`; the next `dev -> preview` carries it instead)
 - [ ] this issue and the `v<version>` milestone closed

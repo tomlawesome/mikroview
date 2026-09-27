@@ -3,8 +3,8 @@
 import { preferencesState } from './preferences.svelte'
 
 // Whether the live view groups repeats of the same connection into one
-// row (#341). Its own small module, matching how theme/colorway/
-// retention/presets each get one rather than growing appState.
+// row (#341). Its own small module, matching how retention/presets and
+// the rest each get one rather than growing appState.
 //
 // Named groupMode rather than group to stay distinct from grouping.ts,
 // which holds the grouping itself: that file decides what counts as the

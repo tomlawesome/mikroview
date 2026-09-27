@@ -444,7 +444,7 @@ export function stateRow(info: PersistenceInfo | null): string | null {
 
 /** The link to the setup guide's own section on mounting a key. */
 export const HOW_TO_MOUNT_URL =
-  'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-optional-off-by-default'
+  'https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md#on-disk-event-history-on-by-default'
 
 /** Where the wizard tells the operator to write the key, on the host:
  *  the app folder's own keys/ (#1209, #1243). Beside data/, never inside

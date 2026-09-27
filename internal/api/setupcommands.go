@@ -53,6 +53,10 @@ type routerosTable struct {
 	Minimum string         `json:"minimum"`
 	Newest  string         `json:"newest"`
 	Rows    []routeros.Row `json:"rows"`
+	// Upgrades is the whole catalogue of "from version X onward, this
+	// affects Y" warnings (#1344), next to Rows: the text lives once
+	// here, and routers/picked below point at it by ID.
+	Upgrades []routeros.Upgrade `json:"upgrades"`
 }
 
 // pickedVersion is what the operator's Version selection (or its
@@ -62,17 +66,20 @@ type pickedVersion struct {
 	Version  string `json:"version"`
 	Standing string `json:"standing"`
 	Dialect  string `json:"dialect"`
+	// Upgrades is the IDs from routeros.UpgradesFor(req.Version) that
+	// apply to the picked version (#1344), always non-nil.
+	Upgrades []string `json:"upgrades"`
 }
 
 // setupCommandsRouter is one router whose version mikroview actually
 // knows -- from a push, or #436 step 3's /ca.crt?ros= hint -- with where
-// it stands and any per-row note that concerns it.
+// it stands and which upgrade warnings (#1344) apply to it.
 type setupCommandsRouter struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	RouterOSVersion string `json:"routerosVersion"`
-	Standing        string `json:"standing"`
-	Note            string `json:"note"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	RouterOSVersion string   `json:"routerosVersion"`
+	Standing        string   `json:"standing"`
+	Upgrades        []string `json:"upgrades"`
 }
 
 // commandStep is one rendered block: the commands themselves, and any
@@ -171,6 +178,7 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			Version:  req.Version,
 			Standing: routeros.VersionStanding(req.Version).String(),
 			Dialect:  d,
+			Upgrades: upgradeIDs(routeros.UpgradesFor(req.Version)),
 		}
 		dialect = d
 	}
@@ -182,16 +190,13 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			note := ""
-			if row, ok := routeros.RowFor(version); ok {
-				note = row.Note
-			}
+			upgrades := upgradeIDs(routeros.UpgradesFor(version))
 			routers = append(routers, setupCommandsRouter{
 				ID:              info.ID,
 				Name:            info.Name,
 				RouterOSVersion: version,
 				Standing:        routeros.VersionStanding(version).String(),
-				Note:            note,
+				Upgrades:        upgrades,
 			})
 		}
 	}
@@ -347,9 +352,10 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, setupCommandsResponse{
 		RouterOS: routerosTable{
-			Minimum: routeros.MinimumVersion,
-			Newest:  routeros.NewestVersion(),
-			Rows:    append([]routeros.Row(nil), routeros.Rows...),
+			Minimum:  routeros.MinimumVersion,
+			Newest:   routeros.NewestVersion(),
+			Rows:     append([]routeros.Row(nil), routeros.Rows...),
+			Upgrades: append([]routeros.Upgrade(nil), routeros.Upgrades...),
 		},
 		Picked:  picked,
 		Routers: routers,
@@ -585,6 +591,17 @@ func validSetupAddress(s string) bool {
 		return true
 	}
 	return validSetupHostname(host)
+}
+
+// upgradeIDs turns a slice of routeros.Upgrade into the IDs the wire
+// contract carries (#1344), always non-nil so JSON says "[]" rather than
+// "null" -- the same contract routers[] itself already keeps.
+func upgradeIDs(upgrades []routeros.Upgrade) []string {
+	ids := make([]string, 0, len(upgrades))
+	for _, u := range upgrades {
+		ids = append(ids, u.ID)
+	}
+	return ids
 }
 
 // defaultDialect is the dialect used when nothing else picks one -- see

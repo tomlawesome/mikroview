@@ -18,7 +18,7 @@ function upgrade(over: Partial<Upgrade> = {}): Upgrade {
     previous: 'v0.4.0',
     current: 'v0.5.0',
     acknowledged: false,
-    routers: { behind: 0, total: 0, reported: 0 },
+    routers: { behind: 0, total: 0, reported: 0, staleLogging: 0 },
     ...over,
   }
 }
@@ -29,7 +29,7 @@ beforeEach(() => {
 
 describe('upgradeState.line', () => {
   it('names the certificate step from TITLES, not a step number, once routers are counted', () => {
-    upgradeState.upgrade = upgrade({ routers: { behind: 2, total: 3, reported: 3 } })
+    upgradeState.upgrade = upgrade({ routers: { behind: 2, total: 3, reported: 3, staleLogging: 0 } })
     expect(upgradeState.line).toContain(TITLES.ca)
     expect(upgradeState.line).not.toMatch(/step \d/)
   })
@@ -42,5 +42,21 @@ describe('upgradeState.line', () => {
     upgradeState.upgrade = upgrade()
     expect(upgradeState.line).toContain(TITLES.ca)
     expect(upgradeState.line).not.toMatch(/step \d/)
+  })
+
+  // #1373: named beside the crossing, singular and plural.
+  it('names a router with an old logging setup, singular', () => {
+    upgradeState.upgrade = upgrade({ routers: { behind: 0, total: 1, reported: 1, staleLogging: 1 } })
+    expect(upgradeState.line).toContain('1 router has an old logging setup')
+  })
+
+  it('names routers with an old logging setup, plural', () => {
+    upgradeState.upgrade = upgrade({ routers: { behind: 0, total: 3, reported: 3, staleLogging: 2 } })
+    expect(upgradeState.line).toContain('2 routers have an old logging setup')
+  })
+
+  it('says nothing about logging leftovers when there are none', () => {
+    upgradeState.upgrade = upgrade({ routers: { behind: 0, total: 1, reported: 1, staleLogging: 0 } })
+    expect(upgradeState.line).not.toContain('logging setup')
   })
 })

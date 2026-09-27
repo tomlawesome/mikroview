@@ -46,7 +46,7 @@ func TestMergeThenGetRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"teal","altitudeStop":3}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"uiTheme":"teal","altitudeStop":3}`)); err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
 	got, ok := s.Get("user-1")
@@ -61,8 +61,8 @@ func TestMergeThenGetRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(got, &gotFields); err != nil {
 		t.Fatal(err)
 	}
-	if gotFields["colorway"] != "teal" || gotFields["altitudeStop"] != float64(3) {
-		t.Errorf("Get = %s, want colorway=teal, altitudeStop=3", got)
+	if gotFields["uiTheme"] != "teal" || gotFields["altitudeStop"] != float64(3) {
+		t.Errorf("Get = %s, want uiTheme=teal, altitudeStop=3", got)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestResetDropsEveryRecordAndPersistsThat(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"user-1", "user-2"} {
-		if err := s.Merge(id, json.RawMessage(`{"colorway":"teal"}`)); err != nil {
+		if err := s.Merge(id, json.RawMessage(`{"uiTheme":"teal"}`)); err != nil {
 			t.Fatalf("Merge %s: %v", id, err)
 		}
 	}
@@ -135,15 +135,15 @@ func TestMergeOverwritesAKeyItRepeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"teal"}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"uiTheme":"teal"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"mono"}`)); err != nil {
+	if err := s.Merge("user-1", json.RawMessage(`{"uiTheme":"mono"}`)); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := s.Get("user-1")
-	if !ok || string(got) != `{"colorway":"mono"}` {
-		t.Errorf("Get after re-merging the same key = (%s, %v), want ({\"colorway\":\"mono\"}, true)", got, ok)
+	if !ok || string(got) != `{"uiTheme":"mono"}` {
+		t.Errorf("Get after re-merging the same key = (%s, %v), want ({\"uiTheme\":\"mono\"}, true)", got, ok)
 	}
 }
 
@@ -326,7 +326,7 @@ func TestMergeRefusesGrowingARecordPastTheCap(t *testing.T) {
 // patch that shrinks it is still accepted.
 func TestRecordAlreadyOverTheCapStillLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "preferences.json")
-	big := `{"records":{"user-1":{"pad":"` + strings.Repeat("x", MaxRecordBytes+1024) + `","colorway":"teal"}}}`
+	big := `{"records":{"user-1":{"pad":"` + strings.Repeat("x", MaxRecordBytes+1024) + `","uiTheme":"teal"}}}`
 	if err := os.WriteFile(path, []byte(big), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -335,10 +335,10 @@ func TestRecordAlreadyOverTheCapStillLoads(t *testing.T) {
 		t.Fatalf("a record over the cap must still open: %v", err)
 	}
 	got, ok := s.Get("user-1")
-	if !ok || !strings.Contains(string(got), `"colorway":"teal"`) {
+	if !ok || !strings.Contains(string(got), `"uiTheme":"teal"`) {
 		t.Fatalf("the over-cap record did not read back: %s", got)
 	}
-	if err := s.Merge("user-1", json.RawMessage(`{"colorway":"ochre"}`)); !errors.Is(err, ErrRecordTooLarge) {
+	if err := s.Merge("user-1", json.RawMessage(`{"uiTheme":"ochre"}`)); !errors.Is(err, ErrRecordTooLarge) {
 		t.Errorf("a patch keeping it over the cap: err = %v, want ErrRecordTooLarge", err)
 	}
 	if err := s.Merge("user-1", json.RawMessage(`{"pad":null}`)); err != nil {

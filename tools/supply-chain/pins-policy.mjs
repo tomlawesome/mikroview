@@ -20,11 +20,12 @@
 // the review record against reality, not a stricter policy this repo
 // does not implement.
 //
-// #1312: the Go toolchain is also pinned four separate times -- go.mod's
+// #1312: the Go toolchain is also pinned several separate times -- go.mod's
 // `go` directive, Dockerfile's `FROM golang:X-alpine`, live-check.Dockerfile's
-// `ARG GO_VERSION=X` and every `image: golang:X` in .gitlab-ci.yml -- and
+// `ARG GO_VERSION=X`, every `image: golang:X` in .gitlab-ci.yml, and (#1356)
+// every `actions/setup-go` `go-version:` in .github/workflows/*.yml -- and
 // nothing tied them together, so CI floated on a patch the shipped image
-// never saw. This script additionally fails when those four disagree,
+// never saw. This script additionally fails when those disagree,
 // independently of the policy-vs-reality check above.
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -134,17 +135,19 @@ const GO_MOD_DIRECTIVE = /^go\s+(\d+\.\d+(?:\.\d+)?)\s*$/m;
 const DOCKERFILE_GOLANG_FROM = /^\s*FROM\s+golang:(\d+\.\d+(?:\.\d+)?)(?:-\S+)?/im;
 const GO_VERSION_ARG = /^\s*ARG\s+GO_VERSION=(\d+\.\d+(?:\.\d+)?)\s*$/m;
 const GITLAB_GOLANG_IMAGE = /image:\s*golang:(\d+\.\d+(?:\.\d+)?)\b/g;
+const WORKFLOW_GO_VERSION = /^\s*go-version:\s*['"]?(\d+\.\d+(?:\.\d+)?)['"]?\s*$/;
 
 /**
- * Reads the Go toolchain version named in each of the four places that
- * name one (#1312): go.mod's `go` directive, the Dockerfile's golang
- * base image, live-check.Dockerfile's checksummed-tarball ARG, and every
- * `image: golang:X` in .gitlab-ci.yml. Returns a map from a short label
- * to the version string found there -- one entry per `.gitlab-ci.yml`
- * `image:` line found, distinctly labelled, so two differing CI jobs are
- * both reported rather than one silently winning.
+ * Reads the Go toolchain version named in each of the places that name
+ * one (#1312, plus GitHub workflows since #1356): go.mod's `go`
+ * directive, the Dockerfile's golang base image, live-check.Dockerfile's
+ * checksummed-tarball ARG, every `image: golang:X` in .gitlab-ci.yml, and
+ * every `actions/setup-go` `go-version:` in .github/workflows/*.yml.
+ * Returns a map from a short label to the version string found there --
+ * one entry per matching line, distinctly labelled, so two differing CI
+ * jobs are both reported rather than one silently winning.
  */
-export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, gitlabCi }) {
+export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, gitlabCi, workflows }) {
   const pins = new Map();
 
   if (goMod !== undefined) {
@@ -166,6 +169,15 @@ export function extractGoVersionPins({ goMod, dockerfile, liveCheckDockerfile, g
       const match = GITLAB_GOLANG_IMAGE.exec(line);
       if (match) pins.set(`${gitlabCi.file}:${index + 1}`, match[1]);
     });
+  }
+  if (workflows !== undefined) {
+    for (const [file, text] of Object.entries(workflows)) {
+      const lines = text.split("\n");
+      lines.forEach((line, index) => {
+        const match = WORKFLOW_GO_VERSION.exec(line);
+        if (match) pins.set(`${file}:${index + 1}`, match[1]);
+      });
+    }
   }
 
   return pins;
@@ -238,6 +250,7 @@ export function collectRepositoryPins(root = repositoryRoot) {
     liveCheckDockerfile:
       liveCheckDockerfileText === undefined ? undefined : { file: "live-check.Dockerfile", text: liveCheckDockerfileText },
     gitlabCi: gitlabCiText === undefined ? undefined : { file: ".gitlab-ci.yml", text: gitlabCiText },
+    workflows: fileTexts,
   });
 
   return {
