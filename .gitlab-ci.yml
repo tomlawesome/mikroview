@@ -782,11 +782,22 @@ test:postgres:
     # internal/matchlog alongside internal/persist (#243 slice 6): its
     # Postgres backend is a second, independent SQL sink with its own
     # table and needs the same real-database coverage.
-    - go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
+    #
+    # #1290: -coverprofile, now that this job owns these two packages'
+    # coverage outright -- test:go's own profile never runs their
+    # Postgres-backed statements (see supply-chain/coverage-floors.yml's
+    # header), and this run, with MIKROVIEW_TEST_POSTGRES set above, is a
+    # strict superset of what test:go covers for them.
+    - go test -race -count=1 -coverprofile=coverage-postgres.out ./internal/persist/... ./internal/matchlog/...
+    # The ratchet against postgres-floors: in supply-chain/coverage-floors.yml
+    # -- the same mechanism test:go's coverage-floor.py call uses, scoped to
+    # just the two packages this job measures.
+    - python3 scripts/coverage-floor.py --section postgres-floors coverage-postgres.out
     - *reuse_evidence
   artifacts:
     paths:
       - ci-reuse-evidence/
+      - coverage-postgres.out
     expire_in: 1 week
 
 # Container smoke test, ported from GitHub's ci.yml (#942, the second
