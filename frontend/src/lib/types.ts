@@ -283,6 +283,10 @@ export interface Healthz {
   // is what lets the country filter and the Settings > ingest card tell
   // the two apart instead of both just staying quiet.
   geoip: boolean
+  // mode (#1347): "setup-only" when the config file was refused at
+  // start-up and the server is serving only sign-in and the config
+  // editor. Absent on a normal start (and on an older server).
+  mode?: 'setup-only' | string
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -2457,4 +2461,73 @@ export interface PreferencesRecord {
   version: number
   prefs: Record<string, unknown>
   userId?: string
+}
+
+// #1347: the config editor's API (internal/api, admin-only throughout).
+// Field names follow the contract on the issue exactly.
+
+/** The four-line header block at the top of a config MikroView wrote. */
+export interface ConfigHeader {
+  schema: number
+  writtenBy: string
+  layout: number
+}
+
+/** POST /api/config/editor/open's answer. `text` is masked: each secret
+ *  value is a `<<secret:key>>` placeholder. */
+export interface ConfigEditorOpen {
+  text: string
+  path: string
+  changedSinceStart: boolean
+  /** null for a file written before headers existed (before v0.7). */
+  header: ConfigHeader | null
+  /** The schema the server guessed from the keys a headerless file uses. */
+  schemaGuess: number
+  runningVersion: string
+  runningSchema: number
+}
+
+/** One line the validator has something to say about. Named apart from
+ *  configProblems.svelte.ts's ConfigProblem, which is the start-up
+ *  banner's different shape. */
+export interface ConfigEditorProblem {
+  line: number
+  key: string
+  severity: 'error' | 'warning' | string
+  message: string
+}
+
+export interface ConfigValidateResult {
+  problems: ConfigEditorProblem[]
+}
+
+/** One thing Carry forward did to the text. */
+export interface ConfigChange {
+  kind: string
+  key: string
+  to: string
+  line: number
+  note: string
+}
+
+export interface ConfigCarryForwardResult {
+  text: string
+  changes: ConfigChange[]
+  problems: ConfigEditorProblem[]
+}
+
+/** A kept copy of the config text, as GET /api/config/snapshots lists it. */
+export interface ConfigSnapshotSummary {
+  id: string
+  when: string
+  by: string
+  schema: number
+  /** 'manual' or 'before-carry-forward'. */
+  why: string
+  note?: string
+}
+
+/** GET /api/config/snapshots/{id}: the summary plus the text itself. */
+export interface ConfigSnapshot extends ConfigSnapshotSummary {
+  text: string
 }
