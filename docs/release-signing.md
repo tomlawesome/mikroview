@@ -122,9 +122,21 @@ GitHub and GitHub's `docker` workflow publishes from it. So there is no
 throwaway tag that exercises signing without also cutting a release.
 
 Instead `sign:release-digest` can be started by hand against an
-already-published tag, using the same web/API-plus-variable shape
-`CHR_EXERCISE` and `CHR_WATCH` use. `SIGN_EXERCISE` is on their `never` lists,
-so triggering it does not re-run all of dev (#951).
+already-published tag. `SIGN_TAG` is on the same `never` lists as
+`CHR_EXERCISE` and `CHR_WATCH`, so triggering it does not re-run all of dev
+(#951).
+
+**`SIGN_TAG` is the only variable.** Naming a tag by hand is already
+unambiguous intent, so an extra on/off switch beside it was one more name to
+spell correctly and nothing else -- and it was misspelled on the first attempt
+(pipeline 1483, 2026-09-22), which quietly ran the whole of dev and signed
+nothing. If the job does not appear in a manual run, the variable name is the
+first thing to check.
+
+A manual run gets **one** attempt at finding the image rather than the release
+path's 45, because anything being exercised is already published: a tag that
+does not resolve is reported in seconds instead of three quarters of an hour
+later.
 
 Owner decision, 2026-09-22: exercise it by **signing v0.6.0's digest for
 real**, rather than dry-running, so the GHCR write and the signature push are
@@ -137,14 +149,32 @@ refuses unprotected refs, so `dev` works and a feature branch does not -- with:
 
 | Variable | Value |
 | --- | --- |
-| `SIGN_EXERCISE` | `true` |
-| `SIGN_TAG` | `v0.6.0` |
+| `SIGN_TAG` | the published tag to sign, e.g. `v0.6.0` |
 
-v0.6.0 is `sha256:3a5e61e840cb23f2ec9e5c964b42ed6d1b6c0734936d9c0b5b7d7bd4fd5eb024`
-(resolved 2026-09-22), so that is the digest the job should report signing. On
-a tag pipeline there is no `SIGN_TAG` and the job signs its own
-`CI_COMMIT_TAG`; with neither set the script refuses rather than sign
-something it guessed.
+Only `sign:release-digest` should run. If other jobs appear, `SIGN_TAG` did not
+reach the pipeline.
+
+On a tag pipeline there is no `SIGN_TAG` and the job signs its own
+`CI_COMMIT_TAG`; with neither set the script refuses rather than sign something
+it guessed.
+
+## The exercise that was run, 2026-09-23
+
+Pipeline 1484 on `dev`, `SIGN_TAG=v0.6.0`. One job, 37 seconds. It found the key
+and password, logged in to GHCR, resolved exactly one platform manifest, and
+pushed the signature:
+
+```
+sign-release-digest: signed ghcr.io/tomlawesome/mikroview@sha256:3a5e61e840cb23f2ec9e5c964b42ed6d1b6c0734936d9c0b5b7d7bd4fd5eb024
+```
+
+Verified independently afterwards with the public key, which reported the
+signature valid and its claims present in the transparency log. Evidence on
+#1309.
+
+So v0.6.0's digest carries a key-based signature it did not ship with. That was
+deliberate (owner, 2026-09-22): signing an already-published release adds a
+valid second signature and changes nothing about what the release contains.
 
 Afterwards, confirm the signature verifies with the public key the same way an
 operator would:

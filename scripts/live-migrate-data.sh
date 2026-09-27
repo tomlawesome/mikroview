@@ -69,7 +69,7 @@ stop() {
   PID=""
 }
 
-echo "== migrate-data, against a real instance"
+echo "-- migrate-data, against a real instance --"
 
 # The embedded frontend only needs to exist for the build; rebuild it
 # only when it's genuinely missing, since run-live-scripts.sh runs these
