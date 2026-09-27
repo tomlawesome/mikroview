@@ -39,6 +39,16 @@ As round 12.
 
 ## Verdicts
 
-None yet.
+Owner, 2026-09-27 (verbatim):
+
+> So, with the letter flickering, I meant a bit more like neon/tube
+> lights flicker when they're broken.
+>
+> Have one more round and try to just go a bit further. Add something
+> more to it.
+
+Read as: the flicker is a failing neon tube — stutter, buzz, drop-outs
+— not a colour swap. Round 14 (`../round-14/`) takes the neon further
+as one direction, AM.
 
 Written by Fable 5.1, 2026-09-27.

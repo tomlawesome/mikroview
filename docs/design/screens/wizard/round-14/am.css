@@ -1,0 +1,46 @@
+/* AM — The neon. Round 13's AL, taken further: a neon sign in the rain. Round 11's slide and swell in one journey, and the
+   wordmark's box as the thing you watch: it stays, moves to the centre,
+   grows by half, wobbles, takes the rain's colours, grows a line from
+   each side that catches the rain and wipes the screen up and away. The
+   wizard then arrives in groups. Finish plays it again, onto the fall. */
+/* width/height explicit: a canvas with only inset keeps its bitmap size, and at any device pixel ratio but 1 everything drawn lands off by that ratio */
+#fx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 6; pointer-events: none; display: none; }
+/* the door: the world (the welcome stack) slides away; the box leaves it and rides on its own */
+.door .world { position: absolute; inset: 0; will-change: transform; }
+.door .stack { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.door .clear { position: absolute; inset: 0; background: radial-gradient(ellipse 460px 380px at 50% 52%, var(--bg) 62%, transparent 78%); transition: opacity 500ms ease 150ms; }
+body.in .door .clear { opacity: 0; }
+body.in .door .fullfall { transition: opacity 450ms ease; opacity: 0; }
+.door .wm-box.gone { visibility: hidden; }
+/* the riding box: the letters live in the DOM above the rain; its border is drawn on the canvas, where it can wobble */
+.ride { position: fixed; left: 0; top: 0; z-index: 7; margin: 0; padding: 12px 30px; border-radius: 4px; background: var(--bg); transform-origin: 50% 50%; will-change: transform; pointer-events: none; }
+.ride .wm { display: block; font-size: 34px; white-space: nowrap; line-height: 1.2; }
+.ride .wm .l { transition: color 140ms ease; }
+.ride.landed { transition: opacity 300ms ease; opacity: 0; }
+/* the wizard arrives in groups: bar, strip, steps one by one, the heading, the form row by row, the foot */
+body.ak .page .chips, body.ak .page .right, body.ak .striprow { opacity: 0; transition: opacity 500ms ease; }
+body.ak.ak-bar .page .chips, body.ak.ak-bar .page .right { opacity: 1; }
+body.ak.ak-strip .striprow { opacity: 1; }
+body.ak .body > * { opacity: 0; transform: translateY(12px); transition: opacity 420ms ease, transform 520ms cubic-bezier(.2,.26,.35,1); }
+body.ak .body > .on { opacity: 1; transform: none; }
+/* and the fall arrives in groups: its columns, then its body, then the side rail */
+body.ak .fallframe .fallbody, body.ak .fallframe .axis { opacity: 0; transition: opacity 600ms ease; }
+body.ak.ak-fb .fallframe .fallbody, body.ak.ak-fb .fallframe .axis { opacity: 1; }
+body.ak .siderail { transition: none; }
+.page .main { will-change: transform; }
+body.out .fallframe { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  #fx, .ride { display: none !important; }
+  body.ak .body > *, body.ak .page .chips, body.ak .page .right, body.ak .striprow, body.ak .fallframe .fallbody, body.ak .fallframe .axis { opacity: 1; transform: none; transition: none; }
+}
+/* ---- AM: the neon ---- */
+/* a lit letter glows in its ink; a dark one is the tube gone out. The canvas sets these inline; the transition is off so a stutter is a stutter. */
+.ride .wm .l { transition: none; }
+/* every group strikes on like a tube: dark, a flash, a dip, then steady. Inline animation-delay staggers them. */
+@keyframes strike { 0% { opacity: 0; transform: translateY(10px); } 18% { opacity: 0.85; transform: none; } 26% { opacity: 0.12; } 40% { opacity: 1; } 52% { opacity: 0.45; } 62% { opacity: 1; } 100% { opacity: 1; transform: none; } }
+body.am .rail li { transition: none; opacity: 0; }
+body.am .body > * { transition: none; }
+body.am .foot { transition: none; }
+body.am .strike { animation: strike 420ms linear both; }
+body.am .fallframe .cols .col { transition: none; }
+@media (prefers-reduced-motion: reduce) { body.am .strike { animation: none; opacity: 1; transform: none; } body.am .rail li { opacity: 1; } }
