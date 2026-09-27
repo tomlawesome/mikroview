@@ -81,7 +81,9 @@
 
 floors:
   # --- below the 70% band: known debt ---
-  .: 42                     # 42.3% measured 2026-09-27. The root `main`
+  .: 39                     # 39.9% re-measured 2026-09-27 on the M22 batch
+                             # (dev at 010892bc, after #1347 added CLI code
+                             # here); 42.3% on the earlier base. The root `main`
                              # package -- CLI subcommand dispatch
                              # (backup_cli.go, migrate_cli.go, history.go,
                              # snapshot.go) plus main() itself. #1290 found
@@ -100,16 +102,8 @@ floors:
                              # demos (AGENTS.md, "Demos the owner
                              # reviews") -- not shipped in the release
                              # binary.
-  internal/evict: 0         # No test files. #1290 (Opus 5, 2026-09-22)
-                             # measured 82-87% of this package's
-                             # statements exercised indirectly through its
-                             # callers (internal/engine, internal/auth,
-                             # internal/rules) via `-coverpkg`, but test:go
-                             # does not set `-coverpkg` (#1333 is
-                             # deliberately not that decision), so none of
-                             # that is captured in coverage.out. Direct
-                             # tests of the package's own contract remain
-                             # genuinely absent; out of scope to add here.
+  internal/evict: 100       # #1328 added the first direct test of its
+                             # contract; 100% measured 2026-09-27.
   internal/matchlog: 58     # 58.5% measured 2026-09-27. Its Postgres-backed
                              # tests skip under test:go (see header above);
                              # test:postgres runs them for real but writes
@@ -151,6 +145,7 @@ floors:
   internal/baseline: 90
   internal/blocklist: 93
   internal/config: 86
+  internal/configsnap: 81    # new with #1347; 81.2% measured 2026-09-27
   internal/coverage: 95
   internal/device: 91
   internal/dossier: 91
@@ -158,7 +153,8 @@ floors:
   internal/engine: 86
   internal/entities: 95
   internal/flags: 94
-  internal/geoip: 100
+  internal/geoip: 83         # 83.4% after #1352 added the three runtime
+                             # sources (100% on the earlier, smaller package)
   internal/hosts: 95
   internal/hub: 100
   internal/logging: 86
@@ -171,7 +167,7 @@ floors:
   internal/routeros/export: 96
   internal/routerstate: 87
   internal/rules: 96
-  internal/seen: 86
+  internal/seen: 85         # 85.8% on the host run of 2026-09-27
   internal/settings: 96
   internal/setup: 88
   internal/store: 96
