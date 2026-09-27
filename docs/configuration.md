@@ -1390,6 +1390,18 @@ error. The UI says so too rather than leaving a reader to guess why every
 flag is blank: the country filter's select carries a disabled "no GeoIP
 database" row, and Settings ▸ ingest states the same fact in one line.
 
+**Settings ▸ country and network owner** (admins only) shows which source
+the flags come from right now, and one row per source: DB-IP Lite needs no
+key; IPinfo Lite takes a token; MaxMind GeoLite2 takes your account ID and
+licence key. Each row shows when its data was last fetched, when it will
+be fetched next, and the last download error, if any. A key is entered
+once: afterwards the row reads "key set", who set it and when, and offers
+remove (click twice to confirm). The key itself is never shown again.
+Setting a key switches the source — IPinfo, then MaxMind, then DB-IP — and
+removing one falls back to the next. IPinfo also knows who runs each
+network, shown as "Network · AS13335 Cloudflare, Inc." in the address
+popover, the host dossier and a flag's tooltip.
+
 ## IP reputation lookup (optional)
 
 Clicking the "investigate" affordance next to a public source/destination
