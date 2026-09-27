@@ -718,8 +718,10 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(clearUserTOTP).not.toHaveBeenCalled()
 
+    // X9-F1: kai has no passkeys either, so clearing the authenticator
+    // app also takes the recovery codes -- the confirm says so.
     await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off; their recovery codes go too' }),
     )
     await settle()
     expect(clearUserTOTP).toHaveBeenCalledWith('u2')
@@ -744,7 +746,7 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
     await settle()
     await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off; their recovery codes go too' }),
     )
     await settle()
 
@@ -812,9 +814,52 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(clearUserPasskeys).not.toHaveBeenCalled()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys' }))
+    // X9-F1: kai has no authenticator app either, so clearing passkeys
+    // also takes the recovery codes -- the confirm says so.
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys; their recovery codes go too' }))
     await settle()
     expect(clearUserPasskeys).toHaveBeenCalledWith('u2')
+  })
+
+  // X9-F1: the recovery-codes warning is said only when clearing this
+  // factor would actually take them -- kai keeps the authenticator app
+  // here, so the codes stay too and the confirm names neither.
+  it('clearing passkeys keeps the short confirm when the authenticator app still stands', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 1, hasTOTP: true },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear passkeys' }))
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'confirm — removes their passkeys' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /recovery codes go too/i })).toBeNull()
+  })
+
+  // X9-F1's other button, same reasoning: kai keeps a passkey here, so
+  // clearing the authenticator app leaves the codes covered too.
+  it('clearing the authenticator app keeps the short confirm when a passkey still stands', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true, passkeyCount: 1 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'confirm — turns their authenticator app off' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /recovery codes go too/i })).toBeNull()
   })
 
   it('offers no clear-passkeys verb on the admin row, even when the admin has passkeys', async () => {

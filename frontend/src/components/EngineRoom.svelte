@@ -1771,7 +1771,11 @@
                     {#if clearingFactor === user.id}
                       clearing…
                     {:else if armedClearFactor === user.id}
-                      confirm — turns their authenticator app off
+                      {#if user.passkeyCount}
+                        confirm — turns their authenticator app off
+                      {:else}
+                        confirm — turns their authenticator app off; their recovery codes go too
+                      {/if}
                     {:else}
                       clear authenticator app
                     {/if}
@@ -1792,7 +1796,11 @@
                     {#if clearingPasskeys === user.id}
                       clearing…
                     {:else if armedClearPasskeys === user.id}
-                      confirm — removes their passkeys
+                      {#if user.hasTOTP}
+                        confirm — removes their passkeys
+                      {:else}
+                        confirm — removes their passkeys; their recovery codes go too
+                      {/if}
                     {:else}
                       clear passkeys
                     {/if}
