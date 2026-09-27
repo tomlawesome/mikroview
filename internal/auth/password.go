@@ -65,6 +65,36 @@ func acquireHashSlot() func() {
 	return func() { <-hashSlots }
 }
 
+// hashParams is the Argon2id cost HashPassword derives new hashes
+// with. Fixed at the production profile (argon2Memory/argon2Time/
+// argon2Threads) unless SetHashParamsForTest overrides it -- nothing
+// outside test code calls that, so a running server always hashes at
+// the real cost.
+var hashParams = KDFParams{Memory: argon2Memory, Time: argon2Time, Threads: argon2Threads}
+
+// SetHashParamsForTest overrides the Argon2id cost every subsequent
+// HashPassword call uses, for the rest of the process, and returns a
+// restore func that puts the production profile back.
+//
+// Test-only, and only safe called from a TestMain before m.Run()
+// starts any test goroutines -- never from inside an individual test.
+// hashParams is an unsynchronized package var: a write here racing a
+// concurrent HashPassword call is exactly the data race -race exists
+// to catch, which is what makes "single-threaded, before any subtest
+// runs" the load-bearing part of that rule, not a suggestion.
+// VerifyPassword is unaffected either way -- it reads memory/time/
+// threads back out of the hash string it's checking, so a hash
+// produced under the real cost still verifies at the real cost even
+// after this runs, and existing tests of HashPassword/VerifyPassword
+// at production cost (internal/auth's own password_test.go and
+// register_cost_test.go) never call this, so they keep exercising the
+// real parameters.
+func SetHashParamsForTest(p KDFParams) (restore func()) {
+	prev := hashParams
+	hashParams = p
+	return func() { hashParams = prev }
+}
+
 // dummyHash is verified against when a username doesn't exist, so a
 // failed login takes the same amount of time either way -- otherwise
 // "valid username, wrong password" (does the Argon2id work) and "no
@@ -80,11 +110,12 @@ func HashPassword(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
+	p := hashParams
 	release := acquireHashSlot()
-	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	hash := argon2.IDKey([]byte(password), salt, p.Time, p.Memory, p.Threads, argon2KeyLen)
 	release()
 	return fmt.Sprintf("argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argon2Memory, argon2Time, argon2Threads,
+		argon2.Version, p.Memory, p.Time, p.Threads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(hash),
 	), nil
