@@ -83,7 +83,7 @@ var removedOrRenamedKeys = map[string]removedKey{
 			"it any more. Remove this section.",
 	},
 	"geoip.dbPath": {
-		Version: "v0.6.2",
+		Version: "v0.7.0",
 		Why: "MikroView now downloads country data itself (#1352): flags work with no setup, and MaxMind " +
 			"GeoLite2 is used by entering your account ID and licence key on the Engine Room's \"Country and " +
 			"network owner\" card, not by pointing at a file. Remove this key.",
