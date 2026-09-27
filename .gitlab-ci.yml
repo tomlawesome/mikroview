@@ -149,6 +149,11 @@ workflow:
   # that one tree rather than `**/*.log`, so an ordinary log file
   # appearing anywhere else still stops the guard and gets a decision.
   - "docs/routeros-verification-logs/**/*.log"
+  # The frame times a design round's screenshot drive records beside its
+  # shots (docs/design/screens/*/round-N/shots/times.txt, from round 11
+  # on): one line per frame saying when it was taken. A record about the
+  # pictures, like the .png.checked note above; nothing reads it back.
+  - "docs/design/**/shots/times.txt"
 
 .code_paths: &code_paths
   # Source extensions at any depth. These are what catch a file in a
