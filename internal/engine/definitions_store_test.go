@@ -615,9 +615,7 @@ func TestSetEnabledAndScopeRefusesAnUnavailableDefinition(t *testing.T) {
 // encode, so the next tryPersistLocked call in s returns ErrPersistFailed
 // regardless of which id a test is actually exercising.
 func poisonDefinitionsStoreForTest(s *DefinitionsStore) {
-	s.mu.Lock()
-	s.raw["\x00poison"] = json.RawMessage("{not valid json")
-	s.mu.Unlock()
+	s.PoisonForTest()
 }
 
 func TestUpsertLeavesTheStoreUnchangedWhenPersistFails(t *testing.T) {
