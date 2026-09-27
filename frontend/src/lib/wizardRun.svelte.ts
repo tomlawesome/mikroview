@@ -214,14 +214,32 @@ class WizardRun {
 
   // Mint the token: the password is spent on the one call, whatever
   // the answer (#1291: minting is what opens the port, so it asks
-  // every time). The router record itself is the router step's act.
+  // every time). A token is minted for a named router, so a walk that
+  // has no router record yet makes one here first (POST /api/devices,
+  // as the retired modal's name step did); a walk opened for a router
+  // that exists (Re-enrol…) already has one. The record's refusal
+  // reads where the mint's would.
+  private minting = false
   async mint() {
-    if (!this.pass) return
-    wizardState.enrolExpectedAddress = this.addr
-    wizardState.enrolPassword = this.pass
-    this.pass = ''
-    await wizardState.mintEnrolmentToken()
-    if (wizardState.enrolment) this.stage = 'paste'
+    if (!this.pass || this.minting) return
+    this.minting = true
+    try {
+      if (!wizardState.ledgerDevice) {
+        const refused = await wizardState.createRouter(this.name.trim())
+        if (refused !== null) {
+          this.pass = ''
+          wizardState.enrolmentError = refused
+          return
+        }
+      }
+      wizardState.enrolExpectedAddress = this.addr
+      wizardState.enrolPassword = this.pass
+      this.pass = ''
+      await wizardState.mintEnrolmentToken()
+      if (wizardState.enrolment) this.stage = 'paste'
+    } finally {
+      this.minting = false
+    }
   }
 
   // Copy on the paste step: the router's turn begins.

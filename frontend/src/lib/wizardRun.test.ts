@@ -38,6 +38,14 @@ describe('the router address', () => {
     expect(addrProblem('router.lan')).toMatch(/A name will not do/)
     expect(addrProblem('192.168.13')).toMatch(/Four numbers/)
     expect(addrProblem('192.168.13.999')).toMatch(/Four numbers/)
+    // The server's rule (netip.ParseAddr) refuses leading zeros and
+    // accepts an IPv6 literal; the client accepts nothing the server
+    // would refuse (#1380).
+    expect(addrProblem('192.168.013.1')).toMatch(/Four numbers/)
+    expect(addrProblem('fd00:13::1')).toBe('')
+    expect(addrProblem('2001:db8:0:0:0:0:0:1')).toBe('')
+    expect(addrProblem('fd00:13::1:')).toMatch(/No port/)
+    expect(addrProblem('fd00::13::1')).toMatch(/No port/)
   })
 })
 
