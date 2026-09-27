@@ -441,6 +441,14 @@ func TestRestoreRollsBackEveryStoreWhenOneWriteFails(t *testing.T) {
 	if _, err := os.Stat(coveragePath); !os.IsNotExist(err) {
 		t.Errorf("coverage store after the failed restore: stat = %v, want it to still not exist", err)
 	}
+
+	// Every store went back cleanly, so the data directory is exactly
+	// what it was before the restore: rollback's own marker removal must
+	// have run, or the next start would refuse a directory that is fine.
+	markerPath := filepath.Join(dir, restoreMarkerName)
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Errorf("restore marker at %s after a fully rolled-back restore: stat = %v, want it removed", markerPath, err)
+	}
 }
 
 // TestRestoreRemovesTheMarkerOnSuccess is #1293's Done-when for the happy
