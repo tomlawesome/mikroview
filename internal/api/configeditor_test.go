@@ -192,11 +192,11 @@ func TestConfigEditorDownloadRevealAndReauth(t *testing.T) {
 	}
 
 	// A manual snapshot, read back within the unlock.
-	var meta configsnap.Meta
+	var meta snapshotView
 	decodeInto(t, postJSON(t, f.admin, f.ts.URL+"/api/config/snapshots", snapshotCreateRequest{Text: carried.Text, Note: "before the move"}), &meta)
 	var got snapshotGetResponse
 	decodeInto(t, f.get(t, "/api/config/snapshots/"+meta.ID), &got)
-	if got.Note != "before the move" || strings.Contains(got.Text, "editor-secret-1347") || !strings.Contains(got.Text, "<<secret:") {
+	if got.Note == nil || *got.Note != "before the move" || got.Why != configsnap.ReasonManual || strings.Contains(got.Text, "editor-secret-1347") || !strings.Contains(got.Text, "<<secret:") {
 		t.Errorf("snapshot get = %+v", got)
 	}
 
@@ -258,7 +258,7 @@ func TestConfigSnapshotsUnavailableWithoutAStore(t *testing.T) {
 	f.s.ConfigEditor.SnapshotsUnavailable = "no retention key"
 	var list snapshotsListResponse
 	decodeInto(t, f.get(t, "/api/config/snapshots"), &list)
-	if list.Available || list.UnavailableReason != "no retention key" || list.Snapshots == nil {
+	if list.Available || list.Reason == nil || *list.Reason != "no retention key" || list.Snapshots == nil {
 		t.Errorf("list without a store = %+v", list)
 	}
 	resp := postJSON(t, f.admin, f.ts.URL+"/api/config/snapshots", snapshotCreateRequest{Text: "listen: {}\n"})
@@ -332,6 +332,42 @@ func TestSetupOnlyRoutesAreInTheAuthorizationMatrix(t *testing.T) {
 	for _, r := range s.setupOnlyRoutes() {
 		if !declared[r.method+" "+r.path] {
 			t.Errorf("setup-only route %s %s has no row in authzMatrix", r.method, r.path)
+		}
+	}
+}
+
+func TestConfigEditorSummaryNeedsNoUnlock(t *testing.T) {
+	f := newEditorFixture(t)
+	postJSON(t, f.admin, f.ts.URL+"/api/config/snapshots", snapshotCreateRequest{Text: "listen: {}\n"}).Body.Close()
+
+	resp := f.get(t, "/api/config/editor/summary")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("summary without opening the editor: %d %s", resp.StatusCode, body)
+	}
+	if strings.Contains(string(body), "editor-secret-1347") || strings.Contains(string(body), "syslogUdp") {
+		t.Errorf("summary carries the config's text: %s", body)
+	}
+	var got editorSummaryResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := editorSummaryResponse{Path: f.path, SchemaGuess: 1, RunningVersion: "0.6.1", RunningSchema: config.CurrentSchema, SnapshotCount: 1}
+	if got != want {
+		t.Errorf("summary = %+v, want %+v", got, want)
+	}
+	if !strings.Contains(string(body), `"header":null`) {
+		t.Errorf("a headerless file's header is not null: %s", body)
+	}
+
+	// The list's shape: when/why/note, reason null when available.
+	resp = f.get(t, "/api/config/snapshots")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	for _, want := range []string{`"reason":null`, `"when":"`, `"why":"manual"`, `"note":null`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("snapshot list lacks %s: %s", want, body)
 		}
 	}
 }

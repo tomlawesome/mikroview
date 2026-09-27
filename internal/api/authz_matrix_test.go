@@ -156,6 +156,9 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/config/editor/open", accessAdmin,
 		"re-checks the caller's password and returns the running config's text (secrets masked) and path -- the " +
 			"infrastructure map /api/config/problems is admin-gated for, and then some; the password is on top of the role, not instead of it"},
+	{http.MethodGet, "/api/config/editor/summary", accessAdmin,
+		"the Engine Room Config card's facts about the running config -- its path, header, schema and snapshot count, " +
+			"no text and no secrets, so no password either; admin-only for the path, the same infrastructure-map disclosure as /api/config/problems"},
 	{http.MethodGet, "/api/config/editor/reveal", accessAdmin,
 		"hands back the config's secret values in the clear, within the fifteen-minute unlock the password bought -- the most sensitive read here"},
 	{http.MethodPost, "/api/config/validate", accessAdmin,
