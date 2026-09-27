@@ -1,7 +1,8 @@
 # Testing
 
 See [docs/development.md](development.md) ("Testing expectations") for what
-a test has to prove. This page covers the Go coverage ratchet (#1333).
+a test has to prove. This page covers the Go and frontend coverage ratchets
+(#1333).
 
 ## Coverage is a ratchet, not a target
 
@@ -31,3 +32,23 @@ sets `MIKROVIEW_TEST_POSTGRES`, so those tests skip themselves there. Their
 floors read low for that reason, not because the Postgres backend is
 untested; capturing that coverage is out of scope for this ratchet (a
 separate decision, not yet made).
+
+`internal/evict`'s floor is 0 (no test files) as of this measurement. #1328,
+on the unmerged `fix/m22-tests-you-can-trust` batch branch, adds a direct
+test for it — whichever of the two lands second must raise this floor to
+match, or `coverage-floor.py`'s own ratchet slack check will start failing
+the next `test:go` run that measures the real gain.
+
+## Frontend
+
+`npm test -- --coverage` (`vitest run --coverage`, what `test:frontend`
+runs) enforces `coverage.thresholds` in `frontend/vitest.config.ts` —
+statements, branches, functions and lines, set at measured values and never
+lowered, same ratchet rule as the Go floors.
+Vitest reports branch coverage directly (unlike Go), so all four numbers are
+real branch/statement/function/line percentages, not a statement-only proxy.
+
+Measure the way `test:frontend` does: the `node:26-alpine` image, `npm ci`,
+then `npm test -- --coverage` from `frontend/`. Measured 2026-09-27:
+statements 82.4%, branches 69.28%, functions 82.34%, lines 84.58% — rounded
+down to statements 82, branches 69, functions 82, lines 84 in the config.
