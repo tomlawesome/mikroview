@@ -229,6 +229,7 @@ func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) 
 		// reset the suggestion tracker on top of that would desync the
 		// two exactly the way this handler's own doc comment warns
 		// against.
+		apiLog.Error("resetting the watchlist failed: " + err.Error())
 		http.Error(w, "resetting the watchlist failed, so nothing was changed", http.StatusInternalServerError)
 		return
 	}
