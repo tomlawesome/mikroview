@@ -1110,3 +1110,58 @@ func listedPasskeyCount(t *testing.T, admin *http.Client, ts *httptest.Server, u
 	t.Fatalf("no row for %q in the user list", username)
 	return -1
 }
+
+// TestPasskeyLoginFactorBeginIsRateLimited is #1345 SEC-A1-F1: starting
+// a passkey prompt spends the pending-login cookie like every other
+// second-step request, so it takes the same LoginLimiter reservations on
+// the same keys and is refused once they run out, instead of minting
+// challenges without limit for anyone holding the password.
+func TestPasskeyLoginFactorBeginIsRateLimited(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+
+	const threshold = 3
+	s.LoginLimiter = auth.NewLoginLimiter(threshold, time.Minute)
+	for i := 0; i < threshold; i++ {
+		passkeyLoginFactorBegin(t, pending, ts)
+	}
+	resp := postJSON(t, pending, ts.URL+"/api/auth/login/factor/begin", struct{}{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("begin number %d got %d, want 429 once the sign-in limiter is spent", threshold+1, resp.StatusCode)
+	}
+	if s.LoginLimiter.Allow("user:"+passkeyBilboUsername, time.Now()) {
+		t.Error("the begins were not counted against the account's sign-in key, the one the other steps share")
+	}
+}
+
+// TestPasskeyLoginGivesTheBeginReservationBack pins the other half: a
+// passkey prompt that ends in a sign-in must leave nothing counted, or
+// every successful passkey sign-in would eat into the budget a real
+// guess is limited by.
+func TestPasskeyLoginGivesTheBeginReservationBack(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+
+	const threshold = 2
+	s.LoginLimiter = auth.NewLoginLimiter(threshold, time.Minute)
+	resp := submitPasskeyAssertion(t, pending, ts, fake, passkeyLoginFactorBegin(t, pending, ts))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login/factor with a passkey assertion returned %d", resp.StatusCode)
+	}
+
+	now := time.Now()
+	for _, key := range []string{"user:" + passkeyBilboUsername, "ip:127.0.0.1"} {
+		for i := 0; i < threshold; i++ {
+			if !s.LoginLimiter.Reserve(key, now) {
+				t.Errorf("%s: only %d of %d attempts left after a successful passkey sign-in, want all of them", key, i, threshold)
+				break
+			}
+		}
+	}
+}
