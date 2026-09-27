@@ -654,7 +654,9 @@ test:frontend:
   script:
     - cd frontend
     - npm ci
-    - npm test
+    # #1333: --coverage turns on vitest.config.ts's coverage.thresholds,
+    # so a regression below the measured ratchet fails this job.
+    - npm test -- --coverage
 
 # The checks that need the frontend actually built, moved here from GitHub's
 # ci.yml `test` job (#935 step 7). Each one's reason is in the script it
