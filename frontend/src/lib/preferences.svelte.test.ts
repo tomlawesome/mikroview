@@ -126,6 +126,55 @@ describe('preferencesState.ensureLoaded', () => {
     expect(preferencesState.get('demoPref')).toBe('pulse')
     expect(saveMyPreferences).toHaveBeenCalledWith({ version: 1, prefs: { demoPref: 'pulse' } }, {})
   })
+
+  // #1345 R5-F3: auth.svelte.ts starts ensureLoaded() without awaiting
+  // it, so the UI is live while the first fetch is still in flight. A
+  // change made in that gap must survive the fetch landing -- whichever
+  // way it lands -- rather than visibly snapping back.
+  it('keeps a change made while the first load is in flight, when that load succeeds', async () => {
+    let resolve!: (v: { version: number; prefs: Record<string, unknown> }) => void
+    vi.mocked(fetchMyPreferences).mockReturnValue(
+      new Promise((r) => {
+        resolve = r
+      }),
+    )
+    const seen: unknown[] = []
+    preferencesState.register('demoPref', (v) => seen.push(v))
+
+    const loading = preferencesState.ensureLoaded()
+    preferencesState.set('demoPref', 'pulse')
+    resolve({ version: 1, prefs: { demoPref: 'mono', retention: 30 } })
+    await loading
+
+    expect(preferencesState.get('demoPref')).toBe('pulse')
+    expect(preferencesState.get('retention')).toBe(30)
+    expect(seen).toEqual(['pulse'])
+  })
+
+  it('keeps a change made while the first load is in flight, when that load fails', async () => {
+    let reject!: (e: Error) => void
+    vi.mocked(fetchMyPreferences).mockReturnValue(
+      new Promise((_, r) => {
+        reject = r
+      }),
+    )
+    const seen: unknown[] = []
+    preferencesState.register('demoPref', (v) => seen.push(v))
+    preferencesState.register('retention', (v) => seen.push(v))
+
+    const loading = preferencesState.ensureLoaded()
+    preferencesState.set('demoPref', 'pulse')
+    reject(new Error('network down'))
+    await loading
+
+    expect(preferencesState.get('demoPref')).toBe('pulse')
+    expect(seen).toEqual(['pulse', undefined])
+
+    // And it is still the pending change a later successful retry sends.
+    vi.mocked(fetchMyPreferences).mockResolvedValue({ version: 1, prefs: {} })
+    await preferencesState.ensureLoaded()
+    expect(saveMyPreferences).toHaveBeenCalledWith({ version: 1, prefs: { demoPref: 'pulse' } }, {})
+  })
 })
 
 describe('preferencesState.get/set', () => {
