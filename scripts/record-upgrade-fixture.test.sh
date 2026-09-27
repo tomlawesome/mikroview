@@ -87,6 +87,31 @@ EOF
   chmod +x "$dir/docker"
 }
 
+# stub_docker_failing_session <dir> <log-file> -- same as stub_docker
+# above except `docker run` (the scripted session) exits 1 with no
+# stdout, standing in for a broken session -- e.g. #1358's "this account
+# has no second factor" -- so --check's job is to fail the pipeline, not
+# print a manifest.
+stub_docker_failing_session() {
+  local dir="$1" log="$2"
+  mkdir -p "$dir"
+  cat > "$dir/docker" <<EOF
+#!/bin/sh
+LOG="$log"
+{ for a in "\$@"; do printf '%s\t' "\$a"; done; printf '\n'; } >> "\$LOG"
+case "\$1" in
+  run)
+    cat >/dev/null
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "$dir/docker"
+}
+
 # A scratch copy, not the real repo: record-upgrade-fixture.sh writes
 # testdata/upgrade/<version>/manifest.json and .upgrade-fixtures/ next
 # to itself (ROOT is derived from $0), and this run's manifest is fake
@@ -96,6 +121,8 @@ mkdir -p "$SCRATCH/scripts"
 cp "$HERE/record-upgrade-fixture.sh" "$SCRATCH/scripts/"
 cp "$HERE/upgrade-fixture-session.py" "$SCRATCH/scripts/"
 chmod +x "$SCRATCH/scripts/record-upgrade-fixture.sh"
+# --check reads this instead of taking a version argument (#1358 item 3).
+echo "0.6.1" > "$SCRATCH/VERSION"
 
 BIN="$TMP/bin"
 LOG="$TMP/docker.log"
@@ -158,6 +185,69 @@ check "$(grep -q 'tls yes' "$LOG" && echo true || echo false)" \
 
 check "$([ -s "$SCRATCH/testdata/upgrade/v0.6.0/manifest.json" ] && echo true || echo false)" \
   "wrote a manifest for the recorded version"
+
+# --- --check (#1358 item 3): runs against a local image reference
+# instead of pulling ghcr.io/tomlawesome/mikroview:<version>, derives its
+# feature-generation version from the tree's own VERSION file, and never
+# uploads -- exercised here without $MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD
+# set at all, so a passing run proves --check enforces that itself
+# rather than relying on the caller to remember the env var. ------------
+run_check() { # run_check <docker-bin-dir>
+  local bindir="$1"
+  : > "$LOG"
+  rm -rf "$CAPTURE"
+  set +e
+  out="$(cd "$SCRATCH" && env -u CI_JOB_TOKEN -u CI_API_V4_URL -u CI_PROJECT_ID -u MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD \
+    PATH="$bindir:$PATH" \
+    bash scripts/record-upgrade-fixture.sh --check local-test-image:rc < /dev/null 2>&1)"
+  rc=$?
+  set -e
+}
+
+rm -rf "$SCRATCH/testdata"
+run_check "$BIN"
+if [ "$rc" -ne 0 ]; then
+  printf '    %s\n' "${out//$'\n'/$'\n    '}"
+fi
+check "$([ "$rc" -eq 0 ] && echo true || echo false)" "--check records against a local image reference (rc=$rc)"
+
+check "$(echo "$out" | grep -q 'PUT\|packages/generic' && echo false || echo true)" \
+  "--check never mentions an upload, even with MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD unset"
+
+check "$([ -s "$SCRATCH/testdata/upgrade/v0.6.1-check/manifest.json" ] && echo true || echo false)" \
+  "--check writes its manifest under a -check-suffixed directory, never the real version's"
+
+check "$([ ! -e "$SCRATCH/testdata/upgrade/v0.6.1/manifest.json" ] && echo true || echo false)" \
+  "--check does not touch the real v0.6.1 manifest directory"
+
+# --check refuses --postgres and refuses an explicit version -- both are
+# usage mistakes, not something to silently reinterpret.
+set +e
+bad_out="$(cd "$SCRATCH" && bash scripts/record-upgrade-fixture.sh --check local-test-image:rc --postgres 2>&1)"
+bad_rc=$?
+set -e
+if [ "$bad_rc" -eq 0 ]; then printf '    %s\n' "${bad_out//$'\n'/$'\n    '}"; fi
+check "$([ "$bad_rc" -ne 0 ] && echo true || echo false)" "--check --postgres is refused"
+
+set +e
+bad_out="$(cd "$SCRATCH" && bash scripts/record-upgrade-fixture.sh --check local-test-image:rc v0.6.1 2>&1)"
+bad_rc=$?
+set -e
+if [ "$bad_rc" -eq 0 ]; then printf '    %s\n' "${bad_out//$'\n'/$'\n    '}"; fi
+check "$([ "$bad_rc" -ne 0 ] && echo true || echo false)" "--check with an explicit version argument is refused"
+
+# --- --check fails the pipeline on a broken session, the same as a real
+# tag-time recording would (#1358's actual incident) -- and writes no
+# manifest, so a red job cannot be mistaken for a recorded check. -------
+FAILBIN="$TMP/bin-failing"
+FAILLOG="$TMP/docker-failing.log"
+stub_docker_failing_session "$FAILBIN" "$FAILLOG"
+
+rm -rf "$SCRATCH/testdata"
+run_check "$FAILBIN"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "--check fails the job when the scripted session fails (rc=$rc)"
+check "$([ ! -e "$SCRATCH/testdata/upgrade/v0.6.1-check/manifest.json" ] && echo true || echo false)" \
+  "--check writes no manifest when the session failed"
 
 echo
 if [ "$fails" -ne 0 ]; then

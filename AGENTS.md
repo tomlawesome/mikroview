@@ -219,6 +219,11 @@ them. Chromium is not the safe choice merely because it is the default:
 refuses under this app's CSP, past live-check, vitest and every
 screenshot, found by the owner opening the app.
 
+Run WebKit through the container (`scripts/gate-local.sh --browser webkit`),
+never from a bare host checkout: Playwright's WebKit needs system libraries
+(`libicudata.so.76` and others) that only the image has, and the host error
+reads as "WebKit is broken" (#1311).
+
 So the two hosts are interchangeable for a run. If the workstation is
 already busy with one, run the next one here instead -- that is the
 point of it existing.
