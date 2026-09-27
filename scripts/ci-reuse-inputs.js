@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 'use strict';
 
+const { execFileSync } = require('node:child_process');
+
 // What each candidate job reads (#1066, ported from Orbit's reuse gate,
 // orbit #898). scripts/ci-reuse-gate.js hashes the HEAD tree, filtered by
 // these globs, and a job whose hash matches an earlier merge request
@@ -14,17 +16,22 @@
 // this file or to ci-reuse-gate.js reruns everything rather than trust a
 // hash whose meaning a bug in these files might just have changed.
 //
-// gate:scenarios' four shards share one input set even though each only
-// runs a slice of the scenario list: every shard builds and runs the
-// same live-check image over the same binary, so a change anywhere in
-// it can move any shard's result. Splitting the shards' inputs to match
-// run-scenarios.sh's plan() (contiguous slices) is future work, not
-// required by #1066 or by #1350 -- see #1350's notes for why: plan()'s
-// slice boundaries move with the total scenario count
-// (scripts/run-scenarios.sh's `k * NR / n`), so a script's shard is only
-// stable while no live-*.mjs file is added, removed or renamed, and
-// reusing narrower than that needs plan() re-derived in this file, not
-// just a smaller glob list.
+// #1350: each gate:scenarios shard's hash is now name-aware rather than
+// one shared hash for all four. jobInputHash special-cases a job name
+// matching /^gate:scenarios(?::(firefox|webkit))? (\d+)\/(\d+)$/ and
+// asks scripts/run-scenarios.sh --list (via the injected `listScenarios`,
+// scenarioShardHash below) what plan() assigns: the shard's own scripts
+// are content-hashed, every other listed scenario is hashed by name
+// only, and everything else in SCENARIOS_PATHS (including scripts never
+// listed, like live-browser.mjs) stays content-hashed as shared input.
+// Safe because plan() is a pure function of the sorted name list: if no
+// name changed, membership did not either, so only an edit to a shard's
+// own scripts moves its hash, while any add, remove or rename changes
+// the name set and moves every shard's hash -- plan()'s slice boundaries
+// move with the total scenario count (`k * NR / n`), which is exactly
+// what makes a script's shard membership only stable while the name set
+// itself is unchanged. See #1350's build notes for why this shells out
+// to run-scenarios.sh rather than reimplementing plan() here.
 //
 // #1306/#1350: the same shard script also runs under Firefox and WebKit
 // (`gate:scenarios:firefox N/4`, `gate:scenarios:webkit N/4`), on
@@ -48,9 +55,31 @@ const COMMON = ['.gitlab-ci.yml', 'scripts/ci-reuse-gate.js', 'scripts/ci-reuse-
 
 const GO_TREE = ['**/*.go', 'go.mod', 'go.sum'];
 
-const SCENARIOS_PATHS = [...COMMON, ...GO_TREE, 'frontend/**', 'scripts/**'];
+// #1391: widened past the Go tree and frontend/scripts/** to the other
+// paths a gate:scenarios shard actually depends on -- live-check.Dockerfile
+// is the image the shards run in, Makefile is what invokes them,
+// deploy/** is embedded by exampleconfig.go, internal/** catches non-.go
+// data GO_TREE's **/*.go misses (frontend/scripts/live-log-every-rule.mjs
+// reads internal/routeros/export/testdata/hide-sensitive.rsc), and
+// THIRD-PARTY-NOTICES.md is checked by a scenario too. Before this, a
+// change to only those files let a shard stand on a pass that never ran
+// against them.
+const SCENARIOS_PATHS = [
+  ...COMMON,
+  ...GO_TREE,
+  'frontend/**',
+  'scripts/**',
+  'Makefile',
+  'live-check.Dockerfile',
+  'deploy/**',
+  'internal/**',
+  'THIRD-PARTY-NOTICES.md',
+];
 
-const IMAGE_PATHS = [...SCENARIOS_PATHS, 'Dockerfile', 'live-check.Dockerfile'];
+// live-check.Dockerfile is already in SCENARIOS_PATHS (#1391); only
+// Dockerfile (the product image, not the live-check one) is IMAGE_PATHS'
+// own addition.
+const IMAGE_PATHS = [...SCENARIOS_PATHS, 'Dockerfile'];
 
 // test:install-line builds the same image as test:container (so it needs
 // IMAGE_PATHS) and then runs install.sh, which lives at the repo root and
@@ -153,10 +182,73 @@ function hashEntries(entries) {
   return crypto.createHash('sha256').update(lines.join(''), 'utf8').digest('hex');
 }
 
-function jobInputHash(job, entries) {
+const SCENARIO_SHARD_RE = /^gate:scenarios(?::(?:firefox|webkit))? (\d+\/\d+)$/;
+
+// The MV_SHARD value (e.g. '2/4') a scenario-shard job name carries, or
+// null for a job this reuse split does not apply to.
+function matchScenarioShard(job) {
+  const match = SCENARIO_SHARD_RE.exec(String(job));
+  return match ? match[1] : null;
+}
+
+// scripts/run-scenarios.sh --list is the single source of truth for
+// plan()'s assignment (#1350's build notes: shelled out to, never
+// reimplemented here). `shard` is an MV_SHARD value, or null for the
+// full unsharded list. Exported so scripts/ci-reuse-gate.js can log a
+// shard's own scripts with the same lister jobInputHash uses.
+function defaultListScenarios(shard) {
+  const env = { ...process.env };
+  if (shard) env.MV_SHARD = shard;
+  else delete env.MV_SHARD;
+  const output = execFileSync('scripts/run-scenarios.sh', ['--list'], { encoding: 'utf8', env });
+  return output.split('\n').filter((line) => line.length > 0);
+}
+
+// A scenario shard's hash: its shared inputs (`selected`, already
+// filtered to SCENARIOS_PATHS) minus every listed scenario script, plus
+// that shard's own scripts content-hashed, plus every other listed
+// scenario hashed by name only (a constant, empty sha -- only the path
+// contributes). `listScenarios` is injected so tests never shell out.
+//
+// Throws rather than hashing something silent if the lister fails, or
+// names a path absent from `entries` -- scripts/ci-reuse-gate.js's gate()
+// and writeEvidence() both already treat a thrown jobInputHash as "run
+// for real, write no evidence" (#1350's build notes).
+function scenarioShardHash(job, shard, entries, selected, listScenarios) {
+  let ownScripts;
+  let allScripts;
+  try {
+    ownScripts = listScenarios(shard);
+    allScripts = listScenarios(null);
+  } catch (error) {
+    throw new Error(`ci-reuse-inputs: ${job}: scripts/run-scenarios.sh --list failed (${error.message})`);
+  }
+
+  const treePaths = new Set(entries.map((entry) => entry.path));
+  for (const scriptPath of new Set([...ownScripts, ...allScripts])) {
+    if (!treePaths.has(scriptPath)) {
+      throw new Error(`ci-reuse-inputs: ${job}: --list named ${scriptPath}, which is not in the tree`);
+    }
+  }
+
+  const ownSet = new Set(ownScripts);
+  const allSet = new Set(allScripts);
+  const shared = selected.filter((entry) => !allSet.has(entry.path));
+  const own = selected.filter((entry) => ownSet.has(entry.path));
+  const others = allScripts
+    .filter((scriptPath) => !ownSet.has(scriptPath))
+    .map((scriptPath) => ({ path: scriptPath, sha: '' }));
+
+  return hashEntries([...shared, ...own, ...others]);
+}
+
+function jobInputHash(job, entries, { listScenarios = defaultListScenarios } = {}) {
   const globs = globsFor(job);
   if (!globs) throw new Error(`ci-reuse-inputs: no job named ${job} in JOB_INPUTS`);
-  return hashEntries(entries.filter((entry) => selects(globs, entry.path)));
+  const selected = entries.filter((entry) => selects(globs, entry.path));
+  const shard = matchScenarioShard(job);
+  if (!shard) return hashEntries(selected);
+  return scenarioShardHash(job, shard, entries, selected, listScenarios);
 }
 
 module.exports = {
@@ -169,4 +261,6 @@ module.exports = {
   parseTreeListing,
   hashEntries,
   jobInputHash,
+  matchScenarioShard,
+  defaultListScenarios,
 };
