@@ -2,7 +2,12 @@
 
 package api
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/tomlawesome/mikroview/internal/config"
+)
 
 // ConfigProblem is one thing wrong with the running configuration,
 // surfaced so an operator sees it in the app rather than only in a
@@ -24,9 +29,22 @@ type ConfigProblem struct {
 	// feature, not just its presentation.
 	Applied     string `json:"applied,omitempty"`
 	Remediation string `json:"remediation,omitempty"`
+	// Severity is "warn" for a live finding that is not a setting being
+	// ignored -- the banner draws those apart from the startup list,
+	// whose heading says "being ignored". Empty for the startup list.
+	Severity string `json:"severity,omitempty"`
 }
 
-// handleConfigProblems reports configuration problems found at startup.
+// HistoryHeldWhileOffCode is the live entry's code: history is off, but
+// retained day files are still on disk (#1354). The frontend keys the
+// entry's link to the disk card on it.
+const HistoryHeldWhileOffCode = "history-held-while-off"
+
+// handleConfigProblems reports configuration problems found at startup,
+// plus one live finding evaluated on every request: history is off but
+// retained files are still on disk (#1354). Live so it keeps coming back
+// until the admin deletes the files or turns history back on, and goes
+// the moment either happens.
 //
 // Admin-gated, and the gate is here rather than in the frontend. Hiding
 // a banner client-side while the endpoint still answers everyone is an
@@ -56,9 +74,34 @@ func (s *Server) handleConfigProblems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	problems := s.ConfigProblems
-	if problems == nil {
-		problems = []ConfigProblem{}
+	problems := append([]ConfigProblem{}, s.ConfigProblems...)
+	if p, ok := s.historyHeldWhileOff(); ok {
+		problems = append(problems, p)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"problems": problems})
+}
+
+// historyHeldWhileOff is the live entry, from the figures the history
+// control already reads (HistorySettings), not a second scan of the
+// directory.
+func (s *Server) historyHeldWhileOff() (ConfigProblem, bool) {
+	if s.HistoryControl == nil {
+		return ConfigProblem{}, false
+	}
+	h := s.HistoryControl.HistorySettings()
+	if h.Enabled || h.Held == nil || h.Held.Days == 0 {
+		return ConfigProblem{}, false
+	}
+	days, are := "1 day", "is"
+	if h.Held.Days != 1 {
+		days, are = fmt.Sprintf("%d days", h.Held.Days), "are"
+	}
+	return ConfigProblem{
+		Code:     HistoryHeldWhileOffCode,
+		Key:      "history.enabled",
+		Severity: "warn",
+		Message: fmt.Sprintf("History is off, but %s (%s → %s, %s) %s still on disk. Nothing new is kept.",
+			days, h.Held.Oldest, h.Held.Newest, config.ByteSize(h.Held.Bytes), are),
+		Remediation: "Turn history on with the same key to use them, or delete them in Settings.",
+	}, true
 }

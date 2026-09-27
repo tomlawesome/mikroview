@@ -3,8 +3,10 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
 )
@@ -70,11 +72,22 @@ type HistoryControl interface {
 	HistorySettings() HistorySettings
 	// ApplyHistory stores the three settings and makes them true of the
 	// running instance: opening the store and handing it what memory
-	// holds, or closing it and deleting what is on disk. It returns
-	// only when that has happened, so the caller's response describes a
-	// finished act rather than an intention.
+	// holds, or closing it and keeping what is on disk (#1354). It
+	// returns only when that has happened, so the caller's response
+	// describes a finished act rather than an intention.
 	ApplyHistory(enabled bool, days int, maxBytes int64) error
+	// DeleteHistoryFiles deletes every retained day file. It refuses
+	// with ErrHistoryOn while the history is on: the one way to delete
+	// it is to turn it off first and then ask, behind a password
+	// (#1354).
+	DeleteHistoryFiles() error
 }
+
+// ErrHistoryOn is DeleteHistoryFiles' refusal while the history is
+// running. A sentinel rather than a check in the handler alone, because
+// the switch can move between the handler reading the state and the
+// control acting on it.
+var ErrHistoryOn = errors.New("the on-disk event history is on")
 
 // historySettingsRequest is PUT /api/settings/history's body.
 type historySettingsRequest struct {
@@ -113,13 +126,13 @@ func (s *Server) handleHistorySettings(w http.ResponseWriter, r *http.Request) {
 // nothing and find it undone at the next restart. ApplyHistory holds
 // both halves so this handler cannot get the order wrong.
 //
-// Turning it off purges before this returns, rather than scheduling it.
-// Off has to mean the events are gone (see the ADR and #853), and a
-// response that says "off" while last month is still on disk is the
-// lie the whole setting exists to avoid.
+// Turning it off keeps what is on disk (#1354): it stops the writer and
+// nothing more. Deleting the files is a separate act,
+// handleHistoryFilesDelete, behind a password, so there is one way to
+// destroy retained history and it always carries that check.
 //
-// Admin-only for the reason the memory slider is, only more so: this
-// one deletes up to a month of retained evidence in a single call.
+// Admin-only for the reason the memory slider is, only more so: a
+// smaller day count or cap deletes the oldest retained days at once.
 func (s *Server) handleHistorySettingsUpdate(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -167,6 +180,93 @@ func (s *Server) handleHistorySettingsUpdate(w http.ResponseWriter, r *http.Requ
 	settingsLog.Info("on-disk event history: " + detail)
 
 	writeJSON(w, http.StatusOK, after)
+}
+
+// historyFilesDeleteRequest is DELETE /api/settings/history/files' body.
+type historyFilesDeleteRequest struct {
+	Password string `json:"password"`
+}
+
+// handleHistoryFilesDelete deletes the retained history files an off
+// history leaves on disk (#1354).
+//
+// The only way to delete them. Turning history off keeps them, and no
+// config setting deletes them (#1353), so an operator who meant to keep
+// last month never loses it to a toggle or a typo. Refused with 409
+// while history is on: it would be deleting files the writer is still
+// appending to, and the card only offers it once history is off.
+//
+// Password-gated like handleTOTPDelete, on the same
+// passwordRecheckLimiterKey bucket and for the same reason: a caller
+// who already holds a session is exactly the position a stolen-cookie
+// attacker is in, and this destroys up to a year of evidence in one
+// call. Admin-only for the PUT's reasons.
+func (s *Server) handleHistoryFilesDelete(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	if s.HistoryControl == nil {
+		http.Error(w, "the on-disk event history is not adjustable on this instance", http.StatusServiceUnavailable)
+		return
+	}
+	user := userFromContext(r)
+	if user == nil {
+		writeUnauthorized(w, "sign in first")
+		return
+	}
+
+	var req historyFilesDeleteRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	const turnOffFirst = "the on-disk event history is on -- turn history off first, then delete its files"
+	before := s.HistoryControl.HistorySettings()
+	if before.Enabled {
+		// Before the password, so a request that could not succeed
+		// anyway does not spend one of the caller's re-check attempts.
+		http.Error(w, turnOffFirst, http.StatusConflict)
+		return
+	}
+
+	now := time.Now()
+	userKey := passwordRecheckLimiterKey(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if _, err := s.Auth.Authenticate(user.Username, req.Password, now); err != nil {
+		writeUnauthorized(w, "incorrect password")
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
+
+	if err := s.HistoryControl.DeleteHistoryFiles(); err != nil {
+		if errors.Is(err, ErrHistoryOn) {
+			http.Error(w, turnOffFirst, http.StatusConflict)
+			return
+		}
+		settingsLog.Error(fmt.Sprintf("deleting the on-disk event history failed: %v", err))
+		http.Error(w, "the on-disk event history files could not all be deleted -- see the server log", http.StatusInternalServerError)
+		return
+	}
+
+	detail := describeHeld(before.Held)
+	s.Audit.Record(auditActor(r), "history.delete", "history", detail)
+	settingsLog.Info("on-disk event history files deleted: " + detail)
+
+	writeJSON(w, http.StatusOK, s.HistoryControl.HistorySettings())
+}
+
+// describeHeld is history.delete's audit detail: what was on disk when
+// the delete was asked for, "3 days, 12345 bytes, 2026-09-01–2026-09-03".
+func describeHeld(h *HistoryHeld) string {
+	if h == nil {
+		return "0 days, 0 bytes"
+	}
+	return fmt.Sprintf("%d days, %d bytes, %s–%s", h.Days, h.Bytes, h.Oldest, h.Newest)
 }
 
 // describeHistory is one half of the audit trail's "from what to what".
