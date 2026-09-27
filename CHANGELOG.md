@@ -75,6 +75,33 @@ rewritten.
   for unattended daily fetching — see docs/configuration.md's
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
+
+### Security
+
+- `VerifyPassword` now refuses, before hashing, a stored hash whose
+  cost settings or lengths are outside what this module writes (with
+  4x headroom) (#1388). A corrupt or tampered hash could previously
+  crash the check and leave a hashing slot taken, so enough of them
+  stalled every later login, or force an unbounded Argon2id
+  computation.
+
+- `requireAuth`'s four path-exemption checks (bootstrap, general,
+  forced-password-change, forced-second-factor-enrolment) now compare
+  the request's *escaped* path, matching how `next`'s `http.ServeMux`
+  actually routes it (#1389). Before this, a request whose escaped and
+  decoded paths differed -- e.g. an anonymous `GET
+  /api/auth%2Fsession`, which decodes to the exempt
+  `/api/auth/session` but escapes to something a wildcard route
+  further down the mux would serve -- could be classified as exempt by
+  one string and dispatched by another, reaching a handler it should
+  never have been let past the gate for.
+
+- `RestrictToAllowList`'s `uiAllowExemptPaths` check now compares the
+  request's *escaped* path too, the same fix as `requireAuth`'s above
+  (#1390). Before this, the same escaped-vs-decoded mismatch let a
+  request outside `ui.allow` reach a route it merely decoded to look
+  like an exempt one, rather than the route it actually dispatched to.
+
 ### Added
 
 - **A config editor, and a refused config no longer stops MikroView
