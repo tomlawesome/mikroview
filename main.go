@@ -651,6 +651,27 @@ func main() {
 		} else {
 			configLog.Error(err.Error() + "\n" + config.CheckHint)
 		}
+		// #1347: a config refused for what it says -- a problem in it,
+		// or a file that would not read or parse -- starts setup-only
+		// mode instead of exiting, so the admin can sign in and fix it
+		// in the editor. A bad command-line flag or an app-folder
+		// mix-up is not something the editor can fix, and still exits.
+		if len(configResult.Fatal) > 0 || strings.HasPrefix(err.Error(), "loading config file") {
+			problems := len(configResult.Fatal)
+			if problems == 0 {
+				// A file that would not load reports as one error;
+				// the editor's own check counts what is in it.
+				for _, p := range config.ValidateText(string(readRawConfigYAML(configResult.ConfigPath))) {
+					if p.Severity == config.SeverityFatal.String() {
+						problems++
+					}
+				}
+			}
+			if problems == 0 {
+				problems = 1
+			}
+			os.Exit(runSetupOnly(configResult, problems))
+		}
 		os.Exit(1)
 	}
 	// Every component logger created before this point (configLog above)
@@ -661,7 +682,7 @@ func main() {
 	// One line per optional file the app folder was asked for, found or
 	// not, naming the path (#1243). Said out loud at every boot because
 	// the whole contract is "drop the file in and restart": an operator
-	// who put the GeoIP database one directory too deep otherwise has
+	// who put the history key one directory too deep otherwise has
 	// only a feature that stayed off and nothing to compare against.
 	// Nothing is printed for a setting config or the environment
 	// already named -- the folder was not consulted for it.
@@ -736,22 +757,6 @@ func main() {
 	}
 	syslog.SetConfiguredSources(configuredSources)
 	h := hub.New()
-	geoLog := logging.New("geoip")
-	geo, err := geoip.Open(cfg.GeoIP.DBPath)
-	if err != nil {
-		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
-	}
-	// One info line on every start, not just on a failed open (#1198): the
-	// unset and the opened-fine cases were both silent before this, so the
-	// owner had no way to tell from the logs whether geoip.dbPath had
-	// actually taken. A failed open still gets the Warn above as well --
-	// this line only adds the two cases that previously said nothing.
-	if geo.Configured() {
-		geoLog.Info(fmt.Sprintf("%s opened", cfg.GeoIP.DBPath))
-	} else if cfg.GeoIP.DBPath == "" {
-		geoLog.Info("no database configured (country flags off)")
-	}
-	defer geo.Close()
 	// rep: always built (AbuseIPDBKey empty just means that one source
 	// inside it stays inert; Shodan InternetDB is free/keyless and
 	// always queried).
@@ -778,6 +783,27 @@ func main() {
 	// and who lowered it in the UI precisely because of that, would find
 	// the instance still failing to start on the figure they replaced.
 	storeMaxMemory, storeCapacity, settingsStore := openStoreSettings(bootCtx, persistence, cfg)
+
+	// Country flags and network owners (#1352): three runtime-fetched
+	// sources, IPinfo > MaxMind > DB-IP, with the two keyed ones' keys
+	// sealed in the settings store under the same retention key the
+	// router-backup vault uses. Built after the settings store because
+	// it reads the stored keys; no network I/O here -- the refresh loop
+	// below does that. Cached files are opened now, so flags are on
+	// from the first event after a restart.
+	geoLog := logging.New("geoip")
+	geo := geoip.New(geoip.Options{
+		CacheDir: cfg.GeoIP.CachePath,
+		Keys:     settingsStore,
+		Sealer:   persistence.key,
+		Log:      geoLog,
+	})
+	defer geo.Close()
+	if src := geo.Source(); src != "" {
+		geoLog.Info("country flags: serving " + src + " from the local cache until the first refresh")
+	} else {
+		geoLog.Info("country flags: no data cached yet -- DB-IP Lite is fetched shortly after start")
+	}
 	st := store.New(storeCapacity, cfg.Store.Retention)
 
 	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
@@ -1399,7 +1425,7 @@ func main() {
 	// Notify (issues #30/#31/#96): alerting on newly-raised flags outside the
 	// UI, through whichever channels are configured -- each independently
 	// enabled by its own identifying field being set (same "empty means
-	// off" convention as Reputation.AbuseIPDBKey/GeoIP.DBPath), sharing
+	// off" convention as Reputation.AbuseIPDBKey), sharing
 	// one Dispatcher/BatchWindow. No dispatcher goroutine is started at
 	// all if nothing is configured.
 	var notifiers []notify.Notifier
@@ -1667,6 +1693,20 @@ func main() {
 	// registry is already serving lookups by then; a cold start with no
 	// cache reports "no vendor data yet" until it lands, which is the
 	// honest state and not an error.
+	// Country data refresh (#1352): same jitter reasoning as OUI above,
+	// but a cold start (nothing cached) waits at most a minute rather
+	// than an hour -- flags are meant to work with no setup, and an
+	// hour of blank flags on a fresh install reads as broken. The loop
+	// also runs straight away whenever a key is set in the Engine Room.
+	go func() {
+		defer logging.Recover(geoLog)
+		jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+		if !geo.Available() {
+			jitter = time.Duration(rand.Int64N(int64(time.Minute)))
+		}
+		geo.Run(ctx, jitter)
+	}()
+
 	if ouiRegistry.Enabled() {
 		go func() {
 			defer logging.Recover(ouiLog)
@@ -1701,70 +1741,7 @@ func main() {
 	// than exiting -- the same degrade-not-crash contract GeoIP/Flags/
 	// Auth/Definitions already have above for their own optional
 	// persistence/integrations.
-	var oidcClient *oidc.Client
-	var oidcState *oidc.StateCodec
-	oidcLog := logging.New("oidc")
-	oidcPolicy := oidc.Policy{
-		AllowedGroups:       cfg.OIDC.AllowedGroups,
-		GroupsClaim:         cfg.OIDC.GroupsClaim,
-		AllowedEmails:       cfg.OIDC.AllowedEmails,
-		AllowedEmailDomains: cfg.OIDC.AllowedEmailDomains,
-		RequiredClaims:      cfg.OIDC.RequiredClaims,
-	}
-
-	switch {
-	case cfg.OIDC.IssuerURL == "":
-		// Not configured -- no log line, same as every other disabled-
-		// by-default optional integration (GeoIP, Reputation, Notify).
-	case cfg.OIDC.PublicBaseURL == "":
-		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
-	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
-		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
-	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
-		// Refused outright, not warned about, and deliberately not
-		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
-		// off is the fail-closed outcome; local login is unaffected.
-		oidcLog.Error(fmt.Sprintf(
-			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
-				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
-				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
-			cfg.OIDC.IssuerURL))
-	default:
-		client, err := oidc.New(ctx, oidc.Config{
-			IssuerURL:    cfg.OIDC.IssuerURL,
-			ClientID:     cfg.OIDC.ClientID,
-			ClientSecret: cfg.OIDC.ClientSecret,
-			// PublicBaseURL, not a request's Host header -- see
-			// config.OIDC.PublicBaseURL's doc comment for why deriving
-			// this from client-influenced input would be a real
-			// redirect_uri-confusion vulnerability.
-			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
-			Scopes:      cfg.OIDC.Scopes,
-		})
-		if err != nil {
-			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
-		} else if state, err := oidc.NewStateCodec(); err != nil {
-			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
-		} else {
-			oidcClient, oidcState = client, state
-			if oidcPolicy.Restricted() {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
-			} else {
-				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
-			}
-			// "SSO is additive; keep a local admin" (#1252). Said out
-			// loud at every start while it is untrue, because the day it
-			// matters is the day the provider is down and nobody is
-			// reading the docs. Not a refusal: turning SSO off here
-			// would leave a deployment whose admin already signs in
-			// through the provider with no way in at all, which is the
-			// lock-out this rule exists to prevent.
-			if authStore.Count() > 0 && !authStore.HasLocalAdmin() {
-				oidcLog.Warn("no MikroView admin has a local password, so SSO is the only way in -- if the provider goes down, " +
-					"signing in needs `mikroview -transfer-admin <username>` at the command line. See SECURITY.md, \"SSO is additive\"")
-			}
-		}
-	}
+	oidcClient, oidcState, oidcPolicy := startOIDC(ctx, cfg, authStore)
 
 	// A bad trusted-proxy entry is a security-relevant misconfiguration,
 	// not a typo to paper over: silently ignoring it would leave the
@@ -1951,12 +1928,13 @@ func main() {
 		OIDCPolicy:            oidcPolicy,
 		StartTime:             time.Now(),
 		Version:               version,
-		GeoIP:                 geo.Configured(),
+		Geo:                   geo,
 		ThirdPartyNotices:     thirdPartyNotices,
 		ConfigProblems:        configProblems,
 		Persistence:           persistenceInfo,
 		ConfigUpgradeSettings: missingSettings,
 		RelyingParty:          relyingParty,
+		ConfigEditor:          newConfigEditor(configLog, persistence, cfg, configResult.ConfigPath),
 	}
 
 	// The live-check harness's two test hooks (#1063, #1064): a watch
@@ -1999,27 +1977,8 @@ func main() {
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
-	if frontend, err := web.DistFS(); err != nil {
-		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
-	} else {
-		// A binary can compile with an empty dist/ -- that is what the
-		// committed .gitkeep is for -- and http.FileServer would then
-		// answer / with a directory listing of that one placeholder,
-		// which reads as a broken install rather than a build step that
-		// was skipped. Say which it is, in the log and in the response
-		// (#353). The API is mounted above and keeps working either way.
-		//
-		// Either way it goes out through staticCacheHeaders (#347), so
-		// the "no frontend" page is itself revalidated rather than kept
-		// by a browser after a proper build is deployed.
-		var ui http.Handler = http.FileServer(http.FS(frontend))
-		if !web.HasUI() {
-			logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
-			ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
-			})
-		}
-		rootMux.Handle("/", staticCacheHeaders(ui))
+	if ui := frontendHandler(); ui != nil {
+		rootMux.Handle("/", ui)
 	}
 
 	httpServer := &http.Server{
@@ -2272,6 +2231,107 @@ func main() {
 	if listenFailed.Load() {
 		os.Exit(1)
 	}
+}
+
+// startOIDC builds the SSO client from cfg's oidc block, or leaves it off
+// with the reason logged -- see the call site in main for the
+// degrade-not-crash contract. Shared with setup-only mode (#1347), which
+// turns SSO on only when the oidc block itself validated.
+func startOIDC(ctx context.Context, cfg config.Config, authStore *auth.Store) (*oidc.Client, *oidc.StateCodec, oidc.Policy) {
+	var oidcClient *oidc.Client
+	var oidcState *oidc.StateCodec
+	oidcLog := logging.New("oidc")
+	oidcPolicy := oidc.Policy{
+		AllowedGroups:       cfg.OIDC.AllowedGroups,
+		GroupsClaim:         cfg.OIDC.GroupsClaim,
+		AllowedEmails:       cfg.OIDC.AllowedEmails,
+		AllowedEmailDomains: cfg.OIDC.AllowedEmailDomains,
+		RequiredClaims:      cfg.OIDC.RequiredClaims,
+	}
+
+	switch {
+	case cfg.OIDC.IssuerURL == "":
+		// Not configured -- no log line, same as every other disabled-
+		// by-default optional integration (GeoIP, Reputation, Notify).
+	case cfg.OIDC.PublicBaseURL == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
+	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
+	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
+		// Refused outright, not warned about, and deliberately not
+		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
+		// off is the fail-closed outcome; local login is unaffected.
+		oidcLog.Error(fmt.Sprintf(
+			"%s is a multi-tenant provider and is not supported -- MikroView only supports self-hosted identity providers "+
+				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
+				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
+			cfg.OIDC.IssuerURL))
+	default:
+		client, err := oidc.New(ctx, oidc.Config{
+			IssuerURL:    cfg.OIDC.IssuerURL,
+			ClientID:     cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret,
+			// PublicBaseURL, not a request's Host header -- see
+			// config.OIDC.PublicBaseURL's doc comment for why deriving
+			// this from client-influenced input would be a real
+			// redirect_uri-confusion vulnerability.
+			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
+			Scopes:      cfg.OIDC.Scopes,
+		})
+		if err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else if state, err := oidc.NewStateCodec(); err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else {
+			oidcClient, oidcState = client, state
+			if oidcPolicy.Restricted() {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
+			} else {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
+			}
+			// "SSO is additive; keep a local admin" (#1252). Said out
+			// loud at every start while it is untrue, because the day it
+			// matters is the day the provider is down and nobody is
+			// reading the docs. Not a refusal: turning SSO off here
+			// would leave a deployment whose admin already signs in
+			// through the provider with no way in at all, which is the
+			// lock-out this rule exists to prevent.
+			if authStore.Count() > 0 && !authStore.HasLocalAdmin() {
+				oidcLog.Warn("no MikroView admin has a local password, so SSO is the only way in -- if the provider goes down, " +
+					"signing in needs `mikroview -transfer-admin <username>` at the command line. See SECURITY.md, \"SSO is additive\"")
+			}
+		}
+	}
+	return oidcClient, oidcState, oidcPolicy
+}
+
+// frontendHandler is the embedded UI, served with staticCacheHeaders,
+// or nil when the binary could not open it (logged). Shared with
+// setup-only mode (#1347), which serves the same UI shell.
+func frontendHandler() http.Handler {
+	frontend, err := web.DistFS()
+	if err != nil {
+		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
+		return nil
+	}
+	// A binary can compile with an empty dist/ -- that is what the
+	// committed .gitkeep is for -- and http.FileServer would then
+	// answer / with a directory listing of that one placeholder,
+	// which reads as a broken install rather than a build step that
+	// was skipped. Say which it is, in the log and in the response
+	// (#353). The API is mounted above and keeps working either way.
+	//
+	// Either way it goes out through staticCacheHeaders (#347), so
+	// the "no frontend" page is itself revalidated rather than kept
+	// by a browser after a proper build is deployed.
+	var ui http.Handler = http.FileServer(http.FS(frontend))
+	if !web.HasUI() {
+		logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
+		ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
+		})
+	}
+	return staticCacheHeaders(ui)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
@@ -3129,7 +3189,7 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Manager, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
@@ -3147,7 +3207,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Manager, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store, hist *historyRuntime, hostRegister *hosts.Register, baselineRegister *baseline.Register, seenRegister *seen.Register) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)

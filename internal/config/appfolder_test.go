@@ -41,7 +41,6 @@ func writeAppFolderFile(t *testing.T, root, name, content string) string {
 func clearAppFolderEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"MIKROVIEW_GEOIP_DB_PATH",
 		"MIKROVIEW_HISTORY_KEY_FILE",
 		"MIKROVIEW_TLS_CERT_FILE",
 		"MIKROVIEW_TLS_KEY_FILE",
@@ -98,10 +97,9 @@ func TestNamedConfigThatIsMissingIsStillAnError(t *testing.T) {
 	}
 }
 
-func TestAppFolderFillsGeoIPHistoryKeyAndTLSPair(t *testing.T) {
+func TestAppFolderFillsHistoryKeyAndTLSPair(t *testing.T) {
 	root := useAppFolder(t)
 	clearAppFolderEnv(t)
-	geo := writeAppFolderFile(t, root, appFolderGeoIPFile, "not really a database")
 	key := writeAppFolderFile(t, root, appFolderHistoryKey, strings.Repeat("k", 44))
 	cert := writeAppFolderFile(t, root, appFolderTLSCertFile, "cert")
 	tlsKey := writeAppFolderFile(t, root, appFolderTLSKeyFile, "key")
@@ -109,9 +107,6 @@ func TestAppFolderFillsGeoIPHistoryKeyAndTLSPair(t *testing.T) {
 	cfg, _, err := LoadWithProblems("", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if cfg.GeoIP.DBPath != geo {
-		t.Errorf("geoip.dbPath = %q, want %q", cfg.GeoIP.DBPath, geo)
 	}
 	if cfg.History.KeyFile != key {
 		t.Errorf("history.keyFile = %q, want %q", cfg.History.KeyFile, key)
@@ -131,9 +126,9 @@ func TestEmptyAppFolderChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.GeoIP.DBPath != "" || cfg.History.KeyFile != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" {
-		t.Errorf("an empty folder set paths anyway: geoip=%q history=%q cert=%q key=%q",
-			cfg.GeoIP.DBPath, cfg.History.KeyFile, cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	if cfg.History.KeyFile != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" {
+		t.Errorf("an empty folder set paths anyway: history=%q cert=%q key=%q",
+			cfg.History.KeyFile, cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	}
 }
 
@@ -175,7 +170,6 @@ func TestConfigValueWinsOverTheAppFolder(t *testing.T) {
 		yaml   string
 		want   func(Config) string
 	}{
-		{"geoip.dbPath", appFolderGeoIPFile, "geoip:\n  dbPath: %s\n", func(c Config) string { return c.GeoIP.DBPath }},
 		{"history.keyFile", appFolderHistoryKey, "history:\n  keyFile: %s\n", func(c Config) string { return c.History.KeyFile }},
 		{"tls.certFile", appFolderTLSCertFile, "tls:\n  certFile: %s\n  keyFile: /own/tls.key\n", func(c Config) string { return c.TLS.CertFile }},
 		{"tls.keyFile", appFolderTLSKeyFile, "tls:\n  certFile: /own/tls.crt\n  keyFile: %s\n", func(c Config) string { return c.TLS.KeyFile }},
@@ -207,7 +201,6 @@ func TestEnvValueWinsOverTheAppFolder(t *testing.T) {
 		others map[string]string
 		want   func(Config) string
 	}{
-		{"geoip.dbPath", appFolderGeoIPFile, "MIKROVIEW_GEOIP_DB_PATH", nil, func(c Config) string { return c.GeoIP.DBPath }},
 		{"history.keyFile", appFolderHistoryKey, "MIKROVIEW_HISTORY_KEY_FILE", nil, func(c Config) string { return c.History.KeyFile }},
 		{"tls.certFile", appFolderTLSCertFile, "MIKROVIEW_TLS_CERT_FILE",
 			map[string]string{"MIKROVIEW_TLS_KEY_FILE": "/own/tls.key"}, func(c Config) string { return c.TLS.CertFile }},
@@ -241,7 +234,7 @@ func TestEnvValueWinsOverTheAppFolder(t *testing.T) {
 func TestAppFolderLookupsAreRecordedForTheBootLog(t *testing.T) {
 	root := useAppFolder(t)
 	clearAppFolderEnv(t)
-	writeAppFolderFile(t, root, appFolderGeoIPFile, "db")
+	writeAppFolderFile(t, root, appFolderHistoryKey, strings.Repeat("k", 44))
 
 	_, result, err := LoadWithProblems("", nil)
 	if err != nil {
@@ -251,7 +244,7 @@ func TestAppFolderLookupsAreRecordedForTheBootLog(t *testing.T) {
 	for _, l := range result.AppFolder {
 		byKey[l.Key] = l
 	}
-	for _, key := range []string{"config file", "geoip.dbPath", "history.keyFile", "tls.certFile", "tls.keyFile"} {
+	for _, key := range []string{"config file", "history.keyFile", "tls.certFile", "tls.keyFile"} {
 		l, ok := byKey[key]
 		if !ok {
 			t.Errorf("no boot line for %s -- the operator cannot tell whether MikroView looked", key)
@@ -261,20 +254,24 @@ func TestAppFolderLookupsAreRecordedForTheBootLog(t *testing.T) {
 			t.Errorf("%s says %q, which does not name the path looked at", key, l.String())
 		}
 	}
-	if !byKey["geoip.dbPath"].Found {
-		t.Error("the GeoIP database was there and the line says it was not")
+	if !byKey["history.keyFile"].Found {
+		t.Error("the history key was there and the line says it was not")
 	}
-	if byKey["history.keyFile"].Found {
-		t.Error("no key was there and the line says one was")
+	if byKey["tls.certFile"].Found {
+		t.Error("no certificate was there and the line says one was")
+	}
+	// #1352 retired the folder's GeoIP database with geoip.dbPath.
+	if _, ok := byKey["geoip.dbPath"]; ok {
+		t.Error("the folder was consulted for geoip.dbPath, which no longer exists")
 	}
 
-	t.Setenv("MIKROVIEW_GEOIP_DB_PATH", filepath.Join(root, appFolderGeoIPFile))
+	t.Setenv("MIKROVIEW_HISTORY_KEY_FILE", filepath.Join(root, appFolderHistoryKey))
 	_, result, err = LoadWithProblems("", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	for _, l := range result.AppFolder {
-		if l.Key == "geoip.dbPath" {
+		if l.Key == "history.keyFile" {
 			t.Error("the folder was consulted for a setting the environment already named")
 		}
 	}
@@ -285,7 +282,7 @@ func TestAppFolderLookupsAreRecordedForTheBootLog(t *testing.T) {
 func TestADirectoryIsNotAnAppFolderFile(t *testing.T) {
 	root := useAppFolder(t)
 	clearAppFolderEnv(t)
-	if err := os.MkdirAll(filepath.Join(root, appFolderGeoIPFile), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, appFolderHistoryKey), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
@@ -293,7 +290,7 @@ func TestADirectoryIsNotAnAppFolderFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.GeoIP.DBPath != "" {
-		t.Errorf("geoip.dbPath = %q, want empty -- a directory was taken for a database", cfg.GeoIP.DBPath)
+	if cfg.History.KeyFile != "" {
+		t.Errorf("history.keyFile = %q, want empty -- a directory was taken for a key", cfg.History.KeyFile)
 	}
 }

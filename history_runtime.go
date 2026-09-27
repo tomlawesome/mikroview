@@ -26,8 +26,9 @@ import (
 // config-file one, and "turn it on" is not a flag flip. It has to open
 // an encrypted store, hand it what memory already holds, and start
 // taking live events -- with no gap and no duplicate at the seam --
-// while "turn it off" has to close that store and delete every file
-// before the operator's request returns. Somewhere has to hold those
+// while "turn it off" has to close that store before the operator's
+// request returns, keeping the files for a separate, password-gated
+// delete (#1354). Somewhere has to hold those
 // sequences; the alternative was spreading them across the API handler
 // and the ingest loop, where the ordering would be nobody's
 // responsibility.
@@ -58,8 +59,8 @@ type historyRuntime struct {
 	// an admin may be swapping it.
 	cur atomic.Pointer[retention.Store]
 
-	// mu serialises ApplyHistory end to end, so two admins cannot
-	// interleave an open with a purge.
+	// mu serialises ApplyHistory and DeleteHistoryFiles end to end, so
+	// two admins cannot interleave an open with a purge.
 	mu       sync.Mutex
 	days     int
 	maxBytes int64
@@ -74,6 +75,16 @@ type historyRuntime struct {
 	// highWater is the newest ring ID the backfill reached. Only ever
 	// written and read inside ApplyHistory, under mu.
 	highWater uint64
+
+	// written is the newest ring ID handed to an open store, and
+	// keptThrough is what it read when history was last turned off with
+	// the files kept (#1354); zero once they are deleted. Turning back on
+	// skips the ring events at or below it, because they are already on
+	// disk: without that, an off-then-on inside one process would write
+	// every event the ring still holds a second time, and a replay would
+	// count them twice once the ring had rolled past them.
+	written     atomic.Uint64
+	keptThrough uint64
 }
 
 // errNoHistoryKey is what ApplyHistory returns when nothing can be
@@ -154,7 +165,21 @@ func (r *historyRuntime) Append(e store.Event) {
 		}
 		r.heldMu.Unlock()
 	}
-	r.cur.Load().Append(e)
+	if st := r.cur.Load(); st != nil {
+		st.Append(e)
+		r.noteWritten(e.ID)
+	}
+}
+
+// noteWritten raises written to id. A compare-and-swap loop rather than
+// a plain store, so an out-of-order caller can never lower it.
+func (r *historyRuntime) noteWritten(id uint64) {
+	for {
+		cur := r.written.Load()
+		if id <= cur || r.written.CompareAndSwap(cur, id) {
+			return
+		}
+	}
 }
 
 // Days satisfies engine.RetainedDays. Nothing open means no days, not
@@ -284,23 +309,42 @@ func (r *historyRuntime) ApplyHistory(enabled bool, days int, maxBytes int64) er
 	}
 }
 
-// turnOff closes the store and deletes every retained file.
+// turnOff closes the store and keeps every retained file (#1354).
 //
-// The purge runs whether or not a store was open, because a previous
-// run may have left files behind and "off" has to mean the events are
-// gone -- the same reason openHistory purges on its own off paths.
-// PurgeDir rather than Store.Purge: deleting is the one operation on
-// these files that needs no key, and it must work on the closed store
-// too.
+// Off stops the writer; it deletes nothing. The files stay on disk,
+// reported in the disk card and the config-problem banner, until an
+// admin turns history back on with the same key or deletes them through
+// DeleteHistoryFiles -- the one deletion path, which always carries a
+// password check.
 func (r *historyRuntime) turnOff(st *retention.Store) error {
 	r.cur.Store(nil)
 	if err := st.Close(); err != nil {
-		r.log.Warn("could not flush the on-disk event history before deleting it", "err", err)
+		r.log.Warn("could not flush the on-disk event history while turning it off", "err", err)
+	}
+	r.keptThrough = r.written.Load()
+	r.log.Info("on-disk event history turned off -- what is retained stays on disk until an admin deletes it", "dir", r.dir)
+	return nil
+}
+
+// DeleteHistoryFiles satisfies api.HistoryControl: deletes every
+// retained day file, refusing while history is on (#1354).
+//
+// Under mu, so a turn-on cannot open a store over files being deleted.
+// PurgeDir rather than Store.Purge: deleting is the one operation on
+// these files that needs no key, and there is no open store to ask.
+func (r *historyRuntime) DeleteHistoryFiles() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cur.Load() != nil {
+		return api.ErrHistoryOn
 	}
 	if err := retention.PurgeDir(r.dir); err != nil {
 		return fmt.Errorf("deleting the retained event history: %w", err)
 	}
-	r.log.Info("on-disk event history turned off -- everything retained has been deleted", "dir", r.dir)
+	// Nothing this process wrote is on disk any more, so a later turn-on
+	// takes the whole ring again.
+	r.keptThrough = 0
+	r.log.Info("on-disk event history deleted by an admin", "dir", r.dir)
 	return nil
 }
 
@@ -346,8 +390,14 @@ func (r *historyRuntime) turnOn(days int, maxBytes int64) error {
 			if e.ID > high {
 				high = e.ID
 			}
+			// Already on disk from before the last turn-off, which kept
+			// the files (#1354): see keptThrough.
+			if e.ID <= r.keptThrough {
+				return
+			}
 			backfilled++
 			st.Append(e)
+			r.noteWritten(e.ID)
 		})
 	}
 	r.highWater = high
@@ -375,6 +425,7 @@ func (r *historyRuntime) release() {
 	for _, e := range held {
 		if e.ID > r.highWater {
 			st.Append(e)
+			r.noteWritten(e.ID)
 		}
 	}
 	// Flushed here rather than left to the five-second ticker so that

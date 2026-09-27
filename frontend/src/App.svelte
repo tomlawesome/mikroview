@@ -48,6 +48,13 @@
   // menu (desktop) and the bottom bar (mobile), both of which call
   // wizardState.launch() directly.
   import SetupWizard from './components/SetupWizard.svelte'
+  // The config editor (#1347) is a full-screen document over the shell,
+  // mounted here like the wizard and opened from Settings' Config card
+  // through configEditorState. In setup-only mode (a refused config) it
+  // is the whole app: serverModeState holds the shell back.
+  import ConfigEditor from './components/ConfigEditor.svelte'
+  import { configEditorState } from './lib/configEditor.svelte'
+  import { serverModeState } from './lib/serverMode.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
@@ -153,8 +160,15 @@
   // Runs once on mount, unconditionally -- everything else in this file
   // waits on its result (authState.state) before doing anything that
   // needs a session.
+  //
+  // #1347: GET /api/healthz first, for setup-only mode. It needs no
+  // session and answers in one same-origin round-trip, and the session
+  // check waits on it so that nothing keyed on 'authenticated' (the
+  // preferences load in authState.apply, the polls below) can start
+  // before it is known whether every one of those routes would 503.
+  // load() never rejects.
   $effect(() => {
-    authState.check()
+    serverModeState.load().then(() => authState.check())
   })
 
   $effect(() => {
@@ -163,6 +177,11 @@
     // 401 bouncing back to the login view) -- same fine-grained
     // reactivity the filter-sync effect below relies on.
     if (authState.state !== 'authenticated') return
+    // #1347: in setup-only mode every one of these routes answers 503
+    // until the config is fixed and MikroView restarted, so none of them
+    // start -- no polls, no socket, no stale-numbers banner. Reading
+    // `loaded` here re-runs this effect once healthz has answered.
+    if (!serverModeState.loaded || serverModeState.setupOnly) return
 
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
@@ -296,6 +315,7 @@
 
   $effect(() => {
     if (authState.state !== 'authenticated') return
+    if (!serverModeState.loaded || serverModeState.setupOnly) return
 
     // Reading every field off appState.filters here is what makes this
     // effect re-run on any filter change (Svelte 5's fine-grained
@@ -340,6 +360,15 @@
        the door opened out into a short staged walk, not a field
        change. -->
   <AuthEnrolFactor />
+{:else if !serverModeState.loaded}
+  <!-- Blank for the one healthz round-trip, like 'loading' above: the
+       shell must not mount before it is known whether the server is in
+       setup-only mode (#1347). -->
+{:else if serverModeState.setupOnly}
+  <!-- #1347: the config was refused, so the server serves sign-in and
+       the config editor and nothing else. No deck, no navigation. -->
+  <ConfigEditor setupOnly />
+  <Toast />
 {:else}
   <!-- First in tab order: rendered ahead of BottomBar and every scene's
        own bar, so a keyboard user reaches it before any navigation
@@ -391,6 +420,9 @@
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <SetupWizard />
+  {#if configEditorState.visible}
+    <ConfigEditor />
+  {/if}
   <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
        beat 6 (the tour) rings the deck's own cards -- both stay mounted
        alongside the shell above rather than replacing it, since the
