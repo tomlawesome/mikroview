@@ -523,6 +523,7 @@ lint:script-tests:
     - git config --global --add safe.directory "$CI_PROJECT_DIR"
     - bash scripts/ci-changed-paths-guard.test.sh
     - bash scripts/ci-reuse-gate.test.sh
+    - bash scripts/gate-remote.test.sh
 
 lint:go:
   stage: lint
