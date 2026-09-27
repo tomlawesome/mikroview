@@ -1,14 +1,7 @@
-# ======================================================================
-#  HEADER -- DO NOT DELETE OR EDIT THIS BLOCK
-# ======================================================================
-# mikroview-config: version=0.6.1 layout=1
-#
-# This is a MikroView configuration file, written for MikroView 0.6.1,
-# layout 1. The full reference for every setting is docs/configuration.md.
-#
-# Do not delete or edit this block. Upgrades read the mikroview-config
-# line to tell which version wrote this file, and so which settings it
-# should have and which need adding.
+# MikroView configuration -- keep these four lines; MikroView reads them.
+# schema: 7            (which settings this file should have; goes up when keys change)
+# written-by: mikroview v0.6.1
+# layout: 1            (the order and banners below)
 
 # Copy this file to config.yaml (git-ignored) and edit for your setup:
 #   cp deploy/config.example.yaml deploy/config.yaml

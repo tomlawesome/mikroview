@@ -1550,6 +1550,15 @@ func load(configPath string, args []string) (Config, Result, error) {
 		}
 	}
 
+	return finishLoad(cfg, configPath, folder, args)
+}
+
+// finishLoad is everything load does after the YAML file: environment,
+// flags, the app folder, device identities and Validate, in that order.
+// Split out so the config editor's ValidateText (#1347) checks a text
+// against exactly the pipeline start-up would put it through, rather
+// than a second copy of it that could drift.
+func finishLoad(cfg Config, configPath string, folder []AppFolderLookup, args []string) (Config, Result, error) {
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
