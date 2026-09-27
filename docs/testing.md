@@ -26,12 +26,18 @@ and the test run itself as a non-root user (uid 10001) — root bypasses the
 Unix permission bits some tests deliberately violate to prove a refusal.
 `supply-chain/coverage-floors.yml`'s header has the exact commands.
 
-`test:postgres` runs `internal/persist` and `internal/matchlog`'s
-Postgres-backed tests separately, without `-coverprofile` — `test:go` never
-sets `MIKROVIEW_TEST_POSTGRES`, so those tests skip themselves there. Their
-floors read low for that reason, not because the Postgres backend is
-untested; capturing that coverage is out of scope for this ratchet (a
-separate decision, not yet made).
+`test:postgres` owns `internal/persist` and `internal/matchlog` outright
+(#1290): `test:go` never sets `MIKROVIEW_TEST_POSTGRES`, so their
+Postgres-backed tests skip themselves there, and `coverage-floor.py`'s
+default mode (what `test:go` runs) skips both packages rather than
+ratcheting a number it cannot see the whole of. `test:postgres` runs both
+packages in full — file-backend and Postgres tests together, a strict
+superset of what `test:go` alone exercises for them — with
+`-coverprofile=coverage-postgres.out`, then checks it with
+`python3 scripts/coverage-floor.py --section postgres-floors
+coverage-postgres.out` against the `postgres-floors:` mapping at the
+bottom of `supply-chain/coverage-floors.yml`: the same three ratchet rules
+as above, scoped to that section.
 
 ## Frontend
 
