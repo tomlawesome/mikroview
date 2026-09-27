@@ -478,7 +478,7 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 		// fall back on. Told to the caller plainly instead, the same
 		// shape handleTOTPConfirm's identical failure takes.
 		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, mintErr))
-		http.Error(w, "the passkey is now active, but recovery codes could not be generated -- remove it and register again from account settings", http.StatusInternalServerError)
+		http.Error(w, "the passkey is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)", http.StatusInternalServerError)
 		return
 	}
 

@@ -1842,7 +1842,7 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 		// about to be shown nothing to fall back on if the app is ever
 		// lost.
 		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, mintErr))
-		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
+		http.Error(w, "the authenticator app is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)", http.StatusInternalServerError)
 		return
 	}
 
