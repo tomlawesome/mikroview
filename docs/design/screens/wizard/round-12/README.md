@@ -95,6 +95,16 @@ nothing they drew had to line up with the DOM. `ak.css` gives the canvas
 
 ## Verdicts
 
-None yet.
+Owner, 2026-09-27 (verbatim):
+
+> YES finally. I love it. Some small tweaks.. the yellow line at the
+> start - from the fall, don't show that at all and remove the numbers
+> from the fall. Basically... do the slide bit but without the fall
+> bits. Only other tweak is to increase the letter flicker a bit
+
+Read as: AK is the journey. Round 13 (`../round-13/`) is AK with the
+two tweaks: the slide keeps its motion but the chute — the NOW line,
+the time labels, the rows, the "nothing has arrived" line — is gone;
+the letters flicker a little more often.
 
 Written by Fable 5.1, 2026-09-27.
