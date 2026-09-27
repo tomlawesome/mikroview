@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { fetchHealthz } from './api'
+import type { GeoSourceName } from './types'
 
 /** The GeoIP setup section, for the "no database" messaging's own link
  *  (#1198) -- the country filter's disabled row and the ingest card's
@@ -18,8 +19,15 @@ export const GEOIP_DOCS_URL =
 // database" before it actually knows -- only an explicit false triggers
 // the messaging. Fetched once and cached like versionState: this only
 // changes on a restart, never from anything the UI does.
+//
+// source (#1352) is which of the three country sources is live -- the
+// fall's foot credits DB-IP only while it is the one in use. Unlike
+// `enabled` it can change without a restart: an admin setting or
+// removing a key in the Engine Room switches it, so that card hands the
+// server's new answer to setSource rather than this refetching.
 class GeoipState {
   enabled = $state<boolean | null>(null)
+  source = $state<GeoSourceName | null>(null)
   private loaded = false
 
   async ensureLoaded() {
@@ -27,6 +35,11 @@ class GeoipState {
     this.loaded = true
     const healthz = await fetchHealthz()
     this.enabled = healthz.geoip
+    this.source = healthz.geoSource ?? null
+  }
+
+  setSource(source: GeoSourceName | null) {
+    this.source = source
   }
 }
 

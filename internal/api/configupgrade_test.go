@@ -18,7 +18,7 @@ import (
 func TestConfigUpgradeAdminOnly(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Version = "v1.2.3"
-	s.ConfigUpgradeSettings = []config.MissingSetting{{Key: "geoip", Block: "# geoip:\n#   dbPath: \"\""}}
+	s.ConfigUpgradeSettings = []config.MissingSetting{{Key: "geoip", Block: "# geoip:\n#   cachePath: \"\""}}
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

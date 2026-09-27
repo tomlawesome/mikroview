@@ -51,3 +51,69 @@ describe('who asks for the config problems', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+// #1354: history off with files still on disk is a live `warn` entry,
+// not a setting being ignored, and it links to the disk card.
+describe('the history-held-while-off entry', () => {
+  const held = {
+    code: 'history-held-while-off',
+    key: 'history.enabled',
+    severity: 'warn',
+    message: 'History is off, but 3 days (2026-09-01 → 2026-09-03, 12.0KiB) are still on disk. Nothing new is kept.',
+    remediation: 'Turn history on with the same key to use them, or delete them in Settings.',
+  }
+
+  it('is drawn apart from the ignored settings, with a link to the disk card', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ problems: [held] }) })
+    authState.role = 'admin'
+    const { container, getByRole } = render(ConfigProblemBanner)
+
+    await waitFor(() => expect(container.querySelector('.banner .warn')).toBeTruthy())
+    expect(container.textContent).not.toContain('being ignored')
+    expect(container.querySelector('.warn')?.textContent).toContain('History is off, but 3 days')
+    expect(container.querySelector('.warn')?.textContent).toContain('Turn history on with the same key')
+    expect(getByRole('button', { name: 'Go to the disk card' })).toBeTruthy()
+  })
+
+  it('appears and goes on refresh, without a reload', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ problems: [] }) })
+    authState.role = 'admin'
+    const { container } = render(ConfigProblemBanner)
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(container.querySelector('.banner')).toBeNull()
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ problems: [held] }) })
+    await configProblemsState.refresh()
+    await waitFor(() => expect(container.querySelector('.banner .warn')).toBeTruthy())
+
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ problems: [] }) })
+    await configProblemsState.refresh()
+    await waitFor(() => expect(container.querySelector('.banner')).toBeNull())
+  })
+
+  it('shows again after a hide when it is new', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ problems: [{ code: 'clamped', key: 'buffer.size', message: 'too large' }] }),
+    })
+    authState.role = 'admin'
+    const { container } = render(ConfigProblemBanner)
+    await waitFor(() => expect(container.querySelector('.banner')).toBeTruthy())
+    configProblemsState.dismissed = true
+    await waitFor(() => expect(container.querySelector('.banner')).toBeNull())
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ problems: [{ code: 'clamped', key: 'buffer.size', message: 'too large' }, held] }),
+    })
+    await configProblemsState.refresh()
+    await waitFor(() => expect(container.querySelector('.banner .warn')).toBeTruthy())
+  })
+
+  it('a session that never asked does not start asking on refresh', async () => {
+    authState.role = 'viewer'
+    render(ConfigProblemBanner)
+    await configProblemsState.refresh()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
