@@ -24,6 +24,12 @@
 # The bare repo and the built image are left behind on purpose: they are the
 # cache that makes the second run quick. The work tree is removed, so the
 # host is tidy for whoever runs next.
+#
+# Since 2026-09-08 CI runs the gate on the runner's own Docker daemon, not
+# this account's -- so the image and build cache left here only ever serve
+# a manual run of this script. That means they are safe to prune whenever
+# nothing holds ~/gate-lock (#1387): nothing else on this host depends on
+# them.
 
 set -euo pipefail
 
@@ -186,13 +192,28 @@ echo "==> running the gate (35-50 minutes unsharded; about 36 divided by the sha
 set +e
 ssh "$HOST" "set -eu
   cd ~/gate-work
+  set +e
   docker run --rm --name mv-gate-run --user 0 --shm-size=1g -v \"\$HOME/gate-work:/work\" -w /work mv-gate:local bash -c '
     set -e
     useradd -m -u 10001 ci-gate
     chown -R ci-gate:ci-gate /work
     su ci-gate -c \"cd /work/frontend && HOME=/home/ci-gate npm ci\"
     su ci-gate -c \"cd /work && HOME=/home/ci-gate MV_BROWSER=$BROWSER make $GATE_TARGET\"
-  '" 2>&1 | tee gate-run.log
+  '
+  gate_rc=\$?
+  set -e
+  # Tidy the daemon after every run, pass or fail, before the ssh session
+  # closes, so the reclaimed-space lines land in this same gate-run.log.
+  # Dangling images only (docker image prune -f, no -a) -- the tagged
+  # mv-gate:local this run used or rebuilt stays. The build cache only
+  # ever speeds up a *rebuild*: CHECKOUT_AND_BUILD above already skips
+  # the build whenever the image exists, and a Dockerfile change forces
+  # most layers to rebuild regardless of what the cache held, so a full
+  # docker builder prune -af here costs nothing a manual run will miss.
+  echo '==> tidy: pruning docker cache (best-effort; a failure here does not affect the gate result)'
+  docker image prune -f 2>&1 | tail -n1 | sed 's/^/==> tidy: /' || true
+  docker builder prune -af 2>&1 | tail -n1 | sed 's/^/==> tidy: /' || true
+  exit \$gate_rc" 2>&1 | tee gate-run.log
 gate_status=${PIPESTATUS[0]}
 set -e
 

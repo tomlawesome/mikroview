@@ -31,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gaissmai/bart"
+	"go4.org/netipx"
 )
 
 // Class is the result of classifying one address. Zero value (Matched
@@ -60,13 +60,25 @@ func (c Class) String() string {
 	return c.Label
 }
 
-// entry is what the bart table stores per prefix -- an index into the
-// classifier's interned entry slice rather than the strings themselves,
-// so 120k prefixes sharing a few dozen distinct (source, detail) pairs
-// cost a few dozen strings, not 120k.
-type classEntry struct {
-	source Source
-	detail string
+// detailRange is one source's contribution to its detail index: the
+// address range a single feed entry covers, plus an index into the
+// classifier's interned detail-string slice rather than the string
+// itself -- so 120k Apple Private Relay prefixes sharing a few hundred
+// distinct city names cost a few hundred strings, not 120k.
+//
+// Sorted per source by from, and looked up the same way netipx.IPSet
+// itself resolves Contains: binary search for the last range starting
+// at or before the address, then check it actually reaches that far.
+// That is only correct when a single source's own ranges do not
+// overlap -- true of every feed on the menu (each is a flat list of
+// disjoint blocks from one publisher) but not enforced, so a future feed
+// whose ranges nest could resolve to the wrong neighbour's detail. It
+// cannot resolve to the wrong *source* or *category*: membership is
+// decided by the per-source netipx.IPSet below, which handles overlap
+// correctly by construction. Only the cosmetic detail string is at risk.
+type detailRange struct {
+	from, to netip.Addr
+	detail   uint32
 }
 
 // RefreshInterval is fixed, not user-configurable, for the same
@@ -79,11 +91,23 @@ const RefreshInterval = 24 * time.Hour
 // table in under the write lock, so a lookup never sees a half-populated
 // table.
 type Classifier struct {
-	mu      sync.RWMutex
-	table   *bart.Table[uint32]
-	entries []classEntry
-	sources map[Source]feedDef
-	order   []Source
+	mu sync.RWMutex
+	// sets holds one netipx.IPSet per source -- pure membership, "does
+	// this address belong to this source's data". Lookup checks them in
+	// ClassOrder (see sources.go), not c.order, because c.order is fetch
+	// priority and ClassOrder is match precedence; they answer different
+	// questions and happen to differ (VPN is fetched after Private Relay,
+	// for the exact-collision reason at SourceApplePrivateRelay's
+	// registry entry, but is checked before it here).
+	sets map[Source]*netipx.IPSet
+	// details holds each source's detail index, present only for a
+	// source that carries per-prefix detail (AWS regions, GCP scopes,
+	// Apple cities) -- Tor and the X4BNet lists never do, so they have no
+	// entry here at all.
+	details       map[Source][]detailRange
+	detailStrings []string
+	sources       map[Source]feedDef
+	order         []Source
 	// priorPrefixes retains the last parsed prefix set per source, so a
 	// source that fails a refresh keeps serving its previous data rather
 	// than dropping to empty. Guarded by mu.
@@ -103,7 +127,8 @@ type Classifier struct {
 // here; Lookup misses until the first Refresh.
 func New(sourceNames []string, log *slog.Logger) *Classifier {
 	c := &Classifier{
-		table:         &bart.Table[uint32]{},
+		sets:          make(map[Source]*netipx.IPSet),
+		details:       make(map[Source][]detailRange),
 		sources:       make(map[Source]feedDef),
 		priorPrefixes: make(map[Source][]classifiedPrefix),
 		coverage:      make(map[Source]uint64),
@@ -146,10 +171,15 @@ func (c *Classifier) Ready() bool {
 	return len(c.fetchedAt) > 0
 }
 
-// Lookup classifies ipStr, returning the most specific match across all
-// enabled sources. bart does longest-prefix-match, which is exactly what
-// we want where feeds overlap: an AWS /24 inside X4B's /16 datacenter
-// range attributes to AWS, the more specific and more useful answer.
+// Lookup classifies ipStr against every enabled source's set, in
+// ClassOrder (see sources.go): the first source whose set contains the
+// address wins, whichever source's prefix for that address happens to
+// be wider or narrower. netipx.IPSet has no longest-prefix match --
+// there is no trie to ask "which of these is more specific" -- so a
+// fixed class order stands in for it. This is the one behaviour change
+// from the bart-backed version: a Tor exit inside an AWS /16 now reads
+// as Tor because Tor is checked first, not because its listing happens
+// to be narrower.
 //
 // A parse failure or a miss returns a zero Class (Matched false) -- never
 // an error, and never a "clean" verdict.
@@ -164,19 +194,42 @@ func (c *Classifier) Lookup(ipStr string) Class {
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	idx, ok := c.table.Lookup(addr)
-	if !ok {
-		return Class{}
+
+	for _, src := range ClassOrder {
+		set, ok := c.sets[src]
+		if !ok || !set.Contains(addr) {
+			continue
+		}
+		def := c.sources[src]
+		return Class{
+			Matched:  true,
+			Category: def.Category,
+			Source:   src,
+			Label:    def.Label,
+			Detail:   c.lookupDetail(src, addr),
+		}
 	}
-	e := c.entries[idx]
-	def := c.sources[e.source]
-	return Class{
-		Matched:  true,
-		Category: def.Category,
-		Source:   e.source,
-		Label:    def.Label,
-		Detail:   e.detail,
+	return Class{}
+}
+
+// lookupDetail resolves the finer per-prefix label (an AWS region, a
+// GCP scope, an Apple city) for a source already known to contain addr.
+// Returns "" for a source with no detail index at all -- Tor and the
+// X4BNet lists, which never carry one.
+func (c *Classifier) lookupDetail(src Source, addr netip.Addr) string {
+	ranges := c.details[src]
+	if len(ranges) == 0 {
+		return ""
 	}
+	i := sort.Search(len(ranges), func(i int) bool { return addr.Less(ranges[i].from) })
+	if i == 0 {
+		return ""
+	}
+	r := ranges[i-1]
+	if addr.Compare(r.to) > 0 {
+		return ""
+	}
+	return c.detailStrings[r.detail]
 }
 
 // Refresh fetches every enabled source and rebuilds the table. Each
@@ -273,11 +326,12 @@ func (c *Classifier) Refresh(ctx context.Context) {
 		c.log.Info(fmt.Sprintf("%s: refreshed, %d prefixes (%s)", def.Label, len(parsed), describeCoverage(cov)))
 	}
 
-	table, entries := buildTable(c.order, current)
+	sets, details, detailStrings := buildSets(current)
 
 	c.mu.Lock()
-	c.table = table
-	c.entries = entries
+	c.sets = sets
+	c.details = details
+	c.detailStrings = detailStrings
 	c.priorPrefixes = current
 	c.coverage = newCoverage
 	for src, t := range newFetchedAt {
@@ -290,47 +344,60 @@ func (c *Classifier) markFetched(src Source, into *map[Source]time.Time) {
 	(*into)[src] = time.Now()
 }
 
-// buildTable interns the (source, detail) pairs and inserts every prefix,
-// in source-priority order so that on an exact-prefix collision the
-// higher-priority source wins. bart's Lookup already resolves overlaps by
-// specificity; this only decides ties.
-//
-// table.Get is checked before every Insert specifically because
-// bart.Table.Insert is last-write-wins on an exact prefix ("if the
-// prefix already exists, its value is updated" -- its own doc comment),
-// not first-write-wins. Iterating in priority order alone does not give
-// higher-priority-wins: it gives whichever source happens to be iterated
-// last for that exact prefix, whatever order collides to be. Caught by
-// TestApplePrivateRelayWinsOverX4BVPNOnExactCollision, which failed
-// against the naive unconditional-Insert version of this function --
-// SourceX4BVPN (lower priority, iterated second) was silently
-// overwriting SourceApplePrivateRelay's entry despite this function's
-// own doc comment already claiming the opposite.
-func buildTable(order []Source, bySrc map[Source][]classifiedPrefix) (*bart.Table[uint32], []classEntry) {
-	table := &bart.Table[uint32]{}
-	var entries []classEntry
-	intern := make(map[classEntry]uint32)
+// buildSets turns each source's parsed prefixes into a netipx.IPSet for
+// membership, plus a sorted detail index for the sources that carry one.
+// There is no cross-source precedence to resolve here any more -- each
+// set only ever answers for its own source, and ClassOrder (sources.go)
+// is what decides which source's answer Lookup reports when more than
+// one contains the address. That replaces buildTable's exact-prefix
+// precedence (table.Get before every Insert, source order deciding the
+// tie): one set per source makes an exact collision between two sources
+// resolve the same way ClassOrder already resolves a nested one, so a
+// second tie-break mechanism would be redundant -- see
+// TestClassOrderDecidesExactCollisions.
+func buildSets(bySrc map[Source][]classifiedPrefix) (map[Source]*netipx.IPSet, map[Source][]detailRange, []string) {
+	sets := make(map[Source]*netipx.IPSet, len(bySrc))
+	details := make(map[Source][]detailRange, len(bySrc))
+	var detailStrings []string
+	intern := make(map[string]uint32)
 
-	idFor := func(e classEntry) uint32 {
-		if id, ok := intern[e]; ok {
+	internDetail := func(s string) uint32 {
+		if id, ok := intern[s]; ok {
 			return id
 		}
-		id := uint32(len(entries))
-		entries = append(entries, e)
-		intern[e] = id
+		id := uint32(len(detailStrings))
+		detailStrings = append(detailStrings, s)
+		intern[s] = id
 		return id
 	}
 
-	for _, src := range order {
-		for _, cp := range bySrc[src] {
-			if _, exists := table.Get(cp.prefix); exists {
-				continue
+	for src, prefixes := range bySrc {
+		var b netipx.IPSetBuilder
+		ranges := make([]detailRange, 0, len(prefixes))
+		hasDetail := false
+		for _, cp := range prefixes {
+			b.AddPrefix(cp.prefix)
+			detail := sanitiseDetail(cp.detail)
+			if detail != "" {
+				hasDetail = true
 			}
-			id := idFor(classEntry{source: src, detail: sanitiseDetail(cp.detail)})
-			table.Insert(cp.prefix, id)
+			r := netipx.RangeOfPrefix(cp.prefix)
+			ranges = append(ranges, detailRange{from: r.From(), to: r.To(), detail: internDetail(detail)})
+		}
+		// Every prefix reaching here already passed acceptablePrefix at
+		// parse time, so an error is not expected -- but IPSet() returns
+		// a usable set of whatever was valid even when it reports one,
+		// so the return value is degrade-gracefully correct either way.
+		// There is no per-source logger here to name it against; Refresh
+		// already covers fetch and parse failures for this source.
+		set, _ := b.IPSet()
+		sets[src] = set
+		if hasDetail {
+			sort.Slice(ranges, func(i, j int) bool { return ranges[i].from.Less(ranges[j].from) })
+			details[src] = ranges
 		}
 	}
-	return table, entries
+	return sets, details, detailStrings
 }
 
 // maxCoverage is "more address space than any number means to a

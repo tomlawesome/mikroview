@@ -1424,8 +1424,9 @@ def cmd_entities(args):
     # type+key with no shared state between them -- so a small thread
     # pool fires them concurrently instead of waiting on each round trip
     # in turn. list() drives the map to completion and re-raises the
-    # first request's exception, same failure behaviour as the loop this
-    # replaced.
+    # first request's exception, but unlike the sequential loop this
+    # replaced -- which stopped at the first failure -- every POST has
+    # already been submitted by the time that exception surfaces.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(lambda body: api.post("/api/entities", json=body), bodies))
     print(f"seeded {len(bodies)} named entities")

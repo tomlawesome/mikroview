@@ -34,17 +34,32 @@ belongs to any package other than the one whose tests produced it.
 
 Rules enforced, each one a `problems` entry below:
   - a package below its floor: coverage regressed, or a floor was set wrong.
-  - a package in the coverage profile but absent from the floors file: a new
-    package must not slip in unmeasured -- adding its floor is a reviewed
-    change to supply-chain/coverage-floors.yml, not something this script
-    does silently.
+  - a package missing a floor it should have: default mode, a package in the
+    coverage profile but absent from the `floors:` mapping; section mode
+    (see below), a package listed in that section but absent from the
+    profile, i.e. never measured. Either way: a new package must not slip
+    in unmeasured -- adding or fixing its floor is a reviewed change to
+    supply-chain/coverage-floors.yml, not something this script does
+    silently.
   - a package sitting more than RATCHET_SLACK points ABOVE its floor: a floor
     that never rises is a target, not a ratchet. This is what makes it one.
 
 Exit codes: 0 clean; 1 one of the rules above fired; 2 the profile or the
 floors file could not be read or parsed (fail red, never quietly green).
 
-Usage: coverage-floor.py <coverage.out> [floors.yml]
+Two modes (#1290). Default mode checks the top-level `floors:` mapping
+against every package in the profile, except any package listed under
+`postgres-floors:` -- those are test:postgres's to ratchet, not test:go's,
+because test:go never sets MIKROVIEW_TEST_POSTGRES and so never sees their
+Postgres-backed statements run. `--section postgres-floors` is the other
+side: it checks only the packages listed in that section, against a
+profile test:postgres produced, applying the same three rules to that
+section alone -- including a package listed there but absent from the
+profile, which default mode has no equivalent check for (a package outside
+a section it isn't skipping is simply not in the profile, which is
+`floors:`'s own "no test files" case, not an error).
+
+Usage: coverage-floor.py [--section SECTION] <coverage.out> [floors.yml]
   floors.yml defaults to supply-chain/coverage-floors.yml, resolved relative
   to the current directory -- run this from the repository root.
 
@@ -60,6 +75,13 @@ import os
 import sys
 
 TARGET_BAND = (70, 85)
+
+# The two section names this file's `floors:`/`postgres-floors:` split
+# uses. Named here, not just as string literals below, so the default-mode
+# / section-mode split reads as one deliberate pair rather than a magic
+# string repeated in two places.
+DEFAULT_SECTION = "floors"
+POSTGRES_SECTION = "postgres-floors"
 
 # How far a package may drift above its floor before this job asks for the
 # floor to be raised. Set deliberately loose.
@@ -155,7 +177,17 @@ def parse_profile(path, module_prefix):
     return total, covered
 
 
-def parse_floors(path):
+def parse_floors(path, section=DEFAULT_SECTION, required=True):
+    """The `<section>:` mapping in a floors file, as {package: floor}.
+
+    `required` controls what happens when that section is absent or empty:
+    True (the default, and always the case for the section a --section run
+    names explicitly) fails red with exit 2 -- see `check_section`'s "unknown
+    section" case. False (default mode's own look at `postgres-floors:`,
+    to build its skip set) just returns {} -- a repo, or a test fixture,
+    with no such section is not an error there, it simply has nothing to
+    skip.
+    """
     try:
         with open(path) as f:
             lines = f.readlines()
@@ -170,7 +202,7 @@ def parse_floors(path):
         if not stripped or stripped.startswith("#"):
             continue
         if not line[0].isspace():
-            in_block = (stripped.rstrip() == "floors:")
+            in_block = (stripped.rstrip() == f"{section}:")
             continue
         if not in_block:
             continue
@@ -190,21 +222,28 @@ def parse_floors(path):
                      f"{value!r}")
 
     if not floors:
-        fail(2, f"{path} has no 'floors:' mapping, or it is empty")
+        if not required:
+            return {}
+        fail(2, f"{path} has no '{section}:' mapping, or it is empty")
     return floors
 
 
-def check(profile_path, floors_path):
-    module_prefix = find_module_prefix(".")
-    total, covered = parse_profile(profile_path, module_prefix)
-    floors = parse_floors(floors_path)
+def check_default(got, floors_path):
+    """The floors: mapping against every measured package, except any
+    package postgres-floors: names -- test:postgres's to ratchet, not
+    this run's (see the module docstring and #1290)."""
+    floors = parse_floors(floors_path, DEFAULT_SECTION)
+    skip = parse_floors(floors_path, POSTGRES_SECTION, required=False)
 
-    got = {}
-    for pkg, stmts in total.items():
-        got[pkg] = 100.0 * covered.get(pkg, 0) / stmts if stmts else 0.0
+    if skip:
+        names = ", ".join(sorted(skip))
+        print(f"coverage-floor: skipped {len(skip)} package(s) measured by "
+              f"test:postgres: {names}")
 
     problems = []
     for pkg in sorted(got):
+        if pkg in skip:
+            continue
         if pkg not in floors:
             problems.append(
                 f"{pkg}: got {got[pkg]:.1f}%, no floor in {floors_path} -- "
@@ -236,12 +275,76 @@ def check(profile_path, floors_path):
     return 0
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2 or len(sys.argv) > 3:
-        print("usage: coverage-floor.py <coverage.out> [floors.yml]",
+def check_section(got, floors_path, section):
+    """One named section (e.g. postgres-floors) against its own profile,
+    all three rules, scoped to only the packages that section lists. A
+    section absent from the file, or present but empty, fails red via
+    parse_floors(..., required=True) -- there is no such thing as an
+    empty section to check."""
+    floors = parse_floors(floors_path, section)
+
+    problems = []
+    for pkg in sorted(floors):
+        floor = floors[pkg]
+        if pkg not in got:
+            problems.append(
+                f"{pkg}: no coverage data in the profile -- listed under "
+                f"{section}: in {floors_path} but never measured.")
+            continue
+        value = got[pkg]
+        if value < floor:
+            problems.append(f"{pkg}: got {value:.1f}%, floor {floor}%")
+        elif value > floor + RATCHET_SLACK:
+            raise_to = math.floor(value)
+            problems.append(
+                f"{pkg}: got {value:.1f}%, floor {floor}% -- more than "
+                f"{RATCHET_SLACK} points above its floor. Raise its floor "
+                f"in {floors_path} to {raise_to} to lock in the gain.")
+
+    if problems:
+        print(f"coverage-floor [{section}]: coverage ratchet failed:\n",
               file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return 1
+
+    band_lo, band_hi = TARGET_BAND
+    in_band = sum(1 for f in floors.values() if band_lo <= f <= band_hi)
+    debt = sum(1 for f in floors.values() if f < band_lo)
+    print(f"coverage-floor [{section}]: {len(floors)} package(s) checked, "
+          f"{in_band} inside the {band_lo}-{band_hi}% band, {debt} "
+          f"carrying known debt below it.")
+    return 0
+
+
+def check(profile_path, floors_path, section=None):
+    module_prefix = find_module_prefix(".")
+    total, covered = parse_profile(profile_path, module_prefix)
+
+    got = {}
+    for pkg, stmts in total.items():
+        got[pkg] = 100.0 * covered.get(pkg, 0) / stmts if stmts else 0.0
+
+    if section is not None:
+        return check_section(got, floors_path, section)
+    return check_default(got, floors_path)
+
+
+if __name__ == "__main__":
+    argv = sys.argv[1:]
+    section_arg = None
+    if argv[:1] == ["--section"]:
+        if len(argv) < 2:
+            print("usage: coverage-floor.py [--section SECTION] "
+                  "<coverage.out> [floors.yml]", file=sys.stderr)
+            raise SystemExit(2)
+        section_arg = argv[1]
+        argv = argv[2:]
+    if len(argv) < 1 or len(argv) > 2:
+        print("usage: coverage-floor.py [--section SECTION] <coverage.out> "
+              "[floors.yml]", file=sys.stderr)
         raise SystemExit(2)
-    profile_arg = sys.argv[1]
-    floors_arg = (sys.argv[2] if len(sys.argv) > 2
+    profile_arg = argv[0]
+    floors_arg = (argv[1] if len(argv) > 1
                   else os.path.join("supply-chain", "coverage-floors.yml"))
-    raise SystemExit(check(profile_arg, floors_arg))
+    raise SystemExit(check(profile_arg, floors_arg, section_arg))

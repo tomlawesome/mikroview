@@ -84,7 +84,7 @@ if (gzipBytes > BUDGET_BYTES) {
       'deliberate -- raise BUDGET_BYTES at the top of this file with a ' +
       "stated reason, and update docs/features.md's shipped-bundle figure " +
       '(the "UI" bullet) to the new measurement in the same PR. ' +
-      'A budget raised without updating the README just moves the drift ' +
+      'A budget raised without updating docs/features.md just moves the drift ' +
       'this check exists to catch.',
   )
   process.exit(1)

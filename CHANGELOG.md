@@ -47,6 +47,12 @@ rewritten.
 
 ### Changed
 
+- **`scripts/gate-remote.sh` prunes the second host's Docker cache after
+  every run** (#1387), pass or fail: dangling images and the whole build
+  cache go, the tagged `mv-gate:local` image stays, and `gate-run.log`
+  says what it reclaimed. Fixes the disk filling up and failing unrelated
+  CI jobs with "no space left on device".
+
 - **Turning history off keeps the files; deleting them is a separate,
   password-gated action** (#1354, owner decision 2026-09-25). The
   switch in Settings stops writing and deletes nothing. While history is
@@ -75,6 +81,23 @@ rewritten.
   for unattended daily fetching — see docs/configuration.md's
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
+- **`security:govulncheck` runs `v1.8.0`, not `v1.4.0`** (#1321). The
+  four-release gap meant a green scan reflected a vulnerability database
+  from June, not today's; `renovate.json` now tracks every `go install
+  …@vX.Y.Z` pin in `.gitlab-ci.yml` so this can't happen silently again.
+
+- **`internal/netclass` matches on `go4.org/netipx`, not
+  `github.com/gaissmai/bart`** (#1313, owner ruling 2026-09-20 on #1288).
+  `bart` is a single-author module; `netipx` is Tailscale-maintained and
+  already a transitive dependency. `netipx` has no trie, so where two
+  enabled sources both claim an address, a fixed class order now decides
+  instead of longest-prefix match: **Tor, then VPN, then Private Relay,
+  then datacenter, then cloud** — the more specific *claim* wins
+  regardless of prefix width, so a Tor exit inside an AWS range still
+  reads as Tor. One visible consequence: where X4BNet's VPN feed has
+  copied Apple Private Relay's ranges verbatim, an exact-prefix overlap
+  now classifies as VPN rather than Private Relay, the reverse of the
+  old trie's tie-break.
 
 ### Security
 
