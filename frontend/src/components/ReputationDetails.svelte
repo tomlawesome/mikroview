@@ -6,13 +6,25 @@
   // rendering only needs to live in one place.
   import type { ReputationResult } from '../lib/types'
 
-  let { result }: { result: ReputationResult } = $props()
+  let {
+    result,
+    owner = null,
+  }: {
+    result: ReputationResult
+    /**
+     * The network owner from the local country source (#1352) --
+     * "AS13335 Cloudflare, Inc." -- drawn as one line under the country.
+     * Null (or left out, as the flag snapshot does) draws nothing.
+     */
+    owner?: string | null
+  } = $props()
 
   const hasIntel = $derived(
     result.abuseScore != null ||
       result.totalReports != null ||
       !!result.isp ||
       !!result.countryCode ||
+      !!owner ||
       !!result.usageType ||
       !!result.isTor ||
       !!result.netClass ||
@@ -59,6 +71,9 @@
         <span class="label">Country</span>
         <span class="value">{result.countryCode}</span>
       </div>
+    {/if}
+    {#if owner}
+      <div class="owner" data-testid="ip-lookup-owner">Network · {owner}</div>
     {/if}
     {#if result.usageType}
       <div class="row">
@@ -135,6 +150,13 @@
   .value {
     color: var(--fg);
     text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  /* One plain line, not a label/value pair: the network owner reads as
+     a sentence under the country ("Network · AS13335 Cloudflare, Inc."). */
+  .owner {
+    color: var(--fg-muted);
     overflow-wrap: anywhere;
   }
 
