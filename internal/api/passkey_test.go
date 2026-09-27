@@ -319,11 +319,10 @@ func TestPasskeyRegisterFinishWrongOriginRefused(t *testing.T) {
 	// Pairing: the identical shape of request, at the right origin,
 	// succeeds -- proving the refusal above is really about the origin
 	// and not some other malformation.
-	goodFake, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "right origin")
+	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "right origin")
 	if out.Passkey.Name != "right origin" {
 		t.Errorf("the paired successful registration = %+v", out)
 	}
-	_ = goodFake
 }
 
 // TestPasskeyLoginFactorWrongRPIDRefused mirrors the wrong-origin test

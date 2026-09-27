@@ -32,6 +32,25 @@ import (
 	"github.com/tomlawesome/mikroview/internal/syslog"
 )
 
+// TestMain drops Argon2id to the cheapest valid cost (auth.KDFParams.
+// Valid's floor) for this package's whole test binary, before any test
+// runs -- the same override internal/api's TestMain applies to its own
+// binary (#1392; see auth.SetHashParamsForTest's doc comment for why it
+// is safe here). This package is a separate test binary from
+// internal/api and internal/auth, so each needs its own TestMain;
+// internal/auth's tests never call this override, so they keep
+// exercising HashPassword at the real, unchanged production cost.
+//
+// clear_second_factor_test.go and backup_passkeys_roundtrip_test.go
+// each create real accounts through auth.Store, paying a full
+// production Argon2id hash per account.
+func TestMain(m *testing.M) {
+	restore := auth.SetHashParamsForTest(auth.KDFParams{Memory: 8 * 1024, Time: 1, Threads: 1})
+	code := m.Run()
+	restore()
+	os.Exit(code)
+}
+
 // newIngestTestDeps builds the minimal set of dependencies
 // ingestOneRecovered needs, all unconfigured/in-memory (no GeoIP DB, no
 // flags/MAC-registry persistence) -- enough to exercise the new-device
