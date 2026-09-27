@@ -1096,6 +1096,13 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 	// exactly like a wrong TOTP code does below.
 	if len(req.Assertion) > 0 {
 		if s.verifyPasskeyAssertion(w, r, user, req.Assertion, now) {
+			// The begin that minted this assertion's single-use
+			// challenge reserved one attempt on each key too
+			// (handleAuthLoginFactorBegin); a completed sign-in gives
+			// that back as well, so a passkey sign-in costs no more
+			// of the budget than a correct code does.
+			s.LoginLimiter.Release(ipKey, now)
+			s.LoginLimiter.Release(userKey, now)
 			s.completeLoginFactor(w, user, ipKey, userKey, now)
 		}
 		return
@@ -1463,9 +1470,17 @@ func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	users := s.Auth.List()
-	out := make([]userSummary, 0, len(users))
-	for _, u := range users {
+	// One read of the accounts document for the whole page, not one per
+	// question per row (#1345 E1-F1). HasTOTP and PasskeyCount come
+	// from the store rather than from u, deliberately: List blanks
+	// TOTPSecret and Passkeys on the copies it hands back, so
+	// User.HasActiveTOTP or len(u.Passkeys) on one of them answers
+	// false/zero for every account -- the mistake #1249 shipped once --
+	// and ListWithSecondFactors reads both off the live record instead.
+	listed := s.Auth.ListWithSecondFactors()
+	out := make([]userSummary, 0, len(listed))
+	for _, l := range listed {
+		u := l.User
 		out = append(out, userSummary{
 			ID:               u.ID,
 			Username:         u.Username,
@@ -1474,19 +1489,8 @@ func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
 			LastLogin:        u.LastLogin,
 			HasLocalPassword: u.LocalPassword(),
 			SSO:              u.OIDCIssuer != "",
-			// Asked of the store rather than of u, deliberately. List
-			// blanks TOTPSecret on the copies it hands back (it is the
-			// live shared secret, the one field here worth more than a
-			// hash), and User.HasActiveTOTP tests that very field --
-			// so calling it on one of these copies answers false for
-			// every account, including the ones that do hold a factor.
-			HasTOTP: s.Auth.HasActiveTOTP(u.ID),
-			// Same trap, same fix, for passkeys (#1250): List blanks
-			// Passkeys wholesale, so len(u.Passkeys) here would always
-			// read zero -- see auth.Store.PasskeyCount's own doc comment,
-			// which names this exact mistake shipping once already for
-			// HasActiveTOTP.
-			PasskeyCount: s.Auth.PasskeyCount(u.ID),
+			HasTOTP:          l.HasActiveTOTP,
+			PasskeyCount:     l.PasskeyCount,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
