@@ -94,6 +94,12 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		// missing this would silently reset every user back to the
 		// defaults their own module ships with.
 		{"prefs", cfg.Prefs.StorePath},
+		// The config editor's snapshots (#1347): whole config files an
+		// admin kept, and the copy taken before each Carry forward --
+		// the one a rollback needs. At a fixed place in the data
+		// directory rather than a configured path; see
+		// configSnapshotsPath.
+		{"config_snapshots", configSnapshotsPath(cfg)},
 	}
 }
 
