@@ -174,6 +174,19 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
   })
 
+  // Q4-F3 (round 61 door audit): chooseTOTP() mirrors AuthenticatorOverlay's
+  // startEnrol() -- a string result is shown inline and the caller stays
+  // on the choose stage, same as that overlay's own equivalent test.
+  it('shows the enrol error and stays on the choose screen when it fails', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue('the server could not do that (500)')
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+
+    expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
+    expect(screen.queryByTestId('totp-secret')).toBeNull()
+  })
+
   it('shows the server refusal on a wrong code and stays on the door', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue({
       uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
@@ -320,6 +333,23 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     expect(registerPasskey).toHaveBeenCalledWith('this laptop')
     expect(authState.passkeyCount).toBe(1)
     expect(screen.getByText('Keep the codes')).toBeTruthy()
+  })
+
+  // Q4-F2 (round 61 door audit): addPasskey() mirrors PasskeysOverlay's
+  // submitAdd() -- a string result (the ceremony's own refusal) is shown
+  // inline and the caller stays on the passkey stage, same as that
+  // overlay's own equivalent test.
+  it("shows the passkey ceremony's own refusal and stays put to retry", async () => {
+    vi.mocked(registerPasskey).mockResolvedValue("That didn't complete -- try again, or use another way in.")
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
+    await screen.findByLabelText('Name')
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+
+    expect(await screen.findByText(/didn't complete/i)).toBeTruthy()
+    expect(authState.passkeyCount).toBe(0)
   })
 
   it('each prove stage offers the other key as the quiet link, when that key is live', async () => {
