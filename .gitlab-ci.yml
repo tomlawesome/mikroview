@@ -1195,8 +1195,9 @@ gate:scenarios:webkit:
     MV_BROWSER: webkit
 
 # The four standalone shell checks (scripts/run-live-scripts.sh), once,
-# plus the quiet-host unit tests (#1003) -- plain bash, no live instance
-# needed, so they run here rather than earning their own job.
+# plus the quiet-host and other plain-bash unit tests (#1003, #1337) --
+# no live instance needed, so they run here rather than earning their
+# own job.
 gate:scripts:
   stage: gate
   tags: [light]
@@ -1227,6 +1228,7 @@ gate:scripts:
     - scripts/upgrade-fixture-session.test.sh
     - scripts/check-upgrade-fixtures-recorded.test.sh
     - scripts/live-web-dist.test.sh
+    - scripts/gate-summary.test.sh
   artifacts:
     when: always
     paths:

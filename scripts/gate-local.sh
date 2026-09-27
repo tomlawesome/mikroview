@@ -31,6 +31,8 @@
 
 set -euo pipefail
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/gate-summary.sh"
+
 WORK="${MV_GATE_LOCAL_WORK:-$HOME/projects/.gate-work/mikroview}"
 BROWSER="${MV_BROWSER:-chromium}"
 # --shards N / MV_SHARDS: run `make live-check-sharded` instead of `make
@@ -171,24 +173,9 @@ docker run --rm --name mv-gate-run --user 0 --shm-size=1g -v "$WORK:/work" -w /w
 gate_status=${PIPESTATUS[0]}
 set -e
 
-# Never judge a run by counting PASS against FAIL. A scenario that throws --
-# a stale selector, an import error -- dies before printing any verdict, so
-# counting verdicts cannot see it. That is #661, and it was read as a clean
-# browser phase across two full runs. The honest check is scenarios started
-# against scenarios that reported: equal means every one of them spoke.
-#
-# live-migrate-data.sh prints its own "== " subheading, so started is
-# legitimately one higher than reported. Anything beyond that is a scenario
-# that died silently.
-started=$(grep -c '^== ' gate-run.log || true)
-reported=$(grep -cE '^RESULT: |^PASS: ' gate-run.log || true)
-
-echo
-echo "==> scenarios started: $started   reported: $reported   (started may exceed reported by exactly 1)"
-silent=$(( started - reported - 1 ))
-if [ "$silent" -gt 0 ]; then
-  echo "==> $silent scenario(s) died without reporting -- see gate-run.log"
-fi
+# See gate-summary.sh (#661, #1337) for why this count matters and what
+# it means for it to come out equal.
+mv_gate_summary gate-run.log
 
 if [ "$KEEP" -eq 1 ]; then
   echo "==> leaving $WORK (--keep)"
