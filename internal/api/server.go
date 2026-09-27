@@ -621,6 +621,9 @@ func (s *Server) apiRoutes() []route {
 		// is far too much work to hang off /api/stats' few-second poll.
 		{http.MethodGet, "/api/settings/history", s.handleHistorySettings},
 		{http.MethodPut, "/api/settings/history", s.handleHistorySettingsUpdate},
+		// Deleting what an off history left on disk (#1354): the only
+		// way retained history is ever deleted wholesale, password-gated.
+		{http.MethodDelete, "/api/settings/history/files", s.handleHistoryFilesDelete},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
