@@ -176,6 +176,11 @@ rewritten.
   history any more; deleting is only ever an admin choice made from
   Settings. Turning history off from Settings still asks, then deletes.
 
+- **The header-scan linearity test no longer flakes on a busy host**
+  (#1376). `TestNextHeaderStartScalesLinearlyOnLongLTRun` now counts the
+  bytes `nextHeaderStart`'s scan actually visits instead of timing it, so
+  the ratio it checks can't be thrown off by other load on the machine.
+
 ## [0.6.1] - 2026-09-24
 
 ### Security
