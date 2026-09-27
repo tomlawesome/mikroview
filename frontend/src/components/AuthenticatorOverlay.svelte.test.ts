@@ -338,3 +338,42 @@ describe('turning it off needs the password', () => {
     expect(screen.queryByText(/turned off\.$/i)).toBeNull()
   })
 })
+
+// X4-F1: the ten codes exist in clear nowhere else, so a reload before
+// the explicit acknowledgement loses them for good -- same guard as
+// LogEveryRule's own beforeunload (its own test file's own pattern,
+// reused here).
+describe('X4-F1: beforeunload guard on the codes step', () => {
+  function dispatchBeforeUnload(): Event {
+    const evt = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(evt)
+    return evt
+  }
+
+  it('is not set before the codes step is ever reached', () => {
+    render(AuthenticatorOverlay, { open: true })
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+
+  it('guards the codes step, and lifts once "I have saved these" is clicked', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:tom?secret=JBSWY3DPEHPK3PXP&issuer=MikroView',
+    })
+    vi.mocked(confirmTOTP).mockResolvedValue({
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+      alreadyIssued: false,
+    })
+    render(AuthenticatorOverlay, { open: true })
+    await fireEvent.click(screen.getByRole('button', { name: /set up authenticator app/i }))
+    await screen.findByTestId('totp-secret')
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+})

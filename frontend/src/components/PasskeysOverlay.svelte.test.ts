@@ -349,3 +349,39 @@ describe('removing a passkey', () => {
     expect(authState.state).toBe('unauthenticated')
   })
 })
+
+// X4-F1: the ten codes exist in clear nowhere else, so a reload before
+// the explicit acknowledgement loses them for good -- same guard as
+// LogEveryRule's own beforeunload (its own test file's own pattern,
+// reused here).
+describe('X4-F1: beforeunload guard on the codes step', () => {
+  function dispatchBeforeUnload(): Event {
+    const evt = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(evt)
+    return evt
+  }
+
+  it('is not set before the codes step is ever reached', () => {
+    render(PasskeysOverlay, { open: true })
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+
+  it('guards the codes step, and lifts once "I have saved these" is clicked', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue({
+      passkey: row(),
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+    })
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText(/add a passkey/i)
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+})
