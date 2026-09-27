@@ -51,6 +51,11 @@ As round 14.
 
 ## Verdicts
 
-None yet.
+Owner, 2026-09-27 (verbatim): "6. Round 15 no sparks approved."
+
+**Ratified**: AN with no sparks (`an-neon.html?nosparks` is the
+reference; in a build the sparks do not exist). The wizard is round
+10's AG with this round's Yes / No change. The consolidated record is
+`../DESIGN.md`; the build issues are linked from #1374.
 
 Written by Fable 5.1, 2026-09-27.
