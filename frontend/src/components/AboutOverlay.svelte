@@ -16,6 +16,7 @@
   // UI is restructured, the notices move, they don't disappear.
   import { versionState } from '../lib/version.svelte'
   import { trapFocus } from '../lib/focusTrap'
+  import { IPINFO_URL, MAXMIND_URL } from '../lib/geo'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
 
@@ -103,6 +104,21 @@
           <a href="/api/third-party-notices" target="_blank" rel="noopener noreferrer">
             third-party notices
           </a>.
+        </p>
+
+        <!--
+          Data credits (#1352), always present whichever source is in
+          use: IPinfo's and MaxMind's terms ask for them here. DB-IP's
+          credit is not here by decision -- it sits at the foot of the
+          fall, and only while DB-IP is the source in use (Fall.svelte).
+        -->
+        <p class="third-party" data-testid="about-credit-ipinfo">
+          Country and network data from
+          <a href={IPINFO_URL} target="_blank" rel="noopener noreferrer">IPinfo Lite</a>.
+        </p>
+        <p class="third-party" data-testid="about-credit-maxmind">
+          This product includes GeoLite data created by MaxMind, available from
+          <a href={MAXMIND_URL} target="_blank" rel="noopener noreferrer">{MAXMIND_URL}</a>.
         </p>
       </div>
     </div>

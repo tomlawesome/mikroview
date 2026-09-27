@@ -29,7 +29,9 @@
   // call and no state of their own.
   import { dossierState } from '../lib/dossier.svelte'
   import { nameEditorState } from '../lib/nameEditor.svelte'
-  import { countryFlag, formatRelative } from '../lib/format'
+  import { countryFlag, formatRelative, isPublicIp } from '../lib/format'
+  import { geoLookup } from '../lib/api'
+  import { ownerLabel } from '../lib/geo'
   import CopyButton from './CopyButton.svelte'
   import GhostRows from './GhostRows.svelte'
   import type { DossierPeer } from '../lib/types'
@@ -51,6 +53,24 @@
   })
 
   const displayName = $derived(d?.names.name ?? '')
+
+  // The network owner (#1352), beside the MAC vendor: for a public
+  // address only, where "who runs this network" is the question a vendor
+  // would answer for a local one. Asked on demand from the local country
+  // source (never attached to events), and drawn only when known.
+  let owner = $state<{ ip: string; label: string | null } | null>(null)
+  $effect(() => {
+    const ip = dossierState.ip
+    if (!dossierState.isOpen || !ip || !isPublicIp(ip)) return
+    let current = true
+    geoLookup(ip).then((g) => {
+      if (current) owner = { ip, label: ownerLabel(g) }
+    })
+    return () => {
+      current = false
+    }
+  })
+  const ownerShown = $derived(owner && owner.ip === dossierState.ip ? owner.label : null)
 
   function ago(iso: string | undefined): string {
     return iso ? formatRelative(iso, nowMs) : 'never'
@@ -226,6 +246,9 @@
             {#if d.mac.registry.note}<p class="from">{d.mac.registry.note}</p>{/if}
           {/if}
           {#if d.mac.note}<p class="note">{d.mac.note}</p>{/if}
+          {#if ownerShown}
+            <p data-testid="dossier-network-owner">network owner · {ownerShown}</p>
+          {/if}
         </section>
 
         <section aria-labelledby="hd-address">

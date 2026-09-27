@@ -37,12 +37,17 @@ vi.mock('../lib/api', () => ({
   fetchRouterNat: vi.fn(async () => ({ available: false, rules: [] })),
   fetchEventsWindow: vi.fn(async () => ({ events: [], hasMore: false })),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
+  // #1352: the foot's DB-IP credit reads the live source from healthz
+  // through geoipState. Never answering keeps that fetch from racing the
+  // source each test below sets on the store directly.
+  fetchHealthz: vi.fn(() => new Promise(() => {})),
 }))
 
 import { fetchEventsWindow } from '../lib/api'
 import { formatHM } from '../lib/format'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { geoipState } from '../lib/geoip.svelte'
 import { appState } from '../lib/state.svelte'
 import type { WatchlistEntry } from '../lib/types'
 
@@ -214,6 +219,35 @@ describe('the bottom-right timestamp is unmounted, not deleted (#700 fault 3)', 
     })
     expect(container.textContent).not.toContain('newest at the top')
     expect(container.querySelector('.window-caption')).toBeNull()
+  })
+})
+
+// #1352: DB-IP Lite's licence asks for a link; the owner settled it sits
+// at the foot of the fall, and only while DB-IP is the source in use.
+describe("the fall's foot credits DB-IP only while it is the source in use (#1352)", () => {
+  it('links to db-ip.com while DB-IP is live', async () => {
+    geoipState.source = 'dbip'
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    const credit = container.querySelector('.fall-foot a.geo-credit')
+    expect(credit?.textContent?.trim()).toBe('IP Geolocation by DB-IP')
+    expect(credit?.getAttribute('href')).toBe('https://db-ip.com')
+    expect(credit?.getAttribute('rel') ?? '').toContain('noopener')
+  })
+
+  it.each([['ipinfo'], ['maxmind'], [null]] as const)('draws nothing at all while the source is %s', async (source) => {
+    geoipState.source = source
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    expect(container.querySelector('.geo-credit')).toBeNull()
+    expect(container.textContent).not.toContain('DB-IP')
+  })
+
+  it('goes the moment the source switches away from DB-IP', async () => {
+    geoipState.source = 'dbip'
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    expect(container.querySelector('.geo-credit')).toBeTruthy()
+    geoipState.setSource('ipinfo')
+    flushSync()
+    expect(container.querySelector('.geo-credit')).toBeNull()
   })
 })
 
