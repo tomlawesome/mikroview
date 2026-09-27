@@ -176,12 +176,10 @@ floors:
 # Same three ratchet rules, same band, a different job's profile because
 # that job is the only one that runs their Postgres-backed statements.
 #
-# 62/58 here are carried over unchanged from the values floors: used to
-# hold for these two packages (measured 2026-09-27 under test:go, where
-# the Postgres-backed statements never ran) -- not a fresh measurement
-# against coverage-postgres.out, which does not exist yet. #1290's plan:
-# the first CI run of this change re-measures them for real and this
-# file's next commit raises both to what that run reports.
+# Measured 2026-09-27 against coverage-postgres.out in the first CI run of
+# #1290 (MR !1115, pipeline 1765, job 25736): persist 81.5%, matchlog 81.8%.
+# The earlier 62/58 were carried over from test:go, where the
+# Postgres-backed statements never ran.
 postgres-floors:
-  internal/persist: 62
-  internal/matchlog: 58
+  internal/persist: 81
+  internal/matchlog: 81
