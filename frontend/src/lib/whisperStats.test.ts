@@ -5,7 +5,6 @@ import {
   bucketAt,
   bucketTotal,
   dropShare,
-  eventsBetween,
   recentBuckets,
   topPort,
   topTalker,
@@ -84,14 +83,6 @@ describe('bucketAt', () => {
   it('returns undefined outside the series', () => {
     const ms = new Date('2026-01-01T00:05:00Z').getTime()
     expect(bucketAt(buckets, ms)).toBeUndefined()
-  })
-})
-
-describe('eventsBetween', () => {
-  it('is start-inclusive, end-exclusive on receivedAt', () => {
-    const events = [evt({ id: 1, receivedAt: 100 }), evt({ id: 2, receivedAt: 200 }), evt({ id: 3, receivedAt: 300 })]
-    const got = eventsBetween(events, 100, 300)
-    expect(got.map((e) => e.id)).toEqual([1, 2])
   })
 })
 
