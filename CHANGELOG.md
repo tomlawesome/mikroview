@@ -42,6 +42,10 @@ rewritten.
   for unattended daily fetching — see docs/configuration.md's
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
+- **`security:govulncheck` runs `v1.8.0`, not `v1.4.0`** (#1321). The
+  four-release gap meant a green scan reflected a vulnerability database
+  from June, not today's; `renovate.json` now tracks every `go install
+  …@vX.Y.Z` pin in `.gitlab-ci.yml` so this can't happen silently again.
 ### Added
 
 - **A router's card names what an earlier setup left behind, with the exact
@@ -74,6 +78,17 @@ rewritten.
   connected router, every "from version X onward, this affects Y"
   warning that applies to its reported version; first entry is 7.24.3's
   removal of the GoDaddy Class 2 root from the router's trust store.
+
+### Added
+
+- **The RouterOS upgrade warning also shows on the drop-list setup card
+  and the account-creation journey** (#1378, follow-up to #1344). Both
+  now fetch the setup commands the warning is drawn from -- the
+  drop-list card once its own setup section is opened, the journey
+  screen that already fetched them for its two-line command block --
+  and show it in the same place relative to the commands, above them.
+  Still not shown on the Engine Room's clipboard-only "copy for
+  RouterOS" (#1344's own ruling).
 
 ### Removed
 
