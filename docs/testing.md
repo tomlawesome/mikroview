@@ -33,12 +33,6 @@ floors read low for that reason, not because the Postgres backend is
 untested; capturing that coverage is out of scope for this ratchet (a
 separate decision, not yet made).
 
-`internal/evict`'s floor is 0 (no test files) as of this measurement. #1328,
-on the unmerged `fix/m22-tests-you-can-trust` batch branch, adds a direct
-test for it — whichever of the two lands second must raise this floor to
-match, or `coverage-floor.py`'s own ratchet slack check will start failing
-the next `test:go` run that measures the real gain.
-
 ## Frontend
 
 `npm test -- --coverage` (`vitest run --coverage`, what `test:frontend`
