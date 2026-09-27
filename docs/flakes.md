@@ -105,6 +105,10 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-23 · 17542c5e (feature/m19-second-factor, remote gate `MV_GATE_WAIT=1 make live-check-remote`, chromium, 4 shards) · three `FAIL`s of the same shape, this time counting up rather than settled: `activity_spike ... got "Learning -- nearest source 2 of 5 samples (0 of 63 sources ready)", want "... (0 of 80 sources ready)"` (also low_slow_scan 0/62, off_hours_activity 0/62). Same cause as the sighting above -- the rendered line was read while the feed was still adding sources -- so the shortfall is 62/63 of 80 rather than a wrong number. Not re-run at this commit: the same suite's previous full run, unsharded on the workstation the evening before, did not fail this scenario, and the four other failures in this run are all the forced-enrolment door and unrelated to it. Second sighting.
 
+- 2026-09-25 · pipeline 1645 (chore/release-0.6.1, !1095) · gate:scenarios 3/4, job 23047 · same shape again: `got "... (0 of 72 sources ready)", want "... (0 of 80 sources ready)"`, also 71/80. Retried as job 23093. Third sighting -- filed as #1346.
+
+**Fixed in #1346:** the scenario now polls `/api/definitions` until every baseline-backed detector's `keys` count is stable across two consecutive reads before opening the bench, instead of reading the page once against whatever the API happened to say a moment later. Kept here so the symptom is findable.
+
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
@@ -159,17 +163,6 @@ each, recorded together because the cause is shared (#831's contention):
 ## internal/api: TestHourTopsFollowsAHostRenameThroughTheRing reads an empty, complete "now" bucket
 
 - 2026-09-23 · d8632dce (feature/1253-backend, local `go test ./internal/api/ -count=1`, this sandboxed container) · full package run · `before the rename, Talker = "" (Complete=true), want "old-name"` at `restamp_hourtops_test.go:52`, on the very first assertion -- before any HTTP call the test itself makes. The event is stamped against a `now` captured before `registerAdmin` (which now drives two extra HTTP round trips to enrol and confirm a TOTP factor, #1253), and `thisMinute()` right after reads `s.Store.HourTops()`'s *last* bucket off the real clock -- if that setup crosses a minute boundary, the event lands in the previous minute's bucket while the assertion reads a fresh, empty, already-complete one. Re-ran 5/5 immediately after, unchanged code: passed every time. First sighting. Note the fixture change is what widened the window: the same test was not flaky before #1253 added those two round trips to `registerAdmin`.
-
-## internal/syslog: TestNextHeaderStartScalesLinearlyOnLongLTRun fails on a timing ratio — #1376
-
-- 2026-09-26 · 18eb8dad (fix/1362-enrol-403, local `go test ./...`, this host with nine agents' builds and test runs alongside) · the same ratio assertion tripped; passed alone straight afterwards. Second sighting.
-
-- 2026-09-23 · 1c0eef18 (feature/m19-second-factor, local `go test ./... -count=1`, this sandboxed container) · one test of 4055 · `nextHeaderStart: 256 KiB 2.273977ms, 1 MiB 24.022903ms, ratio 10.6 ... want about 4x -- the per-offset '>' scan looks unbounded again`, the assertion failing above a ratio of 10. Re-run alone on the same commit immediately afterwards: passed, ratio 3.7 (256 KiB 2.39ms, 1 MiB 8.73ms). The test measures wall-clock scan time at two buffer sizes and compares the ratio, so it reads whatever else the machine was doing; the run that tripped it was the full 55-package suite on a container also hosting other work. Nothing in the branch touches `internal/syslog`. If it recurs, the question is whether the threshold can be made to measure work rather than elapsed time, since a ratio guard on a loaded box will keep doing this.
-- 2026-09-26 · 09bb07fe (fix/1368-paste-where, local `go test ./...`, shared runner also busy with unrelated full test/build runs from other worktrees per `ps aux`) · `nextHeaderStart: 256 KiB 2.014817ms, 1 MiB 25.092056ms, ratio 12.5 ... want about 4x`. Re-run alone immediately after, unchanged code: passed, ratio 7.8. Nothing in #1368's diff touches `internal/syslog`. Second sighting.
-- 2026-09-26 · 763e1dee (feature/1359-et-default, local `go test ./... -count=1`, this sandboxed container) · `nextHeaderStart: 256 KiB 1.983303ms, 1 MiB 36.079013ms, ratio 18.2 (linear ~4, quadratic ~16)`. Re-run alone on the same commit immediately afterwards: passed, ratio 3.5 (256 KiB 2.32ms, 1 MiB 8.10ms). The branch only touches `internal/blocklist` and `internal/config`. Second sighting.
-- 2026-09-27 · 528c89da (feature/1352-geo-backend, local `go test ./...`, shared host) · `nextHeaderStart: 256 KiB 3.016804ms, 1 MiB 36.455919ms, ratio 12.1`. Re-run alone straight afterwards: passed. The branch does not touch `internal/syslog`.
-- 2026-09-27 · da376c45 (feature/1352-geo-sources, after merging feature/1352-geo-backend and feature/1352-geo-frontend, local `go test ./...`, shared host) · `nextHeaderStart: 256 KiB 3.016804ms, 1 MiB 36.455919ms, ratio 12.1 (linear ~4, quadratic ~16)`. Re-run alone immediately after, unchanged code: passed, ratio 4.4 (256 KiB 2.557145ms, 1 MiB 11.153419ms). Neither merged branch touches `internal/syslog`.
-
 
 ## live-connection-states: content does not return to its pre-loss position after the banner clears
 
