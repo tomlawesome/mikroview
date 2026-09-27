@@ -538,7 +538,9 @@ describe('#1304 E2: chain/country option lists stay correct incrementally', () =
 
   it('picks up a newly observed chain and source country, then drops them once evicted', async () => {
     appState.appendLive([evt({ id: 1, chain: 'mangle', srcIp: '203.0.113.9', srcCountry: 'FR' })])
-    await new Promise((r) => setTimeout(r, 220))
+    await vi.waitFor(() => {
+      expect(appState.chainOptions).toContain('mangle')
+    })
 
     expect(appState.chainOptions).toContain('mangle')
     expect(appState.srcCountryOptions.map((o) => o.value)).toContain('FR')
@@ -549,7 +551,9 @@ describe('#1304 E2: chain/country option lists stay correct incrementally', () =
       evt({ id: i + 100, chain: 'forward', srcIp: '198.51.100.1', srcCountry: 'US' }),
     )
     appState.appendLive(filler)
-    await new Promise((r) => setTimeout(r, 220))
+    await vi.waitFor(() => {
+      expect(appState.chainOptions).not.toContain('mangle')
+    })
 
     expect(appState.chainOptions).not.toContain('mangle')
     expect(appState.srcCountryOptions.map((o) => o.value)).not.toContain('FR')
