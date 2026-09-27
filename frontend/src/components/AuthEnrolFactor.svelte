@@ -192,6 +192,21 @@
   function finish() {
     void enter()
   }
+
+  function onBeforeUnload(e: BeforeUnloadEvent) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+
+  // X4-F1: the ten codes exist in clear nowhere else, and a reload before
+  // "I have saved these" loses them for good -- same guard as
+  // LogEveryRule's own beforeunload, on while this screen is the one
+  // showing them, off the instant it isn't.
+  $effect(() => {
+    if (stage !== 'codes') return
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  })
 </script>
 
 <!-- data-void, same as AuthScreen: the door is always the void (#645);

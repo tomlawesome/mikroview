@@ -413,3 +413,54 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     expect(container.querySelectorAll('.fullfall.enrol i').length).toBe(40)
   })
 })
+
+// X4-F1: the ten codes exist in clear nowhere else, so a reload before
+// the explicit acknowledgement loses them for good -- same guard as
+// LogEveryRule's own beforeunload (its own test file's own pattern,
+// reused here).
+describe('X4-F1: beforeunload guard on the codes stage', () => {
+  function dispatchBeforeUnload(): Event {
+    const evt = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(evt)
+    return evt
+  }
+
+  it('is not set before the codes stage is ever reached', () => {
+    render(AuthEnrolFactor)
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+
+  // Unlike the overlays, "I have saved these" here doesn't move `stage`
+  // away from 'codes' -- it hands off to the app (enter(), which flips
+  // authState.state), and it's App.svelte that then unmounts this door
+  // in the real app. Simulated here with an explicit unmount(), which is
+  // what actually runs the $effect's cleanup and drops the listener.
+  it('guards the codes stage, and the guard is gone once the door hands off to the app', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
+    })
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: TEN_CODES, alreadyIssued: false })
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'meredith',
+      role: 'viewer',
+      mustEnrolSecondFactor: false,
+      ssoAvailable: false,
+    })
+
+    const { unmount } = render(AuthEnrolFactor)
+    await enterTotpStage()
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+    await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
+    unmount()
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+})
