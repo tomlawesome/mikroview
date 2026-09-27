@@ -56,6 +56,17 @@ rewritten.
   stalled every later login, or force an unbounded Argon2id
   computation.
 
+- `requireAuth`'s four path-exemption checks (bootstrap, general,
+  forced-password-change, forced-second-factor-enrolment) now compare
+  the request's *escaped* path, matching how `next`'s `http.ServeMux`
+  actually routes it (#1389). Before this, a request whose escaped and
+  decoded paths differed -- e.g. an anonymous `GET
+  /api/auth%2Fsession`, which decodes to the exempt
+  `/api/auth/session` but escapes to something a wildcard route
+  further down the mux would serve -- could be classified as exempt by
+  one string and dispatched by another, reaching a handler it should
+  never have been let past the gate for.
+
 ### Added
 
 - **A router's card names what an earlier setup left behind, with the exact
