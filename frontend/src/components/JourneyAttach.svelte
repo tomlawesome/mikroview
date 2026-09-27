@@ -17,6 +17,7 @@
   import { wizardState } from '../lib/wizard.svelte'
   import { journeyState } from '../lib/journey.svelte'
   import Fullfall from './Fullfall.svelte'
+  import UpgradeWarnings from './UpgradeWarnings.svelte'
 
   let copied = $state(false)
 
@@ -62,6 +63,14 @@
     <p class="account">Signed in as <b>{authState.username}</b> — the account you just made.</p>
     <p class="lead">Two lines on the router, and MikroView starts hearing it:</p>
     {#if commands}
+      <!-- #1378: the wizard's own upgrade-breaks-a-command warning
+           (#1344), above the block it concerns, same as
+           SetupWizard.svelte's commandsHead -- this beat already fetches
+           wizardState.commands (the effect above), so the fetch wiring
+           is free; only the render was missing. -->
+      {#if wizardState.commands}
+        <UpgradeWarnings commands={wizardState.commands} />
+      {/if}
       <pre class="code">{commands}</pre>
       <button type="button" class="copy" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
     {:else}
