@@ -24,6 +24,8 @@ import { auditState } from "./audit.svelte";
 import { persistenceState } from "./persistence.svelte";
 import { configProblemsState } from "./configProblems.svelte";
 import { configUpgradeState } from "./configUpgrade.svelte";
+import { configEditorState } from "./configEditor.svelte";
+import { serverModeState } from "./serverMode.svelte";
 import { preferencesState } from "./preferences.svelte";
 import type { AuthSession } from "./types";
 
@@ -91,6 +93,10 @@ function clearSessionState() {
   // accessAdmin rows of internal/api/authz_matrix_test.go) whose
   // answer lived in a module-level store rather than a component.
   configUpgradeState.reset();
+  // #1347: the config editor's text, its revealed secret values and the
+  // snapshot list -- admin-only, and the secrets are the last thing the
+  // next person on this tab should be handed.
+  configEditorState.reset();
   // #1283: the shared per-user preferences record (presets, top-talker
   // widgets, and the rest of the modules that used to
   // read/write localStorage directly). logout() below has already
@@ -360,7 +366,9 @@ class AuthState {
       // already in flight), so calling it here on every pass is cheap
       // and simpler than tracking "did this transition freshly into
       // authenticated" separately.
-      if (this.state === "authenticated") void preferencesState.ensureLoaded();
+      // #1347: not in setup-only mode, where /api/me/preferences is one
+      // of the routes answering 503 until the config is fixed.
+      if (this.state === "authenticated" && !serverModeState.setupOnly) void preferencesState.ensureLoaded();
     } else {
       this.state = "unauthenticated";
       this.username = "";

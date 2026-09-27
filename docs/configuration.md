@@ -823,7 +823,9 @@ MikroView treats two kinds of mistake differently.
 would be unsafe or would mean MikroView isn't doing its job — an
 unreadable listen address, a session that never expires, or session
 cookies without the `Secure` flag while TLS is on. The error names the
-setting so you know what to fix.
+setting so you know what to fix. MikroView then comes up in
+[setup-only mode](#setup-only-mode-when-the-config-is-refused): you can
+sign in and fix the file in the config editor, and nothing else runs.
 
 **Everything else starts anyway, using a sensible default.** A negative
 retention or a zero event limit would mean nothing is kept at all, so
@@ -841,6 +843,130 @@ and hostnames.
 If `config.yaml` isn't readable by that user, the container will fail to
 start with a permission error. `chmod 644 deploy/config.yaml` after
 editing it is the simplest fix here, since a config file is not a secret.
+
+### The header: which version a config was written for
+
+Every config file MikroView writes starts with four comment lines, and so
+does `deploy/config.example.yaml`:
+
+```
+# MikroView configuration -- keep these four lines; MikroView reads them.
+# schema: 7            (which settings this file should have; goes up when keys change)
+# written-by: mikroview v0.6.1
+# layout: 1            (the order and banners below)
+```
+
+- **schema** is the set of settings the file was written for. It goes up
+  by one in any release that adds, removes or renames a setting:
+  v0.1.0 is 1, v0.2.0 is 2, v0.3.x is 3, v0.4.0 is 4, v0.5.x is 5, v0.6.0
+  is 6 and v0.6.1 is 7.
+- **written-by** is the MikroView release that wrote the file.
+- **layout** is the order the file is in: the header, the settings you
+  must set, the optional features, then -- under a large banner --
+  everything that only restates a default and only needs uncommenting to
+  change.
+
+They are comments, so a file carrying them still loads on every release,
+including ones from before the header existed. Keep them: they are how
+you (and MikroView) can tell at a glance which settings a file should
+have. A file without them is read anyway; the config editor works out
+which release it most likely came from by the settings it uses, and
+shows you that guess.
+
+### The config editor
+
+**Engine Room ▸ Config** opens your running `config.yaml` in a full-screen
+editor, with the same checks `-validate-config` runs shown beside it as
+you type, each on its line. It is for admins only, and opening it asks
+for your password again. That unlocks it for **15 minutes**; showing the
+secrets, downloading, and opening a snapshot all need the unlock, and
+after it lapses they ask for the password again.
+
+**MikroView never writes your config file.** What the editor gives you
+is a download, named after the release it is for --
+`config.v0.6.1.yaml` -- and you put it on the host yourself. Keep your
+previous file beside it rather than overwriting it: going back to the
+previous release after a bad upgrade means starting that release with
+that file.
+
+- **The text is the file as it is on disk now**, comments and all. If it
+  has changed since MikroView started, the editor says so: the running
+  instance is still on the version it read at start-up until it is
+  restarted.
+- **Secrets are masked.** The eleven settings that hold a secret or the
+  path to one are listed in one place in the code
+  (`internal/config/editor_secrets.go`). The six that hold the secret
+  itself -- `reputation.abuseIPDBKey`, `notify.smtp.password`,
+  `notify.pushover.token`, `notify.pushover.user`, every
+  `notify.webhook.headers` value and `oidc.clientSecret` -- show as
+  `<<secret:oidc.clientSecret>>`. Leave a placeholder as it is and the
+  download carries the real value; type over it and the download carries
+  what you typed. **Show** reveals them, within the unlock. The five that
+  hold a *path* to a secret file (`postgres.dsnFile`, `tls.keyFile`,
+  `history.keyFile`, `auth.recoveryPepperPath`,
+  `auth.recoveryKeysPath`) are not masked: a path is not the secret.
+- **Carry forward** rewrites the text for this release: settings a
+  release removed are dropped (each with the reason, as the start-up
+  refusal gives it), renamed ones get their new name, every section moves
+  into its place in the layout, and the header is written. Your values
+  and your comments stay, including a comment that was above a removed
+  setting. Every change is listed beside the text, with the line it was
+  on. Before it rewrites anything it keeps a snapshot of the text as it
+  was.
+- **Snapshots**: the last five copies are kept -- ones you take, and the
+  one taken before each Carry forward -- with when, by whom, which
+  schema and release the text was for, and a note. The newest
+  before-Carry-forward snapshot is never the one pushed out by a new one,
+  so the copy a rollback needs survives five more. Each can be downloaded
+  or loaded back into the editor. They hold whole config files, secrets
+  included, so they are only ever kept sealed under the retention key
+  (`history.keyFile`), in `config-snapshots.json` beside the accounts
+  store, and they travel in `-backup`. With no retention key there are no
+  snapshots, and the editor says so; everything else still works.
+
+Opening the editor, downloading, taking a snapshot and deleting one each
+write an audit log entry (`config.editor.open`, `config.download`,
+`config.snapshot`, `config.snapshot.delete`) -- never with a value in it.
+
+### Setup-only mode: when the config is refused
+
+When start-up refuses the config -- a setting it will not start with, a
+setting it no longer knows, or a file that will not parse -- MikroView
+no longer just exits. It logs why, then:
+
+```
+config refused (3 problems) -- serving the config editor only at https://mikroview.home.lan:8080; nothing else is running until the config is fixed and MikroView restarted
+```
+
+and serves only the web UI, sign-in (`/api/auth/*`), `/api/healthz`
+(which reports `"mode": "setup-only"`) and the config editor. Nothing is
+ingested, no syslog or backup listener starts, nothing runs in the
+background, and every other API route answers `503` with
+`MikroView is in setup-only mode: fix the config and restart`. After you
+sign in the UI goes straight to the editor, with a banner saying why.
+Fix the file, put it on the host, and restart.
+
+- **Signing in**: local accounts always work. Single sign-on stays on
+  when the `oidc` block itself is fine, and is off only when the problem
+  is inside it.
+- **Where it listens, and which accounts**: every section of the refused
+  file that reads cleanly on its own is used; a section that does not
+  falls back to its default. So a problem inside `auth:` means the
+  default accounts store, `/var/lib/mikroview/users.json`.
+- **When it refuses to start at all**, as a refused config always did:
+  the accounts store cannot be opened or holds no account (there would
+  be nobody to sign in, and the first-run screen would hand the admin
+  account to whoever reached the port first); `ui:` cannot be read or
+  `ui.allow` is invalid (who may reach the editor could not be honoured);
+  this deployment keeps its accounts in Postgres (only a file accounts
+  store is read here); the data directory was written by a newer
+  release; or a restore is part-way through. A bad command-line flag
+  still stops it too -- that is not something the editor can fix.
+- **Nothing is upgraded in this mode.** The data directory is checked,
+  never migrated, so starting the previous release on it with the
+  previous config still works.
+- The container's `-healthcheck` still reports unhealthy while the
+  config is refused -- truthfully: MikroView is not monitoring anything.
 
 ### Problem codes
 
@@ -2398,9 +2524,28 @@ is genuinely missing.
 The reverse direction -- a key your config sets that this version no
 longer understands -- is issue #1207's unknown-key check: it refuses to
 start rather than silently ignoring the key, naming what replaced it
-when something did. That happens before this notice (or anything else
-in the app) could ever show it, so there is nothing for this screen to
-add on that side.
+when something did. That happens before this notice could ever show it;
+MikroView comes up in
+[setup-only mode](#setup-only-mode-when-the-config-is-refused) instead,
+where the config editor's Carry forward drops or renames those keys for
+you.
+
+### The config editor (issue #1347)
+
+**Settings ▸ config** shows the file MikroView was started with, which
+version wrote it and how many snapshots are kept. **Open the editor**
+asks for your password again, then shows the file full-screen. As you
+type, MikroView checks the text and lists any problems on the right,
+each with its line; click one to jump to it. **Carry forward** rewrites
+the file for this version: removed settings are dropped, renamed ones
+are moved, and your values and comments are kept, with every change
+listed. Secrets are hidden until you press **Show secrets**.
+**Download** (or Ctrl+S) gives you the finished file to put in place
+yourself -- MikroView never changes the file on disk -- and asks for
+your password again if it has been more than 15 minutes. Keep your
+previous file beside the new one rather than overwriting it. **Snapshot**
+keeps a copy of the text (the last five are kept); Carry forward keeps
+one of the old file before it changes anything.
 
 ## Watchlist (optional)
 
@@ -4830,7 +4975,7 @@ starting the server. `mikroview -h` lists them too. See
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/healthz` | liveness/uptime/version check |
+| `GET /api/healthz` | liveness/uptime/version check; carries `"mode": "setup-only"` when the config was refused (see [Setup-only mode](#setup-only-mode-when-the-config-is-refused)) |
 | `GET /ca.crt` | MikroView's self-generated CA certificate, unauthenticated -- present whenever MikroView generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
@@ -4928,6 +5073,16 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/tune-logging/render` | user tier: switches logging on for the selected rules from an uploaded export and returns the edited file plus one `set` command per rule. The output is mechanically checked to differ from the input only in logging attributes before it is ever returned; a check failure answers 500 rather than an edited file (#435). Same body cap as analyse above, and the same never-stored guarantee |
 | `GET /api/persistence` | admin-only: which backend this deployment's persisted state actually uses -- `file` (with its directory), `postgres`, or `memory` (#853: no `history.keyFile` configured, so the JSON-file state store refuses to persist at all -- except accounts, tokens and recovery keys, which keep persisting to a plain file per #853 rule 6) -- gated the same as `GET /api/config/problems` below, since a filesystem path is the same infrastructure-map disclosure |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
+| `POST /api/config/editor/open` | admin-only (#1347): given `{"password": "..."}`, re-checks it and unlocks the config editor for this session for 15 minutes. Returns `{text, path, changedSinceStart, header, schemaGuess, runningVersion, runningSchema}` -- `text` is the running config file as it is on disk now, with secret values masked as `<<secret:<key>>>`; `header` is `{schema, writtenBy, layout}` or `null`. 400 for a missing body, 401 for a wrong password, 429 after repeated wrong ones. Audited as `config.editor.open` |
+| `GET /api/config/editor/summary` | admin-only, no password or unlock (nothing secret in it): `{path, header, schemaGuess, runningVersion, runningSchema, snapshotCount, changedSinceStart}` for the Engine Room's Config card -- facts about the running config file, never its text |
+| `GET /api/config/editor/reveal` | admin-only, within the unlock: `{"secrets": {"<key>": "<value>"}}`, each value exactly as written in the file, quotes included, so it can replace its placeholder. 401 `{"reauth": true}` once the unlock has lapsed |
+| `POST /api/config/validate` | admin-only: given `{"text": "..."}`, the same checks start-up runs -- `{"problems": [{line, key, severity, message}]}`, `severity` `fatal` or `warning`, `line` 0 when a problem is not about one line |
+| `POST /api/config/carry-forward` | admin-only: given `{"text": "..."}`, rewrites it for this release -- `{text, changes: [{kind, key, to, line, note}], problems}`. `kind` is `header`, `removed`, `renamed`, `moved` or `snapshot` (the snapshot taken of the text before the rewrite, or why none could be) |
+| `POST /api/config/download` | admin-only, within the unlock: given `{"text": "..."}`, returns the file with secrets put back and the header written, as an attachment named `config.v<release>.yaml`. 400 when a placeholder has no value to put back; 401 `{"reauth": true}` once the unlock has lapsed. Audited as `config.download` |
+| `GET /api/config/snapshots` | admin-only: `{available, reason, keep, snapshots: [{id, when, by, schema, version, why, note}]}`, newest first, `why` `manual` or `before-carry-forward`, `note` null when there is none; `available` is false with no retention key, and `reason` (otherwise null) says why |
+| `POST /api/config/snapshots` | admin-only: given `{"text": "...", "note": "..."}`, keeps a snapshot (secrets put back) and returns its metadata (the list's shape), 201. 503 with no retention key. Audited as `config.snapshot` |
+| `GET /api/config/snapshots/{id}` | admin-only, within the unlock: one snapshot in the list's shape plus its `text`, secrets masked (their values become the ones this session's placeholders stand for). 404 for an unknown id; 401 `{"reauth": true}` once the unlock has lapsed |
+| `DELETE /api/config/snapshots/{id}` | admin-only: deletes one snapshot, 204. Audited as `config.snapshot.delete` |
 | `GET /api/router-backups` | admin-only: Settings' router-backups group -- every router's held generations (arrival times, sizes, `.backup` header), a `protected` array of the ones kept by hand (id, arrival times, sizes, comment, `protectedAt`, `protectedBy`), the SFTP drop box's own port, a missed-push count derived from the learned interval, `lowSpace` -- true when the disk is nearly full and the vault is replacing the oldest generation with each new arrival rather than adding one, never refusing a backup -- and `lock`, the optional vault passphrase's status (`passphraseSet`, `locked`, `unlockedForYou`, `minPassphraseLength`, `idleTimeoutSeconds`), always present even when no passphrase is set (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default)) |
 | `GET /api/router-backups/{device}/{generation}/{kind}` | admin-only: streams one generation's file back decrypted -- `kind` is `backup` or `rsc`. Audit-logged with who, which router, which generation and which half of the pair, since a router's whole configuration (credentials included) is never an unaccountable download |
 | `POST /api/router-backups/{device}/{generation}/protect` | admin-only: mark a generation kept, given `{"comment": "..."}` -- required, one line, 1 to 120 characters, control characters refused. Moves it out of the ten-generation cycle into a pool of its own for that router, with no limit on how many it holds. 400 for a missing or over-length comment, 404 if the vault holds no such router or generation, 409 if it is already kept. Answers with the router's whole block (both lists), so the screen renders what the vault now holds. Audited as `router_backup.protected` |

@@ -59,6 +59,7 @@
   } from '../lib/api'
   import { duplicateDrift, duplicateDriftMessage, duplicateCleanupCommand } from '../lib/ingestDuplicates'
   import ConfigUpgrade from './ConfigUpgrade.svelte'
+  import ConfigCard from './ConfigCard.svelte'
   import { TRACK_X0, TRACK_X1, bufferRow, clockTime, formatSize, type Proposal } from '../lib/memory'
   import { restartRow, stateRow, type DiskPhase } from '../lib/history'
   import MemoryControl from './MemoryControl.svelte'
@@ -1210,6 +1211,16 @@
         <div class="stsection wide" id="engineroom-new-settings">
           <h3>new settings</h3>
           <ConfigUpgrade />
+        </div>
+      {/if}
+
+      <!-- #1347: the running config file and the door into the config
+           editor, beside the settings it names. Admin-only, like the
+           group above: every route behind it is. -->
+      {#if isAdmin}
+        <div class="stsection wide" id="engineroom-config">
+          <h3>config</h3>
+          <ConfigCard />
         </div>
       {/if}
 

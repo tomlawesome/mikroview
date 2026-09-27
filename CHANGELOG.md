@@ -68,6 +68,28 @@ rewritten.
   checked.
 ### Added
 
+- **A config editor, and a refused config no longer stops MikroView
+  dead** (#1347). Admins can open the running `config.yaml` in the UI
+  (password again; a 15-minute unlock covers showing secrets and
+  downloading), see start-up's own checks on each line as they type, and
+  press **Carry forward** to rewrite an old file for this release:
+  removed settings dropped with the reason, sections moved into the
+  example's layout, values and comments kept. The result is a download
+  named `config.v<release>.yaml` -- MikroView never writes the config
+  file; keep the previous one beside it. Secrets are masked in the
+  editor and put back in the download. The last five snapshots of the
+  text are kept, sealed under the retention key and carried by
+  `-backup`, including one taken before every Carry forward. When
+  start-up refuses the config it now comes up in **setup-only mode**:
+  sign-in, `/api/healthz` (`"mode": "setup-only"`) and the editor, with
+  every other route answering 503 and nothing else running. It still
+  exits as before when there is no account to sign in with, when
+  `ui.allow` cannot be honoured, or when the accounts live in Postgres.
+  Every config MikroView writes, and `deploy/config.example.yaml`, now
+  opens with four header lines naming the schema (the settings it should
+  have: v0.6.1 is 7), the release that wrote it and its layout. See
+  docs/configuration.md's "The config editor" and "Setup-only mode".
+
 - **A router's card names what an earlier setup left behind, with the exact
   fix** (#1373). The push script now reports every logging action still
   sending to this MikroView instance, not only the one named `mikroview` --
