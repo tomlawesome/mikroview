@@ -64,6 +64,13 @@ dark states in classes.
 
 ## Verdicts
 
-None yet.
+Owner, 2026-09-27 (verbatim):
+
+> The sparks look a bit like cheap confetti, but I really like the rest.
+
+Read as: everything but the sparks stands. The sparks were coloured
+dots in every drop's ink — confetti. Round 15 (`../round-15/`) redraws
+them as sparks: white-hot, cooling to the tube's own ink, fast thin
+streaks, fewer; and offers `?nosparks` to compare against none.
 
 Written by Fable 5.1, 2026-09-27.
