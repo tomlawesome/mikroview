@@ -105,6 +105,10 @@ each, recorded together because the cause is shared (#831's contention):
 
 - 2026-09-23 · 17542c5e (feature/m19-second-factor, remote gate `MV_GATE_WAIT=1 make live-check-remote`, chromium, 4 shards) · three `FAIL`s of the same shape, this time counting up rather than settled: `activity_spike ... got "Learning -- nearest source 2 of 5 samples (0 of 63 sources ready)", want "... (0 of 80 sources ready)"` (also low_slow_scan 0/62, off_hours_activity 0/62). Same cause as the sighting above -- the rendered line was read while the feed was still adding sources -- so the shortfall is 62/63 of 80 rather than a wrong number. Not re-run at this commit: the same suite's previous full run, unsharded on the workstation the evening before, did not fail this scenario, and the four other failures in this run are all the forced-enrolment door and unrelated to it. Second sighting.
 
+- 2026-09-25 · pipeline 1645 (chore/release-0.6.1, !1095) · gate:scenarios 3/4, job 23047 · same shape again: `got "... (0 of 72 sources ready)", want "... (0 of 80 sources ready)"`, also 71/80. Retried as job 23093. Third sighting -- filed as #1346.
+
+**Fixed in #1346:** the scenario now polls `/api/definitions` until every baseline-backed detector's `keys` count is stable across two consecutive reads before opening the bench, instead of reading the page once against whatever the API happened to say a moment later. Kept here so the symptom is findable.
+
 ## live-policy: before any push, the popover says an empty table instead of "no table has been pushed"
 
 - 2026-09-10 · 135615f6 (!988, pins-policy dates only) · pipeline 880, gate:scenarios 1/4 · `FAIL before any push, the popover says no table has been pushed -- not an empty table`; four pipelines shared the runner
