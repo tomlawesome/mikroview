@@ -2,6 +2,8 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent, Flag } from '../lib/types'
   import { countryFlag, formatAddr, formatTimeMs, isPublicIp, rawTooltip } from '../lib/format'
+  import { geoLookup } from '../lib/api'
+  import { countryName, ownerLabel } from '../lib/geo'
   import { appState, natSide } from '../lib/state.svelte'
   // #1200: both dropped from the row by #644's rewrite, restored here.
   // IpInvestigateButton is the same component EventDetailSheet.svelte
@@ -124,6 +126,54 @@
   // render here.
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
+
+  // #1352: the flag's tooltip names the country, and -- once asked --
+  // the network owner too: "United Kingdom · AS13335 Cloudflare, Inc.".
+  // No new column; the owner is looked up on the first hover of this
+  // flag (geoLookup keeps the answer, so the next row with the same
+  // address asks nothing), never carried on the event. Unknown leaves
+  // the plain country name.
+  let srcOwner = $state<string | null>(null)
+  let dstOwner = $state<string | null>(null)
+  let srcAsked = false
+  let dstAsked = false
+  const srcGeoTitle = $derived(geoTitle(event.srcCountry, srcOwner))
+  const dstGeoTitle = $derived(geoTitle(event.dstCountry, dstOwner))
+
+  function geoTitle(code: string | undefined, owner: string | null): string {
+    const name = countryName(code)
+    return owner ? `${name} · ${owner}` : name
+  }
+
+  // A listener rather than an attribute handler: the flag is not a
+  // control (hovering it only fills in its own tooltip), and it goes
+  // after its first use.
+  function onFirstHover(node: HTMLElement, ask: () => void) {
+    node.addEventListener('mouseenter', ask, { once: true })
+    return {
+      destroy() {
+        node.removeEventListener('mouseenter', ask)
+      },
+    }
+  }
+
+  function askSrcOwner() {
+    if (srcAsked || !event.srcIp) return
+    srcAsked = true
+    const ip = event.srcIp
+    geoLookup(ip).then((g) => {
+      if (event.srcIp === ip) srcOwner = ownerLabel(g)
+    })
+  }
+
+  function askDstOwner() {
+    if (dstAsked || !event.dstIp) return
+    dstAsked = true
+    const ip = event.dstIp
+    geoLookup(ip).then((g) => {
+      if (event.dstIp === ip) dstOwner = ownerLabel(g)
+    })
+  }
 
   // flagged (#1201, #1269): whether this row's source carries any open
   // flag at all -- derived from the sourceFlags prop LiveTable already
@@ -379,7 +429,8 @@
           use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
         >
           {event.srcHostName || event.srcIp}{#if srcFlag}
-            <span class="geo">{srcFlag}</span>{/if}
+            <span class="geo" title={srcGeoTitle} use:onFirstHover={askSrcOwner}>{srcFlag}</span
+            >{/if}
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
@@ -446,7 +497,8 @@
           use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
         >
           {event.dstHostName || event.dstIp}{#if dstFlag}
-            <span class="geo">{dstFlag}</span>{/if}
+            <span class="geo" title={dstGeoTitle} use:onFirstHover={askDstOwner}>{dstFlag}</span
+            >{/if}
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}
@@ -631,7 +683,8 @@
           use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
         >
           {event.srcHostName || event.srcIp}{#if srcFlag}
-            <span class="geo">{srcFlag}</span>{/if}
+            <span class="geo" title={srcGeoTitle} use:onFirstHover={askSrcOwner}>{srcFlag}</span
+            >{/if}
         </span>
         <CopyButton value={event.srcIp} label="source IP" />
         {#if editAvailable}
@@ -673,7 +726,8 @@
           use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
         >
           {event.dstHostName || event.dstIp}{#if dstFlag}
-            <span class="geo">{dstFlag}</span>{/if}
+            <span class="geo" title={dstGeoTitle} use:onFirstHover={askDstOwner}>{dstFlag}</span
+            >{/if}
         </span>
         <CopyButton value={event.dstIp} label="destination IP" />
         {#if editAvailable}

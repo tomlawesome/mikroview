@@ -9,7 +9,7 @@ import (
 )
 
 // appFolderRoot is the folder an operator mounts read-only at
-// /etc/mikroview: config, GeoIP database, history key, certificate, all
+// /etc/mikroview: config, history key, certificate, all
 // in one place, so adding a feature is dropping a file in and
 // restarting rather than adding another mount line
 // (docs/decisions/app-folder.md, #1209).
@@ -24,9 +24,11 @@ var appFolderRoot = "/etc/mikroview"
 // The fixed layout inside the folder. The names are the contract --
 // docs/decisions/app-folder.md prints this same list -- so an operator
 // can put a file in the right place without reading any code.
+//
+// GeoLite2-Country.mmdb left the list with geoip.dbPath (#1352):
+// MikroView now downloads country data itself.
 const (
 	appFolderConfigFile  = "config.yaml"
-	appFolderGeoIPFile   = "GeoLite2-Country.mmdb"
 	appFolderHistoryKey  = "keys/history.key"
 	appFolderTLSCertFile = "certs/tls.crt"
 	appFolderTLSKeyFile  = "certs/tls.key"
@@ -45,7 +47,7 @@ func DefaultConfigPath() string { return filepath.Join(appFolderRoot, appFolderC
 // logger, and one loop at the call site keeps the boot lines in one
 // place and in a fixed order.
 type AppFolderLookup struct {
-	// Key names the setting the file fills -- "geoip.dbPath" -- so the
+	// Key names the setting the file fills -- "history.keyFile" -- so the
 	// boot line connects to the configuration reference. The config
 	// file itself has no key and reads as "config file".
 	Key string
@@ -91,12 +93,6 @@ func applyAppFolder(cfg *Config) ([]AppFolderLookup, error) {
 		found := appFolderFileExists(path)
 		lookups = append(lookups, AppFolderLookup{Key: key, Path: path, Found: found})
 		return path, found
-	}
-
-	if cfg.GeoIP.DBPath == "" {
-		if path, found := look("geoip.dbPath", appFolderGeoIPFile); found {
-			cfg.GeoIP.DBPath = path
-		}
 	}
 
 	if cfg.History.KeyFile == "" {

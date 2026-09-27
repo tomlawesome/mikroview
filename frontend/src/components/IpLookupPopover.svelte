@@ -83,7 +83,7 @@
     {:else if ipLookupState.error}
       <div class="status error">{ipLookupState.error}</div>
     {:else if ipLookupState.result}
-      <ReputationDetails result={ipLookupState.result} />
+      <ReputationDetails result={ipLookupState.result} owner={ipLookupState.owner} />
     {/if}
   </div>
 {/if}

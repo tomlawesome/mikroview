@@ -109,8 +109,8 @@ func TestMissingSettingsBlockIsVerbatimFromTheExampleFile(t *testing.T) {
 		if !strings.Contains(m.Block, "# geoip:") {
 			t.Errorf("geoip's block does not contain its own key line:\n%s", m.Block)
 		}
-		if !strings.Contains(m.Block, "dbPath") {
-			t.Errorf("geoip's block does not contain dbPath:\n%s", m.Block)
+		if !strings.Contains(m.Block, "cachePath") {
+			t.Errorf("geoip's block does not contain cachePath:\n%s", m.Block)
 		}
 		for _, line := range strings.Split(m.Block, "\n") {
 			if strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") {

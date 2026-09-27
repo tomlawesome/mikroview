@@ -87,6 +87,43 @@ check(
 
 const BASELINE_BACKED = ['activity_spike', 'global_spike', 'rule_spike', 'off_hours_activity', 'low_slow_scan']
 
+// The feed above lands its events (waitForEventsTotal) and global_spike
+// takes its own first reading (the loop just above), but neither proves
+// every baseline-backed detector's *count of distinct sources* has
+// caught up: each /api/definitions read costs a dispatch-index rebuild
+// (same comment as above), so `keys` can keep climbing for a beat after
+// the last event has been ingested. Reading it mid-climb is #1346 -- the
+// bench's mount and this scenario's own later read then land on
+// different numbers for the same still-growing count, e.g. "72 of 80"
+// vs "80 of 80" (or "0 of 63" counting up to "0 of 80"), with nothing
+// wrong in the app. So wait for `keys` to stop moving -- stable across
+// two consecutive reads a beat apart -- before opening the bench, the
+// same shape as #1323's fix: wait for the thing to settle, not a fixed
+// moment. This only delays when the bench opens; it does not touch what
+// the per-row checks below compare, so a genuine mismatch after settling
+// still fails there, with both numbers in its message.
+async function baselineKeys() {
+  const defs = await fetchDefinitions()
+  return Object.fromEntries(BASELINE_BACKED.map((id) => [id, defs.find((d) => d.id === id)?.learning?.keys ?? 0]))
+}
+
+async function waitForBaselineKeysToSettle(timeoutMs = 20000, intervalMs = 1000) {
+  const deadline = Date.now() + timeoutMs
+  let prev = await baselineKeys()
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs))
+    const cur = await baselineKeys()
+    if (BASELINE_BACKED.every((id) => cur[id] === prev[id])) return cur
+    prev = cur
+  }
+  throw new Error(
+    `baseline-backed source counts (keys) never settled within ${timeoutMs}ms -- last saw ${JSON.stringify(prev)}`,
+  )
+}
+
+const settledKeys = await waitForBaselineKeysToSettle()
+console.log(`  info baseline-backed source counts settled at ${JSON.stringify(settledKeys)}`)
+
 // --- the presentation: recompute the expected sentence, compare to the DOM
 
 const SECONDS_PER_DAY = 86400

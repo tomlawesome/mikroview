@@ -30,11 +30,14 @@ with a fixed layout inside the folder:
 ```
 mikroview/
   config.yaml                   optional -- defaults run without it
-  GeoLite2-Country.mmdb         optional -- country flags appear when present
   keys/history.key              optional -- history encryption on when present
   certs/tls.crt, certs/tls.key  optional -- your own certificate instead of the self-signed one
   data/                         MikroView's store; never edit
 ```
+
+Amended 2026-09-27 (#1352): `GeoLite2-Country.mmdb` left the layout with
+`geoip.dbPath`. MikroView now downloads country data itself; MaxMind is used by
+entering an account ID and licence key in the Engine Room.
 
 MikroView looks for each file at that path when config does not name one, and
 says at boot which optional files it found. Adding a feature is dropping a

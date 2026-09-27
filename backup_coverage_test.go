@@ -24,7 +24,7 @@ import (
 // finds every string field whose name ends in "Path" -- the naming
 // convention every persisted-document field in this package already
 // follows (StorePath, TokensStorePath, RecoveryKeysPath, MatchLogPath,
-// DBPath, ...) -- and requires each one to be either carried by
+// CachePath, ...) -- and requires each one to be either carried by
 // backedUpStores or listed, with a reason, on excludedFromBackup
 // (backup_cli.go). A field satisfying neither fails the test: the same
 // silent drift #372 found, but now caught at build time instead of by an

@@ -355,17 +355,18 @@ func TestMigrationRefusesAnUnwritableDestination(t *testing.T) {
 	}
 }
 
-// TestMigrationNamesStoresItIsNotMoving covers the store configured onto
-// a different mount -- the GeoIP database in the shipped compose file is
-// mounted under /etc/mikroview, not in the data directory.
+// TestMigrationNamesStoresItIsNotMoving covers a store configured onto
+// a different mount -- here the recovery pepper, pointed outside the
+// data directory. (This used to be the GeoIP database, until #1352
+// retired geoip.dbPath.)
 //
 // Silently not moving it would look identical to moving it, right up
 // until the new deployment starts without it.
 func TestMigrationNamesStoresItIsNotMoving(t *testing.T) {
 	_, cfg := seedDataDir(t)
 	elsewhere := t.TempDir()
-	cfg.GeoIP.DBPath = filepath.Join(elsewhere, "GeoLite2-Country.mmdb")
-	if err := os.WriteFile(cfg.GeoIP.DBPath, []byte("placeholder database"), 0o600); err != nil {
+	cfg.Auth.RecoveryPepperPath = filepath.Join(elsewhere, "recovery-pepper.key")
+	if err := os.WriteFile(cfg.Auth.RecoveryPepperPath, []byte("placeholder pepper"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -375,12 +376,12 @@ func TestMigrationNamesStoresItIsNotMoving(t *testing.T) {
 	for _, s := range plan.Outside {
 		outside = append(outside, s.Name)
 	}
-	if len(outside) != 1 || outside[0] != "geoip_db" {
-		t.Fatalf("stores outside the data directory reported as %v, want [geoip_db]", outside)
+	if len(outside) != 1 || outside[0] != "recovery_pepper" {
+		t.Fatalf("stores outside the data directory reported as %v, want [recovery_pepper]", outside)
 	}
 	for _, s := range plan.Stores {
-		if s.Name == "geoip_db" {
-			t.Error("geoip_db was reported as moved, but it is on a different mount and was not")
+		if s.Name == "recovery_pepper" {
+			t.Error("recovery_pepper was reported as moved, but it is on a different mount and was not")
 		}
 	}
 }
@@ -391,7 +392,7 @@ func TestMigrationNamesStoresItIsNotMoving(t *testing.T) {
 // backupVaultDirectory doc comment), so an operator pointing it at a
 // separate mount -- the SFTP-backed vault's realistic deployment -- has to
 // see it called out as not moved, exactly as TestMigrationNamesStoresItIsNotMoving
-// requires for geoip_db above. Silently leaving it out of migratedStores
+// requires for recovery_pepper above. Silently leaving it out of migratedStores
 // meant it landed in neither plan.Stores nor plan.Outside: no copy, no
 // warning, and the vault's encrypted generations were gone the moment the
 // operator deleted the old data directory per the command's own instructions.

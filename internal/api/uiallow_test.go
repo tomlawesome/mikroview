@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -340,6 +341,45 @@ func TestUIAllowExemptsEveryRouterFacingRoute(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("%d router-facing route(s) are not in uiAllowExemptPaths, so ui.allow would refuse a router that cannot be listed in it: %s",
 			len(missing), strings.Join(missing, ", "))
+	}
+}
+
+// TestUIAllowExemptPathsMatchesEscapedPath (#1390): uiAllowExemptPaths
+// must be checked against the escaped path, not the decoded one -- the
+// same fix requireAuth's own path-membership checks got for #1389
+// (escapedPathProbeMux, reused here, is defined in
+// requireauth_escapedpath_test.go). next -- ultimately the same
+// *http.ServeMux main.go builds -- dispatches on the escaped path
+// (net/http's wildcard-pattern matching works on request-line bytes, not
+// the decoded string), so a request whose escaped and decoded forms
+// differ has to be classified by the string it is dispatched by, not the
+// one it merely decodes to.
+func TestUIAllowExemptPathsMatchesEscapedPath(t *testing.T) {
+	// A range that does not include loopback: httptest.NewServer's real
+	// TCP connection makes the caller's own peer address loopback, so
+	// this keeps that caller outside ui.allow without needing a trusted
+	// proxy and a forwarding header just to name an "outside" address.
+	s := uiAllowServer(t, []string{"203.0.113.0/24"})
+	var hit atomic.Bool
+	ts := httptest.NewServer(s.RestrictToAllowList(escapedPathProbeMux(&hit)))
+	defer ts.Close()
+
+	// Decodes to "/api/ingest/routeros" (an exempt, router-facing route),
+	// but its escaped form -- what the probe's "GET /api/{x}" pattern
+	// actually matches -- is "/api/ingest%2Frouteros", a single trailing
+	// segment, not that exempt route.
+	resp, err := http.Get(ts.URL + "/api/ingest%2Frouteros")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if hit.Load() {
+		t.Error("a caller outside ui.allow reached the app handler " +
+			"by decoding to an exempt path while escaping to something else")
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
 	}
 }
 

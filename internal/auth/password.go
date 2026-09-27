@@ -58,11 +58,55 @@ const (
 // stays fixed.
 const maxConcurrentHashes = 4
 
+// Upper bounds VerifyPassword accepts from a stored hash (issue #1388).
+// A stored hash is data, not necessarily one HashPassword wrote -- a
+// corrupt document, or anyone with write access to the backend, can put
+// any cost into it -- so its declared cost is checked before any memory
+// is allocated. Four times today's cost leaves room to raise the
+// constants above without locking out existing hashes; raising them
+// past these bounds means raising the bounds in the same change.
+const (
+	maxVerifyMemory  = 4 * argon2Memory // KiB
+	maxVerifyTime    = 4 * argon2Time
+	maxVerifyKeyLen  = 64
+	maxVerifySaltLen = 64
+)
+
 var hashSlots = make(chan struct{}, maxConcurrentHashes)
 
 func acquireHashSlot() func() {
 	hashSlots <- struct{}{}
 	return func() { <-hashSlots }
+}
+
+// hashParams is the Argon2id cost HashPassword derives new hashes
+// with. Fixed at the production profile (argon2Memory/argon2Time/
+// argon2Threads) unless SetHashParamsForTest overrides it -- nothing
+// outside test code calls that, so a running server always hashes at
+// the real cost.
+var hashParams = KDFParams{Memory: argon2Memory, Time: argon2Time, Threads: argon2Threads}
+
+// SetHashParamsForTest overrides the Argon2id cost every subsequent
+// HashPassword call uses, for the rest of the process, and returns a
+// restore func that puts the production profile back.
+//
+// Test-only, and only safe called from a TestMain before m.Run()
+// starts any test goroutines -- never from inside an individual test.
+// hashParams is an unsynchronized package var: a write here racing a
+// concurrent HashPassword call is exactly the data race -race exists
+// to catch, which is what makes "single-threaded, before any subtest
+// runs" the load-bearing part of that rule, not a suggestion.
+// VerifyPassword is unaffected either way -- it reads memory/time/
+// threads back out of the hash string it's checking, so a hash
+// produced under the real cost still verifies at the real cost even
+// after this runs, and existing tests of HashPassword/VerifyPassword
+// at production cost (internal/auth's own password_test.go and
+// register_cost_test.go) never call this, so they keep exercising the
+// real parameters.
+func SetHashParamsForTest(p KDFParams) (restore func()) {
+	prev := hashParams
+	hashParams = p
+	return func() { hashParams = prev }
 }
 
 // dummyHash is verified against when a username doesn't exist, so a
@@ -80,11 +124,12 @@ func HashPassword(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
+	p := hashParams
 	release := acquireHashSlot()
-	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	hash := argon2.IDKey([]byte(password), salt, p.Time, p.Memory, p.Threads, argon2KeyLen)
 	release()
 	return fmt.Sprintf("argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argon2Memory, argon2Time, argon2Threads,
+		argon2.Version, p.Memory, p.Time, p.Threads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(hash),
 	), nil
@@ -101,7 +146,9 @@ func mustHashPassword(password string) string {
 // VerifyPassword reports whether password matches encodedHash (as
 // produced by HashPassword), comparing in constant time. A malformed
 // encodedHash is treated as a non-match, never an error -- there's
-// nothing a caller can usefully do differently.
+// nothing a caller can usefully do differently. So is one whose declared
+// cost or lengths are outside the maxVerify* bounds above: it is refused
+// before any hashing is done.
 func VerifyPassword(password, encodedHash string) bool {
 	parts := strings.Split(encodedHash, "$")
 	if len(parts) != 5 || parts[0] != "argon2id" {
@@ -116,17 +163,27 @@ func VerifyPassword(password, encodedHash string) bool {
 	if _, err := fmt.Sscanf(parts[2], "m=%d,t=%d,p=%d", &memory, &iterations, &threads); err != nil {
 		return false
 	}
+	if version != argon2.Version ||
+		iterations < 1 || iterations > maxVerifyTime ||
+		threads < 1 ||
+		memory < 8*uint32(threads) || memory > maxVerifyMemory {
+		return false
+	}
+	if len(parts[3]) > base64.RawStdEncoding.EncodedLen(maxVerifySaltLen) ||
+		len(parts[4]) > base64.RawStdEncoding.EncodedLen(maxVerifyKeyLen) {
+		return false
+	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[3])
-	if err != nil {
+	if err != nil || len(salt) == 0 {
 		return false
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(want) == 0 {
 		return false
 	}
 	release := acquireHashSlot()
+	defer release() // a panic inside argon2 must not keep the slot
 	got := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want)))
-	release()
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
