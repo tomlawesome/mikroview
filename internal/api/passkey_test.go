@@ -953,6 +953,9 @@ func TestPasskeyRegisterWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("register/finish with a failing mint returned %d, want 500: %s", resp.StatusCode, body)
 	}
+	if want := "the passkey is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)"; !strings.Contains(string(body), want) {
+		t.Errorf("body = %q, want it to contain %q", body, want)
+	}
 	if u, ok := s.Auth.Get(passkeyBilboID(t, s)); !ok || len(u.Passkeys) != 1 {
 		t.Fatal("the passkey was not added -- the save budget failed AddPasskey itself, so this test proves nothing")
 	}

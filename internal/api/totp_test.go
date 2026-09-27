@@ -992,6 +992,9 @@ func TestTOTPConfirmWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("confirm with a failing mint returned %d, want 500: %s", resp.StatusCode, body)
 	}
+	if want := "the authenticator app is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)"; !strings.Contains(string(body), want) {
+		t.Errorf("body = %q, want it to contain %q", body, want)
+	}
 	if !s.Auth.HasActiveTOTP(totpBilboID(t, s)) {
 		t.Fatal("the factor is not active -- the save budget failed ConfirmTOTP itself, so this test proves nothing")
 	}
