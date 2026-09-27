@@ -31,9 +31,13 @@
 # issue #1281 refuses a TLS syslog connection from an address nobody
 # declared before the handshake even starts -- and "no" otherwise.
 
+import base64
+import hashlib
+import hmac
 import json
 import socket
 import ssl
+import struct
 import sys
 import time
 import urllib.error
@@ -140,6 +144,51 @@ def wait_for_health(api_base, attempts=120, delay=0.5):
     raise SystemExit(f"container never answered {api_base}/api/healthz: {last}")
 
 
+def totp_code_now(secret_b32, step=30, digits=6):
+    """The current RFC 6238 TOTP code for a base32 secret, stdlib only
+    (hmac/hashlib/base64/struct -- no third-party TOTP library),
+    matching internal/auth/totp.go's own algorithm and parameters
+    (HMAC-SHA1, a 30-second step, 6 digits): the counter is the number
+    of 30-second steps since the epoch, HMAC-SHA1'd with the secret,
+    then RFC 4226 §5.3's dynamic truncation picks 4 bytes out of the
+    20-byte digest and masks their top bit before taking it mod 10**6.
+    VerifyTOTP accepts the current step and one step either side, so a
+    few seconds of latency between computing this and the server
+    checking it does not matter.
+    """
+    secret = base64.b32decode(secret_b32 + "=" * (-len(secret_b32) % 8), casefold=True)
+    counter = int(time.time() // step)
+    digest = hmac.new(secret, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = int.from_bytes(digest[offset : offset + 4], "big") & 0x7FFFFFFF
+    return str(code % (10**digits)).zfill(digits)
+
+
+def enrol_second_factor_if_required(api):
+    """Enrols an authenticator-app (TOTP) factor for the caller's own
+    just-signed-in account, if the server demands one before it will
+    do anything else.
+
+    Since v0.6.1 (#1253) every local account is stopped at a forced
+    "set up your second factor" gate on its first sign-in, and
+    POST /api/auth/totp/enrol is the route that starts clearing it.
+    Older images have no such route at all -- that generation of the
+    server didn't have TOTP -- so a 404 here means "nothing to do",
+    detected from the response the server actually gives rather than
+    from comparing version strings, which keeps this working
+    unmodified against whatever a later release changes. Any other
+    non-200 is a real failure and is raised.
+    """
+    status, body, _ = api._req("POST", "/api/auth/totp/enrol", {})
+    if status == 404:
+        return False
+    if status != 200:
+        raise RuntimeError(f"POST /api/auth/totp/enrol: {status} {body[:300]!r}")
+    secret = json.loads(body)["secret"]
+    api.post("/api/auth/totp/confirm", {"code": totp_code_now(secret)})
+    return True
+
+
 wait_for_health(base_url)
 api = API(base_url)
 manifest = {"version": version, "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -149,6 +198,13 @@ manifest = {"version": version, "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ"
 # every later call in this script uses.
 api.post("/api/auth/register", {"username": FIXTURE_ADMIN, "password": FIXTURE_PASSWORD})
 manifest["adminUsername"] = FIXTURE_ADMIN
+
+# 1a. The admin just signed in above -- from v0.6.1 on, that account
+# can reach nothing else at all until it enrols a second factor
+# (#1253). Older images never ask; see
+# enrol_second_factor_if_required's own comment for how that is told
+# apart.
+manifest["secondFactorEnrolled"] = enrol_second_factor_if_required(api)
 
 # 2. A second, viewer-tier account.
 api.post("/api/auth/users", {"username": FIXTURE_VIEWER, "password": FIXTURE_PASSWORD, "role": "viewer"})
