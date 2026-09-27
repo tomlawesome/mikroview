@@ -5,7 +5,7 @@
     "The dependency dashboard is off (owner, 2026-09-10). It is a bot-written issue with no acceptance criteria that never reaches a done state, so it sits in a milestone that can then never report as finished, and it is stale between runs. Turning it off changes nothing about what Renovate watches or raises: the merge requests still arrive. ai/orbit turned it off on 2026-09-08 for the same reason; this matches it."
   ],
   "dependencyDashboard": false,
-  "baseBranches": ["dev"],
+  "baseBranchPatterns": ["dev"],
   "platformAutomerge": false,
   "automerge": false,
   "minimumReleaseAge": "7 days",
@@ -14,7 +14,7 @@
   "labels": ["type: chore", "area: governance"],
   "commitMessagePrefix": "deps:",
   "branchPrefix": "renovate/",
-  "enabledManagers": ["gomod", "npm", "dockerfile", "gitlabci", "custom.regex"],
+  "enabledManagers": ["gomod", "npm", "dockerfile", "gitlabci", "github-actions", "custom.regex"],
   "ignorePaths": ["**/node_modules/**", "tools/screenshots/**"],
   "gomod": {
     "postUpdateOptions": ["gomodTidy"]
@@ -30,7 +30,7 @@
     },
     {
       "customType": "regex",
-      "description": "actions/setup-go's go-version in .github/workflows/*.yml (#1356) isn't seen either: enabledManagers above has no github-actions entry, so nothing manages that pin natively -- tracked here as the same go dep as go.mod so the packageRule below groups it with the rest.",
+      "description": "actions/setup-go's go-version in .github/workflows/*.yml (#1356), tracked here as the same go dep as go.mod so the go toolchain packageRule below groups it with the rest. The github-actions manager is enabled now (#1324) but its own reading of setup-go's go-version is switched off below, so this one line has one owner.",
       "managerFilePatterns": ["/^\\.github/workflows/.*\\.ya?ml$/"],
       "matchStrings": ["go-version:\\s*'(?<currentValue>\\d+\\.\\d+\\.\\d+)'"],
       "datasourceTemplate": "golang-version",
@@ -68,6 +68,19 @@
       "matchManagers": ["gitlabci"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "ci images minor and patch"
+    },
+    {
+      "minimumReleaseAge": "7 days",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "github actions minor and patch",
+      "description": "The uses: pins in .github/workflows/*.yml (#1324). Renovate keeps them on a 40-character SHA and rewrites the # vX.Y.Z comment beside it. lint:supply-chain-pins fails until supply-chain/pins-policy.json records the new SHA and comment with a review date, so each bump is read by a human before it merges -- the same step the docker and ci-image bumps already take."
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["go"],
+      "enabled": false,
+      "description": "setup-go's go-version is owned by the #1356 regex manager above, grouped as go toolchain; without this the github-actions manager would propose the same bump a second time."
     },
     {
       "minimumReleaseAge": "7 days",
