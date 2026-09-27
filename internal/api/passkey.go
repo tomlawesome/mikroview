@@ -449,22 +449,12 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 	// already showed its user. See GenerateRecoveryCodesIfAbsent's doc
 	// comment (recoverycodes.go) and handleTOTPConfirm's identical use
 	// of it in auth.go.
-	recoveryCodes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(current.ID, now)
-	if err != nil {
-		// The passkey is already added at this point -- AddPasskey above
-		// committed. A mint failure must not be answered like "already
-		// issued" (null recoveryCodes, 200): the frontend reads null as
-		// exactly that, and here nothing was ever issued for this
-		// account to fall back on. Told to the caller plainly instead,
-		// the same shape handleTOTPConfirm's identical failure takes --
-		// including leaving session rotation and the audit record for a
-		// retry that gets past this, rather than reporting a factor
-		// change with no way back in as a clean success.
-		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, err))
-		http.Error(w, "the passkey is now active, but recovery codes could not be generated -- remove it and register again from account settings", http.StatusInternalServerError)
-		return
-	}
+	recoveryCodes, alreadyIssued, mintErr := s.Auth.GenerateRecoveryCodesIfAbsent(current.ID, now)
 
+	// Rotation and the audit record happen whether or not the mint
+	// worked: AddPasskey above already committed, so the passkey is live
+	// either way, and no retry could do them later -- begin now lists
+	// this passkey in excludeCredentials (#1394).
 	if wasFirstFactor {
 		// Parity with handleTOTPConfirm: turning on the account's first
 		// second factor is exactly the moment a stale or forgotten
@@ -475,7 +465,22 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 	}
 
 	s.clearPasskeyRegisterCookie(w)
-	s.Audit.Record(current.Username, "account.passkey_added", current.Username, "name="+stored.Name)
+	detail := "name=" + stored.Name
+	if mintErr != nil {
+		detail += "; recovery codes could not be saved"
+	}
+	s.Audit.Record(current.Username, "account.passkey_added", current.Username, detail)
+
+	if mintErr != nil {
+		// A mint failure must not be answered like "already issued"
+		// (null recoveryCodes, 200): the frontend reads null as exactly
+		// that, and here nothing was ever issued for this account to
+		// fall back on. Told to the caller plainly instead, the same
+		// shape handleTOTPConfirm's identical failure takes.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, mintErr))
+		http.Error(w, "the passkey is now active, but recovery codes could not be generated -- remove it and register again from account settings", http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, http.StatusOK, passkeyRegisterFinishResponse{
 		Passkey:       toPasskeySummary(stored, s.RelyingParty.RPID),

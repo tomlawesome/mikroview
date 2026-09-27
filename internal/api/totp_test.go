@@ -901,6 +901,103 @@ func TestTOTPConfirmRejectsBadCode(t *testing.T) {
 	}
 }
 
+// Obvious placeholder, same convention as the constants above.
+const mintFailPassword = "mint-fail-password-placeholder"
+
+// mintFailServer stands up an auth-enabled server (with a ready
+// RelyingParty, for the passkey half) whose accounts store saves
+// normally until the test lowers budget.left -- so a second factor can
+// commit and the recovery-code mint straight after it fail (#1394).
+// Returns the one account's signed-in browser (registered through the
+// real route, as the first account) and a second browser holding its
+// own session for that account, to show whether sessions were rotated.
+func mintFailServer(t *testing.T) (s *Server, ts *httptest.Server, browser, otherDevice *http.Client, budget *recoveryCodesSaveBudgetBackend) {
+	t.Helper()
+	budget = &recoveryCodesSaveBudgetBackend{left: 1000}
+	authStore, err := auth.OpenWithBackend(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ = newTestServer(t)
+	s.Auth = authStore
+	rp, err := NewRelyingParty("https://passkeys.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.RelyingParty = rp
+	ts = httptest.NewServer(s.Routes())
+	t.Cleanup(ts.Close)
+
+	browser = &http.Client{Jar: mustCookieJar(t)}
+	reg := postJSON(t, browser, ts.URL+"/api/auth/register", credentialsRequest{Username: totpBilboUsername, Password: mintFailPassword})
+	reg.Body.Close()
+	if reg.StatusCode != http.StatusCreated {
+		t.Fatalf("register returned %d", reg.StatusCode)
+	}
+	otherDevice = sessionClient(t, s, ts, totpBilboUsername)
+	return s, ts, browser, otherDevice, budget
+}
+
+// checkFirstFactorRotatedDespiteMintFailure is the part of #1394 both
+// handlers share: the factor went live, so every other session is gone,
+// the calling browser got a fresh session cookie and is still signed
+// in, and the audit log recorded action for the account.
+func checkFirstFactorRotatedDespiteMintFailure(t *testing.T, s *Server, ts *httptest.Server, resp *http.Response, browser, otherDevice *http.Client, action string) {
+	t.Helper()
+	rotated := false
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			rotated = true
+		}
+	}
+	if !rotated {
+		t.Error("the response set no fresh session cookie, want this browser's session rotated")
+	}
+	if sess := sessionOf(t, otherDevice, ts); sess.Authenticated {
+		t.Error("another device's session survived the first factor going live, want it signed out")
+	}
+	if sess := sessionOf(t, browser, ts); !sess.Authenticated {
+		t.Error("the enrolling browser was signed out by its own factor going live")
+	}
+	found := false
+	for _, e := range s.Audit.Query(audit.Query{Limit: 1000}).Entries {
+		if e.Action == action && e.Target == totpBilboUsername {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no %s audit entry was recorded for the factor that went live", action)
+	}
+}
+
+// TestTOTPConfirmWhoseRecoveryCodesFailStillRotatesAndAudits (#1394): a
+// confirm whose recovery-code mint fails after ConfirmTOTP committed
+// still answers 500, but the factor is live, so sessions are rotated
+// and account.totp_enabled is recorded exactly as on success -- no
+// retry can do it later, since confirming again needs a fresh secret.
+func TestTOTPConfirmWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
+	s, ts, browser, otherDevice, budget := mintFailServer(t)
+	enrolled := totpEnrol(t, browser, ts)
+	secret, err := auth.DecodeTOTPSecret(enrolled.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := auth.GenerateTOTPCode(secret, totpCounterNow(time.Now()))
+
+	budget.left = 1 // ConfirmTOTP's own save, then nothing
+	resp := postJSON(t, browser, ts.URL+"/api/auth/totp/confirm", totpConfirmRequest{Code: code})
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	budget.left = 1000
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("confirm with a failing mint returned %d, want 500: %s", resp.StatusCode, body)
+	}
+	if !s.Auth.HasActiveTOTP(totpBilboID(t, s)) {
+		t.Fatal("the factor is not active -- the save budget failed ConfirmTOTP itself, so this test proves nothing")
+	}
+	checkFirstFactorRotatedDespiteMintFailure(t, s, ts, resp, browser, otherDevice, "account.totp_enabled")
+}
+
 // TestTOTPDeleteWrongPassword proves the factor survives a wrong-
 // password attempt to remove it, and that the attempt is rate-limited on
 // passwordRecheckLimiterKey rather than left as an unthrottled oracle
