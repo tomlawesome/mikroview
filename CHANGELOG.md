@@ -37,6 +37,10 @@ rewritten.
   for unattended daily fetching — see docs/configuration.md's
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
+- **`security:govulncheck` runs `v1.8.0`, not `v1.4.0`** (#1321). The
+  four-release gap meant a green scan reflected a vulnerability database
+  from June, not today's; `renovate.json` now tracks every `go install
+  …@vX.Y.Z` pin in `.gitlab-ci.yml` so this can't happen silently again.
 ### Added
 
 - **A router's card names what an earlier setup left behind, with the exact
