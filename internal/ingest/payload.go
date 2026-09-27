@@ -407,6 +407,13 @@ type LoggingEntry struct {
 	Topics   RouterOSList `json:"topics"`
 	Action   string       `json:"action"`
 	Disabled RouterOSFlag `json:"disabled"`
+	// SrcAddress is the action's own src-address (#1373), added the day
+	// the page carries it -- see routeros.LoggingSetup's comment on why
+	// it was left off before. Omitted by a router still running a script
+	// pasted before this field existed, which decodes as "" and is simply
+	// not something a leftover check can say anything about for that
+	// action.
+	SrcAddress string `json:"srcAddress,omitempty"`
 }
 
 // LoggingEntry record types, as the page's own `type` key spells them.

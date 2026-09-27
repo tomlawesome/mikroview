@@ -58,7 +58,7 @@ func TestPreferencesPatchThenGetRoundTrips(t *testing.T) {
 
 	patch := patchJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1,
-		"prefs":   map[string]any{"colorway": "teal", "altitudeStop": 3},
+		"prefs":   map[string]any{"uiTheme": "teal", "altitudeStop": 3},
 	})
 	patch.Body.Close()
 	if patch.StatusCode != http.StatusNoContent {
@@ -78,8 +78,8 @@ func TestPreferencesPatchThenGetRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(got.Prefs, &prefs); err != nil {
 		t.Fatal(err)
 	}
-	if prefs["colorway"] != "teal" {
-		t.Errorf("colorway = %v, want teal", prefs["colorway"])
+	if prefs["uiTheme"] != "teal" {
+		t.Errorf("uiTheme = %v, want teal", prefs["uiTheme"])
 	}
 	if prefs["altitudeStop"] != float64(3) {
 		t.Errorf("altitudeStop = %v, want 3", prefs["altitudeStop"])
@@ -129,7 +129,7 @@ func TestPreferencesPatchOfDifferentKeysBothSurvive(t *testing.T) {
 	client := registerAdmin(t, s, ts)
 
 	patchJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
-		"version": 1, "prefs": map[string]any{"colorway": "teal"},
+		"version": 1, "prefs": map[string]any{"uiTheme": "teal"},
 	}).Body.Close()
 	patchJSON(t, client, ts.URL+"/api/me/preferences", map[string]any{
 		"version": 1, "prefs": map[string]any{"retention": 30},
@@ -146,8 +146,8 @@ func TestPreferencesPatchOfDifferentKeysBothSurvive(t *testing.T) {
 	if err := json.Unmarshal(got.Prefs, &prefs); err != nil {
 		t.Fatal(err)
 	}
-	if prefs["colorway"] != "teal" {
-		t.Errorf("colorway = %v, want teal -- the second tab's save must not discard it", prefs["colorway"])
+	if prefs["uiTheme"] != "teal" {
+		t.Errorf("uiTheme = %v, want teal -- the second tab's save must not discard it", prefs["uiTheme"])
 	}
 	if prefs["retention"] != float64(30) {
 		t.Errorf("retention = %v, want 30", prefs["retention"])

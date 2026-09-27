@@ -238,6 +238,55 @@ describe('Fleet deck identity (#657/#706)', () => {
   })
 })
 
+// #1373: another action, or a built-in RouterOS action, still sending
+// logs here from a setup this instance's wizard has moved past. The
+// description shows to anyone; the paste-ready fix is admin-only, the
+// same line Re-enrol… and Add a router already draw.
+describe('Fleet -- logging leftovers (#1373)', () => {
+  const leftover = {
+    name: 'memory',
+    builtin: true,
+    description: 'The built-in `memory` action was repointed here.',
+    commands: ['/system logging action set [find name=memory] target=memory'],
+  }
+
+  beforeEach(() => {
+    appState.initialLoadDone = true
+    flagsState.list = []
+  })
+
+  it('names the leftover and offers a viewer no fix commands', () => {
+    authState.role = 'viewer'
+    setDevices([device({ loggingLeftovers: [leftover] })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.textContent).toContain('The built-in `memory` action was repointed here.')
+    expect(container.querySelector('pre')).toBeNull()
+  })
+
+  it('gives an admin the paste-ready commands', () => {
+    authState.role = 'admin'
+    setDevices([device({ loggingLeftovers: [leftover] })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.querySelector('pre')?.textContent).toBe(
+      '/system logging action set [find name=memory] target=memory',
+    )
+    expect(container.textContent).toContain("Paste into the router's terminal")
+  })
+
+  it('draws nothing when there is nothing to report', () => {
+    authState.role = 'admin'
+    setDevices([device({ loggingLeftovers: [] })])
+    const { container } = render(Fleet)
+    flushSync()
+
+    expect(container.querySelector('pre')).toBeNull()
+  })
+})
+
 // #1284: adding a router is the wizard's own router steps, opened from
 // the fleet -- and #657's grammar still holds, so the action is drawn
 // for an admin and is simply not there for anyone else. Re-enrol… and

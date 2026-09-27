@@ -14,7 +14,7 @@
 //
 // This package never looks inside a record. What a "preference" is
 // belongs entirely to the frontend modules that own each key (presets,
-// top-talker widgets, colourway, and so on) -- see the API contract on
+// top-talker widgets, and so on) -- see the API contract on
 // #1283. Storing it as opaque json.RawMessage, keyed by user id, is what
 // keeps this package from ever needing to change when the frontend adds
 // or renames a key.
@@ -35,7 +35,7 @@ import (
 var prefsLog = logging.New("prefs")
 
 // MaxRecordBytes caps one user's merged record. Every real key the
-// frontend stores (presets, topTalkers, colorway, altitudeStop, columns,
+// frontend stores (presets, topTalkers, altitudeStop, columns,
 // groupMode, retention, metrics, deckOrder) is a scalar, a short array
 // or a few hundred bytes per saved preset or widget, so a heavy user's
 // whole record is a few KiB and 256 KiB leaves room for hundreds of

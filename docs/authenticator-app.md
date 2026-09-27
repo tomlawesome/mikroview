@@ -173,6 +173,14 @@ below). Removing your very last factor signs you out at once, and the
 next time you sign in you're back at the forced setup screen above,
 picking a factor and drawing a genuinely fresh set of ten from scratch.
 
+**Mislaid your saved copy without losing a factor? Draw a fresh ten
+without removing anything.** Open the account menu and choose **New
+recovery codes…**, confirm your password, and the old ten stop working
+the moment the new ten are shown. This needs at least one authenticator
+app or passkey already active, and — unlike setting one up — doesn't
+sign you out anywhere else: only a change to which factors protect your
+account does that.
+
 ## Signing in afterwards
 
 Sign in with your username and password as usual. Once your password

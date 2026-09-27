@@ -75,10 +75,13 @@ check(
 )
 
 // And the command block for step 1 is withheld while blocked -- a
-// router told to run it would get a certificate it cannot verify.
+// router told to run it would get a certificate it cannot verify. What
+// is shown instead is the config.yaml line to paste (#1365), which is
+// the fix on mikroview's side, not a router command.
+const blockedPres = await page.$$eval('.setup-wizard .body pre', (els) => els.map((e) => e.textContent.trim()))
 check(
-  (await page.locator('.setup-wizard .body pre').count()) === 0,
-  'the CA-trust command is withheld while step 1 is blocked',
+  blockedPres.length === 1 && /^hosts: \[/.test(blockedPres[0]) && !/\/tool fetch/.test(blockedPres[0]),
+  `the CA-trust command is withheld while step 1 is blocked; only the tls.hosts line is shown (${JSON.stringify(blockedPres)})`,
 )
 
 // Next must not walk past it either. There is nothing to force past

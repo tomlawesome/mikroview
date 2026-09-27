@@ -2,8 +2,8 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   //
   // The account menu (#633, slimmed by #647 round 23): the scene bar's
-  // account chip carries theme switching, Run setup…, sign out, and
-  // About & licence (AGPL 5(d)/13 -- the licence must stay reachable
+  // account chip carries Run setup…, sign out, and About & licence
+  // (AGPL 5(d)/13 -- the licence must stay reachable
   // from the running app). Settings, Entities and Audit log left the
   // menu once each had somewhere better to live -- Settings and
   // Entities joined the deck as cards of their own, and Audit log has
@@ -14,10 +14,10 @@
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
   import { versionState } from '../lib/version.svelte'
-  import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
   import PasskeysOverlay from './PasskeysOverlay.svelte'
+  import RecoveryCodesOverlay from './RecoveryCodesOverlay.svelte'
   import UptimeBadge from './UptimeBadge.svelte'
 
   let open = $state(false)
@@ -29,6 +29,8 @@
   let showAuthenticator = $state(false)
   // Same reasoning, same fix, for #1250's own overlay.
   let showPasskeys = $state(false)
+  // Same reasoning, same fix, for #1331's own overlay.
+  let showRecoveryCodes = $state(false)
   let logoutError = $state<string | null>(null)
   let menuEl: HTMLElement | undefined
 
@@ -100,10 +102,6 @@
 
   {#if open}
     <div class="menu" role="menu">
-      <div class="row theme-row">
-        <ThemeMenu />
-      </div>
-      <div class="rule"></div>
       {#each operate.filter((r) => !r.admin || isAdmin) as row (row.label)}
         <button class="row" role="menuitem" class:on={row.view === appState.view} onclick={() => go(row)}>
           {row.label}
@@ -133,6 +131,16 @@
         <button class="row" role="menuitem" onclick={() => ((showPasskeys = true), (open = false))}>
           Passkeys{#if authState.passkeyCount > 0}<span class="on-tag">&nbsp;· {authState.passkeyCount}</span>{/if}
         </button>
+        <!-- #1331: only offered once there's a factor for the codes to
+             stand behind -- the server refuses the route on an account
+             with none (recovery codes are a spare key, not a
+             replacement for one), so this row would only invite that
+             refusal before either row above it has been set up. -->
+        {#if authState.hasTOTP || authState.passkeyCount > 0}
+          <button class="row" role="menuitem" onclick={() => ((showRecoveryCodes = true), (open = false))}>
+            New recovery codes…
+          </button>
+        {/if}
       {:else}
         <p class="row-note">
           Authenticator app — not offered. This account signs in through single sign-on; your
@@ -162,6 +170,7 @@
 <AboutOverlay bind:open={showAbout} />
 <AuthenticatorOverlay bind:open={showAuthenticator} />
 <PasskeysOverlay bind:open={showPasskeys} />
+<RecoveryCodesOverlay bind:open={showRecoveryCodes} />
 
 <style>
   .account {
@@ -240,11 +249,6 @@
 
   .row.on {
     color: var(--fg);
-  }
-
-  .theme-row {
-    cursor: default;
-    justify-content: space-between;
   }
 
   /* The menu's foot, from round 37's `.whomenu .mg.foot`: the label on

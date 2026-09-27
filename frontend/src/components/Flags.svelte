@@ -2552,7 +2552,7 @@
      the three bands") and validated there against the void ground --
      CVD worst adjacent dE 12.8, contrast >= 3:1. Fixed hexes rather
      than theme tokens, the same call flagPalette.ts makes for the six
-     family inks: a colorway retunes chrome, not the data colours. They
+     family inks: --accent retunes chrome, not the data colours. They
      deliberately do not reuse --drop and --alarm, which name a firewall
      verdict and the chrome's alarm; see app.css on why those two are
      not shared. */

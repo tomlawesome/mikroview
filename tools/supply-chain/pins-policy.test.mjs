@@ -9,7 +9,7 @@
 // is exercised for real by running the script directly against this repo,
 // which is how #711's policy file was built and checked in the first
 // place.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -137,6 +137,19 @@ describe("extractGoVersionPins", () => {
 
   it("returns an empty map when none of the four inputs are given", () => {
     assert.equal(extractGoVersionPins({}).size, 0);
+  });
+
+  it("reads actions/setup-go's go-version from a GitHub workflow (#1356)", () => {
+    const pins = extractGoVersionPins({
+      workflows: {
+        ".github/workflows/docker.yml": [
+          "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+          "        with:",
+          "          go-version: '1.27.1'",
+        ].join("\n"),
+      },
+    });
+    assert.equal(pins.get(".github/workflows/docker.yml:3"), "1.27.1");
   });
 });
 
@@ -266,6 +279,29 @@ describe("collectRepositoryPins", () => {
     const problems = diffGoVersionPins(goVersionPins);
     assert.equal(problems.length, 1);
     assert.match(problems[0], /disagree/);
+  });
+
+  it("fails when a GitHub workflow's go-version pin disagrees with go.mod (#1356)", () => {
+    const dir = scratchDir();
+    writeFileSync(join(dir, "go.mod"), "module example\n\ngo 1.27.1\n", "utf8");
+    const workflowsDir = join(dir, ".github", "workflows");
+    mkdirSync(workflowsDir, { recursive: true });
+    // Deliberately one patch behind go.mod, the #1356 shape.
+    writeFileSync(
+      join(workflowsDir, "docker.yml"),
+      [
+        "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+        "        with:",
+        "          go-version: '1.27.0'",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { goVersionPins } = collectRepositoryPins(dir);
+    const problems = diffGoVersionPins(goVersionPins);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /disagree/);
+    assert.match(problems[0], /docker\.yml:3=1\.27\.0/);
   });
 
   it("passes when a copy of the four Go pins agrees", () => {

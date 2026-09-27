@@ -104,6 +104,7 @@
   import {
     deleteContract,
     deviceState,
+    loggingLeftovers,
     multihomedEcho,
     routerAddress,
     setupEcho,
@@ -114,6 +115,7 @@
   } from '../lib/fleet'
   import { REFUSED_STRIP_LEAD } from '../lib/setupsteps'
   import { wizardState } from '../lib/wizard.svelte'
+  import LoggingLeftovers from './LoggingLeftovers.svelte'
   import type {
     Device,
     EntityType,
@@ -867,6 +869,9 @@
                      router reports of the wizard's own logging setup. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: another action, or a built-in, still sending
+                   logs here from a setup the wizard has moved past. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
               {#if isAdmin}
                 {@render reEnrolButton(d.id, d.name)}
@@ -898,6 +903,8 @@
                      off here hid the one card most likely to need it. -->
                 <div class="frow dim">{setupEcho(d)}</div>
               {/if}
+              <!-- #1373: same as the registered cards above. -->
+              <LoggingLeftovers leftovers={loggingLeftovers(d)} canFix={isAdmin} />
               {#if detail?.ruleCount !== null && detail?.ruleCount !== undefined}
                 <div class="frow dim">{detail.ruleCount} rule{detail.ruleCount === 1 ? '' : 's'} pushed</div>
               {/if}
@@ -983,6 +990,13 @@
               <div class="frow dim">
                 {r.lines} line{r.lines === 1 ? '' : 's'} · first seen {formatHM(r.firstSeen)} · last seen {formatHM(r.lastSeen)}
               </div>
+              {#if r.note}
+                <!-- #1373: this address is not a stranger's -- it is an
+                     enrolled router's own pushed /ip/address table, so a
+                     logging action from an earlier setup is almost
+                     certainly still sending from it. -->
+                <div class="frow dim">{r.note}</div>
+              {/if}
               <div class="frow dim">{REFUSED_STRIP_LEAD} Re-enrol the router it belongs to, or add it as a new one.</div>
             </div>
           {/each}
