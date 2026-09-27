@@ -313,7 +313,12 @@ fi
 shot_fails=0
 for f in README.md docs/*.md .github/workflows/pages.yml; do
   [ -f "$f" ] || continue
-  grep -noE '<!-- shot:.*-->' "$f" 2>/dev/null >"$tmpd/shot-hits" || true
+  # [^>]* rather than .*: the greedy .* would span two markers sharing
+  # one line, from the first marker's opening comment to the second's
+  # closing -->, and report them as one garbled failure. Excluding '>'
+  # stops the match at the first marker's own -->, since that is the
+  # first '>' either marker's text can contain.
+  grep -noE '<!-- shot:[^>]*-->' "$f" 2>/dev/null >"$tmpd/shot-hits" || true
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     lineno=${hit%%:*}

@@ -393,7 +393,7 @@
   // Round 36's "ring holds 41 m" (#1005): the old buffer-% stat, said as
   // reach rather than a fraction -- how far back the events the stream
   // currently holds go. Off appState.events, the same raw buffer
-  // statTalker/statPort read above via eventsBetween (not heldEvents,
+  // statTalker/statPort read above via recentEventsBetween (not heldEvents,
   // which is the table's own filtered view for csv ↓) -- arrives
   // oldest-first (state.svelte's own append order), so the span is just
   // its two ends, not a scan for a min/max nothing here can put out of
