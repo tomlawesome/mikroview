@@ -583,7 +583,7 @@ describe('the columns ▸ picker (#729/#1197)', () => {
 })
 
 // #1304 E11: statTalker/statPort used to rescan the whole appState.events
-// buffer (via eventsBetween's forward scan) every time either the buffer
+// buffer (via a forward scan, since removed) every time either the buffer
 // or the active window changed -- while the panel is open and traffic is
 // live, that is most flushes. appState.events is oldest-first (the same
 // ordering ringHolds already leans on), and the window this panel ever
