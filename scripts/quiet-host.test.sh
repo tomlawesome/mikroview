@@ -75,6 +75,19 @@ else
 fi
 [ -z "$(find "$QH_MOUNT" -name '.hold.*')" ] && echo "ok - no temp flag left behind" || { echo "FAIL - temp flag left behind"; fail=1; }
 
+# R6-F1: a queuing job killed mid-wait (e.g. GitLab's interruptible
+# auto-cancel on a newer push) must not leave its .hold.XXXXXX candidate
+# behind either -- same as the queue-timeout case above, but via a signal
+# instead of the queue giving up on its own.
+CI_JOB_ID=4242 QH_QUEUE_POLL_S=5 QH_QUEUE_MAX_S=60 "$SCRIPT" hold >"$TMP/hold-cancel.out" 2>&1 &
+cancelled=$!
+sleep 1
+[ -n "$(find "$QH_MOUNT" -name '.hold.*')" ] || { echo "FAIL - queued hold never created its temp candidate"; fail=1; }
+kill -TERM "$cancelled"
+wait "$cancelled" 2>/dev/null || true
+[ -z "$(find "$QH_MOUNT" -name '.hold.*')" ] && echo "ok - cancelled mid-queue leaves no temp flag behind" || { echo "FAIL - temp flag left behind after cancellation"; fail=1; }
+check "$(grep -m1 '^job=' "$QH_MOUNT/hold")" "job=1234" "the held job's hold is untouched by the cancellation"
+
 # and takes the host once the first hold clears (orbit-base-image's build
 # holding it, say): never alongside it
 ( sleep 2; grep -q '^job=1234$' "$QH_MOUNT/hold" && touch "$TMP/first-still-held"; CI_JOB_ID=1234 "$SCRIPT" release >/dev/null 2>&1 ) &
