@@ -29,6 +29,14 @@ for script in scripts/live-*.sh; do
     # as a check it defines its variables in a subshell, exits 0 and
     # reports nothing, which reads as a check that passed.
     scripts/live-env.sh|scripts/live-container.sh|scripts/live-stores.sh|scripts/live-slot.sh) continue ;;
+    # Same reason: live-web-dist.sh is sourced by the checks below and by
+    # its own live-web-dist.test.sh, never run standalone -- executed here
+    # it defines a function and exits 0 having done nothing, which is the
+    # phantom start #1337 traced. Its test is a plain bash unit test with
+    # no server involved, not one of "the four standalone shell checks"
+    # (Makefile:129), so it runs in gate:scripts alongside the other
+    # *.test.sh files instead of here.
+    scripts/live-web-dist.sh|scripts/live-web-dist.test.sh) continue ;;
     # Needs a real RouterOS CHR booted alongside the instance. Run by
     # `make live-routeros-container`.
     scripts/live-routeros.sh) continue ;;
