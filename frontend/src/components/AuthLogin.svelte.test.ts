@@ -296,6 +296,27 @@ describe('AuthLogin at the pending-factor step', () => {
     expect(fetchAuthSession).not.toHaveBeenCalled()
   })
 
+  // #1345 R4-F3, code-box half: an authenticator-code refusal that
+  // lands after switching to "recovery code" is not the recovery code's.
+  it('drops a code refusal that lands after switching to a recovery code', async () => {
+    let answer!: (v: string) => void
+    vi.mocked(submitLoginFactor).mockReturnValue(
+      new Promise((r) => {
+        answer = r
+      }),
+    )
+
+    render(AuthLogin)
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '000000' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await fireEvent.click(screen.getByRole('button', { name: /use a recovery code instead/i }))
+
+    answer('invalid code')
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: /continue/i })).toHaveProperty('disabled', false))
+
+    expect(screen.queryByText('invalid code')).toBeNull()
+  })
+
   // The recovery-code toggle only relabels the field -- same box, same
   // call, so this pins that it never changes what field name/shape is
   // submitted.
@@ -460,6 +481,45 @@ describe('AuthLogin at the pending-factor step offering a passkey (#1250)', () =
     expect(submitLoginFactor).toHaveBeenCalledWith('a1b2-c3d4-e5f6-g7h8')
     expect(beginPasskeyLogin).not.toHaveBeenCalled()
     expect(authState.state).toBe('authenticated')
+  })
+
+  // #1345 R4-F3: the switch links stay live while the passkey prompt is
+  // open, so the prompt can fail after the operator has already moved
+  // on to the code box -- its message belongs to the passkey button,
+  // not under the box the operator is now typing into.
+  it('drops a passkey failure that lands after switching to the authenticator app', async () => {
+    stubPasskeyCapableBrowser()
+    vi.mocked(beginPasskeyLogin).mockResolvedValue({ publicKey: { challenge: 'c' } })
+    let dismiss!: () => void
+    const get = vi.fn(
+      () =>
+        new Promise<null>((resolve) => {
+          dismiss = () => resolve(null)
+        }),
+    )
+    vi.stubGlobal('navigator', { credentials: { get } })
+
+    render(AuthLogin)
+    await fireEvent.click(screen.getByRole('button', { name: /^use your passkey$/i }))
+    await vi.waitFor(() => expect(get).toHaveBeenCalled())
+    await fireEvent.click(screen.getByRole('button', { name: /use your authenticator app instead/i }))
+    expect(screen.getByLabelText('code')).toBeTruthy()
+
+    dismiss()
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: /continue/i })).toHaveProperty('disabled', false))
+
+    expect(screen.queryByText(/that didn't complete/i)).toBeNull()
+  })
+
+  it('still shows a passkey failure under the passkey button when nothing was switched', async () => {
+    stubPasskeyCapableBrowser()
+    vi.mocked(beginPasskeyLogin).mockResolvedValue({ publicKey: { challenge: 'c' } })
+    vi.stubGlobal('navigator', { credentials: { get: vi.fn(async () => null) } })
+
+    render(AuthLogin)
+    await fireEvent.click(screen.getByRole('button', { name: /^use your passkey$/i }))
+
+    await vi.waitFor(() => expect(screen.getByText(/that didn't complete/i)).toBeTruthy())
   })
 
   it('replaces the button with a link to the right address when this browser cannot use the passkey, but still offers the other ways in', () => {

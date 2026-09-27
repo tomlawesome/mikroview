@@ -142,12 +142,18 @@
   // firePasskey is the passkey mode's own action, wired to the "Use your
   // passkey" button rather than the form's submit -- there is no field
   // for it to carry, only the click itself.
+  //
+  // #1345 R4-F3: the "instead" links stay live while a request is out
+  // (the passkey prompt can sit open indefinitely), so a result can land
+  // after the operator has switched ways. Its error is only shown if the
+  // way it was sent from is still the one on screen -- otherwise it
+  // would appear under a control that never sent it.
   async function firePasskey() {
     error = null
     submitting = true
     const result = await onLoginWithPasskey?.()
     submitting = false
-    if (result) error = result
+    if (result && factorWay === 'passkey') error = result
   }
 
   async function handleSubmit(e: Event) {
@@ -159,10 +165,11 @@
         error = factorWay === 'recovery' ? 'Enter a recovery code.' : 'Enter the code from your app.'
         return
       }
+      const sentFrom = factorWay
       submitting = true
       const result = await onSubmitFactor?.(code)
       submitting = false
-      if (result) error = result
+      if (result && factorWay === sentFrom) error = result
       return
     }
 
