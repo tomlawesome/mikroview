@@ -89,11 +89,14 @@ class PreferencesState {
       // reason it always was: with no honest answer for "is the server
       // record empty", upload-then-delete could throw away the only
       // copy of a browser's presets against a record that turns out not
-      // to have been empty at all.
+      // to have been empty at all. Before the first load, this.prefs
+      // holds nothing but set() calls made while this fetch was in
+      // flight (it starts empty, and reset() empties it) -- kept, so
+      // such a change doesn't snap back to its default here (#1345
+      // R5-F3); everything else hydrates as undefined, i.e. defaults.
       if (!this.loaded) {
-        this.prefs = {}
         this.loaded = true
-        for (const [key, hydrate] of this.hydrators) hydrate(undefined)
+        for (const [key, hydrate] of this.hydrators) hydrate(this.prefs[key])
       }
       return
     }
