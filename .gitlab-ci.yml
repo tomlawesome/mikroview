@@ -626,7 +626,11 @@ test:go:
     - scripts/fetch-upgrade-fixtures.sh
     - useradd -m -u 10001 ci-test
     - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
-    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
+    # #1392: -timeout 20m, not the 10m default. internal/api alone takes
+    # 430-590s under -race on the shared runner and crossed 600s on
+    # 2026-09-27; the timeout is here to catch a hang, not to time the
+    # suite. #1392 owns bringing internal/api back under 5 minutes.
+    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -timeout 20m -coverprofile=coverage.out"
   # The runner reuses its build directory between pipelines, so leaving the
   # checkout owned by ci-test hands the next pipeline's root-run jobs a
   # repository git will not touch. Give it back (#908).
