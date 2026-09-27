@@ -121,6 +121,51 @@ func TestTryEnrolLeavesTheDeviceUnenrolledWhenPersistFails(t *testing.T) {
 	}
 }
 
+// TestTryEnrolRestoresTheRefusalWhenPersistFails covers the rollback
+// branch the test above cannot reach: a router's address is usually
+// already refused by the time its enrolment line arrives (it logged its
+// own logging-action change first), and TryEnrol lifts that refusal
+// before saving. When the save fails, the refusal must come back as it
+// was -- in the refused list the wizard shows, with its count, and in
+// the per-prefix index (#1289) that bounds that list.
+func TestTryEnrolRestoresTheRefusalWhenPersistFails(t *testing.T) {
+	r, err := OpenRegistryWithBackend(nil, nil)
+	if err != nil {
+		t.Fatalf("OpenRegistryWithBackend: %v", err)
+	}
+	now := time.Now()
+	if _, err := r.Create("hap-ax3", "hap-ax3", now); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := r.MintEnrolment("hap-ax3", "10.10.0.1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Refuse("10.10.0.1", []byte("logging action changed"))
+	r.Refuse("10.10.0.1", []byte("logging action changed"))
+	before := r.Refused()
+	if len(before) != 1 || before[0].Lines != 2 {
+		t.Fatalf("test setup: Refused() = %+v, want 10.10.0.1 refused twice", before)
+	}
+
+	r.backend = &failingSaveBackend{}
+	line := []byte(`<30>Jan  1 00:00:00 router mikroview-enrol ` + token)
+	if r.TryEnrol("10.10.0.1", line) {
+		t.Fatal("TryEnrol() = true against a backend that cannot save, want false")
+	}
+
+	if got := r.Refused(); len(got) != 1 || got[0] != before[0] {
+		t.Errorf("Refused() after a failed enrolment = %+v, want the original refusal %+v back", got, before)
+	}
+	p, ok := refusedPrefix("10.10.0.1")
+	if !ok {
+		t.Fatal("refusedPrefix(10.10.0.1) found no prefix")
+	}
+	if _, indexed := r.refusedByPrefix[p]["10.10.0.1"]; !indexed {
+		t.Errorf("refusedByPrefix[%s] = %v after a failed enrolment, want 10.10.0.1 back in it", p, r.refusedByPrefix[p])
+	}
+}
+
 // TestMintEnrolmentReplacesAnyPendingToken is the "Reroll" affordance:
 // minting again invalidates the previous token outright rather than
 // letting either one redeem.
