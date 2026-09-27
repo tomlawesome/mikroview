@@ -2014,8 +2014,9 @@ export async function fetchHistorySettings(): Promise<HistorySettings> {
 
 // setHistorySettings turns the on-disk history on or off and sets its
 // days and byte cap in one call: the server applies the new window at
-// once, deleting the oldest days it no longer allows, which is why the
-// control only ever calls this from a link that names the deletion.
+// once, deleting the oldest days it no longer allows, which is why a
+// shrink only ever calls this from a link that names the deletion.
+// Turning off deletes nothing (#1354) -- see deleteHistoryFiles.
 //
 // Admin-only server-side. Returns the server's new state on success, or
 // its own words on refusal -- setStoreMaxMemory's shape -- so the group
@@ -2121,6 +2122,17 @@ export function geoLookup(ip: string): Promise<GeoLookup | null> {
 // For tests: forget every kept answer.
 export function clearGeoLookupCache(): void {
   geoLookupCache.clear()
+}
+
+// deleteHistoryFiles deletes every retained history file an off history
+// left on disk (#1354), password-gated like disableTOTP: the one way
+// retained history is deleted wholesale. Returns the server's new state,
+// or its own words on refusal (a wrong password, history still on) so
+// the card can show them and keep the field open.
+export async function deleteHistoryFiles(password: string): Promise<HistorySettings | string> {
+  const res = await deleteJSON('/api/settings/history/files', { password })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `deleteHistoryFiles: ${res.status}`
 }
 
 // fetchRouterBackups reads Settings' "router backups" group (#394,

@@ -25,6 +25,9 @@ export const SECTION_TARGETS = {
   // #1225: a flag's "block…" action lands on the drop list group's own
   // .stsection, the same way ingest-loss's `details` link lands above.
   'engineroom/droplist': { view: 'engineroom', anchor: 'engineroom-droplist' },
+  // #1354: the banner's "history is off but files are on disk" entry
+  // lands on the disk group, whose section already carries this id.
+  'engineroom/disk': { view: 'engineroom', anchor: 'diskg' },
 } as const satisfies Record<string, { view: View; anchor: string }>
 
 export type SectionId = keyof typeof SECTION_TARGETS

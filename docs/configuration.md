@@ -355,11 +355,18 @@ the wizard says it can never show it to you again.
   one that can't be read, or `enabled: false` -- MikroView keeps the
   files it finds, writes nothing new, and logs a warning naming the
   directory, and how to turn history back on (`history.enabled: true`
-  with the `history.keyFile` they were written under). An admin can
-  delete the files from Settings. Turning it off from the control in
-  Settings is different: that asks first ("delete N days · keep them")
-  and, once confirmed, deletes the files before the change shows on
-  screen.
+  with the `history.keyFile` they were written under). Turning it off
+  from the control in Settings keeps the files too (#1354): it stops
+  writing and deletes nothing.
+
+  **Deleting retained history is a UI action, admin only, behind your
+  password.** While history is off and files are still on disk, the
+  admin sees a notice in the banner at the top of the app and a
+  **Delete history files** action on the disk card in Settings. Click
+  it once to arm it, again to confirm, then enter your password. The
+  deletion is recorded in the audit log as `history.delete`. The notice
+  stays until the files are deleted or history is turned back on. No
+  config setting deletes history.
 - `history.keyFile` — path to a master key file that you generate.
   **Put it at `mikroview/keys/history.key` and restart** — MikroView
   finds it there with nothing else set:
@@ -5102,7 +5109,8 @@ starting the server. `mikroview -h` lists them too. See
 | `POST /api/ingest/router-backup` | ingest-token-only, not session-gated -- the sliced HTTPS alternative to the SFTP drop box (see [Router backups over SFTP](#router-backups-over-sftp-optional-off-by-default) and [routeros-setup.md](routeros-setup.md#7c-ii-https-only-alternative-for-a-deployment-with-no-open-sftp-port)). `{"op":"begin",...}` declares a transfer's kind, total size and slice count; `{"op":"slice",...}` posts each piece, up to 32KiB, up to the vault's 16MiB-per-file cap, one transfer per device at a time. One ingest-limiter reservation is spent per whole transfer (at `begin`), not per slice. Refused with 400 (a malformed or out-of-spec request), 404 (an unrecognised transfer id, or another device's), 429 (too many devices already in flight, or this device's ingest allowance spent), or 503 (the vault is not enabled, or MikroView itself could not store the finished file). A completed transfer is audited as `ingest.router_backup`; a refusal as `ingest.router_backup.refused`; a storage fault as `ingest.router_backup.failed` |
 | `PUT /api/settings/store` | admin-only: set `store.maxMemory` on the running instance -- stores the figure and resizes the event ring to match, growing keeps everything held, shrinking drops the oldest events first. Body `{"maxMemory": <bytes>}`. Refused with 400 if outside the allowed range, rather than clamped (see [How events are stored](#how-events-are-stored)). Audit-logged as `settings.store_max_memory` |
 | `GET /api/settings/history` | admin-only: the on-disk event history's state -- `keyed` (a usable key file is mounted), `enabled`, the two caps, `held` (the window actually on disk: days, oldest, newest, bytes -- `null` when nothing is), `capped` (the byte cap rather than the day count is what last dropped a day) and `bytesPerDay` (the newest complete day's file size, 0 if there isn't one). Admin for the read as well as the write, unlike the memory group: it names how much custody data this deployment keeps and how far back it reaches |
-| `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; **turning it off deletes every retained file before the response is written**. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
+| `PUT /api/settings/history` | admin-only: turn the on-disk event history on or off and set its two caps. Body `{"enabled": <bool>, "days": <int>, "maxBytes": <bytes>}`, answering with the same shape `GET` returns. Turning it on takes what the event buffer already holds and everything after; turning it off stops writing and keeps every retained file (#1354) -- deleting them is the route below. `days` below 1 or `maxBytes` below 1 MiB is refused with a 400; a request to turn it on with no key file mounted is refused with a 409. Audit-logged as `settings.history` |
+| `DELETE /api/settings/history/files` | admin-only: delete every retained history file while history is off (#1354) -- the only way retained history is deleted wholesale. Body `{"password": "<your password>"}`, re-checked like the other password prompts and rate-limited with them: a wrong one is a 401 (`incorrect password`). Refused with a 409 while history is on. Answers with the same shape `GET` returns. Audit-logged as `history.delete`, with the days, bytes and date range deleted |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see

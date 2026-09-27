@@ -267,8 +267,12 @@ var authzMatrix = []routeExpectation{
 			"anywhere to put it"},
 	{http.MethodPut, "/api/settings/history", accessAdmin,
 		"turns the on-disk event history on or off and sets its two caps (#910). Admin for the memory slider's " +
-			"reasons and one of its own: turning it off deletes every retained event before the call returns, " +
-			"which is the largest single act of evidence destruction available anywhere in mikroview"},
+			"reasons and one of its own: a smaller day count or cap deletes the oldest retained days at once. " +
+			"Turning it off keeps the files (#1354); deleting them is the route below"},
+	{http.MethodDelete, "/api/settings/history/files", accessAdmin,
+		"deletes every retained history file an off history left on disk (#1354) -- the largest single act of " +
+			"evidence destruction available anywhere in mikroview, so admin-only and behind a password re-check " +
+			"on top of the session"},
 
 	{http.MethodGet, "/api/settings/geo", accessAdmin,
 		"the Engine Room's \"Country and network owner\" card (#1352): which country source is live and each " +

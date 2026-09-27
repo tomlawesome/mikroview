@@ -647,6 +647,9 @@ func (s *Server) coreRoutes() []route {
 		// On-demand network owner for one address (#1352) -- never
 		// attached to every event; read only when someone asks.
 		{http.MethodGet, "/api/geo/lookup", s.handleGeoLookup},
+		// Deleting what an off history left on disk (#1354): the only
+		// way retained history is ever deleted wholesale, password-gated.
+		{http.MethodDelete, "/api/settings/history/files", s.handleHistoryFilesDelete},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},

@@ -10,8 +10,9 @@
 //
 //  - Shrinking the days is a proposal: the link names what would go, in
 //    the server's own figures, and nothing changes until it is taken.
-//  - `turn off` names every day on disk, and taking the link really
-//    empties the history directory -- the deletion the sentence promised.
+//  - `turn off` is immediate and keeps the day files (#1354): the row
+//    reads the kept window and the delete is offered. Deleting them is
+//    live-history-delete.mjs's, which runs next.
 //  - `turn on` is immediate, and the row reads a held window again once
 //    the writer has flushed.
 //
@@ -237,46 +238,41 @@ check(
   `the on-disk row still reads the server's window (${afterFewer.held?.days} days) -- got "${fewerRows['on disk']}"`,
 )
 
-// --- turn off: a proposal that names every day, then really deletes ----
+// --- turn off: immediate, and the day files stay (#1354) ----------------
 
-await page.click(`${DISKG} button:has-text("turn off")`)
-await page.waitForSelector(NOTE)
 const heldNow = afterFewer.held.days
-check(
-  (await page.locator(`${NOTE} button:has-text("delete ${plural(heldNow, 'day')}")`).count()) === 1,
-  `the link names every day on disk: "delete ${plural(heldNow, 'day')}"`,
-)
-check((await page.locator(`${NOTE} button:has-text("keep them")`).count()) === 1, 'the other link is "keep them"')
-const offNote = await noteText(page)
-check(
-  (heldNow === 1
-    ? /^off deletes the one day on disk, .+, and keeps nothing after/
-    : new RegExp(`^off deletes all ${heldNow} days on disk, back to .+, and keeps nothing after`)
-  ).test(offNote),
-  `the sentence says what off costs -- got "${offNote}"`,
-)
-check((await page.locator(`${DISKG}.doff`).count()) === 1, "the group is in round 42's doff state")
-const offRows = await rows(page)
-check((offRows.allowed ?? '').endsWith(' · off'), `the allowed row shows the proposed off -- got "${offRows.allowed}"`)
-check((await history(page)).enabled === true, 'proposing off changed nothing on the server')
-
-await page.click(`${NOTE} button:has-text("delete ${plural(heldNow, 'day')}")`)
-await page.waitForSelector(NOTE, { state: 'detached', timeout: 30000 })
+await page.click(`${DISKG} button:has-text("turn off")`)
+await page.locator(`${DISKG} button:has-text("turn off")`).waitFor({ state: 'detached', timeout: 30000 })
+check((await page.locator(NOTE).count()) === 0, 'turning off asks nothing: no proposal, it deletes nothing')
 const off = await history(page)
 check(off.enabled === false, 'the server has history off')
-check(off.held === null, `nothing is held after off -- got ${JSON.stringify(off.held)}`)
-check(await dayFilesGone(), `${historyDir} holds no day files after off -- got ${dayFiles().join(', ') || 'none'}`)
+check(
+  off.held?.days === heldNow,
+  `the ${plural(heldNow, 'day')} on disk are still reported after off -- got ${JSON.stringify(off.held)}`,
+)
+check(dayFiles().length > 0, `${historyDir} still holds its day files after off`)
 
 const stoppedRows = await rows(page)
-check(stoppedRows['on disk'] === 'nothing', `the on-disk row reads "nothing" -- got "${stoppedRows['on disk']}"`)
+check(
+  / — kept on disk; turn history on with the same key to use them$/.test(stoppedRows['on disk'] ?? ''),
+  `the on-disk row reads the kept window -- got "${stoppedRows['on disk']}"`,
+)
+check(
+  (stoppedRows['on disk'] ?? '').startsWith(`${plural(heldNow, 'day')} ·`),
+  `the kept row leads with the server's ${heldNow} held days -- got "${stoppedRows['on disk']}"`,
+)
 check((stoppedRows.allowed ?? '').endsWith(' · turn on'), `the allowed row ends with "turn on" -- got "${stoppedRows.allowed}"`)
-check((await page.locator(`${DISKG} svg.stmem`).count()) === 0, 'there is no bar with nothing on disk')
+check((await page.locator(`${DISKG} svg.stmem`).count()) === 0, 'there is no bar while off')
 check((await page.locator(SLIDER).count()) === 1, 'the track is still live while off')
 check((await page.locator(`${DISKG}.dstopped`).count()) === 1, "the group is in round 42's dstopped state")
 const hint = ((await page.locator(`${DISKG} .wleft .oghint`).first().textContent()) ?? '').replace(/\s+/g, ' ').trim()
 check(
-  /^nothing on disk — events live in memory only/.test(hint),
-  `the hint says where events live now -- got "${hint}"`,
+  /^nothing new is kept on disk — events live in memory only/.test(hint),
+  `the hint says where events live now, without claiming the disk is empty -- got "${hint}"`,
+)
+check(
+  (await page.locator(`${DISKG} button:has-text("Delete history files")`).count()) === 1,
+  'the delete is offered while the files are kept',
 )
 
 // --- turn on: immediate, and a held window comes back --------------------

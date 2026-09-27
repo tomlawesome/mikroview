@@ -90,6 +90,69 @@ describe('JourneyAttach', () => {
     expect(container.querySelector('.fullfall')?.getAttribute('aria-hidden')).toBe('true')
   })
 
+  it('shows the upgrade-warning block above the command lines when the response carries one (#1378)', async () => {
+    wizardState.status = {
+      instance: {
+        tlsEnabled: true,
+        hosts: ['localhost'],
+        syslogPort: ':6514',
+        syslogEnabled: true,
+        address: '',
+        addressCandidates: [],
+        backupTransport: 'sftp',
+      },
+      sources: [],
+      devices: [],
+      pushKinds: [],
+      marks: [],
+      witnesses: [],
+    }
+    vi.mocked(fetchSetupCommands).mockResolvedValue({
+      routeros: {
+        minimum: '7.18',
+        newest: '7.24.1',
+        rows: [],
+        upgrades: [
+          {
+            id: 'cert-store-7.24.3',
+            from: '7.24.3',
+            steps: ['syslog'],
+            heading: 'RouterOS 7.24.3 stopped trusting one public root certificate, GoDaddy Class 2.',
+            body: 'Check the chain your certificate uses.',
+          },
+        ],
+      },
+      picked: null,
+      routers: [
+        { id: 'core', name: 'core', routerosVersion: '7.24.4', standing: 'reviewed', upgrades: ['cert-store-7.24.3'] },
+      ],
+      steps: {
+        caTrust: { commands: '', note: '' },
+        syslog: { commands: SYSLOG_COMMANDS, note: '' },
+        ruleTagging: { commands: '', note: '' },
+        push: { commands: '', note: '' },
+        schedule: { commands: '', note: '' },
+        backup: { commands: '', note: '' },
+        backupSchedule: { commands: '', note: '' },
+      },
+    })
+
+    const { container } = render(JourneyAttach)
+
+    await waitFor(() => {
+      expect(screen.getByText(/core \(7\.24\.4\) runs RouterOS 7\.24\.3 or later\./)).toBeTruthy()
+    })
+    // Above the command block, not after it.
+    const stack = container.querySelector('.stack')
+    const warningEl = screen.getByText(/runs RouterOS 7\.24\.3 or later/).closest('.note.upgrade')
+    const codeEl = container.querySelector('.code')
+    expect(warningEl).toBeTruthy()
+    if (warningEl && codeEl && stack) {
+      const children = Array.from(stack.children)
+      expect(children.indexOf(warningEl)).toBeLessThan(children.indexOf(codeEl))
+    }
+  })
+
   it('Continue moves the journey on to Connecting', async () => {
     wizardState.status = {
       instance: {
