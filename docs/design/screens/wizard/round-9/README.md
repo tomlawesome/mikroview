@@ -94,6 +94,32 @@ fit in a 640px body; their stamps truncate at narrow widths.
 
 ## Verdicts
 
-None yet.
+**Owner, 2026-09-27 (verbatim),** with three screenshots
+(`shots/owner-verdict-fall-selector.png`: the tagging step's mini-fall;
+`shots/owner-verdict-track.png`: the track; `shots/owner-verdict-ledger-fall.png`:
+the ledger's "the fall now" header row, struck through in red):
+
+"I don't like the fake fall thing as a selector. get rid of the bits
+drawn over in red. The enrol bar is better but it should stay just
+green. Also for AE.. 1-4 could easily be condensed into a single step
+easily and clearly.
+
+Also, users shouldn't be able to click the next steps in the left menu.
+until they've done the one before it. They should be able to click
+preceeding steps after they've completed one. I'd like to see AE as a
+full screen, with a beautiful transition between first login and
+successfully completing the wizard. I don't just mean a fade in/out. I
+mean something like Orbit's login/out animation journeys
+
+AF is dropped."
+
+- **AF** dropped.
+- **AE** kept, for round 10: no mini-fall anywhere (tagging goes back to
+  a rule list; the ledger loses its column row); the track stays, all
+  green; questions 1–4 (name, address, push, backup) become one step;
+  the step list only allows steps already reached, and any earlier
+  completed step; the wizard becomes a full screen, with a designed
+  transition from first login into the wizard and out to the finished
+  fall, in the spirit of Orbit's login/logout journeys.
 
 Written by Fable 5.1, 2026-09-27.
