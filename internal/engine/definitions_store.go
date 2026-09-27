@@ -336,6 +336,18 @@ var ErrDefinitionImmutable = errors.New("engine: this definition cannot be modif
 // this to a 5xx without echoing the wrapped detail to the client.
 var ErrPersistFailed = errors.New("engine: saving this change failed")
 
+// PoisonForTest plants an entry that cannot be encoded, so every later
+// save through tryPersistLocked fails with ErrPersistFailed -- the only
+// way that error can arise, since the write-behind itself never fails a
+// caller synchronously. Exported for internal/api's handler-level tests
+// of the 500 it maps to; nothing outside tests calls it. Needs a store
+// opened with a backend: an in-memory one never encodes anything.
+func (s *DefinitionsStore) PoisonForTest() {
+	s.mu.Lock()
+	s.raw["\x00poison"] = json.RawMessage("{not valid json")
+	s.mu.Unlock()
+}
+
 // Upsert creates or replaces the definition at d.ID. d must validate
 // (Definition.Validate) and must not collide with an existing shipped or
 // unavailable definition at the same ID -- see ErrDefinitionImmutable.

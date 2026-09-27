@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -648,9 +649,34 @@ func (s *Server) handleAuthLoginFactorBegin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// The same LoginLimiter reservations, on the same keys, that every
+	// other step spending this pending-login cookie takes (#1345
+	// SEC-A1-F1): without them, anyone holding the password could start
+	// passkey prompts without limit. Kept on success here, like a guess
+	// that has not yet proved right: handleAuthLoginFactor gives them
+	// back once the assertion this begin mints signs the user in, so
+	// only a prompt that never completes a sign-in stays counted.
+	ipKey := "ip:" + s.clientIP(r)
+	userKey := "user:" + strings.ToLower(user.Username)
+	if !s.LoginLimiter.Reserve(ipKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		s.LoginLimiter.Release(ipKey, now)
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	// A failure below is this server's, not the caller's attempt.
+	releaseReservations := func() {
+		s.LoginLimiter.Release(ipKey, now)
+		s.LoginLimiter.Release(userKey, now)
+	}
+
 	wu := webauthnUser{id: []byte(user.ID), username: user.Username, credentials: webauthnCredentialsFor(nonStale)}
 	assertion, session, err := s.RelyingParty.WebAuthn.BeginLogin(wu)
 	if err != nil {
+		releaseReservations()
 		authLog.Error(fmt.Sprintf("beginning passkey login for %s: %v", user.Username, err))
 		http.Error(w, "unable to start passkey sign-in", http.StatusInternalServerError)
 		return
@@ -659,6 +685,7 @@ func (s *Server) handleAuthLoginFactorBegin(w http.ResponseWriter, r *http.Reque
 
 	encoded, err := passkeyAssertSessionCodec.encode(*session)
 	if err != nil {
+		releaseReservations()
 		authLog.Error(fmt.Sprintf("sealing passkey login session for %s: %v", user.Username, err))
 		http.Error(w, "unable to start passkey sign-in", http.StatusInternalServerError)
 		return
