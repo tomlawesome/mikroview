@@ -47,6 +47,7 @@
   import { versionState } from '../lib/version.svelte'
   import { geoipState, GEOIP_DOCS_URL } from '../lib/geoip.svelte'
   import { persistenceState } from '../lib/persistence.svelte'
+  import { configProblemsState } from '../lib/configProblems.svelte'
   import { familyOf } from '../lib/flagPalette'
   import {
     fetchSetupStatus,
@@ -294,6 +295,10 @@
     historyFetchedAt = Date.now()
     if (historyRetry) clearTimeout(historyRetry)
     historyRetry = setTimeout(refreshHistory, 6_000)
+    // Turning history off or on, or deleting its files, adds or clears
+    // the banner's "files still on disk" entry (#1354): ask again now
+    // rather than leaving it until a reload.
+    configProblemsState.refresh()
   }
 
   // The `state` row (round 43): the state store, beside the key.
@@ -1465,7 +1470,6 @@
           class:dshrink={diskPhase === 'dshrink'}
           class:dgrow={diskPhase === 'dgrow'}
           class:dcap={diskPhase === 'dcap'}
-          class:doff={diskPhase === 'doff'}
           class:dcapped={diskPhase === 'dcapped'}
           class:dstopped={diskPhase === 'dstopped'}
           class:dnokey={diskPhase === 'dnokey'}
