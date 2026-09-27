@@ -39,6 +39,7 @@
 # Usage:
 #   scripts/record-upgrade-fixture.sh v0.3.0
 #   scripts/record-upgrade-fixture.sh --postgres v0.3.0
+#   scripts/record-upgrade-fixture.sh --check <local-image>
 #
 # Requires docker. Uploading takes whichever credential the environment
 # offers:
@@ -56,24 +57,58 @@
 # Set MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD=1 to record and pack locally
 # without uploading (used by the "tiny file" upload test and by anyone who
 # wants to inspect a recording before it goes anywhere).
+#
+# --check <image> -- #1358 item 3: exercises the same scripted session
+# against an already-built local image instead of pulling a released one
+# from GHCR, so a dev -> preview merge request can catch a broken session
+# before a tag ever runs this script for real. Always the file backend
+# (postgres fixtures are proven per schema version, not per check run --
+# see the --postgres mode's own header above -- so --check refuses
+# --postgres rather than recording a throwaway dump nobody reads) and
+# always skips the upload, regardless of MIKROVIEW_UPGRADE_FIXTURE_SKIP_
+# UPLOAD -- a check run must never reach the package registry even if the
+# caller forgets to set that. The version used for feature-generation
+# detection (HAS_WATCHLIST etc. below) comes from this tree's own VERSION
+# file, not an argument: a check run is always testing what dev is about
+# to become, never a past release.
 set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 MODE="file"
 VERSION=""
+CHECK=false
+CHECK_IMAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --postgres) MODE="postgres" ;;
+    --check)
+      CHECK=true
+      CHECK_IMAGE="${2:?record-upgrade-fixture: --check needs an image reference}"
+      shift
+      ;;
     --) ;;
     -*) echo "record-upgrade-fixture: unknown flag $1" >&2; exit 2 ;;
     *) VERSION="$1" ;;
   esac
   shift
 done
-: "${VERSION:?usage: scripts/record-upgrade-fixture.sh [--postgres] <version>, e.g. v0.3.0}"
+if $CHECK; then
+  [ "$MODE" != "postgres" ] || { echo "record-upgrade-fixture: --check does not support --postgres" >&2; exit 2; }
+  [ -z "$VERSION" ] || { echo "record-upgrade-fixture: --check derives its version from VERSION -- do not pass one" >&2; exit 2; }
+  VERSION="v$(cat "$ROOT/VERSION")-check"
+  MIKROVIEW_UPGRADE_FIXTURE_SKIP_UPLOAD=1
+else
+  : "${VERSION:?usage: scripts/record-upgrade-fixture.sh [--postgres] <version>, e.g. v0.3.0}"
+fi
 VERSION_BARE="${VERSION#v}"
+VERSION_BARE="${VERSION_BARE%-check}"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="ghcr.io/tomlawesome/mikroview:${VERSION}"
+if $CHECK; then
+  IMAGE="$CHECK_IMAGE"
+else
+  IMAGE="ghcr.io/tomlawesome/mikroview:${VERSION}"
+fi
 # Pinned like every other image this repository runs (#711). Not in
 # supply-chain/pins-policy.json: that file records the pins CI itself
 # declares in .gitlab-ci.yml and the Dockerfile, and these two are
