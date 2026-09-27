@@ -11,7 +11,8 @@
   // so a banner people can make go away forever is a banner that does
   // nothing.
   import { authState } from '../lib/auth.svelte'
-  import { configProblemsState } from '../lib/configProblems.svelte'
+  import { HISTORY_HELD_WHILE_OFF, configProblemsState } from '../lib/configProblems.svelte'
+  import { goToSection } from '../lib/sectionLink'
 
   // #1188: GET /api/config/problems is admin-gated server-side, so every
   // non-admin session used to request it on load purely to be refused,
@@ -28,24 +29,40 @@
 {#if configProblemsState.hasProblems && !configProblemsState.dismissed}
   <div class="banner" role="status">
     <div class="content">
-      <strong>
-        {configProblemsState.problems.length === 1
-          ? 'A setting in your configuration is being ignored'
-          : `${configProblemsState.problems.length} settings in your configuration are being ignored`}
-      </strong>
-      <ul>
-        {#each configProblemsState.problems as p (p.code + p.key)}
-          <li>
-            <code>{p.key}</code> — {p.message}
-            {#if p.applied}
-              <span class="applied">Using <code>{p.applied}</code> instead.</span>
-            {/if}
-            {#if p.remediation}
-              <span class="fix">{p.remediation}</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
+      {#if configProblemsState.ignored.length > 0}
+        <strong>
+          {configProblemsState.ignored.length === 1
+            ? 'A setting in your configuration is being ignored'
+            : `${configProblemsState.ignored.length} settings in your configuration are being ignored`}
+        </strong>
+        <ul>
+          {#each configProblemsState.ignored as p (p.code + p.key)}
+            <li>
+              <code>{p.key}</code> — {p.message}
+              {#if p.applied}
+                <span class="applied">Using <code>{p.applied}</code> instead.</span>
+              {/if}
+              {#if p.remediation}
+                <span class="fix">{p.remediation}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <!-- Live findings (#1354): not a setting being ignored, so not
+           under that heading. Each stays until what it reports stops
+           being true -- the server works it out on every request. -->
+      {#each configProblemsState.warnings as p (p.code + p.key)}
+        <p class="warn">
+          {p.message}
+          {#if p.remediation}
+            <span class="fix">{p.remediation}</span>
+          {/if}
+          {#if p.code === HISTORY_HELD_WHILE_OFF}
+            <button type="button" class="go" onclick={() => goToSection('engineroom/disk')}>Go to the disk card</button>
+          {/if}
+        </p>
+      {/each}
     </div>
     <button
       type="button"
@@ -98,6 +115,26 @@
   .fix {
     color: var(--fg-muted);
     margin-left: 0.35rem;
+  }
+
+  .warn {
+    margin: 0;
+  }
+
+  .warn + .warn,
+  ul + .warn {
+    margin-top: 0.35rem;
+  }
+
+  .go {
+    background: none;
+    border: none;
+    padding: 0;
+    margin-left: 0.35rem;
+    font: inherit;
+    color: inherit;
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .dismiss {
