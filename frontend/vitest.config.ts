@@ -5,25 +5,9 @@
 // red for everyone else. UTC matches CI, so local runs now agree with it.
 process.env.TZ = 'UTC'
 
-import os from 'node:os'
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { svelteTesting } from '@testing-library/svelte/vite'
-
-// #1379: vitest's default worker count (os.availableParallelism(), one
-// thread per logical CPU) assumes it has the box to itself. On the
-// shared/sandboxed host this suite also runs on it does not -- load
-// average was 20-28 against 12 vCPUs at measurement time, entirely from
-// other agents' unrelated work, which this suite cannot see or control.
-// Matching our own worker count to that load average would be fragile
-// (it moves constantly); halving the CPU count is the fixed, load-blind
-// knob vitest documents for exactly this -- fewer of our own threads
-// fighting each other and the rest of the host for the same cores means
-// each worker's quantum is less likely to be starved past a test's
-// timeout. A synchronous, CPU-bound render (LiveTable.svelte.test.ts's
-// 800-row stripe test, #1308) has no I/O wait to hide a starved
-// scheduler behind, so it is the one that showed this first.
-const maxWorkers = Math.max(1, Math.floor(os.cpus().length / 2))
 
 // Deliberately separate from vite.config.ts rather than merging a `test`
 // field into it -- vite.config.ts already carries a fair amount of
@@ -41,7 +25,6 @@ export default defineConfig({
   plugins: [svelte(), svelteTesting()],
   test: {
     environment: 'jsdom',
-    maxWorkers,
     include: [
       'src/**/*.{test,spec}.{ts,js}',
       'guards/**/*.{test,spec}.{ts,js}',
