@@ -5,6 +5,12 @@ import type { OffBaseline } from './baseline'
 import type { ConfigUpgradeResponse } from './configUpgrade'
 import type {
   ApiToken,
+  ConfigCarryForwardResult,
+  ConfigEditorOpen,
+  ConfigEditorSummary,
+  ConfigSnapshot,
+  ConfigSnapshotsList,
+  ConfigValidateResult,
   AuditResult,
   AuthSession,
   BackupTransport,
@@ -51,6 +57,8 @@ import type {
   Stats,
   StoreMemory,
   HistorySettings,
+  GeoLookup,
+  GeoSettings,
   SetupMark,
   SetupStatus,
   Suggestion,
@@ -2023,6 +2031,99 @@ export async function setHistorySettings(body: {
   return (await res.text()).trim() || `setHistorySettings: ${res.status}`
 }
 
+// --- Country and network owner (#1352) -------------------------------------
+//
+// fetchGeoSettings reads the Engine Room's "country and network owner"
+// card: which source is live, and each source's download state. Admin-
+// only server-side; a non-admin's refusal surfaces as a thrown ApiError
+// for the caller to swallow, fetchHistorySettings' shape.
+export async function fetchGeoSettings(): Promise<GeoSettings> {
+  const res = await fetch('/api/settings/geo')
+  if (!res.ok) throw new ApiError(`fetchGeoSettings: ${res.status}`, res.status)
+  return res.json()
+}
+
+// The geo routes answer a refusal as {"error": "..."} rather than a bare
+// line, so the words are pulled out of that before falling back to the
+// body as text -- the same "the server's own words" rule
+// setHistorySettings keeps.
+async function geoRefusal(res: Response, name: string): Promise<string> {
+  const body = (await res.text()).trim()
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown }
+    if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim()
+  } catch {
+    // not JSON: the body itself, below
+  }
+  return body || `${name}: ${res.status}`
+}
+
+// The four key writes. Each answers the whole GET shape, so the card
+// redraws from the server's word rather than guessing; a refusal comes
+// back as the server's own sentence. The key is sent once and never
+// read back.
+export async function setGeoIpinfoToken(token: string): Promise<GeoSettings | string> {
+  const res = await putJSON('/api/settings/geo/ipinfo', { token })
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'setGeoIpinfoToken')
+}
+
+export async function removeGeoIpinfoToken(): Promise<GeoSettings | string> {
+  const res = await deleteJSON('/api/settings/geo/ipinfo')
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'removeGeoIpinfoToken')
+}
+
+export async function setGeoMaxmindKey(accountId: string, licenseKey: string): Promise<GeoSettings | string> {
+  const res = await putJSON('/api/settings/geo/maxmind', { accountId, licenseKey })
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'setGeoMaxmindKey')
+}
+
+export async function removeGeoMaxmindKey(): Promise<GeoSettings | string> {
+  const res = await deleteJSON('/api/settings/geo/maxmind')
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'removeGeoMaxmindKey')
+}
+
+// geoLookup asks for one address's country and network owner, on
+// demand: the owner is never carried on events (the stream holds
+// thousands and the owner is read only when someone asks -- #1352's
+// Fable call), so the popover, the dossier and the flag's tooltip each
+// ask here. Answers are kept in a small map so hovering the same flag
+// twice asks once; a request in flight is shared the same way. A failure
+// is not kept, so the next hover asks again. Resolves null on any
+// failure -- every caller simply shows nothing more.
+const GEO_LOOKUP_CAP = 500
+const geoLookupCache = new Map<string, Promise<GeoLookup | null>>()
+
+export function geoLookup(ip: string): Promise<GeoLookup | null> {
+  const hit = geoLookupCache.get(ip)
+  if (hit) return hit
+  const pending = (async () => {
+    try {
+      const res = await fetch(`/api/geo/lookup?ip=${encodeURIComponent(ip)}`)
+      if (!res.ok) throw new ApiError(`geoLookup: ${res.status}`, res.status)
+      return (await res.json()) as GeoLookup
+    } catch {
+      geoLookupCache.delete(ip)
+      return null
+    }
+  })()
+  geoLookupCache.set(ip, pending)
+  // A Map iterates in insertion order, so the first key is the oldest.
+  if (geoLookupCache.size > GEO_LOOKUP_CAP) {
+    const oldest = geoLookupCache.keys().next().value
+    if (oldest !== undefined) geoLookupCache.delete(oldest)
+  }
+  return pending
+}
+
+// For tests: forget every kept answer.
+export function clearGeoLookupCache(): void {
+  geoLookupCache.clear()
+}
+
 // deleteHistoryFiles deletes every retained history file an off history
 // left on disk (#1354), password-gated like disableTOTP: the one way
 // retained history is deleted wholesale. Returns the server's new state,
@@ -2614,4 +2715,133 @@ export async function deleteDecommissionWatch(id: string, reason?: string): Prom
   const res = await deleteJSON(`/api/decommission/watches/${encodeURIComponent(id)}`, reason ? { reason } : undefined)
   if (res.ok) return null
   return (await res.text()) || `deleteDecommissionWatch: ${res.status}`
+}
+
+// --- The config editor (#1347) -------------------------------------------
+//
+// All admin-only. Opening asks for the password again and unlocks
+// Show secrets and Download for 15 minutes; once that lapses the two
+// answer 401 with {reauth:true}, which is told apart here from a
+// session that has actually ended (a plain 401) so the editor can ask
+// for the password inline rather than bouncing to the sign-in page.
+
+/** The editor's unlock has lapsed: ask for the password and try again. */
+export interface ConfigReauth {
+  reauth: true
+}
+
+async function isReauth(res: Response): Promise<boolean> {
+  if (res.status !== 401) return false
+  try {
+    const body = await res.clone().json()
+    return body?.reauth === true
+  } catch {
+    return false
+  }
+}
+
+export async function openConfigEditor(password: string): Promise<ConfigEditorOpen | string> {
+  const res = await postJSON('/api/config/editor/open', { password })
+  if (res.ok) return res.json()
+  return serverSaid(res)
+}
+
+// No password and no unlock: nothing this returns is secret, only facts
+// about the file. What the Config card shows before the editor is opened.
+export async function configEditorSummary(): Promise<ConfigEditorSummary | string> {
+  const res = await fetch('/api/config/editor/summary')
+  if (res.ok) return res.json()
+  return serverSaid(res)
+}
+
+// Throws, like the other reads: the editor's Problems rail shows a
+// failed check as its own line rather than as "no problems".
+export async function validateConfig(text: string): Promise<ConfigValidateResult> {
+  const res = await postJSON('/api/config/validate', { text })
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  const body = await res.json()
+  return { problems: Array.isArray(body?.problems) ? body.problems : [] }
+}
+
+export async function carryForwardConfig(text: string): Promise<ConfigCarryForwardResult | string> {
+  const res = await postJSON('/api/config/carry-forward', { text })
+  if (!res.ok) return serverSaid(res)
+  const body = await res.json()
+  return {
+    text: typeof body?.text === 'string' ? body.text : text,
+    changes: Array.isArray(body?.changes) ? body.changes : [],
+    problems: Array.isArray(body?.problems) ? body.problems : [],
+  }
+}
+
+/** The server's own name for the file, from Content-Disposition. */
+export function filenameFromDisposition(header: string | null | undefined): string | null {
+  if (!header) return null
+  const star = /filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i.exec(header)
+  let name: string | null = null
+  if (star) {
+    try {
+      name = decodeURIComponent(star[1].trim().replace(/^"|"$/g, ''))
+    } catch {
+      name = null
+    }
+  }
+  if (!name) {
+    const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(header)
+    if (plain) name = (plain[2] ?? plain[1]).trim()
+  }
+  if (!name) return null
+  // Never a path: the browser strips these too, but say so here.
+  name = name.replace(/[/\\]/g, '_')
+  return name || null
+}
+
+export interface ConfigDownload {
+  filename: string | null
+  blob: Blob
+}
+
+export async function downloadConfig(text: string): Promise<ConfigDownload | ConfigReauth | string> {
+  const res = await postJSON('/api/config/download', { text })
+  if (await isReauth(res)) return { reauth: true }
+  if (!res.ok) return serverSaid(res)
+  return { filename: filenameFromDisposition(res.headers?.get?.('Content-Disposition')), blob: await res.blob() }
+}
+
+export async function revealConfigSecrets(): Promise<{ secrets: Record<string, string> } | ConfigReauth | string> {
+  const res = await fetch('/api/config/editor/reveal')
+  if (await isReauth(res)) return { reauth: true }
+  if (!res.ok) return serverSaid(res)
+  const body = await res.json()
+  return { secrets: body?.secrets && typeof body.secrets === 'object' ? body.secrets : {} }
+}
+
+// {available, reason, keep, snapshots} -- keep is how many of them
+// MikroView keeps, for the card's and the panel's "the last N are kept".
+export async function fetchConfigSnapshots(): Promise<ConfigSnapshotsList> {
+  const res = await fetch('/api/config/snapshots')
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  const body = await res.json()
+  return {
+    keep: typeof body?.keep === 'number' ? body.keep : 0,
+    snapshots: Array.isArray(body?.snapshots) ? body.snapshots : [],
+  }
+}
+
+export async function createConfigSnapshot(text: string, note: string): Promise<string | null> {
+  const res = await postJSON('/api/config/snapshots', { text, note })
+  if (res.ok) return null
+  return serverSaid(res)
+}
+
+export async function fetchConfigSnapshot(id: string): Promise<ConfigSnapshot | string> {
+  const res = await fetch(`/api/config/snapshots/${encodeURIComponent(id)}`)
+  if (res.ok) return res.json()
+  return serverSaid(res)
+}
+
+export async function deleteConfigSnapshot(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/config/snapshots/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return serverSaid(res)
 }

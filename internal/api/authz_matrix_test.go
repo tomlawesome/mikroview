@@ -149,6 +149,33 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/config/upgrade", accessAdmin,
 		"the \"N new settings are available\" notice (#1218) and its ready-to-paste YAML -- admin-only like the wizard's own writes, since there is no read-only wizard for a viewer to reach this alongside"},
 
+	// The config editor (#1347). Every route admin-only: the config is
+	// the instance itself, secrets included, and the editor's whole job
+	// is producing the file that decides everything else. Setup-only
+	// mode serves these same rows (setuponly.go).
+	{http.MethodPost, "/api/config/editor/open", accessAdmin,
+		"re-checks the caller's password and returns the running config's text (secrets masked) and path -- the " +
+			"infrastructure map /api/config/problems is admin-gated for, and then some; the password is on top of the role, not instead of it"},
+	{http.MethodGet, "/api/config/editor/summary", accessAdmin,
+		"the Engine Room Config card's facts about the running config -- its path, header, schema and snapshot count, " +
+			"no text and no secrets, so no password either; admin-only for the path, the same infrastructure-map disclosure as /api/config/problems"},
+	{http.MethodGet, "/api/config/editor/reveal", accessAdmin,
+		"hands back the config's secret values in the clear, within the fifteen-minute unlock the password bought -- the most sensitive read here"},
+	{http.MethodPost, "/api/config/validate", accessAdmin,
+		"runs a config text through start-up's checks; the answers name keys, paths and hosts, the same disclosure as /api/config/problems"},
+	{http.MethodPost, "/api/config/carry-forward", accessAdmin,
+		"rewrites a config text for this build and snapshots the old one, writing to the snapshot store and the audit log"},
+	{http.MethodPost, "/api/config/download", accessAdmin,
+		"returns the whole config file with its secrets put back, within the unlock window -- a config file is the instance's keys"},
+	{http.MethodGet, "/api/config/snapshots", accessAdmin,
+		"lists the kept config snapshots (who took them, when, why); the texts themselves are behind the unlock on the route below"},
+	{http.MethodPost, "/api/config/snapshots", accessAdmin,
+		"keeps a whole config file, secrets included, in the snapshot store, and writes the audit log"},
+	{http.MethodGet, "/api/config/snapshots/{id}", accessAdmin,
+		"returns one kept config file (secrets masked, their values released to this session), within the unlock window"},
+	{http.MethodDelete, "/api/config/snapshots/{id}", accessAdmin,
+		"deletes a kept config file, possibly the copy a rollback needs, and writes the audit log"},
+
 	{http.MethodGet, "/api/upgrade", accessViewer,
 		"the upgrade notice's facts (#1240): the version this data directory last ran, this one, and how many of " +
 			"the operator's declared routers are still on the old setup. Deliberately a tier below /api/config/upgrade " +
@@ -246,6 +273,27 @@ var authzMatrix = []routeExpectation{
 		"deletes every retained history file an off history left on disk (#1354) -- the largest single act of " +
 			"evidence destruction available anywhere in mikroview, so admin-only and behind a password re-check " +
 			"on top of the session"},
+
+	{http.MethodGet, "/api/settings/geo", accessAdmin,
+		"the Engine Room's \"Country and network owner\" card (#1352): which country source is live and each " +
+			"source's fetch state, plus whether an API key is set and by whom -- never the key itself. Admin for " +
+			"the read too: the card sits in the admin-only Engine Room grid, and who configured which provider " +
+			"account is instance configuration, not something the stream needs (healthz carries the one fact it " +
+			"does need, geoSource)"},
+	{http.MethodPut, "/api/settings/geo/ipinfo", accessAdmin,
+		"stores an IPinfo Lite token, sealed under the retention key (#1352) -- entering a credential is a setup " +
+			"task, the same tier as minting the droplist pull key"},
+	{http.MethodDelete, "/api/settings/geo/ipinfo", accessAdmin,
+		"removes the IPinfo token -- same tier as setting it"},
+	{http.MethodPut, "/api/settings/geo/maxmind", accessAdmin,
+		"stores a MaxMind account ID and licence key, sealed under the retention key (#1352) -- same tier as " +
+			"the IPinfo token"},
+	{http.MethodDelete, "/api/settings/geo/maxmind", accessAdmin,
+		"removes the MaxMind credentials -- same tier as setting them"},
+	{http.MethodGet, "/api/geo/lookup", accessViewer,
+		"on-demand country and network owner for one public address (#1352), for the IP popover and host " +
+			"dossier -- any signed-in caller, like /api/lookup/ip/{ip}: it reveals nothing about an address the " +
+			"stream is not already showing, and no key or provider detail reaches the browser"},
 
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,

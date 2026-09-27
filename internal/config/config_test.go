@@ -74,14 +74,14 @@ devices:
 	})
 
 	t.Run("geoip and reputation env vars", func(t *testing.T) {
-		t.Setenv("MIKROVIEW_GEOIP_DB_PATH", "/data/GeoLite2-Country.mmdb")
+		t.Setenv("MIKROVIEW_GEOIP_CACHE_PATH", "/data/geoip")
 		t.Setenv("MIKROVIEW_ABUSEIPDB_KEY", "test-key")
 		cfg, err := Load("", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.GeoIP.DBPath != "/data/GeoLite2-Country.mmdb" {
-			t.Errorf("GeoIP.DBPath = %q, want the env value", cfg.GeoIP.DBPath)
+		if cfg.GeoIP.CachePath != "/data/geoip" {
+			t.Errorf("GeoIP.CachePath = %q, want the env value", cfg.GeoIP.CachePath)
 		}
 		if cfg.Reputation.AbuseIPDBKey != "test-key" {
 			t.Errorf("Reputation.AbuseIPDBKey = %q, want the env value", cfg.Reputation.AbuseIPDBKey)
@@ -1116,6 +1116,18 @@ func TestOUIDefaultsToEnabledAgainstTheIEEERegistry(t *testing.T) {
 	}
 	if cfg.OUI.CachePath != "/var/lib/mikroview/oui-registry.json" {
 		t.Errorf("OUI.CachePath = %q, want it under the data directory", cfg.OUI.CachePath)
+	}
+}
+
+// #1352: country data is fetched and cached like the OUI registry, under
+// the data directory, with no setting needed.
+func TestGeoIPCacheDefaultsUnderTheDataDirectory(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GeoIP.CachePath != "/var/lib/mikroview/geoip" {
+		t.Errorf("GeoIP.CachePath = %q, want it under the data directory", cfg.GeoIP.CachePath)
 	}
 }
 
