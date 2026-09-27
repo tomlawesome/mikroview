@@ -301,6 +301,55 @@ func (s *Server) handleConfigEditorOpen(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
+type editorSummaryResponse struct {
+	Path              string         `json:"path"`
+	Header            *config.Header `json:"header"`
+	SchemaGuess       int            `json:"schemaGuess"`
+	RunningVersion    string         `json:"runningVersion"`
+	RunningSchema     int            `json:"runningSchema"`
+	SnapshotCount     int            `json:"snapshotCount"`
+	ChangedSinceStart bool           `json:"changedSinceStart"`
+}
+
+// handleConfigEditorSummary is what the Engine Room's Config card shows
+// before the editor is opened: which file, which schema and release it
+// says it is for, how many snapshots are kept. No password and no
+// unlock, because nothing in it is secret -- the file's text is not
+// sent, only facts about it. It reads the file as it is on disk now; an
+// unreadable file reports its header as null and changedSinceStart true.
+func (s *Server) handleConfigEditorSummary(w http.ResponseWriter, r *http.Request) {
+	if !s.editorGate(w, r) {
+		return
+	}
+	ed := s.ConfigEditor
+	var raw []byte
+	readable := true
+	if ed.Path != "" {
+		// #nosec G304 -- this deployment's own config path, fixed at
+		// start-up by main.go; never taken from the request.
+		b, err := os.ReadFile(ed.Path)
+		if err != nil {
+			readable = false
+		}
+		raw = b
+	}
+	text := string(raw)
+	resp := editorSummaryResponse{
+		Path:              ed.Path,
+		SchemaGuess:       config.GuessSchema(text),
+		RunningVersion:    ed.RunningVersion,
+		RunningSchema:     config.CurrentSchema,
+		ChangedSinceStart: !readable || !bytes.Equal(raw, ed.StartupText),
+	}
+	if h, ok := config.ParseHeader(text); ok {
+		resp.Header = &h
+	}
+	if ed.Snapshots != nil {
+		resp.SnapshotCount = ed.Snapshots.Count()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 type editorTextRequest struct {
 	Text string `json:"text"`
 }
@@ -462,13 +511,36 @@ func (s *Server) handleConfigEditorReveal(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"secrets": s.editorValues(r)})
 }
 
+// snapshotView is one snapshot's metadata as the API gives it -- the
+// field names the web side was built against, which differ from the
+// store's own: when rather than takenAt, why rather than reason, and a
+// note that is null rather than "" when there is none.
+type snapshotView struct {
+	ID      string    `json:"id"`
+	When    time.Time `json:"when"`
+	By      string    `json:"by"`
+	Schema  int       `json:"schema"`
+	Version string    `json:"version"`
+	Why     string    `json:"why"`
+	Note    *string   `json:"note"`
+}
+
+func viewOf(m configsnap.Meta) snapshotView {
+	v := snapshotView{ID: m.ID, When: m.TakenAt, By: m.By, Schema: m.Schema, Version: m.Version, Why: m.Reason}
+	if m.Note != "" {
+		note := m.Note
+		v.Note = &note
+	}
+	return v
+}
+
 type snapshotsListResponse struct {
 	// Available is false when this server keeps no snapshots, with
-	// UnavailableReason saying why in words for the admin.
-	Available         bool              `json:"available"`
-	UnavailableReason string            `json:"unavailableReason,omitempty"`
-	Keep              int               `json:"keep"`
-	Snapshots         []configsnap.Meta `json:"snapshots"`
+	// Reason saying why in words for the admin (null when available).
+	Available bool           `json:"available"`
+	Reason    *string        `json:"reason"`
+	Keep      int            `json:"keep"`
+	Snapshots []snapshotView `json:"snapshots"`
 }
 
 // handleConfigSnapshotsList lists the snapshots, newest first, without
@@ -477,12 +549,15 @@ func (s *Server) handleConfigSnapshotsList(w http.ResponseWriter, r *http.Reques
 	if !s.editorGate(w, r) {
 		return
 	}
-	resp := snapshotsListResponse{Keep: configsnap.Keep, Snapshots: []configsnap.Meta{}}
+	resp := snapshotsListResponse{Keep: configsnap.Keep, Snapshots: []snapshotView{}}
 	if store := s.ConfigEditor.Snapshots; store != nil {
 		resp.Available = true
-		resp.Snapshots = store.List()
+		for _, m := range store.List() {
+			resp.Snapshots = append(resp.Snapshots, viewOf(m))
+		}
 	} else {
-		resp.UnavailableReason = s.ConfigEditor.SnapshotsUnavailable
+		reason := s.ConfigEditor.SnapshotsUnavailable
+		resp.Reason = &reason
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -532,11 +607,11 @@ func (s *Server) handleConfigSnapshotCreate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.Audit.Record(user.Username, "config.snapshot", meta.ID, "manual")
-	writeJSON(w, http.StatusCreated, meta)
+	writeJSON(w, http.StatusCreated, viewOf(meta))
 }
 
 type snapshotGetResponse struct {
-	configsnap.Meta
+	snapshotView
 	Text string `json:"text"`
 }
 
@@ -564,7 +639,7 @@ func (s *Server) handleConfigSnapshotGet(w http.ResponseWriter, r *http.Request)
 	}
 	masked, values := config.MaskSecrets(snap.Text)
 	s.rememberEditorValues(r, values, false)
-	writeJSON(w, http.StatusOK, snapshotGetResponse{Meta: snap.Meta, Text: masked})
+	writeJSON(w, http.StatusOK, snapshotGetResponse{snapshotView: viewOf(snap.Meta), Text: masked})
 }
 
 // handleConfigSnapshotDelete removes one snapshot.
@@ -595,6 +670,7 @@ func (s *Server) handleConfigSnapshotDelete(w http.ResponseWriter, r *http.Reque
 func (s *Server) configEditorRoutes() []route {
 	return []route{
 		{http.MethodPost, "/api/config/editor/open", s.handleConfigEditorOpen},
+		{http.MethodGet, "/api/config/editor/summary", s.handleConfigEditorSummary},
 		{http.MethodGet, "/api/config/editor/reveal", s.handleConfigEditorReveal},
 		{http.MethodPost, "/api/config/validate", s.handleConfigValidate},
 		{http.MethodPost, "/api/config/carry-forward", s.handleConfigCarryForward},
