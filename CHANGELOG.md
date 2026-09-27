@@ -70,6 +70,17 @@ rewritten.
   warning that applies to its reported version; first entry is 7.24.3's
   removal of the GoDaddy Class 2 root from the router's trust store.
 
+### Added
+
+- **The RouterOS upgrade warning also shows on the drop-list setup card
+  and the account-creation journey** (#1378, follow-up to #1344). Both
+  now fetch the setup commands the warning is drawn from -- the
+  drop-list card once its own setup section is opened, the journey
+  screen that already fetched them for its two-line command block --
+  and show it in the same place relative to the commands, above them.
+  Still not shown on the Engine Room's clipboard-only "copy for
+  RouterOS" (#1344's own ruling).
+
 ### Removed
 
 - **The Theme button and its accent-colour picker are gone** (#1371,

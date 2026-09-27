@@ -25,6 +25,16 @@
   // 2 of the full wizard renders, never invented copy -- and it asks for
   // the status itself rather than assuming the attach beat's own fetch
   // has landed.
+  //
+  // #1378 (the setup wizard's upgrade-breaks-a-command warning, #1344,
+  // extended past the wizard): deliberately not repeated on this screen.
+  // journeyState only ever reaches 'connecting' by way of
+  // JourneyAttach.svelte's fromAttach() (see journey.svelte.ts), and
+  // this beat shares the exact same wizardState.commands the attach beat
+  // already fetched and already rendered the warning against -- so this
+  // is the same surface a few seconds later, and showing it again here
+  // would be the same paragraph twice in one walk-through rather than a
+  // screen an operator could reach without having seen it.
   $effect(() => {
     if (!wizardState.status) wizardState.refresh()
   })
