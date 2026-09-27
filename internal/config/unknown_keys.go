@@ -46,6 +46,11 @@ type removedKey struct {
 //     backend it configured (the config-upgrade notice's per-version
 //     dismissal, #1218) was removed in favor of a plain close button;
 //     nothing reads or writes it any more.
+//   - geoip.dbPath: "## [Unreleased]", "`geoip.dbPath` is gone" (#1352)
+//     -- together with its -geoip-db flag and MIKROVIEW_GEOIP_DB_PATH;
+//     MaxMind now works only through the account ID and licence key
+//     entered on the Engine Room's "Country and network owner" card,
+//     and MikroView downloads the file itself.
 //
 // Do not add an entry without a matching CHANGELOG.md line: an unknown
 // key with no entry here still refuses to start (see explainYAMLError),
@@ -76,6 +81,12 @@ var removedOrRenamedKeys = map[string]removedKey{
 		Why: "configDrift.storePath, its only key, backed the config-upgrade notice's per-version " +
 			"dismissal (#1218), removed in favor of a plain close button (#1277); nothing reads or writes " +
 			"it any more. Remove this section.",
+	},
+	"geoip.dbPath": {
+		Version: "v0.6.2",
+		Why: "MikroView now downloads country data itself (#1352): flags work with no setup, and MaxMind " +
+			"GeoLite2 is used by entering your account ID and licence key on the Engine Room's \"Country and " +
+			"network owner\" card, not by pointing at a file. Remove this key.",
 	},
 }
 

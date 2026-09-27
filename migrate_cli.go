@@ -113,7 +113,6 @@ func migratedStores(cfg config.Config) []migratedStore {
 		// A directory, not a document -- see migratedStore.Dir.
 		migratedStore{Name: "tls", Path: cfg.TLS.StorePath, Dir: true},
 		migratedStore{Name: "recovery_pepper", Path: cfg.Auth.RecoveryPepperPath},
-		migratedStore{Name: "geoip_db", Path: cfg.GeoIP.DBPath},
 		// The retained event history (#856), a directory like tls above.
 		// Carried, unlike the snapshot directory: a snapshot is
 		// disposable state whose loss costs one cold start, while this
@@ -167,6 +166,9 @@ var excludedFromMigration = map[string]string{
 		"does, so nothing an operator believes they moved is lost by leaving four megabytes of " +
 		"somebody else's registry behind. It is also data MikroView has no permission to redistribute " +
 		"(see internal/oui.SourceURL), which is a second reason not to copy it around.",
+	"GeoIP.CachePath": "a cache of the country databases MikroView downloads (#1352), not state the " +
+		"operator owns: the refresh loop fetches them again shortly after the move, and flags are blank " +
+		"only until it does. Copying somebody else's databases around is also not MikroView's to do.",
 	"Postgres.DSNFile": "a mounted secret carrying a database password. It is deliberately not in the " +
 		"data directory (storage.go's readDSNFile explains why it is a file at all), and copying a " +
 		"credential into a freshly created volume during a migration would spread it, not move it.",
