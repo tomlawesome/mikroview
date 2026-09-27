@@ -1110,11 +1110,16 @@ export async function clearUserTOTP(id: string): Promise<string | null> {
   return (await res.text()) || `clearUserTOTP: ${res.status}`
 }
 
-// fetchPasskeys feeds PasskeysOverlay's list step (#1250).
-export async function fetchPasskeys(): Promise<PasskeySummary[] | string> {
+// fetchPasskeys feeds PasskeysOverlay's list step (#1250). Q5-F2: this
+// used to return failure text like PasskeysOverlay's own mutating calls
+// (renamePasskey, disablePasskey), which left a 401 here read as plain
+// error prose instead of routing to sign-in the way every other list
+// call in this file already does -- fetchDevices/fetchUsers's own shape,
+// matched here.
+export async function fetchPasskeys(): Promise<PasskeySummary[]> {
   const res = await fetch('/api/auth/passkeys')
-  if (res.ok) return res.json()
-  return (await res.text()) || `fetchPasskeys: ${res.status}`
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
 }
 
 // beginPasskeyRegistration/finishPasskeyRegistration wrap the two round
