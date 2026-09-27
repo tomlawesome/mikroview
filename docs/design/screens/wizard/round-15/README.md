@@ -33,6 +33,14 @@ Now:
   and the line strikes, nine sparks fly from each end — the one moment
   the tube throws a handful.
 
+## The wizard, one change
+
+Owner, while round 15 was up (verbatim): "Remove the two lines with a
+green Yes and change the button to just a Yes/No. You don't need to
+time/interval as it's already in the description". Done in `wizard.js`
+(the first change to the wizard since round 10): the push and backup
+choices read **Yes** / **No**, and the two lines under them are gone.
+
 ## Gates
 
 As round 14.

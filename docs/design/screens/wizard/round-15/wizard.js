@@ -1,4 +1,6 @@
-/* Round 11's wizard: round 10's AG steps, bodies, bar, strip and fall,
+/* Round 15's wizard: round 10's AG steps (owner, 2026-09-27, on round 15: the
+   push and backup choices are a plain Yes / No, and the two 'Yes — … Not now — …'
+   lines under them are gone; the label's own line already says what each does), bodies, bar, strip and fall,
    carried forward verbatim. What is new is the seam at the bottom: a
    direction supplies wayIn() and wayOut(), and calls showWizard(),
    showFall() and fallLive() at its own beats. */
@@ -40,8 +42,8 @@ function routerBody(s) {
   <div class="form">
     <label class="k" for="f-name">Name<small>What MikroView calls it on the fall, the stream and Entities.</small></label><div class="v"><input id="f-name" type="text" data-field="name" value="${esc(s.name)}" placeholder="rb5009" autocomplete="off"></div>
     <label class="k" for="f-addr">Its address<small>Its own address on the network MikroView sits on. The enrolment window opens for this address alone.</small></label><div class="v"><input id="f-addr" type="text" data-field="addr" value="${esc(s.addr)}" placeholder="192.168.13.1" autocomplete="off" class="${prob ? 'bad' : ''}" aria-invalid="${prob ? 'true' : 'false'}"><p class="problem" data-problem aria-live="polite">${esc(prob)}</p></div>
-    <label class="k">Push router state<small>Every 20 minutes the router posts its rule table, address lists, leases and interfaces.</small></label><div class="v">${seg('push', 'Yes, every 20 minutes', 'Not now')}<div class="gives"><b>Yes</b> — named bands on the fall, rules to tag, leases and interfaces on the map. <i>Not now</i> — the fall stays address-only.</div></div>
-    <label class="k">Back up nightly<small>At 03:00 the router exports its configuration and posts it, kept encrypted under your key file.</small></label><div class="v">${seg('backup', 'Yes, nightly at 03:00', 'Not now')}<div class="gives"><b>Yes</b> — a nightly .backup and .rsc under your key. <i>Not now</i> — no backups kept here.</div></div>
+    <label class="k">Push router state<small>Every 20 minutes the router posts its rule table, address lists, leases and interfaces.</small></label><div class="v">${seg('push', 'Yes', 'No')}</div>
+    <label class="k">Back up nightly<small>At 03:00 the router exports its configuration and posts it, kept encrypted under your key file.</small></label><div class="v">${seg('backup', 'Yes', 'No')}</div>
   </div>`;
 }
 function passBody(s) {
