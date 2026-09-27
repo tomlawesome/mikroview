@@ -572,6 +572,16 @@ flags at all. To tell a regression from a pre-existing failure, run the
 whole `make live-check` on both trees, a worktree at `gitlab/dev` and the
 branch, never the one scenario twice.
 
+### A vitest timeout in a full local run is not a failure
+
+On a host loaded by other agents' suites, a full `npx vitest run` times out
+a different handful of slow tests each time (LiveTable, City, EngineRoom,
+Topography). Re-run the failing file alone: if it passes, carry on and log
+nothing. Only an assertion failure, or a timeout that repeats in isolation
+or in CI, is real. No config change fixes this: halving vitest's workers
+helped locally and broke `test:frontend` on the runner (#1379, owner,
+2026-09-27).
+
 ### Match CI's exact commands, not the obvious equivalents
 
 Local verification is incomplete unless it used the same commands CI uses —
