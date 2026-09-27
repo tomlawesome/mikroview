@@ -377,6 +377,43 @@ describe('the window-cap chip (#801, round 36 item 6.1)', () => {
     expect(container.textContent).not.toContain('this window holds more')
     expect(container.querySelector('.att.dim')).toBeNull()
   })
+
+  // #1345 R4B-F2: nothing makes two window polls answer in the order
+  // they were sent. The 15 m poll below is still out when the operator
+  // picks 1 h; the 1 h poll answers first, then the stale 15 m one lands
+  // -- it must not put its older window back over the newer one.
+  it('keeps a newer window when an older poll answers after it', async () => {
+    const page = (hasMore: boolean) => ({
+      events: [],
+      hasMore,
+      windowStart: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+      serverTime: new Date().toISOString(),
+    })
+    let answerOld!: (v: ReturnType<typeof page>) => void
+    vi.mocked(fetchEventsWindow)
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          answerOld = r
+        }),
+      )
+      .mockResolvedValue(page(false))
+    const { container, getByRole } = render(Fall)
+    await waitFor(() => expect(fallState.loading).toBe(false))
+    fallState.boundaries = [boundary()]
+    flushSync()
+
+    await fireEvent.click(getByRole('button', { name: '1 h' }))
+    await waitFor(() => expect(fetchEventsWindow).toHaveBeenCalledTimes(2))
+    expect(getByRole('button', { name: '1 h' }).getAttribute('aria-pressed')).toBe('true')
+    // Let the 1 h poll's answer land first.
+    await new Promise((r) => setTimeout(r, 0))
+
+    answerOld(page(true))
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+
+    expect(container.textContent).not.toContain('this window holds more')
+  })
 })
 
 describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #790/#801)', () => {

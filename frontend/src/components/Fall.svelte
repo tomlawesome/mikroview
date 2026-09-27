@@ -206,7 +206,19 @@
   // untouched and still draws the window's own message.
   let windowPollStopped = false
 
+  // #1345 R4B-F2: two window polls can be in flight at once (a span
+  // change, or one tick answering slower than POLL_MS), and nothing
+  // makes them answer in the order they were sent -- EngineRoom's #1275
+  // overtaken() problem. Same answer: each poll remembers its place in
+  // line and stands down, failure path included, if a later one has
+  // already been answered. A counter rather than EngineRoom's clock, so
+  // two polls issued in the same millisecond (a span click right after
+  // a tick) still order.
+  let windowIssued = 0
+  let windowAnswered = 0
+
   async function loadWindow() {
+    const seq = ++windowIssued
     const end = Date.now()
     const start = end - spanMs
     // Flags come from the shared flagsState store (App.svelte already
@@ -214,19 +226,21 @@
     // Fall used to poll flags on its own tick too, doubling the request.
     try {
       const res = await fetchEventsWindow({ since: new Date(start).toISOString(), limit: WINDOW_LIMIT })
+      if (seq < windowAnswered) return
+      windowAnswered = seq
       const receivedAt = Date.now()
       windowEvents = res.events.map((e) => ({ ...e, receivedAt }))
       windowHasMore = res.hasMore
       windowError = null
     } catch (e) {
+      if (seq < windowAnswered) return
       if (!isCancelledFetch(e, windowPollStopped)) {
         windowError = e instanceof Error ? e.message : String(e)
       }
-    } finally {
-      windowStart = start
-      windowEnd = end
-      windowLoading = false
     }
+    windowStart = start
+    windowEnd = end
+    windowLoading = false
   }
 
   $effect(() => {
