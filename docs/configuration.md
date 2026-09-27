@@ -2341,6 +2341,23 @@ when something did. That happens before this notice (or anything else
 in the app) could ever show it, so there is nothing for this screen to
 add on that side.
 
+### The config editor (issue #1347)
+
+**Settings ▸ config** shows the file MikroView was started with, which
+version wrote it and how many snapshots are kept. **Open the editor**
+asks for your password again, then shows the file full-screen. As you
+type, MikroView checks the text and lists any problems on the right,
+each with its line; click one to jump to it. **Carry forward** rewrites
+the file for this version: removed settings are dropped, renamed ones
+are moved, and your values and comments are kept, with every change
+listed. Secrets are hidden until you press **Show secrets**.
+**Download** (or Ctrl+S) gives you the finished file to put in place
+yourself -- MikroView never changes the file on disk -- and asks for
+your password again if it has been more than 15 minutes. Keep your
+previous file beside the new one rather than overwriting it. **Snapshot**
+keeps a copy of the text (the last five are kept); Carry forward keeps
+one of the old file before it changes anything.
+
 ## Watchlist (optional)
 
 Issue #243 grew the old Control Ports tab into a user-tuned watchlist:
