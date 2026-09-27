@@ -36,7 +36,7 @@ import (
 // ingestOneRecovered needs, all unconfigured/in-memory (no GeoIP DB, no
 // flags/MAC-registry persistence) -- enough to exercise the new-device
 // wiring itself (issue #103 phase 1) without touching disk.
-func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MACRegistry, *flags.Store, *hub.Hub, *geoip.Lookup, *rules.Store) {
+func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MACRegistry, *flags.Store, *hub.Hub, *geoip.Manager, *rules.Store) {
 	t.Helper()
 	st := store.New(1000, time.Hour)
 	devices := device.NewRegistry(nil)
@@ -49,10 +49,9 @@ func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MA
 		t.Fatal(err)
 	}
 	h := hub.New()
-	geo, err := geoip.Open("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A nil Manager answers every lookup with "unknown" -- no data
+	// source, no network.
+	var geo *geoip.Manager
 	ru, err := rules.Open("")
 	if err != nil {
 		t.Fatal(err)

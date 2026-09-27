@@ -243,6 +243,27 @@ var authzMatrix = []routeExpectation{
 			"reasons and one of its own: turning it off deletes every retained event before the call returns, " +
 			"which is the largest single act of evidence destruction available anywhere in mikroview"},
 
+	{http.MethodGet, "/api/settings/geo", accessAdmin,
+		"the Engine Room's \"Country and network owner\" card (#1352): which country source is live and each " +
+			"source's fetch state, plus whether an API key is set and by whom -- never the key itself. Admin for " +
+			"the read too: the card sits in the admin-only Engine Room grid, and who configured which provider " +
+			"account is instance configuration, not something the stream needs (healthz carries the one fact it " +
+			"does need, geoSource)"},
+	{http.MethodPut, "/api/settings/geo/ipinfo", accessAdmin,
+		"stores an IPinfo Lite token, sealed under the retention key (#1352) -- entering a credential is a setup " +
+			"task, the same tier as minting the droplist pull key"},
+	{http.MethodDelete, "/api/settings/geo/ipinfo", accessAdmin,
+		"removes the IPinfo token -- same tier as setting it"},
+	{http.MethodPut, "/api/settings/geo/maxmind", accessAdmin,
+		"stores a MaxMind account ID and licence key, sealed under the retention key (#1352) -- same tier as " +
+			"the IPinfo token"},
+	{http.MethodDelete, "/api/settings/geo/maxmind", accessAdmin,
+		"removes the MaxMind credentials -- same tier as setting them"},
+	{http.MethodGet, "/api/geo/lookup", accessViewer,
+		"on-demand country and network owner for one public address (#1352), for the IP popover and host " +
+			"dossier -- any signed-in caller, like /api/lookup/ip/{ip}: it reveals nothing about an address the " +
+			"stream is not already showing, and no key or provider detail reaches the browser"},
+
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},
