@@ -102,6 +102,19 @@ by `setTimeout` beats; a build would drive them from the same state.
 
 ## Verdicts
 
-None yet.
+Owner, 2026-09-27 (verbatim):
+
+> needs a lot more work, its very boring andthe rain looks wird/not
+> liketheproper thing. try a verion where the user slides down the fall,
+> and a version where the rain increases and gets more colorful and
+> vibrant with increasing intensity until it fills thescreen, before
+> reducing to nothing to reveal thescreen. then try one wild, brave awe
+> inspiring incredible option too, free reign on the third one - go nuts
+
+Read as: AG's wizard (the one router step, the gated rail, the green
+track, the rule list, the ledger) stands; the *journeys* are the work.
+Round 11 draws three ways in: the slide down the fall, the rain that
+swells to fill the screen, and one unconstrained. The door's rain must
+be the real `Fullfall`'s, not a static field of marks.
 
 Written by Fable 5.1, 2026-09-27.
