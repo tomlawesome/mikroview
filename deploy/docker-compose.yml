@@ -69,7 +69,7 @@ services:
       retries: 3
     volumes:
       # One app folder on the host, two mounts: read-only for what you
-      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # own (config, keys, certs), read-write for what MikroView
       # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
       # Sample config: deploy/config.example.yaml -- copy it to
       # mikroview/config.yaml (see docs/install.md's "Persistent data"
@@ -84,7 +84,7 @@ services:
       - ./mikroview:/etc/mikroview:ro
       - ./mikroview/data:/var/lib/mikroview
       # Mounting each file separately instead -- config.yaml,
-      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or the
+      # a bind-mounted data/ of its own, or the
       # mikroview-data named volume -- is the old way and still works: a
       # path set in config.yaml or the environment always wins over the
       # folder default. See docs/configuration.md.
@@ -99,9 +99,6 @@ services:
       # come up on defaults. Set it only if your config lives somewhere
       # other than mikroview/config.yaml.
       # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
-      # file into mikroview/ is the old way and still works -- see
-      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json

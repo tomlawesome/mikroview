@@ -16,6 +16,35 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **Country flags work with no setup, and IPinfo adds the network owner**
+  (#1352, owner decision 2026-09-27). MikroView now downloads its own
+  country data at runtime and caches it under `geoip.cachePath`
+  (default `/var/lib/mikroview/geoip`); nothing ships in the image.
+  Three sources, in a fixed order: IPinfo Lite (country and network
+  owner, free token) beats MaxMind GeoLite2-Country (free account ID and
+  licence key) beats DB-IP IP-to-Country Lite (no account, the default).
+  Keys are entered on the Engine Room's "Country and network owner"
+  card only -- never in `config.yaml` -- stored sealed under
+  `history.keyFile` the way router backups are, and never shown again,
+  logged or returned by any API. With no `history.keyFile` mounted, key
+  entry is refused and DB-IP stays in use. New API: `GET
+  /api/settings/geo`, `PUT`/`DELETE /api/settings/geo/ipinfo` and
+  `/api/settings/geo/maxmind` (admin), `GET /api/geo/lookup?ip=` (any
+  signed-in user), and `geoSource` on `/api/healthz`. See
+  docs/configuration.md's "GeoIP country flags".
+
+### Removed
+
+- **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
+  `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
+  `GeoLite2-Country.mmdb`. MikroView downloads MaxMind's file itself
+  now: enter your MaxMind account ID and licence key on the Engine
+  Room's "Country and network owner" card instead, and delete the
+  mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
+  refuses to start and names the card. Remove the key.
+
 ### Changed
 
 - **Turning history off keeps the files; deleting them is a separate,
@@ -47,6 +76,28 @@ rewritten.
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
 ### Added
+
+- **A config editor, and a refused config no longer stops MikroView
+  dead** (#1347). Admins can open the running `config.yaml` in the UI
+  (password again; a 15-minute unlock covers showing secrets and
+  downloading), see start-up's own checks on each line as they type, and
+  press **Carry forward** to rewrite an old file for this release:
+  removed settings dropped with the reason, sections moved into the
+  example's layout, values and comments kept. The result is a download
+  named `config.v<release>.yaml` -- MikroView never writes the config
+  file; keep the previous one beside it. Secrets are masked in the
+  editor and put back in the download. The last five snapshots of the
+  text are kept, sealed under the retention key and carried by
+  `-backup`, including one taken before every Carry forward. When
+  start-up refuses the config it now comes up in **setup-only mode**:
+  sign-in, `/api/healthz` (`"mode": "setup-only"`) and the editor, with
+  every other route answering 503 and nothing else running. It still
+  exits as before when there is no account to sign in with, when
+  `ui.allow` cannot be honoured, or when the accounts live in Postgres.
+  Every config MikroView writes, and `deploy/config.example.yaml`, now
+  opens with four header lines naming the schema (the settings it should
+  have: v0.6.1 is 7), the release that wrote it and its layout. See
+  docs/configuration.md's "The config editor" and "Setup-only mode".
 
 - **A router's card names what an earlier setup left behind, with the exact
   fix** (#1373). The push script now reports every logging action still

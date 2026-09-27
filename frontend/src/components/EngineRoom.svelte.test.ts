@@ -110,6 +110,18 @@ vi.mock('../lib/api', () => ({
     setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
   })),
   fetchConfigUpgrade: vi.fn(async () => ({ version: 'v1.2.3', settings: [] })),
+  fetchGeoSettings: vi.fn(async () => ({
+    source: 'dbip',
+    sources: {
+      dbip: { loaded: true, fetchedAt: '2026-09-27T00:00:00Z', nextRefresh: null, lastError: null },
+      ipinfo: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+      maxmind: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+    },
+  })),
+  setGeoIpinfoToken: vi.fn(),
+  removeGeoIpinfoToken: vi.fn(),
+  setGeoMaxmindKey: vi.fn(),
+  removeGeoMaxmindKey: vi.fn(),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -136,6 +148,7 @@ import {
   fetchRouterBackups as fetchRouterBackupsReal,
   fetchDroplist as fetchDroplistReal,
   fetchConfigUpgrade as fetchConfigUpgradeReal,
+  fetchGeoSettings as fetchGeoSettingsReal,
 } from '../lib/api'
 import type { RouterBackupsResponse, Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
@@ -144,6 +157,7 @@ const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
 const fetchRouterBackups = vi.mocked(fetchRouterBackupsReal)
 const fetchDroplist = vi.mocked(fetchDroplistReal)
 const fetchConfigUpgrade = vi.mocked(fetchConfigUpgradeReal)
+const fetchGeoSettings = vi.mocked(fetchGeoSettingsReal)
 
 function stats(overrides: Partial<Stats> = {}): Stats {
   return {
@@ -1458,7 +1472,9 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     const backups = document.getElementById('bakg')
     expect(backups).toBeTruthy()
     expect(backups?.querySelector('h3')?.textContent).toBe('router backups')
-    expect(disk?.nextElementSibling?.id).toBe('bakg')
+    // #1352's country group sits beside disk, so backups follows it.
+    expect(disk?.nextElementSibling?.id).toBe('engineroom-geo')
+    expect(disk?.nextElementSibling?.nextElementSibling?.id).toBe('bakg')
     // RouterBackups really is the thing mounted here, wired to the
     // fetched resp -- not an empty shell.
     expect(within(backups as HTMLElement).getByText('rb5009')).toBeTruthy()
@@ -1656,5 +1672,55 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
 
     expect(document.getElementById('engineroom-droplist')).toBeNull()
     expect(screen.queryByText('drop list')).toBeNull()
+  })
+})
+
+// #1352: the "country and network owner" group. GeoSources.svelte has
+// its own component tests; what belongs here is the integration layer:
+// mounted under its heading beside disk, admin-gated, and the same dfail
+// "the server did not answer" shape the neighbouring groups draw.
+describe('the country and network owner group (#1352)', () => {
+  it('mounts right after disk for an admin, reading the source in use', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const geo = document.getElementById('engineroom-geo')
+    expect(geo).toBeTruthy()
+    expect(geo?.querySelector('h3')?.textContent).toBe('country and network owner')
+    expect(document.getElementById('diskg')?.nextElementSibling?.id).toBe('engineroom-geo')
+    expect(within(geo as HTMLElement).getByText('Flags from DB-IP Lite')).toBeTruthy()
+    expect(geoipState.source).toBe('dbip')
+  })
+
+  it('answers unknown, with a working ask again, when the server does not', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    fetchGeoSettings.mockRejectedValueOnce(new Error('network error'))
+    render(EngineRoom)
+    await settle()
+    await settle()
+
+    const geo = document.getElementById('engineroom-geo')
+    expect(geo?.classList.contains('dfail')).toBe(true)
+    expect(within(geo as HTMLElement).getByText(/unknown — the server did not answer/)).toBeTruthy()
+
+    await fireEvent.click(within(geo as HTMLElement).getByRole('button', { name: 'ask again' }))
+    await settle()
+    await settle()
+    expect(document.getElementById('engineroom-geo')?.classList.contains('dfail')).toBe(false)
+  })
+
+  it('a viewer sees no country group at all, and it is never fetched', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(document.getElementById('engineroom-geo')).toBeNull()
+    expect(screen.queryByText('country and network owner')).toBeNull()
+    expect(fetchGeoSettings).not.toHaveBeenCalled()
   })
 })

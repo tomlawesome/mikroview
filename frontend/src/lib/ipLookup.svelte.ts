@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { lookupIp } from './api'
+import { geoLookup, lookupIp } from './api'
+import { ownerLabel } from './geo'
 import { appState } from './state.svelte'
 import type { ReputationResult } from './types'
 
@@ -20,6 +21,11 @@ class IpLookupState {
   result = $state<ReputationResult | null>(null)
   loading = $state(false)
   error = $state<string | null>(null)
+  // The network owner (#1352) -- "AS13335 Cloudflare, Inc." -- from the
+  // local country source, asked alongside the reputation lookup and
+  // shown as one line under the country. Null while unknown, in which
+  // case the popover says nothing about it.
+  owner = $state<string | null>(null)
 
   private requestId = 0
 
@@ -41,8 +47,13 @@ class IpLookupState {
     this.result = null
     this.error = null
     this.loading = true
+    this.owner = null
 
     const id = ++this.requestId
+    geoLookup(ip).then((g) => {
+      if (id !== this.requestId) return
+      this.owner = ownerLabel(g)
+    })
     lookupIp(ip).then(
       (r) => {
         if (id !== this.requestId) return

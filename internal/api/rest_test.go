@@ -164,19 +164,20 @@ func TestHandleHealthz(t *testing.T) {
 		t.Errorf("version field = %v, want test-version", body["version"])
 	}
 	if body["geoip"] != false {
-		t.Errorf("geoip field = %v, want false (Server.GeoIP defaults to false)", body["geoip"])
+		t.Errorf("geoip field = %v, want false (a Server with no Geo has no source)", body["geoip"])
+	}
+	if v, ok := body["geoSource"]; !ok || v != nil {
+		t.Errorf("geoSource = %v (present %v), want null", v, ok)
 	}
 }
 
-// #1198: a country database is nil-means-disabled like every other
-// optional integration -- main sets Server.GeoIP from
-// geoip.Lookup.Configured(), and this is the one place a caller (the
-// country filter, the ingest settings card) can tell "no database" apart
-// from "no public traffic yet". Covers both states the field can report;
-// TestHandleHealthz above already covers the rest of the payload.
+// #1198: whether country flags are available is the one place a caller
+// (the country filter, the ingest settings card) can tell "no country
+// data" apart from "no public traffic yet"; #1352 adds which source is
+// live. TestHandleHealthz above covers the no-source state.
 func TestHandleHealthzGeoIP(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.GeoIP = true
+	s.Geo = &fakeGeo{source: "dbip"}
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
@@ -192,6 +193,9 @@ func TestHandleHealthzGeoIP(t *testing.T) {
 	}
 	if body["geoip"] != true {
 		t.Errorf("geoip field = %v, want true", body["geoip"])
+	}
+	if body["geoSource"] != "dbip" {
+		t.Errorf("geoSource = %v, want dbip", body["geoSource"])
 	}
 }
 

@@ -283,6 +283,15 @@ export interface Healthz {
   // is what lets the country filter and the Settings > ingest card tell
   // the two apart instead of both just staying quiet.
   geoip: boolean
+  // geoSource (#1352): which of the three country sources is live, or
+  // null when none has loaded yet. Every signed-in user needs it, not
+  // only admins: the fall's foot credits DB-IP only while it is the one
+  // in use.
+  geoSource?: GeoSourceName | null
+  // mode (#1347): "setup-only" when the config file was refused at
+  // start-up and the server is serving only sign-in and the config
+  // editor. Absent on a normal start (and on an older server).
+  mode?: 'setup-only' | string
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -374,6 +383,47 @@ export interface HistorySettings {
   // no rate to reckon from yet, in which case every "at today's rate"
   // phrase is left off rather than invented.
   bytesPerDay: number
+}
+
+// The three country sources (#1352). Precedence is fixed server-side,
+// never chosen here: IPinfo beats MaxMind beats DB-IP.
+export type GeoSourceName = 'dbip' | 'ipinfo' | 'maxmind'
+
+// One source's download state, as GET /api/settings/geo reports it.
+// Timestamps are ISO strings or null; lastError is the server's own
+// words, already stripped of any key.
+export interface GeoSourceStatus {
+  loaded: boolean
+  fetchedAt: string | null
+  nextRefresh: string | null
+  lastError: string | null
+}
+
+// A source that needs a key: whether one is stored, and who stored it
+// when. The key itself never comes back.
+export interface GeoKeyedSourceStatus extends GeoSourceStatus {
+  keySet: boolean
+  setAt: string | null
+  setBy: string | null
+}
+
+// GET /api/settings/geo (admin), and the answer to every PUT/DELETE
+// under it.
+export interface GeoSettings {
+  source: GeoSourceName | null
+  sources: {
+    dbip: GeoSourceStatus
+    ipinfo: GeoKeyedSourceStatus
+    maxmind: GeoKeyedSourceStatus
+  }
+}
+
+// GET /api/geo/lookup?ip= (any signed-in user): an address's country
+// and network owner, each null when the loaded source does not know.
+export interface GeoLookup {
+  country: string | null
+  asn: number | null
+  asName: string | null
 }
 
 export interface HistoryHeld {
@@ -2457,4 +2507,96 @@ export interface PreferencesRecord {
   version: number
   prefs: Record<string, unknown>
   userId?: string
+}
+
+// #1347: the config editor's API (internal/api, admin-only throughout).
+// Field names follow the contract on the issue exactly.
+
+/** The four-line header block at the top of a config MikroView wrote. */
+export interface ConfigHeader {
+  schema: number
+  writtenBy: string
+  layout: number
+}
+
+/** POST /api/config/editor/open's answer. `text` is masked: each secret
+ *  value is a `<<secret:key>>` placeholder. */
+export interface ConfigEditorOpen {
+  text: string
+  path: string
+  changedSinceStart: boolean
+  /** null for a file written before headers existed (before v0.7). */
+  header: ConfigHeader | null
+  /** The schema the server guessed from the keys a headerless file uses. */
+  schemaGuess: number
+  runningVersion: string
+  runningSchema: number
+}
+
+/** GET /api/config/editor/summary's answer -- the same file facts as
+ *  ConfigEditorOpen, minus the text, plus the snapshot count. No
+ *  password and no unlock: this is what the Config card shows before
+ *  the editor has ever been opened. */
+export interface ConfigEditorSummary {
+  path: string
+  header: ConfigHeader | null
+  schemaGuess: number
+  runningVersion: string
+  runningSchema: number
+  snapshotCount: number
+  changedSinceStart: boolean
+}
+
+/** One line the validator has something to say about. Named apart from
+ *  configProblems.svelte.ts's ConfigProblem, which is the start-up
+ *  banner's different shape. */
+export interface ConfigEditorProblem {
+  line: number
+  key: string
+  severity: 'fatal' | 'warning'
+  message: string
+}
+
+export interface ConfigValidateResult {
+  problems: ConfigEditorProblem[]
+}
+
+/** One thing Carry forward did to the text. */
+export interface ConfigChange {
+  kind: string
+  key: string
+  to: string
+  line: number
+  note: string
+}
+
+export interface ConfigCarryForwardResult {
+  text: string
+  changes: ConfigChange[]
+  problems: ConfigEditorProblem[]
+}
+
+/** A kept copy of the config text, as GET /api/config/snapshots lists it. */
+export interface ConfigSnapshotSummary {
+  id: string
+  when: string
+  by: string
+  schema: number
+  /** The release its header named it for, "" for a headerless snapshot. */
+  version: string
+  /** 'manual' or 'before-carry-forward'. */
+  why: string
+  note?: string
+}
+
+/** GET /api/config/snapshots/{id}: the summary plus the text itself. */
+export interface ConfigSnapshot extends ConfigSnapshotSummary {
+  text: string
+}
+
+/** GET /api/config/snapshots' envelope: the list plus how many of them
+ *  MikroView keeps. */
+export interface ConfigSnapshotsList {
+  keep: number
+  snapshots: ConfigSnapshotSummary[]
 }
