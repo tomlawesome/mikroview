@@ -5,17 +5,17 @@
   // second-factor.md's own instruction): same modal chrome, same
   // password-gated removal beat, same shared recovery codes.
   //
-  // Five states: list (every registered passkey, with rename/remove),
+  // Six states: list (every registered passkey, with rename/remove),
   // adding (name it, then the browser's own prompt), codes (the ten
-  // recovery codes, shown once, the same as the authenticator app's --
-  // or, when a factor already minted them, a one-line note that the
-  // existing ones still stand rather than a blank grid), removing
-  // (password confirm, the same beat as turning the authenticator app
-  // off), and unavailable -- shown instead of all of the above whenever
-  // this deployment can't offer a passkey right now, or this browser is
-  // not at the address they were made for. The row that opens this
-  // overlay is never hidden (AccountMenu.svelte); this is where it says
-  // why.
+  // recovery codes, shown once, the same as the authenticator app's),
+  // added-done (a passkey added when a factor had already minted
+  // recovery codes: a one-line note that the existing ones still stand
+  // rather than a blank grid), removing (password confirm, the same
+  // beat as turning the authenticator app off), and unavailable --
+  // shown instead of all of the above whenever this deployment can't
+  // offer a passkey right now, or this browser is not at the address
+  // they were made for. The row that opens this overlay is never
+  // hidden (AccountMenu.svelte); this is where it says why.
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'

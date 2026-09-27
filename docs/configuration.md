@@ -1416,9 +1416,11 @@ publicUrl: "https://mikroview.example.com:8443"  # a hostname, not an IP address
 
 #### CFG-0102
 
-`publicUrl`'s scheme is `http` and the host is not `localhost`. Browsers
-only offer passkeys over https. Passkeys are unavailable; everything
-else is unaffected. See [Public
+`publicUrl`'s scheme is not `https`, and it is not `http` on
+`localhost` either -- `http` elsewhere is the case an operator actually
+mistypes, but any other non-https scheme trips this the same way.
+Browsers only offer passkeys over https. Passkeys are unavailable;
+everything else is unaffected. See [Public
 URL](#public-url-publicurl-optional-for-passkeys).
 
 ```yaml
