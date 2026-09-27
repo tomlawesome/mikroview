@@ -17,9 +17,10 @@ vi.mock('../lib/api', () => ({
   fetchNameProvenance: vi.fn(async () => ({ editable: true, source: 'none', name: '', label: '' })),
   upsertEntity: vi.fn(async () => ''),
   deleteEntity: vi.fn(async () => ''),
+  geoLookup: vi.fn(async () => ({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' })),
 }))
 
-import { fetchHostDossier } from '../lib/api'
+import { fetchHostDossier, geoLookup } from '../lib/api'
 import { dossierState } from '../lib/dossier.svelte'
 import { authState } from '../lib/auth.svelte'
 import type { HostDossier as HostDossierResponse } from '../lib/types'
@@ -114,6 +115,7 @@ beforeEach(() => {
   authState.role = 'user'
   vi.mocked(fetchHostDossier).mockClear()
   vi.mocked(fetchHostDossier).mockImplementation(async () => FIXTURE)
+  vi.mocked(geoLookup).mockClear()
 })
 
 afterEach(() => {
@@ -247,5 +249,33 @@ describe('HostDossier', () => {
     authState.role = 'viewer'
     await open()
     expect(screen.queryByText('Name this device')).toBeNull()
+  })
+
+  // #1352: the network owner, beside the MAC vendor, for a public
+  // address only -- looked up on demand, drawn only when known.
+  it('shows the network owner for a public address', async () => {
+    FIXTURE.ip = '1.1.1.1'
+    await open('1.1.1.1')
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('dossier-network-owner').textContent?.trim()).toBe(
+        'network owner · AS13335 Cloudflare, Inc.',
+      ),
+    )
+    expect(geoLookup).toHaveBeenCalledWith('1.1.1.1')
+  })
+
+  it('asks nothing and shows no owner for a local address', async () => {
+    await open('10.20.0.31')
+    expect(geoLookup).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('dossier-network-owner')).toBeNull()
+  })
+
+  it('shows no owner row when the source does not know one', async () => {
+    vi.mocked(geoLookup).mockResolvedValueOnce({ country: 'US', asn: null, asName: null })
+    FIXTURE.ip = '1.1.1.1'
+    await open('1.1.1.1')
+    await vi.waitFor(() => expect(geoLookup).toHaveBeenCalled())
+    flushSync()
+    expect(screen.queryByTestId('dossier-network-owner')).toBeNull()
   })
 })

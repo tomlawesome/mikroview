@@ -283,6 +283,11 @@ export interface Healthz {
   // is what lets the country filter and the Settings > ingest card tell
   // the two apart instead of both just staying quiet.
   geoip: boolean
+  // geoSource (#1352): which of the three country sources is live, or
+  // null when none has loaded yet. Every signed-in user needs it, not
+  // only admins: the fall's foot credits DB-IP only while it is the one
+  // in use.
+  geoSource?: GeoSourceName | null
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -374,6 +379,47 @@ export interface HistorySettings {
   // no rate to reckon from yet, in which case every "at today's rate"
   // phrase is left off rather than invented.
   bytesPerDay: number
+}
+
+// The three country sources (#1352). Precedence is fixed server-side,
+// never chosen here: IPinfo beats MaxMind beats DB-IP.
+export type GeoSourceName = 'dbip' | 'ipinfo' | 'maxmind'
+
+// One source's download state, as GET /api/settings/geo reports it.
+// Timestamps are ISO strings or null; lastError is the server's own
+// words, already stripped of any key.
+export interface GeoSourceStatus {
+  loaded: boolean
+  fetchedAt: string | null
+  nextRefresh: string | null
+  lastError: string | null
+}
+
+// A source that needs a key: whether one is stored, and who stored it
+// when. The key itself never comes back.
+export interface GeoKeyedSourceStatus extends GeoSourceStatus {
+  keySet: boolean
+  setAt: string | null
+  setBy: string | null
+}
+
+// GET /api/settings/geo (admin), and the answer to every PUT/DELETE
+// under it.
+export interface GeoSettings {
+  source: GeoSourceName | null
+  sources: {
+    dbip: GeoSourceStatus
+    ipinfo: GeoKeyedSourceStatus
+    maxmind: GeoKeyedSourceStatus
+  }
+}
+
+// GET /api/geo/lookup?ip= (any signed-in user): an address's country
+// and network owner, each null when the loaded source does not know.
+export interface GeoLookup {
+  country: string | null
+  asn: number | null
+  asName: string | null
 }
 
 export interface HistoryHeld {

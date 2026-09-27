@@ -51,6 +51,8 @@ import type {
   Stats,
   StoreMemory,
   HistorySettings,
+  GeoLookup,
+  GeoSettings,
   SetupMark,
   SetupStatus,
   Suggestion,
@@ -2020,6 +2022,99 @@ export async function setHistorySettings(body: {
   const res = await putJSON('/api/settings/history', body)
   if (res.ok) return res.json()
   return (await res.text()).trim() || `setHistorySettings: ${res.status}`
+}
+
+// --- Country and network owner (#1352) -------------------------------------
+//
+// fetchGeoSettings reads the Engine Room's "country and network owner"
+// card: which source is live, and each source's download state. Admin-
+// only server-side; a non-admin's refusal surfaces as a thrown ApiError
+// for the caller to swallow, fetchHistorySettings' shape.
+export async function fetchGeoSettings(): Promise<GeoSettings> {
+  const res = await fetch('/api/settings/geo')
+  if (!res.ok) throw new ApiError(`fetchGeoSettings: ${res.status}`, res.status)
+  return res.json()
+}
+
+// The geo routes answer a refusal as {"error": "..."} rather than a bare
+// line, so the words are pulled out of that before falling back to the
+// body as text -- the same "the server's own words" rule
+// setHistorySettings keeps.
+async function geoRefusal(res: Response, name: string): Promise<string> {
+  const body = (await res.text()).trim()
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown }
+    if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim()
+  } catch {
+    // not JSON: the body itself, below
+  }
+  return body || `${name}: ${res.status}`
+}
+
+// The four key writes. Each answers the whole GET shape, so the card
+// redraws from the server's word rather than guessing; a refusal comes
+// back as the server's own sentence. The key is sent once and never
+// read back.
+export async function setGeoIpinfoToken(token: string): Promise<GeoSettings | string> {
+  const res = await putJSON('/api/settings/geo/ipinfo', { token })
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'setGeoIpinfoToken')
+}
+
+export async function removeGeoIpinfoToken(): Promise<GeoSettings | string> {
+  const res = await deleteJSON('/api/settings/geo/ipinfo')
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'removeGeoIpinfoToken')
+}
+
+export async function setGeoMaxmindKey(accountId: string, licenseKey: string): Promise<GeoSettings | string> {
+  const res = await putJSON('/api/settings/geo/maxmind', { accountId, licenseKey })
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'setGeoMaxmindKey')
+}
+
+export async function removeGeoMaxmindKey(): Promise<GeoSettings | string> {
+  const res = await deleteJSON('/api/settings/geo/maxmind')
+  if (res.ok) return res.json()
+  return geoRefusal(res, 'removeGeoMaxmindKey')
+}
+
+// geoLookup asks for one address's country and network owner, on
+// demand: the owner is never carried on events (the stream holds
+// thousands and the owner is read only when someone asks -- #1352's
+// Fable call), so the popover, the dossier and the flag's tooltip each
+// ask here. Answers are kept in a small map so hovering the same flag
+// twice asks once; a request in flight is shared the same way. A failure
+// is not kept, so the next hover asks again. Resolves null on any
+// failure -- every caller simply shows nothing more.
+const GEO_LOOKUP_CAP = 500
+const geoLookupCache = new Map<string, Promise<GeoLookup | null>>()
+
+export function geoLookup(ip: string): Promise<GeoLookup | null> {
+  const hit = geoLookupCache.get(ip)
+  if (hit) return hit
+  const pending = (async () => {
+    try {
+      const res = await fetch(`/api/geo/lookup?ip=${encodeURIComponent(ip)}`)
+      if (!res.ok) throw new ApiError(`geoLookup: ${res.status}`, res.status)
+      return (await res.json()) as GeoLookup
+    } catch {
+      geoLookupCache.delete(ip)
+      return null
+    }
+  })()
+  geoLookupCache.set(ip, pending)
+  // A Map iterates in insertion order, so the first key is the oldest.
+  if (geoLookupCache.size > GEO_LOOKUP_CAP) {
+    const oldest = geoLookupCache.keys().next().value
+    if (oldest !== undefined) geoLookupCache.delete(oldest)
+  }
+  return pending
+}
+
+// For tests: forget every kept answer.
+export function clearGeoLookupCache(): void {
+  geoLookupCache.clear()
 }
 
 // fetchRouterBackups reads Settings' "router backups" group (#394,

@@ -55,6 +55,7 @@
     fetchHistorySettings,
     fetchRouterBackups,
     fetchDroplist,
+    fetchGeoSettings,
   } from '../lib/api'
   import { duplicateDrift, duplicateDriftMessage, duplicateCleanupCommand } from '../lib/ingestDuplicates'
   import ConfigUpgrade from './ConfigUpgrade.svelte'
@@ -64,6 +65,7 @@
   import DiskControl from './DiskControl.svelte'
   import RouterBackups from './RouterBackups.svelte'
   import Droplist from './Droplist.svelte'
+  import GeoSources from './GeoSources.svelte'
   import { usersState } from '../lib/users.svelte'
   import ResetCodeOverlay from './ResetCodeOverlay.svelte'
   import { tokensState } from '../lib/tokens.svelte'
@@ -71,7 +73,16 @@
   import { formatEps, formatRelative, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import { toIngestLossInputs } from '../lib/ingestLossBanners'
-  import type { SetupStatus, FlagType, Device, HistorySettings, RouterBackupsResponse, DroplistResponse, PasswordResetCode } from '../lib/types'
+  import type {
+    SetupStatus,
+    FlagType,
+    Device,
+    HistorySettings,
+    RouterBackupsResponse,
+    DroplistResponse,
+    PasswordResetCode,
+    GeoSettings,
+  } from '../lib/types'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -131,6 +142,15 @@
       refreshDroplist()
       droplistTimer = setInterval(refreshDroplist, 60_000)
     }
+    // The country and network owner group (#1352) is admin-only end to
+    // end too -- GET /api/settings/geo 403s anyone else. Polled so a
+    // download that finishes while the page is open shows its new
+    // "last fetched" without a reload.
+    let geoTimer: ReturnType<typeof setInterval> | undefined
+    if (isAdmin) {
+      refreshGeo()
+      geoTimer = setInterval(refreshGeo, 60_000)
+    }
     fetchDevices()
       .then((all) => {
         // Same de-dup/order rule the former tokens door applied -- an
@@ -152,6 +172,7 @@
       if (historyRetry) clearTimeout(historyRetry)
       if (routerBackupsTimer) clearInterval(routerBackupsTimer)
       if (droplistTimer) clearInterval(droplistTimer)
+      if (geoTimer) clearInterval(geoTimer)
     }
   })
 
@@ -255,6 +276,43 @@
         if (overtaken(startedAt, droplistFetchedAt)) return
         droplistUnanswered = true
       })
+  }
+
+  // --- country and network owner (#1352) ----------------------------------
+  let geoSettings = $state<GeoSettings | null>(null)
+  // The drop list's own `dfail` idiom: the GET did not answer for a
+  // reason other than role, and there is nothing yet to draw from.
+  let geoUnanswered = $state(false)
+  // Same stamp, same reason as droplistFetchedAt above (#1275): a key
+  // the operator just set is written straight into geoSettings by
+  // geoChanged, so an overtaking poll would take it back off screen.
+  let geoFetchedAt = 0
+
+  function refreshGeo() {
+    const startedAt = Date.now()
+    fetchGeoSettings()
+      .then((g) => {
+        if (overtaken(startedAt, geoFetchedAt)) return
+        geoSettings = g
+        geoFetchedAt = startedAt
+        geoUnanswered = false
+        geoipState.setSource(g.source)
+      })
+      .catch((err: unknown) => {
+        if ((err as { status?: number } | null)?.status === 403) return
+        if (overtaken(startedAt, geoFetchedAt)) return
+        geoUnanswered = true
+      })
+  }
+
+  // A key set or removed answers with the whole new state, the source in
+  // use included -- handed on to geoipState so the fall's DB-IP credit
+  // follows at once rather than at the next page load.
+  function geoChanged(next: GeoSettings) {
+    geoSettings = next
+    geoFetchedAt = Date.now()
+    geoUnanswered = false
+    geoipState.setSource(next.source)
   }
 
   // Same stamp again (#1275). The disk group is raced by its own tick,
@@ -1494,9 +1552,37 @@
         </div>
       {/if}
 
-      <!-- Round 44's "router backups" group (#394), straight after disk:
-           memory, disk, router backups -- the three things mikroview
-           holds, in the order they outlive a restart. Admin-only, like
+      <!-- #1352's "country and network owner" group, beside the disk
+           group (the Fable call on #1352): which source the flags come
+           from, and the keys that switch it. Admin-only -- never fetched
+           below admin (see onMount). It has no diagram, so it stacks
+           like router backups before its first pair (`dnodiagram`). -->
+      {#if isAdmin}
+        {#if geoSettings}
+          <div id="engineroom-geo" class="stsection wide dnodiagram">
+            <h3>country and network owner</h3>
+            <GeoSources settings={geoSettings} onchanged={geoChanged} />
+          </div>
+        {:else if geoUnanswered}
+          <div id="engineroom-geo" class="stsection wide dfail">
+            <h3>country and network owner</h3>
+            <div class="wrows">
+              <div class="orow">
+                <span>source</span>
+                <span class="ov">
+                  unknown — the server did not answer ·
+                  <button class="olink" onclick={refreshGeo}>ask again</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      {/if}
+
+      <!-- Round 44's "router backups" group (#394), after disk (with
+           #1352's country group beside disk in between): memory, disk,
+           router backups -- the three things mikroview holds, in the
+           order they outlive a restart. Admin-only, like
            `key`/`state` above -- never fetched below admin (see
            onMount), so absent rather than shown a 403 it cannot act on. -->
       {#if isAdmin}
