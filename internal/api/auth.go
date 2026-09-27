@@ -1096,6 +1096,13 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 	// exactly like a wrong TOTP code does below.
 	if len(req.Assertion) > 0 {
 		if s.verifyPasskeyAssertion(w, r, user, req.Assertion, now) {
+			// The begin that minted this assertion's single-use
+			// challenge reserved one attempt on each key too
+			// (handleAuthLoginFactorBegin); a completed sign-in gives
+			// that back as well, so a passkey sign-in costs no more
+			// of the budget than a correct code does.
+			s.LoginLimiter.Release(ipKey, now)
+			s.LoginLimiter.Release(userKey, now)
 			s.completeLoginFactor(w, user, ipKey, userKey, now)
 		}
 		return
