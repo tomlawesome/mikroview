@@ -374,6 +374,20 @@ run "$good"
 check "$(case "$out" in *"ok: no unrealized shot markers"*) echo true;; *) echo false;; esac)" \
   "a fixture with no shot markers passes"
 
+# two markers sharing one line are reported as two failures, each with
+# its own marker text -- not one garbled failure spanning both (#1345
+# S6S-F2)
+c9b="$TMP/case9b-two-shot-markers-one-line"
+cp -r "$good" "$c9b"
+printf '\n<!-- shot: the widget collapsed --><!-- shot: the widget expanded -->\n' >>"$c9b/docs/x.md"
+commit "$c9b" "2026-01-02T00:00:00" "add two unrealized shot markers on one line"
+run "$c9b"
+check "$([ "$rc" -ne 0 ] && echo true || echo false)" "two shot markers on one line fails (rc=$rc)"
+check "$(case "$out" in *"shot marker 'the widget collapsed' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
+  "and names the first marker's own text"
+check "$(case "$out" in *"shot marker 'the widget expanded' has no screenshot yet"*) echo true;; *) echo false;; esac)" \
+  "and the second marker's own text, not garbled together with the first"
+
 echo
 if [ "$fails" -ne 0 ]; then
   echo "check-release-surfaces.test.sh: $fails check(s) failed"

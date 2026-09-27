@@ -76,10 +76,21 @@ const SCENARIOS_PATHS = [
   'THIRD-PARTY-NOTICES.md',
 ];
 
-// live-check.Dockerfile is already in SCENARIOS_PATHS (#1391); only
-// Dockerfile (the product image, not the live-check one) is IMAGE_PATHS'
-// own addition.
-const IMAGE_PATHS = [...SCENARIOS_PATHS, 'Dockerfile'];
+// live-check.Dockerfile is already in SCENARIOS_PATHS (#1391); Dockerfile
+// (the product image, not the live-check one) and, since #1290,
+// supply-chain/coverage-floors.yml and scripts/coverage-floor.py are
+// IMAGE_PATHS' own additions -- test:postgres now ratchets its two
+// packages' coverage against that file with that script (the
+// postgres-floors: section), so a floor change must not be reused past
+// unrun. scripts/coverage-floor.py already matches SCENARIOS_PATHS'
+// 'scripts/**' above; named again here so the dependency is legible
+// without having to know that.
+const IMAGE_PATHS = [
+  ...SCENARIOS_PATHS,
+  'Dockerfile',
+  'supply-chain/coverage-floors.yml',
+  'scripts/coverage-floor.py',
+];
 
 // test:install-line builds the same image as test:container (so it needs
 // IMAGE_PATHS) and then runs install.sh, which lives at the repo root and

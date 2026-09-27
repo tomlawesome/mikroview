@@ -35,8 +35,9 @@ again="$(env PATH=/usr/bin:/bin MV_COSIGN_DIR="$TMP/cache" bash "$SCRIPT" 2>"$TM
 check "$again" "$out" "a second run returns the cached path"
 check "$(grep -c downloading "$TMP/err2")" "0" "a second run does not download"
 
-# 3. The refusal. Same script, one character of the expected checksum
-# changed, so the download is genuine and only the comparison differs.
+# 3. The refusal. Same script, the expected checksum replaced with an
+# all-zero digest, so the download is genuine and only the comparison
+# differs.
 sed 's/^readonly COSIGN_SHA256=".*"$/readonly COSIGN_SHA256="0000000000000000000000000000000000000000000000000000000000000000"/' \
   "$SCRIPT" > "$TMP/bad-sha.sh"
 env PATH=/usr/bin:/bin MV_COSIGN_DIR="$TMP/bad" bash "$TMP/bad-sha.sh" >"$TMP/out3" 2>"$TMP/err3"

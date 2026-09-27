@@ -11,8 +11,8 @@ import (
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// build makes a classifier with a table populated directly, bypassing the
-// network -- the fetch path is tested separately.
+// build makes a classifier with its sets populated directly, bypassing
+// the network -- the fetch path is tested separately.
 func build(t *testing.T, bySrc map[Source][]classifiedPrefix, order ...Source) *Classifier {
 	t.Helper()
 	c := New(nil, testLog())
@@ -20,9 +20,7 @@ func build(t *testing.T, bySrc map[Source][]classifiedPrefix, order ...Source) *
 		c.sources[s] = registryBySource[s]
 	}
 	c.order = order
-	table, entries := buildTable(order, bySrc)
-	c.table = table
-	c.entries = entries
+	c.sets, c.details, c.detailStrings = buildSets(bySrc)
 	return c
 }
 
@@ -35,48 +33,63 @@ func cp(t *testing.T, cidr, detail string) classifiedPrefix {
 	return classifiedPrefix{prefix: p.Masked(), detail: detail}
 }
 
-// TestLongestPrefixWins is the whole reason for bart: where feeds overlap,
-// the more specific range is the more useful attribution.
-func TestLongestPrefixWins(t *testing.T) {
+// TestClassOrderDecidesOverlaps is the #1313 "done when" test: netipx has
+// no trie, so where two sources both claim an address, ClassOrder (see
+// sources.go) decides, not prefix width. A Tor /32 sitting inside a
+// cloud /16 must read as Tor -- Tor is checked first regardless of its
+// narrower prefix -- and a cloud /24 with no competing claim must still
+// read as cloud, so the order is deciding overlaps, not breaking
+// matching altogether.
+//
+// This test is only worth having if it actually pins the order: reverse
+// ClassOrder and this must fail. Verified by hand while writing it
+// (temporarily swapping SourceTor and SourceGCP in the slice made the
+// nested-address assertion below fail with CategoryDatacenter instead of
+// CategoryTor), then restored.
+func TestClassOrderDecidesOverlaps(t *testing.T) {
 	c := build(t, map[Source][]classifiedPrefix{
-		SourceX4BDC: {cp(t, "52.0.0.0/8", "")},
-		SourceAWS:   {cp(t, "52.94.0.0/16", "eu-west-1")},
-	}, SourceX4BDC, SourceAWS)
+		SourceTor: {cp(t, "34.80.0.1/32", "")},
+		SourceGCP: {cp(t, "34.80.0.0/16", "asia-east1")},
+	}, SourceTor, SourceGCP)
 
-	got := c.Lookup("52.94.1.1")
-	if !got.Matched || got.Source != SourceAWS {
-		t.Fatalf("Lookup = %+v, want the more specific AWS match", got)
-	}
-	if got.Detail != "eu-west-1" {
-		t.Errorf("Detail = %q, want eu-west-1", got.Detail)
+	// The Tor /32 is nested inside the GCP /16. ClassOrder checks Tor
+	// first, so the narrower-by-width cloud entry never gets a say.
+	got := c.Lookup("34.80.0.1")
+	if !got.Matched || got.Category != CategoryTor || got.Source != SourceTor {
+		t.Fatalf("Lookup(nested address) = %+v, want CategoryTor (Tor is checked before cloud in ClassOrder, regardless of prefix width)", got)
 	}
 
-	// An address inside only the broad range still attributes to it.
-	if got := c.Lookup("52.1.1.1"); got.Source != SourceX4BDC {
-		t.Errorf("Lookup of the broad-only address = %+v, want X4B datacenter", got)
+	// An address in the GCP range only -- no Tor claim on it -- still
+	// classifies as cloud.
+	got = c.Lookup("34.80.1.1")
+	if !got.Matched || got.Category != CategoryDatacenter || got.Source != SourceGCP {
+		t.Fatalf("Lookup(cloud-only address) = %+v, want CategoryDatacenter/SourceGCP", got)
+	}
+	if got.Detail != "asia-east1" {
+		t.Errorf("Detail = %q, want asia-east1", got.Detail)
 	}
 }
 
-// TestApplePrivateRelayWinsOverX4BVPNOnExactCollision is the reproducer
-// for the reason SourceApplePrivateRelay is listed before SourceX4BVPN
-// in feedRegistry (see that entry's own comment): X4BNet's VPN feed
-// pulls Apple's ranges in verbatim, so the exact same prefix can arrive
-// from both sources. On that exact-prefix tie, priority order decides --
-// this proves it resolves to the authoritative CategoryPrivacyRelay, not
-// CategoryVPN, which is the whole point: an iPhone's ordinary Private
-// Relay traffic must never read as "known VPN exit".
-func TestApplePrivateRelayWinsOverX4BVPNOnExactCollision(t *testing.T) {
+// TestClassOrderVPNWinsOverPrivateRelayOnExactCollision documents a real
+// consequence of the #1313 ruling's literal order (Tor, VPN, Private
+// Relay, datacenter, cloud): VPN is checked before Private Relay, so
+// where X4BNet's VPN feed has copied Apple's ranges verbatim (see
+// SourceApplePrivateRelay's registry comment), the exact same prefix now
+// classifies as VPN. Before #1313, buildTable's exact-prefix precedence
+// (removed) put SourceApplePrivateRelay first in the registry
+// specifically to make this resolve to CategoryPrivacyRelay instead --
+// this test's name and result are the opposite of what it asserted
+// before that change. Recorded here rather than left to be discovered
+// as a silent regression.
+func TestClassOrderVPNWinsOverPrivateRelayOnExactCollision(t *testing.T) {
 	c := build(t, map[Source][]classifiedPrefix{
 		SourceApplePrivateRelay: {cp(t, "172.224.226.0/27", "London")},
 		SourceX4BVPN:            {cp(t, "172.224.226.0/27", "")},
 	}, SourceApplePrivateRelay, SourceX4BVPN)
 
 	got := c.Lookup("172.224.226.5")
-	if !got.Matched || got.Category != CategoryPrivacyRelay {
-		t.Fatalf("Lookup = %+v, want CategoryPrivacyRelay (Apple's own feed must win the exact-prefix tie over X4B's copy)", got)
-	}
-	if got.Source != SourceApplePrivateRelay {
-		t.Errorf("Source = %q, want %q", got.Source, SourceApplePrivateRelay)
+	if !got.Matched || got.Category != CategoryVPN || got.Source != SourceX4BVPN {
+		t.Fatalf("Lookup = %+v, want CategoryVPN/SourceX4BVPN -- ClassOrder checks VPN before Private Relay", got)
 	}
 }
 
@@ -149,17 +162,18 @@ func TestSanitiseDetailRejectsUntrustedGarbage(t *testing.T) {
 	}
 }
 
-// TestLabelsAreInterned proves the entries slice holds one entry per
-// distinct (source, detail), not one per prefix -- the memory property
-// the #114 research asked for.
+// TestLabelsAreInterned proves detailStrings holds one string per
+// distinct detail, not one per prefix -- the memory property the #114
+// research asked for, now backing the sorted detail index instead of
+// bart's per-prefix trie value.
 func TestLabelsAreInterned(t *testing.T) {
 	var many []classifiedPrefix
 	for i := 0; i < 200; i++ {
 		many = append(many, cp(t, netip.PrefixFrom(netip.AddrFrom4([4]byte{52, byte(i), 0, 0}), 16).String(), "eu-west-1"))
 	}
 	c := build(t, map[Source][]classifiedPrefix{SourceAWS: many}, SourceAWS)
-	if len(c.entries) != 1 {
-		t.Errorf("entries = %d for 200 prefixes sharing one label, want 1", len(c.entries))
+	if len(c.detailStrings) != 1 {
+		t.Errorf("detailStrings = %d for 200 prefixes sharing one label, want 1", len(c.detailStrings))
 	}
 }
 

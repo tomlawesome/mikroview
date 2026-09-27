@@ -670,17 +670,6 @@ async function resetInstance(page) {
  */
 export const DESKTOP_VIEWPORT = { width: 1920, height: 1080 }
 
-/**
- * session launches a browser and signs in, returning a live page.
- *
- * Its own landing default is 'stream' (#616 retired #544's interim --
- * the fall is the real landing page now, not Stream) so that every
- * scenario written against the old landing keeps working unmodified:
- * session() signs in, then navigates to Stream itself before returning,
- * exactly where those scenarios already assume they start. Pass
- * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
- * instead of being moved off it.
- */
 // ---- The second step at sign-in (#1253) ----------------------------------
 //
 // Every local account must now hold a second factor, so the right
@@ -941,6 +930,17 @@ export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
   await page.waitForSelector('#main-content', { timeout: 15000 })
 }
 
+/**
+ * session launches a browser and signs in, returning a live page.
+ *
+ * Its own landing default is 'stream' (#616 retired #544's interim --
+ * the fall is the real landing page now, not Stream) so that every
+ * scenario written against the old landing keeps working unmodified:
+ * session() signs in, then navigates to Stream itself before returning,
+ * exactly where those scenarios already assume they start. Pass
+ * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
+ * instead of being moved off it.
+ */
 export async function session({
   dismissSetup = true,
   landing = 'stream',

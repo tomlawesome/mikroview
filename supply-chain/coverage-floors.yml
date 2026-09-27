@@ -41,12 +41,15 @@
 #
 # test:go never sets MIKROVIEW_TEST_POSTGRES, so every Postgres-backed test
 # in internal/persist and internal/matchlog calls t.Skip there -- #1290 found
-# this first. test:postgres exercises those tests for real, against a real
-# Postgres, but runs `go test -race -count=1 ./internal/persist/...
-# ./internal/matchlog/...` with no `-coverprofile`, so that coverage is never
-# captured anywhere. The two packages' floors below read low for that reason,
-# not because the Postgres backend is untested. Capturing it is a separate
-# decision, out of scope for #1333.
+# this first. Those two packages are not in the `floors:` mapping below at
+# all, and scripts/coverage-floor.py's default mode (what test:go runs)
+# skips them rather than ratcheting a number it cannot see the whole of.
+# test:postgres owns them instead: it runs both packages in full
+# (file-backend and Postgres tests together, a strict superset of what
+# test:go alone exercises for them), writes coverage-postgres.out, and
+# checks it with `coverage-floor.py --section postgres-floors` against the
+# `postgres-floors:` mapping at the bottom of this file -- the same three
+# ratchet rules as `floors:`, applied to that section alone.
 #
 # Reproduced on 2026-09-27 with the golang:1.27.1 image and the ci-test uid
 # exactly as above, via rootless Docker rather than the workstation directly
@@ -104,15 +107,6 @@ floors:
                              # binary.
   internal/evict: 100       # #1328 added the first direct test of its
                              # contract; 100% measured 2026-09-27.
-  internal/matchlog: 58     # 58.5% measured 2026-09-27. Its Postgres-backed
-                             # tests skip under test:go (see header above);
-                             # test:postgres runs them for real but writes
-                             # no coverage profile. Not a real regression in
-                             # what test:postgres actually exercises.
-  internal/persist: 62      # 62.9% measured 2026-09-27. Same cause as
-                             # internal/matchlog above -- every store writes
-                             # through this package, and its Postgres path
-                             # (postgres.go) is the part test:go cannot see.
   scripts/routerosappendrow: 29  # 29.2% measured 2026-09-27. A CLI dev-tool
                              # under scripts/, not shipped in the release
                              # binary.
@@ -174,3 +168,18 @@ floors:
   internal/suggest: 90
   internal/syslog: 96
   internal/watchlist: 94
+
+# --- test:postgres's own floors (#1290) ---
+# internal/persist and internal/matchlog, checked against coverage-postgres.out
+# by `coverage-floor.py --section postgres-floors` in the test:postgres job,
+# not against the floors: mapping above -- see the header note on why.
+# Same three ratchet rules, same band, a different job's profile because
+# that job is the only one that runs their Postgres-backed statements.
+#
+# Measured 2026-09-27 against coverage-postgres.out in the first CI run of
+# #1290 (MR !1115, pipeline 1765, job 25736): persist 81.5%, matchlog 81.8%.
+# The earlier 62/58 were carried over from test:go, where the
+# Postgres-backed statements never ran.
+postgres-floors:
+  internal/persist: 81
+  internal/matchlog: 81

@@ -14,11 +14,14 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 pass=0; fail=0
 
-# expect <want-exit> <name> <profile-content-or-PATH:x> <floors-content-or-PATH:x>
+# expect <want-exit> <name> <profile-content-or-PATH:x> <floors-content-or-PATH:x> [checker-arg...]
 # The checker resolves the module path from go.mod above the current
 # directory, so it is always run with repo_root as the working directory.
+# Trailing args (e.g. --section postgres-floors) go before the profile and
+# floors paths, matching the checker's own argv order.
 expect() {
-  local want="$1" name="$2" profile="$3" floors="$4" got=0 out
+  local want="$1" name="$2" profile="$3" floors="$4"; shift 4
+  local extra=("$@") got=0 out
   local prof_arg="$work/cover.out" floors_arg="$work/floors.yml"
 
   if [[ "$profile" == PATH:* ]]; then
@@ -32,7 +35,7 @@ expect() {
     printf '%s\n' "$floors" > "$floors_arg"
   fi
 
-  out="$(cd "$repo_root" && python3 "$checker" "$prof_arg" "$floors_arg" 2>&1)" || got=$?
+  out="$(cd "$repo_root" && python3 "$checker" "${extra[@]}" "$prof_arg" "$floors_arg" 2>&1)" || got=$?
   if [ "$got" = "$want" ]; then
     echo "ok   $name"; pass=$((pass + 1))
   else
@@ -140,6 +143,43 @@ $(block internal/ok 79 21)" \
 "floors:
 $clean_floor
   internal/ok: 79"
+
+# #1290: postgres-floors:, the second section test:postgres checks instead
+# of test:go. Four cases, one per rule the build notes name.
+
+expect 0 "default mode skips packages listed under postgres-floors, even ones that would otherwise fail" \
+"mode: set
+$clean_block
+$(block internal/persist 5 95)
+$(block internal/matchlog 5 95)" \
+"floors:
+$clean_floor
+
+postgres-floors:
+  internal/persist: 62
+  internal/matchlog: 58"
+
+expect 1 "section mode: a postgres-floors package under its floor is caught" \
+"mode: set
+$(block internal/persist 50 50)" \
+"postgres-floors:
+  internal/persist: 62" \
+--section postgres-floors
+
+expect 1 "section mode flags a postgres-floors package never measured in the profile" \
+"mode: set
+$(block internal/persist 70 30)" \
+"postgres-floors:
+  internal/persist: 62
+  internal/matchlog: 58" \
+--section postgres-floors
+
+expect 2 "an unknown --section exits 2, same as a missing floors mapping" \
+"mode: set
+$clean_block" \
+"floors:
+$clean_floor" \
+--section no-such-section
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

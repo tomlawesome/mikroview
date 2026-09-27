@@ -219,6 +219,11 @@ them. Chromium is not the safe choice merely because it is the default:
 refuses under this app's CSP, past live-check, vitest and every
 screenshot, found by the owner opening the app.
 
+Run WebKit through the container (`scripts/gate-local.sh --browser webkit`),
+never from a bare host checkout: Playwright's WebKit needs system libraries
+(`libicudata.so.76` and others) that only the image has, and the host error
+reads as "WebKit is broken" (#1311).
+
 So the two hosts are interchangeable for a run. If the workstation is
 already busy with one, run the next one here instead -- that is the
 point of it existing.
@@ -261,6 +266,13 @@ gate failure) if another run already holds it (#809); run
 `scripts/gate-remote.sh --wait` (or `MV_GATE_WAIT=1`) to poll until it
 frees instead of refusing (#811). If the holder looks dead, follow the
 `ssh ... rm -r ~/gate-lock` hint the refusal prints.
+
+The script prunes `mvagent`'s Docker cache after every run, pass or fail
+(#1387): dangling images and the whole build cache go, but the tagged
+`mv-gate:local` image stays, so the next run is still cached. A hand
+prune from another account, same rootless daemon:
+`sudo -u mvagent env DOCKER_HOST=unix:///run/user/1001/docker.sock docker builder prune -af`
+(and the same with `docker image prune -af` for images).
 
 **No loop runs here (#831), and none runs anywhere since 2026-09-08.**
 This host also carries GitLab CI, so a `scripts/gate-dev-loop.sh` run

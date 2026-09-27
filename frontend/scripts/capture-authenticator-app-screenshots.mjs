@@ -59,7 +59,7 @@
 // Since #1253/m19 (second factors, every local account), live-env.sh's
 // own `up` step now enrols a factor for this admin before handing back
 // -- requireAuth's forced-enrolment door refuses an account without one
-// everything but the four enrolment routes, and without that this
+// access to everything but the four enrolment routes, and without that this
 // script's own plain-password login would never reach #main-content.
 // completeSecondFactor (live-browser.mjs) finishes that login step with
 // MV_TOTP_SECRET, the same helper every live-*.mjs scenario's session()

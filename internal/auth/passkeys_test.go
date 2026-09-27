@@ -96,9 +96,8 @@ func TestAddPasskeyTrimsAndBoundsAGivenName(t *testing.T) {
 }
 
 // TestAddPasskeyRefusesADuplicateCredentialID proves ErrPasskeyDuplicate
-// can actually fire: the guard is deleted, the test is watched to fail,
-// then the guard is restored (see this file's final report for which
-// guards were proved this way).
+// can actually fire: the guard was deleted, this test was watched to
+// fail, then the guard was restored.
 func TestAddPasskeyRefusesADuplicateCredentialID(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {

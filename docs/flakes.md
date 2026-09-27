@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## coverage-floor: internal/baseline's coverage drops under full-suite load
+
+- 2026-09-27 · dee367fa (fix/1290-postgres-coverage, local `go test ./... -coverprofile`, no -race, host busy with other agents) · `internal/baseline: got 88.6%, floor 90%`; `go test ./internal/baseline/...` alone read 90.7% three times running. Coverage that moves with load means a timing-dependent path in its tests; the ratchet can go red on it.
+
 ## TestTheUnlockSweepSurvivesAPanicInOneTick: the sweeper never ran again after a tick panicked
 
 - 2026-09-26 · 442bc4f5 (feature/1331-recovery-codes, local) · `go test
