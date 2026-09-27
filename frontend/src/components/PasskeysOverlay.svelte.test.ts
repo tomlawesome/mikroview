@@ -385,3 +385,24 @@ describe('X4-F1: beforeunload guard on the codes step', () => {
     expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
   })
 })
+
+// Q5-F2: fetchPasskeys used to return failure as text, unlike every other
+// list call in lib/api.ts -- loadList() now catches the ApiError it
+// throws instead, the same shape App.svelte's own poll failures use.
+describe('Q5-F2: loading the list reports errors like the other list calls', () => {
+  it('routes a 401 to sign-in rather than showing it as list text', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(fetchPasskeys).mockRejectedValue(new ApiError('sign in first', 401))
+    render(PasskeysOverlay, { open: true })
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    expect(screen.queryByText('sign in first')).toBeNull()
+  })
+
+  it('shows any other failure as list text', async () => {
+    vi.mocked(fetchPasskeys).mockRejectedValue(new ApiError('the server could not do that (500)', 500))
+    render(PasskeysOverlay, { open: true })
+
+    expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
+  })
+})

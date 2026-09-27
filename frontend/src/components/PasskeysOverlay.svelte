@@ -62,13 +62,22 @@
   async function loadList() {
     listError = null
     loadingList = true
-    const result = await fetchPasskeys()
-    loadingList = false
-    if (typeof result === 'string') {
-      listError = result
-      return
+    // Q5-F2: fetchPasskeys now throws ApiError like every other list call
+    // in lib/api.ts -- a 401 here means this session is already gone
+    // (same reasoning as submitAdd/confirmRemove below), routed the same
+    // way rather than shown as plain error text; anything else is a
+    // genuine failure to read the list.
+    try {
+      passkeys = await fetchPasskeys()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      listError = err instanceof Error ? err.message : String(err)
+    } finally {
+      loadingList = false
     }
-    passkeys = result
   }
 
   // Fetched fresh every time this opens, the same reasoning as
