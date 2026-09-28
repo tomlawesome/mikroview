@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -448,22 +449,12 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 	// already showed its user. See GenerateRecoveryCodesIfAbsent's doc
 	// comment (recoverycodes.go) and handleTOTPConfirm's identical use
 	// of it in auth.go.
-	recoveryCodes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(current.ID, now)
-	if err != nil {
-		// The passkey is already added at this point -- AddPasskey above
-		// committed. A mint failure must not be answered like "already
-		// issued" (null recoveryCodes, 200): the frontend reads null as
-		// exactly that, and here nothing was ever issued for this
-		// account to fall back on. Told to the caller plainly instead,
-		// the same shape handleTOTPConfirm's identical failure takes --
-		// including leaving session rotation and the audit record for a
-		// retry that gets past this, rather than reporting a factor
-		// change with no way back in as a clean success.
-		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, err))
-		http.Error(w, "the passkey is now active, but recovery codes could not be generated -- remove it and register again from account settings", http.StatusInternalServerError)
-		return
-	}
+	recoveryCodes, alreadyIssued, mintErr := s.Auth.GenerateRecoveryCodesIfAbsent(current.ID, now)
 
+	// Rotation and the audit record happen whether or not the mint
+	// worked: AddPasskey above already committed, so the passkey is live
+	// either way, and no retry could do them later -- begin now lists
+	// this passkey in excludeCredentials (#1394).
 	if wasFirstFactor {
 		// Parity with handleTOTPConfirm: turning on the account's first
 		// second factor is exactly the moment a stale or forgotten
@@ -474,7 +465,22 @@ func (s *Server) handleAuthPasskeysRegisterFinish(w http.ResponseWriter, r *http
 	}
 
 	s.clearPasskeyRegisterCookie(w)
-	s.Audit.Record(current.Username, "account.passkey_added", current.Username, "name="+stored.Name)
+	detail := "name=" + stored.Name
+	if mintErr != nil {
+		detail += "; recovery codes could not be saved"
+	}
+	s.Audit.Record(current.Username, "account.passkey_added", current.Username, detail)
+
+	if mintErr != nil {
+		// A mint failure must not be answered like "already issued"
+		// (null recoveryCodes, 200): the frontend reads null as exactly
+		// that, and here nothing was ever issued for this account to
+		// fall back on. Told to the caller plainly instead, the same
+		// shape handleTOTPConfirm's identical failure takes.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after registering a passkey: %v", current.Username, mintErr))
+		http.Error(w, "the passkey is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)", http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, http.StatusOK, passkeyRegisterFinishResponse{
 		Passkey:       toPasskeySummary(stored, s.RelyingParty.RPID),
@@ -648,9 +654,34 @@ func (s *Server) handleAuthLoginFactorBegin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// The same LoginLimiter reservations, on the same keys, that every
+	// other step spending this pending-login cookie takes (#1345
+	// SEC-A1-F1): without them, anyone holding the password could start
+	// passkey prompts without limit. Kept on success here, like a guess
+	// that has not yet proved right: handleAuthLoginFactor gives them
+	// back once the assertion this begin mints signs the user in, so
+	// only a prompt that never completes a sign-in stays counted.
+	ipKey := "ip:" + s.clientIP(r)
+	userKey := "user:" + strings.ToLower(user.Username)
+	if !s.LoginLimiter.Reserve(ipKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		s.LoginLimiter.Release(ipKey, now)
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	// A failure below is this server's, not the caller's attempt.
+	releaseReservations := func() {
+		s.LoginLimiter.Release(ipKey, now)
+		s.LoginLimiter.Release(userKey, now)
+	}
+
 	wu := webauthnUser{id: []byte(user.ID), username: user.Username, credentials: webauthnCredentialsFor(nonStale)}
 	assertion, session, err := s.RelyingParty.WebAuthn.BeginLogin(wu)
 	if err != nil {
+		releaseReservations()
 		authLog.Error(fmt.Sprintf("beginning passkey login for %s: %v", user.Username, err))
 		http.Error(w, "unable to start passkey sign-in", http.StatusInternalServerError)
 		return
@@ -659,6 +690,7 @@ func (s *Server) handleAuthLoginFactorBegin(w http.ResponseWriter, r *http.Reque
 
 	encoded, err := passkeyAssertSessionCodec.encode(*session)
 	if err != nil {
+		releaseReservations()
 		authLog.Error(fmt.Sprintf("sealing passkey login session for %s: %v", user.Username, err))
 		http.Error(w, "unable to start passkey sign-in", http.StatusInternalServerError)
 		return

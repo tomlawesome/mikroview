@@ -174,11 +174,35 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
   })
 
+  // Q4-F3 (round 61 door audit): chooseTOTP() mirrors AuthenticatorOverlay's
+  // startEnrol() -- a string result is shown inline and the caller stays
+  // on the choose stage, same as that overlay's own equivalent test.
+  it('shows the enrol error and stays on the choose screen when it fails', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue('the server could not do that (500)')
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getByRole('button', { name: /authenticator app/i }))
+
+    expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
+    expect(screen.queryByTestId('totp-secret')).toBeNull()
+  })
+
+  // FR2-F1: a string result now always re-checks the session (see the
+  // describe block below) -- a wrong code leaves mustEnrolSecondFactor
+  // true, so this still reads as a plain refusal, not the codes-lost line.
   it('shows the server refusal on a wrong code and stays on the door', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue({
       uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
     })
     vi.mocked(confirmTOTP).mockResolvedValue('invalid code')
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'meredith',
+      role: 'viewer',
+      mustEnrolSecondFactor: true,
+      ssoAvailable: false,
+    })
 
     render(AuthEnrolFactor)
 
@@ -189,7 +213,7 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
 
     expect(await screen.findByText('invalid code')).toBeTruthy()
     expect(authState.state).toBe('must-enrol-factor')
-    expect(fetchAuthSession).not.toHaveBeenCalled()
+    expect(fetchAuthSession).toHaveBeenCalled()
   })
 
   // This door has no cancel, skip or sign-out -- a 401 from any of its
@@ -322,6 +346,33 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     expect(screen.getByText('Keep the codes')).toBeTruthy()
   })
 
+  // Q4-F2 (round 61 door audit): addPasskey() mirrors PasskeysOverlay's
+  // submitAdd() -- a string result (the ceremony's own refusal) is shown
+  // inline and the caller stays on the passkey stage, same as that
+  // overlay's own equivalent test.
+  it("shows the passkey ceremony's own refusal and stays put to retry", async () => {
+    vi.mocked(registerPasskey).mockResolvedValue("That didn't complete -- try again, or use another way in.")
+    // FR2-F1: addPasskey() re-checks the session on any string result --
+    // unchanged here, so this still reads as a plain ceremony refusal.
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'meredith',
+      role: 'viewer',
+      mustEnrolSecondFactor: true,
+      ssoAvailable: false,
+    })
+
+    render(AuthEnrolFactor)
+    await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
+    await screen.findByLabelText('Name')
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+
+    expect(await screen.findByText(/didn't complete/i)).toBeTruthy()
+    expect(authState.passkeyCount).toBe(0)
+  })
+
   it('each prove stage offers the other key as the quiet link, when that key is live', async () => {
     vi.mocked(enrolTOTP).mockResolvedValue({
       uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
@@ -381,5 +432,116 @@ describe('AuthEnrolFactor (the forced-enrolment door, #1336)', () => {
     const { container } = render(AuthEnrolFactor)
 
     expect(container.querySelectorAll('.fullfall.enrol i').length).toBe(40)
+  })
+
+  // FR2-F1: the server can 500 (or otherwise fail) after already
+  // committing the factor -- confirmTOTP/registerPasskey then answer with
+  // plain text, indistinguishable by status from an ordinary ceremony
+  // refusal. Re-checking the session is what tells them apart: if
+  // mustEnrolSecondFactor has flipped to false, the factor is on and only
+  // the codes failed to save, so the door offers Enter instead of asking
+  // to retry a ceremony that can't be repeated.
+  describe('FR2-F1: the factor commits but the recovery codes fail to save', () => {
+    function committedSession(): Awaited<ReturnType<typeof fetchAuthSession>> {
+      return {
+        setupRequired: false,
+        authenticated: true,
+        username: 'meredith',
+        role: 'viewer',
+        mustEnrolSecondFactor: false,
+        ssoAvailable: false,
+      }
+    }
+
+    it('confirm(): shows the codes-lost line and Enter when the session says the factor is already on', async () => {
+      vi.mocked(enrolTOTP).mockResolvedValue({
+        uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
+      })
+      vi.mocked(confirmTOTP).mockResolvedValue(
+        'the passkey is now active, but recovery codes could not be saved',
+      )
+      vi.mocked(fetchAuthSession).mockResolvedValue(committedSession())
+
+      render(AuthEnrolFactor)
+      await enterTotpStage()
+      await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+      await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+      expect(await screen.findByText(/your second step is on, but the recovery codes couldn.t be saved/i)).toBeTruthy()
+      expect(screen.getByRole('button', { name: /^enter$/i })).toBeTruthy()
+      // The ordinary retry path is gone -- a fresh secret would be needed.
+      expect(screen.queryByRole('button', { name: /^confirm$/i })).toBeNull()
+
+      await fireEvent.click(screen.getByRole('button', { name: /^enter$/i }))
+      await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
+    })
+
+    it('addPasskey(): shows the codes-lost line and Enter when the session says the factor is already on', async () => {
+      vi.mocked(registerPasskey).mockResolvedValue(
+        'the authenticator app is now active, but recovery codes could not be saved',
+      )
+      vi.mocked(fetchAuthSession).mockResolvedValue(committedSession())
+
+      render(AuthEnrolFactor)
+      await fireEvent.click(screen.getAllByRole('button', { name: /set it up/i })[1])
+      await screen.findByLabelText('Name')
+      await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+      await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+
+      expect(await screen.findByText(/your second step is on, but the recovery codes couldn.t be saved/i)).toBeTruthy()
+      expect(screen.getByRole('button', { name: /^enter$/i })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /add passkey/i })).toBeNull()
+    })
+  })
+})
+
+// X4-F1: the ten codes exist in clear nowhere else, so a reload before
+// the explicit acknowledgement loses them for good -- same guard as
+// LogEveryRule's own beforeunload (its own test file's own pattern,
+// reused here).
+describe('X4-F1: beforeunload guard on the codes stage', () => {
+  function dispatchBeforeUnload(): Event {
+    const evt = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(evt)
+    return evt
+  }
+
+  it('is not set before the codes stage is ever reached', () => {
+    render(AuthEnrolFactor)
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+
+  // Unlike the overlays, "I have saved these" here doesn't move `stage`
+  // away from 'codes' -- it hands off to the app (enter(), which flips
+  // authState.state), and it's App.svelte that then unmounts this door
+  // in the real app. Simulated here with an explicit unmount(), which is
+  // what actually runs the $effect's cleanup and drops the listener.
+  it('guards the codes stage, and the guard is gone once the door hands off to the app', async () => {
+    vi.mocked(enrolTOTP).mockResolvedValue({
+      uri: 'otpauth://totp/MikroView:meredith?secret=GQ4TMNZVG5UWK2LNMFRGYZLBOR2WCZ3F&issuer=MikroView',
+    })
+    vi.mocked(confirmTOTP).mockResolvedValue({ recoveryCodes: TEN_CODES, alreadyIssued: false })
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'meredith',
+      role: 'viewer',
+      mustEnrolSecondFactor: false,
+      ssoAvailable: false,
+    })
+
+    const { unmount } = render(AuthEnrolFactor)
+    await enterTotpStage()
+    await fireEvent.input(screen.getByLabelText('Code from the app'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^confirm$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+    await vi.waitFor(() => expect(authState.state).toBe('authenticated'))
+    unmount()
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
   })
 })

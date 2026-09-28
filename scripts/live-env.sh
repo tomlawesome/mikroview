@@ -391,6 +391,16 @@ EOF
   # warning naming both routes when it sees it.
   MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"
+  # From here to the last thing that can fail (TOTP confirm below), a
+  # curl/python hiccup would otherwise trip set -e and exit with the
+  # server already running -- Makefile's `live-check` only arms its own
+  # `down` trap *after* `up` returns, precisely so `up`'s "port already in
+  # use" refusal (which happens before the server is spawned) isn't undone
+  # by a spurious `down`. That reasoning does not cover a failure here,
+  # after spawn, so this instance would otherwise leak until the next
+  # `up`'s own `down >/dev/null 2>&1 || true` reclaims it (R6B-F1).
+  # Cleared once up() has nothing left that can fail.
+  trap 'down >/dev/null 2>&1 || true' EXIT
 
   for _ in $(seq 1 40); do
     if curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi
@@ -451,6 +461,7 @@ print(counter, "%06d" % ((struct.unpack(">I", mac[o:o + 4])[0] & 0x7FFFFFFF) % 1
     -d "{\"code\":\"$totp_code\"}" \
     "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/auth/totp/confirm" >/dev/null
   echo "$totp_counter" > "$MV_DIR/totp-last-counter"
+  trap - EXIT
 
   echo "export MV_URL=$MV_SCHEME://$MV_BIND:$HTTP_PORT"
   # The same instance under the name passkeys need (#1250). A WebAuthn

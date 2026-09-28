@@ -1660,6 +1660,7 @@ func writeDefinitionError(w http.ResponseWriter, err error) {
 		// own path or detail and has no business leaving this process --
 		// see ErrPersistFailed's own doc comment (v0.6.0 audit finding
 		// R6).
+		apiLog.Error("saving a definition change failed: " + err.Error())
 		http.Error(w, "the change could not be saved, so nothing was changed", http.StatusInternalServerError)
 	default:
 		http.Error(w, err.Error(), http.StatusBadRequest)

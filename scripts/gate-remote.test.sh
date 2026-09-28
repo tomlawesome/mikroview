@@ -47,4 +47,35 @@ else
   echo "ok - image prune is dangling-only"
 fi
 
+# Q6C-F1: gate-local.sh has --shard i/N (run one slice, e.g. to reproduce a
+# single red CI shard without four browsers' worth of contention); this
+# host script had no way to pass that through at all. Its argument parsing
+# and validation run before the dirty-tree check and before anything
+# touches the network, so the invalid/conflicting cases below can be run
+# directly -- deterministic regardless of this checkout's own git status --
+# without ever attempting SSH. A *valid* --shard is checked by shape (grep)
+# instead, since actually running it would either hit the dirty-tree
+# refusal or a real (and here unreachable) second host.
+has "--shard)   SHARD=\"\$2\"; shift 2 ;;" "--shard is a recognised flag"
+has "MV_SHARD=\$SHARD live-check" "a valid --shard threads MV_SHARD into the remote make invocation, same as gate-local.sh"
+has "[--shards N | --shard i/N]" "the usage string mentions --shard"
+
+set +e
+out="$("$SCRIPT" --shard 9/2 2>&1)"; rc=$?
+set -e
+check "$rc" "2" "--shard with i>8 exits 2"
+grep -qF "must be i/N with 1 <= i <= N <= 8" <<< "$out" && echo "ok - out-of-range --shard names the rule" || { echo "FAIL - out-of-range --shard names the rule: $out"; fail=1; }
+
+set +e
+out="$("$SCRIPT" --shard 2/1 2>&1)"; rc=$?
+set -e
+check "$rc" "2" "--shard with index > count exits 2"
+grep -qF "exceeds the shard count" <<< "$out" && echo "ok - --shard 2/1 is refused as index-exceeds-count" || { echo "FAIL - --shard 2/1 is refused as index-exceeds-count: $out"; fail=1; }
+
+set +e
+out="$("$SCRIPT" --shards 2 --shard 1/2 2>&1)"; rc=$?
+set -e
+check "$rc" "2" "--shards and --shard together exits 2"
+grep -qF "pick one" <<< "$out" && echo "ok - --shards and --shard together is refused" || { echo "FAIL - --shards and --shard together is refused: $out"; fail=1; }
+
 exit "$fail"

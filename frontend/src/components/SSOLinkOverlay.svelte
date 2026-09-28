@@ -109,11 +109,11 @@
           <div class="warning">
             <strong>Your MikroView password and second step will be deleted.</strong>
             <p>
-              Both go: the password, and the authenticator app or passkeys you use
-              for the second step. This can't be undone from MikroView. After
-              connecting, signing in goes through your identity provider only — and
-              if you ever lose access to it, MikroView can't recover this account
-              for you.
+              All of it goes: the password, the authenticator app or passkeys you
+              use for the second step, and your ten recovery codes. This can't be
+              undone from MikroView. After connecting, signing in goes through your
+              identity provider only — and if you ever lose access to it, MikroView
+              can't recover this account for you.
             </p>
           </div>
         {/if}
