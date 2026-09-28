@@ -212,6 +212,42 @@ describe('adding a passkey', () => {
     expect(await screen.findByText(/didn't complete/i)).toBeTruthy()
     expect(authState.passkeyCount).toBe(0)
   })
+
+  // Matches AuthenticatorOverlay's own codes-screen guard: the ten codes
+  // exist in clear nowhere else, so neither the header X nor Escape is
+  // wired here, only the explicit acknowledgement.
+  it('offers no header close button on the codes screen -- only the explicit acknowledgement', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue({
+      passkey: row(),
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+    })
+    await openAdding()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(screen.queryByRole('button', { name: /close/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /i have saved these/i })).toBeTruthy()
+  })
+
+  it('Escape does not close the codes screen, but does close every other screen', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue({
+      passkey: row(),
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+    })
+    await openAdding()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: /passkeys/i })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+    expect(screen.queryByRole('dialog', { name: /passkeys/i })).toBeNull()
+  })
 })
 
 // Closing mid-ceremony doesn't cancel it, it only unmounts the view -- a
