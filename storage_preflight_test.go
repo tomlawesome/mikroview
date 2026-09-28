@@ -162,6 +162,15 @@ func TestCheckNoRestoreInProgressRefusesWhileTheMarkerExists(t *testing.T) {
 	if !strings.Contains(err.Error(), "own copy") {
 		t.Errorf("the refusal must name restoring from the operator's own copy of the data directory, got: %v", err)
 	}
+	// #1345 FR9-F1: the marker also outlives a restore whose stores all
+	// landed and only the vault or retained history did not, so the
+	// refusal must not tell that operator their stores are mixed.
+	if strings.Contains(err.Error(), "stores on disk are a mixture") {
+		t.Errorf("the refusal claims the stores are mixed, which is false when only the vault or history failed, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stores all landed") {
+		t.Errorf("the refusal must allow for the stores having all landed, got: %v", err)
+	}
 }
 
 // TestCheckNoRestoreInProgressSkipsPostgresDeployments: -restore itself

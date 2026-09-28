@@ -41,6 +41,12 @@ BROWSER="${MV_BROWSER:-chromium}"
 # of `make live-check` -- N instances, N slices, the same scenarios in a
 # fraction of the window (#1004). Empty means the unsharded gate.
 SHARDS="${MV_SHARDS:-}"
+# --shard i/N / MV_SHARD: run just the i-th slice, on its own -- same as
+# gate-local.sh's (#1387's sibling gap, Q6C-F1): CI runs the slices as four
+# separate jobs, so reproducing one red job on this host meant running all
+# four and hoping four browsers' worth of contention did not change the
+# answer. Mutually exclusive with --shards.
+SHARD="${MV_SHARD:-}"
 KEEP=0
 # --wait / MV_GATE_WAIT: poll for the lock instead of refusing (#811).
 WAIT="${MV_GATE_WAIT:-0}"
@@ -51,11 +57,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --browser) BROWSER="$2"; shift 2 ;;
     --shards)  SHARDS="$2"; shift 2 ;;
+    --shard)   SHARD="$2"; shift 2 ;;
     --host)    HOST="$2"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     --wait)    WAIT=1; shift ;;
     -h|--help)
-      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--shards N] [--host NAME] [--keep] [--wait]"
+      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--shards N | --shard i/N] [--host NAME] [--keep] [--wait]"
       exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -70,13 +77,29 @@ case "$SHARDS" in
   ''|[1-8]) ;;
   *) echo "--shards must be 1 to 8 (got '$SHARDS')" >&2; exit 2 ;;
 esac
+case "$SHARD" in
+  '') ;;
+  [1-8]/[1-8])
+    if [ "${SHARD%/*}" -gt "${SHARD#*/}" ]; then
+      echo "--shard index exceeds the shard count (got '$SHARD')" >&2; exit 2
+    fi ;;
+  *) echo "--shard must be i/N with 1 <= i <= N <= 8 (got '$SHARD')" >&2; exit 2 ;;
+esac
+if [ -n "$SHARDS" ] && [ -n "$SHARD" ]; then
+  echo "--shards runs every slice at once and --shard runs one; pick one" >&2
+  exit 2
+fi
 if [ -n "$SHARDS" ]; then
   GATE_TARGET="MV_SHARDS=$SHARDS live-check-sharded"
+elif [ -n "$SHARD" ]; then
+  # `make live-check` reads MV_SHARD itself and skips the standalone
+  # scripts when it is set, which is what the sharded target does too.
+  GATE_TARGET="MV_SHARD=$SHARD live-check"
 else
   GATE_TARGET="live-check"
 fi
 
-echo "==> gate on $HOST, engine $BROWSER${SHARDS:+, $SHARDS shards}, from $REF ($(git rev-parse --short HEAD))"
+echo "==> gate on $HOST, engine $BROWSER${SHARDS:+, $SHARDS shards}${SHARD:+, slice $SHARD alone}, from $REF ($(git rev-parse --short HEAD))"
 
 # A dirty tree would run code that is not what gets pushed, and the run would
 # claim to have tested a commit it did not. Refuse rather than mislead.

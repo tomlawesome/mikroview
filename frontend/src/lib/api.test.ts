@@ -756,6 +756,15 @@ describe('the passkey calls (#1250)', () => {
     expect(result).toEqual(rows)
   })
 
+  // Q5-F2: fetchPasskeys used to return failure as text, unlike every
+  // other list call in this file (fetchDevices, fetchUsers, ...), which
+  // throw ApiError -- PasskeysOverlay's loadList() now relies on that to
+  // route a 401 the same way its other calls already do.
+  it('fetchPasskeys throws ApiError on failure, like the other list calls', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(fetchPasskeys()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+  })
+
   it('beginPasskeyRegistration posts an empty body and returns the library\'s own creation options', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ publicKey: { challenge: 'c' } }) }))
     vi.stubGlobal('fetch', fetchMock)

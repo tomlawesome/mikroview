@@ -1666,6 +1666,39 @@ func (s *Store) List() []User {
 	s.reloadIfStale()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.listLocked()
+}
+
+// ListedUser is one row of ListWithSecondFactors: List's blanked copy
+// plus the two second-factor answers that copy can no longer give
+// (HasActiveTOTP and PasskeyCount, below), read off the live record
+// under the same lock.
+type ListedUser struct {
+	User          User
+	HasActiveTOTP bool
+	PasskeyCount  int
+}
+
+// ListWithSecondFactors is List plus HasActiveTOTP and PasskeyCount for
+// every account, in one staleness check and one read lock -- for the
+// admin users list, which used to ask the store for each separately and
+// so re-read the accounts document 1+2N times per page load (#1345
+// E1-F1). The copies are blanked exactly as List blanks them.
+func (s *Store) ListWithSecondFactors() []ListedUser {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	users := s.listLocked()
+	out := make([]ListedUser, 0, len(users))
+	for _, cp := range users {
+		live := s.byID[cp.ID]
+		out = append(out, ListedUser{User: cp, HasActiveTOTP: live.HasActiveTOTP(), PasskeyCount: len(live.Passkeys)})
+	}
+	return out
+}
+
+// listLocked is List's body. Must be called with s.mu held.
+func (s *Store) listLocked() []User {
 	out := make([]User, 0, len(s.byID))
 	for _, u := range s.byID {
 		cp := *u
@@ -1688,7 +1721,8 @@ func (s *Store) List() []User {
 		// stance as the three fields above. Blanked wholesale rather
 		// than per-field, same as TOTPSecret: a caller that needs a
 		// count (the users list's passkeyCount, internal/api wave 2)
-		// must call PasskeyCount(userID) (passkeys.go) instead of
+		// must call PasskeyCount(userID) (passkeys.go), or read it off
+		// ListWithSecondFactors for every account at once, instead of
 		// reading len(this copy's Passkeys), which always reads zero
 		// now. #1249 shipped exactly this mistake once already, reading
 		// HasActiveTOTP off a List() copy whose TOTPSecret was blanked

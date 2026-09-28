@@ -1096,6 +1096,13 @@ func (s *Server) handleAuthLoginFactor(w http.ResponseWriter, r *http.Request) {
 	// exactly like a wrong TOTP code does below.
 	if len(req.Assertion) > 0 {
 		if s.verifyPasskeyAssertion(w, r, user, req.Assertion, now) {
+			// The begin that minted this assertion's single-use
+			// challenge reserved one attempt on each key too
+			// (handleAuthLoginFactorBegin); a completed sign-in gives
+			// that back as well, so a passkey sign-in costs no more
+			// of the budget than a correct code does.
+			s.LoginLimiter.Release(ipKey, now)
+			s.LoginLimiter.Release(userKey, now)
 			s.completeLoginFactor(w, user, ipKey, userKey, now)
 		}
 		return
@@ -1463,9 +1470,17 @@ func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	users := s.Auth.List()
-	out := make([]userSummary, 0, len(users))
-	for _, u := range users {
+	// One read of the accounts document for the whole page, not one per
+	// question per row (#1345 E1-F1). HasTOTP and PasskeyCount come
+	// from the store rather than from u, deliberately: List blanks
+	// TOTPSecret and Passkeys on the copies it hands back, so
+	// User.HasActiveTOTP or len(u.Passkeys) on one of them answers
+	// false/zero for every account -- the mistake #1249 shipped once --
+	// and ListWithSecondFactors reads both off the live record instead.
+	listed := s.Auth.ListWithSecondFactors()
+	out := make([]userSummary, 0, len(listed))
+	for _, l := range listed {
+		u := l.User
 		out = append(out, userSummary{
 			ID:               u.ID,
 			Username:         u.Username,
@@ -1474,19 +1489,8 @@ func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
 			LastLogin:        u.LastLogin,
 			HasLocalPassword: u.LocalPassword(),
 			SSO:              u.OIDCIssuer != "",
-			// Asked of the store rather than of u, deliberately. List
-			// blanks TOTPSecret on the copies it hands back (it is the
-			// live shared secret, the one field here worth more than a
-			// hash), and User.HasActiveTOTP tests that very field --
-			// so calling it on one of these copies answers false for
-			// every account, including the ones that do hold a factor.
-			HasTOTP: s.Auth.HasActiveTOTP(u.ID),
-			// Same trap, same fix, for passkeys (#1250): List blanks
-			// Passkeys wholesale, so len(u.Passkeys) here would always
-			// read zero -- see auth.Store.PasskeyCount's own doc comment,
-			// which names this exact mistake shipping once already for
-			// HasActiveTOTP.
-			PasskeyCount: s.Auth.PasskeyCount(u.ID),
+			HasTOTP:          l.HasActiveTOTP,
+			PasskeyCount:     l.PasskeyCount,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1811,31 +1815,36 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 	// once) both saw no codes yet and both minted, the second silently
 	// replacing what the first had already shown. See
 	// GenerateRecoveryCodesIfAbsent's doc comment (recoverycodes.go).
-	codes, alreadyIssued, err := s.Auth.GenerateRecoveryCodesIfAbsent(user.ID, now)
-	if err != nil {
-		// The factor is active at this point regardless -- ConfirmTOTP
-		// already committed. Logged rather than swallowed (R6), and
-		// told to the caller plainly rather than reported as a clean
-		// success: they are about to be shown nothing to fall back on
-		// if the app is ever lost. Recovering from here is
-		// DELETE /api/auth/totp followed by enrolling again, same as
-		// any other abandoned enrolment.
-		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, err))
-		http.Error(w, "the authenticator app is now active, but recovery codes could not be generated -- remove it and enrol again from account settings", http.StatusInternalServerError)
-		return
-	}
+	codes, alreadyIssued, mintErr := s.Auth.GenerateRecoveryCodesIfAbsent(user.ID, now)
 	detail := "authenticator app confirmed"
-	if alreadyIssued {
+	switch {
+	case mintErr != nil:
+		detail += "; recovery codes could not be saved"
+	case alreadyIssued:
 		detail += "; existing recovery codes unchanged"
-	} else {
+	default:
 		detail += "; recovery codes issued"
 	}
 
+	// Rotation and the audit record happen whether or not the mint
+	// worked: ConfirmTOTP above already committed, so the factor is
+	// live either way, and no retry could do them later -- confirming
+	// again needs a fresh secret (#1394).
 	s.Sessions.RevokeAllForUser(user.ID)
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
 
 	s.Audit.Record(user.Username, "account.totp_enabled", user.Username, detail)
+
+	if mintErr != nil {
+		// Logged rather than swallowed (R6), and told to the caller
+		// plainly rather than reported as a clean success: they are
+		// about to be shown nothing to fall back on if the app is ever
+		// lost.
+		authLog.Error(fmt.Sprintf("generating recovery codes for %s after confirming TOTP: %v", user.Username, mintErr))
+		http.Error(w, "the authenticator app is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)", http.StatusInternalServerError)
+		return
+	}
 
 	writeJSON(w, http.StatusOK, totpConfirmResponse{Enabled: true, RecoveryCodes: codes, AlreadyIssued: alreadyIssued})
 }

@@ -32,6 +32,9 @@ describe('SSOLinkOverlay', () => {
 
     expect(screen.getByText(/password and second step will be deleted/i)).toBeTruthy()
     expect(screen.getByText(/can't be undone/i)).toBeTruthy()
+    // X4-F2: the warning named the password and the second step, but not
+    // the ten recovery codes that go with them.
+    expect(screen.getByText(/ten recovery codes/i)).toBeTruthy()
     expect(startSSOLink).not.toHaveBeenCalled()
   })
 

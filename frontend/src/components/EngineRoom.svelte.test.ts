@@ -150,7 +150,7 @@ import {
   fetchConfigUpgrade as fetchConfigUpgradeReal,
   fetchGeoSettings as fetchGeoSettingsReal,
 } from '../lib/api'
-import type { RouterBackupsResponse, Stats } from '../lib/types'
+import type { DroplistResponse, HistorySettings, RouterBackupsResponse, Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
 const fetchHistorySettings = vi.mocked(fetchHistorySettingsReal)
@@ -188,6 +188,33 @@ function backupsWith(device: string): RouterBackupsResponse {
     totalRouters: 1,
     totalBytes: 1024,
     lock: { passphraseSet: false, locked: false, unlockedForYou: false, minPassphraseLength: 12, idleTimeoutSeconds: 900 },
+  }
+}
+
+// One drop-list answer naming a single entry -- the whole of what the
+// out-of-order poll test below needs to tell two answers apart.
+function droplistWith(cidr: string): DroplistResponse {
+  return {
+    listName: 'mikroview-drops',
+    entries: [{ cidr, addedBy: 'tom', addedAt: '2026-09-14T00:00:00Z', reason: 'ssh brute force' }],
+    key: { present: false },
+    ownRangesKnown: true,
+    setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
+  }
+}
+
+// One history answer naming a single days-held figure -- restartRow's
+// own text (lib/history.ts) is what the out-of-order poll test below
+// reads to tell two answers apart.
+function historyWith(days: number): HistorySettings {
+  return {
+    keyed: true,
+    enabled: true,
+    days: 30,
+    maxBytes: 1024 * 1024 * 1024,
+    held: { days, oldest: '2026-09-01', newest: '2026-09-01', bytes: 1024 },
+    capped: false,
+    bytesPerDay: 0,
   }
 }
 
@@ -691,8 +718,10 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(clearUserTOTP).not.toHaveBeenCalled()
 
+    // X9-F1: kai has no passkeys either, so clearing the authenticator
+    // app also takes the recovery codes -- the confirm says so.
     await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off; their recovery codes go too' }),
     )
     await settle()
     expect(clearUserTOTP).toHaveBeenCalledWith('u2')
@@ -717,7 +746,7 @@ describe('The settings shelf (#633)', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
     await settle()
     await fireEvent.click(
-      screen.getByRole('button', { name: 'confirm — turns their authenticator app off' }),
+      screen.getByRole('button', { name: 'confirm — turns their authenticator app off; their recovery codes go too' }),
     )
     await settle()
 
@@ -785,9 +814,52 @@ describe('The settings shelf (#633)', () => {
     await settle()
     expect(clearUserPasskeys).not.toHaveBeenCalled()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys' }))
+    // X9-F1: kai has no authenticator app either, so clearing passkeys
+    // also takes the recovery codes -- the confirm says so.
+    await fireEvent.click(screen.getByRole('button', { name: 'confirm — removes their passkeys; their recovery codes go too' }))
     await settle()
     expect(clearUserPasskeys).toHaveBeenCalledWith('u2')
+  })
+
+  // X9-F1: the recovery-codes warning is said only when clearing this
+  // factor would actually take them -- kai keeps the authenticator app
+  // here, so the codes stay too and the confirm names neither.
+  it('clearing passkeys keeps the short confirm when the authenticator app still stands', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 0 },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, passkeyCount: 1, hasTOTP: true },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear passkeys' }))
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'confirm — removes their passkeys' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /recovery codes go too/i })).toBeNull()
+  })
+
+  // X9-F1's other button, same reasoning: kai keeps a passkey here, so
+  // clearing the authenticator app leaves the codes covered too.
+  it('clearing the authenticator app keeps the short confirm when a passkey still stands', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    const { fetchUsers } = await import('../lib/api')
+    vi.mocked(fetchUsers).mockResolvedValue([
+      { id: 'u1', username: 'tom', role: 'admin', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: false },
+      { id: 'u2', username: 'kai', role: 'user', createdAt: '2026-08-01T00:00:00Z', hasLocalPassword: true, sso: false, hasTOTP: true, passkeyCount: 1 },
+    ])
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'clear authenticator app' }))
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'confirm — turns their authenticator app off' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /recovery codes go too/i })).toBeNull()
   })
 
   it('offers no clear-passkeys verb on the admin row, even when the admin has passkeys', async () => {
@@ -1006,6 +1078,41 @@ describe('The settings shelf (#633)', () => {
     expect(fetchHistorySettings).toHaveBeenCalledTimes(2)
     expect(document.getElementById('diskg')?.classList.contains('dfail')).toBe(false)
     expect(screen.getByRole('slider', { name: 'Days kept on disk' })).toBeTruthy()
+  })
+
+  // #1275, same guard as router backups above (refreshHistory's own use
+  // of overtaken()): an older answer would flip the days-held row back
+  // to what it was before the operator's own change, racing
+  // historyChanged's stamp -- a poll that answers after a newer one has
+  // already landed must be ignored rather than applied.
+  it('ignores a history poll that answers after a newer one (#1275)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((h: HistorySettings) => void)[] = []
+      const held = () => new Promise<HistorySettings>((resolve) => answer.push(resolve))
+      fetchHistorySettings.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      // The mount poll is out; the tick a minute later sends a second.
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The newer request answers first, then the older one comes back.
+      answer[1](historyWith(5))
+      await settle()
+      answer[0](historyWith(27))
+      await settle()
+      await settle()
+
+      expect(screen.getByText('the buffer clears — the 5 days on disk stay; trying a watcher reads them')).toBeTruthy()
+      expect(screen.queryByText('the buffer clears — the 27 days on disk stay; trying a watcher reads them')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('router backups stacks its rows until there is a strip to draw beside them (#1153)', async () => {
@@ -1662,6 +1769,41 @@ describe("EngineRoom's three newest settings groups (#1218 finding 15)", () => {
     await settle()
 
     expect(document.getElementById('engineroom-droplist')?.classList.contains('dfail')).toBe(false)
+  })
+
+  // #1275, same guard as router backups above (refreshDroplist's own
+  // use of overtaken()): an older answer would put back the entry the
+  // operator just removed or minted, so a poll that answers after a
+  // newer one has already landed must be ignored rather than applied.
+  it('ignores a drop-list poll that answers after a newer one (#1275)', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    vi.useFakeTimers()
+    try {
+      const answer: ((r: DroplistResponse) => void)[] = []
+      const held = () => new Promise<DroplistResponse>((resolve) => answer.push(resolve))
+      fetchDroplist.mockImplementationOnce(held).mockImplementationOnce(held)
+
+      render(EngineRoom)
+      await settle()
+      // The mount poll is out; the tick a minute later sends a second.
+      vi.advanceTimersByTime(60_000)
+      await settle()
+      expect(answer).toHaveLength(2)
+
+      // The newer request answers first, then the older one comes back.
+      answer[1](droplistWith('203.0.113.99/32'))
+      await settle()
+      answer[0](droplistWith('198.51.100.1/32'))
+      await settle()
+      await settle()
+
+      const droplist = document.getElementById('engineroom-droplist') as HTMLElement
+      expect(within(droplist).getByText('203.0.113.99/32')).toBeTruthy()
+      expect(within(droplist).queryByText('198.51.100.1/32')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a viewer sees no "drop list" group at all', async () => {

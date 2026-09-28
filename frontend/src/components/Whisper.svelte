@@ -347,9 +347,10 @@
     return [windowStartMs, windowEndMs]
   })
 
-  // #1304 E11: eventsBetween (lib/whisperStats.ts) forward-scans whatever
-  // array it's handed -- fine for a bounded slice, but handing it the
-  // whole appState.events buffer (up to MAX_CLIENT_EVENTS) meant every
+  // #1304 E11: the forward scan this replaced (whisperStats.ts's
+  // eventsBetween, since removed) walked whatever array it was handed --
+  // fine for a bounded slice, but handing it the whole appState.events
+  // buffer (up to MAX_CLIENT_EVENTS) meant every
   // statTalker/statPort recompute rescanned the entire live buffer just
   // to pull out a window a few minutes wide. appState.events arrives
   // oldest-first (state.svelte's own append order -- ringHolds above

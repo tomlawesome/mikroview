@@ -450,3 +450,75 @@ func TestClearSecondFactorCorrectKeyClearsPasskeyOnlyAccount(t *testing.T) {
 		t.Error("the spent recovery key still redeems after being used")
 	}
 }
+
+// Declining the "type 'saved'" prompt must leave the previous recovery
+// keys valid: rotating into a set the operator says they never captured
+// is the one outcome worse than not rotating. The factor itself is
+// already cleared by then -- deliberately, see the comment above
+// printRecoveryKeys in runClearSecondFactor -- so the account is
+// checked for that too, to pin the order rather than just the exit code.
+func TestClearSecondFactorDeclinedConfirmationKeepsThePreviousKeys(t *testing.T) {
+	f := newClearFactorFixture(t)
+	seedUserWithActiveTOTP(t, f.store, "bilbo")
+
+	withStdin(t, f.keys[0]+"\nno\n")
+	code, out := runClearSecondFactorCapture(t, []string{"bilbo"})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; output:\n%s", code, out)
+	}
+
+	fresh, ok := f.store.ByUsername("bilbo")
+	if !ok {
+		t.Fatal("the account vanished")
+	}
+	if fresh.HasActiveTOTP() {
+		t.Error("the factor is still active; it is cleared before the confirmation prompt")
+	}
+	if _, err := f.openRecovery(t).Redeem(f.keys[0]); err != nil {
+		t.Errorf("the original recovery key no longer redeems after the new keys were declined: %v", err)
+	}
+}
+
+// A Commit that cannot be stored must be reported as a failure and must
+// leave the previous recovery keys valid, not neither set. The
+// recovery-key file is moved into a directory of its own and that
+// directory made read-only, so the auth store beside the fixture's other
+// files can still be written (the clear happens first) while the
+// rotation's atomic write has nowhere to put its temp file.
+func TestClearSecondFactorFailedCommitKeepsThePreviousKeys(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the permission bits this test depends on")
+	}
+	f := newClearFactorFixture(t)
+	seedUserWithActiveTOTP(t, f.store, "bilbo")
+
+	keysDir := filepath.Join(filepath.Dir(f.recoveryPath), "keysdir")
+	if err := os.Mkdir(keysDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(keysDir, filepath.Base(f.recoveryPath))
+	if err := os.Rename(f.recoveryPath, moved); err != nil {
+		t.Fatal(err)
+	}
+	f.recoveryPath = moved
+	cfgPath := os.Getenv("MIKROVIEW_CONFIG")
+	cfgYAML := fmt.Sprintf("auth:\n  storePath: %q\n  recoveryKeysPath: %q\n  recoveryPepperPath: %q\n",
+		f.authPath, f.recoveryPath, f.pepperPath)
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keysDir, 0o500); err != nil { // read+execute, no write
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(keysDir, 0o700) })
+
+	withStdin(t, f.keys[0]+"\nsaved\n")
+	code, out := runClearSecondFactorCapture(t, []string{"bilbo"})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (the new keys cannot be stored); output:\n%s", code, out)
+	}
+
+	if _, err := f.openRecovery(t).Redeem(f.keys[0]); err != nil {
+		t.Errorf("the original recovery key no longer redeems after a failed rotation: %v", err)
+	}
+}

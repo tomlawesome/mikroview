@@ -186,4 +186,21 @@ rc=$?
 check "$rc" "1" "a malformed digest refuses"
 grep -q "is not sha256:<64 hex>" <<< "$out6" && echo "ok - the refusal says the digest shape is wrong" || { echo "FAIL - the refusal says the digest shape is wrong"; fail=1; }
 
+# 7. Q6-F2: the image never appears on GHCR at all -- the wait loop must
+# exhaust its attempts and refuse, rather than the untested case where it
+# somehow falls through and tries to sign nothing. STUB_PUBLISHED=0 makes
+# `docker manifest inspect` fail on every attempt.
+out7="$(run \
+  MV_SIGNING_DIR="$KEYDIR" \
+  GHCR_PUBLISH_TOKEN="dummy-ghcr-token" \
+  MV_DOCKER="$DOCKER_STUB" MV_COSIGN="$COSIGN_STUB" \
+  MV_SIGN_WAIT_ATTEMPTS=2 MV_SIGN_WAIT_INTERVAL=0 \
+  STUB_PUBLISHED=0 \
+  2>&1)"
+rc=$?
+check "$rc" "1" "an image that never appears on GHCR refuses"
+grep -q "never appeared on GHCR after 2 attempts" <<< "$out7" && echo "ok - the refusal names the attempt count" || { echo "FAIL - the refusal names the attempt count: $out7"; fail=1; }
+grep -q "attempt 1/2: not published yet" <<< "$out7" && grep -q "attempt 2/2: not published yet" <<< "$out7" \
+  && echo "ok - both attempts are logged" || { echo "FAIL - both attempts are logged: $out7"; fail=1; }
+
 exit "$fail"

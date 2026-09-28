@@ -125,6 +125,23 @@ rewritten.
   request outside `ui.allow` reach a route it merely decoded to look
   like an exempt one, rather than the route it actually dispatched to.
 
+- Starting a passkey sign-in prompt now counts against the same
+  sign-in attempt limit as the password and code steps (#1345
+  SEC-A1-F1). Someone who already had the password could previously
+  start prompts without limit. A prompt that is cancelled or never
+  completes counts as one failed attempt; a successful passkey sign-in
+  gives its attempt back.
+
+- A wrong recovery code now takes the same time to reject however many
+  of the account's codes are already used (#1345 SEC-A2-F1). The check
+  used to skip spent codes, so rejection time hinted at how many were
+  spent.
+
+- Turning on an account's first second factor now signs out its other
+  sessions and writes the audit record even when saving the recovery
+  codes then fails (#1394). Both used to be skipped on that path, left
+  for a retry that could never happen.
+
 ### Added
 
 - **A config editor, and a refused config no longer stops MikroView
@@ -222,6 +239,26 @@ rewritten.
   docs/install.md and docs/configuration.md).
 
 ### Fixed
+
+- **Recovery codes and the way out when they fail** (#1345). While
+  recovery codes are on screen, closing or reloading the tab now asks
+  first (the codes are shown once). If a new second factor saves but its
+  recovery codes do not, the first-sign-in screen now says the second
+  step is on and offers Enter, instead of leaving the user on a screen
+  whose advice pointed at settings they could not reach; the error text
+  now points at the account menu's "New recovery codes…". Linking SSO
+  now says the recovery codes go too, and an admin clearing a user's
+  last second factor is told the same.
+
+- A preference changed while the first load of preferences fails no
+  longer snaps back; it is sent once a load succeeds (#1345 R5-F3). A
+  late sign-in error now shows under the method that sent it, not the
+  one switched to meanwhile (R4-F3). A slow Fall poll can no longer
+  overwrite a newer one (R4B-F2). Failing to list passkeys now behaves
+  like the other lists: an expired session goes to sign-in, anything
+  else shows the list's own error (Q5-F2). A restore refusal no longer
+  calls the stores "a mixture" when they all landed and only the router
+  backup vault or event history did not (FR9-F1).
 
 - **The setup wizard now says where each copy box goes** (#1368). Every
   block meant for the router — trust the certificate, send logs, tag
