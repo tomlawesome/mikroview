@@ -372,34 +372,44 @@ function isResizeObserverLoopNotice(text) {
 }
 
 /**
- * dismissSetupWizard closes the setup modal if a fresh instance
- * auto-launched it (#487).
+ * dismissSetupWizard guards against the setup wizard auto-launching over
+ * a fresh instance and blocking every other scenario's first click.
  *
- * The modal opens on first admin sign-in with no router sending, which
- * is exactly the state a freshly stood-up harness is in before any
- * scenario has fed anything. It is a real focus trap over a real veil,
- * so leaving it up makes every other scenario's first click fail an
- * actionability check for a reason that has nothing to do with what it
- * is testing.
+ * It used to close the modal (#487) with Escape -- SetupWizard.svelte
+ * owned that key while open. The full-screen wizard that replaced it
+ * (#1381, Wizard.svelte) has no ✕ and does not bind Escape: DESIGN.md
+ * ("Superseded: the wizard as a modal") retired "explicit close only"
+ * along with the modal itself, because the new wizard is a claim ledger
+ * meant to be walked to Finish, not dismissed, and nothing in it reaches
+ * Finish before the router has actually answered (wizardRun.ts's
+ * footSpec offers Finish only at the 'done' stage). There is now nothing
+ * for this helper to click.
  *
- * Gated on the server's own device list rather than a blind wait: with a
- * device already known the modal cannot auto-launch, so there is nothing
- * to wait for and no seconds to spend waiting for it. `waitFor` rather
- * than `isVisible`, because isVisible answers immediately about a modal
- * that is still one paint away.
+ * That is fine in practice: wizardState.maybeAutoLaunch only fires with
+ * zero devices, and scripts/live-env.sh's loopback config always
+ * declares one (`live-router`) before the harness serves its first
+ * request, so every ordinary scenario's first sign-in already has a
+ * device on record and the wizard never opens. So this stays a guard,
+ * not a workaround -- it fails loudly rather than trying to paper over
+ * an un-dismissable-by-design screen with a stale keypress. A scenario
+ * that genuinely wants the wizard (Run setup…, Add a router) opens it on
+ * purpose and does not call this first.
  */
 export async function dismissSetupWizard(page) {
   // The answer is `{ devices: [...] }`, not a bare array: reading it as
   // one made the guard never fire, so every scenario paid the full
-  // ten-second wait for a modal that could not open (#1060).
+  // ten-second wait for a wizard that could not open (#1060).
   const body = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
   const devices = Array.isArray(body) ? body : body?.devices
   if (Array.isArray(devices) && devices.length > 0) return
-  const modal = page.locator('.setup-wizard')
-  await modal.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
-  if (await modal.count()) {
-    await page.keyboard.press('Escape')
-    await modal.waitFor({ state: 'detached', timeout: 5000 })
+  const wizard = page.locator('.page.wiz')
+  await wizard.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
+  if (await wizard.count()) {
+    throw new Error(
+      'the setup wizard auto-launched with no devices declared, and the full-screen wizard has no way to dismiss it ' +
+        '(DESIGN.md, "Superseded: the wizard as a modal") -- declare a device (scripts/live-env.sh\'s DEVICES_BLOCK) ' +
+        'rather than trying to close it here',
+    )
   }
 }
 
@@ -970,8 +980,9 @@ export async function session({
   // page.route: once the app's service worker controls the page, an
   // /api request is fetched by the worker, and only Chromium lets
   // Playwright's routes see a worker's fetches -- under WebKit the mock
-  // never fires and the real server answers (live-setup-wizard-source-
-  // split saw the real router where it had mocked a split one). Keeping
+  // never fires and the real server answers (the wizard's own
+  // source-split scenario saw the real router where it had mocked a
+  // split one). Keeping
   // the worker out of that scenario's context is what makes the mock
   // hold on every engine; the app runs the same without one.
   const page = await browser.newPage({

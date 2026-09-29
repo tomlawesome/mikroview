@@ -18,8 +18,8 @@
 // own door -- Run setup… -- correctly reopens on the router's turn, the
 // ledger as it stands (DESIGN.md, "The model"), and never on the form.
 // A first router's happy path therefore cannot be walked on this
-// harness without a second instance. As live-setup-wizard-source-split
-// does for its own unreachable shape, this drives the real bundled
+// harness without a second instance. As the wizard's own source-split
+// scenario does for its own unreachable shape, this drives the real bundled
 // components against the real server's actual answers with only the
 // shape under test overridden: /api/setup/status with its sources not
 // yet heard from, so the run starts at The router. Everything that
