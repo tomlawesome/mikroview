@@ -71,9 +71,10 @@ async function api(method, path, body) {
 // factor rather than the account's first, so no recovery codes would be
 // minted) and leave "Passkeys · 1" untrue before this run has done
 // anything. Clear any survivors through the API first so registration
-// always starts from the same "no factor yet" account. This is setup,
-// not verification -- the registration and login themselves are driven
-// through the UI below.
+// always starts from the same "no passkey yet" account -- the account's
+// authenticator-app factor from #1253/live-env.sh, if any, is untouched
+// here. This is setup, not verification -- the registration and login
+// themselves are driven through the UI below.
 {
   const existing = await api('GET', '/api/auth/passkeys')
   for (const pk of existing.body ?? []) {
@@ -211,11 +212,11 @@ check(
 )
 
 // --- Clean up: leave the account exactly as this run found it ------------
-// Removing the only passkey also clears the recovery codes it minted
-// (DeletePasskey: "if no factor of either kind remains afterwards,
-// clear RecoveryCodes too"), so this restores the "no factor" account
-// the run started from -- the same reasoning live-change-password
-// restores the password it changed.
+// This account's authenticator-app factor from #1253/live-env.sh
+// remains after the passkey is gone (DeletePasskey only clears
+// RecoveryCodes when no factor of either kind remains), so this
+// restores the "no passkey" account the run started from -- the same
+// reasoning live-change-password restores the password it changed.
 
 await page.click('.account .menu button.row:has-text("Passkeys · 1")')
 check(await visible('[aria-label="Passkeys"]'), 'the Passkeys dialog reopens to remove it')

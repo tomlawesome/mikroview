@@ -167,3 +167,18 @@ export async function downloadFromUrl(url: string, filename: string): Promise<'o
   URL.revokeObjectURL(objectUrl)
   return 'ok'
 }
+
+// saveBlob (#1347) is the same link-click idiom for a file the server
+// has already sent and the caller has in hand -- the config editor's
+// download, which is a POST (the text goes in the body), so neither a
+// plain <a href> nor downloadFromUrl's GET can fetch it.
+export function saveBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}

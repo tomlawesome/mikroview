@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — AF · The fall comes alive, finished in the panel</title>
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="fall.css">
+<link rel="stylesheet" href="inks.css">
+<style>
+/* AF — The fall comes alive, finished in the panel (round 8's AC, kept
+   by the owner: "should be developed further"; its closing bar: "weird
+   and I don't like it ... just say finish"). So there is no bar. The
+   panel that asked the questions is the panel that finishes: it shows
+   the track (each proof in its own ink, undo under each station) over
+   the live fall, and Finish closes it. The chips in the top bar, in the
+   same inks, are what remains. Round 8's own comment follows.
+   AC — The fall comes alive. Full screen, no modal: setup happens on the
+   fall itself, which starts dark and empty — one hatched column, nothing
+   logged, NOW standing still. A panel in the middle asks the five
+   questions; the frame answers each one. Copy starts the clock; the
+   enrol line makes it rain, address-only and grey; the push splits the
+   rain into named boundaries, watched ones in their lane ink, dark ones
+   hatched in red; tagging is done by touching a dark column; each new
+   prefix's first line lights it. Done, the panel folds to a ledger strip
+   and the operator is left standing in their live fall — the product's
+   opening argument, watched happening. */
+body { overflow: hidden; }
+.app { position: fixed; inset: 0; display: grid; grid-template-rows: 48px 14px 1fr; grid-template-columns: 1fr 40px; }
+.bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 20px; }
+.bar .chips { display: flex; gap: 8px; margin-left: 18px; flex-wrap: nowrap; overflow: hidden; }
+.bar .right { margin-left: auto; display: flex; gap: 10px; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); }
+.striprow { grid-column: 1; padding: 0 20px 0 82px; }
+.rail { grid-row: 2 / -1; grid-column: 2; border-left: 1px solid var(--border); }
+.main { grid-column: 1; position: relative; display: grid; grid-template-columns: 62px 1fr; padding: 10px 20px 0 20px; min-height: 0; }
+.axis { position: relative; }
+.axis span { position: absolute; left: 0; font: 11.5px var(--font-mono); color: var(--fg-dim); }
+.axis span.now-t { color: var(--now); font-weight: 700; }
+.fall { display: grid; grid-template-rows: auto 1fr; min-height: 0; gap: 6px; }
+.fallbody { min-height: 0; }
+/* the panel */
+.panel { position: absolute; left: 50%; top: 150px; transform: translateX(-50%); width: 600px; max-width: calc(100% - 140px); background: var(--glass); backdrop-filter: blur(8px); border: 1px solid var(--hair-2); border-radius: 10px; box-shadow: 0 24px 60px -12px rgba(0,0,0,0.6); display: flex; flex-direction: column; }
+.panel .head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.panel .head .kick { font: 600 9.5px var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-muted); }
+.panel .head .kick b { color: var(--fg); font-weight: 800; }
+.panel .head .close { margin-left: auto; }
+.panel .pb { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; max-height: calc(100vh - 320px); overflow-y: auto; }
+.panel .pf { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border); }
+.panel .pf .hint { margin-left: auto; font-size: 12px; color: var(--fg-muted); }
+.panel.wide { width: 760px; }
+.panel h3 { margin: 0; font-size: 19px; font-weight: 600; line-height: 1.35; }
+.panel .hint { margin: 0; font-size: 13px; color: var(--fg-muted); line-height: 1.55; }
+.panel .ctl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.panel input[type=text], .panel input[type=password] { width: 300px; font-size: 14px; padding: 9px 12px; background: var(--bg); }
+.panel input.bad { border-color: var(--warn); }
+.panel .problem { margin: 0; min-height: 1.4em; font-size: 12.5px; color: var(--warn); }
+.panel .gives { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12.5px; color: var(--fg-muted); }
+.panel .gives .y { color: var(--accept); font-weight: 600; }
+.panel pre { margin: 0; align-self: stretch; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); user-select: all; }
+.panel pre.script { max-height: calc(12 * 1.6em + 24px); overflow-y: auto; flex-shrink: 0; }
+.panel button { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+.panel button:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
+.panel button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.panel button.close { width: 30px; height: 30px; padding: 0; font-size: 12px; line-height: 1; }
+.panel button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; }
+.panel input[type=text], .panel input[type=password] { border: 1px solid var(--border); color: var(--fg); border-radius: 5px; font-family: var(--font-mono); }
+.panel input:focus { outline: none; border-color: var(--accent); }
+.panel .copyrow { display: flex; align-items: center; gap: 12px; align-self: stretch; }
+.panel .warnbox pre { font-size: 12px; }
+.panel .obs { font-size: 12.5px; }
+.panel .obs small { margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; }
+button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; cursor: pointer; }
+.panel .undo { align-self: stretch; display: flex; flex-direction: column; gap: 8px; }
+.panel .undo pre { font-size: 12px; }
+.reopen { font: 12px var(--font-mono); color: var(--fg-muted); }
+.rulehint { font-size: 12.5px; color: var(--fg-muted); }
+.rulehint b { color: var(--fall-drop); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar"><span class="wm">MIKRO<em>VIEW</em></span><div class="chips" id="chips"></div><div class="right" id="barright"></div></div>
+  <div class="striprow" id="strip"></div>
+  <nav class="rail" aria-label="Sections"><div class="stcards"><div class="stcard on"><span class="nm">The fall</span></div><div class="stcard"><span class="nm">Topography</span></div><div class="stcard"><span class="nm">Metrics</span></div><div class="stcard"><span class="nm">Stream</span></div><div class="stcard"><span class="nm">The docket</span></div><div class="stcard"><span class="nm">Entities</span></div><div class="stcard"><span class="nm">Settings</span></div><div class="stcard"><span class="nm">Log every rule</span></div></div></nav>
+  <div class="main">
+    <div class="axis" id="axis"></div>
+    <div class="fall"><div class="cols" id="cols"></div><div class="fallbody" id="fb"></div></div>
+    <div class="panel" id="panel" role="dialog" aria-labelledby="pk"></div>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script src="fall.js"></script>
+<script src="track.js"></script>
+<script>
+const $ = s => document.querySelector(s); const esc = MV.esc; const Q = MV.questions; const S = MV.story;
+const t = k => MV.ev(k) ? MV.ev(k).t : '';
+const known = s => MV.has('push');
+function columns(s) {
+  if (!known(s)) { const b = { id: 'all', name: (s.name || 'your router') + ' · all traffic', sub: MV.has('enrol') ? 'address-only until the push names boundaries' : 'nothing has arrived', lane: 'lan', logs: [], sug: null }; return [[b, MV.has('enrol') ? 'addr' : 'unknown']]; }
+  return s.stage === 'tune' ? FALL.states(s, 'pick') : FALL.states(s);
+}
+function renderFall(s) {
+  const cols = columns(s);
+  $('#cols').style.gridTemplateColumns = `repeat(${cols.length}, 1fr)`;
+  $('#cols').innerHTML = cols.map(([b, st]) => FALL.header(b, st, st === 'unknown' ? { label: 'unknown — waiting for a router' } : st === 'addr' ? { label: 'address-only — no rule table yet' } : { pick: s.stage === 'tune' && (st === 'proposed' || st === 'armed') && !s.tuneCopied, chosen: st === 'armed' && !s.tuneCopied, attrs: s.stage === 'tune' && b.sug !== null && !b.logs.length && !s.tuneCopied ? `data-act="toggle" data-i="${b.sug}" role="checkbox" aria-checked="${st === 'armed'}" tabindex="0"` : '' })).join('');
+  $('#strip').innerHTML = FALL.strip(known(s) ? cols : cols.map(([b]) => [b, MV.has('enrol') ? 'on' : 'off']));
+  paintBody(s);
+  const chips = [];
+  if (s.name) chips.push(`<span class="att dec"><i></i>${esc(s.name)}</span>`);
+  if (s.refused) chips.push(`<span class="att alarm"><i></i>refused · ${S.other}</span>`);
+  else if (s.copied && !MV.has('enrol')) { if (MV.has('cert')) chips.push(`<span class="att cert"><i></i>cert · ${t('cert')}</span>`); chips.push(`<span class="att wait"><i></i>${MV.has('cert') ? 'waiting for the enrol line' : 'waiting for ' + MV.from()}</span>`); }
+  if (MV.has('enrol')) { if (MV.has('cert')) chips.push(`<span class="att cert"><i></i>cert · ${t('cert')}</span>`); chips.push(`<span class="att logs"><i></i>logs · ${t('enrol')}</span>`); }
+  if (MV.has('push')) chips.push(`<span class="att push"><i></i>push · 20 min</span>`);
+  if (known(s)) { const dark = S.boundaries.filter(b => !MV.watched(b)).length; chips.push(dark ? `<span class="att dark"><i></i>${dark} dark</span>` : `<span class="att ok"><i></i>every boundary watched</span>`); if (s.standing === 'ahead') chips.push(`<span class="att now"><i></i>RouterOS ${s.version} — ahead of review</span>`); }
+  if (MV.has('backup')) chips.push(`<span class="att backup"><i></i>backup · 03:00</span>`);
+  if (s.tagged) chips.push(`<span class="att rules"><i></i>${s.chosen.size} rules</span>`);
+  if (s.finished) { if (s.push === false) chips.push(`<span class="att off"><i></i><s>push</s> · not now</span>`); if (s.backup === false) chips.push(`<span class="att off"><i></i><s>backup</s> · not now</span>`); }
+  $('#chips').innerHTML = chips.join('');
+  $('#barright').innerHTML = (s.finished ? `<span class="reopen">Run setup… reopens the ledger</span>` : '') + (MV.has('enrol') ? `<span class="att logs"><i></i>live · ${(4 + (s.tagged ? 3 : 0))}/s</span><span>${s.lines.toLocaleString()} lines</span>` : `<span class="att"><i></i>no router yet</span>`);
+}
+let lastPaint = 0;
+function paintBody(s) {
+  const fb = $('#fb'); const W = fb.clientWidth || 1200, H = fb.clientHeight || 700;
+  fb.innerHTML = FALL.body(columns(s), s, W, H, { nowCaption: false, colOf: known(s) ? null : () => 0, now: s.copied, unknownText: s.copied ? 'waiting for the first line' : 'nothing has arrived — no router sends here yet' });
+  const ax = $('#axis'); const top = 64 + 10; const pxs = 2.2; let lab = '';
+  if (s.copied) { lab += `<span class="now-t" style="top:${top - 30}px;line-height:1.2">NOW<br>${MV.hms(MV.now())}</span>`; for (let k = 1; k <= 6; k++) { const secs = k * 30; lab += `<span style="top:${top + secs * pxs - 6}px">${MV.hm(MV.now() - secs)}</span>`; } }
+  else lab = `<span style="top:${top - 6}px">—:——</span>`;
+  ax.innerHTML = lab;
+}
+/* panel bodies — Z's anatomy, one question at a time */
+function askBody(s) {
+  const q = Q[s.q]; let ctl = '';
+  if (q.kind === 'text') { const prob = q.id === 'addr' ? MV.addrProblem(s.addr) : ''; ctl = `<div class="ctl"><input type="text" data-field="${q.field}" value="${esc(s[q.field])}" placeholder="${q.placeholder}" autocomplete="off" aria-label="${esc(q.title)}" class="${prob ? 'bad' : ''}"><button type="button" class="primary" data-act="next" ${MV.answered(q) ? '' : 'disabled'}>Next</button><span class="note">or <kbd>Enter</kbd></span></div><p class="problem" data-problem aria-live="polite">${esc(prob)}</p>`; }
+  else if (q.kind === 'password') ctl = `<div class="ctl"><input type="password" data-field="pass" value="${esc(s.pass)}" placeholder="password" aria-label="Your password"><button type="button" class="primary" data-act="next" ${s.pass ? '' : 'disabled'}>Mint the token</button></div>`;
+  else ctl = `<div class="ctl"><button type="button" class="primary" data-act="yes">${q.yes}</button><button type="button" data-act="no">${q.no}</button></div><div class="gives"><b class="y">Yes</b><span>${q.gives}</span><b>Not now</b><span>${q.without}</span></div>`;
+  const fallNote = q.id === 'push' ? `<p class="hint">Behind this panel the fall is one grey column: MikroView can see lines, not boundaries. The push is what splits it into <b>ether1 · input</b>, <b>bridge → ether1</b> and the rest, each watched or dark.</p>` : '';
+  return `<h3>${esc(q.ask)}</h3><p class="hint">${esc(q.hint)}</p>${fallNote}${ctl}`;
+}
+function pasteBody(s) {
+  const secs = MV.sections().filter(x => x.on);
+  return `<h3>One paste.</h3><p class="hint">${secs.length} parts — ${secs.map(x => x.title.toLowerCase()).join(', ')} — the enrol line last. Into the router’s <b>terminal</b> (WinBox ▸ New Terminal, or ssh), not a script.</p><pre class="script">${esc(MV.pasteBlock())}</pre><div class="copyrow"><button type="button" class="primary" data-act="copy" ${s.copied ? 'disabled' : ''}>${s.copied ? 'Copied' : 'Copy'}</button><span class="token-life">Token good until ${S.tokenUntil} · <button type="button" class="linkish" data-act="reroll">Reroll</button></span></div><div class="obs waiting">${s.copied ? 'Copied. The clock behind starts when the router answers.' : 'Nothing has arrived yet. NOW stands still until the router speaks.'}</div>`;
+}
+function watchBody(s) {
+  const refused = s.refused ? `<div class="warnbox"><span><b>Lines from ${S.other} arrived without the enrol line and were refused.</b> If that is this router, its logging action sends from another address — an older <span class="mono">remote</span> action or a stale <span class="mono">src-address</span>. Fix it, then paste the last line again:</span><pre>${esc(MV.fixSrc())}\n${esc(MV.sections().at(-1).lines[0])}</pre><span>Or, if ${S.other} is right: <button type="button" class="linkish" data-act="use-other">enrol at ${S.other} instead</button>.</span></div>` : '';
+  const ahead = MV.has('push') && s.standing === 'ahead' ? `<div class="cautionbox"><b>RouterOS ${s.version} is newer than these commands were reviewed on (${S.reviewed}).</b> They ran and the push arrived; if anything reads wrong, this is the first suspect.</div>` : '';
+  const lead = MV.arrivedAll() ? `<h3>${esc(s.name)} is sending.</h3><p class="hint">${known(s) ? `The push named ${S.boundaries.length} boundaries; ${S.boundaries.filter(b => !MV.watched(b)).length} are dark. Next: light them.` : 'Everything you chose has arrived.'}</p>` : `<h3>The router’s turn.</h3><p class="hint">Each station lights in its own colour as its proof arrives. Behind: the first line makes it rain, the push gives the rain its boundaries.</p>`;
+  return `${lead}${TRACK.render(s)}${refused}${ahead}`;
+}
+function tuneBody(s) {
+  const n = s.chosen.size;
+  const obs = s.tagged ? `<div class="obs counting">${n} boundaries lit · first line ${s.tunedAt}</div>` : s.tuneCopied ? `<div class="obs waiting">Waiting for the first line with a new prefix — the tagged columns turn on as it lands.</div>` : `<div class="obs quiet">Nothing to wait for until you paste.</div>`;
+  return `<h3>${S.boundaries.filter(b => !b.logs.length).length} boundaries are dark.</h3><p class="rulehint">Hatched columns behind have a rule but no log line — <b>blank because nothing is logged</b>, not because nothing is sent. Touch a dark column to tag its rule; this is the only second paste.</p><pre class="script">${esc(MV.tagBlock()) || '# touch a column'}</pre><div class="copyrow"><button type="button" class="primary" data-act="tune-copy" ${s.tuneCopied || !n ? 'disabled' : ''}>${s.tuneCopied ? 'Copied' : `Copy — ${n} rule${n === 1 ? '' : 's'}`}</button><span class="note">Sets, never adds.</span></div>${obs}`;
+}
+function renderPanel(s) {
+  const p = $('#panel');
+  if (s.finished) { p.hidden = true; return; }
+  p.hidden = false; p.classList.toggle('wide', s.stage === 'paste' || s.stage === 'tune' || s.stage === 'done');
+  const kick = s.stage === 'ask' ? `<b>Set up ${esc(s.name || 'a router')}</b> · question ${s.q + 1} of ${Q.length}` : s.stage === 'paste' ? `<b>${esc(s.name)}</b> · the block` : s.stage === 'watch' ? `<b>${esc(s.name)}</b> · the router’s turn` : s.stage === 'done' ? `<b>${esc(s.name)}</b> · where setup stands` : `<b>${esc(s.name)}</b> · light the dark boundaries`;
+  const body = s.stage === 'ask' ? askBody(s) : s.stage === 'paste' ? pasteBody(s) : s.stage === 'watch' ? watchBody(s) : s.stage === 'done' ? doneBody(s) : tuneBody(s);
+  let l = '', r = '', hint = '';
+  if (s.stage === 'ask') { l = `<button type="button" data-act="back" ${s.q ? '' : 'disabled'}>Back</button>`; hint = Q[s.q].kind === 'yesno' ? 'Yes or Not now, above' : 'Nothing touches the router until the paste'; }
+  else if (s.stage === 'paste') { l = `<button type="button" data-act="back">Back</button>`; hint = 'Next checks what has arrived'; r = `<button type="button" class="primary" disabled>Next</button>`; }
+  else if (s.stage === 'watch') { hint = MV.arrivedAll() ? '' : 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="to-tune" ${MV.arrivedAll() ? '' : 'disabled'}>Next</button>`; }
+  else if (s.stage === 'done') { l = `<button type="button" data-act="another">Add another router</button>`; hint = 'Finish leaves you on the fall'; r = `<button type="button" class="primary" data-act="finish">Finish</button>`; }
+  else { r = `<button type="button" data-act="tune-skip">Leave them dark</button><button type="button" class="primary" data-act="to-done" ${s.tagged ? '' : 'disabled'}>Next</button>`; hint = s.tagged ? '' : 'Next checks what has arrived'; }
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null;
+  p.innerHTML = `<div class="head"><span class="kick" id="pk">${kick}</span><button type="button" class="close" aria-label="Close setup — Run setup… reopens it here" data-act="leave">✕</button></div><div class="pb">${body}</div><div class="pf">${l}<span class="hint">${hint}</span>${r}</div>`;
+  const inp = p.querySelector('input[data-field]'); if (inp && (!focused || focused === inp.dataset.field)) { inp.focus(); const v = inp.value; inp.value = ''; inp.value = v; }
+}
+function doneBody(s) {
+  const st = TRACK.stations(s); const n = st.filter(x => x.state === 'done' && x.id !== 'copy').length, k = st.filter(x => x.state === 'skip').length;
+  const undo = s.undoOpen ? `<div class="undo"><span class="note">Undo <b class="ink-${s.undoOpen === 'tune' ? 'rules' : s.undoOpen}">${s.undoOpen === 'tune' ? 'the tagged rules' : s.undoOpen}</b> — paste on the router. MikroView notices when it stops, and that station goes grey again.</span><pre>${esc(TRACK.undoText(s.undoOpen))}</pre></div>` : s.showUndoAll ? `<div class="undo"><span class="note">Everything, then <button type="button" class="linkish" data-act="reset">forget ${esc(s.name)} on MikroView</button>.</span><pre>${esc([...MV.undoLines.cert, ...MV.undoLines.logs, ...(s.push ? MV.undoLines.push : []), ...(s.backup ? MV.undoLines.backup : []), ...(s.tagged ? MV.undoLines.tune() : [])].join('\n'))}</pre></div>` : '';
+  const dark = known(s) ? S.boundaries.filter(b => !MV.watched(b)).length : null;
+  return `<h3>${esc(s.name)} is sending.</h3><p class="hint">${n} things stand on evidence${k ? `; ${k} set aside` : ''}. ${dark === null ? 'The fall behind is address-only until the push.' : dark ? `Behind this panel, ${S.boundaries.length - dark} of ${S.boundaries.length} boundaries are watched; ${dark} stay dark until their rules log.` : 'Behind this panel, every boundary is watched.'} Undo any station from under it.</p>${TRACK.render(s, { undo: true, open: s.undoOpen })}${undo}<p class="note">To start again from nothing, <button type="button" class="linkish" data-act="undo-all">${s.showUndoAll ? 'hide the undo lines' : 'undo everything on the router first'}</button>.</p>`;
+}
+function render(s) { renderFall(s); renderPanel(s); }
+function field(f, s) { const q = Q[s.q]; document.querySelectorAll('[data-act=next]').forEach(b => b.disabled = !MV.answered(q)); if (f === 'addr') { const p = MV.addrProblem(s.addr); const el = $('[data-problem]'); if (el) el.textContent = p; const inp = $('[data-field=addr]'); if (inp) inp.classList.toggle('bad', !!p); } if (f === 'name') { const k = $('#pk'); if (k) k.innerHTML = `<b>Set up ${esc(s.name || 'a router')}</b> · question ${s.q + 1} of ${Q.length}`; const c = $('#chips'); if (c && !c.querySelector('.att.dec')) c.innerHTML = s.name ? `<span class="att dec"><i></i>${esc(s.name)}</span>` : ''; else if (c) c.querySelector('.att.dec').innerHTML = `<i></i>${esc(s.name)}`; } }
+function key(e, s) { if (e.target.matches('input')) return; if (s.stage === 'tune' && (e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.act === 'toggle') { e.preventDefault(); MV.act('toggle', e.target.dataset); } }
+let lastTick = 0;
+function tick(s) { const t0 = Date.now(); if (t0 - lastTick < 400) return; lastTick = t0; if (s.copied) { paintBody(s); const tr = document.querySelector('.panel .track'); if (tr && s.stage === 'watch') tr.outerHTML = TRACK.render(s); const br = $('#barright'); if (br && MV.has('enrol')) br.innerHTML = `<span class="att ok"><i></i>live · ${(4 + (s.tagged ? 3 : 0))}/s</span><span>${s.lines.toLocaleString()} lines</span>`; } }
+window.addEventListener('resize', () => paintBody(MV.state));
+MV.boot({ render, field, tick, key });
+</script>
+</body>
+</html>

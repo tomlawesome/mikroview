@@ -347,9 +347,10 @@
     return [windowStartMs, windowEndMs]
   })
 
-  // #1304 E11: eventsBetween (lib/whisperStats.ts) forward-scans whatever
-  // array it's handed -- fine for a bounded slice, but handing it the
-  // whole appState.events buffer (up to MAX_CLIENT_EVENTS) meant every
+  // #1304 E11: the forward scan this replaced (whisperStats.ts's
+  // eventsBetween, since removed) walked whatever array it was handed --
+  // fine for a bounded slice, but handing it the whole appState.events
+  // buffer (up to MAX_CLIENT_EVENTS) meant every
   // statTalker/statPort recompute rescanned the entire live buffer just
   // to pull out a window a few minutes wide. appState.events arrives
   // oldest-first (state.svelte's own append order -- ringHolds above
@@ -393,7 +394,7 @@
   // Round 36's "ring holds 41 m" (#1005): the old buffer-% stat, said as
   // reach rather than a fraction -- how far back the events the stream
   // currently holds go. Off appState.events, the same raw buffer
-  // statTalker/statPort read above via eventsBetween (not heldEvents,
+  // statTalker/statPort read above via recentEventsBetween (not heldEvents,
   // which is the table's own filtered view for csv ↓) -- arrives
   // oldest-first (state.svelte's own append order), so the span is just
   // its two ends, not a scan for a min/max nothing here can put out of

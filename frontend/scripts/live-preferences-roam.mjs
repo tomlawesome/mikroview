@@ -10,10 +10,8 @@
 // proves the round trip both ways: user A's preset is invisible to user
 // B, and still there when A signs back in.
 //
-// NOT RUN as part of writing this: the backend half of #1283
-// (GET/PUT /api/me/preferences) does not exist in this worktree, so
-// nothing here has executed against a real server. node --check only.
-// The integrator should run this once the backend lands.
+// The backend half of #1283 is GET/PATCH /api/me/preferences
+// (internal/api/preferences.go).
 
 import { session, check, done, goTo, openAccountMenu, completeSecondFactor, enrolFactorAndSignIn } from './live-browser.mjs'
 

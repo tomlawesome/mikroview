@@ -1,0 +1,53 @@
+/* The fall's own grammar, ported from Fall.svelte (values quoted from the
+   component: .wm, .att, .ovstrip/.ovtick, .blab/.bsub/.ch-ok/.ch-bad, the
+   lane underline, #fall-hatch, the NOW line, .tlab, .spec, the marks) and
+   the engine room's rail (.stcard .nm). Nothing here is invented; where a
+   mockup needs a size the app does not fix, it takes the nearest one. */
+:root { --lane-lan: #3987e5; --lane-srv: #199e70; --lane-iot: #c98500; --lane-guest: #d76a9e; --lane-5: #7b6a0b; --o-grid2: rgba(160, 185, 230, 0.2); }
+.wm { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); font-family: var(--font-sans); }
+.wm em { color: var(--accent); font-style: normal; }
+.att { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--o-grid2); border-radius: 12px; padding: 3px 12px; font: 600 10.5px/1.5 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-muted); background: transparent; white-space: nowrap; }
+.att i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim); flex: none; }
+.att.alarm i { background: var(--fall-drop); animation: pulse 1.4s ease-in-out infinite; }
+.att.alarm { color: var(--fall-drop); border-color: rgba(224, 82, 82, 0.4); }
+.att.dark i { background: transparent; border: 1px solid var(--fg-dim); }
+.att.ok i { background: var(--accept); } .att.ok { color: var(--accept); }
+.att.dec i { background: var(--log); } .att.dec { color: var(--log); }
+.att.wait i { background: var(--fg-dim); animation: pulse 1.6s ease-in-out infinite; }
+.att.now i { background: var(--now); } .att.now { color: var(--now); }
+.att b { font-weight: 800; color: inherit; }
+.ovstrip { display: flex; gap: 3px; height: 6px; }
+.ovstrip .ovtick { flex: 1; border-radius: 2px; background: var(--fg-dim); opacity: 0.32; transition: background 300ms, opacity 300ms; }
+.ovstrip .ovtick.on { opacity: 1; }
+.ovstrip .ovtick.dark { background: transparent; border: 1px dashed var(--o-grid2); opacity: 0.8; }
+/* column headers */
+.cols { display: grid; gap: 14px; }
+.col { min-width: 0; position: relative; }
+.col .blab { font: 700 13px/1.3 var(--font-mono); color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.col .bsub { font: 400 10px/1.5 var(--font-mono); color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.col .ch { font: 800 9.5px/1.6 var(--font-mono); letter-spacing: 0.07em; text-transform: uppercase; margin-top: 2px; }
+.col .ch-ok { color: var(--accept); } .col .ch-bad { color: var(--fall-drop); } .col .ch-arm { color: var(--log); } .col .ch-dim { color: var(--fg-dim); }
+.col .bar { height: 3px; border-radius: 1.5px; margin-top: 4px; background: var(--lane); transition: background 300ms; }
+.col.dark .bar { background: transparent; border-top: 1px dashed var(--o-grid2); height: 0; margin-top: 6px; }
+.col.pick { cursor: pointer; border-radius: 6px; padding: 8px 8px 6px; margin: -8px -8px -6px; }
+.col.pick:hover { background: var(--bg-hover); }
+.col.pick.chosen { background: color-mix(in srgb, var(--lane) 10%, transparent); }
+/* the body under the headers: peaks, hatch, marks */
+.fallbody { position: relative; overflow: hidden; }
+.fallbody svg { display: block; width: 100%; height: 100%; }
+.spec { fill: none; stroke-width: 1.4; }
+.spec.accept { stroke: var(--fall-accept); } .spec.drop { stroke: var(--fall-drop); }
+.spec-l { font: 400 10.5px var(--font-mono); fill: var(--fg-muted); }
+.hatch-line { stroke: var(--o-grid2); stroke-width: 1.5; }
+.dark-anno { font: 700 10.5px var(--font-mono); fill: var(--fall-drop); }
+.dark-anno.q { fill: var(--fg-dim); font-weight: 400; }
+.mark { opacity: 0.85; }
+.nowline { stroke: var(--now); stroke-width: 1.6; }
+.nowcap { font: 700 12px var(--font-mono); fill: var(--now); }
+.tlab { font: 400 11.5px var(--font-mono); fill: var(--fg-dim); }
+.tlab.now-t { fill: var(--now); }
+.gridline { stroke: rgba(160, 185, 230, 0.06); stroke-width: 1; }
+/* right rail */
+.stcards { display: flex; flex-direction: column; gap: 22px; align-items: center; padding-top: 18px; }
+.stcard .nm { writing-mode: vertical-rl; transform: rotate(180deg); font: 600 9.5px var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-muted); }
+.stcard.on .nm { color: var(--fg); font-weight: 800; }

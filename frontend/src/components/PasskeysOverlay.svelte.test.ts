@@ -212,6 +212,42 @@ describe('adding a passkey', () => {
     expect(await screen.findByText(/didn't complete/i)).toBeTruthy()
     expect(authState.passkeyCount).toBe(0)
   })
+
+  // Matches AuthenticatorOverlay's own codes-screen guard: the ten codes
+  // exist in clear nowhere else, so neither the header X nor Escape is
+  // wired here, only the explicit acknowledgement.
+  it('offers no header close button on the codes screen -- only the explicit acknowledgement', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue({
+      passkey: row(),
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+    })
+    await openAdding()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(screen.queryByRole('button', { name: /close/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /i have saved these/i })).toBeTruthy()
+  })
+
+  it('Escape does not close the codes screen, but does close every other screen', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue({
+      passkey: row(),
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+    })
+    await openAdding()
+
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: /passkeys/i })).toBeTruthy()
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+    expect(screen.queryByRole('dialog', { name: /passkeys/i })).toBeNull()
+  })
 })
 
 // Closing mid-ceremony doesn't cancel it, it only unmounts the view -- a
@@ -347,5 +383,62 @@ describe('removing a passkey', () => {
 
     await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
     expect(authState.state).toBe('unauthenticated')
+  })
+})
+
+// X4-F1: the ten codes exist in clear nowhere else, so a reload before
+// the explicit acknowledgement loses them for good -- same guard as
+// LogEveryRule's own beforeunload (its own test file's own pattern,
+// reused here).
+describe('X4-F1: beforeunload guard on the codes step', () => {
+  function dispatchBeforeUnload(): Event {
+    const evt = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(evt)
+    return evt
+  }
+
+  it('is not set before the codes step is ever reached', () => {
+    render(PasskeysOverlay, { open: true })
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+
+  it('guards the codes step, and lifts once "I have saved these" is clicked', async () => {
+    vi.mocked(registerPasskey).mockResolvedValue({
+      passkey: row(),
+      recoveryCodes: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'],
+    })
+    render(PasskeysOverlay, { open: true })
+    await screen.findByText(/add a passkey/i)
+    await fireEvent.click(screen.getByRole('button', { name: /add passkey/i }))
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'this laptop' } })
+    await fireEvent.click(screen.getByRole('button', { name: /^continue$/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+})
+
+// Q5-F2: fetchPasskeys used to return failure as text, unlike every other
+// list call in lib/api.ts -- loadList() now catches the ApiError it
+// throws instead, the same shape App.svelte's own poll failures use.
+describe('Q5-F2: loading the list reports errors like the other list calls', () => {
+  it('routes a 401 to sign-in rather than showing it as list text', async () => {
+    authState.state = 'authenticated'
+    vi.mocked(fetchPasskeys).mockRejectedValue(new ApiError('sign in first', 401))
+    render(PasskeysOverlay, { open: true })
+
+    await vi.waitFor(() => expect(pageReload.now).toHaveBeenCalled())
+    expect(screen.queryByText('sign in first')).toBeNull()
+  })
+
+  it('shows any other failure as list text', async () => {
+    vi.mocked(fetchPasskeys).mockRejectedValue(new ApiError('the server could not do that (500)', 500))
+    render(PasskeysOverlay, { open: true })
+
+    expect(await screen.findByText('the server could not do that (500)')).toBeTruthy()
   })
 })

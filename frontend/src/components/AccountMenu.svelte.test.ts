@@ -246,6 +246,25 @@ describe('two mounted account menus do not share the authenticator dialog (#1332
 
     expect(screen.getAllByRole('dialog', { name: /authenticator app/i })).toHaveLength(1)
   })
+
+  // Same bug, same fix, different overlay -- PasskeysOverlay used to be
+  // gated the same way AuthenticatorOverlay was, so it is worth showing
+  // the fix holds there too rather than assuming one overlay stands for
+  // both.
+  it('opens the passkeys dialog in the clicked menu only, not in an unrelated mounted copy', async () => {
+    authState.role = 'user'
+    authState.hasLocalPassword = true
+    render(AccountMenu)
+    render(AccountMenu)
+
+    const chips = screen.getAllByTitle('Account and operate pages')
+    await fireEvent.click(chips[0])
+    flushSync()
+    await fireEvent.click(screen.getByRole('menuitem', { name: /^passkeys/i }))
+    flushSync()
+
+    expect(screen.getAllByRole('dialog', { name: /^passkeys$/i })).toHaveLength(1)
+  })
 })
 
 describe('the slimmed account menu (#647)', () => {

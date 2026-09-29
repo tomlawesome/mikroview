@@ -122,6 +122,14 @@ vi.mock('../lib/api', () => ({
     ownRangesKnown: false,
     setup: { scheduler: '', rule: '', disableRule: '', emptyList: '' },
   })),
+  fetchGeoSettings: vi.fn(async () => ({
+    source: null,
+    sources: {
+      dbip: { loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+      ipinfo: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+      maxmind: { keySet: false, setAt: null, setBy: null, loaded: false, fetchedAt: null, nextRefresh: null, lastError: null },
+    },
+  })),
   clearAllFlags: vi.fn(),
   setFlagVerdict: vi.fn(),
   deleteFlagVerdict: vi.fn(),

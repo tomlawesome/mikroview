@@ -1,0 +1,65 @@
+/* Round 9: one ink per thing. The owner's note on round 8 — "use more
+   mikroview colours ... give the 'success' things a mix of mikroview
+   colours ... greying out used to denote things ... still clear about
+   what it means". So every artefact the wizard makes gets one ink, and
+   keeps it everywhere it appears: step list, chips, track, ledger, the
+   fall's own columns. All six are app.css tokens already meaning the
+   same kind of thing in the app; nothing is invented. */
+:root {
+  --fall-nat: #9b3fc9;                 /* app.css:168 — the fall's NAT ink */
+  --ink-cert: var(--accent);           /* trust: the router now trusts MikroView — MikroView's own ink */
+  --ink-logs: var(--accept);           /* logs flowing — the one green, kept for the moment the fall starts */
+  --ink-push: var(--fall-nat);         /* router state — the push draws the boundaries; purple is the fall's "the router rewrote it" */
+  --ink-backup: var(--now);            /* a clock thing — amber is time in MikroView */
+  --ink-token: var(--log);             /* a decision you made — decision blue */
+  --ink-rules: var(--lane-guest);      /* tagged rules — the lane family; each rule's dot wears its own lane */
+  --ink-off: var(--fg-dim);            /* not yet, not now, set aside */
+}
+.ink-cert { color: var(--ink-cert); } .ink-logs { color: var(--ink-logs); } .ink-push { color: var(--ink-push); }
+.ink-backup { color: var(--ink-backup); } .ink-token { color: var(--ink-token); } .ink-rules { color: var(--ink-rules); } .ink-off { color: var(--ink-off); }
+/* chips (.att from fall.css) in each ink */
+.att.cert { color: var(--ink-cert); border-color: color-mix(in srgb, var(--ink-cert) 40%, transparent); } .att.cert i { background: var(--ink-cert); }
+.att.logs { color: var(--ink-logs); border-color: color-mix(in srgb, var(--ink-logs) 40%, transparent); } .att.logs i { background: var(--ink-logs); }
+.att.push { color: var(--ink-push); border-color: color-mix(in srgb, var(--ink-push) 45%, transparent); } .att.push i { background: var(--ink-push); }
+.att.backup { color: var(--ink-backup); border-color: color-mix(in srgb, var(--ink-backup) 40%, transparent); } .att.backup i { background: var(--ink-backup); }
+.att.token { color: var(--ink-token); border-color: color-mix(in srgb, var(--ink-token) 40%, transparent); } .att.token i { background: var(--ink-token); }
+.att.rules { color: var(--ink-rules); border-color: color-mix(in srgb, var(--ink-rules) 40%, transparent); } .att.rules i { background: var(--ink-rules); }
+.att.off { color: var(--ink-off); border-style: dashed; } .att.off i { background: transparent; border: 1px solid var(--ink-off); }
+.att.off s { text-decoration-color: var(--ink-off); }
+
+/* The track: one wire from Copy to Done, a station per proof. A
+   station is grey until its event lands, then fills in its ink; the
+   wire behind it colours up to the last arrival; the amber NOW cursor
+   travels the gap to the next one. Set aside = dashed grey, struck. */
+.track { position: relative; align-self: stretch; display: flex; padding: 22px 0 6px; }
+.track .wire { position: absolute; left: 0; right: 0; top: 30px; height: 2px; background: var(--hair-2); opacity: 0.5; }
+.track .seg { position: absolute; top: 30px; height: 2px; transition: width 400ms; }
+.track .stn { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 0 4px; }
+.track .stn .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--ink-off); background: var(--bg); box-sizing: border-box; position: relative; z-index: 1; margin-top: 1px; }
+.track .stn.done .dot { background: var(--ink); border-color: var(--ink); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ink) 22%, transparent); }
+.track .stn.wait .dot { animation: pulse 1.6s ease-in-out infinite; border-color: var(--fg-muted); }
+.track .stn.skip .dot { border-style: dashed; }
+.track .stn.alarm .dot { border-color: var(--alarm); background: var(--alarm); animation: pulse 1.4s ease-in-out infinite; }
+.track .stn .lab { font: 700 11px/1.3 var(--font-mono); letter-spacing: 0.04em; color: var(--ink-off); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.track .stn.done .lab { color: var(--ink); }
+.track .stn.wait .lab { color: var(--fg-muted); font-weight: 400; }
+.track .stn.skip .lab { text-decoration: line-through; text-decoration-color: var(--ink-off); }
+.track .stn.alarm .lab { color: var(--alarm); }
+.track .stn .st { font: 400 11px/1.3 var(--font-mono); color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.track .stn.done .st { color: var(--fg-muted); }
+.track .stn .sub { display: flex; gap: 3px; height: 6px; }
+.track .stn .sub i { width: 6px; height: 6px; border-radius: 50%; background: var(--lane); }
+.track .stn .u { font: 11px var(--font-sans); }
+.track .now { position: absolute; top: 18px; width: 2px; height: 26px; background: var(--now); transition: left 250ms linear; z-index: 2; }
+.track .now::after { content: 'NOW'; position: absolute; top: -14px; left: 4px; font: 700 9.5px var(--font-mono); color: var(--now); letter-spacing: 0.1em; }
+.track.compact { padding-top: 18px; } .track.compact .stn .st { display: none; }
+@media (prefers-reduced-motion: reduce) { .track .seg, .track .now { transition: none; } }
+/* ledger rows and step list wear the same inks */
+.step-row.done .step-n, .step-row.done .step-receipt { border-color: var(--ink, var(--accept)); color: var(--ink, var(--accept)); }
+.ledger .row .step-n.done { border-color: var(--ink); color: var(--ink); }
+.ledger .row .r.done { color: var(--ink); }
+.ledger .row .step-n.skip { border-style: dashed; border-color: var(--ink-off); color: var(--ink-off); }
+.ledger .row .r.skip { color: var(--ink-off); }
+.ledger .row.skip > span:nth-child(2) { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: var(--ink-off); }
+.ledger .row.skip .r { text-decoration: none; }
+[hidden] { display: none !important; }

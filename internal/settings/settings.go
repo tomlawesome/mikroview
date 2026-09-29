@@ -24,6 +24,14 @@
 // session. history.keyFile and history.dir stay in the file for exactly
 // that reason: one names a mounted secret, the other a filesystem path,
 // and neither has any business being editable from a browser.
+//
+// The one exception to "credentials stay in the file" is the country
+// data sources' API keys (#1352): owner decision 2026-09-27, "one source
+// of truth -- they're no longer set in the config". They are held here
+// only as ciphertext sealed by internal/geoip under the retention key,
+// the way the router-backup vault seals its files, so neither this
+// document, a Postgres row nor a backup envelope ever carries one in
+// the clear. This package never sees a key's plaintext.
 package settings
 
 import (
@@ -31,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
@@ -49,6 +58,27 @@ var persistLog = logging.New("settings")
 type storeFile struct {
 	Store   storeSection   `json:"store"`
 	History historySection `json:"history"`
+	// Geo is the country data sources' sealed API keys (#1352), keyed
+	// by source name ("ipinfo", "maxmind"). Absent until one is set.
+	Geo map[string]geoKeySection `json:"geo,omitempty"`
+}
+
+// geoKeySection is one sealed key. Sealed is the ciphertext exactly as
+// internal/geoip produced it (base64 in JSON, as encoding/json writes a
+// []byte); SetAt and SetBy are plain, because the settings card shows
+// them to admins and neither is a secret.
+type geoKeySection struct {
+	Sealed []byte    `json:"sealed"`
+	SetAt  time.Time `json:"setAt"`
+	SetBy  string    `json:"setBy"`
+}
+
+// GeoKey is one country data source's stored key: ciphertext only, plus
+// when and by whom it was set. See the package comment.
+type GeoKey struct {
+	Sealed []byte
+	SetAt  time.Time
+	SetBy  string
 }
 
 type storeSection struct {
@@ -90,6 +120,7 @@ type Store struct {
 	version        int64
 	maxMemoryBytes int64
 	history        History
+	geo            map[string]GeoKey
 }
 
 // Open loads path if it exists (a missing file is the expected first-run
@@ -141,6 +172,18 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			Enabled:  file.History.Enabled,
 			Days:     file.History.Days,
 			MaxBytes: file.History.MaxBytes,
+		}
+		for name, k := range file.Geo {
+			// An entry with no ciphertext is a corrupt document, not an
+			// absent key: refusing is the same call the two checks
+			// above make, for the same reason.
+			if len(k.Sealed) == 0 {
+				return fmt.Errorf("geo.%s holds no sealed key", name)
+			}
+			if s.geo == nil {
+				s.geo = map[string]GeoKey{}
+			}
+			s.geo[name] = GeoKey{Sealed: k.Sealed, SetAt: k.SetAt, SetBy: k.SetBy}
 		}
 		return nil
 	})
@@ -222,13 +265,58 @@ func (s *Store) SetHistory(h History) error {
 	return s.persistLocked()
 }
 
-// persistLocked writes the document if persistence is configured. Both
-// callers (SetMaxMemory, SetHistory) change an operator-set value and
-// already return this error rather than swallowing it -- there is no
-// log-and-carry-on variant in this package, unlike internal/auth's.
+// GeoKey returns the stored key for a country data source, and whether
+// one is stored.
+func (s *Store) GeoKey(source string) (GeoKey, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	k, ok := s.geo[source]
+	return k, ok
+}
+
+// SetGeoKey stores (or replaces) a country data source's sealed key.
+// The in-memory value is updated even when the write fails, the same
+// contract SetMaxMemory documents; the error says it will not survive a
+// restart.
+func (s *Store) SetGeoKey(source string, k GeoKey) error {
+	if source == "" || len(k.Sealed) == 0 {
+		return fmt.Errorf("a geo key needs a source name and ciphertext")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.geo == nil {
+		s.geo = map[string]GeoKey{}
+	}
+	s.geo[source] = k
+	return s.persistLocked()
+}
+
+// ClearGeoKey removes a country data source's key. Removing one that is
+// not stored is not an error: the outcome the caller asked for holds.
+func (s *Store) ClearGeoKey(source string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.geo[source]; !ok {
+		return nil
+	}
+	delete(s.geo, source)
+	return s.persistLocked()
+}
+
+// persistLocked writes the document if persistence is configured. Every
+// caller changes an operator-set value and returns this error rather
+// than swallowing it -- there is no log-and-carry-on variant in this
+// package, unlike internal/auth's.
 func (s *Store) persistLocked() error {
 	if s.backend == nil {
 		return nil
+	}
+	var geo map[string]geoKeySection
+	if len(s.geo) > 0 {
+		geo = make(map[string]geoKeySection, len(s.geo))
+		for name, k := range s.geo {
+			geo[name] = geoKeySection{Sealed: k.Sealed, SetAt: k.SetAt, SetBy: k.SetBy}
+		}
 	}
 	data, err := json.MarshalIndent(storeFile{
 		Store: storeSection{MaxMemoryBytes: s.maxMemoryBytes},
@@ -237,6 +325,7 @@ func (s *Store) persistLocked() error {
 			Days:     s.history.Days,
 			MaxBytes: s.history.MaxBytes,
 		},
+		Geo: geo,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding the settings document: %w", err)

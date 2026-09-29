@@ -107,3 +107,70 @@ func TestConfigProblemsRefusesACallerWithNoSession(t *testing.T) {
 		t.Errorf("an anonymous caller was served the config problems: %s", body)
 	}
 }
+
+// #1354: history off with files still on disk is a live entry, worked
+// out on every request from the control's own figures -- present while
+// that is true, gone the moment the files are deleted or history is
+// turned back on.
+func TestConfigProblemsReportHistoryHeldWhileOff(t *testing.T) {
+	s, _ := newTestServer(t)
+	ctl := offWithFilesHistory()
+	s.HistoryControl = ctl
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	problems := func() []ConfigProblem {
+		t.Helper()
+		resp, err := http.Get(ts.URL + "/api/config/problems")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var got struct {
+			Problems []ConfigProblem `json:"problems"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Problems
+	}
+
+	got := problems()
+	if len(got) != 1 {
+		t.Fatalf("history off with 27 days on disk gave %d entries, want 1: %+v", len(got), got)
+	}
+	p := got[0]
+	if p.Code != HistoryHeldWhileOffCode || p.Severity != "warn" || p.Key != "history.enabled" {
+		t.Errorf("the entry is %+v, want code %s, severity warn, key history.enabled", p, HistoryHeldWhileOffCode)
+	}
+	for _, want := range []string{"History is off", "27 days", "2026-08-07 → 2026-09-02", "812.0MiB", "Nothing new is kept"} {
+		if !strings.Contains(p.Message, want) {
+			t.Errorf("the message %q does not say %q", p.Message, want)
+		}
+	}
+	if !strings.Contains(p.Remediation, "same key") || !strings.Contains(p.Remediation, "delete") {
+		t.Errorf("the remediation %q does not offer both ways out", p.Remediation)
+	}
+
+	// Turned back on: gone.
+	if err := ctl.ApplyHistory(true, 30, 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	if got := problems(); len(got) != 0 {
+		t.Errorf("with history on again the entry is still reported: %+v", got)
+	}
+
+	// Off again, then deleted: gone.
+	if err := ctl.ApplyHistory(false, 30, 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	if got := problems(); len(got) != 1 {
+		t.Fatalf("off again with the files kept gave %d entries, want 1", len(got))
+	}
+	if err := ctl.DeleteHistoryFiles(); err != nil {
+		t.Fatal(err)
+	}
+	if got := problems(); len(got) != 0 {
+		t.Errorf("with the files deleted the entry is still reported: %+v", got)
+	}
+}

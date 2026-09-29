@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview wizard — round 4 — U contact sheet</title>
+<style>
+  :root {
+    --bg: #06080e;
+    --bg-elevated: #0f1422;
+    --border: rgba(160, 185, 230, 0.13);
+    --fg: #e9eefb;
+    --fg-muted: #97a4c4;
+    --fg-dim: #55628a;
+    --accent: #9db8e8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    margin: 0;
+    padding: 32px 40px 60px;
+  }
+  h1 { font-size: 18px; letter-spacing: 0.04em; margin: 0 0 6px; }
+  h1 em { color: var(--accent); font-style: normal; }
+  p.lead { color: var(--fg-muted); font-size: 13px; margin: 0 0 28px; max-width: 760px; line-height: 1.6; }
+  a { color: var(--accent); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 22px;
+  }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-elevated);
+    display: flex;
+    flex-direction: column;
+  }
+  .card a.thumb { display: block; line-height: 0; border-bottom: 1px solid var(--border); }
+  .card img { width: 100%; height: auto; display: block; }
+  .card .cap { padding: 12px 14px 14px; }
+  .card .cap b { font-size: 13px; color: var(--fg); }
+  .card .cap p { margin: 4px 0 0; font-size: 12px; color: var(--fg-muted); line-height: 1.5; }
+  @media (max-width: 1000px) {
+    .grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 640px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<p style="margin:0;padding:10px 20px;background:#2a1010;color:#f0b0b0;font:13px sans-serif">Dropped 2026-09-26 — owner: "extremely underwhelming, lack creativity and have zero ambition". See round-5.</p>
+<h1>MIKRO<em>VIEW</em> · wizard round 4 (#1374) · direction <em>U</em> — the full-screen guided flow</h1>
+<p class="lead">Nine scenes, dark only, 1440×900 each. Same data story as direction T: instance 192.168.13.15:8080,
+router rb5009 at 192.168.13.1 (RouterOS 7.16.2), other address 192.168.254.1, clock from 14:02.
+See <a href="README.md">README.md</a> and <a href="direction-u-wizard.html">the full scene page</a>.</p>
+<div class="grid">
+  <div class="card">
+    <a class="thumb" href="shots/u-u1-dark.png"><img src="shots/u-u1-dark.png" alt="u1 — Before we start, empty" loading="lazy"></a>
+    <div class="cap"><b>u1 — Before we start, empty</b><p>Shows: the form; Begin disabled with its reason.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u2-dark.png"><img src="shots/u-u2-dark.png" alt="u2 — Before we start, filled" loading="lazy"></a>
+    <div class="cap"><b>u2 — Before we start, filled</b><p>Shows: all Required filled, backup switch off; Begin enabled.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u3-dark.png"><img src="shots/u-u3-dark.png" alt="u3 — Connect the router · Paste" loading="lazy"></a>
+    <div class="cap"><b>u3 — Connect the router · Paste</b><p>Shows: told strip; progress rail; the move open with the block folded and Copy primary.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u4-dark.png"><img src="shots/u-u4-dark.png" alt="u4 — Connect the router · Wait" loading="lazy"></a>
+    <div class="cap"><b>u4 — Connect the router · Wait</b><p>Shows: the wait screen — large observation line, pulsing dot; drawer closed.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u5-dark.png"><img src="shots/u-u5-dark.png" alt="u5 — Connect the router · Wait, drawer open" loading="lazy"></a>
+    <div class="cap"><b>u5 — Connect the router · Wait, drawer open</b><p>Shows: the two lists of §4, with the 192.168.254.1 cross.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u6-dark.png"><img src="shots/u-u6-dark.png" alt="u6 — Connect the router · Receipt, undo open" loading="lazy"></a>
+    <div class="cap"><b>u6 — Connect the router · Receipt, undo open</b><p>Shows: the two-line receipt; §5's two blocks (On MikroView / On the router).</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u7-dark.png"><img src="shots/u-u7-dark.png" alt="u7 — Push · Paste, block expanded" loading="lazy"></a>
+    <div class="cap"><b>u7 — Push · Paste, block expanded</b><p>Shows: the folded block opened, token inside, one Copy, caption.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u8-dark.png"><img src="shots/u-u8-dark.png" alt="u8 — Where setup stands" loading="lazy"></a>
+    <div class="cap"><b>u8 — Where setup stands</b><p>Shows: four-row ledger with the §6 amber line; primary Confirm rb5009 is set up, secondary Take me to the fall; Start setup again… at the foot.</p></div>
+  </div>
+  <div class="card">
+    <a class="thumb" href="shots/u-u9-dark.png"><img src="shots/u-u9-dark.png" alt="u9 — Before we start, backup off → step list" loading="lazy"></a>
+    <div class="cap"><b>u9 — Before we start, backup off → step list</b><p>Shows: the rail as it first appears after Begin — five items, nothing dimmed for the switched-off backup.</p></div>
+  </div>
+</div>
+</body>
+</html>

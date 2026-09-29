@@ -5,6 +5,7 @@ import {
   beginPasskeyLogin,
   beginPasskeyRegistration,
   buildQuery,
+  clearGeoLookupCache,
   clearAllFlags,
   clearUserPasskeys,
   clearUserTOTP,
@@ -20,6 +21,7 @@ import {
   fetchPasskeys,
   fetchSetupCommands,
   finishPasskeyRegistration,
+  geoLookup,
   login,
   mintDroplistKey,
   onForcedAuthGate,
@@ -29,6 +31,8 @@ import {
   revokeDroplistKey,
   saveSetupBackupTransport,
   setFlagVerdict,
+  setGeoIpinfoToken,
+  setGeoMaxmindKey,
   setRouterBackupComment,
   submitLoginFactor,
   submitPasskeyLoginAssertion,
@@ -752,6 +756,15 @@ describe('the passkey calls (#1250)', () => {
     expect(result).toEqual(rows)
   })
 
+  // Q5-F2: fetchPasskeys used to return failure as text, unlike every
+  // other list call in this file (fetchDevices, fetchUsers, ...), which
+  // throw ApiError -- PasskeysOverlay's loadList() now relies on that to
+  // route a 401 the same way its other calls already do.
+  it('fetchPasskeys throws ApiError on failure, like the other list calls', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, text: async () => 'sign in first' })))
+    await expect(fetchPasskeys()).rejects.toMatchObject({ status: 401, message: 'sign in first' })
+  })
+
   it('beginPasskeyRegistration posts an empty body and returns the library\'s own creation options', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ publicKey: { challenge: 'c' } }) }))
     vi.stubGlobal('fetch', fetchMock)
@@ -947,3 +960,75 @@ describe('the forced-auth-gate 403 (#1362)', () => {
     }
   })
 })
+
+// #1352: the geo key writes and the on-demand owner lookup.
+describe('the country source calls (#1352)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    clearGeoLookupCache()
+  })
+
+  it('sends the IPinfo token as JSON, and the MaxMind pair likewise', async () => {
+    const answer = { source: 'ipinfo', sources: {} }
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => answer }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await setGeoIpinfoToken('fake-token')).toEqual(answer)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/settings/geo/ipinfo')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('PUT')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ token: 'fake-token' })
+
+    await setGeoMaxmindKey('123456', 'fake-licence')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/settings/geo/maxmind')
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ accountId: '123456', licenseKey: 'fake-licence' })
+  })
+
+  it("a 400 answers the server's {error} words, and a plain body as itself", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 400, text: async () => '{"error":"token must not be empty"}' })),
+    )
+    expect(await setGeoIpinfoToken('')).toBe('token must not be empty')
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 400, text: async () => 'bad request' })))
+    expect(await setGeoIpinfoToken('')).toBe('bad request')
+  })
+
+  it('geoLookup asks once per address and keeps the answer', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const a = await geoLookup('1.1.1.1')
+    const b = await geoLookup('1.1.1.1')
+    expect(a).toEqual({ country: 'US', asn: 13335, asName: 'Cloudflare, Inc.' })
+    expect(b).toBe(a)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/geo/lookup?ip=1.1.1.1')
+  })
+
+  it('geoLookup keeps no failure, so the next ask tries again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => '' })))
+    expect(await geoLookup('1.1.1.1')).toBeNull()
+
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ country: null, asn: null, asName: null }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await geoLookup('1.1.1.1')).toEqual({ country: null, asn: null, asName: null })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('geoLookup keeps at most 500 answers, letting the oldest go first', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ country: null, asn: null, asName: null }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    for (let i = 0; i < 501; i++) await geoLookup(`203.0.${Math.floor(i / 256)}.${i % 256}`)
+    expect(fetchMock).toHaveBeenCalledTimes(501)
+    await geoLookup('203.0.1.244') // the newest: still kept
+    expect(fetchMock).toHaveBeenCalledTimes(501)
+    await geoLookup('203.0.0.0') // the oldest: let go, so asked again
+    expect(fetchMock).toHaveBeenCalledTimes(502)
+  })
+})
+

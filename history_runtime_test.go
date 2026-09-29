@@ -4,10 +4,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/settings"
@@ -90,9 +92,10 @@ func TestHistoryTurnOnTakesWhatMemoryHolds(t *testing.T) {
 	}
 }
 
-// Off has to mean the events are gone, and gone before the call
-// returns -- not scheduled, not on the next flush.
-func TestHistoryTurnOffLeavesTheDirectoryEmpty(t *testing.T) {
+// Off stops the writer and keeps the files (#1354): turning history off
+// is not how retained evidence is deleted. The held window is still
+// reported, so the disk card and the banner can offer the delete.
+func TestHistoryTurnOffKeepsTheFiles(t *testing.T) {
 	cfg := historyConfig(t, true, writeKeyFile(t))
 	dir := historyDirectory(cfg)
 	hist := newHistoryRuntime(quietLog(), cfg, unpersistedSettings(t), store.New(100, time.Hour))
@@ -104,26 +107,110 @@ func TestHistoryTurnOffLeavesTheDirectoryEmpty(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 	if n := retainedDayCount(t, dir); n != 2 {
-		t.Fatalf("%d day file(s) retained, want 2 -- there was nothing to delete", n)
+		t.Fatalf("%d day file(s) retained, want 2", n)
 	}
 
 	if err := hist.ApplyHistory(false, 30, 1<<30); err != nil {
 		t.Fatalf("turning it off: %v", err)
 	}
 
+	if n := retainedDayCount(t, dir); n != 2 {
+		t.Errorf("turning it off left %d day file(s), want both kept", n)
+	}
+	got := hist.HistorySettings()
+	if got.Enabled {
+		t.Error("the state still reads on after turning it off")
+	}
+	if got.Held == nil || got.Held.Days != 2 {
+		t.Errorf("after turning it off the state reports %+v held, want the 2 days still on disk", got.Held)
+	}
+}
+
+// Deleting is its own act, refused while history is on and complete
+// before it returns when history is off (#1354).
+func TestHistoryDeleteFilesRefusesWhileOnThenEmptiesTheDirectory(t *testing.T) {
+	cfg := historyConfig(t, true, writeKeyFile(t))
+	dir := historyDirectory(cfg)
+	hist := newHistoryRuntime(quietLog(), cfg, unpersistedSettings(t), store.New(100, time.Hour))
+	t.Cleanup(func() { hist.Close() })
+
+	hist.Append(historyEvent(time.Now().UTC().Add(-2*time.Hour), "10.5.0.1"))
+	hist.Append(historyEvent(time.Now().UTC().Add(-26*time.Hour), "10.5.0.2"))
+	if err := hist.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if err := hist.DeleteHistoryFiles(); !errors.Is(err, api.ErrHistoryOn) {
+		t.Fatalf("deleting while on returned %v, want api.ErrHistoryOn", err)
+	}
+	if n := retainedDayCount(t, dir); n != 2 {
+		t.Fatalf("a refused delete left %d day file(s), want 2", n)
+	}
+
+	if err := hist.ApplyHistory(false, 30, 1<<30); err != nil {
+		t.Fatalf("turning it off: %v", err)
+	}
+	if err := hist.DeleteHistoryFiles(); err != nil {
+		t.Fatalf("deleting while off: %v", err)
+	}
+
 	if n := retainedDayCount(t, dir); n != 0 {
-		t.Errorf("turning it off left %d day file(s) behind", n)
+		t.Errorf("deleting left %d day file(s) behind", n)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("reading %s: %v", dir, err)
 	}
 	if len(entries) != 0 {
-		t.Errorf("turning it off left %d file(s) in %s", len(entries), dir)
+		t.Errorf("deleting left %d file(s) in %s", len(entries), dir)
 	}
-	got := hist.HistorySettings()
-	if got.Enabled || got.Held != nil {
-		t.Errorf("after turning it off the state reads %+v, want off with nothing held", got)
+	if got := hist.HistorySettings(); got.Enabled || got.Held != nil {
+		t.Errorf("after deleting the state reads %+v, want off with nothing held", got)
+	}
+}
+
+// Off keeps the files, so turning back on must not take again the ring
+// events those files already hold (#1354): each event is on disk once,
+// or a replay that has rolled past the ring counts it twice.
+func TestHistoryOffThenOnDoesNotWriteKeptEventsTwice(t *testing.T) {
+	cfg := historyConfig(t, true, writeKeyFile(t))
+	ring := store.New(1000, 72*time.Hour)
+	hist := newHistoryRuntime(quietLog(), cfg, unpersistedSettings(t), ring)
+	t.Cleanup(func() { hist.Close() })
+
+	now := time.Now().UTC()
+	for i := range 3 {
+		hist.Append(ring.Insert(historyEvent(now.Add(time.Duration(i-10)*time.Second), "10.8.0.1")))
+	}
+	if err := hist.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := hist.ApplyHistory(false, 30, 1<<30); err != nil {
+		t.Fatalf("turning it off: %v", err)
+	}
+	// One event while off: in memory only, so turning on must take it.
+	ring.Insert(historyEvent(now.Add(-5*time.Second), "10.8.0.2"))
+	if err := hist.ApplyHistory(true, 30, 1<<30); err != nil {
+		t.Fatalf("turning it back on: %v", err)
+	}
+
+	seen := map[uint64]int{}
+	days, err := hist.Days()
+	if err != nil {
+		t.Fatalf("Days: %v", err)
+	}
+	for _, day := range days {
+		if _, err := hist.ReplayDay(day, time.Time{}, func(e store.Event) { seen[e.ID]++ }); err != nil {
+			t.Fatalf("ReplayDay(%s): %v", day, err)
+		}
+	}
+	if len(seen) != 4 {
+		t.Errorf("%d distinct events on disk, want 4: the 3 kept and the 1 that arrived while off", len(seen))
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("event %d is on disk %d times -- turning back on wrote a kept event again", id, n)
+		}
 	}
 }
 
@@ -200,11 +287,12 @@ func TestHistoryReplaySurvivesASwap(t *testing.T) {
 	if err := hist.ApplyHistory(true, 30, 1<<30); err != nil {
 		t.Fatalf("turning it back on: %v", err)
 	}
-	// Turning it back on took the ring, so its one event is now on disk
-	// as well as in memory -- and the cutoff keeps it from being
-	// counted twice.
-	if w := corpus.Replay(func(store.Event) {}); w.Count != 1 {
-		t.Errorf("after turning it back on the corpus saw %d events, want 1", w.Count)
+	// Turning it off kept the day file (#1354), and turning it back on
+	// took the ring, so its one event is now on disk as well as in
+	// memory -- the cutoff keeps that one from being counted twice, and
+	// the kept event from 30 hours ago is back in the window.
+	if w := corpus.Replay(func(store.Event) {}); w.Count != 2 {
+		t.Errorf("after turning it back on the corpus saw %d events, want 2", w.Count)
 	}
 }
 

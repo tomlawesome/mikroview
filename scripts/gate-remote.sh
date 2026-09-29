@@ -24,8 +24,16 @@
 # The bare repo and the built image are left behind on purpose: they are the
 # cache that makes the second run quick. The work tree is removed, so the
 # host is tidy for whoever runs next.
+#
+# Since 2026-09-08 CI runs the gate on the runner's own Docker daemon, not
+# this account's -- so the image and build cache left here only ever serve
+# a manual run of this script. That means they are safe to prune whenever
+# nothing holds ~/gate-lock (#1387): nothing else on this host depends on
+# them.
 
 set -euo pipefail
+
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/gate-summary.sh"
 
 HOST="${MV_GATE_HOST:-mikroview-runner}"
 BROWSER="${MV_BROWSER:-chromium}"
@@ -33,6 +41,12 @@ BROWSER="${MV_BROWSER:-chromium}"
 # of `make live-check` -- N instances, N slices, the same scenarios in a
 # fraction of the window (#1004). Empty means the unsharded gate.
 SHARDS="${MV_SHARDS:-}"
+# --shard i/N / MV_SHARD: run just the i-th slice, on its own -- same as
+# gate-local.sh's (#1387's sibling gap, Q6C-F1): CI runs the slices as four
+# separate jobs, so reproducing one red job on this host meant running all
+# four and hoping four browsers' worth of contention did not change the
+# answer. Mutually exclusive with --shards.
+SHARD="${MV_SHARD:-}"
 KEEP=0
 # --wait / MV_GATE_WAIT: poll for the lock instead of refusing (#811).
 WAIT="${MV_GATE_WAIT:-0}"
@@ -43,11 +57,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --browser) BROWSER="$2"; shift 2 ;;
     --shards)  SHARDS="$2"; shift 2 ;;
+    --shard)   SHARD="$2"; shift 2 ;;
     --host)    HOST="$2"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     --wait)    WAIT=1; shift ;;
     -h|--help)
-      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--shards N] [--host NAME] [--keep] [--wait]"
+      echo "usage: scripts/gate-remote.sh [--browser chromium|firefox|webkit] [--shards N | --shard i/N] [--host NAME] [--keep] [--wait]"
       exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -62,13 +77,29 @@ case "$SHARDS" in
   ''|[1-8]) ;;
   *) echo "--shards must be 1 to 8 (got '$SHARDS')" >&2; exit 2 ;;
 esac
+case "$SHARD" in
+  '') ;;
+  [1-8]/[1-8])
+    if [ "${SHARD%/*}" -gt "${SHARD#*/}" ]; then
+      echo "--shard index exceeds the shard count (got '$SHARD')" >&2; exit 2
+    fi ;;
+  *) echo "--shard must be i/N with 1 <= i <= N <= 8 (got '$SHARD')" >&2; exit 2 ;;
+esac
+if [ -n "$SHARDS" ] && [ -n "$SHARD" ]; then
+  echo "--shards runs every slice at once and --shard runs one; pick one" >&2
+  exit 2
+fi
 if [ -n "$SHARDS" ]; then
   GATE_TARGET="MV_SHARDS=$SHARDS live-check-sharded"
+elif [ -n "$SHARD" ]; then
+  # `make live-check` reads MV_SHARD itself and skips the standalone
+  # scripts when it is set, which is what the sharded target does too.
+  GATE_TARGET="MV_SHARD=$SHARD live-check"
 else
   GATE_TARGET="live-check"
 fi
 
-echo "==> gate on $HOST, engine $BROWSER${SHARDS:+, $SHARDS shards}, from $REF ($(git rev-parse --short HEAD))"
+echo "==> gate on $HOST, engine $BROWSER${SHARDS:+, $SHARDS shards}${SHARD:+, slice $SHARD alone}, from $REF ($(git rev-parse --short HEAD))"
 
 # A dirty tree would run code that is not what gets pushed, and the run would
 # claim to have tested a commit it did not. Refuse rather than mislead.
@@ -184,34 +215,34 @@ echo "==> running the gate (35-50 minutes unsharded; about 36 divided by the sha
 set +e
 ssh "$HOST" "set -eu
   cd ~/gate-work
+  set +e
   docker run --rm --name mv-gate-run --user 0 --shm-size=1g -v \"\$HOME/gate-work:/work\" -w /work mv-gate:local bash -c '
     set -e
     useradd -m -u 10001 ci-gate
     chown -R ci-gate:ci-gate /work
     su ci-gate -c \"cd /work/frontend && HOME=/home/ci-gate npm ci\"
     su ci-gate -c \"cd /work && HOME=/home/ci-gate MV_BROWSER=$BROWSER make $GATE_TARGET\"
-  '" 2>&1 | tee gate-run.log
+  '
+  gate_rc=\$?
+  set -e
+  # Tidy the daemon after every run, pass or fail, before the ssh session
+  # closes, so the reclaimed-space lines land in this same gate-run.log.
+  # Dangling images only (docker image prune -f, no -a) -- the tagged
+  # mv-gate:local this run used or rebuilt stays. The build cache only
+  # ever speeds up a *rebuild*: CHECKOUT_AND_BUILD above already skips
+  # the build whenever the image exists, and a Dockerfile change forces
+  # most layers to rebuild regardless of what the cache held, so a full
+  # docker builder prune -af here costs nothing a manual run will miss.
+  echo '==> tidy: pruning docker cache (best-effort; a failure here does not affect the gate result)'
+  docker image prune -f 2>&1 | tail -n1 | sed 's/^/==> tidy: /' || true
+  docker builder prune -af 2>&1 | tail -n1 | sed 's/^/==> tidy: /' || true
+  exit \$gate_rc" 2>&1 | tee gate-run.log
 gate_status=${PIPESTATUS[0]}
 set -e
 
-# Never judge a run by counting PASS against FAIL. A scenario that throws --
-# a stale selector, an import error -- dies before printing any verdict, so
-# counting verdicts cannot see it. That is #661, and it was read as a clean
-# browser phase across two full runs. The honest check is scenarios started
-# against scenarios that reported: equal means every one of them spoke.
-#
-# live-migrate-data.sh prints its own "== " subheading, so started is
-# legitimately one higher than reported. Anything beyond that is a scenario
-# that died silently.
-started=$(grep -c '^== ' gate-run.log || true)
-reported=$(grep -cE '^RESULT: |^PASS: ' gate-run.log || true)
-
-echo
-echo "==> scenarios started: $started   reported: $reported   (started may exceed reported by exactly 1)"
-silent=$(( started - reported - 1 ))
-if [ "$silent" -gt 0 ]; then
-  echo "==> $silent scenario(s) died without reporting -- see gate-run.log"
-fi
+# See gate-summary.sh (#661, #1337) for why this count matters and what
+# it means for it to come out equal.
+mv_gate_summary gate-run.log
 
 if [ "$KEEP" -eq 1 ]; then
   echo "==> leaving ~/gate-work on $HOST (--keep)"

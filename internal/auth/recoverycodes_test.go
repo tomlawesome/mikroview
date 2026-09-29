@@ -184,6 +184,44 @@ func TestRecoveryCodeWorksOnceThenIsRefused(t *testing.T) {
 	}
 }
 
+// TestBurnRecoveryCodeStillRefusesSpentCodesWhileCheckingEverySlot is
+// #1345 SEC-A2-F1's behaviour half: BurnRecoveryCode now runs the
+// comparison against spent slots too, so the time taken no longer
+// depends on how many are spent, and a spent code matching its own slot
+// must still be refused, without re-stamping when it was spent.
+func TestBurnRecoveryCodeStillRefusesSpentCodesWhileCheckingEverySlot(t *testing.T) {
+	s, id := newRecoveryTestStore(t)
+	codes, err := s.GenerateRecoveryCodes(id, time.Now())
+	if err != nil {
+		t.Fatalf("GenerateRecoveryCodes: %v", err)
+	}
+	spentAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	for _, c := range codes[:1] {
+		if ok, err := s.BurnRecoveryCode(id, c, spentAt); err != nil || !ok {
+			t.Fatalf("spending %s: ok=%v err=%v", c, ok, err)
+		}
+	}
+
+	if ok, err := s.BurnRecoveryCode(id, codes[0], time.Now()); err != nil || ok {
+		t.Errorf("a spent code: ok=%v err=%v, want ok=false err=nil", ok, err)
+	}
+	if ok, err := s.BurnRecoveryCode(id, "ZZZZZ-ZZZZZ", time.Now()); err != nil || ok {
+		t.Errorf("a code never issued: ok=%v err=%v, want ok=false err=nil", ok, err)
+	}
+	u, _ := s.Get(id)
+	for i, rc := range u.RecoveryCodes {
+		switch {
+		case i == 0 && !rc.UsedAt.Equal(spentAt):
+			t.Errorf("slot %d UsedAt = %v, want it left at %v by the refused retry", i, rc.UsedAt, spentAt)
+		case i > 0 && !rc.UsedAt.IsZero():
+			t.Errorf("slot %d UsedAt = %v after only refused attempts, want it unspent", i, rc.UsedAt)
+		}
+	}
+	if ok, err := s.BurnRecoveryCode(id, codes[9], time.Now()); err != nil || !ok {
+		t.Errorf("the last unspent code: ok=%v err=%v, want ok=true err=nil", ok, err)
+	}
+}
+
 func TestBurnRecoveryCodeRefusals(t *testing.T) {
 	tests := []struct {
 		name    string

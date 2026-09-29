@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — AG · The fall rises</title>
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="fall.css">
+<link rel="stylesheet" href="inks.css">
+<style>
+/* AG — The fall rises. Round 9's AE, as the owner asked for it on
+   2026-09-27: full screen, no modal; name / address / push / backup as
+   one step; the step list gated to steps already reached; tagging by a
+   rule list, no mini-fall anywhere; the track stays, all green. And the
+   two journeys — the door into the wizard, the wizard out onto the
+   fall — designed rather than faded, in the spirit of Orbit's dawn and
+   dusk but out of MikroView's own material: the door's rain, the amber
+   box round the wordmark, the boundary strip, the NOW line.
+
+   The way in (≈1.7s): the fields drop, the rain gathers upward into one
+   thin strip across the top of the page, the amber box rides to the
+   top-left and settles as the bar's wordmark, the step rail slides in
+   and its steps write on one by one, the first step rises.
+   The way out (≈2.6s): the ledger folds, the rail withdraws, the strip
+   splits into the fall's column headers which drop into place, the NOW
+   line draws across in amber, the rain begins under it, the right rail
+   slides in. Then it is the fall. Reduced motion collapses both to a
+   short crossfade. */
+:root { --ink-cert: var(--accept); --ink-push: var(--accept); --ink-backup: var(--accept); --ink-token: var(--accept); --ink-rules: var(--accept); --ink-logs: var(--accept); }
+body { overflow: hidden; }
+.track .stn .sub { display: none; }
+.track .stn.done .lab { color: var(--accept); }
+/* ---- the page frame, shared by the wizard and the fall ---- */
+.page { position: fixed; inset: 0; display: grid; grid-template-rows: 48px 14px 1fr; grid-template-columns: 236px 1fr 40px; }
+.bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 20px; }
+.bar .wm { opacity: 0; }
+.bar .chips { display: flex; gap: 8px; margin-left: 18px; overflow: hidden; }
+.bar .right { margin-left: auto; display: flex; gap: 10px; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); }
+.striprow { grid-column: 1 / 3; padding: 0 20px 0 20px; }
+.striprow .ovstrip { transition: gap 500ms; }
+.striprow .ovtick { transition: background 400ms, opacity 400ms, flex 500ms; }
+/* the step rail */
+.rail { grid-column: 1; grid-row: 3; border-right: 1px solid var(--border); padding: 14px 8px; overflow-y: auto; transition: transform 600ms cubic-bezier(.35,0,.2,1), opacity 500ms; }
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rail li { transition: opacity 350ms, transform 350ms; }
+.step-row { width: 100%; display: flex; align-items: flex-start; gap: 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; color: var(--fg-muted); }
+.step-row:hover:not(:disabled) { background: var(--bg-hover); }
+.step-row:disabled { opacity: 1; cursor: default; }
+.step-row.locked { color: var(--fg-dim); }
+.step-row.locked .step-n { border-style: dashed; color: var(--fg-dim); }
+.step-row.current { background: var(--bg-elevated); border-color: var(--border); color: var(--fg); }
+.step-row.done .step-n { border-color: var(--accept); color: var(--accept); }
+.step-row.done .step-receipt { color: var(--accept); }
+.step-row.chosen .step-n { border-color: var(--log); color: var(--log); }
+.step-row.chosen .step-receipt { color: var(--log); }
+/* the body */
+.main { grid-column: 2 / 4; grid-row: 3; position: relative; min-height: 0; display: grid; grid-template-rows: 1fr auto; }
+.body { min-height: 0; overflow-y: auto; padding: 26px 40px 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 860px; }
+.body h3 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.3; color: var(--fg); }
+.body .hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--fg-muted); max-width: 640px; }
+.foot { display: flex; align-items: center; gap: 12px; padding: 12px 40px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.foot .fhint { margin-left: auto; font-size: 12.5px; color: var(--fg-muted); }
+.page button:not(.step-row) { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+.page button:not(.step-row):hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
+.page button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.page button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; }
+.page input[type=text], .page input[type=password] { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--fg); border-radius: 5px; padding: 9px 12px; font-family: var(--font-mono); font-size: 14px; min-width: 0; }
+.page input:focus { outline: none; border-color: var(--accent); }
+.page input.bad { border-color: var(--warn); }
+.page pre { margin: 0; align-self: stretch; padding: 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); user-select: all; }
+.page pre.script { max-height: calc(14 * 1.6em + 24px); overflow-y: auto; flex-shrink: 0; }
+.sec { color: var(--fg-dim); user-select: none; }
+/* step 1: the router, one form */
+.form { align-self: stretch; display: grid; grid-template-columns: 180px 1fr; gap: 14px 18px; align-items: start; max-width: 720px; margin-top: 6px; }
+.form label.k { padding-top: 9px; font-size: 13.5px; color: var(--fg); }
+.form label.k small { display: block; font-size: 12px; color: var(--fg-dim); line-height: 1.4; margin-top: 2px; }
+.form .v { display: flex; flex-direction: column; gap: 4px; }
+.form .v input { width: 320px; }
+.form .problem { margin: 0; min-height: 1.3em; font-size: 12.5px; color: var(--warn); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 8px 14px; background: transparent; color: var(--fg-muted); }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent-bg); color: var(--fg); }
+.seg button.on.no { background: transparent; color: var(--log); border-color: var(--log); }
+.gives { font-size: 12.5px; color: var(--fg-muted); line-height: 1.5; margin-top: 4px; }
+.gives b { color: var(--accept); font-weight: 600; } .gives i { color: var(--log); font-style: normal; }
+/* the router's turn */
+.obs { align-self: stretch; max-width: 720px; }
+.stream { align-self: stretch; max-width: 720px; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; max-height: 120px; overflow: hidden; }
+.stream .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stream .l b { font-weight: 500; color: var(--log); }
+.track { max-width: 720px; }
+/* rules list */
+.rules { align-self: stretch; max-width: 760px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.rules label { display: grid; grid-template-columns: 22px 70px 60px 1fr 1fr 90px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.rules label:first-child { border-top: 0; }
+.rules label:hover { background: var(--bg-hover); }
+.rules .h { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; cursor: default; }
+.rules .h:hover { background: none; }
+.rules .why { color: var(--fg-muted); }
+.rules .pre { font-family: var(--font-mono); color: var(--log); }
+.rules .act.drop { color: var(--drop); } .rules .act.accept { color: var(--accept); }
+.rules label.lit .pre { color: var(--accept); }
+/* the ledger */
+.ledger { align-self: stretch; max-width: 720px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.ledger .row:first-child { border-top: 0; }
+.ledger .row .r { font-size: 12px; }
+.ledger .undo { grid-column: 1 / -1; }
+.ledger .undo pre { font-size: 12px; }
+.ledger .row .step-n.done { border-color: var(--accept); color: var(--accept); }
+.ledger .row .r.done { color: var(--accept); }
+/* ---- the fall (after the way out) ---- */
+.fallframe { grid-column: 1 / 3; grid-row: 3; display: grid; grid-template-columns: 62px 1fr; padding: 10px 20px 0 20px; min-height: 0; opacity: 0; pointer-events: none; }
+.fallframe .axis { position: relative; }
+.fallframe .axis span { position: absolute; left: 0; font: 11.5px var(--font-mono); color: var(--fg-dim); }
+.fallframe .axis span.now-t { color: var(--now); font-weight: 700; }
+.fallframe .fall { display: grid; grid-template-rows: auto 1fr; min-height: 0; gap: 6px; }
+.fallframe .cols .col { transition: transform 600ms cubic-bezier(.2,.26,.35,1), opacity 500ms; }
+.fallframe .fallbody { min-height: 0; }
+.siderail { grid-row: 2 / -1; grid-column: 3; border-left: 1px solid var(--border); opacity: 0; transform: translateX(40px); transition: transform 700ms cubic-bezier(.2,.26,.35,1), opacity 600ms; }
+/* ---- the door ---- */
+.door { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 5; }
+.door .rain { position: absolute; inset: 0; opacity: 0.85; -webkit-mask: radial-gradient(ellipse 320px 300px at 50% 46%, transparent 62%, #000 100%); mask: radial-gradient(ellipse 320px 300px at 50% 46%, transparent 62%, #000 100%); }
+.door .rain svg { width: 100%; height: 100%; display: block; }
+.door .stack { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 14px; width: 320px; animation: rise 0.3s ease-out; }
+.wm-box { display: inline-block; margin: 0 auto 8px; padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px; box-shadow: 0 0 14px color-mix(in srgb, var(--now) 22%, transparent), inset 0 0 10px color-mix(in srgb, var(--now) 6%, transparent); animation: kindle 0.5s ease-out; }
+.wm-box .wm { font-size: 34px; }
+.door h1 { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg); text-align: center; }
+.door .subtitle { margin: -6px 0 6px; font-size: 13px; color: var(--fg-dim); text-align: center; }
+.door .field { width: 100%; display: flex; flex-direction: column; gap: 2px; }
+.door .field input { background: transparent; border: 0; border-bottom: 1px solid var(--hair-2); color: var(--fg); padding: 8px 2px; font: 14px var(--font-mono); }
+.door .field input:focus { outline: none; border-bottom-color: var(--accent); }
+.door .field span { font: 600 9.5px var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim); }
+.submit-btn { align-self: center; margin-top: 12px; background: transparent; border: 1px solid var(--hair-2); color: var(--accent); font-weight: 600; letter-spacing: 0.04em; border-radius: 999px; padding: 7px 30px; }
+.submit-btn:hover { border-color: var(--accent); }
+.proto-bar { left: auto; right: 12px; bottom: 72px; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+@keyframes kindle { from { box-shadow: none; border-color: transparent; } }
+/* ---- the way in ---- */
+body.in .door .stack > :not(.wm-box) { transition: opacity 320ms ease, transform 420ms cubic-bezier(.35,0,.2,1); opacity: 0; transform: translateY(18px); }
+body.in .door .rain { transition: transform 1300ms cubic-bezier(.35,0,.2,1) 200ms, opacity 500ms ease 1000ms, -webkit-mask-size 600ms ease, mask-size 600ms ease; transform: translateY(-47vh) scaleY(0.06); opacity: 0; -webkit-mask: none; mask: none; }
+body.in .door { transition: background 500ms ease 300ms; background: transparent; pointer-events: none; }
+body.in .wm-box { transition: transform 1080ms cubic-bezier(.35,0,.2,1) 260ms, border-color 500ms ease 900ms, box-shadow 500ms ease 900ms, padding 500ms ease 900ms; border-color: transparent; box-shadow: none; }
+body.in .door .stack { animation: none; }
+body.wiz .door { display: none; }
+.rail.away { transform: translateX(-100%); opacity: 0; }
+.rail.away li { opacity: 0; transform: translateX(-12px); }
+.body.away { opacity: 0; transform: translateY(10px); }
+.body, .foot { transition: opacity 400ms ease, transform 400ms cubic-bezier(.2,.26,.35,1); }
+.foot.away { opacity: 0; }
+/* ---- the way out ---- */
+body.out .striprow .ovstrip { gap: 14px; }
+.fallframe.rising { opacity: 1; transition: opacity 500ms ease; }
+.fallframe .cols .col.pre { transform: translateY(-28px); opacity: 0; }
+.fallframe .nowline { transition: none; }
+.fallframe .nowdraw { stroke-dasharray: 1; stroke-dashoffset: 1; pathLength: 1; }
+body.fall .fallframe { pointer-events: auto; }
+body.fall .siderail { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  body.in .door .stack > *, body.in .door .rain, body.in .wm-box, .rail, .rail li, .body, .foot, .fallframe, .fallframe .cols .col, .siderail, .striprow .ovtick, .striprow .ovstrip { transition: opacity 300ms ease !important; transform: none !important; }
+  .door .stack, .wm-box { animation: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="page" id="page" aria-hidden="true">
+  <div class="bar"><span class="wm" id="barwm">MIKRO<em>VIEW</em></span><div class="chips" id="chips"></div><div class="right" id="barright"></div></div>
+  <div class="striprow" id="strip"></div>
+  <nav class="rail away" id="rail" aria-label="Setup steps"><ol id="steps"></ol></nav>
+  <div class="main" id="main"><div class="body away" id="body"></div><div class="foot away" id="foot"></div></div>
+  <div class="fallframe" id="fallframe"><div class="axis" id="axis"></div><div class="fall"><div class="cols" id="cols"></div><div class="fallbody" id="fb"></div></div></div>
+  <nav class="siderail" id="siderail" aria-label="Sections"><div class="stcards"><div class="stcard on"><span class="nm">The fall</span></div><div class="stcard"><span class="nm">Topography</span></div><div class="stcard"><span class="nm">Metrics</span></div><div class="stcard"><span class="nm">Stream</span></div><div class="stcard"><span class="nm">The docket</span></div><div class="stcard"><span class="nm">Entities</span></div><div class="stcard"><span class="nm">Settings</span></div><div class="stcard"><span class="nm">Log every rule</span></div></div></nav>
+</div>
+<div class="door" id="door">
+  <div class="rain" id="rain" aria-hidden="true"></div>
+  <div class="stack">
+    <div class="wm-box" id="wmbox"><span class="wm">MIKRO<em>VIEW</em></span></div>
+    <h1>Welcome</h1>
+    <p class="subtitle">First sign-in. Setting up your first router comes next.</p>
+    <label class="field"><span>account</span><input type="text" id="acct" value="tom" autocomplete="off"></label>
+    <label class="field"><span>password</span><input type="password" id="pw" value="correct horse"></label>
+    <button type="button" class="submit-btn" id="enter" data-act="enter">Enter</button>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script src="fall.js"></script>
+<script src="track.js"></script>
+<script>
+const $ = s => document.querySelector(s); const esc = MV.esc; const S = MV.story; const Q = MV.questions;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const t = k => MV.ev(k) ? MV.ev(k).t : '';
+/* ---- steps: five, gated ---- */
+const STEPS = [
+  { id: 'router', title: 'The router' },
+  { id: 'pass', title: 'Mint the token' },
+  { id: 'paste', title: 'Paste once' },
+  { id: 'tune', title: 'Tag firewall rules' },
+  { id: 'stand', title: 'Where setup stands' },
+];
+const routerDone = s => !!s.name && !!s.addr && !MV.addrProblem(s.addr) && s.push !== null && s.backup !== null;
+const stageOf = s => s.stage === 'ask' ? (s.q === 4 ? 'pass' : 'router') : s.stage === 'watch' ? 'paste' : s.stage === 'done' ? 'stand' : s.stage;
+/* which steps are reached: everything up to the furthest the run has got */
+const reachedIdx = s => s.stage === 'done' ? 4 : s.stage === 'tune' ? 3 : (s.stage === 'paste' || s.stage === 'watch') ? 2 : s.q === 4 ? 1 : 0;
+function rowState(s, id) {
+  const a = { cls: '', receipt: '' };
+  switch (id) {
+    case 'router': if (MV.has('enrol')) { a.cls = 'done'; a.receipt = `${s.name} · enrolled ${MV.from()} · ${t('enrol')}`; } else if (routerDone(s)) { a.cls = 'chosen'; a.receipt = `${s.name} · ${s.addr} · push ${s.push ? 'yes' : 'not now'} · backup ${s.backup ? 'yes' : 'not now'}`; } else a.receipt = 'name, address, push, backup'; break;
+    case 'pass': if (s.pass) { a.cls = MV.has('cert') ? 'done' : 'chosen'; a.receipt = `token good until ${S.tokenUntil}`; } else a.receipt = 'your password, once'; break;
+    case 'paste': if (MV.arrivedAll()) { a.cls = 'done'; a.receipt = `everything arrived · ${s.lines.toLocaleString()} lines`; } else if (MV.has('cert')) { a.cls = 'chosen'; a.receipt = 'certificate fetched · waiting'; } else if (s.copied) a.receipt = 'copied · waiting for the certificate'; else a.receipt = 'one block, into the terminal'; break;
+    case 'tune': if (s.push === false) a.receipt = 'needs the push'; else if (s.tagged) { a.cls = 'done'; a.receipt = `${s.chosen.size} rules tagged · ${s.tunedAt}`; } else if (s.tuneSkipped) { a.cls = 'chosen'; a.receipt = 'left dark'; } else a.receipt = 'proposed from the push'; break;
+    case 'stand': a.cls = s.stage === 'done' ? 'done' : ''; break;
+  }
+  return a;
+}
+function renderSteps(s) {
+  const cur = stageOf(s); const reached = reachedIdx(s);
+  $('#steps').innerHTML = STEPS.map((d, i) => { const r = rowState(s, d.id); const locked = i > reached; const can = !locked && i < reached && s.stage !== 'watch' && s.stage !== 'tune' && s.stage !== 'done'; return `<li><button type="button" class="step-row ${r.cls} ${locked ? 'locked' : ''} ${cur === d.id ? 'current' : ''}" ${can ? `data-act="goto-step" data-i="${i}"` : 'disabled'} aria-current="${cur === d.id ? 'step' : 'false'}" ${locked ? 'aria-disabled="true" title="After the step before it"' : ''}><span class="step-n">${d.id === 'stand' ? '✓' : i + 1}</span><span class="step-text"><span class="step-title">${d.title}</span>${r.receipt ? `<span class="step-receipt">${esc(r.receipt)}</span>` : ''}</span></button></li>`; }).join('');
+}
+/* ---- bodies ---- */
+function routerBody(s) {
+  const prob = MV.addrProblem(s.addr);
+  const seg = (id, yes, no) => `<div class="seg" role="radiogroup"><button type="button" class="${s[id] === true ? 'on' : ''}" data-act="set" data-q="${id}" data-v="yes" role="radio" aria-checked="${s[id] === true}">${yes}</button><button type="button" class="${s[id] === false ? 'on no' : ''}" data-act="set" data-q="${id}" data-v="no" role="radio" aria-checked="${s[id] === false}">${no}</button></div>`;
+  return `<h3>Your first router.</h3><p class="hint">Four things, then one paste. Nothing touches the router until you paste, and MikroView never connects to it — the router sends.</p>
+  <div class="form">
+    <label class="k" for="f-name">Name<small>What MikroView calls it on the fall, the stream and Entities.</small></label><div class="v"><input id="f-name" type="text" data-field="name" value="${esc(s.name)}" placeholder="rb5009" autocomplete="off"></div>
+    <label class="k" for="f-addr">Its address<small>Its own address on the network MikroView sits on. The enrolment window opens for this address alone.</small></label><div class="v"><input id="f-addr" type="text" data-field="addr" value="${esc(s.addr)}" placeholder="192.168.13.1" autocomplete="off" class="${prob ? 'bad' : ''}" aria-invalid="${prob ? 'true' : 'false'}"><p class="problem" data-problem aria-live="polite">${esc(prob)}</p></div>
+    <label class="k">Push router state<small>Every 20 minutes the router posts its rule table, address lists, leases and interfaces.</small></label><div class="v">${seg('push', 'Yes, every 20 minutes', 'Not now')}<div class="gives"><b>Yes</b> — named bands on the fall, rules to tag, leases and interfaces on the map. <i>Not now</i> — the fall stays address-only.</div></div>
+    <label class="k">Back up nightly<small>At 03:00 the router exports its configuration and posts it, kept encrypted under your key file.</small></label><div class="v">${seg('backup', 'Yes, nightly at 03:00', 'Not now')}<div class="gives"><b>Yes</b> — a nightly .backup and .rsc under your key. <i>Not now</i> — no backups kept here.</div></div>
+  </div>`;
+}
+function passBody(s) {
+  return `<h3>Your password, to mint ${esc(s.name)}’s token.</h3><p class="hint">Minting opens the log port for ${esc(s.addr)}, for 15 minutes, so it asks for your password at that moment. The token goes at the end of the block.</p><div class="form" style="grid-template-columns:auto"><div class="v"><input type="password" data-field="pass" value="${esc(s.pass)}" placeholder="password" aria-label="Your password" style="width:320px"></div></div>`;
+}
+function blockHtml() { return MV.sections().filter(x => x.on).map((x, i) => `<span class="sec"># ${i + 1} · ${x.title}</span>\n${x.lines.map(esc).join('\n')}`).join('\n'); }
+function pasteBody(s) {
+  const secs = MV.sections().filter(x => x.on);
+  return `<h3>One paste.</h3><p class="hint">${secs.length} parts, in order — ${secs.map(x => x.title.toLowerCase()).join(', ')} — and the enrol line last. Into the router’s <b>terminal</b> (WinBox ▸ New Terminal, or ssh), not a script.</p>
+  <pre class="script" aria-label="The block to paste">${blockHtml()}</pre>
+  <div class="copyrow"><button type="button" class="primary" data-act="copy" ${s.copied ? 'disabled' : ''}>${s.copied ? 'Copied' : 'Copy'}</button><span class="token-life">Token good until ${S.tokenUntil} (15 minutes) · <button type="button" class="linkish" data-act="reroll">Reroll</button></span></div>
+  <div class="obs waiting">${s.copied ? 'Copied. Waiting for the router — the certificate fetch comes first.' : 'Nothing has arrived yet. Copy, paste, and this line will say what the router did.'}</div>`;
+}
+function watchBody(s) {
+  const refused = s.refused ? `<div class="warnbox" style="max-width:720px"><span><b>Lines from ${S.other} arrived without the enrol line and were refused.</b> If that is this router, its logging action is sending from another address — usually an older <span class="mono">remote</span> action, or a <span class="mono">src-address</span> left from a previous setup. Fix it on the router, then paste the last line of the block again:</span><pre>${esc(MV.fixSrc())}\n${esc(MV.sections().at(-1).lines[0])}</pre><span>Or, if ${S.other} is the address it should send from: <button type="button" class="linkish" data-act="use-other">enrol at ${S.other} instead</button>.</span></div>` : '';
+  const ahead = MV.has('push') && s.standing === 'ahead' ? `<div class="cautionbox" style="max-width:720px"><b>RouterOS ${s.version} is newer than these commands were reviewed on (${S.reviewed}).</b> They ran and the push arrived. If anything reads wrong, this is the first suspect.</div>` : '';
+  const stream = MV.has('enrol') ? `<div class="stream" aria-label="Lines arriving">${s.tail.slice(-6).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join('')}</div>` : '';
+  const last = TRACK.stations(s).filter(x => x.state === 'done').at(-1);
+  const latest = last && last.id !== 'copy' ? `<div class="obs arrived">${esc(MV.ev(last.undo === 'logs' ? 'enrol' : last.id) ? MV.ev(last.undo === 'logs' ? 'enrol' : last.id).h : last.lab)}<small>${esc(last.st.split(' · ')[0])}</small></div>` : `<div class="obs waiting">Copied. Waiting for the router — the certificate fetch comes first.</div>`;
+  const lead = MV.arrivedAll() ? `<h3>${esc(s.name)} is sending.</h3><p class="hint">Everything you chose has arrived; each station stands on evidence.</p>` : `<h3>The router’s turn.</h3><p class="hint">The block is on the router. Each part answers in its own time — every station that lights is something that arrived.</p>`;
+  return `${lead}${TRACK.render(s)}${latest}${refused}${ahead}${stream}`;
+}
+function tuneBody(s) {
+  const sug = S.suggestions;
+  const obs = s.tagged ? `<div class="obs counting">${s.chosen.size} rules logging · first new line ${s.tunedAt}<small>${s.lines.toLocaleString()} lines</small></div>` : s.tuneCopied ? `<div class="obs waiting">Waiting for the first line carrying a new prefix.</div>` : `<div class="obs quiet">Nothing to wait for until you paste — the rule table is already here.</div>`;
+  const rows = sug.map((r, i) => { const on = s.chosen.has(i); return `<label class="${s.tagged && on ? 'lit' : ''}"><input type="checkbox" data-act="toggle" data-i="${i}" ${on ? 'checked' : ''} ${s.tuneCopied ? 'disabled' : ''}><span class="mono">${r.chain}</span><span class="act ${r.action}">${r.action}</span><span>${esc(r.comment)}</span><span class="why">${esc(r.why)}</span><span class="pre">${r.prefix}</span></label>`; }).join('');
+  return `<h3>${sug.length} rules log nothing.</h3><p class="hint">The push read ${S.rules} rules; ${S.alreadyLog.length} already log. These ${sug.length} sit on boundaries nobody watches — a rule, but no line. Tick the ones to tag; this is the only second paste.</p>
+  <div class="rules"><label class="h"><span></span><span>chain</span><span>action</span><span>rule</span><span>why it matters</span><span>prefix</span></label>${rows}</div>
+  <pre class="script" aria-label="Tagging block" style="max-width:760px">${esc(MV.tagBlock()) || '<span class="sec"># nothing ticked</span>'}</pre>
+  <div class="copyrow"><button type="button" class="primary" data-act="tune-copy" ${s.tuneCopied || !s.chosen.size ? 'disabled' : ''}>${s.tuneCopied ? 'Copied' : `Copy — ${s.chosen.size} rule${s.chosen.size === 1 ? '' : 's'}`}</button><span class="note">Safe to paste again; it sets, never adds.</span></div>${obs}`;
+}
+function doneBody(s) {
+  const rows = [
+    { done: true, t: 'Certificate trusted', r: `fetched by ${MV.from()} · ${t('cert')}`, u: 'cert' },
+    { done: true, t: 'Logs flowing', r: `enrolled at ${MV.from()} · ${t('enrol')} · ${s.lines.toLocaleString()} lines`, u: 'logs' },
+    s.push ? { done: true, t: 'Router state pushed', r: `every 20 minutes · first ${t('push')} · RouterOS ${s.version}`, u: 'push' } : { done: false, t: 'Router state', r: 'not now · the fall stays address-only' },
+    s.backup ? { done: true, t: 'Nightly backup', r: `03:00 · scheduled ${t('backup')}`, u: 'backup' } : { done: false, t: 'Backup', r: 'not now · no backups kept here' },
+    s.push ? (s.tagged ? { done: true, t: 'Rules tagged', r: `${s.chosen.size} rules log · since ${s.tunedAt}`, u: 'tune' } : { done: false, t: 'Rules', r: 'left dark · 5 boundaries log nothing' }) : null,
+  ].filter(Boolean);
+  const n = rows.filter(r => r.done).length, k = rows.length - n;
+  const undoAll = s.showUndoAll ? `<pre style="max-width:720px">${esc([...MV.undoLines.cert, ...MV.undoLines.logs, ...(s.push ? MV.undoLines.push : []), ...(s.backup ? MV.undoLines.backup : []), ...(s.tagged ? MV.undoLines.tune() : [])].join('\n'))}</pre><p class="note">Then <button type="button" class="linkish" data-act="reset">forget ${esc(s.name)} on MikroView</button> — its token, its enrolment and its record.</p>` : '';
+  return `<h3>${esc(s.name)} is sending.</h3><p class="hint">${n} ${n === 1 ? 'thing stands' : 'things stand'} on evidence${k ? `; ${k} ${k === 1 ? 'was' : 'were'} set aside` : ''}. Finish takes you to the fall, with ${esc(s.name)} already flowing.</p>${TRACK.render(s, { compact: true })}
+  <div class="ledger">${rows.map(r => `<div class="row ${r.done ? '' : 'skip'}"><span class="step-n ${r.done ? 'done' : 'skip'}">${r.done ? '✓' : '–'}</span><span>${r.t}<div class="r ${r.done ? 'done' : 'skip'}">${esc(r.r)}</div></span>${r.u ? `<button type="button" class="linkish u" data-act="undo" data-u="${r.u}">${s.undoOpen === r.u ? 'Hide' : 'Undo'}</button>` : '<span></span>'}${s.undoOpen === r.u && r.u ? `<div class="undo"><pre>${esc(TRACK.undoText(r.u))}</pre><p class="note">Paste on the router. MikroView notices when the lines stop and this row goes back to waiting.</p></div>` : ''}</div>`).join('')}</div>
+  <p class="note">Admin ▸ Run setup… reopens this ledger any time. To start again from nothing, <button type="button" class="linkish" data-act="undo-all">${s.showUndoAll ? 'hide the undo lines' : 'undo everything on the router first'}</button>.</p>${undoAll}`;
+}
+function renderFoot(s) {
+  let l = '', r = '', hint = ''; const st = stageOf(s);
+  if (st === 'router') { hint = routerDone(s) ? '' : 'All four, then Next'; r = `<button type="button" class="primary" data-act="router-next" ${routerDone(s) ? '' : 'disabled'}>Next</button>`; }
+  else if (st === 'pass') { l = `<button type="button" data-act="goto-step" data-i="0">Back</button>`; r = `<button type="button" class="primary" data-act="next" ${s.pass ? '' : 'disabled'}>Mint the token</button>`; }
+  else if (st === 'paste' && s.stage === 'paste') { l = `<button type="button" data-act="goto-step" data-i="1">Back</button>`; hint = 'Next checks what has arrived'; r = `<button type="button" class="primary" disabled>Next</button>`; }
+  else if (st === 'paste') { hint = MV.arrivedAll() ? '' : 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="to-tune" ${MV.arrivedAll() ? '' : 'disabled'}>Next</button>`; }
+  else if (st === 'tune') { r = `<button type="button" data-act="tune-skip">Skip this step</button><button type="button" class="primary" data-act="to-done" ${s.tagged ? '' : 'disabled'}>Next</button>`; hint = s.tagged ? '' : 'Next checks what has arrived'; }
+  else if (st === 'stand') { l = `<button type="button" data-act="another">Add another router</button>`; r = `<button type="button" class="primary" data-act="finish">Finish</button>`; }
+  $('#foot').innerHTML = `${l}<span class="fhint">${hint}</span>${r}`;
+}
+/* the bar: wordmark, chips, strip */
+function renderBar(s) {
+  const chips = [];
+  if (s.name) chips.push(`<span class="att dec"><i></i>${esc(s.name)}</span>`);
+  if (s.refused) chips.push(`<span class="att alarm"><i></i>refused · ${S.other}</span>`);
+  if (MV.has('cert')) chips.push(`<span class="att ok"><i></i>cert · ${t('cert')}</span>`);
+  if (MV.has('enrol')) chips.push(`<span class="att ok"><i></i>logs · ${t('enrol')}</span>`);
+  if (MV.has('push')) { chips.push(`<span class="att ok"><i></i>push · 20 min</span>`); const dark = S.boundaries.filter(b => !MV.watched(b)).length; chips.push(dark ? `<span class="att dark"><i></i>${dark} dark</span>` : `<span class="att ok"><i></i>every boundary watched</span>`); if (s.standing === 'ahead') chips.push(`<span class="att now"><i></i>RouterOS ${s.version} — ahead of review</span>`); }
+  if (MV.has('backup')) chips.push(`<span class="att ok"><i></i>backup · 03:00</span>`);
+  if (s.tagged) chips.push(`<span class="att ok"><i></i>${s.chosen.size} rules</span>`);
+  $('#chips').innerHTML = chips.join('');
+  $('#barright').innerHTML = MV.has('enrol') ? `<span class="att ok"><i></i>live · ${(4 + (s.tagged ? 3 : 0))}/s</span><span>${s.lines.toLocaleString()} lines</span>` : `<span class="att"><i></i>no router yet</span>`;
+  // the strip: one tick until the push names boundaries; then one per boundary
+  const cols = MV.has('push') ? FALL.states(s) : [[{ lane: 'lan' }, MV.has('enrol') ? 'watched' : 'off']];
+  $('#strip').innerHTML = FALL.strip(cols);
+}
+function render(s) {
+  if (phase === 'door') return;
+  renderSteps(s); renderBar(s);
+  const b = $('#body'); const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null;
+  const st = stageOf(s);
+  b.innerHTML = st === 'router' ? routerBody(s) : st === 'pass' ? passBody(s) : s.stage === 'paste' ? pasteBody(s) : st === 'paste' ? watchBody(s) : st === 'tune' ? tuneBody(s) : doneBody(s);
+  renderFoot(s);
+  const inp = b.querySelector('input[data-field]'); if (inp && (!focused || focused === inp.dataset.field)) { inp.focus(); const v = inp.value; inp.value = ''; inp.value = v; }
+  if (phase === 'fall' || phase === 'out') renderFall(s);
+}
+function field(f, s) { if (f === 'addr') { const p = MV.addrProblem(s.addr); const el = $('[data-problem]'); if (el) el.textContent = p; const inp = $('[data-field=addr]'); if (inp) { inp.classList.toggle('bad', !!p); inp.setAttribute('aria-invalid', p ? 'true' : 'false'); } } const nb = $('[data-act=router-next]'); if (nb) nb.disabled = !routerDone(s); const mb = $('[data-act=next]'); if (mb) mb.disabled = !s.pass; }
+/* our own step order, hooked into the engine's next() */
+function next(s) {
+  if (s.stage !== 'ask') return false;
+  if (s.q < 4) { if (routerDone(s)) { s.q = 4; } return true; }
+  if (s.pass) { s.stage = 'paste'; } return true;
+}
+let lastTick = 0;
+function tick(s) { if (s.stage !== 'watch' && s.stage !== 'tune' && phase !== 'fall') return; const now = Date.now(); if (now - lastTick < 400) return; lastTick = now; const r = document.querySelector('.body .track'); if (r && s.stage === 'watch') r.outerHTML = TRACK.render(s); const st = document.querySelector('.stream'); if (st) st.innerHTML = s.tail.slice(-6).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join(''); const c = document.querySelector('.obs.counting small'); if (c) c.textContent = s.lines.toLocaleString() + ' lines'; const br = $('#barright'); if (br && MV.has('enrol')) br.innerHTML = `<span class="att ok"><i></i>live · ${(4 + (s.tagged ? 3 : 0))}/s</span><span>${s.lines.toLocaleString()} lines</span>`; if (phase === 'fall') paintFall(s); }
+/* ---- the fall, after the way out ---- */
+function fallCols(s) { return MV.has('push') ? FALL.states(s) : [[{ id: 'all', name: (s.name || 'your router') + ' · all traffic', sub: 'address-only until the push names boundaries', lane: 'lan', logs: [], sug: null }, 'addr']]; }
+function renderFall(s, pre) {
+  const cols = fallCols(s);
+  $('#cols').style.gridTemplateColumns = `repeat(${cols.length}, 1fr)`;
+  $('#cols').innerHTML = cols.map(([b, st], i) => FALL.header(b, st, st === 'addr' ? { label: 'address-only — no rule table yet' } : {}).replace('class="col ', `class="col ${pre ? 'pre' : ''} `).replace('<div class="col', `<div style="transition-delay:${i * 70}ms" class="col`)).join('');
+  paintFall(s);
+}
+function paintFall(s) {
+  const fb = $('#fb'); const W = fb.clientWidth || 1200, H = fb.clientHeight || 700; const cols = fallCols(s);
+  fb.innerHTML = FALL.body(cols, s, W, H, { nowCaption: false, colOf: MV.has('push') ? null : () => 0, now: true });
+  const ax = $('#axis'); const top = 74, pxs = 2.2; let lab = `<span class="now-t" style="top:${top - 30}px;line-height:1.2">NOW<br>${MV.hms(MV.now())}</span>`; for (let k = 1; k <= 6; k++) { const secs = k * 30; lab += `<span style="top:${top + secs * pxs - 6}px">${MV.hm(MV.now() - secs)}</span>`; } ax.innerHTML = lab;
+}
+/* ---- rain for the door ---- */
+function rain() {
+  const W = innerWidth, H = innerHeight; let out = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`;
+  let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 420; i++) { const x = r() * W, y = r() * H, drop = r() < 0.35; out += `<rect x="${x.toFixed(0)}" y="${y.toFixed(0)}" width="2.4" height="7" rx="0.6" fill="${drop ? 'var(--fall-drop)' : 'var(--fall-accept)'}" opacity="${(0.35 + r() * 0.55).toFixed(2)}"/>`; }
+  $('#rain').innerHTML = out + '</svg>';
+}
+/* ---- the two journeys ---- */
+let phase = 'door';
+const beat = (ms, f) => setTimeout(f, reduced ? Math.min(ms, 300) : ms);
+function wayIn() {
+  phase = 'in'; document.body.classList.add('in');
+  // the amber box rides to where the bar's wordmark sits (FLIP)
+  const box = $('#wmbox'), target = $('#barwm'); const a = box.getBoundingClientRect(), b = target.getBoundingClientRect();
+  const sx = b.width / box.querySelector('.wm').getBoundingClientRect().width; const dx = b.left - a.left - (a.width - a.width * sx) / 2 - 30 * sx, dy = b.top - a.top - (a.height - a.height * sx) / 2 - 12 * sx;
+  if (!reduced) box.style.transform = `translate(${dx}px, ${dy}px) scale(${sx})`;
+  beat(600, () => { $('#page').setAttribute('aria-hidden', 'false'); phase = 'wiz'; render(MV.state); $('#rail').classList.remove('away'); });
+  beat(1400, () => { $('#barwm').style.opacity = 1; document.body.classList.add('wiz'); });
+  beat(1250, () => { $('#body').classList.remove('away'); $('#foot').classList.remove('away'); $('#page').classList.add('live'); const inp = $('[data-field=name]'); if (inp) inp.focus(); });
+}
+function wayOut() {
+  phase = 'out'; const s = MV.state; document.body.classList.add('out');
+  $('#body').classList.add('away'); $('#foot').classList.add('away');
+  beat(350, () => { $('#rail').classList.add('away'); $('#main').style.display = 'none'; });
+  beat(700, () => { renderFall(s, true); $('#fallframe').classList.add('rising'); });
+  beat(900, () => { document.querySelectorAll('#cols .col').forEach(c => c.classList.remove('pre')); });
+  beat(1700, () => { document.body.classList.add('fall'); phase = 'fall'; paintFall(s); });
+}
+/* ---- wiring ---- */
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+  const a = b.dataset.act; const s = MV.state;
+  if (a === 'enter') { if (phase === 'door') wayIn(); }
+  else if (a === 'router-next') { if (routerDone(s)) { s.q = 4; MV.render(); } }
+  else if (a === 'goto-step') { const i = Number(b.dataset.i); if (s.stage === 'ask' || s.stage === 'paste') { s.stage = 'ask'; s.q = i === 0 ? 0 : 4; if (i === 2) s.stage = 'paste'; MV.render(); } }
+  else if (a === 'finish') { if (phase === 'wiz') wayOut(); }
+});
+document.addEventListener('change', e => { if (e.target.matches('input[type=checkbox][data-act=toggle]')) { /* the engine's click handler already toggled state; keep the box honest */ e.target.checked = MV.state.chosen.has(Number(e.target.dataset.i)); } });
+document.addEventListener('keydown', e => { if (phase === 'door' && e.key === 'Enter') { e.preventDefault(); wayIn(); } });
+window.addEventListener('resize', () => { if (phase === 'fall') paintFall(MV.state); });
+rain();
+MV.boot({ render, field, tick, next });
+if (location.search.includes('demo')) { Object.assign(MV.state, { q: 0 }); }
+if (location.search.includes('skipdoor')) { document.body.classList.add('in', 'wiz'); $('#barwm').style.opacity = 1; $('#rail').classList.remove('away'); $('#body').classList.remove('away'); $('#foot').classList.remove('away'); phase = 'wiz'; render(MV.state); }
+</script>
+</body>
+</html>
