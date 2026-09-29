@@ -1,0 +1,41 @@
+/* AH — The slide. The door is the top of the fall; Enter lets go, and you
+   slide down it — through NOW, through the empty time nothing has filled
+   yet — and land on the wizard, which comes up to meet you. The rain is
+   the weather you fall through: three planes at three depths, the real
+   Fullfall's strokes, streaking as you pass them. Finish is the same
+   slide again, one screen further, onto the live fall. */
+.door { background: transparent; }
+.door .world { position: absolute; inset: 0; will-change: transform; }
+.door .stack { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+/* the amber box rides with you, not with the world */
+.door .wm-box.riding { position: fixed; margin: 0; z-index: 3; transition: border-color 500ms ease, box-shadow 500ms ease; }
+/* the centre carved out of the weather while the door stands (the app masks; the mockup covers) */
+.door .clear { position: absolute; inset: 0; background: radial-gradient(ellipse 460px 380px at 50% 52%, var(--bg) 62%, transparent 78%); transition: opacity 500ms ease 150ms; }
+body.in .door .clear { opacity: 0; }
+/* the chute: the fall's grammar under the door, before any router has filled it */
+.chute { position: absolute; left: 0; right: 0; top: 100%; height: 230vh; padding: 0 20px 0 82px; }
+.chute .nowline { position: absolute; left: 82px; right: 20px; top: 0; height: 0; border-top: 1.6px solid var(--now); box-shadow: 0 0 10px color-mix(in srgb, var(--now) 40%, transparent); }
+.chute .nowcap { position: absolute; left: 20px; top: -34px; font: 700 12px/1.25 var(--font-mono); color: var(--now); }
+.chute .row { position: absolute; left: 82px; right: 20px; height: 0; border-top: 1px solid rgba(160, 185, 230, 0.06); }
+.chute .t { position: absolute; left: 20px; font: 11.5px var(--font-mono); color: var(--fg-dim); transform: translateY(-50%); }
+.chute .empty { position: absolute; left: 50%; transform: translateX(-50%); font: 10.5px var(--font-mono); color: var(--fg-dim); text-align: center; white-space: nowrap; }
+.chute .empty b { display: block; color: var(--fg-muted); font-weight: 700; margin-bottom: 4px; }
+/* the weather: three planes at three depths, each two screens tall so it loops without a seam */
+.weather { position: fixed; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+.weather .plane { position: absolute; inset: 0; transform-origin: 50% 50%; }
+.weather .plane .fullfall { position: absolute; left: 0; right: 0; top: 0; height: 100vh; }
+.weather .plane .fullfall.dup { top: 100vh; }
+.weather .plane.far { --k: 0.45; --z: 0.6; opacity: 0.5; }
+.weather .plane.mid { --k: 1; --z: 1; }
+.weather .plane.near { --k: 1.8; --z: 1.7; opacity: 0.75; }
+.weather .fullfall i { height: calc(13px * var(--stretch, 1)); transition: height 120ms linear; }
+.weather.gone { transition: opacity 500ms ease; opacity: 0; }
+/* the page arrives from below; the way out slides the body up and the fall in */
+.page { transform: translateY(100vh); will-change: transform; }
+body.wiz .page { transform: none; }
+.page .main, .page .fallframe { will-change: transform; }
+body.out .fallframe { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .page { transform: none; }
+  .weather { display: none; }
+}
