@@ -379,3 +379,48 @@ func TestTraceTalliesOnlyTheDeviceItWasAskedAbout(t *testing.T) {
 		t.Fatalf("no device named is every device, got %d", got.Like)
 	}
 }
+
+// DoorLastSeen backs #1319's "seen arriving" mark: it answers about
+// traffic that arrived at the WAN edge, regardless of what the router
+// then did with it, and regardless of whether a door was even pushed
+// for the port -- the caller decides which ports to ask about.
+func TestDoorLastSeen(t *testing.T) {
+	s := New(1000, time.Hour)
+	s.Insert(Event{DeviceID: "core", Action: ActionAccept, Protocol: "tcp", Time: time.Now(),
+		InInterface: "ether1", SrcIP: "203.0.113.50", DstIP: "203.0.113.9", DstPort: 22})
+	// A drop still counts as "arrived" -- this mark is about traffic
+	// reaching the edge, not about the router's own verdict on it.
+	s.Insert(Event{DeviceID: "core", Action: ActionDrop, Protocol: "udp", Time: time.Now(),
+		InInterface: "ether1", SrcIP: "203.0.113.51", DstIP: "203.0.113.9", DstPort: 500})
+	// A private source is never "from the internet".
+	s.Insert(Event{DeviceID: "core", Action: ActionAccept, Protocol: "tcp", Time: time.Now(),
+		InInterface: "ether1", SrcIP: "10.0.0.5", DstIP: "203.0.113.9", DstPort: 8443})
+	// The wrong interface: not this device's WAN.
+	s.Insert(Event{DeviceID: "core", Action: ActionAccept, Protocol: "tcp", Time: time.Now(),
+		InInterface: "bridge1", SrcIP: "203.0.113.52", DstIP: "10.0.0.9", DstPort: 445})
+	// A second device's own WAN traffic must not answer for "core".
+	s.Insert(Event{DeviceID: "shed", Action: ActionAccept, Protocol: "tcp", Time: time.Now(),
+		InInterface: "ether1", SrcIP: "203.0.113.53", DstIP: "203.0.113.1", DstPort: 22})
+
+	got := s.DoorLastSeen("core", "ether1", []DoorPort{
+		{Port: 22, Proto: "tcp"},
+		{Port: 500, Proto: "udp"},
+		{Port: 8443, Proto: "tcp"},
+		{Port: 445, Proto: "tcp"},
+	})
+	if _, ok := got[DoorPort{22, "tcp"}]; !ok {
+		t.Fatal("a public-source accept on the WAN interface must answer")
+	}
+	if _, ok := got[DoorPort{500, "udp"}]; !ok {
+		t.Fatal("a dropped packet still arrived")
+	}
+	if _, ok := got[DoorPort{8443, "tcp"}]; ok {
+		t.Fatal("a private source is not from the internet")
+	}
+	if _, ok := got[DoorPort{445, "tcp"}]; ok {
+		t.Fatal("traffic on another interface is not this WAN's arrival")
+	}
+	if len(got) != 2 {
+		t.Fatalf("want exactly two doors answered, got %+v", got)
+	}
+}

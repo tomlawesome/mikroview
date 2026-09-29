@@ -3,14 +3,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-// Only fetchTrace is stubbed (B1's own test needs to control when its
-// promise resolves); every other export of the module -- fetchPorts and
-// the rest -- stays real, the same way the file's own top-of-file note
-// says the component's other network calls never fire because
-// appState.devices stays empty throughout this file.
+// fetchTrace is stubbed because B1's own test needs to control when its
+// promise resolves. fetchWanDoors is stubbed too (#1319): wanDoorsState
+// reaches the network from its own open()/refresh(), which the doors-
+// panel entry-point tests below call directly, independent of
+// appState.devices -- unlike zonesState.refresh() and friends, which
+// this file's own top-of-file note already explains never fire.
+// Every other export of the module -- fetchPorts and the rest -- stays
+// real.
 vi.mock('../lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api')>()),
   fetchTrace: vi.fn(),
+  fetchWanDoors: vi.fn(async () => ({ devices: [] })),
 }))
 import { fetchTrace, type TraceResponse } from '../lib/api'
 import { appState } from '../lib/state.svelte'
@@ -28,6 +32,7 @@ import { hostsState } from '../lib/hosts.svelte'
 import { baselineState } from '../lib/baseline.svelte'
 import { portFilterState } from '../lib/portFilter.svelte'
 import { servingState } from '../lib/serving.svelte'
+import { wanDoorsState } from '../lib/wanDoors.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { Host } from '../lib/api'
@@ -3134,6 +3139,71 @@ describe('the boundary card and the declare path (round 49, #1016)', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    wanDoorsState.close()
+    wanDoorsState.devices = []
+  })
+
+  // #1319: the boundary card gains one last row exactly when its own
+  // "from" side is the internet. guestDark() draws both directions of
+  // the bridge4<->ether1 pair as material (neither is logged), and
+  // openCard() opens whichever is first in the DOM -- Guest -> the
+  // internet, per the test above/below asserting its *back* line reads
+  // "the internet → Guest". This helper instead opens the direction
+  // whose own primary label starts with "the internet →", i.e. the one
+  // this row is about.
+  function openInternetCard(container: HTMLElement): HTMLElement {
+    const groups = [...container.querySelectorAll<SVGGElement>('.cov-g')]
+    const g = groups.find((el) => el.querySelector('title')?.textContent?.startsWith('the internet →'))
+    expect(g, 'no boundary in this fixture has the internet on its "from" side').toBeTruthy()
+    g!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    return container.querySelector<HTMLElement>('.card')!
+  }
+
+  it('opens the doors panel from the boundary card\'s own row when the card is the internet edge', () => {
+    guestDark()
+    wanDoorsState.devices = [
+      { id: 'router1', name: 'router1', wan: 'ether1', doors: [{ label: '#5', ordinal: 5, dstPort: '22' }], services: null },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = openInternetCard(container)
+    const row = [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+    expect(row, 'the card should gain a Doors from the internet row').toBeTruthy()
+    expect(row!.textContent?.trim()).toBe('Doors from the internet · 1')
+
+    expect(wanDoorsState.isOpen).toBe(false)
+    ;(row as HTMLButtonElement).click()
+    flushSync()
+    expect(wanDoorsState.isOpen).toBe(true)
+  })
+
+  it('shows "· none" on the boundary card\'s row when nothing is a door', () => {
+    guestDark()
+    wanDoorsState.devices = [{ id: 'router1', name: 'router1', wan: 'ether1', doors: [], services: null }]
+    const { container } = render(Topography)
+    flushSync()
+
+    const card = openInternetCard(container)
+    const row = [...card.querySelectorAll('button.s')].find((b) => b.textContent?.includes('Doors from the internet'))
+    expect(row!.textContent?.trim()).toBe('Doors from the internet · none')
+  })
+
+  it('opens the doors panel from the internet anchor itself', () => {
+    guestDark()
+    wanDoorsState.devices = []
+    const { container } = render(Topography)
+    flushSync()
+
+    const anchor = container.querySelector<SVGGElement>('.doors-anchor-btn')
+    expect(anchor, 'the internet anchor should carry its own doors button').toBeTruthy()
+    expect(anchor!.getAttribute('aria-label')).toBe('Doors from the internet')
+
+    expect(wanDoorsState.isOpen).toBe(false)
+    anchor!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+    expect(wanDoorsState.isOpen).toBe(true)
   })
 
   it('opens a card on a dark boundary saying what the rule does and what both directions are', () => {

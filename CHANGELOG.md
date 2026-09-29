@@ -18,6 +18,16 @@ rewritten.
 
 ### Added
 
+- **The router's own management services join the pushed tables**
+  (#1329, owner decision 2026-09-22). A new `ip-service` push carries
+  one row per `/ip/service` entry (`telnet`, `ftp`, `www`, `www-ssl`,
+  `ssh`, `api`, `api-ssl`, `winbox`) -- disabled, listen port, address
+  restriction and, for the TLS services, the certificate name -- so
+  MikroView shows what the router itself listens on rather than
+  inferring it from traffic. No passwords or key material. Sent by
+  default alongside the other wizard-generated tables, and the setup
+  report's push-drift check now expects it too. See
+  `docs/routeros-setup.md`'s `ip-service` row for its field mapping.
 - **Country flags work with no setup, and IPinfo adds the network owner**
   (#1352, owner decision 2026-09-27). MikroView now downloads its own
   country data at runtime and caches it under `geoip.cachePath`

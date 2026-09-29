@@ -600,6 +600,10 @@ func (s *Server) coreRoutes() []route {
 		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
+		// The pushed /ip/service table (issue #1329): the router's own
+		// management services, same session-gated read-only shape as the
+		// three routes above.
+		{http.MethodGet, "/api/routeros/{device}/services", s.handleRouterOSServices},
 		// Per-tunnel state (issue #874, City 9's ingest side): WireGuard
 		// handshake-derived up/down and the /ppp/active table backing
 		// L2TP/PPTP/SSTP/OVPN alike. Same session-gated, read-only shape
@@ -621,6 +625,12 @@ func (s *Server) coreRoutes() []route {
 		// answer, and what -- traffic only, no doors, the same read shape
 		// as the two routes above.
 		{http.MethodGet, "/api/ports/serving", s.handleServing},
+		// #1319's doors panel: what the pushed input-chain and dst-nat
+		// tables let the internet reach, and the pushed /ip/service rows
+		// beside them -- policy from the pushed tables, "seen arriving"
+		// from the event buffer, kept apart the same way the two routes
+		// above already keep doors and traffic apart. See wanedge.go.
+		{http.MethodGet, "/api/doors/internet", s.handleWANDoors},
 		// Ingest-loss "Clear all" (#1015): zeroes the four monotonic
 		// syslog-listener loss counters /api/stats' "syslog.loss" field
 		// reads, so a transient loss stops permanently marking the
