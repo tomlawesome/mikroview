@@ -555,4 +555,5 @@ var ingestKindNames = []string{
 	string(ingest.KindDHCPLease),
 	string(ingest.KindARP),
 	string(ingest.KindIPAddress),
+	string(ingest.KindIPService),
 }

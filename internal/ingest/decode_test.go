@@ -41,6 +41,7 @@ func TestDecodePayloadAcceptsEachKind(t *testing.T) {
 		{"wireguard-interface", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"site-to-site","publicKey":"abc123","listenPort":51820}]}`},
 		{"wireguard-peer", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`},
 		{"ip-address", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`},
+		{"ip-service", `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":"10.0.0.0/8","certificate":"mikrotik-ca"}]}`},
 		{"logging", `{"kind":"logging","page":1,"pages":1,"wizardVersion":1,"records":[{"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},{"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}]}`},
 	}
 	for _, c := range cases {
@@ -587,6 +588,63 @@ func TestIPAddressRejectsControlAndFormatCharacters(t *testing.T) {
 	// TestDecodePayloadRejectsFormatCharacterInField.
 	decodeErr(t, `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"","interface":"","comment":"evil\u0007bell"}]}`)
 	decodeErr(t, `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24\u202e","network":"","interface":"","comment":""}]}`)
+}
+
+// TestIPServiceRoundTripsFields is issue #1329's own acceptance case: a
+// pushed /ip/service row survives decode with every field intact,
+// Address included -- RouterOSList takes the plain-string shape here
+// the same way it takes a filter rule's connection-state.
+func TestIPServiceRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":"10.0.0.0/8","certificate":"mikrotik-ca"}]}`)
+	if len(p.IPServices) != 1 {
+		t.Fatalf("len(IPServices) = %d, want 1", len(p.IPServices))
+	}
+	got := p.IPServices[0]
+	if got.Name != "www-ssl" || got.Disabled || int(got.Port) != 443 || got.Certificate != "mikrotik-ca" {
+		t.Errorf("IPServices[0] = %+v, unexpected", got)
+	}
+	if len(got.Address) != 1 || got.Address[0] != "10.0.0.0/8" {
+		t.Errorf("IPServices[0].Address = %+v, want [10.0.0.0/8]", got.Address)
+	}
+}
+
+// TestIPServiceWithNoAddressRestrictionDecodesToAnEmptyList is the case
+// that matters most downstream (#1329): a service RouterOS reports with
+// no address restriction at all -- reachable from anywhere -- must
+// decode to an empty/nil Address, never to a restriction of zero
+// entries being confused with "restricted to nothing." Exercised both
+// as an absent key (a router whose script never sends it) and as an
+// explicit empty string (RouterOS's own rendering of an unset address
+// property).
+func TestIPServiceWithNoAddressRestrictionDecodesToAnEmptyList(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"winbox","disabled":false,"port":8291,"certificate":""}]}`)
+	if len(p.IPServices) != 1 {
+		t.Fatalf("len(IPServices) = %d, want 1", len(p.IPServices))
+	}
+	if got := p.IPServices[0].Address; len(got) != 0 {
+		t.Errorf("Address (key absent) = %+v, want empty", got)
+	}
+
+	p = decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"winbox","disabled":false,"port":8291,"address":"","certificate":""}]}`)
+	if got := p.IPServices[0].Address; len(got) != 0 {
+		t.Errorf("Address (empty string) = %+v, want empty", got)
+	}
+}
+
+// TestIPServiceRejectsUnknownRecordField pins the same strict-decoding
+// contract every other kind in this file gets: a field this schema does
+// not know about refuses the whole page rather than being silently
+// dropped.
+func TestIPServiceRejectsUnknownRecordField(t *testing.T) {
+	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":"","certificate":"","tls-version":"only-1.2"}]}`)
+}
+
+// TestIPServiceRejectsControlAndFormatCharacters mirrors
+// TestIPAddressRejectsControlAndFormatCharacters for this kind's own
+// text fields.
+func TestIPServiceRejectsControlAndFormatCharacters(t *testing.T) {
+	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"evil\u0007bell","disabled":false,"port":22,"address":"","certificate":""}]}`)
+	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":"","certificate":"cert\u202e"}]}`)
 }
 
 // TestDecodeRealFilterRulePush decodes a payload captured verbatim from a
