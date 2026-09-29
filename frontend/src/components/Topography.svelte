@@ -146,6 +146,12 @@
     ribKey,
     zoneTally,
   } from '../lib/portFilter'
+  // The "seen serving" lens (#1320): a sibling to the two above, sharing
+  // this same map rather than opening a view of its own. serving.ts
+  // holds the arithmetic and the wording, serving.svelte.ts holds what
+  // the server answered.
+  import { servingState } from '../lib/serving.svelte'
+  import { hostBadge, servingTally } from '../lib/serving'
   import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
   // The decommission ghost (#460, round 55): a segment the router has
@@ -621,11 +627,22 @@
     return spanLabel(now - t)
   }
 
-  /** The dot's own tooltip, and the accessible name of its button. */
+  /** The dot's own tooltip, and the accessible name of its button.
+   *
+   * The serving lens's own badge (#1320) rides on the end of whichever
+   * base label presence already picked, rather than replacing it: a
+   * quiet host the lens still lights is still quiet, and the map must
+   * not stop saying so just because it also answers something. */
   function hostDotLabel(d: HostDot): string {
-    if (d.presence === 'intended') return `${d.label} · quiet on purpose`
-    if (d.presence === 'quiet' && d.host) return `${d.label} · quiet · ${quietFor(d.host.lastSeen, nowMs)}`
-    return d.label
+    let base: string
+    if (d.presence === 'intended') base = `${d.label} · quiet on purpose`
+    else if (d.presence === 'quiet' && d.host) base = `${d.label} · quiet · ${quietFor(d.host.lastSeen, nowMs)}`
+    else base = d.label
+    if (servingOn) {
+      const sh = servingState.byIp.get(d.ip)
+      if (sh) return `${base} · seen serving ${hostBadge(sh.ports, sh.more)}`
+    }
+    return base
   }
 
   // Shared by ribPath and the internet-edge limbs (#726: "bundle the
@@ -2336,10 +2353,11 @@
     reach = { subject: hostSubject(ip), zoneId, host, ip }
   }
 
-  /** Standing on something clears #1018's two filters, the same way
-   * opening one of them clears the reach. Three answers layered on one
-   * map would stack their crumbs on each other and leave nobody able to
-   * say which of them a dim rib was dim because of.
+  /** Standing on something clears #1018's two filters and #1320's lens,
+   * the same way opening any one of the three clears the reach and the
+   * other two. Three answers layered on one map would stack their
+   * crumbs on each other and leave nobody able to say which of them a
+   * dim rib was dim because of.
    *
    * Declared here rather than beside the filters themselves because the
    * three descends below call it, and they are declared above the
@@ -2347,6 +2365,7 @@
   function clearMapFilters() {
     portFilterState.clear()
     mapTraceState.clear()
+    servingState.clear()
   }
 
   /** The two zones a ground-plan road joins, or null when it joins none
@@ -2445,6 +2464,7 @@
       else if (cityStop === null && mapTraceState.active && mapTraceState.listOpen) mapTraceState.listOpen = false
       else if (cityStop === null && mapTraceState.active) mapTraceState.clear()
       else if (cityStop === null && (portFilterState.active || portFilterState.open)) portFilterState.clear()
+      else if (cityStop === null && servingState.open) servingState.clear()
       else if (reach) surface()
     }
   }
@@ -4004,7 +4024,91 @@
 
   const portOn = $derived(portFilterState.active && portFilterState.settled)
   const traceOn = $derived(mapTraceState.active)
+  // Settled the same way portOn is: dimming to an in-flight fetch's
+  // empty placeholder would read as "nothing answers" for the moment
+  // between turning the lens on and its answer landing.
+  const servingOn = $derived(servingState.open && servingState.settled)
+  // filterOn is deliberately port/trace only: every consumer below it is
+  // about ribs, roads and the baseline/alarm decoration that comes off
+  // with a filter -- exactly what the serving lens must leave alone
+  // (#1320). hostsFilterOn is the wider flag for the two things the
+  // lens is allowed to change: a host's own dot and the lane's own
+  // tally line.
   const filterOn = $derived(portOn || traceOn)
+  const hostsFilterOn = $derived(portOn || traceOn || servingOn)
+
+  /** The pill's own fraction: how many of every host the map knows
+   * about, across every lane, the lens lit. The pill's claim is about
+   * the whole estate, unlike the lane card's own per-zone tally. */
+  const servingCount = $derived.by((): { on: number; total: number } => {
+    if (!servingOn) return { on: 0, total: 0 }
+    let on = 0
+    let total = 0
+    for (const z of zones) {
+      const row = laneHostRow(z)
+      total += row.total
+      on += row.dots.filter((d) => servingState.hosts.has(d.ip)).length
+      on += row.hidden.filter((d) => servingState.hosts.has(d.ip)).length
+    }
+    return { on, total }
+  })
+
+  /** The collapsed pill's own tail: `7 of 41 hosts answer in the
+   * window`, or the empty phrase where the window carried nothing. */
+  const servingTailText = $derived(
+    servingState.nothingSeen
+      ? 'nothing answered in the window'
+      : `${servingTally(servingCount.on, servingCount.total) ?? 'nothing answered'} in the window`,
+  )
+
+  /* ---------------- the reach's own served-port chips (#1320) ---------------- */
+
+  /** The reach subject's own served-port answer, or undefined where the
+   * lens is off or this host answered nothing. */
+  const reachServed = $derived(servingOn && reach ? servingState.byIp.get(reach.ip) : undefined)
+
+  interface ReachChip {
+    label: string
+    x: number
+    w: number
+    /** Whether this is the `+N more` chip -- the only one that is a
+     * button, opening the dossier the way every other `+N more` on this
+     * screen does. */
+    more: boolean
+  }
+
+  const SERVE_CHIP_Y = 74
+  const SERVE_CHIP_H = 16
+  const SERVE_CHIP_PAD = 8
+  const SERVE_CHIP_GAP = 6
+  // There is no live text measurement on this canvas (no other chip
+  // here uses one either); a per-character estimate is exact enough for
+  // a single-line monospace label and keeps the row a pure layout, no
+  // second render pass.
+  const SERVE_CHIP_CHAR = 5.6
+
+  function serveChipWidth(label: string): number {
+    return label.length * SERVE_CHIP_CHAR + SERVE_CHIP_PAD * 2
+  }
+
+  /** One chip per served port, busiest first as the answer already
+   * sorts them, then `+N more` -- laid out left to right and centred as
+   * a row under the host name. */
+  const reachChips = $derived.by((): ReachChip[] => {
+    const sh = reachServed
+    if (!sh || sh.ports.length === 0) return []
+    const labels: { label: string; more: boolean }[] = sh.ports.map((p) => ({ label: `${p.port}/${p.proto}`, more: false }))
+    if (sh.more > 0) labels.push({ label: `+${sh.more} more`, more: true })
+    const widths = labels.map((l) => serveChipWidth(l.label))
+    const total = widths.reduce((a, b) => a + b, 0) + SERVE_CHIP_GAP * (labels.length - 1)
+    let x = -total / 2
+    return labels.map((l, i) => {
+      const w = widths[i]
+      const chip: ReachChip = { label: l.label, x: x + w / 2, w, more: l.more }
+      x += w + SERVE_CHIP_GAP
+      return chip
+    })
+  })
 
   /**
    * Every direction the trace lights: the half it came in on and the
@@ -4038,7 +4142,15 @@
 
   /** What the filter in force lights, keyed the same way reality.ts
    * keys a direction, so a lit direction and a drawn one are one string
-   * rather than two conventions that agree until they do not. */
+   * rather than two conventions that agree until they do not.
+   *
+   * The serving lens deliberately lights none of these (#1320): its own
+   * answer is host-level, not per-crossing, and a rib lit from zone
+   * membership alone would be a claim about traffic on that boundary the
+   * lens cannot actually back -- exactly the kind of thing "seen
+   * serving" exists to refuse. Ribs and roads keep their ordinary,
+   * unfiltered look while the lens is on; only hosts and lane tallies
+   * change (see hostsFilterOn below). */
   const lit = $derived(portOn ? litRibs(portFilterState.ribs) : traceOn ? traceLit : new Map())
 
   interface LitHalf {
@@ -4274,18 +4386,20 @@
     return doorHalves.has(key) ? 0.6 : 0.4
   }
 
-  /** The addresses the filter lights: the hosts on the port, or the two
-   * ends of the traced line. */
+  /** The addresses the filter lights: the hosts on the port, the hosts
+   * seen serving, or the two ends of the traced line. */
   const litHosts = $derived.by((): Set<string> => {
     if (portOn) return portFilterState.hostIps
+    if (servingOn) return servingState.hosts
     const e = mapTraceState.event
     if (!e) return new Set<string>()
     return new Set([e.srcIp, e.dstIp].filter((ip): ip is string => !!ip))
   })
 
   /** The lane card's line under a filter: `2 of 12 hosts on 445/tcp`
-   * for the port, and the traced end's own tally for the trace
-   * (`cam-porch · 14× today`, `tom-desktop · never reached`).
+   * for the port, `7 of 12 hosts answer` for the serving lens, and the
+   * traced end's own tally for the trace (`cam-porch · 14× today`,
+   * `tom-desktop · never reached`).
    *
    * The port's count runs over this row's own dots -- the hosts the
    * surface knows about -- and never over the answer's host list
@@ -4297,6 +4411,10 @@
     if (portOn) {
       const on = row.dots.filter((d) => litHosts.has(d.ip)).length + hiddenLitHosts(row)
       return zoneTally(on, row.total, portFilterState.label)
+    }
+    if (servingOn) {
+      const on = row.dots.filter((d) => litHosts.has(d.ip)).length + hiddenLitHosts(row)
+      return servingTally(on, row.total)
     }
     const e = mapTraceState.event
     if (!e) return null
@@ -4431,12 +4549,26 @@
     return { at: { x, y: 470 }, lines }
   })
 
-  /** Opening one filter closes the other, and both close the reach:
-   * three answers layered on one map would leave nobody able to say
-   * which of them a dim rib was dim because of. */
+  /** Opening one filter closes the others, and all three close the
+   * reach: three answers layered on one map would leave nobody able to
+   * say which of them a dim rib was dim because of. */
   async function openPortPicker() {
     mapTraceState.clear()
+    servingState.clear()
     await portFilterState.openPicker()
+  }
+
+  /** The serving lens's own on/off (#1320): no picker to open, so one
+   * click is the whole control. Same "closes the others" rule as
+   * openPortPicker. */
+  async function toggleServing() {
+    if (servingState.open) {
+      servingState.clear()
+      return
+    }
+    mapTraceState.clear()
+    portFilterState.clear()
+    await servingState.turnOn()
   }
 
   /** What the callout asks for: the pair it names, exactly. A pair the
@@ -4456,6 +4588,7 @@
 
   function openTrace(req: Parameters<typeof mapTraceState.open>[0], opts?: Parameters<typeof mapTraceState.open>[1]) {
     portFilterState.clear()
+    servingState.clear()
     if (reach) surface()
     void mapTraceState.open(req, opts)
   }
@@ -4920,6 +5053,31 @@
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
       <button class="pill p" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
+    {/if}
+    <!-- The "seen serving" lens (#1320), right of ⌕ port. No picker bar:
+         there is nothing to narrow, only to turn on, so one click is the
+         whole control and the pill has two shapes instead of the port
+         pill's three. -->
+    {#if servingState.open}
+      <!-- Collapsed the instant the lens is turned on, not once its
+           answer lands -- the same #1178 reasoning the port pill
+           follows. The tail is held back until settled so an in-flight
+           fetch is never read as "nothing answered". -->
+      <button
+        class="pill p on"
+        aria-pressed="true"
+        title="A host busy last week but closed now still shows; a quiet listener never does."
+        onclick={toggleServing}
+        >⌕ <b>serving</b>{#if servingOn}&nbsp;<em>· {servingTailText}</em>{/if}</button
+      >
+      <button class="pill-x" aria-label="Clear the serving lens" onclick={() => servingState.clear()}>✕</button>
+    {:else}
+      <button
+        class="pill p"
+        aria-pressed="false"
+        title="Hosts seen answering in the window, and on what. Not a port scan: a quiet listener is invisible here."
+        onclick={toggleServing}>⌕ serving</button
+      >
     {/if}
     <!-- `⟡ off-baseline today · N`, ahead of the ⚑ count, in the accept
          ink (round-49/index.html's `chrome`, the `.nmk` mark, and
@@ -5683,7 +5841,7 @@
                        to still be there for it to be one. -->
                   <g
                     class="hot"
-                    class:dot-off={filterOn && !litHosts.has(d.ip)}
+                    class:dot-off={hostsFilterOn && !litHosts.has(d.ip)}
                     role="button"
                     tabindex="0"
                     aria-label="{hostDotLabel(d)} — open its reach"
@@ -5750,6 +5908,12 @@
                     {#if w.watchCount > 0}
                       <circle class="h-watch" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
                     {/if}
+                    <!-- Seen serving (#1320): a hollow ring in the same
+                         dim ink h-watch uses, never the alarm colour --
+                         a fact, not a warning, so it does not pulse. -->
+                    {#if servingOn && servingState.hosts.has(d.ip)}
+                      <circle class="h-serve" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 2.5} />
+                    {/if}
                     {#if hostCard?.key === d.key}
                       <circle class="h-open" cx={hostDotX(di)} cy={HOST_DOT_Y} r={hostDotR + 4} />
                     {/if}
@@ -5765,11 +5929,11 @@
                    `2 of 12 hosts on 445/tcp`, or the traced end's own
                    tally -- and goes back to the presence count when the
                    filter clears. -->
-              {@const tally = filterOn ? filterTally(row) : null}
+              {@const tally = hostsFilterOn ? filterTally(row) : null}
               <text x={-cardHalf + cardPad} y="82" class="n-sub hosttally" class:filter-tally={!!tally}
                 >{tally ?? hostTally(row)}</text
               >
-            {:else if !filterOn}
+            {:else if !hostsFilterOn}
               <!-- #1165: a zone the router named but whose addresses
                    resolved to nothing left this band blank, which reads
                    as a card that failed to draw. It says the fact
@@ -6409,6 +6573,46 @@
             <text y="4" text-anchor="middle" class="n-cidr small">{reach.ip}</text>
           {/if}
         </g>
+        <!-- The serving lens's own drill-down (#1320): one line of chips
+             under the host name, only while the lens is on and this
+             host answered something. Chips are not buttons -- they are
+             the evidence, already on the map -- except `+N more`, which
+             opens the same HostDossier every other `+N more` on this
+             screen does. -->
+        {#if reachChips.length > 0}
+          <g transform="translate({MX} {MY})" class="serve-chips">
+            <text y={SERVE_CHIP_Y - 10} text-anchor="middle" class="n-sub">seen serving in the window:</text>
+            {#each reachChips as c (c.label)}
+              {#if c.more}
+                <g
+                  role="button"
+                  tabindex="0"
+                  class="serve-chip serve-more"
+                  aria-label="{c.label} — open the dossier for every port it answered"
+                  onclick={(e) => {
+                    e.stopPropagation()
+                    dossierState.open(reach!.ip, e.currentTarget as unknown as HTMLElement)
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      dossierState.open(reach!.ip, e.currentTarget as unknown as HTMLElement)
+                    }
+                  }}
+                >
+                  <rect class="serve-chip-bg" x={c.x - c.w / 2} y={SERVE_CHIP_Y} width={c.w} height={SERVE_CHIP_H} rx="8" />
+                  <text class="chip-t" x={c.x} y={SERVE_CHIP_Y + SERVE_CHIP_H / 2 + 3} text-anchor="middle">{c.label}</text>
+                </g>
+              {:else}
+                <g class="serve-chip">
+                  <rect class="serve-chip-bg" x={c.x - c.w / 2} y={SERVE_CHIP_Y} width={c.w} height={SERVE_CHIP_H} rx="8" />
+                  <text class="chip-t" x={c.x} y={SERVE_CHIP_Y + SERVE_CHIP_H / 2 + 3} text-anchor="middle">{c.label}</text>
+                </g>
+              {/if}
+            {/each}
+          </g>
+        {/if}
         {#each siblings as sib, i (sib.ip)}
           <g
             transform="translate({i === 0 ? 478 : 646} {i === 0 ? 408 : 412})"
@@ -7524,6 +7728,16 @@
   /* Watched: this screen's own watcher ink, the same one the aggregate
      bar and the dials use. */
   .h-watch {
+    fill: none;
+    stroke: var(--marked);
+    stroke-width: 1.1;
+    stroke-opacity: 0.9;
+  }
+
+  /* Seen serving (#1320): a hollow ring, the same muted token h-watch
+     uses -- a fact about traffic, never the alarm ink -- and no
+     animation, because nothing here is a warning. */
+  .h-serve {
     fill: none;
     stroke: var(--marked);
     stroke-width: 1.1;
@@ -9906,5 +10120,25 @@
   .uc-trace:hover .uc-trace-t,
   .uc-trace:focus-visible .uc-trace-t {
     text-decoration: underline;
+  }
+
+  /* The serving lens's own drill-down chips (#1320): a faint background
+     so a chip on the bare map reads as a shape, not floating text -- the
+     port picker's own chips sit inside a bar and need none. */
+  .serve-chip-bg {
+    fill: color-mix(in srgb, var(--fg) 10%, transparent);
+  }
+
+  .serve-more {
+    cursor: pointer;
+  }
+
+  .serve-more .chip-t {
+    fill: var(--accent);
+  }
+
+  .serve-more:hover .serve-chip-bg,
+  .serve-more:focus-visible .serve-chip-bg {
+    fill: color-mix(in srgb, var(--accent) 20%, transparent);
   }
 </style>

@@ -2599,6 +2599,44 @@ export async function fetchPorts(ports: number[], proto: string): Promise<PortsR
   return res.json()
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// The "seen serving" lens (#1320): a sibling to the port filter above,
+// over the same living topology.
+// ─────────────────────────────────────────────────────────────────────
+
+// ServedPort is one port a host was seen answering on, in the window.
+export interface ServedPort {
+  port: number
+  proto: string
+  events: number
+}
+
+// ServingHost is one address seen serving in the window: what it
+// answered on, busiest first, capped server-side with `more` carrying
+// the rest -- the same shortlist-not-inventory shape PortCandidate's
+// list takes.
+export interface ServingHost {
+  ip: string
+  name?: string
+  ports: ServedPort[]
+  more: number
+}
+
+export interface ServingResponse {
+  generatedAt: number
+  windowSeconds: number
+  hosts: ServingHost[]
+}
+
+// fetchServing asks which hosts the window saw actually answer, and on
+// what. No selection to pass -- unlike the port filter, this lens has
+// nothing to narrow, only to turn on.
+export async function fetchServing(): Promise<ServingResponse> {
+  const res = await fetch('/api/ports/serving')
+  if (!res.ok) throw new ApiError(`fetchServing: ${res.status}`, res.status)
+  return res.json()
+}
+
 // TraceRequest names the one line to trace. Either form resolves to one
 // event server-side: `event` where the caller holds an id (a stream
 // row), and the pair/port where it does not (the map's own unplanned

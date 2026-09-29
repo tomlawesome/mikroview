@@ -458,6 +458,8 @@ var authzMatrix = []routeExpectation{
 		"the port filter's answer (#1018 round 53): which boundaries and hosts carried a port in the window, and which pushed filter rules name it. Same viewer-tier read as GET /api/baseline/off directly above and for the same reason -- a non-admin looking at the map is exactly who asks where a port is used. Deliberately not on readOnlyRoutes for the same reason too: it is the operator's private address space with a port attached, which no bearer token has ever been able to read"},
 	{http.MethodGet, "/api/trace", accessViewer,
 		"one logged line's single hop through the router (#1018 round 53): the interfaces it came in and left on, the rule that decided, the NAT if any. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports above -- it names both ends of one connection on the operator's own network"},
+	{http.MethodGet, "/api/ports/serving", accessViewer,
+		"the 'seen serving' lens's answer (#1320): every host the window saw actually answer, and what. Same viewer tier and the same off-readOnlyRoutes reasoning as GET /api/ports directly above, for the same reason -- it is the operator's own address space with the ports each host answered on, which no bearer token has ever been able to read"},
 	{http.MethodPut, "/api/baseline/{key}/expected", accessUser,
 		"saying a line is expected is an on-record statement that traffic belongs, and it is the only way a line leaves the bright state early -- the same weight as marking a quiet host intended, so the same user tier and the same audit line. It also exempts the line from eviction, which is a second reason it is not a viewer's to make"},
 	{http.MethodDelete, "/api/baseline/{key}/expected", accessUser,

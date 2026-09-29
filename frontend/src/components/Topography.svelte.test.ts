@@ -27,6 +27,7 @@ import { altitudeStopState } from '../lib/altitudeStop.svelte'
 import { hostsState } from '../lib/hosts.svelte'
 import { baselineState } from '../lib/baseline.svelte'
 import { portFilterState } from '../lib/portFilter.svelte'
+import { servingState } from '../lib/serving.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { Host } from '../lib/api'
@@ -216,6 +217,8 @@ beforeEach(() => {
   portFilterState.clear()
   portFilterState.proto = 'tcp'
   mapTraceState.clear()
+  // #1320's serving lens is a module-level singleton for the same reason.
+  servingState.clear()
   vi.mocked(fetchTrace).mockReset()
   wizardState.open = false
   // Every test starts on a fresh slider: altitudeStopState is a
@@ -684,11 +687,13 @@ describe('crossing the altitude centre (#869)', () => {
   it('draws the port pill on both sides of the centre, and carries the selection across', () => {
     const { container } = render(Topography)
     flushSync()
-    expect(container.querySelectorAll('.pills .pill').length).toBe(1) // ◆ city, the default
+    // Two idle pills now (#1320 adds ⌕ serving beside ⌕ port), both drawn
+    // at every altitude -- ◆ city is the default.
+    expect(container.querySelectorAll('.pills .pill').length).toBe(2)
     expect(container.querySelector('.pills .pill')?.textContent?.trim()).toBe('⌕ port')
 
     crossTo(container, '2') // to zones: the 2D side
-    expect(container.querySelectorAll('.pills .pill').length).toBe(1)
+    expect(container.querySelectorAll('.pills .pill').length).toBe(2)
 
     portFilterState.ports = [445]
     portFilterState.proto = 'tcp'
@@ -1154,7 +1159,7 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
 })
 
 describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018 put a filter there)', () => {
-  it('renders no lens tabs and no overlay pills -- only the port filter', () => {
+  it('renders no lens tabs and no overlay pills -- only the two filters', () => {
     const { container } = render(Topography)
     flushSync()
     showTheMap(container)
@@ -1165,13 +1170,14 @@ describe('the lens row (round 49 reduced it to two pills; #981 took those; #1018
 
     // Owner, 2026-09-08 (#981): there is no toggle -- "something that's
     // always there is easy to ignore; if it's not always there you know
-    // it's there for a reason." The one pill in this row is #1018's port
-    // filter, which is not a lens: it does not switch a layer on and off,
-    // it redraws the map to an answer, and it goes away with the ✕.
+    // it's there for a reason." The two pills in this row are #1018's
+    // port filter and #1320's serving lens, neither of which is a lens
+    // in the old sense: each redraws the map to an answer rather than
+    // switching a layer on and off, and each goes away with its own ✕.
     const pills = [...container.querySelectorAll('.pills .pill')]
-    expect(pills.length).toBe(1)
-    expect(pills[0].textContent?.trim()).toBe('⌕ port')
-    expect(pills[0].getAttribute('aria-pressed')).toBe('false')
+    expect(pills.length).toBe(2)
+    expect(pills.map((p) => p.textContent?.trim())).toEqual(['⌕ port', '⌕ serving'])
+    expect(pills.every((p) => p.getAttribute('aria-pressed') === 'false')).toBe(true)
   })
 
   it('shows the collapsed answer, with no picker bar, the moment a port is selected (#1178)', () => {
@@ -2641,13 +2647,13 @@ describe('#715 item 4: the worst unplanned flow gets round 30\'s own card', () =
 describe('#715 item 3, as #981 left it: the marks are the data, not an overlay', () => {
   const oneLane: RouterIPAddress[] = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
 
-  it('leaves nothing in the overlay row but the off-baseline tally and the port pill', () => {
+  it('leaves nothing in the overlay row but the off-baseline tally and the two filter pills', () => {
     const { container } = render(Topography)
     flushSync()
     showTheMap(container)
 
     const buttons = [...container.querySelectorAll('[aria-label="Map overlays"] button')]
-    expect(buttons.map((b) => b.textContent?.trim())).toEqual(['⌕ port'])
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(['⌕ port', '⌕ serving'])
     expect(container.querySelector('[role="tablist"]')).toBeNull()
   })
 
@@ -3736,10 +3742,10 @@ describe('living hosts on the 2D map (#1016)', () => {
       flushSync()
       showTheMap(container)
 
-      // The one pill in the row is #1018's port filter, and it switches
-      // neither of these marks: take the flag and the watcher away and
-      // both go, whatever the filter is doing.
-      expect([...container.querySelectorAll('.pills .pill')].map((p) => p.textContent?.trim())).toEqual(['⌕ port'])
+      // The two pills in the row are #1018's port filter and #1320's
+      // serving lens, and neither switches these marks: take the flag
+      // and the watcher away and both go, whatever either filter is doing.
+      expect([...container.querySelectorAll('.pills .pill')].map((p) => p.textContent?.trim())).toEqual(['⌕ port', '⌕ serving'])
       expect(container.querySelector('.zone .hostrow .h-halo')).not.toBeNull()
       expect(container.querySelector('.zone .hostrow .h-watch')).not.toBeNull()
     })
@@ -5432,6 +5438,157 @@ describe('the port filter (#1018, round 53)', () => {
     flushSync()
     expect(portFilterState.active).toBe(false)
     expect(container.querySelector('.lit-half')).toBeNull()
+  })
+})
+
+describe('the "seen serving" lens (#1320)', () => {
+  const lanes: RouterIPAddress[] = [
+    { address: '10.0.10.1/24', network: '10.0.10.0', interface: 'bridge1', comment: 'LAN' },
+    { address: '10.0.20.1/24', network: '10.0.20.0', interface: 'ether3', comment: 'Servers' },
+  ]
+
+  // Two LAN hosts reaching a server, so the map draws two dots to
+  // dim/light between -- the same shape the port filter's own fixture
+  // takes, and for the same reason: z.hosts only ever comes from an
+  // event's own srcIp (zones.svelte.ts), so the destination draws none.
+  function seedMap() {
+    zonesState.pushed = lanes
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.21', srcHostName: 'tom-desktop', dstIp: '10.0.20.5', dstPort: 445, protocol: 'tcp' }),
+      event({ inInterface: 'bridge1', outInterface: 'ether3', srcIp: '10.0.10.34', srcHostName: 'laptop-anna', dstIp: '10.0.20.5', dstPort: 22, protocol: 'tcp' }),
+    ]
+  }
+
+  /** Drives the store the way a landed fetch would, matching the port
+   * filter's own filterTo helper above. */
+  function serveHosts(hosts: (typeof servingState)['answer']['hosts']) {
+    servingState.open = true
+    servingState.answer = { generatedAt: 1, windowSeconds: 3600, hosts }
+    servingState.settled = true
+  }
+
+  it('lights only the hosts seen answering, dimming the rest without removing them', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'tom-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const dimmed = [...container.querySelectorAll('.zone .hostrow .dot-off')]
+    expect(dimmed.length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.zone .hostrow .h-dot').length).toBeGreaterThan(dimmed.length)
+  })
+
+  // The answer is host-level, not per-crossing: there is no honest way
+  // to say which rib a served host was reached over, so lighting one
+  // from zone membership alone would claim traffic on a boundary the
+  // lens cannot actually back -- exactly the "open port" style
+  // overclaim #1320 exists to refuse. Ribs and roads stay exactly as
+  // they are with no lens on at all; only a host's own dot and the
+  // lane's own tally line move.
+  it('leaves ribs and lanes at their ordinary look -- only hosts and the lane tally change', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'tom-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    // The ribs between LAN and Servers are drawn (the fixture's own two
+    // accepted events), and none of them takes the filtered/muted
+    // treatment the port filter and trace apply to an off-answer rib.
+    expect(container.querySelectorAll('.redge, .cedge').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.redge.port-off, .cedge.port-off').length).toBe(0)
+    // No fabricated highlight layer either -- the serving lens lights no
+    // rib at all, unlike the port filter's own answer.
+    expect(container.querySelectorAll('.lit-half').length).toBe(0)
+    // The lane holding the lit host is not faded whole -- only its own
+    // off-answer dot recedes.
+    expect(container.querySelectorAll('.zone.lane-off').length).toBe(0)
+  })
+
+  it('reads the collapsed pill as "N of M hosts answer in the window"', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'tom-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    expect(container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '⌕ serving · 1 of 2 hosts answer in the window',
+    )
+  })
+
+  it('reads the idle pill and the empty answer in their own words', () => {
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    const servingIdle = [...container.querySelectorAll('.pills .pill')].find((b) => b.textContent?.trim() === '⌕ serving')
+    expect(servingIdle).toBeTruthy()
+
+    seedMap()
+    serveHosts([])
+    flushSync()
+    expect(container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      '⌕ serving · nothing answered in the window',
+    )
+  })
+
+  it('turning the lens on clears the port filter, and opening the port picker clears the lens', () => {
+    // A URL-aware stub: mounting the map fires its own baseline refresh
+    // regardless of this test's clicks, and the two clicks under test
+    // reach fetchServing and fetchPorts -- each needs an answer shaped
+    // like its own, or a later read of the wrong one crashes.
+    const fetchMock = vi.fn(async (url: unknown) => {
+      if (typeof url === 'string' && url.startsWith('/api/baseline/off')) {
+        return { ok: true, json: async () => EMPTY_OFF_BASELINE }
+      }
+      return {
+        ok: true,
+        json: async () => ({ generatedAt: 1, windowSeconds: 3600, hosts: [], candidates: [], ribs: [], doors: [] }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    seedMap()
+    portFilterState.ports = [445]
+    portFilterState.proto = 'tcp'
+    portFilterState.answeredKey = portFilterState.key
+    expect(portFilterState.active).toBe(true)
+
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    // Clicking the idle "⌕ serving" pill turns the lens on -- and clears
+    // the port filter, exactly as opening the port picker clears the
+    // lens: one lens at a time, because two would dim a host for two
+    // different reasons at once.
+    const servingIdle = [...container.querySelectorAll('.pills .pill')].find((b) => b.textContent?.trim() === '⌕ serving')
+    expect(servingIdle).toBeTruthy()
+    ;(servingIdle as HTMLButtonElement).click()
+    flushSync()
+    expect(portFilterState.active).toBe(false)
+    expect(servingState.open).toBe(true)
+
+    const portIdle = [...container.querySelectorAll('.pills .pill')].find((b) => b.textContent?.trim() === '⌕ port')
+    expect(portIdle).toBeTruthy()
+    ;(portIdle as HTMLButtonElement).click()
+    flushSync()
+    expect(servingState.open).toBe(false)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('clears on Esc', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'tom-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+    expect(container.querySelector('.pill.p.on')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    flushSync()
+    expect(servingState.open).toBe(false)
   })
 })
 
