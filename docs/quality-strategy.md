@@ -55,18 +55,39 @@ not stop at the first red job.
 
 | Job(s)                                              | Stands on a match of |
 |------------------------------------------------------|-----------------------|
-| `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml` |
-| `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` and `live-check.Dockerfile` |
+| `gate:scenarios 1/4` … `4/4`                         | the Go tree, `frontend/`, `scripts/`, `.gitlab-ci.yml`, `Makefile`, `live-check.Dockerfile`, `deploy/`, `internal/`, `THIRD-PARTY-NOTICES.md` (#1391) -- own shard's scripts content-hashed, other listed scenarios by name only (#1350) |
+| `gate:scenarios:firefox 1/4` … `4/4`, `gate:scenarios:webkit 1/4` … `4/4` | the same as `gate:scenarios`, kept as a separate entry per engine (#1350) |
+| `gate:image`, `test:container`, `test:postgres`      | the above, plus `Dockerfile` |
 | `test:install-line`                                  | the above, plus `install.sh` (#1242 -- root-level, so none of the other lists' globs see it) |
 | `test:go`, `test:frontend`                           | not covered -- already cheap enough (#1066) |
 
-The four `gate:scenarios` shards share one input set even though each only
-runs a slice of the scenario list (`scripts/run-scenarios.sh`'s `plan()`):
-every shard builds and runs the same live-check image over the same
-binary, so a change anywhere in that set can move any shard's result.
-Splitting the shards' own inputs to match `plan()`'s contiguous slices is
-future work, not required by #1066 -- today a scenario-only change still
-reruns all four shards, just not the rest of the pipeline.
+Each `gate:scenarios` shard's hash is name-aware (#1350): shared inputs
+(`SCENARIOS_PATHS`, minus every scenario script) content-hashed, that
+shard's own scripts (`MV_SHARD=i/N scripts/run-scenarios.sh --list`)
+content-hashed, and every other listed scenario hashed by *name only*.
+Safe because `plan()` is a pure function of the sorted name list: if no
+name changed, no script moved shard either, so editing one shard's script
+reruns only that shard, on every engine; adding, removing or renaming a
+scenario changes the name set and reruns all four. `scripts/run-scenarios.sh
+--list` (with or without `MV_SHARD`) is shelled out to rather than
+reimplemented, so this file never drifts from `plan()`. The lister is
+injected (`jobInputHash`'s third argument); a lister failure, or a listed
+path absent from the tree, throws -- the job then runs for real and
+writes no evidence.
+
+`gate:scenarios:firefox` and `gate:scenarios:webkit` (#1306) run the
+identical shard script under a different `MV_BROWSER`, on `dev` ->
+`preview` merge requests only. Each engine's four shards get their own
+`JOB_INPUTS` entry and the same shard-aware hash. Reuse across pipelines
+is matched by `scripts/ci-reuse-gate.js`'s exact job-name lookup
+(`CI_JOB_NAME`, e.g. `gate:scenarios:firefox 2/4`), so a Firefox pass can
+never stand in for a Chromium or WebKit shard, or vice versa -- the engine
+is part of the job name, not a separate field this file has to track.
+
+On a hash mismatch, if the evidence being compared against names a
+`commit` (added by #1350), the gate prints `git diff --name-only <that
+commit> HEAD` filtered to the job's own inputs, so the job log says what
+changed rather than just that something did.
 
 `gate:image`, `test:container` and `test:postgres` share one combined,
 deliberately over-broad list rather than three narrow ones: the first

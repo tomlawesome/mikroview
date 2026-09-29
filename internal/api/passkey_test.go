@@ -319,11 +319,10 @@ func TestPasskeyRegisterFinishWrongOriginRefused(t *testing.T) {
 	// Pairing: the identical shape of request, at the right origin,
 	// succeeds -- proving the refusal above is really about the origin
 	// and not some other malformation.
-	goodFake, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "right origin")
+	_, out := registerPasskey(t, bilbo, ts, s.RelyingParty, "right origin")
 	if out.Passkey.Name != "right origin" {
 		t.Errorf("the paired successful registration = %+v", out)
 	}
-	_ = goodFake
 }
 
 // TestPasskeyLoginFactorWrongRPIDRefused mirrors the wrong-origin test
@@ -934,6 +933,35 @@ func TestPasskeyRecoveryCodeMintOnce(t *testing.T) {
 	})
 }
 
+// TestPasskeyRegisterWhoseRecoveryCodesFailStillRotatesAndAudits
+// (#1394): a first-factor registration whose recovery-code mint fails
+// after AddPasskey committed still answers 500, but the passkey is
+// live, so sessions are rotated and account.passkey_added is recorded
+// exactly as on success -- no retry can do it later, since begin now
+// lists this passkey in excludeCredentials. mintFailServer and
+// checkFirstFactorRotatedDespiteMintFailure are in totp_test.go.
+func TestPasskeyRegisterWhoseRecoveryCodesFailStillRotatesAndAudits(t *testing.T) {
+	s, ts, browser, otherDevice, budget := mintFailServer(t)
+	fake := NewFakeAuthenticator(s.RelyingParty.RPID, s.RelyingParty.Origin)
+	creation := passkeyRegisterBegin(t, browser, ts)
+
+	budget.left = 1 // AddPasskey's own save, then nothing
+	resp := passkeyRegisterFinishRaw(t, browser, ts, fake, creation, "YubiKey")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	budget.left = 1000
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("register/finish with a failing mint returned %d, want 500: %s", resp.StatusCode, body)
+	}
+	if want := "the passkey is now active, but recovery codes could not be saved -- get a set from the account menu (New recovery codes…)"; !strings.Contains(string(body), want) {
+		t.Errorf("body = %q, want it to contain %q", body, want)
+	}
+	if u, ok := s.Auth.Get(passkeyBilboID(t, s)); !ok || len(u.Passkeys) != 1 {
+		t.Fatal("the passkey was not added -- the save budget failed AddPasskey itself, so this test proves nothing")
+	}
+	checkFirstFactorRotatedDespiteMintFailure(t, s, ts, resp, browser, otherDevice, "account.passkey_added")
+}
+
 // TestPasskeyClearConditionalKeepsRecoveryCodes covers both directions
 // of #1250's shared-recovery-codes clearing rule: removing one factor
 // while the other remains active must not strip the codes backing it.
@@ -1110,4 +1138,59 @@ func listedPasskeyCount(t *testing.T, admin *http.Client, ts *httptest.Server, u
 	}
 	t.Fatalf("no row for %q in the user list", username)
 	return -1
+}
+
+// TestPasskeyLoginFactorBeginIsRateLimited is #1345 SEC-A1-F1: starting
+// a passkey prompt spends the pending-login cookie like every other
+// second-step request, so it takes the same LoginLimiter reservations on
+// the same keys and is refused once they run out, instead of minting
+// challenges without limit for anyone holding the password.
+func TestPasskeyLoginFactorBeginIsRateLimited(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+
+	const threshold = 3
+	s.LoginLimiter = auth.NewLoginLimiter(threshold, time.Minute)
+	for i := 0; i < threshold; i++ {
+		passkeyLoginFactorBegin(t, pending, ts)
+	}
+	resp := postJSON(t, pending, ts.URL+"/api/auth/login/factor/begin", struct{}{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("begin number %d got %d, want 429 once the sign-in limiter is spent", threshold+1, resp.StatusCode)
+	}
+	if s.LoginLimiter.Allow("user:"+passkeyBilboUsername, time.Now()) {
+		t.Error("the begins were not counted against the account's sign-in key, the one the other steps share")
+	}
+}
+
+// TestPasskeyLoginGivesTheBeginReservationBack pins the other half: a
+// passkey prompt that ends in a sign-in must leave nothing counted, or
+// every successful passkey sign-in would eat into the budget a real
+// guess is limited by.
+func TestPasskeyLoginGivesTheBeginReservationBack(t *testing.T) {
+	s, ts, _ := passkeyTestServer(t)
+	bilbo := loggedInClient(t, ts.URL, passkeyBilboUsername, passkeyBilboPassword)
+	fake, _ := registerPasskey(t, bilbo, ts, s.RelyingParty, "YubiKey")
+	pending := startPasskeyLogin(t, ts, passkeyBilboUsername, passkeyBilboPassword)
+
+	const threshold = 2
+	s.LoginLimiter = auth.NewLoginLimiter(threshold, time.Minute)
+	resp := submitPasskeyAssertion(t, pending, ts, fake, passkeyLoginFactorBegin(t, pending, ts))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login/factor with a passkey assertion returned %d", resp.StatusCode)
+	}
+
+	now := time.Now()
+	for _, key := range []string{"user:" + passkeyBilboUsername, "ip:127.0.0.1"} {
+		for i := 0; i < threshold; i++ {
+			if !s.LoginLimiter.Reserve(key, now) {
+				t.Errorf("%s: only %d of %d attempts left after a successful passkey sign-in, want all of them", key, i, threshold)
+				break
+			}
+		}
+	}
 }

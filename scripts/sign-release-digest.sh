@@ -18,6 +18,17 @@
 # .gitlab-ci.yml (also triggered by a v* tag, also waiting on the same
 # GHCR image) rather than re-invented.
 #
+# Q6-F3: the two copies deliberately disagree on what exhausting the wait
+# means. There, a slow GHCR publish exits 75 and is tolerated
+# (allow_failure: exit_codes: 75) -- a tag already cut must not go red over
+# fixture recording being best-effort. Here, exhausting the wait calls
+# `fail` (plain exit 1, no allow_failure): a release signature is not
+# best-effort. That is the right call for each job today, but because the
+# loop is copied rather than shared, nothing forces a future change to the
+# timing budget or the publish check (e.g. record:upgrade-fixture switching
+# off `docker manifest inspect`) to move both copies together. If you
+# change this loop's shape, check .gitlab-ci.yml's copy too.
+#
 # Usage:
 #   scripts/sign-release-digest.sh <tag>
 #

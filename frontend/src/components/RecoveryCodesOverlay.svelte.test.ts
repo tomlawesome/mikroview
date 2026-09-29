@@ -156,3 +156,34 @@ describe('closing is blocked while a request is in flight', () => {
     expect(screen.getByRole('button', { name: /^close$/i })).toHaveProperty('disabled', true)
   })
 })
+
+// X4-F1: the fresh ten exist in clear nowhere else, so a reload before
+// the explicit acknowledgement loses them for good -- same guard as
+// LogEveryRule's own beforeunload (its own test file's own pattern,
+// reused here).
+describe('X4-F1: beforeunload guard on the codes step', () => {
+  function dispatchBeforeUnload(): Event {
+    const evt = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(evt)
+    return evt
+  }
+
+  it('is not set before the codes step is ever reached', () => {
+    render(RecoveryCodesOverlay, { open: true })
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+
+  it('guards the codes step, and lifts once "I have saved these" is clicked', async () => {
+    vi.mocked(regenerateRecoveryCodes).mockResolvedValue(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'])
+    render(RecoveryCodesOverlay, { open: true })
+    await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: /regenerate codes/i }))
+    await screen.findByTestId('recovery-codes')
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true)
+
+    await fireEvent.click(screen.getByRole('button', { name: /i have saved these/i }))
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false)
+  })
+})

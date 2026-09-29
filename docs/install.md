@@ -40,7 +40,7 @@ stays memory-only until you mount `keys/history.key` in `mikroview-etc`
 yourself, the same way Compose installs do below.
 
 The `mikroview-etc` volume is the app folder #1243 introduced: an empty
-folder is fine, and dropping a config file, GeoIP database or
+folder is fine, and dropping a config file or
 certificate pair into it is picked up at the next restart with no other
 change. It is mounted read-only, as the Compose examples below have
 always mounted it -- MikroView only ever reads it, and nothing that
@@ -99,12 +99,12 @@ services:
       retries: 3
     volumes:
       # One app folder on the host, two mounts: read-only for what you
-      # own (config, keys, certs, GeoIP), read-write for what MikroView
+      # own (config, keys, certs), read-write for what MikroView
       # owns. Layout and the ruling behind it: docs/decisions/app-folder.md.
       - ./mikroview:/etc/mikroview:ro
       - ./mikroview/data:/var/lib/mikroview
       # Mounting each file separately instead -- config.yaml,
-      # GeoLite2-Country.mmdb, a bind-mounted data/ of its own, or a
+      # a bind-mounted data/ of its own, or a
       # named volume for data -- is the old way and still works: a path
       # set in config.yaml or the environment always wins over the
       # folder default. See docs/configuration.md.
@@ -114,9 +114,6 @@ services:
       # deployment). Naming it here explicitly would make that file
       # mandatory instead of optional -- see docs/configuration.md.
       # - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
-      # Naming MIKROVIEW_GEOIP_DB_PATH explicitly instead of dropping the
-      # file into mikroview/ is the old way and still works -- see
-      # docs/configuration.md.
       # Only needed to move a store somewhere other than the default
       # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
@@ -151,7 +148,6 @@ Create the `mikroview` folder next to the compose file first, with your config i
 ```
 mikroview/
   config.yaml                   optional -- defaults run without it
-  GeoLite2-Country.mmdb         optional -- country flags appear when present
   keys/history.key              optional -- history encryption on when present
   certs/tls.crt, certs/tls.key  optional -- your own certificate instead of the self-signed one
   data/                         MikroView's store; created for you
@@ -262,9 +258,7 @@ and still works exactly as before; see docs/decisions/app-folder.md.
 
 The same fix applies to any other host path you bind-mount over a
 `/var/lib/mikroview/*` sub-path (e.g. `flags.storePath`, `auth.storePath`,
-`tls.storePath` — see [docs/configuration.md](configuration.md)), or
-over `/etc/mikroview/GeoLite2-Country.mmdb` if you ever mount that
-read-write. Read-only mounts like `config.yaml` don't need either fix —
+`tls.storePath` — see [docs/configuration.md](configuration.md)). Read-only mounts like `config.yaml` don't need either fix —
 world-readable (`chmod 644`, as in the Quickstart above) is enough, since
 the container only needs to read it, not own it.
 

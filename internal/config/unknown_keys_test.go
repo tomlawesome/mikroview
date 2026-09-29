@@ -84,6 +84,12 @@ func TestKnownRemovedKeyGetsItsSpecificMessage(t *testing.T) {
 			wantInMsg: []string{"flags.detectorSettingsStorePath", "v0.5.0", "#873"},
 		},
 		{
+			name:      "geoip.dbPath",
+			src:       "geoip:\n  dbPath: /etc/mikroview/GeoLite2-Country.mmdb\n",
+			wantKey:   "geoip.dbPath",
+			wantInMsg: []string{"geoip.dbPath", "#1352", "Country and network owner", "Engine Room"},
+		},
+		{
 			name:      "configDrift.storePath",
 			src:       "configDrift:\n  storePath: /var/lib/mikroview/config-drift.json\n",
 			wantKey:   "configDrift",

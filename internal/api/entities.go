@@ -70,6 +70,7 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 		// Anything else reaching here is a failed write (Store.Upsert's
 		// tryPersistLocked branch), whose text can carry the backend's
 		// own path or detail and has no business leaving this process.
+		apiLog.Error("saving an entity failed: " + err.Error())
 		http.Error(w, "could not save that entity", http.StatusInternalServerError)
 		return
 	}
@@ -101,6 +102,7 @@ func (s *Server) handleEntitiesDelete(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := s.Entities.Delete(req.Type, req.Key)
 	if err != nil {
+		apiLog.Error("deleting an entity failed: " + err.Error())
 		http.Error(w, "could not delete that entity", http.StatusInternalServerError)
 		return
 	}

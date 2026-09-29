@@ -94,6 +94,12 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		// missing this would silently reset every user back to the
 		// defaults their own module ships with.
 		{"prefs", cfg.Prefs.StorePath},
+		// The config editor's snapshots (#1347): whole config files an
+		// admin kept, and the copy taken before each Carry forward --
+		// the one a rollback needs. At a fixed place in the data
+		// directory rather than a configured path; see
+		// configSnapshotsPath.
+		{"config_snapshots", configSnapshotsPath(cfg)},
 	}
 }
 
@@ -180,9 +186,11 @@ var excludedFromBackup = map[string]string{
 		"host is more likely to be wrong than right (different hostname/IP SANs, a CA nothing has " +
 		"trusted yet), and regenerating it is one restart away, so there is nothing here a restore " +
 		"is actually saving.",
-	"GeoIP.DBPath": "an external MaxMind database file the operator downloads themselves (#372), not " +
-		"a store MikroView writes -- there is nothing here for a restore to reproduce that a fresh " +
-		"download would not already give back.",
+	"GeoIP.CachePath": "a cache of the country databases MikroView downloads from DB-IP, IPinfo and " +
+		"MaxMind (#1352), not MikroView's own state -- the next refresh fetches them again. They are " +
+		"also somebody else's data under their own licence terms (CC BY 4.0, CC BY-SA 4.0, the GeoLite " +
+		"EULA), and a backup is a copy that travels. The API keys that fetch them are not excluded: " +
+		"they ride in the settings store, still sealed under the retention key the way router backups are.",
 	"OUI.CachePath": "a cache of IEEE's public MA-L registry (#410), not MikroView's own state -- the " +
 		"next refresh re-fetches it in seconds, so a restore saves nothing. It is also somebody " +
 		"else's data, published with no permission to redistribute it (see internal/oui.SourceURL), " +

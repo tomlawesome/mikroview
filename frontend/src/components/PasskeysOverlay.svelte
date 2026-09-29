@@ -5,17 +5,17 @@
   // second-factor.md's own instruction): same modal chrome, same
   // password-gated removal beat, same shared recovery codes.
   //
-  // Five states: list (every registered passkey, with rename/remove),
+  // Six states: list (every registered passkey, with rename/remove),
   // adding (name it, then the browser's own prompt), codes (the ten
-  // recovery codes, shown once, the same as the authenticator app's --
-  // or, when a factor already minted them, a one-line note that the
-  // existing ones still stand rather than a blank grid), removing
-  // (password confirm, the same beat as turning the authenticator app
-  // off), and unavailable -- shown instead of all of the above whenever
-  // this deployment can't offer a passkey right now, or this browser is
-  // not at the address they were made for. The row that opens this
-  // overlay is never hidden (AccountMenu.svelte); this is where it says
-  // why.
+  // recovery codes, shown once, the same as the authenticator app's),
+  // added-done (a passkey added when a factor had already minted
+  // recovery codes: a one-line note that the existing ones still stand
+  // rather than a blank grid), removing (password confirm, the same
+  // beat as turning the authenticator app off), and unavailable --
+  // shown instead of all of the above whenever this deployment can't
+  // offer a passkey right now, or this browser is not at the address
+  // they were made for. The row that opens this overlay is never
+  // hidden (AccountMenu.svelte); this is where it says why.
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'
@@ -62,13 +62,22 @@
   async function loadList() {
     listError = null
     loadingList = true
-    const result = await fetchPasskeys()
-    loadingList = false
-    if (typeof result === 'string') {
-      listError = result
-      return
+    // Q5-F2: fetchPasskeys now throws ApiError like every other list call
+    // in lib/api.ts -- a 401 here means this session is already gone
+    // (same reasoning as submitAdd/confirmRemove below), routed the same
+    // way rather than shown as plain error text; anything else is a
+    // genuine failure to read the list.
+    try {
+      passkeys = await fetchPasskeys()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        authState.handleUnauthorized()
+        return
+      }
+      listError = err instanceof Error ? err.message : String(err)
+    } finally {
+      loadingList = false
     }
-    passkeys = result
   }
 
   // Fetched fresh every time this opens, the same reasoning as
@@ -77,6 +86,21 @@
   // different session must not be shown stale here.
   $effect(() => {
     if (open && !unavailableReason) void loadList()
+  })
+
+  function onBeforeUnload(e: BeforeUnloadEvent) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+
+  // X4-F1: the ten codes exist in clear nowhere else, and a reload before
+  // "I have saved these" loses them for good -- same guard as
+  // LogEveryRule's own beforeunload, on while this screen is the one
+  // showing them, off the instant it isn't.
+  $effect(() => {
+    if (step !== 'codes') return
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
   })
 
   function resetFields() {

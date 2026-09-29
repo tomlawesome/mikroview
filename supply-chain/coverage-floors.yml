@@ -1,0 +1,185 @@
+# Go test-coverage floors, one per package. Read by scripts/coverage-floor.py
+# (#1333, ported from birdcage's script of the same name), which runs against
+# `go test ./... -race -coverprofile=...` in the `test:go` job in
+# .gitlab-ci.yml, on every merge request and on push to dev.
+#
+# STATEMENT coverage, not branch coverage -- Go's own toolchain has no branch-
+# coverage mode. A package at 100% here means every line ran at least once,
+# not that every condition was tried both ways.
+#
+# This is a RATCHET, not a fixed target:
+#   - each floor below is set at the value measured on 2026-09-27, rounded
+#     DOWN to a whole percent (from the exact fraction, not from a
+#     display value already rounded to one decimal -- go test's own "X.X%"
+#     output rounds, and two packages here (internal/config, internal/routeros)
+#     sit just under the whole number that display would suggest) -- not at
+#     70, so introducing this file does not turn the build red over coverage
+#     nobody has touched.
+#   - a floor only ever goes UP, when a package's coverage genuinely improves.
+#     Never lower one to make a change pass -- if a change would require
+#     that, the change needs more tests, not a smaller floor.
+#   - scripts/coverage-floor.py also fails a package sitting more than 5
+#     points ABOVE its floor (RATCHET_SLACK) -- that means the floor is
+#     stale, and the fix is to raise it here to lock the gain in, not to
+#     leave the headroom sitting there.
+#   - the 70-85% band itself is not chased past 85%: a package already
+#     inside it is done, and effort belongs on packages below 70%, not on
+#     pushing an 87% package toward 100%.
+#
+# Measure the way test:go's script: block does, or the numbers are wrong in
+# both directions -- root, uid and image all matter here (see
+# docs/decisions/gitlab-ci-root-in-container-test-failure.md for a worked
+# example of the same class of mismatch):
+#
+#   scripts/fetch-upgrade-fixtures.sh
+#   useradd -m -u 10001 ci-test
+#   chown -R ci-test:ci-test "$CI_PROJECT_DIR"
+#   su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test \
+#     go test ./... -race -coverprofile=coverage.out"
+#   go tool cover -func=coverage.out | tail -1
+#   python3 scripts/coverage-floor.py coverage.out
+#
+# test:go never sets MIKROVIEW_TEST_POSTGRES, so every Postgres-backed test
+# in internal/persist and internal/matchlog calls t.Skip there -- #1290 found
+# this first. Those two packages are not in the `floors:` mapping below at
+# all, and scripts/coverage-floor.py's default mode (what test:go runs)
+# skips them rather than ratcheting a number it cannot see the whole of.
+# test:postgres owns them instead: it runs both packages in full
+# (file-backend and Postgres tests together, a strict superset of what
+# test:go alone exercises for them), writes coverage-postgres.out, and
+# checks it with `coverage-floor.py --section postgres-floors` against the
+# `postgres-floors:` mapping at the bottom of this file -- the same three
+# ratchet rules as `floors:`, applied to that section alone.
+#
+# Reproduced on 2026-09-27 with the golang:1.27.1 image and the ci-test uid
+# exactly as above, via rootless Docker rather than the workstation directly
+# (agent host has no sudo, so it cannot become uid 10001 on the bare host).
+# One difference from a real CI checkout: the container was seeded from a
+# standalone `git clone` of this branch tip rather than a bind mount of the
+# worktree, because a worktree's .git is a pointer file into its parent
+# checkout's object store, which does not exist inside the container -- four
+# tests that shell out to `git ls-files` to enumerate their own source
+# (fuzz_crasher_persistence_test.go, injection_sinks_test.go,
+# style_guard_test.go) failed with "exit status 128" on a first attempt that
+# copied the worktree without .git at all, for that reason and not because of
+# anything in the code. The clone is a full, independent .git, which is what
+# a real CI checkout also is, so this reproduces test:go's actual condition
+# rather than diverging from it. First CI run on this branch is the
+# confirmation that a real GitLab checkout agrees.
+#
+# Total: 81.7% of statements across 55 packages (81.6% measured 2026-09-24 on
+# fix/v061-audit without -race, as the codex user; 81.5% on 2026-09-22, #1290)
+# -- close enough that -race and the uid drop do not materially move the
+# total, though they do move individual packages (see
+# gitlab-ci-root-in-container-test-failure.md on why root vs. non-root
+# matters to specific permission-refusal tests).
+#
+# scripts/coverage-floor.py also fails on any package present in the coverage
+# profile but missing from this file: a new package must get a floor added
+# here as a reviewed change, not slip in unmeasured. Five packages have no
+# test files at all and never appear in the profile (go test does not build
+# a test binary, so there is no coverage block to attribute) -- listed below
+# anyway rather than silently absent, per the same rule birdcage's file
+# follows.
+
+floors:
+  # --- below the 70% band: known debt ---
+  .: 39                     # 39.9% re-measured 2026-09-27 on the M22 batch
+                             # (dev at 010892bc, after #1347 added CLI code
+                             # here); 42.3% on the earlier base. The root `main`
+                             # package -- CLI subcommand dispatch
+                             # (backup_cli.go, migrate_cli.go, history.go,
+                             # snapshot.go) plus main() itself. #1290 found
+                             # several break-glass admin paths here at 0%
+                             # (runRecoverAdminAccount,
+                             # runGenerateRecoveryKeys, runTransferAdmin,
+                             # readPasswordTwice, openAuthStoreForCLI,
+                             # openRecoveryStoreForCLI) along with
+                             # readDSNFile, openStorage and
+                             # watchForCertificateReload -- these are the
+                             # flows the live-check gate exercises at the
+                             # integration level (AGENTS.md, "The gate
+                             # blocks the merge, in CI"), not unit tests.
+                             # Raising this is out of scope for #1333.
+  cmd/demo-history: 0       # No test files. Dev-data seeding tool for
+                             # demos (AGENTS.md, "Demos the owner
+                             # reviews") -- not shipped in the release
+                             # binary.
+  internal/evict: 100       # #1328 added the first direct test of its
+                             # contract; 100% measured 2026-09-27.
+  scripts/routerosappendrow: 29  # 29.2% measured 2026-09-27. A CLI dev-tool
+                             # under scripts/, not shipped in the release
+                             # binary.
+  scripts/routeroscommands: 0    # No test files. CLI dev-tool under
+                             # scripts/, not shipped.
+  scripts/routerosfreshness: 0   # No test files. CLI dev-tool under
+                             # scripts/, not shipped.
+  scripts/routerosreference: 0   # No test files. CLI dev-tool under
+                             # scripts/, not shipped.
+
+  # --- inside the 70-85% band ---
+  internal/api: 84
+  internal/backupvault: 83
+  internal/decommission: 82
+  internal/ingest: 77
+  internal/notify: 79
+  internal/oidc: 85
+  internal/retention: 78
+  internal/servertls: 83
+  internal/snapshot: 80
+  internal/tlssniff: 79
+  web: 71
+
+  # --- above the band: done, not chased toward 100 ---
+  internal/audit: 95
+  internal/auth: 88
+  internal/backup: 91
+  internal/backupsftp: 87
+  internal/backupslice: 93
+  internal/baseline: 90
+  internal/blocklist: 93
+  internal/config: 86
+  internal/configsnap: 81    # new with #1347; 81.2% measured 2026-09-27
+  internal/coverage: 95
+  internal/device: 91
+  internal/dossier: 91
+  internal/droplist: 91
+  internal/engine: 86
+  internal/entities: 95
+  internal/flags: 94
+  internal/geoip: 83         # 83.4% after #1352 added the three runtime
+                             # sources (100% on the earlier, smaller package)
+  internal/hosts: 95
+  internal/hub: 100
+  internal/logging: 86
+  internal/naming: 89
+  internal/netclass: 86
+  internal/oui: 86
+  internal/prefs: 89
+  internal/reputation: 93
+  internal/routeros: 91
+  internal/routeros/export: 96
+  internal/routerstate: 87
+  internal/rules: 96
+  internal/seen: 85         # 85.8% on the host run of 2026-09-27
+  internal/settings: 96
+  internal/setup: 88
+  internal/store: 96
+  internal/suggest: 90
+  internal/syslog: 96
+  internal/watchlist: 94
+
+# --- test:postgres's own floors (#1290) ---
+# internal/persist and internal/matchlog, checked against coverage-postgres.out
+# by `coverage-floor.py --section postgres-floors` in the test:postgres job,
+# not against the floors: mapping above -- see the header note on why.
+# Same three ratchet rules, same band, a different job's profile because
+# that job is the only one that runs their Postgres-backed statements.
+#
+# Measured 2026-09-27 against coverage-postgres.out in the first CI run of
+# #1290 (MR !1115, pipeline 1765, job 25736): persist 81.5%, matchlog 81.8%.
+# The earlier 62/58 were carried over from test:go, where the
+# Postgres-backed statements never ran.
+postgres-floors:
+  internal/persist: 81
+  internal/matchlog: 81

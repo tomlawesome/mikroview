@@ -87,18 +87,21 @@ var feedRegistry = []feedDef{
 		Parse:    parseTorList,
 	},
 	{
-		// Positioned before SourceX4BVPN deliberately: X4BNet's own build
-		// pipeline pulls Apple's list into their VPN feed verbatim (#114's
-		// research comment names their fetch-apple-privacy-relay.yml
-		// workflow), so the same prefixes exist in both. buildTable
-		// resolves an exact-prefix tie by priority order, so listing the
-		// authoritative source first is what makes a Private Relay egress
-		// address classify as CategoryPrivacyRelay rather than shadowing
-		// into CategoryVPN -- the single false positive #114's research
-		// called out as mattering most ("every iPhone/iPad/Mac with
-		// iCloud+ ... telling an operator 'this is a known VPN exit'
-		// about their family's normal Safari browsing destroys trust in
-		// the signal on day one").
+		// Positioned before SourceX4BVPN for fetch and combined-entry-
+		// budget priority only -- as of #1313 that no longer decides how
+		// an exact collision between the two classifies. That was
+		// buildTable's job (removed, #1313): iterate in priority order,
+		// first writer wins an exact-prefix tie, which is what made this
+		// registry order matter for classification and not just fetch
+		// budget. X4BNet's own build pipeline pulls Apple's list into
+		// their VPN feed verbatim (#114's research comment names their
+		// fetch-apple-privacy-relay.yml workflow), so the same prefixes
+		// exist in both, and ClassOrder below now decides that tie
+		// instead -- VPN before Private Relay, the opposite of this
+		// registry's order, so the exact collision this comment used to
+		// resolve to CategoryPrivacyRelay now resolves to CategoryVPN.
+		// Flagged to the owner rather than silently changed; ClassOrder's
+		// own comment has the ruling it follows.
 		Source:   SourceApplePrivateRelay,
 		Category: CategoryPrivacyRelay,
 		Label:    "Apple Private Relay",
@@ -142,6 +145,43 @@ var registryBySource = func() map[Source]feedDef {
 	}
 	return m
 }()
+
+// ClassOrder is the fixed order Lookup checks its per-source sets in
+// (#1313, owner ruling 2026-09-20 on #1288, question 37a: move netclass
+// off gaissmai/bart -- a single-author module -- onto go4.org/netipx).
+//
+// bart was a trie: it resolved two feeds claiming the same address by
+// longest prefix, so a VPN /24 inside an AWS /16 read as VPN because /24
+// is more specific, not because anyone chose VPN over AWS. netipx has no
+// trie, only membership sets, so that resolution has to be made
+// explicit -- this is that choice, made once here rather than left to
+// fall out of whatever prefix widths a feed happens to publish.
+//
+// Order: Tor, then VPN, then Private Relay, then datacenter, then cloud.
+// Read as narrowest-*claim*-wins, not narrowest-*prefix*-wins: Tor's
+// list is a small, first-party, high-precision claim, so it wins even
+// against a /32 cloud entry inside it -- "a Tor exit inside an AWS range
+// is Tor" is the worked example the ruling gives. Datacenter and cloud
+// are last because they are the broadest, weakest claims on the menu
+// (#114 measured datacenter alone at >10% of routable IPv4).
+//
+// One consequence worth naming: VPN is checked before Private Relay,
+// so where X4BNet's VPN feed has copied Apple's own ranges verbatim (see
+// SourceApplePrivateRelay's registry comment above), an exact overlap
+// now classifies as VPN, not Private Relay -- the reverse of what
+// buildTable's removed exact-prefix precedence gave. That reverses the
+// specific false positive #114's research called out as mattering most
+// (an iPhone's ordinary Private Relay traffic reading as "known VPN
+// exit"). This is the literal order the ruling specifies; it is recorded
+// here rather than quietly resolved either way.
+var ClassOrder = []Source{
+	SourceTor,
+	SourceX4BVPN,
+	SourceApplePrivateRelay,
+	SourceX4BDC,
+	SourceAWS,
+	SourceGCP,
+}
 
 // DefaultSources is a conservative starting point (#114 finding 2/3): the
 // high-precision lists, not the broad datacenter feeds. An operator who

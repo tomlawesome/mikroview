@@ -66,10 +66,6 @@ export function bucketAt(buckets: TimeBucket[], atMs: number): TimeBucket | unde
   })
 }
 
-export function eventsBetween(events: ClientEvent[], startMs: number, endMs: number): ClientEvent[] {
-  return events.filter((e) => e.receivedAt >= startMs && e.receivedAt < endMs)
-}
-
 // Top talker/top port ask the same "who/what led this window" question
 // MetricsTotals.svelte's ledger already asks of the whole buffer (see
 // lib/topN.ts) -- reused rather than re-implemented, just over the

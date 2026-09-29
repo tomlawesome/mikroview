@@ -1,0 +1,27 @@
+/* The door, as round 10 drew it (the real AuthScreen's: the void, the
+   amber 1.5px box round the wordmark, underlined fields, the round Enter
+   button), with the rain now the real Fullfall's. Shared by every round-11
+   direction; each journey animates it away in its own way. */
+.door { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); z-index: 5; overflow: hidden; }
+.door .stack { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 14px; width: 320px; animation: rise 0.3s ease-out; }
+.wm-box { display: inline-block; margin: 0 auto 8px; padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px; box-shadow: 0 0 14px color-mix(in srgb, var(--now) 22%, transparent), inset 0 0 10px color-mix(in srgb, var(--now) 6%, transparent); animation: kindle 0.5s ease-out; background: var(--bg); }
+.wm-box .wm { font-size: 34px; }
+.door h1 { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg); text-align: center; }
+.door .subtitle { margin: -6px 0 6px; font-size: 13px; color: var(--fg-dim); text-align: center; }
+.door .field { width: 100%; display: flex; flex-direction: column; gap: 2px; }
+.door .field input { background: transparent; border: 0; border-bottom: 1px solid var(--hair-2); color: var(--fg); padding: 8px 2px; font: 14px var(--font-mono); }
+.door .field input:focus { outline: none; border-bottom-color: var(--accent); }
+.door .field span { font: 600 9.5px var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-dim); }
+.submit-btn { align-self: center; margin-top: 12px; background: transparent; border: 1px solid var(--hair-2); color: var(--accent); font-weight: 600; letter-spacing: 0.04em; border-radius: 999px; padding: 7px 30px; }
+.submit-btn:hover { border-color: var(--accent); }
+.proto-bar { left: auto; right: 12px; bottom: 72px; z-index: 20; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+@keyframes kindle { from { box-shadow: none; border-color: transparent; } }
+/* the fields and welcome drop away first, in every direction */
+body.in .door .stack > :not(.wm-box) { transition: opacity 320ms ease, transform 420ms cubic-bezier(.35,0,.2,1); opacity: 0; transform: translateY(18px); }
+body.in .door .stack { animation: none; }
+body.wiz .door { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .door .stack, .wm-box { animation: none !important; }
+  body.in .door { transition: opacity 300ms ease; opacity: 0; }
+}

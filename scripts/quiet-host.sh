@@ -46,6 +46,10 @@ cmd_hold() {
   # minute, and the host caps every hold at one hour, so the queue always
   # ends.
   tmp=$(mktemp "$QH_MOUNT/.hold.XXXXXX")
+  # Cancelled mid-queue (e.g. an interruptible job auto-cancelled by a
+  # newer push) kills this loop before either exit path below removes
+  # $tmp; the trap catches that case too, same pattern as ensure-cosign.sh.
+  trap 'rm -f "$tmp"' EXIT
   # mktemp makes it 0600; other holders read `expires` from it.
   chmod 0644 "$tmp"
   queue_max="${QH_QUEUE_MAX_S:-3900}"

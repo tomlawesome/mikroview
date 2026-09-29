@@ -34,5 +34,25 @@ export default defineConfig({
       // separate runner just for one file.
       'scripts/**/*.{test,spec}.mjs',
     ],
+    // #1333, the frontend half: a ratchet at measured values, same
+    // reasoning as scripts/coverage-floor.py's Go floors -- never lower
+    // to make a change pass; a change that would need that needs more
+    // tests. 'text' prints the per-file table in the job log; no other
+    // reporter is wired to anything yet, so nothing else is added.
+    // See docs/testing.md for how these were measured.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text'],
+      // Measured 2026-09-27 against the node:26-alpine image `npm test --
+      // --coverage` (statements 82.4%, branches 69.28%, functions 82.34%,
+      // lines 84.58%), rounded down. See docs/testing.md for the exact
+      // command.
+      thresholds: {
+        lines: 84,
+        statements: 82,
+        functions: 82,
+        branches: 69,
+      },
+    },
   },
 })

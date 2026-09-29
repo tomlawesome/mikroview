@@ -307,15 +307,12 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
-	// GeoIP reports whether a country database was successfully opened
-	// (main sets this from geoip.Lookup.Configured()), surfaced on
-	// GET /api/healthz as `geoip` (#1198). Country flags degrade silently
-	// to blank when there is no database -- indistinguishable, from the
-	// UI's side, from "no public traffic yet" -- so this is the one fact
-	// that lets the country filter and the ingest settings card tell a
-	// reader which case they are looking at instead of staying quiet
-	// about it.
-	GeoIP bool
+	// Geo is the country-flag and network-owner source manager (#1352,
+	// internal/geoip): GET /api/healthz's `geoip` and `geoSource`, the
+	// Engine Room's key card (/api/settings/geo) and the on-demand
+	// owner lookup (/api/geo/lookup). Nil is valid and reads as "no
+	// source loaded" -- a Server built by a test without one.
+	Geo GeoService
 	// ThirdPartyNotices is THIRD-PARTY-NOTICES.md, embedded in the
 	// binary at build time (see notices.go) and served verbatim by
 	// handleThirdPartyNotices. Every dependency compiled into this
@@ -346,6 +343,17 @@ type Server struct {
 	// depends on (this binary, this process's config) -- see main.go and
 	// config.MissingSettings -- and served as-is by handleConfigUpgrade.
 	ConfigUpgradeSettings []config.MissingSetting
+
+	// ConfigEditor is the config editor's setup (#1347, configeditor.go):
+	// the running config's path and start-up bytes, the release to name
+	// a download after, and the snapshot store. Nil on a Server built
+	// without one (most tests), in which case every editor route answers
+	// 503 rather than pretending.
+	ConfigEditor *ConfigEditor
+	// editor is each session's editor unlock and remembered secret
+	// values. Unexported and lazily built, so a zero-valued Server needs
+	// no setup.
+	editor editorState
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -560,6 +568,13 @@ func (s *Server) routes() []route {
 }
 
 func (s *Server) apiRoutes() []route {
+	// The config editor (#1347) is appended from its own table rather
+	// than listed here, because setup-only mode serves the same table
+	// (see setuponly.go) and the two must never drift apart.
+	return append(s.coreRoutes(), s.configEditorRoutes()...)
+}
+
+func (s *Server) coreRoutes() []route {
 	return []route{
 		{http.MethodGet, "/api/healthz", s.handleHealthz},
 		{http.MethodGet, "/api/events", s.handleEvents},
@@ -621,6 +636,20 @@ func (s *Server) apiRoutes() []route {
 		// is far too much work to hang off /api/stats' few-second poll.
 		{http.MethodGet, "/api/settings/history", s.handleHistorySettings},
 		{http.MethodPut, "/api/settings/history", s.handleHistorySettingsUpdate},
+		// The Engine Room's "Country and network owner" card (#1352):
+		// which country source is live, and the two write-only keys.
+		// See geo.go.
+		{http.MethodGet, "/api/settings/geo", s.handleGeoSettings},
+		{http.MethodPut, "/api/settings/geo/ipinfo", s.handleGeoIPinfoSet},
+		{http.MethodDelete, "/api/settings/geo/ipinfo", s.handleGeoIPinfoDelete},
+		{http.MethodPut, "/api/settings/geo/maxmind", s.handleGeoMaxMindSet},
+		{http.MethodDelete, "/api/settings/geo/maxmind", s.handleGeoMaxMindDelete},
+		// On-demand network owner for one address (#1352) -- never
+		// attached to every event; read only when someone asks.
+		{http.MethodGet, "/api/geo/lookup", s.handleGeoLookup},
+		// Deleting what an off history left on disk (#1354): the only
+		// way retained history is ever deleted wholesale, password-gated.
+		{http.MethodDelete, "/api/settings/history/files", s.handleHistoryFilesDelete},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},

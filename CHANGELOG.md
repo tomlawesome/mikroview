@@ -16,7 +16,51 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **Country flags work with no setup, and IPinfo adds the network owner**
+  (#1352, owner decision 2026-09-27). MikroView now downloads its own
+  country data at runtime and caches it under `geoip.cachePath`
+  (default `/var/lib/mikroview/geoip`); nothing ships in the image.
+  Three sources, in a fixed order: IPinfo Lite (country and network
+  owner, free token) beats MaxMind GeoLite2-Country (free account ID and
+  licence key) beats DB-IP IP-to-Country Lite (no account, the default).
+  Keys are entered on the Engine Room's "Country and network owner"
+  card only -- never in `config.yaml` -- stored sealed under
+  `history.keyFile` the way router backups are, and never shown again,
+  logged or returned by any API. With no `history.keyFile` mounted, key
+  entry is refused and DB-IP stays in use. New API: `GET
+  /api/settings/geo`, `PUT`/`DELETE /api/settings/geo/ipinfo` and
+  `/api/settings/geo/maxmind` (admin), `GET /api/geo/lookup?ip=` (any
+  signed-in user), and `geoSource` on `/api/healthz`. See
+  docs/configuration.md's "GeoIP country flags".
+
+### Removed
+
+- **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
+  `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
+  `GeoLite2-Country.mmdb`. MikroView downloads MaxMind's file itself
+  now: enter your MaxMind account ID and licence key on the Engine
+  Room's "Country and network owner" card instead, and delete the
+  mounted `.mmdb`. A `config.yaml` that still sets `geoip.dbPath`
+  refuses to start and names the card. Remove the key.
+
 ### Changed
+
+- **`scripts/gate-remote.sh` prunes the second host's Docker cache after
+  every run** (#1387), pass or fail: dangling images and the whole build
+  cache go, the tagged `mv-gate:local` image stays, and `gate-run.log`
+  says what it reclaimed. Fixes the disk filling up and failing unrelated
+  CI jobs with "no space left on device".
+
+- **Turning history off keeps the files; deleting them is a separate,
+  password-gated action** (#1354, owner decision 2026-09-25). The
+  switch in Settings stops writing and deletes nothing. While history is
+  off with files still on disk, an admin sees a banner notice and a
+  **Delete history files** action on the disk card: two clicks, then
+  their password (`DELETE /api/settings/history/files`, audited as
+  `history.delete`). The notice goes when the files are deleted or
+  history is turned back on.
 
 - **Emerging Threats' compromised-IPs list is now on by default
   alongside Spamhaus DROP** (#1359, owner decision 2026-09-25). Both
@@ -37,7 +81,90 @@ rewritten.
   for unattended daily fetching — see docs/configuration.md's
   "Local IP/CIDR blocklist matching" section for the clauses and dates
   checked.
+- **`security:govulncheck` runs `v1.8.0`, not `v1.4.0`** (#1321). The
+  four-release gap meant a green scan reflected a vulnerability database
+  from June, not today's; `renovate.json` now tracks every `go install
+  …@vX.Y.Z` pin in `.gitlab-ci.yml` so this can't happen silently again.
+
+- **`internal/netclass` matches on `go4.org/netipx`, not
+  `github.com/gaissmai/bart`** (#1313, owner ruling 2026-09-20 on #1288).
+  `bart` is a single-author module; `netipx` is Tailscale-maintained and
+  already a transitive dependency. `netipx` has no trie, so where two
+  enabled sources both claim an address, a fixed class order now decides
+  instead of longest-prefix match: **Tor, then VPN, then Private Relay,
+  then datacenter, then cloud** — the more specific *claim* wins
+  regardless of prefix width, so a Tor exit inside an AWS range still
+  reads as Tor. One visible consequence: where X4BNet's VPN feed has
+  copied Apple Private Relay's ranges verbatim, an exact-prefix overlap
+  now classifies as VPN rather than Private Relay, the reverse of the
+  old trie's tie-break.
+
+### Security
+
+- `VerifyPassword` now refuses, before hashing, a stored hash whose
+  cost settings or lengths are outside what this module writes (with
+  4x headroom) (#1388). A corrupt or tampered hash could previously
+  crash the check and leave a hashing slot taken, so enough of them
+  stalled every later login, or force an unbounded Argon2id
+  computation.
+
+- `requireAuth`'s four path-exemption checks (bootstrap, general,
+  forced-password-change, forced-second-factor-enrolment) now compare
+  the request's *escaped* path, matching how `next`'s `http.ServeMux`
+  actually routes it (#1389). Before this, a request whose escaped and
+  decoded paths differed -- e.g. an anonymous `GET
+  /api/auth%2Fsession`, which decodes to the exempt
+  `/api/auth/session` but escapes to something a wildcard route
+  further down the mux would serve -- could be classified as exempt by
+  one string and dispatched by another, reaching a handler it should
+  never have been let past the gate for.
+
+- `RestrictToAllowList`'s `uiAllowExemptPaths` check now compares the
+  request's *escaped* path too, the same fix as `requireAuth`'s above
+  (#1390). Before this, the same escaped-vs-decoded mismatch let a
+  request outside `ui.allow` reach a route it merely decoded to look
+  like an exempt one, rather than the route it actually dispatched to.
+
+- Starting a passkey sign-in prompt now counts against the same
+  sign-in attempt limit as the password and code steps (#1345
+  SEC-A1-F1). Someone who already had the password could previously
+  start prompts without limit. A prompt that is cancelled or never
+  completes counts as one failed attempt; a successful passkey sign-in
+  gives its attempt back.
+
+- A wrong recovery code now takes the same time to reject however many
+  of the account's codes are already used (#1345 SEC-A2-F1). The check
+  used to skip spent codes, so rejection time hinted at how many were
+  spent.
+
+- Turning on an account's first second factor now signs out its other
+  sessions and writes the audit record even when saving the recovery
+  codes then fails (#1394). Both used to be skipped on that path, left
+  for a retry that could never happen.
+
 ### Added
+
+- **A config editor, and a refused config no longer stops MikroView
+  dead** (#1347). Admins can open the running `config.yaml` in the UI
+  (password again; a 15-minute unlock covers showing secrets and
+  downloading), see start-up's own checks on each line as they type, and
+  press **Carry forward** to rewrite an old file for this release:
+  removed settings dropped with the reason, sections moved into the
+  example's layout, values and comments kept. The result is a download
+  named `config.v<release>.yaml` -- MikroView never writes the config
+  file; keep the previous one beside it. Secrets are masked in the
+  editor and put back in the download. The last five snapshots of the
+  text are kept, sealed under the retention key and carried by
+  `-backup`, including one taken before every Carry forward. When
+  start-up refuses the config it now comes up in **setup-only mode**:
+  sign-in, `/api/healthz` (`"mode": "setup-only"`) and the editor, with
+  every other route answering 503 and nothing else running. It still
+  exits as before when there is no account to sign in with, when
+  `ui.allow` cannot be honoured, or when the accounts live in Postgres.
+  Every config MikroView writes, and `deploy/config.example.yaml`, now
+  opens with four header lines naming the schema (the settings it should
+  have: v0.6.1 is 7), the release that wrote it and its layout. See
+  docs/configuration.md's "The config editor" and "Setup-only mode".
 
 - **A router's card names what an earlier setup left behind, with the exact
   fix** (#1373). The push script now reports every logging action still
@@ -70,6 +197,17 @@ rewritten.
   warning that applies to its reported version; first entry is 7.24.3's
   removal of the GoDaddy Class 2 root from the router's trust store.
 
+### Added
+
+- **The RouterOS upgrade warning also shows on the drop-list setup card
+  and the account-creation journey** (#1378, follow-up to #1344). Both
+  now fetch the setup commands the warning is drawn from -- the
+  drop-list card once its own setup section is opened, the journey
+  screen that already fetched them for its two-line command block --
+  and show it in the same place relative to the commands, above them.
+  Still not shown on the Engine Room's clipboard-only "copy for
+  RouterOS" (#1344's own ruling).
+
 ### Removed
 
 - **The Theme button and its accent-colour picker are gone** (#1371,
@@ -101,6 +239,26 @@ rewritten.
   docs/install.md and docs/configuration.md).
 
 ### Fixed
+
+- **Recovery codes and the way out when they fail** (#1345). While
+  recovery codes are on screen, closing or reloading the tab now asks
+  first (the codes are shown once). If a new second factor saves but its
+  recovery codes do not, the first-sign-in screen now says the second
+  step is on and offers Enter, instead of leaving the user on a screen
+  whose advice pointed at settings they could not reach; the error text
+  now points at the account menu's "New recovery codes…". Linking SSO
+  now says the recovery codes go too, and an admin clearing a user's
+  last second factor is told the same.
+
+- A preference changed while the first load of preferences fails no
+  longer snaps back; it is sent once a load succeeds (#1345 R5-F3). A
+  late sign-in error now shows under the method that sent it, not the
+  one switched to meanwhile (R4-F3). A slow Fall poll can no longer
+  overwrite a newer one (R4B-F2). Failing to list passkeys now behaves
+  like the other lists: an expired session goes to sign-in, anything
+  else shows the list's own error (Q5-F2). A restore refusal no longer
+  calls the stores "a mixture" when they all landed and only the router
+  backup vault or event history did not (FR9-F1).
 
 - **The setup wizard now says where each copy box goes** (#1368). Every
   block meant for the router — trust the certificate, send logs, tag
@@ -164,6 +322,11 @@ rewritten.
   to turn history back on. Nothing in the config file deletes retained
   history any more; deleting is only ever an admin choice made from
   Settings. Turning history off from Settings still asks, then deletes.
+
+- **The header-scan linearity test no longer flakes on a busy host**
+  (#1376). `TestNextHeaderStartScalesLinearlyOnLongLTRun` now counts the
+  bytes `nextHeaderStart`'s scan actually visits instead of timing it, so
+  the ratio it checks can't be thrown off by other load on the machine.
 
 ## [0.6.1] - 2026-09-24
 

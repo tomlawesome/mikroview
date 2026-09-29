@@ -37,12 +37,17 @@ vi.mock('../lib/api', () => ({
   fetchRouterNat: vi.fn(async () => ({ available: false, rules: [] })),
   fetchEventsWindow: vi.fn(async () => ({ events: [], hasMore: false })),
   fetchWatchlistEntries: vi.fn(async () => ({ entries: [], coverage: {} })),
+  // #1352: the foot's DB-IP credit reads the live source from healthz
+  // through geoipState. Never answering keeps that fetch from racing the
+  // source each test below sets on the store directly.
+  fetchHealthz: vi.fn(() => new Promise(() => {})),
 }))
 
 import { fetchEventsWindow } from '../lib/api'
 import { formatHM } from '../lib/format'
 import { fallState, type FallBoundary } from '../lib/fall.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { geoipState } from '../lib/geoip.svelte'
 import { appState } from '../lib/state.svelte'
 import type { WatchlistEntry } from '../lib/types'
 
@@ -217,6 +222,35 @@ describe('the bottom-right timestamp is unmounted, not deleted (#700 fault 3)', 
   })
 })
 
+// #1352: DB-IP Lite's licence asks for a link; the owner settled it sits
+// at the foot of the fall, and only while DB-IP is the source in use.
+describe("the fall's foot credits DB-IP only while it is the source in use (#1352)", () => {
+  it('links to db-ip.com while DB-IP is live', async () => {
+    geoipState.source = 'dbip'
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    const credit = container.querySelector('.fall-foot a.geo-credit')
+    expect(credit?.textContent?.trim()).toBe('IP Geolocation by DB-IP')
+    expect(credit?.getAttribute('href')).toBe('https://db-ip.com')
+    expect(credit?.getAttribute('rel') ?? '').toContain('noopener')
+  })
+
+  it.each([['ipinfo'], ['maxmind'], [null]] as const)('draws nothing at all while the source is %s', async (source) => {
+    geoipState.source = source
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    expect(container.querySelector('.geo-credit')).toBeNull()
+    expect(container.textContent).not.toContain('DB-IP')
+  })
+
+  it('goes the moment the source switches away from DB-IP', async () => {
+    geoipState.source = 'dbip'
+    const { container } = await renderFall({ boundaries: [boundary()] })
+    expect(container.querySelector('.geo-credit')).toBeTruthy()
+    geoipState.setSource('ipinfo')
+    flushSync()
+    expect(container.querySelector('.geo-credit')).toBeNull()
+  })
+})
+
 describe('the rig draws no inline width cap of its own (#700 faults 4 and 10)', () => {
   // #722 gave a single boundary its own reason not to fill the frame
   // (capped at MAX_PITCH -- see the band width policy tests below), so
@@ -342,6 +376,43 @@ describe('the window-cap chip (#801, round 36 item 6.1)', () => {
     const { container } = await renderFall({ boundaries: [boundary()], events: [] })
     expect(container.textContent).not.toContain('this window holds more')
     expect(container.querySelector('.att.dim')).toBeNull()
+  })
+
+  // #1345 R4B-F2: nothing makes two window polls answer in the order
+  // they were sent. The 15 m poll below is still out when the operator
+  // picks 1 h; the 1 h poll answers first, then the stale 15 m one lands
+  // -- it must not put its older window back over the newer one.
+  it('keeps a newer window when an older poll answers after it', async () => {
+    const page = (hasMore: boolean) => ({
+      events: [],
+      hasMore,
+      windowStart: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+      serverTime: new Date().toISOString(),
+    })
+    let answerOld!: (v: ReturnType<typeof page>) => void
+    vi.mocked(fetchEventsWindow)
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          answerOld = r
+        }),
+      )
+      .mockResolvedValue(page(false))
+    const { container, getByRole } = render(Fall)
+    await waitFor(() => expect(fallState.loading).toBe(false))
+    fallState.boundaries = [boundary()]
+    flushSync()
+
+    await fireEvent.click(getByRole('button', { name: '1 h' }))
+    await waitFor(() => expect(fetchEventsWindow).toHaveBeenCalledTimes(2))
+    expect(getByRole('button', { name: '1 h' }).getAttribute('aria-pressed')).toBe('true')
+    // Let the 1 h poll's answer land first.
+    await new Promise((r) => setTimeout(r, 0))
+
+    answerOld(page(true))
+    await new Promise((r) => setTimeout(r, 0))
+    flushSync()
+
+    expect(container.textContent).not.toContain('this window holds more')
   })
 })
 
