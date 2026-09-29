@@ -2353,11 +2353,20 @@
     reach = { subject: hostSubject(ip), zoneId, host, ip }
   }
 
-  /** Standing on something clears #1018's two filters and #1320's lens,
-   * the same way opening any one of the three clears the reach and the
-   * other two. Three answers layered on one map would stack their
-   * crumbs on each other and leave nobody able to say which of them a
-   * dim rib was dim because of.
+  /** Standing on something clears #1018's two filters, the same way
+   * opening either one of them clears the reach and the other. Two
+   * answers layered on one map would stack their crumbs on each other
+   * and leave nobody able to say which of them a dim rib was dim
+   * because of.
+   *
+   * #1320's serving lens deliberately does not clear here (#1396): it
+   * lights no rib and dims no lane whole (see hostsFilterOn/filterOn
+   * above), so there is no crumb of its own to stack against a reach --
+   * and the reach is exactly where its answer is read in full, as the
+   * host's own served-port chips. Clearing it on descend meant those
+   * chips could never render at all. It still clears, and still clears
+   * the other two, wherever *it* is the one being turned on
+   * (toggleServing/openPortPicker/openTrace).
    *
    * Declared here rather than beside the filters themselves because the
    * three descends below call it, and they are declared above the
@@ -2365,7 +2374,6 @@
   function clearMapFilters() {
     portFilterState.clear()
     mapTraceState.clear()
-    servingState.clear()
   }
 
   /** The two zones a ground-plan road joins, or null when it joins none
