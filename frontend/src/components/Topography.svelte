@@ -5007,6 +5007,7 @@
     {#if portFilterState.open}
       <div
         class="pill p edit"
+        data-pill="port"
         role="group"
         aria-label="Pick ports — click to select, several at once; or type a list and press enter"
       >
@@ -5067,6 +5068,7 @@
            settled. -->
       <button
         class="pill p on"
+        data-pill="port"
         aria-pressed="true"
         title="filtered to {portFilterState.label} — click to change, ✕ to clear"
         onclick={openPortPicker}
@@ -5074,7 +5076,7 @@
       >
       <button class="pill-x" aria-label="Clear the port filter" onclick={() => portFilterState.clear()}>✕</button>
     {:else}
-      <button class="pill p" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
+      <button class="pill p" data-pill="port" aria-pressed="false" aria-expanded="false" onclick={openPortPicker}>⌕ port</button>
     {/if}
     <!-- The "seen serving" lens (#1320), right of ⌕ port. No picker bar:
          there is nothing to narrow, only to turn on, so one click is the
@@ -5087,6 +5089,7 @@
            fetch is never read as "nothing answered". -->
       <button
         class="pill p on"
+        data-pill="serving"
         aria-pressed="true"
         title="A host busy last week but closed now still shows; a quiet listener never does."
         onclick={toggleServing}
@@ -5096,6 +5099,7 @@
     {:else}
       <button
         class="pill p"
+        data-pill="serving"
         aria-pressed="false"
         title="Hosts seen answering in the window, and on what. Not a port scan: a quiet listener is invisible here."
         onclick={toggleServing}>⌕ serving</button
