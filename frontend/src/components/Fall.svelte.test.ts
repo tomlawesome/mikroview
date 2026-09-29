@@ -416,6 +416,48 @@ describe('the window-cap chip (#801, round 36 item 6.1)', () => {
   })
 })
 
+// #1255: the sentence explaining the unmatched lane used to live only in
+// the caption's <title> and the band head's aria-label (#1164, #1196), so
+// a sighted user only saw it on hover. This chip carries the same words,
+// reused from unmatchedExplanation rather than duplicated, into the
+// attention row where they are always visible.
+describe("the unmatched lane's attention chip (#1255)", () => {
+  it('names the lane and the reason when its chain was never pushed at all', async () => {
+    const events = [makeEvent({ chain: 'srcnat', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toContain('other traffic -- events whose boundary is not in a pushed rule table yet')
+  })
+
+  it('names the narrower reason when the chain is pushed but the interfaces are not (#1196)', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    expect(chip).toBeTruthy()
+    expect(chip?.textContent).toContain('other traffic -- their chain is in a pushed table, but no rule there names these interfaces')
+  })
+
+  it('is absent when the unmatched lane has no traffic', async () => {
+    const events = [makeEvent({ chain: 'forward', inInterface: 'iot', outInterface: 'bridge1' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    expect(chip).toBeUndefined()
+  })
+
+  it('opens Stream on the unmatched lane when activated, the same navigation the dark chip uses', async () => {
+    const events = [makeEvent({ chain: 'srcnat', inInterface: 'wan', outInterface: 'lan' })]
+    const { container } = await renderFall({ boundaries: [boundary()], events })
+    const chip = [...container.querySelectorAll('.att.dim')].find((n) => n.tagName.toLowerCase() === 'button')
+    appState.view = 'fall'
+    await fireEvent.click(chip!)
+    flushSync()
+    expect(appState.view).toBe('live')
+    expect(appState.filters.chain).toBe('')
+    expect(appState.filters.interface).toBe('')
+  })
+})
+
 describe('band status vocabulary matches the mockup (#700 fault 9, reworded by #790/#801)', () => {
   it('reads WATCHED for a quiet-but-covered band -- no tick, and never QUIET', async () => {
     const { container } = await renderFall({ boundaries: [boundary()], events: [] })
