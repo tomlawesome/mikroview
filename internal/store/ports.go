@@ -3,6 +3,7 @@
 package store
 
 import (
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -663,6 +664,84 @@ func (s *Store) Trace(q TraceQuery) TraceResult {
 			if len(out.SameMinute) < maxTraceRelated {
 				out.SameMinute = append(out.SameMinute, *e)
 			}
+		}
+	}
+	return out
+}
+
+// DoorPort is one (port, proto) pair issue #1319's doors panel asks
+// "seen arriving" about. Proto "" matches either tcp or udp, the same
+// unset-means-any reading doorsFor gives a rule that names no protocol.
+type DoorPort struct {
+	Port  int
+	Proto string
+}
+
+// DoorLastSeen answers, for each of ports, the most recent time the
+// held window carried an inbound event from a public source arriving on
+// device's wan interface for that port -- the "seen arriving" mark
+// beside a pushed rule or service that "allowed through" it. A port
+// absent from the returned map arrived never in the window.
+//
+// This is deliberately not the same fact as PortRib/PortHost above: a
+// door is drawn "allowed through" from the pushed table alone, whether
+// or not anything ever knocked, and never from whether the event that
+// arrived was itself accepted or dropped -- MikroView's evidence here is
+// what arrived at the edge, not what the router then did with it.
+//
+// Cap like Ports: a bounded, whole-window scan walking backward from
+// the newest event exactly as Ports does, holding one RLock for the
+// whole pass -- and it stops the moment every asked-for door has its
+// answer, since anything further back can only be older.
+func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]time.Time {
+	out := map[DoorPort]time.Time{}
+	if device == "" || wan == "" {
+		return out
+	}
+	want := make(map[DoorPort]struct{}, len(ports))
+	for _, p := range ports {
+		if p.Port > 0 {
+			want[p] = struct{}{}
+		}
+	}
+	if len(want) == 0 {
+		return out
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.count == 0 {
+		return out
+	}
+	idx := s.head - 1
+	if idx < 0 {
+		idx = s.capacity - 1
+	}
+	remaining := len(want)
+	for i := 0; i < s.count && remaining > 0; i++ {
+		e := s.buf[idx]
+		idx--
+		if idx < 0 {
+			idx = s.capacity - 1
+		}
+		if e.DeviceID != device || e.InInterface != wan || e.DstPort <= 0 {
+			continue
+		}
+		ip := net.ParseIP(e.SrcIP)
+		if ip == nil || !isPublicIP(ip) {
+			continue
+		}
+		proto := strings.ToLower(e.Protocol)
+		for _, key := range [2]DoorPort{{e.DstPort, proto}, {e.DstPort, ""}} {
+			if _, asked := want[key]; !asked {
+				continue
+			}
+			if _, already := out[key]; already {
+				continue
+			}
+			out[key] = e.ReceivedAt
+			remaining--
 		}
 	}
 	return out

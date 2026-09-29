@@ -56,6 +56,12 @@ const (
 	// (docs/decisions/upgrade-framework.md, "Router-side drift joins
 	// the framework").
 	KindLogging Kind = "logging"
+	// KindIPService is issue #1329's table: one row per /ip/service entry
+	// -- telnet, ftp, www, www-ssl, ssh, api, api-ssl, winbox -- so
+	// mikroview shows the router's own management services as observed
+	// rather than inferred from traffic. See IPServiceEntry's own doc
+	// comment for what each row carries and why.
+	KindIPService Kind = "ip-service"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -421,6 +427,51 @@ const (
 	LoggingTypeAction = "action"
 	LoggingTypeRule   = "rule"
 )
+
+// IPServiceEntry mirrors one /ip/service row -- issue #1329: the
+// router's own management services (telnet, ftp, www, www-ssl, ssh,
+// api, api-ssl, winbox), pushed so mikroview shows what the router
+// itself listens on rather than inferring it from traffic. Exactly
+// eight of these exist on any RouterOS install and none is ever added
+// or removed, only enabled, disabled or reconfigured -- unlike
+// FilterRule and NATRule, there is no Ordinal or Dynamic here, and
+// nothing to page: eight rows never approaches maxRecordsPerPage.
+//
+// Deliberately narrow, matching the owner-ratified scope on #1329: only
+// what tells an operator "is this exposed, on what port, from where" --
+// Name identifies which of the eight this is, Disabled and Port are
+// self-explanatory, Address is RouterOS's own comma-separated allow-list
+// (empty meaning no restriction -- reachable from anywhere, the case
+// that matters most downstream), and Certificate is the certificate's
+// *name* for the two TLS services (www-ssl, api-ssl) -- never key
+// material, which a read-policy script's view of this menu never
+// carries in the first place, the same guarantee WireguardPeer's own
+// comment already documents for private keys.
+//
+// Address is RouterOSList rather than a plain string for the same
+// shape-depends-on-content reason WireguardPeer.AllowedAddress is: a
+// script that passes the property straight through gets whatever
+// RouterOS's serializer gives it, and this type takes either shape
+// without the caller needing to know which arrived. Absent or empty
+// decodes to nil/no entries, which this schema (like RouterOSList
+// everywhere else) reads as "unset" -- here that reads as "no
+// restriction", not "restricted to nothing", matching RouterOS's own
+// behaviour for an empty address property.
+//
+// Field names are RouterOS 7's documented /ip/service properties
+// (name, port, address, certificate, disabled), taken from the
+// documentation, not yet observed on a live router: the weekly CHR
+// exercise is what confirms them (#1329's follow-up issue tracks that
+// check). tls-version and vrf exist
+// on a real router too; neither is carried here, since nothing #1329
+// asks for reads them.
+type IPServiceEntry struct {
+	Name        string       `json:"name"`
+	Disabled    bool         `json:"disabled"`
+	Port        RouterOSInt  `json:"port"`
+	Address     RouterOSList `json:"address"`
+	Certificate string       `json:"certificate"`
+}
 
 // RouterOSFlag decodes a yes/no field that :serialize to=json may emit
 // either as the string RouterOS prints ("yes"/"no") or as a JSON

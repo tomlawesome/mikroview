@@ -317,3 +317,21 @@ func (s *Server) handleRouterOSAddresses(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// handleRouterOSServices is handleRouterOSRules for the pushed
+// /ip/service table (issue #1329) -- the router's own management
+// services, observed from what it pushed rather than inferred from
+// traffic, and read-only here the same way every other table on this
+// file is: nothing contacts the router on request.
+func (s *Server) handleRouterOSServices(w http.ResponseWriter, r *http.Request) {
+	device := r.PathValue("device")
+	services, updatedAt, ok := s.RouterState.IPServices(device)
+	resp := routerTableResponse{Available: ok, Rules: services}
+	if ok {
+		resp.UpdatedAt = &updatedAt
+	}
+	if services == nil {
+		resp.Rules = []ingest.IPServiceEntry{}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

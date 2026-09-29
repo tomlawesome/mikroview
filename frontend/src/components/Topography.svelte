@@ -151,6 +151,7 @@
   // holds the arithmetic and the wording, serving.svelte.ts holds what
   // the server answered.
   import { servingState } from '../lib/serving.svelte'
+  import { wanDoorsState } from '../lib/wanDoors.svelte'
   import { hostBadge, servingTally } from '../lib/serving'
   import type { OffBaselineLine } from '../lib/baseline'
   import type { Host } from '../lib/api'
@@ -188,6 +189,12 @@
       // own timer: an offer appears on a push, and a push is what moves
       // every other table here too.
       decommissionsState.refresh()
+      // The doors panel's own standing count (#1319), so the boundary
+      // card's "Doors from the internet · N" row and the internet
+      // anchor beside it have a number without the sheet being open --
+      // refreshed with the rest rather than only on open, the same
+      // reasoning decommissionsState just gave above.
+      wanDoorsState.refresh()
     }
   })
 
@@ -3549,6 +3556,13 @@
     appState.view = 'watchlist'
   }
 
+  // The doors panel's internet-anchor entry (#1319) -- the same target
+  // the boundary card's own "Doors from the internet" row opens.
+  function openWanDoorsFromAnchor(e: Event) {
+    e.stopPropagation()
+    wanDoorsState.open()
+  }
+
   // A rounded-rect path for the bar's outer half(es) -- SVG's <rect> only
   // takes one radius for all four corners, and the split bar needs one
   // end square at the centre divider, so each half draws its own path.
@@ -5676,6 +5690,30 @@
           {#if internetAggregate && !filterOn}
             {@render aggregateBar(internetAggregate, -100, 200, 34, 16, { id: zonesState.wanInterface ?? '', name: 'the internet' })}
           {/if}
+          <!-- The doors panel's other entry (#1319), beside the boundary
+               card's own row: what the pushed tables let the internet
+               reach. Passive like the rest of this card -- its own
+               pointer-events are switched back on the same way the
+               aggregate bar's `.hbar-g` already is. -->
+          {#if zonesState.wanInterface}
+            <g
+              class="doors-anchor-btn"
+              role="button"
+              tabindex="0"
+              aria-label="Doors from the internet"
+              onclick={openWanDoorsFromAnchor}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openWanDoorsFromAnchor(e)
+                }
+              }}
+            >
+              <text x="-82" y="52" class="n-sub doors-anchor-t"
+                >Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}</text
+              >
+            </g>
+          {/if}
         </g>
       </g>
 
@@ -7144,6 +7182,16 @@
         <div class="s">nothing drawn across it is a fact; nothing is known</div>
       {/if}
 
+      {#if zonesState.wanInterface && boundaryCard.from === zonesState.wanInterface}
+        <!-- The doors panel's own entry (#1319): this boundary's "from"
+             side is the internet, so the card gains one last row into
+             what the pushed tables let it reach. The internet anchor
+             above opens the same panel. -->
+        <button type="button" class="s doors-row" onclick={() => wanDoorsState.open()}>
+          Doors from the internet{wanDoorsState.totalDoors > 0 ? ` · ${wanDoorsState.totalDoors}` : ' · none'}
+        </button>
+      {/if}
+
       {#if cardPinned && isAdmin && cardCoverage !== 'quiet'}
         <!-- The declare form: a reason, both directions, and who. Both
              directions is checked by default (round 49 item 7) because
@@ -8229,6 +8277,27 @@
 
   .card .s.nb {
     color: var(--fg);
+  }
+
+  /* The doors panel's own row (#1319): a plain `.s` fact line that
+     happens to be a button, reset back to the div-like look every other
+     `.s` line has -- no alarm colour, no border, just an underline on
+     hover/focus so it still reads as interactive. */
+  .card .s.doors-row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .card .s.doors-row:hover,
+  .card .s.doors-row:focus-visible {
+    color: var(--fg);
+    text-decoration: underline;
   }
 
   /* The card's own table (round-49/index.html:209-213): the off-baseline
@@ -9643,6 +9712,28 @@
      own clicks (#699: the internet island gained one). */
   .passive .hbar-g {
     pointer-events: auto;
+  }
+
+  /* The internet island's doors-panel anchor (#1319) takes its own
+     clicks back the same way its aggregate bar does above. No alarm
+     ink: this is a statement, not a warning. */
+  .passive .doors-anchor-btn {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .doors-anchor-t {
+    text-decoration: none;
+  }
+
+  .doors-anchor-btn:hover .doors-anchor-t,
+  .doors-anchor-btn:focus-visible .doors-anchor-t {
+    fill: var(--fg);
+    text-decoration: underline;
+  }
+
+  .doors-anchor-btn:focus-visible {
+    outline: none;
   }
 
   /* --- node info cards (#648, rounds 22-23) ------------------------------ */
