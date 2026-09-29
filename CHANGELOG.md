@@ -34,6 +34,13 @@ rewritten.
   `/api/settings/geo/maxmind` (admin), `GET /api/geo/lookup?ip=` (any
   signed-in user), and `geoSource` on `/api/healthz`. See
   docs/configuration.md's "GeoIP country flags".
+- **The fall's unmatched lane explains itself without a hover** (#1255).
+  Its attention row now carries a chip naming the lane and the exact
+  reason -- "other traffic -- events whose boundary is not in a pushed
+  rule table yet", or the narrower "other traffic -- their chain is in a
+  pushed table, but no rule there names these interfaces" -- whenever
+  that lane has any traffic. Dim ink, like the window-cap chip; a real
+  button, like the dark-boundary chip, opening Stream on that lane.
 
 ### Removed
 

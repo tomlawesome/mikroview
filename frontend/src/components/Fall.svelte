@@ -567,6 +567,11 @@
 
   const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
+  // #1255: the unmatched lane's own attention chip. bandsData only ever
+  // pushes the '__unmatched__' band once some event actually landed
+  // there, so its mere presence here already means "has traffic" -- no
+  // separate total > 0 guard needed.
+  const unmatchedBand = $derived(allBands.find((b) => b.key === '__unmatched__'))
   // One boundary, one colour, everywhere: shared by the rig's band-head
   // underlines and the overview strip's ticks below, the same lane map
   // the atlas overlay's zones draw from (fall.svelte.ts's laneColors) --
@@ -1256,6 +1261,21 @@
     {#if darkBands.length > 0}
       <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
         <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
+      </button>
+    {/if}
+    <!-- #1255: the unmatched lane's own chip, so the sentence the caption's
+         hover and the band head's aria-label already carry (unmatchedExplanation,
+         above) reaches a sighted reader without hovering. Dim ink and a
+         hollow marker like the window-cap chip below -- a fact, not an
+         alarm -- but a real button like the dark-boundary chip above,
+         since there is somewhere for this one to lead: the same
+         openInStream this fall already opens every other band with. No
+         new geometry: both `.att` and `.att.dim` are the rig's own
+         classes, reused rather than duplicated. -->
+    {#if unmatchedBand}
+      {@const ub = unmatchedBand}
+      <button type="button" class="att dim" onclick={() => openInStream(ub)}>
+        <i></i>{ub.label} -- {unmatchedExplanation(ub)}
       </button>
     {/if}
     <!-- The window cap (#801, round 36 item 6.1): the third chip in the
