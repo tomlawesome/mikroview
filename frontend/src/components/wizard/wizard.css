@@ -162,8 +162,8 @@
 .wiz .stream .l b { font-weight: 500; color: var(--log); }
 /* rules list */
 .wiz .rules { align-self: stretch; max-width: 760px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.wiz .rules label { display: grid; grid-template-columns: 22px 70px 60px 1fr 1fr 90px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
-.wiz .rules label:first-child { border-top: 0; }
+.wiz .rules label, .wiz .rules .h { display: grid; grid-template-columns: 22px 70px 60px 1fr 1fr 90px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.wiz .rules label:first-child, .wiz .rules .h:first-child { border-top: 0; }
 .wiz .rules label:hover { background: var(--bg-hover); }
 .wiz .rules .h { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; cursor: default; }
 .wiz .rules .h:hover { background: none; }
@@ -172,6 +172,8 @@
 .wiz .rules .act.drop { color: var(--drop); }
 .wiz .rules .act.accept { color: var(--accept); }
 .wiz .rules label.lit .pre { color: var(--accept); }
+/* the tagging block (tuneBody's pre.script, its width the prototype's own) */
+.wiz.page pre.script.tagblock { max-width: 760px; }
 /* the ledger */
 .wiz .ledger { align-self: stretch; max-width: 720px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
 .wiz .ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 12px; border-top: 1px solid var(--border); font-size: 13px; }
