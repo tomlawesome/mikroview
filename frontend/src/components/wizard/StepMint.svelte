@@ -1,13 +1,16 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // Step 2 · Mint the token (DESIGN.md): the password, asked at the
-  // moment of minting (#1291) -- ported from the prototype's passBody.
-  // The footer's "Mint the token" (Wizard.svelte) spends it on one call
-  // through wizardState; a refusal reads back here.
-  //
-  // The step issue under #1374 fills in the rest: the token's 15-minute
-  // life and Reroll are the paste step's line.
+  // Step 2 · Mint the token (DESIGN.md, "The steps, in detail"; #1382):
+  // the password, asked at the moment of minting (#1291: minting is
+  // what opens the log port for the router's address, for 15 minutes,
+  // so it asks every time; Reroll comes back here and asks again) --
+  // ported from the prototype's passBody. Enter here and the footer's
+  // "Mint the token" (Wizard.svelte) both run wizardRun.mint(), which
+  // makes the router record if the walk has none yet and spends the
+  // password on the one call. A refusal reads back under the field.
+  // The token itself is never shown here: it goes at the end of the
+  // block, on the paste step.
 
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'

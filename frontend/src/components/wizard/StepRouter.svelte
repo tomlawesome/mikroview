@@ -1,15 +1,20 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // Step 1 · The router (DESIGN.md, "The steps, in detail"): one form --
-  // name, address, push Yes / No, backup Yes / No -- ported from the
-  // prototype's routerBody. The form binds to the run's answers; the
-  // footer's Next (Wizard.svelte) is free once all four are answered.
+  // Step 1 · The router (DESIGN.md, "The steps, in detail"; #1382): one
+  // form -- name, address, push Yes / No, backup Yes / No -- ported
+  // from the prototype's routerBody. The form binds to the run's
+  // answers; the footer's Next (Wizard.svelte) is free once all four
+  // are answered, and the rail's receipt reads "name · address · push
+  // yes/not now · backup yes/not now" from the same answers.
   //
-  // The step issue under #1374 fills in what this shell leaves: the
-  // router record's creation on Next (wizardState.createRouter), and
-  // the address check's full wording (#1380). The address problem line
-  // is aria-live, as the record asks.
+  // The address is checked as you type (#1380), the problem worded
+  // under the field in an aria-live line, with the server's own rule
+  // (wizardRun.ts, addrProblem). Nothing here touches the server: the
+  // router record is made at the moment of minting, on the next step.
+  // The push and backup labels are spans, not labels -- a radiogroup
+  // has no one control for a label to point at -- named by
+  // aria-labelledby instead.
 
   import { wizardRun } from '../../lib/wizardRun.svelte'
 
