@@ -338,6 +338,8 @@ var authzMatrix = []routeExpectation{
 		"the pushed NAT table, same reasoning as the rules row above"},
 	{http.MethodGet, "/api/routeros/{device}/addresses", accessViewer,
 		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
+	{http.MethodGet, "/api/routeros/{device}/services", accessViewer,
+		"the pushed /ip/service table (#1329) -- the router's own management services, same tier as the rules/NAT/addresses rows above"},
 	{http.MethodGet, "/api/routeros/{device}/wireguard", accessViewer,
 		"the pushed WireGuard tables with derived per-tunnel state (#874), same tier as the rules/NAT/addresses rows above -- display data annotating what a viewer already sees on the topography"},
 	{http.MethodGet, "/api/routeros/{device}/ppp-active", accessViewer,
