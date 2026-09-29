@@ -123,13 +123,35 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 	// Group 1a: input-chain accepts on the WAN interface. An unset
 	// in-interface reads as "any" -- the same convention doorWho and
 	// the forward-chain policy edges already give an unset interface
-	// condition -- which includes the WAN.
+	// condition -- which includes the WAN -- but only once two other
+	// conditions are ruled out, either of which would make "from the
+	// internet" a claim this endpoint cannot back:
+	//
+	//   - a non-empty ConnectionState: `accept connection-state=
+	//     established,related` answers only-already-open connections,
+	//     never a fresh one arriving from the internet, and a real
+	//     router's input chain is full of exactly this rule.
+	//   - a non-empty SrcAddress/SrcAddressList: the rule restricts who
+	//     may use it, and this endpoint has no way to tell whether that
+	//     restriction names the internet or the operator's own LAN
+	//     (`src-address-list=LAN` is the worked example) -- and the
+	//     panel's own fixed caveat already says the list here may be
+	//     incomplete, never that it may be wrong.
+	//
+	// A rule with no dst-port at all is still a door -- DstPort stays ""
+	// and the frontend renders "any port" rather than a blank.
 	if rules, _, ok := s.RouterState.FilterRules(device); ok {
 		for _, rule := range rules {
 			if rule.Disabled {
 				continue
 			}
 			if !strings.EqualFold(rule.Chain, "input") || !strings.EqualFold(rule.Action, "accept") {
+				continue
+			}
+			if len(rule.ConnectionState) > 0 {
+				continue
+			}
+			if rule.SrcAddress != "" || rule.SrcAddressList != "" {
 				continue
 			}
 			if rule.InInterface != "" && rule.InInterface != wan {
@@ -145,13 +167,19 @@ func (s *Server) wanDoorsForDevice(device, wan string) wanDeviceDoors {
 		}
 	}
 
-	// Group 2: enabled dst-nat rules forwarding through to a host.
+	// Group 2: enabled dst-nat rules forwarding through to a host. The
+	// same sender-restriction exclusion as group 1a above; NATRule
+	// carries no ConnectionState (dst-nat's own chain, prerouting, never
+	// answers established/related the way an input accept can).
 	if nat, _, ok := s.RouterState.NATRules(device); ok {
 		for _, rule := range nat {
 			if rule.Disabled {
 				continue
 			}
 			if !strings.EqualFold(rule.Chain, "dstnat") || !strings.EqualFold(rule.Action, "dst-nat") {
+				continue
+			}
+			if rule.SrcAddress != "" {
 				continue
 			}
 			if rule.InInterface != "" && rule.InInterface != wan {

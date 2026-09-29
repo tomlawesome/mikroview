@@ -164,6 +164,24 @@ describe('WanDoors', () => {
     expect(screen.getByText(/web · allowed through ○ · seen arriving ●/)).toBeTruthy()
   })
 
+  it("says 'any port' for a door that names no dst-port, rather than a blank", async () => {
+    withDeviceWans([{ id: 'core', iface: 'ether1' }])
+    vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
+      devices: [
+        {
+          id: device,
+          name: 'rb5009',
+          wan,
+          doors: [{ label: '#1', ordinal: 1, dstPort: '' }],
+          services: null,
+        },
+      ],
+    }))
+    await open()
+
+    expect(screen.getByText('#1 any port → this router')).toBeTruthy()
+  })
+
   it("prints the device's own nmap check with the union of its door and service ports", async () => {
     withDeviceWans([{ id: 'core', iface: 'ether1' }])
     vi.mocked(fetchWanDoors).mockImplementation(async (device, wan) => ({
