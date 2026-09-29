@@ -3,6 +3,7 @@
 package store
 
 import (
+	"net"
 	"testing"
 	"time"
 )
@@ -97,5 +98,137 @@ func TestServingDeviceFilter(t *testing.T) {
 	got := s.Serving(ServingQuery{Device: "core"})
 	if len(got.Hosts) != 1 || got.Hosts[0].IP != "10.0.20.5" {
 		t.Fatalf("want only core's own server, got %+v", got.Hosts)
+	}
+}
+
+// The scan walks backward through the ring exactly as Ports and
+// DoorLastSeen do, so a store filled to exactly its capacity -- head
+// wrapped back to 0 -- must still find its own newest event.
+func TestServingWalksBackwardThroughAWrappedRing(t *testing.T) {
+	s := New(2, time.Hour)
+	s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "tcp",
+		SrcIP: "10.0.10.21", DstIP: "10.0.20.5", DstPort: 445})
+	s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "tcp",
+		SrcIP: "10.0.10.22", DstIP: "10.0.30.5", DstPort: 22})
+
+	got := s.Serving(ServingQuery{})
+	if len(got.Hosts) != 2 {
+		t.Fatalf("want both servers found across the wrap, got %+v", got.Hosts)
+	}
+}
+
+// An event older than Since must stop the backward scan rather than being
+// silently skipped -- the same "break, not continue" contract Ports and
+// Trace hold, since anything further back can only be older still.
+func TestServingSinceFilterStopsAtTheWindowEdge(t *testing.T) {
+	s := New(1000, time.Hour)
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+	s.Insert(Event{ReceivedAt: older, Action: ActionAccept, Protocol: "tcp",
+		SrcIP: "10.0.10.21", DstIP: "10.0.20.5", DstPort: 445})
+	s.Insert(Event{ReceivedAt: newer, Action: ActionAccept, Protocol: "tcp",
+		SrcIP: "10.0.10.22", DstIP: "10.0.30.5", DstPort: 22})
+
+	got := s.Serving(ServingQuery{Since: newer.Add(-time.Minute)})
+	if len(got.Hosts) != 1 || got.Hosts[0].IP != "10.0.30.5" {
+		t.Fatalf("want only the event inside the window, got %+v", got.Hosts)
+	}
+}
+
+// A line missing either end of what "served" means -- no destination
+// address, or no destination port at all (ICMP, for instance) -- is not a
+// host answering something and must not appear.
+func TestServingSkipsEventsMissingDestination(t *testing.T) {
+	s := New(1000, time.Hour)
+	s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "tcp",
+		SrcIP: "10.0.10.21", DstIP: "", DstPort: 445})
+	s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "icmp",
+		SrcIP: "10.0.10.21", DstIP: "10.0.20.5", DstPort: 0})
+
+	got := s.Serving(ServingQuery{})
+	if len(got.Hosts) != 0 {
+		t.Fatalf("neither line names a real server, got %+v", got.Hosts)
+	}
+}
+
+// The picker only ever offers tcp or udp, the same restriction Ports
+// applies to its own candidates, so a line on any other protocol must not
+// mint a served port nothing can select.
+func TestServingSkipsNonTCPUDPProtocol(t *testing.T) {
+	s := New(1000, time.Hour)
+	s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "icmp",
+		SrcIP: "10.0.10.21", DstIP: "10.0.20.5", DstPort: 8})
+
+	got := s.Serving(ServingQuery{})
+	if len(got.Hosts) != 0 {
+		t.Fatalf("an icmp line must not appear as a served port, got %+v", got.Hosts)
+	}
+}
+
+// A host's own ports sort busiest first, and only fall back to port then
+// protocol once two ports tie on events -- both tie-break rungs need
+// their own case: one pair that actually differs in event count, and one
+// pair tied on both events and port number (53/tcp vs 53/udp) which can
+// only be split by protocol.
+func TestServingSortsPortsByEventsThenPortThenProto(t *testing.T) {
+	s := New(1000, time.Hour)
+	insert := func(proto string, port, n int) {
+		for i := 0; i < n; i++ {
+			s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: proto,
+				SrcIP: "10.0.10.21", DstIP: "10.0.20.5", DstPort: port})
+		}
+	}
+	insert("tcp", 443, 1)
+	insert("tcp", 53, 2)
+	insert("udp", 53, 2)
+	insert("tcp", 80, 3)
+
+	got := s.Serving(ServingQuery{})
+	if len(got.Hosts) != 1 {
+		t.Fatalf("want one server host, got %+v", got.Hosts)
+	}
+	ports := got.Hosts[0].Ports
+	want := []ServedPort{
+		{Port: 80, Proto: "tcp", Events: 3},
+		{Port: 53, Proto: "tcp", Events: 2},
+		{Port: 53, Proto: "udp", Events: 2},
+		{Port: 443, Proto: "tcp", Events: 1},
+	}
+	if len(ports) != len(want) {
+		t.Fatalf("want %d ports, got %+v", len(want), ports)
+	}
+	for i, w := range want {
+		if ports[i] != w {
+			t.Fatalf("want %+v at position %d, got %+v", w, i, ports[i])
+		}
+	}
+}
+
+// servingLineCap bounds distinct host x port x proto lines the same way
+// maxPortLines bounds Ports' own tally. Once the cap is reached, a
+// wholly new line must be dropped rather than minting another host --
+// the scan has already made its point about how many distinct servers
+// this window holds.
+func TestServingStopsCountingNewLinesPastTheCap(t *testing.T) {
+	s := New(servingLineCap+1, time.Hour)
+	// The scan walks backward from the newest event, so this marker -- the
+	// one wholly new line that must be dropped -- has to be the *oldest*
+	// insertion: everything filling the cap below is met first.
+	s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "tcp",
+		SrcIP: "10.0.10.21", DstIP: "203.0.113.9", DstPort: 80})
+	for i := 0; i < servingLineCap; i++ {
+		ip := net.IPv4(10, 0, byte(i>>8), byte(i)).String()
+		s.Insert(Event{Time: time.Now(), Action: ActionAccept, Protocol: "tcp",
+			SrcIP: "10.0.10.21", DstIP: ip, DstPort: 80})
+	}
+
+	got := s.Serving(ServingQuery{})
+	if len(got.Hosts) != servingLineCap {
+		t.Fatalf("want exactly the capped number of hosts, got %d", len(got.Hosts))
+	}
+	for _, h := range got.Hosts {
+		if h.IP == "203.0.113.9" {
+			t.Fatal("a wholly new line past the cap must not be counted")
+		}
 	}
 }
