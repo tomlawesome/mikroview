@@ -397,6 +397,17 @@ var blockSpecs = map[string]blockSpec{
 		source:  "/ip/address",
 		record:  `{"address"=($v->"address"); "network"=($v->"network"); "interface"=($v->"interface"); "comment"=($v->"comment")}`,
 	},
+	// ip-service is issue #1329: the router's own management services
+	// (telnet, ftp, www, www-ssl, ssh, api, api-ssl, winbox), so an
+	// operator sees what's actually listening rather than mikroview
+	// inferring it from traffic. Field names are RouterOS 7's documented
+	// /ip/service properties -- see internal/ingest.IPServiceEntry's own
+	// doc comment for whether they were confirmed against a live router.
+	"ip-service": {
+		varName: "svc",
+		source:  "/ip/service",
+		record:  `{"name"=($v->"name"); "disabled"=($v->"disabled"); "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate")}`,
+	},
 }
 
 // PushBlock renders one table's push block: fetch every record, rewrite
