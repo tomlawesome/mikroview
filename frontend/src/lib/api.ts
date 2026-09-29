@@ -2637,6 +2637,63 @@ export async function fetchServing(): Promise<ServingResponse> {
   return res.json()
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// The doors panel (#1319): what the WAN edge lets in, and where each
+// door leads. Two facts kept apart the same way the port filter above
+// keeps traffic and policy apart: WanDoor.to is nil for a door that
+// ends at the router itself, set for one a dst-nat rule forwards
+// through to a host; lastSeen is undefined where nothing arrived.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface WanDoorHost {
+  ip: string
+  name?: string
+}
+
+export interface WanDoor {
+  label: string
+  ordinal: number
+  dstPort: string
+  proto?: string
+  to?: WanDoorHost
+  comment?: string
+  lastSeen?: string
+}
+
+export interface WanService {
+  name: string
+  port: number
+  // "" means no restriction -- RouterOS's own reading of an empty
+  // address property, carried straight through.
+  address: string
+}
+
+export interface WanDeviceDoors {
+  id: string
+  name?: string
+  wan: string
+  doors: WanDoor[]
+  // null means the router has never pushed /ip/service (#1329) --
+  // distinct from an empty, pushed table.
+  services: WanService[] | null
+  publicAddress?: string
+}
+
+export interface WanDoorsResponse {
+  devices: WanDeviceDoors[]
+}
+
+// fetchWanDoors asks one device's own section of the doors panel. The
+// backend has no notion of which interface faces the internet -- see
+// wanedge.go's own comment -- so wan is supplied from the same
+// deviceWans observation zones.svelte.ts already computes client-side.
+export async function fetchWanDoors(device: string, wan: string): Promise<WanDoorsResponse> {
+  const qs = new URLSearchParams({ device, wan })
+  const res = await fetch(`/api/doors/internet?${qs}`)
+  if (!res.ok) throw new ApiError(`fetchWanDoors: ${res.status}`, res.status)
+  return res.json()
+}
+
 // TraceRequest names the one line to trace. Either form resolves to one
 // event server-side: `event` where the caller holds an id (a stream
 // row), and the pair/port where it does not (the map's own unplanned
