@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mikroview wizard design — round 4 — Directions T &amp; U</title>
+<style>
+  body { background: #06080e; color: #e9eefb; font: 14px/1.6 system-ui, sans-serif; max-width: 980px; margin: 40px auto; padding: 0 20px 60px; }
+  h1 { font-size: 18px; letter-spacing: 0.04em; }
+  h1 em { color: #9db8e8; font-style: normal; }
+  a { color: #9db8e8; }
+  p.lede { color: #97a4c4; font-size: 13px; }
+  h2.section { font-size: 15.5px; margin: 34px 0 4px; border-top: 1px solid rgba(160,185,230,0.2); padding-top: 20px; }
+  h2.section:first-of-type { border-top: none; padding-top: 0; margin-top: 22px; }
+  p.sublede { color: #97a4c4; font-size: 12.5px; margin: 0 0 4px; }
+  .row {
+    display: flex; gap: 20px; align-items: flex-start; border: 1px solid rgba(160,185,230,0.2);
+    border-radius: 12px; padding: 14px 18px; margin-top: 16px;
+  }
+  .row a.thumb { flex: none; display: block; border-radius: 8px; overflow: hidden; border: 1px solid rgba(160,185,230,0.25); }
+  .row a.thumb img { display: block; width: 260px; height: auto; }
+  .row .cap h2 { font-size: 14.5px; margin: 0 0 6px; }
+  .row .cap h2 .id { color: #9db8e8; font-family: ui-monospace, monospace; font-size: 13px; margin-right: 8px; }
+  .row .cap p { color: #97a4c4; font-size: 12.5px; margin: 0; }
+</style>
+</head>
+<body>
+<p style="margin:0;padding:10px 20px;background:#2a1010;color:#f0b0b0;font:13px sans-serif">Dropped 2026-09-26 — owner: "extremely underwhelming, lack creativity and have zero ambition". See round-5.</p>
+<h1>MIKRO<em>VIEW</em> · setup wizard refinement (#1374) · round 4</h1>
+<p class="lede">Gated version pick, one form up front, the told strip, three-move steps, and the lighter
+visual weight of §8 &mdash; drawn as two directions on the same nine-scene story: <b>T</b> keeps the
+940px modal, <b>U</b> redraws the frame as a full-screen guided flow. See
+<a href="README.md">README.md</a> for the full spec and owner rulings.</p>
+
+<h2 class="section">Direction T &mdash; the modal, refined</h2>
+<p class="sublede"><a href="direction-t-wizard.html">Open direction-t-wizard.html</a></p>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t1-dark.png"><img src="shots/t-t1-dark.png" alt="t1 — Before we start, empty"></a>
+  <div class="cap"><h2><span class="id">t1</span>Before we start, empty</h2><p>the form; Begin disabled with its reason</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t2-dark.png"><img src="shots/t-t2-dark.png" alt="t2 — Before we start, filled"></a>
+  <div class="cap"><h2><span class="id">t2</span>Before we start, filled</h2><p>all Required filled, backup switch off; Begin enabled</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t3-dark.png"><img src="shots/t-t3-dark.png" alt="t3 — Connect the router · Paste"></a>
+  <div class="cap"><h2><span class="id">t3</span>Connect the router · Paste</h2><p>told strip; slim rail of §8 (four rows); move 1 open with the block folded and Copy primary; moves 2–3 dimmed</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t4-dark.png"><img src="shots/t-t4-dark.png" alt="t4 — Connect the router · Wait"></a>
+  <div class="cap"><h2><span class="id">t4</span>Connect the router · Wait</h2><p>move 1 collapsed to "Copied 14:02"; observation line; drawer closed</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t5-dark.png"><img src="shots/t-t5-dark.png" alt="t5 — Connect the router · Wait, drawer open"></a>
+  <div class="cap"><h2><span class="id">t5</span>Connect the router · Wait, drawer open</h2><p>the two lists of §4, with the 192.168.254.1 cross</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t6-dark.png"><img src="shots/t-t6-dark.png" alt="t6 — Connect the router · Receipt, undo open"></a>
+  <div class="cap"><h2><span class="id">t6</span>Connect the router · Receipt, undo open</h2><p>the two-line receipt; §5's two blocks</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t7-dark.png"><img src="shots/t-t7-dark.png" alt="t7 — Push · Paste, block expanded"></a>
+  <div class="cap"><h2><span class="id">t7</span>Push · Paste, block expanded</h2><p>the folded block opened by a click, token inside, one Copy, caption</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t8-dark.png"><img src="shots/t-t8-dark.png" alt="t8 — Where setup stands"></a>
+  <div class="cap"><h2><span class="id">t8</span>Where setup stands</h2><p>four-row ledger with the §6 amber line; primary Confirm rb5009 is set up, secondary Take me to the fall; Start setup again… at the foot</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/t-t9-dark.png"><img src="shots/t-t9-dark.png" alt="t9 — Before we start, backup off → step list"></a>
+  <div class="cap"><h2><span class="id">t9</span>Before we start, backup off → step list</h2><p>the step list as it first appears after Begin: three rows plus Where setup stands, nothing dimmed for the switched-off backup</p></div>
+</div>
+
+<h2 class="section">Direction U &mdash; the full-screen guided flow</h2>
+<p class="sublede"><a href="direction-u-wizard.html">Open direction-u-wizard.html</a> &mdash; same nine
+scenes, same story; no modal, no side step list, a top progress rail and a centred ~600px column.</p>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u1-dark.png"><img src="shots/u-u1-dark.png" alt="u1 — Before we start, empty"></a>
+  <div class="cap"><h2><span class="id">u1</span>Before we start, empty</h2><p>the form; Begin disabled with its reason</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u2-dark.png"><img src="shots/u-u2-dark.png" alt="u2 — Before we start, filled"></a>
+  <div class="cap"><h2><span class="id">u2</span>Before we start, filled</h2><p>all Required filled, backup switch off; Begin enabled</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u3-dark.png"><img src="shots/u-u3-dark.png" alt="u3 — Connect the router · Paste"></a>
+  <div class="cap"><h2><span class="id">u3</span>Connect the router · Paste</h2><p>told strip; progress rail; move open with the block folded and Copy primary</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u4-dark.png"><img src="shots/u-u4-dark.png" alt="u4 — Connect the router · Wait"></a>
+  <div class="cap"><h2><span class="id">u4</span>Connect the router · Wait</h2><p>the wait screen: large observation line, pulsing dot; drawer closed</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u5-dark.png"><img src="shots/u-u5-dark.png" alt="u5 — Connect the router · Wait, drawer open"></a>
+  <div class="cap"><h2><span class="id">u5</span>Connect the router · Wait, drawer open</h2><p>the two lists of §4, with the 192.168.254.1 cross</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u6-dark.png"><img src="shots/u-u6-dark.png" alt="u6 — Connect the router · Receipt, undo open"></a>
+  <div class="cap"><h2><span class="id">u6</span>Connect the router · Receipt, undo open</h2><p>the two-line receipt; §5's two blocks</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u7-dark.png"><img src="shots/u-u7-dark.png" alt="u7 — Push · Paste, block expanded"></a>
+  <div class="cap"><h2><span class="id">u7</span>Push · Paste, block expanded</h2><p>the folded block opened by a click, token inside, one Copy, caption</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u8-dark.png"><img src="shots/u-u8-dark.png" alt="u8 — Where setup stands"></a>
+  <div class="cap"><h2><span class="id">u8</span>Where setup stands</h2><p>four-row ledger with the §6 amber line; primary Confirm rb5009 is set up, secondary Take me to the fall; Start setup again… at the foot</p></div>
+</div>
+
+<div class="row">
+  <a class="thumb" href="shots/u-u9-dark.png"><img src="shots/u-u9-dark.png" alt="u9 — Before we start, backup off → step list"></a>
+  <div class="cap"><h2><span class="id">u9</span>Before we start, backup off → step list</h2><p>the rail as it first appears after Begin: five items, nothing dimmed for the switched-off backup</p></div>
+</div>
+
+</body>
+</html>

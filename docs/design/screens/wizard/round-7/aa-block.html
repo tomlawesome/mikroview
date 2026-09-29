@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — AA · The block writes itself</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+/* AA — The block writes itself. The modal is the ratified one, but the
+   step list is gone: the paste block is the ledger, from the first
+   question to the finish. It starts as a skeleton — every part it could
+   contain, dim — and the questions are asked *in* it: a caret walks
+   down the parts, each answer inks its lines (or folds them to one dim
+   comment), the password mints the token into the last line, and Copy
+   wakes when the block is whole. After the paste the same block gains a
+   proof margin — a mark beside each part as the router answers — and at
+   the end Undo lives beside each part too. One artefact, whole journey. */
+.sheet { align-self: stretch; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; padding: 10px 0; }
+.part { display: grid; grid-template-columns: 128px 1fr; }
+.part.dim .code .fold { color: var(--fg-dim); font-family: var(--font-sans); font-size: 11.5px; text-indent: 0; }
+.part .mark { padding: 4px 6px 0 12px; font-size: 11px; color: var(--fg-dim); white-space: normal; overflow-wrap: anywhere; display: flex; align-items: flex-start; gap: 6px; }
+.part .mark i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-top: 5px; flex: none; }
+.part .mark.waiting i { background: var(--fg-dim); animation: pulse 1.6s ease-in-out infinite; } .part .mark.waiting { color: var(--fg-muted); }
+.part .mark.arrived { color: var(--accept); } .part .mark.arrived i { background: var(--accept); }
+.part .mark.decision { color: var(--log); } .part .mark.decision i { background: none; border: 1px dashed var(--log); }
+.part .mark.chosen { color: var(--log); } .part .mark.chosen i { background: var(--log); }
+.part .mark.caution { color: var(--caution); } .part .mark.caution i { background: var(--caution); }
+.part .mark.refused { color: var(--warn); } .part .mark.refused i { background: var(--warn); }
+.part .code { padding: 4px 14px 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); border-left: 1px solid var(--border); padding-left: 12px; }
+.part.dim .code { color: var(--fg-dim); }
+.part.folded .code { color: var(--fg-dim); }
+.part.hot .code { border-left-color: var(--accent); }
+.part .h { color: var(--fg-muted); user-select: none; }
+.part.hot .h { color: var(--fg); }
+.part.dim .h { color: var(--fg-dim); }
+.caret { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; margin-left: 2px; animation: pulse 1s steps(2) infinite; }
+.slot { display: inline-block; border-bottom: 1px dashed var(--fg-dim); color: var(--fg-dim); padding: 0 2px; }
+.part input.inline { display: inline-block; background: var(--bg); border: 1px solid var(--accent); border-radius: 4px; padding: 1px 6px; font: inherit; color: var(--fg); width: 180px; margin: -2px 0; }
+.part input.inline:focus { outline: none; box-shadow: 0 0 0 2px var(--accent-bg); }
+.askcard { margin: 6px 0 8px; padding: 10px 12px; border: 1px solid var(--hair-2); border-radius: 6px; background: var(--bg); font-family: var(--font-sans); font-size: 13.5px; line-height: 1.55; text-indent: 0; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.askcard b { font-weight: 600; font-size: 14.5px; }
+.askcard .hint { color: var(--fg-muted); font-size: 12.5px; }
+.askcard .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.askcard .gives { font-size: 12px; color: var(--fg-muted); }
+.askcard .gives .y { color: var(--accept); }
+.change { font-family: var(--font-sans); font-size: 11.5px; color: var(--fg-dim); margin-left: 10px; }
+.change button { font: inherit; color: var(--log); background: none; border: 0; padding: 0; text-decoration: underline; }
+.type span.t { animation: ink 320ms ease-out both; }
+@keyframes ink { from { color: var(--fg-dim); } to { color: inherit; } }
+.sub { padding: 6px 14px 8px 12px; border-left: 1px solid var(--border); font-family: var(--font-sans); text-indent: 0; }
+.sub .warnbox, .sub .cautionbox { margin: 4px 0; }
+.sub .rules { font-family: var(--font-sans); border: 1px solid var(--border); border-radius: 6px; margin: 4px 0 8px; }
+.sub .rules label { display: grid; grid-template-columns: 22px 66px 56px 1fr 1fr 84px; gap: 10px; align-items: center; padding: 6px 10px; border-top: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.sub .rules label:first-child { border-top: 0; }
+.sub .rules .why { color: var(--fg-muted); } .sub .rules .pre { font-family: var(--font-mono); color: var(--log); }
+.sub .rules .act.drop { color: var(--drop); } .sub .rules .act.accept { color: var(--accept); }
+.sub .undo { color: var(--fg-dim); font-family: var(--font-mono); white-space: pre-wrap; margin: 4px 0; }
+.sub .note { font-size: 12px; }
+.foot { align-self: stretch; display: flex; align-items: center; gap: 12px; }
+.stream { align-self: stretch; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; max-height: 100px; overflow: hidden; }
+.stream .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .stream .l b { font-weight: 500; color: var(--log); }
+.body { gap: 10px; }
+</style>
+</head>
+<body>
+<div class="shell" aria-hidden="true">
+  <nav class="rail"><div class="brand">MikroView</div><div>The fall</div><div>Topography</div><div>Metrics</div><div>Stream</div><div>Entities</div><div class="on">Admin ▸ Run setup…</div></nav>
+  <div class="ghost"><i style="width:40%"></i><i style="width:70%"></i><i style="width:55%"></i><i style="width:80%"></i><i style="width:35%"></i></div>
+</div>
+<div class="veil">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ttl">
+    <header><span class="crumb">Set up a router</span><h2 id="ttl">New router</h2><span class="crumb" id="stepof"></span><button type="button" class="close" aria-label="Close setup — Run setup… reopens it here" data-act="leave">✕</button></header>
+    <div class="middle"><div class="body" id="body"></div></div>
+    <footer id="foot"></footer>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script>
+const $ = s => document.querySelector(s); const esc = MV.esc; const Q = MV.questions; const S = MV.story;
+const qOf = { name: 0, addr: 1, push: 2, backup: 3, pass: 4 };
+const partOfQ = ['head', 'logs', 'push', 'backup', 'enrol'];
+const t = k => MV.ev(k) ? MV.ev(k).t : '';
+function askCard(q, s) {
+  let ctl;
+  if (q.kind === 'yesno') ctl = `<div class="ctl"><button type="button" class="primary" data-act="yes">${q.yes}</button><button type="button" data-act="no">${q.no}</button></div><div class="gives"><span class="y">Yes</span> — ${q.gives}. <span>Not now</span> — ${q.without}.</div>`;
+  else if (q.kind === 'password') ctl = `<div class="ctl"><input type="password" data-field="pass" value="${esc(s.pass)}" placeholder="password" aria-label="Your password" style="width:220px"><button type="button" class="primary" data-act="next" ${s.pass ? '' : 'disabled'}>Mint the token</button></div>`;
+  else ctl = `<div class="ctl"><span class="hint">Type it into the line above, then <kbd>Enter</kbd>.</span></div>`;
+  return `<div class="askcard"><b>${esc(q.ask)}</b><span class="hint">${esc(q.hint)}</span>${ctl}</div>`;
+}
+function inline(f, s, ph) { return `<input class="inline" type="text" data-field="${f}" value="${esc(s[f])}" placeholder="${ph}" aria-label="${f === 'name' ? 'Router name' : 'Router address'}" autocomplete="off">`; }
+function slot(v, ph) { return v ? esc(v) : `<span class="slot">‹${ph}›</span>`; }
+function partHtml({ id, mark, cls, h, lines, ask, sub }) {
+  const body = cls === 'dim' && lines && lines.length ? `<span class="fold">${lines.length} line${lines.length === 1 ? '' : 's'} — filled in when asked</span>` : (lines ? lines.join('\n') : '');
+  return `<div class="part ${cls || ''}" data-part="${id}"><div class="mark ${mark ? mark.cls : ''}">${mark ? `<i></i><span>${mark.text}</span>` : ''}</div><div class="code">${h ? `<span class="h">${h}</span>\n` : ''}${body}${ask || ''}</div>${sub ? `<div></div><div class="sub">${sub}</div>` : ''}</div>`;
+}
+function render(s) {
+  const asking = s.stage === 'ask'; const cur = asking ? partOfQ[s.q] : null; const idx = asking ? s.q : 99;
+  const secs = Object.fromEntries(MV.sections().map(x => [x.id, x]));
+  const after = (i) => asking && i > idx; const hot = (i) => asking && i === idx;
+  const stateOf = (i) => after(i) ? 'dim' : hot(i) ? 'hot' : '';
+  const proof = (k, wait) => s.stage === 'ask' || s.stage === 'paste' ? null : MV.has(k) ? { cls: 'arrived', text: t(k) } : { cls: 'waiting', text: wait };
+  const parts = [];
+  // 0 head — the name
+  parts.push({ id: 'head', cls: stateOf(0), mark: asking && idx > 0 || !asking ? { cls: 'chosen', text: 'named' } : null,
+    h: `# ${hot(0) ? inline('name', s, 'router name') : slot(s.name, 'router name')} · MikroView setup${hot(0) ? '<span class="caret"></span>' : ''}`, lines: [], ask: hot(0) ? askCard(Q[0], s) : '' });
+  // 1 cert — always on, given
+  parts.push({ id: 'cert', cls: after(1) && idx < 1 ? 'dim' : '', mark: proof('cert', 'fetch') || null, h: '# 1 · Trust the certificate', lines: secs.cert.lines.map(esc),
+    sub: s.stage === 'done' ? undoSub('cert', s) : '' });
+  // 2 logs — the address
+  const addrShown = hot(1) ? inline('addr', s, '192.168.13.1') : slot(s.addr, 'address');
+  const logsLines = secs.logs.lines.map(l => esc(l).replace(esc(MV.from()), s.addr || s.useOther ? esc(MV.from()) : `<span class="slot">‹address›</span>`));
+  if (hot(1)) logsLines[0] = logsLines[0].replace(/src-address=.*$/, 'src-address=' + addrShown + '<span class="caret"></span>');
+  parts.push({ id: 'logs', cls: stateOf(1), mark: proof('enrol', 'enrol line') || (s.addr ? { cls: 'chosen', text: 'from ' + esc(MV.from()) } : null), h: `# 2 · Send logs, from ${s.addr && !hot(1) ? esc(MV.from()) : 'this address'}`, lines: logsLines, ask: hot(1) ? askCard(Q[1], s) : '',
+    sub: s.refused ? refusedSub(s) : s.stage === 'done' ? undoSub('logs', s) : '' });
+  // 3 push
+  parts.push(optional('push', 3, 2, '# 3 · Push router state', 'every 20 minutes', 'the fall stays address-only', secs, s, proof('push', 'first push'), stateOf, hot, MV.has('push') && s.standing === 'ahead' ? `<div class="cautionbox"><b>RouterOS ${s.version} is newer than these commands were reviewed on (${S.reviewed}).</b> They ran and the push arrived. If anything reads wrong, this is the first suspect.</div>` : ''));
+  // 4 backup
+  parts.push(optional('backup', 4, 3, '# 4 · Back up nightly', 'nightly at 03:00', 'no backups kept here', secs, s, proof('backup', 'schedule'), stateOf, hot, ''));
+  // 5 enrol — the password mints the token
+  const tokenLine = s.pass ? esc(secs.enrol.lines[0]) : `/log info "mikroview-enrol <span class="slot">‹token — your password mints it›</span>"`;
+  parts.push({ id: 'enrol', cls: stateOf(4), mark: s.pass ? { cls: s.stage === 'ask' || s.stage === 'paste' ? 'chosen' : (MV.has('enrol') ? 'arrived' : 'waiting'), text: s.stage === 'ask' || s.stage === 'paste' ? 'until ' + S.tokenUntil : MV.has('enrol') ? t('enrol') : 'enrol line' } : null, h: '# 5 · Enrol — the last line, always', lines: [tokenLine + (hot(4) ? '<span class="caret"></span>' : '')], ask: hot(4) ? askCard(Q[4], s) : '' });
+  // 6 tune — appears after the push
+  if (s.stage === 'tune' || (s.stage === 'done' && s.push)) parts.push(tunePart(s));
+  const secsOn = MV.sections().filter(x => x.on).length;
+  let lead, foot = '';
+  if (asking) lead = `<p class="lead">This is the block you will paste — all of it, once, at the end. It is filled in as you answer; nothing is pasted until it says so.</p>`;
+  else if (s.stage === 'paste') { lead = `<p class="lead">The block is whole: ${secsOn} parts, the enrol line last. Paste it into the router’s <b>terminal</b> (WinBox ▸ New Terminal, or ssh), not into a script. It is safe to paste twice.</p>`; }
+  else if (s.stage === 'watch') lead = MV.arrivedAll() ? `<p class="lead"><b>${esc(s.name)} is sending.</b> Every part has answered; the margin says when.</p>` : `<p class="lead">The block is on the router. The margin fills in as each part answers — nothing there is a guess.</p>`;
+  else if (s.stage === 'tune') lead = `<p class="lead">The push brought <b>${S.rules} rules</b>; ${S.alreadyLog.length} already log. A sixth part is proposed below — the only second paste.</p>`;
+  else { const n = 2 + (s.push ? 1 : 0) + (s.backup ? 1 : 0) + (s.tagged ? 1 : 0); lead = `<p class="headline"><b>${esc(s.name)} is sending.</b> ${n} parts stand on evidence. Undo any part beside it; Run setup… reopens this block any time.</p>`; }
+  if (s.stage === 'paste' || s.stage === 'watch') foot = `<div class="foot"><button type="button" class="primary" data-act="copy" ${s.copied ? 'disabled' : ''}>${s.copied ? 'Copied' : 'Copy the block'}</button><span class="token-life">Token good until ${S.tokenUntil} (15 minutes) · <button type="button" class="linkish" data-act="reroll">Reroll</button></span></div>`;
+  if (s.stage === 'done') foot = `<p class="note">To start again from nothing, <button type="button" class="linkish" data-act="undo-all">${s.showUndoAll ? 'hide the undo lines' : 'show every undo line'}</button>${s.showUndoAll ? ' — paste them on the router, then <button type="button" class="linkish" data-act="reset">forget ' + esc(s.name) + ' on MikroView</button>' : ''}.</p>${s.showUndoAll ? `<pre>${esc([...MV.undoLines.cert, ...MV.undoLines.logs, ...(s.push ? MV.undoLines.push : []), ...(s.backup ? MV.undoLines.backup : []), ...(s.tagged ? MV.undoLines.tune() : [])].join('\n'))}</pre>` : ''}`;
+  const stream = MV.has('enrol') && s.stage === 'watch' ? `<div class="stream">${s.tail.slice(-5).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join('')}</div>` : '';
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.field : null;
+  $('#body').innerHTML = `${lead}<div class="sheet" aria-label="The block to paste">${parts.map(partHtml).join('')}</div>${foot}${stream}`;
+  $('#ttl').textContent = s.name || 'New router';
+  $('#stepof').textContent = asking ? `${Q.filter(MV.answered).length} of ${Q.length} answered` : s.stage === 'paste' ? 'ready to paste' : s.stage === 'done' ? '' : 'on the router';
+  renderFoot(s);
+  const inp = $('input[data-field]'); if (inp && (!focused || focused === inp.dataset.field)) { inp.focus(); const v = inp.value; inp.value = ''; inp.value = v; }
+}
+function optional(id, n, qi, h, yesText, noText, secs, s, proof, stateOf, hot, extra) {
+  const v = s[id]; const q = Q[qi];
+  if (v === false) return { id, cls: 'folded', mark: { cls: 'decision', text: 'not now' }, h: `${h} — not now <span class="change">${s.stage === 'ask' || s.stage === 'paste' ? `<button type="button" data-act="set" data-q="${id}" data-v="yes">add it</button>` : ''}</span>`, lines: [`<span class="dim"># ${noText}</span>`] };
+  const mark = v === true ? (proof || { cls: 'chosen', text: yesText }) : null;
+  return { id, cls: stateOf(qi), mark, h: `${h}${v === true ? ' — ' + yesText : hot(qi) ? '?' : ''}${v === true && (s.stage === 'ask' || s.stage === 'paste') ? ` <span class="change"><button type="button" data-act="set" data-q="${id}" data-v="no">not now</button></span>` : ''}`,
+    lines: secs[id].lines.map(esc), ask: hot(qi) ? askCard(q, s) : '', sub: extra || (s.stage === 'done' && v ? undoSub(id, s) : '') };
+}
+function refusedSub(s) { return `<div class="warnbox"><span><b>Lines from ${S.other} arrived without the enrol line and were refused.</b> If that is this router, its logging action is sending from another address — an older <span class="mono">remote</span> action, or a <span class="mono">src-address</span> left from before. Fix it on the router, then paste part 5 again:</span><pre>${esc(MV.fixSrc())}\n${esc(MV.sections().at(-1).lines[0])}</pre><span>Or, if ${S.other} is right: <button type="button" class="linkish" data-act="use-other">enrol at ${S.other} instead</button>.</span></div>`; }
+function undoSub(id, s) { const open = s.undoOpen === id; const lines = typeof MV.undoLines[id] === 'function' ? MV.undoLines[id]() : MV.undoLines[id]; return `<button type="button" class="linkish" data-act="undo" data-u="${id}" style="font-size:12px">${open ? 'Hide undo' : 'Undo this part'}</button>${open ? `<div class="undo">${esc(lines.join('\n'))}</div><p class="note">Paste on the router. MikroView notices when it stops and this part goes back to waiting.</p>` : ''}`; }
+function tunePart(s) {
+  const sug = S.suggestions;
+  const rules = s.stage === 'tune' ? `<div class="rules">${sug.map((r, i) => `<label><input type="checkbox" data-act="toggle" data-i="${i}" ${s.chosen.has(i) ? 'checked' : ''}><span class="mono">${r.chain}</span><span class="act ${r.action}">${r.action}</span><span>${esc(r.comment)}</span><span class="why">${esc(r.why)}</span><span class="pre">${r.prefix}</span></label>`).join('')}</div><div class="ctl" style="display:flex;gap:10px;align-items:center"><button type="button" class="primary" data-act="tune-copy" ${s.tuneCopied || !s.chosen.size ? 'disabled' : ''}>${s.tuneCopied ? 'Copied' : 'Copy part 6'}</button><span class="note">Sets, never adds — safe to paste again.</span></div>` : '';
+  const mark = s.tagged ? { cls: 'arrived', text: s.tunedAt } : s.tuneCopied ? { cls: 'waiting', text: 'first line' } : s.tuneSkipped ? { cls: 'decision', text: 'skipped' } : { cls: 'chosen', text: 'proposed' };
+  const lines = s.tuneSkipped && s.stage === 'done' ? [`<span class="dim"># skipped · 5 boundaries log nothing</span>`] : (MV.tagBlock() ? MV.tagBlock().split('\n').map(esc) : ['<span class="dim"># nothing ticked</span>']);
+  return { id: 'tune', cls: s.tuneSkipped ? 'folded' : '', mark, h: `# 6 · Tag firewall rules — ${s.tagged ? s.chosen.size + ' rules now log' : 'five boundaries log nothing; tick the ones to tag'}`, lines, sub: rules + (s.stage === 'done' && s.tagged ? undoSub('tune', s) : '') };
+}
+function renderFoot(s) {
+  let l = '', r = '', hint = '';
+  if (s.stage === 'ask') { const q = Q[s.q]; l = `<button type="button" data-act="back" ${s.q ? '' : 'disabled'}>Back</button>`; if (q.kind === 'yesno') hint = 'Answer in the block — Yes or Not now'; else r = `<button type="button" class="primary" data-act="next" ${MV.answered(q) ? '' : 'disabled'}>${q.kind === 'password' ? 'Mint the token' : 'Next'}</button>`; }
+  else if (s.stage === 'paste') { l = `<button type="button" data-act="back">Back</button>`; hint = 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="next" disabled>Next</button>`; }
+  else if (s.stage === 'watch') { hint = MV.arrivedAll() ? '' : 'Next checks what has arrived'; r = `<button type="button" class="primary" data-act="to-tune" ${MV.arrivedAll() ? '' : 'disabled'}>Next</button>`; }
+  else if (s.stage === 'tune') { r = `<button type="button" data-act="tune-skip">Skip this part</button><button type="button" class="primary" data-act="to-done" ${s.tagged ? '' : 'disabled'}>Next</button>`; hint = s.tagged ? '' : 'Next checks what has arrived'; }
+  else { l = `<button type="button" data-act="another">Add another router</button>`; r = `<button type="button" class="primary" data-act="fall">Open the fall</button>`; }
+  $('#foot').innerHTML = `${l}<span class="hint">${hint}</span>${r}`;
+}
+function field(f, s) { const btns = document.querySelectorAll('[data-act=next]'); btns.forEach(b => b.disabled = !MV.answered(Q[s.q])); if (f === 'name') $('#ttl').textContent = s.name || 'New router'; }
+let lastTick = 0;
+function tick(s) { const t0 = Date.now(); if (t0 - lastTick < 400) return; lastTick = t0; const st = $('.stream'); if (st) st.innerHTML = s.tail.slice(-5).map(l => `<div class="l"><span class="dim">${l.t}</span> <b>${l.pre}</b> ${esc(l.text.slice(l.pre.length))}</div>`).join(''); }
+MV.boot({ render, field, tick });
+</script>
+</body>
+</html>

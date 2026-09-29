@@ -1,0 +1,113 @@
+/* Round 7 shared shell. Ported, not re-imagined: the token block is
+   frontend/src/app.css's Atlas II identity verbatim, and the modal,
+   header, step list, body, pre, observation line, warning box, footer
+   and buttons are SetupWizard.svelte's own rules (same names, same
+   values). A direction adds its own surface on top; nothing here is
+   new to the app. */
+:root {
+  --bg: #06080e; --bg-elevated: #0f1422; --bg-hover: rgba(160, 185, 230, 0.08);
+  --border: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26); --glass: rgba(15, 20, 34, 0.66);
+  --fg: #e9eefb; --fg-muted: #97a4c4; --fg-dim: #55628a; --accent: #9db8e8;
+  --alarm: #ff5470; --now: #e8b05a;
+  --accept: #3ecf7e; --accept-bg: rgba(62, 207, 126, 0.12);
+  --drop: #f5a623; --drop-bg: rgba(245, 166, 35, 0.12);
+  --reject: #ef4444; --reject-bg: rgba(239, 68, 68, 0.12);
+  --log: #38bdf8; --log-bg: rgba(56, 189, 248, 0.12);
+  --warn: #f28a1e; --caution: #e8e04d;
+  --chart-traffic: #3987e5; --chart-refused: #e66767;
+  --fall-accept: #5aa7f0; --fall-drop: #e05252; --fall-other: #6b7280;
+  --accent-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+.modal .step-row:disabled { opacity: 1; cursor: default; }
+
+/* The shell behind the modal: the ratified rail, ghost rows, the fall's
+   void. Drawn only so the modal sits where it will sit. */
+.shell { position: fixed; inset: 0; display: grid; grid-template-columns: 216px 1fr; }
+.rail { border-right: 1px solid var(--border); padding: 14px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--fg-dim); }
+.rail .brand { color: var(--fg); font-weight: 600; margin-bottom: 10px; }
+.rail div { padding: 5px 8px; border-radius: 5px; }
+.rail .on { background: var(--bg-elevated); color: var(--fg-muted); }
+.ghost { padding: 22px; display: flex; flex-direction: column; gap: 10px; }
+.ghost i { display: block; height: 10px; border-radius: 3px; background: rgba(160, 185, 230, 0.06); }
+.veil { position: fixed; inset: 0; background: rgba(6, 8, 14, 0.66); display: flex; align-items: center; justify-content: center; }
+
+/* SetupWizard.svelte .modal / header / .middle / .steps / .body */
+.modal { width: 940px; max-width: 94%; max-height: 92vh; height: 92vh; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.5); overflow: hidden; }
+.modal > header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
+.crumb { font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+.modal h2 { margin: 0; flex: 1; font-size: 16px; color: var(--fg); min-width: 0; font-weight: 600; }
+.close { background: transparent; border: 1px solid var(--border); color: var(--fg-muted); border-radius: 5px; font-size: 12px; line-height: 1; width: 30px; height: 30px; padding: 0; flex: none; }
+.close:hover { color: var(--fg); border-color: var(--fg-muted); }
+.middle { flex: 1; display: flex; min-height: 0; }
+.steps { width: 224px; flex: none; border-right: 1px solid var(--border); overflow-y: auto; padding: 10px 8px; }
+.steps ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.modal .step-row { width: 100%; display: flex; align-items: flex-start; gap: 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; color: var(--fg-muted); }
+.modal .step-row:hover { background: var(--bg-hover); }
+.modal .step-row.current { background: var(--bg-elevated); border-color: var(--border); color: var(--fg); }
+.step-n { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); font-size: 11px; }
+.step-row.done .step-n { border-color: var(--accept); color: var(--accept); }
+.step-row.forced .step-n { border-color: var(--caution); color: var(--caution); }
+.step-row.skipped .step-n { border-style: dashed; border-color: var(--log); color: var(--log); }
+.step-row.chosen .step-n { border-color: var(--log); color: var(--log); }
+.step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.step-title { font-size: 13px; }
+.step-receipt { font-size: 11px; line-height: 1.4; color: var(--accept); word-break: break-word; }
+.step-receipt.gap, .step-receipt.consequence { color: var(--fg-muted); }
+.step-row.skipped .step-receipt, .step-row.chosen .step-receipt { color: var(--log); }
+.step-row.skipped .step-receipt.gap, .step-row.skipped .step-receipt.consequence { color: var(--fg-muted); }
+.step-row.forced .step-receipt { color: var(--caution); }
+.body { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.lead, .note, .headline { margin: 0; font-size: 14px; line-height: 1.6; color: var(--fg); }
+.note { font-size: 12.5px; color: var(--fg-muted); }
+.headline { font-size: 15px; }
+.modal pre { margin: 0; align-self: stretch; padding: 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); user-select: all; }
+.modal pre.script { max-height: calc(14 * 1.6em + 24px); overflow-y: auto; flex-shrink: 0; }
+.modal pre.stale { opacity: 0.5; }
+.modal button { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: transparent; border: 1px solid var(--border); color: var(--fg-muted); }
+.modal button:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
+.modal button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.modal button.amber { background: var(--log); border-color: var(--log); color: var(--bg); font-weight: 600; }
+.modal button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; }
+.modal input[type=text], .modal input[type=password] { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--fg); border-radius: 5px; padding: 7px 10px; font-family: var(--font-mono); font-size: 12.5px; min-width: 0; }
+.modal input:focus { outline: none; border-color: var(--accent); }
+/* the observation line, four flavours */
+.obs { align-self: stretch; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
+.obs::before { content: ''; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.obs.waiting { border: 1px dashed var(--hair-2); color: var(--fg-muted); }
+.obs.waiting::before { background: var(--fg-dim); animation: pulse 1.6s ease-in-out infinite; }
+.obs.arrived { border: 1px solid var(--accept); background: var(--accept-bg); color: var(--accept); }
+.obs.arrived::before { background: var(--accept); }
+.obs.counting { border: 1px solid var(--accept); background: var(--accept-bg); color: var(--accept); }
+.obs.counting::before { background: var(--accept); }
+.obs.quiet { border: 1px solid var(--border); color: var(--fg-muted); }
+.obs.quiet::before { background: var(--fg-dim); }
+.obs.decision { border: 1px dashed var(--log); color: var(--log); }
+.obs.decision::before { background: var(--log); }
+/* the partial-step warning box (#1132) and the heavy caution (forced past) */
+.warnbox { align-self: stretch; border: 1px solid var(--warn); border-left-width: 3px; background: rgba(242, 138, 30, 0.08); color: var(--fg); padding: 10px 12px; border-radius: 6px; font-size: 13px; line-height: 1.55; display: flex; flex-direction: column; gap: 8px; }
+.warnbox b { color: var(--warn); font-weight: 600; }
+.warnbox pre { font-size: 12px; }
+.cautionbox { align-self: stretch; border-left: 3px solid var(--caution); padding: 8px 12px; color: var(--fg-muted); font-size: 12.5px; line-height: 1.55; }
+.cautionbox b { color: var(--caution); font-weight: 600; }
+.modal > footer { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.modal > footer .hint { margin-left: auto; font-size: 12.5px; color: var(--fg-muted); }
+.copyrow { display: flex; align-items: center; gap: 12px; align-self: stretch; }
+.token-life { font-size: 12.5px; color: var(--fg-muted); }
+.receiptline { font-size: 12px; color: var(--fg-muted); font-family: var(--font-mono); }
+.ok { color: var(--accept); } .dec { color: var(--log); } .mut { color: var(--fg-muted); } .dim { color: var(--fg-dim); } .cau { color: var(--caution); } .wrn { color: var(--warn); }
+.mono { font-family: var(--font-mono); font-size: 12.5px; }
+kbd { font: 11px var(--font-mono); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; color: var(--fg-muted); background: var(--bg-elevated); }
+@keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+/* prototype furniture, deliberately not the app's look */
+.proto-bar { position: fixed; left: 12px; bottom: 12px; z-index: 50; display: flex; align-items: center; gap: 12px; padding: 6px 10px; border: 1px dashed var(--hair-2); border-radius: 6px; background: var(--glass); font-size: 12px; color: var(--fg-muted); }
+.proto-bar select, .proto-bar button { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 4px; color: var(--fg); font-size: 12px; padding: 3px 6px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

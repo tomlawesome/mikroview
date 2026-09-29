@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView setup — X · Blueprint</title>
+<style>
+/* X — Blueprint. The whole screen is a drawing sheet. The network is
+   drafted in construction lines; each thing the router proves is inked.
+   Notes panel top-left carries the form; the title block bottom-right
+   carries the revision history that the evidence writes. */
+:root {
+  --paper: #0a1730; --grid: rgba(190,215,255,0.055); --grid2: rgba(190,215,255,0.11);
+  --ink: #d7e6ff; --ink-2: #93acd6; --ink-3: #5a739e; --panel: rgba(8,18,40,0.86);
+  --alarm: #ff8a7a; --hot: #ffd27a; --drop: #f5a623;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 13px/1.5 var(--mono); overflow: hidden;
+  background-image: linear-gradient(var(--grid2) 1px, transparent 1px), linear-gradient(90deg, var(--grid2) 1px, transparent 1px), linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 72px 72px, 72px 72px, 12px 12px, 12px 12px; }
+button, input { font: inherit; color: inherit; } button { cursor: pointer; }
+.sheet { position: fixed; inset: 14px; border: 1px solid var(--ink-2); outline: 1px solid var(--ink-3); outline-offset: 4px; }
+.sheet svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.u { text-transform: uppercase; letter-spacing: 0.1em; }
+.small { font-size: 10.5px; }
+
+/* notes panel */
+.notes { position: absolute; top: 28px; left: 28px; width: 392px; border: 1px solid var(--ink-2); background: var(--panel); backdrop-filter: blur(4px); max-height: calc(100% - 56px); overflow-y: auto; }
+.notes::-webkit-scrollbar { width: 6px; } .notes::-webkit-scrollbar-thumb { background: var(--ink-3); }
+.notes .hd { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--ink-2); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
+.notes .hd b { color: var(--ink); font-weight: 600; }
+.notes .bd { padding: 16px 14px 18px; }
+.notes .view { animation: in 240ms ease-out both; }
+@keyframes in { from { opacity: 0; } to { opacity: 1; } }
+h1 { margin: 0 0 2px; font-size: 18px; font-weight: 600; letter-spacing: 0.01em; }
+.sub { margin: 0 0 16px; font-size: 11.5px; color: var(--ink-2); letter-spacing: 0.04em; }
+label.f { display: block; margin-bottom: 14px; }
+label.f .l { display: flex; justify-content: space-between; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 4px; }
+label.f .l em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+label.f input { width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--ink-2); padding: 5px 2px; color: var(--ink); outline: none; font-size: 14px; }
+label.f input:focus { border-bottom-color: var(--ink); box-shadow: 0 1px 0 var(--ink); }
+label.f input[readonly] { color: var(--ink-2); }
+label.f .h { font-size: 11px; color: var(--ink-3); margin-top: 4px; font-family: var(--sans); }
+.row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px dashed var(--ink-3); border-bottom: 1px dashed var(--ink-3); margin: 4px 0 16px; font-size: 12px; }
+.row .r { margin-left: auto; font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+.sw { width: 30px; height: 16px; border: 1px solid var(--ink-2); background: none; position: relative; padding: 0; flex: none; }
+.sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; background: var(--ink-3); transition: transform 140ms, background 140ms; }
+.sw[aria-checked=true]::after { transform: translateX(14px); background: var(--ink); }
+.btn { border: 1px solid var(--ink); background: none; padding: 7px 14px; font-size: 11.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink); }
+.btn:hover { background: rgba(215,230,255,0.08); }
+.btn.p { background: var(--ink); color: var(--paper); font-weight: 600; }
+.btn.p:disabled { background: var(--ink-3); border-color: var(--ink-3); cursor: not-allowed; }
+.btn.danger { border-color: var(--alarm); color: var(--alarm); }
+.link { background: none; border: none; padding: 0; color: var(--ink-2); text-decoration: underline; font-size: 11.5px; letter-spacing: 0.04em; }
+.acts { display: flex; gap: 14px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+.note { font-size: 11px; color: var(--ink-3); margin: 12px 0 0; font-family: var(--sans); line-height: 1.5; }
+.note b { color: var(--ink-2); font-weight: 500; }
+pre.block { margin: 0; border: 1px solid var(--ink-3); padding: 10px 12px; font: 11px/1.6 var(--mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 58px; overflow: hidden; background: rgba(0,0,0,0.25); }
+pre.block.open { max-height: 380px; overflow: auto; }
+.fold { margin: 6px 0 12px; }
+.ev { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.ev li { display: grid; grid-template-columns: 22px 62px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--ink-3); align-items: baseline; animation: in 200ms ease-out both; }
+.ev .n { color: var(--ink-2); } .ev .t { color: var(--ink-3); font-size: 11px; }
+.ev li.wait .n { color: var(--ink-3); } .ev li.bad .n, .ev li.bad .t { color: var(--alarm); }
+.ev .d { display: block; color: var(--ink-2); font-size: 11px; margin-top: 2px; font-family: var(--sans); }
+.ev .d b { color: var(--ink); font-weight: 500; }
+.ev .warn { color: var(--hot); }
+.checks { margin-top: 12px; border-top: 1px solid var(--ink-3); padding-top: 10px; font-size: 11.5px; font-family: var(--sans); }
+.checks h4 { margin: 6px 0 4px; font: 10.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+.checks ul { list-style: none; margin: 0; padding: 0; } .checks li { display: flex; gap: 8px; color: var(--ink-2); padding: 2px 0; }
+.checks li .m { width: 12px; flex: none; } .checks .bad .m { color: var(--alarm); }
+.checks code { font: 11px var(--mono); color: var(--ink); }
+table.rules { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-bottom: 12px; }
+table.rules th { text-align: left; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--ink-2); padding: 0 6px 5px 0; font-weight: 500; }
+table.rules td { padding: 6px 6px 6px 0; border-bottom: 1px dashed var(--ink-3); vertical-align: top; }
+table.rules tr.off td { opacity: 0.4; }
+table.rules .why { color: var(--ink-3); font-size: 10.5px; font-family: var(--sans); }
+.chk { width: 14px; height: 14px; border: 1px solid var(--ink-2); background: none; padding: 0; font-size: 10px; line-height: 1; color: var(--paper); }
+tr:not(.off) .chk { background: var(--ink); border-color: var(--ink); }
+.ledger { list-style: none; margin: 0 0 14px; padding: 0; font-size: 12px; }
+.ledger li { padding: 8px 0; border-bottom: 1px dashed var(--ink-3); }
+.ledger .h { display: flex; gap: 10px; align-items: baseline; }
+.ledger .h .uu { margin-left: auto; background: none; border: none; padding: 0; color: var(--ink-3); text-decoration: underline; font-size: 11px; }
+.ledger .e { color: var(--ink-2); font-size: 11px; margin-top: 2px; }
+.undo { margin-top: 8px; border: 1px solid var(--ink-3); padding: 10px; font-size: 11.5px; background: rgba(0,0,0,0.25); animation: in 200ms ease-out both; }
+.undo h5 { margin: 0 0 4px; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+.undo p { margin: 0 0 8px; color: var(--ink-2); font-family: var(--sans); }
+.undo pre { margin: 0 0 8px; font: 11px/1.6 var(--mono); white-space: pre-wrap; }
+.undo .r { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; } .undo .r .btn { padding: 4px 10px; font-size: 10.5px; } .undo .note { margin: 0; }
+
+/* title block */
+.title { position: absolute; right: 28px; bottom: 28px; width: 420px; border: 1px solid var(--ink-2); background: var(--panel); font-size: 11px; }
+.title table { width: 100%; border-collapse: collapse; }
+.title td { border: 1px solid var(--ink-3); padding: 5px 8px; vertical-align: top; }
+.title td.k { width: 92px; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+.title td b { font-weight: 600; letter-spacing: 0.04em; }
+.title .revs td { font-size: 10.5px; color: var(--ink-2); }
+.title .revs td:first-child { width: 28px; color: var(--ink); }
+.title .revs td:nth-child(2) { width: 68px; }
+.stamp { position: absolute; right: 470px; bottom: 90px; padding: 8px 14px; border: 2px solid var(--ink); outline: 1px solid var(--ink); outline-offset: 3px; transform: rotate(-7deg); font-size: 13px; letter-spacing: 0.22em; text-transform: uppercase; opacity: 0; transition: opacity 400ms; }
+.stamp.on { opacity: 1; }
+.stamp small { display: block; font-size: 9.5px; letter-spacing: 0.14em; color: var(--ink-2); }
+
+/* drawing */
+.cons { fill: none; stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 4; }
+.inked { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.thin { fill: none; stroke: var(--ink-2); stroke-width: 0.8; }
+.t { font: 11px var(--mono); fill: var(--ink); letter-spacing: 0.06em; }
+.t.u { text-transform: uppercase; letter-spacing: 0.14em; font-size: 10px; fill: var(--ink-2); }
+.t.d { fill: var(--ink-3); font-size: 10px; }
+.t.big { font-size: 15px; letter-spacing: 0.1em; }
+.balloon circle { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
+.balloon text { font: 600 10.5px var(--mono); fill: var(--ink); text-anchor: middle; dominant-baseline: central; }
+.callout { opacity: 0; transition: opacity 400ms; } .callout.on { opacity: 1; }
+.callout.bad .inked, .callout.bad .thin { stroke: var(--alarm); } .callout.bad .t { fill: var(--alarm); } .callout.bad .balloon circle { stroke: var(--alarm); } .callout.bad .balloon text { fill: var(--alarm); }
+.ghost { opacity: 0.55; }
+.port { fill: none; stroke: var(--ink-2); stroke-width: 0.8; } .port.on { fill: var(--ink); stroke: var(--ink); } .port.wan { fill: var(--ink-2); stroke: var(--ink-2); }
+.hatch { fill: url(#hatch); }
+.link-cons { fill: none; stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 4; }
+.link-ink { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-dasharray: 500; stroke-dashoffset: 500; }
+.link-ink.on { animation: draw 1200ms ease-out forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+.flow { fill: var(--ink); opacity: 0; } .flow.on { opacity: 0.9; }
+.iface { opacity: 0; transition: opacity 500ms; } .iface.on { opacity: 1; }
+.sched { opacity: 0; transition: opacity 500ms; } .sched.on { opacity: 1; }
+.sched rect.c { fill: none; stroke: var(--ink-3); stroke-width: 0.8; } .sched rect.c.log { fill: var(--ink); stroke: var(--ink); } .sched rect.c.sug { fill: none; stroke: var(--hot); stroke-width: 1.2; }
+.cursor { animation: blink 1s steps(2) infinite; } @keyframes blink { 50% { opacity: 0; } }
+
+.proto-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 22px; display: flex; align-items: center; gap: 12px; padding: 7px 11px; border: 1px dashed rgba(245,166,35,0.6); background: rgba(10,23,48,0.94); font: 12px var(--sans); color: var(--drop); z-index: 9; }
+.proto-bar select { background: #0f1f3d; border: 1px solid var(--ink-3); padding: 2px 5px; font-size: 12px; color: var(--ink); }
+.proto-bar button { background: none; border: 1px solid var(--ink-3); padding: 2px 8px; font-size: 12px; color: var(--ink-2); }
+.proto-bar b { letter-spacing: 0.08em; text-transform: uppercase; font-size: 10.5px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } .link-ink.on { stroke-dashoffset: 0; } .flow { display: none; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <svg viewBox="0 0 1400 800" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+    <defs>
+      <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#5a739e" stroke-width="0.7"/></pattern>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d7e6ff"/></marker>
+      <marker id="dim" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 5 L 10 5 M 5 0 L 5 10" stroke="#93acd6" stroke-width="1.2"/></marker>
+    </defs>
+    <!-- sheet furniture: zone letters along the top, numbers down the side -->
+    <g class="t d" id="zones"></g>
+    <text class="t u" x="700" y="28" text-anchor="middle">Router setup · drawing 1374-A</text>
+
+    <!-- MikroView -->
+    <g transform="translate(600 420)">
+      <circle r="44" class="inked"/><circle r="6" class="inked"/>
+      <path d="M -60 0 H -48 M 48 0 H 60 M 0 -60 V -48 M 0 48 V 60" class="thin"/>
+      <text class="t big" y="82" text-anchor="middle">MIKROVIEW</text>
+      <text class="t d" y="98" text-anchor="middle" id="mv-addr"></text>
+      <text class="t d" y="-74" text-anchor="middle" id="mv-lines"></text>
+    </g>
+
+    <!-- the link -->
+    <path id="lk-c" class="link-cons" d="M 1000 420 H 644"/>
+    <path id="lk-i" class="link-ink" d="M 1000 420 H 648" marker-end="url(#arr)"/>
+    <g id="flow"></g>
+
+    <!-- router, front elevation -->
+    <g transform="translate(1110 420)">
+      <rect id="rt-body" x="-110" y="-36" width="220" height="72" class="cons"/>
+      <g id="ports"></g>
+      <circle id="led" cx="-94" cy="-20" r="3" class="port"/>
+      <text class="t big" y="-54" text-anchor="middle" id="rt-name">ROUTER</text>
+      <text class="t d" y="116" text-anchor="middle" id="rt-model"></text>
+      <!-- dimension line: the address -->
+      <path d="M -110 58 V 70 M 110 58 V 70" class="thin"/>
+      <path d="M -110 66 H 110" class="thin" marker-start="url(#dim)" marker-end="url(#dim)"/>
+      <text class="t" y="84" text-anchor="middle" id="rt-addr"></text>
+      <text class="t d" y="100" text-anchor="middle" id="rt-ver"></text>
+    </g>
+
+    <!-- interfaces: three small elevations to the right -->
+    <g id="ifaces"></g>
+
+    <!-- callouts -->
+    <g id="c-cert" class="callout"><path d="M 1010 388 L 990 350 H 830" class="thin"/><g class="balloon" transform="translate(816 350)"><circle r="10"/><text>1</text></g><text class="t" x="830" y="342">CERTIFICATE FETCHED</text><text class="t d" x="830" y="365" id="c-cert-t"></text></g>
+    <g id="c-enrol" class="callout"><path d="M 820 420 L 790 470 H 700" class="thin"/><g class="balloon" transform="translate(686 470)"><circle r="10"/><text>2</text></g><text class="t" x="700" y="490">ENROL LINE · STREAM OPEN</text><text class="t d" x="700" y="512" id="c-enrol-t"></text></g>
+    <g id="c-push" class="callout"><path d="M 1190 456 L 1210 545 H 1260" class="thin"/><g class="balloon" transform="translate(1246 545)"><circle r="10"/><text>3</text></g><text class="t" x="1260" y="537">FIRST PUSH</text><text class="t d" x="1260" y="560" id="c-push-t"></text></g>
+    <g id="c-backup" class="callout"><path d="M 580 378 L 560 300 H 470" class="thin"/><g class="balloon" transform="translate(456 300)"><circle r="10"/><text>4</text></g><text class="t" x="470" y="292">BACKUP · NIGHTLY 03:00</text><text class="t d" x="470" y="315" id="c-backup-t"></text></g>
+    <g id="c-bad" class="callout bad"><path d="M 830 420 L 860 560 H 720" class="thin"/><g class="balloon" transform="translate(706 560)"><circle r="10"/><text>!</text></g><text class="t" x="720" y="552" id="c-bad-h">LINES FROM 192.168.254.1 REFUSED</text><text class="t d" x="720" y="575">NOT THE ADDRESS GIVEN</text></g>
+
+    <!-- schedule A: the rule table, bottom-left -->
+    <g id="sched" class="sched" transform="translate(470 640)">
+      <text class="t u" y="-14">Schedule A · filter rules</text>
+      <g id="cells"></g>
+      <text class="t d" y="40" id="sched-l"></text>
+    </g>
+  </svg>
+
+  <aside class="notes" aria-label="Notes">
+    <div class="hd"><span id="hd-l">Notes</span><b id="hd-r"></b></div>
+    <div class="bd" id="bd"></div>
+  </aside>
+
+  <div class="stamp" id="stamp">Issued<small id="stamp-t"></small></div>
+
+  <div class="title" aria-label="Title block">
+    <table class="revs" id="revs"></table>
+    <table>
+      <tr><td class="k">Project</td><td><b>MikroView</b></td><td class="k">Sheet</td><td id="tb-sheet">—</td></tr>
+      <tr><td class="k">Drawing</td><td>Router setup</td><td class="k">Rev</td><td id="tb-rev">—</td></tr>
+      <tr><td class="k">Drawn from</td><td id="tb-from">operator entry</td><td class="k">Status</td><td id="tb-status">draft</td></tr>
+    </table>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script>
+const { story, esc } = MV; const has = MV.has, ev = MV.ev;
+const $ = s => document.querySelector(s);
+const svgNS = 'http://www.w3.org/2000/svg';
+const el = (t, a = {}, txt) => { const n = document.createElementNS(svgNS, t); for (const k in a) n.setAttribute(k, a[k]); if (txt != null) n.textContent = txt; return n; };
+
+/* sheet zones */
+const zones = $('#zones');
+'ABCDEFGH'.split('').forEach((z, i) => zones.appendChild(el('text', { x: 90 + i * 175, y: 14, 'text-anchor': 'middle', class: 't d' }, z)));
+[1, 2, 3, 4, 5, 6].forEach((n, i) => zones.appendChild(el('text', { x: 10, y: 80 + i * 130, class: 't d' }, String(n))));
+/* ports */
+const ports = $('#ports'); for (let i = 0; i < 8; i++) ports.appendChild(el('rect', { class: 'port', x: -86 + i * 22, y: 6, width: 16, height: 16 }));
+/* interfaces */
+const ifG = $('#ifaces');
+story.ifaces.forEach((f, i) => {
+  const y = 300 + i * 96;
+  const g = el('g', { class: 'iface', id: 'if' + i, transform: `translate(1300 ${y})` });
+  g.appendChild(el('path', { d: `M -80 0 H -60`, class: 'thin' }));
+  g.appendChild(el('rect', { x: -60, y: -22, width: 130, height: 44, class: f.wan ? 'inked' : 'thin' }));
+  g.appendChild(el('text', { x: -50, y: -4, class: 't' }, f.n.toUpperCase()));
+  g.appendChild(el('text', { x: -50, y: 12, class: 't d' }, `${f.d} · ${f.leases ? f.leases + ' leases' : f.peers ? f.peers + ' peers' : f.a}`));
+  ifG.appendChild(g);
+});
+const bus = el('path', { id: 'bus', class: 'thin iface', d: 'M 1220 420 H 1240 V 300 M 1240 396 V 492 M 1240 300 H 1220 M 1240 396 H 1220 M 1240 492 H 1220' }); ifG.prepend(bus);
+/* schedule cells */
+const cells = $('#cells'); for (let i = 0; i < story.rules; i++) cells.appendChild(el('rect', { class: 'c', x: (i % 24) * 12, y: Math.floor(i / 24) * 12, width: 9, height: 9, 'data-i': i }));
+/* flow dots */
+const flow = $('#flow');
+function flowOn(on) { flow.innerHTML = ''; if (!on || matchMedia('(prefers-reduced-motion: reduce)').matches) return; for (let i = 0; i < 6; i++) { const c = el('circle', { class: 'flow on', r: 1.8 }); const am = el('animateMotion', { dur: '2.4s', repeatCount: 'indefinite', begin: `${-(i * 0.4)}s` }); am.appendChild(el('mpath', { href: '#lk-i' })); c.appendChild(am); flow.appendChild(c); } }
+
+const alreadyIdx = [2, 13, 33], sugIdx = [5, 9, 17, 28, 41];
+const revLetters = 'ABCDEFGH';
+function paint(s) {
+  $('#mv-addr').textContent = story.mv;
+  $('#rt-name').textContent = (s.name || 'ROUTER').toUpperCase();
+  $('#rt-addr').textContent = MV.from() || '';
+  $('#rt-body').setAttribute('class', has('enrol') ? 'inked' : s.name ? 'thin' : 'cons');
+  $('#led').setAttribute('class', 'port' + (has('enrol') ? ' on' : ''));
+  $('#lk-i').classList.toggle('on', has('cert'));
+  $('#lk-c').style.opacity = has('cert') ? 0 : 1;
+  flowOn(has('enrol'));
+  $('#mv-lines').textContent = has('enrol') ? `${s.lines.toLocaleString()} LINES RECEIVED` : '';
+  const pushed = has('push');
+  ports.querySelectorAll('.port').forEach((p, i) => p.setAttribute('class', 'port' + (pushed ? (i === 0 ? ' wan' : i < 6 ? ' on' : '') : '')));
+  document.querySelectorAll('#ifaces .iface').forEach(g => g.classList.toggle('on', pushed));
+  $('#rt-ver').textContent = pushed ? `ROUTEROS ${s.version} · ${s.standing === 'reviewed' ? 'REVIEWED' : 'AHEAD OF REVIEW'}` : '';
+  $('#rt-model').textContent = '';
+  for (const k of ['cert', 'enrol', 'push', 'backup']) { const c = $('#c-' + k); c.classList.toggle('on', has(k)); if (has(k)) $(`#c-${k}-t`).textContent = ev(k).t; }
+  $('#c-bad').classList.toggle('on', s.refused && !s.useOther);
+  const tuning = s.stage === 'tune' || s.stage === 'done' || pushed;
+  $('#sched').classList.toggle('on', tuning);
+  const sug = new Set([...s.chosen].map(i => sugIdx[i]));
+  cells.querySelectorAll('rect').forEach((r, i) => r.setAttribute('class', 'c' + (alreadyIdx.includes(i) || (s.tagged && sug.has(i)) ? ' log' : (s.stage === 'tune' && !s.tagged && sug.has(i)) ? ' sug' : '')));
+  const n = story.alreadyLog.length + (s.tagged ? s.chosen.size : 0);
+  $('#sched-l').textContent = tuning ? `${story.rules} RULES · ${n} LOGGING${s.stage === 'tune' && !s.tagged ? ` · ${s.chosen.size} PROPOSED` : ''} · ${story.lists} LISTS · ${story.leases} LEASES` : '';
+  /* title block */
+  $('#tb-sheet').textContent = s.name || '—';
+  const revs = s.evidence.length + (s.tagged ? 1 : 0);
+  $('#tb-rev').textContent = revs ? revLetters[revs - 1] : '—';
+  $('#tb-from').textContent = pushed ? 'router push' : has('enrol') ? 'router stream' : 'operator entry';
+  $('#tb-status').textContent = s.stage === 'done' ? 'ISSUED' : s.copied ? 'in progress' : 'draft';
+  const rows = s.evidence.map((e, i) => `<tr><td>${revLetters[i]}</td><td>${e.t}</td><td>${esc(e.h)}</td></tr>`);
+  if (s.tagged) rows.push(`<tr><td>${revLetters[s.evidence.length]}</td><td>${s.tunedAt}</td><td>${s.chosen.size} rules logging</td></tr>`);
+  $('#revs').innerHTML = `<tr><td class="k" colspan="3">Revisions</td></tr>` + (rows.length ? rows.join('') : `<tr><td colspan="3" style="color:var(--ink-3)">none — nothing proved yet</td></tr>`);
+  $('#stamp').classList.toggle('on', s.stage === 'done'); $('#stamp-t').textContent = `${esc(s.name)} · ${MV.hm(MV.now())}`;
+}
+function tick(s) { if (has('enrol')) $('#mv-lines').textContent = `${s.lines.toLocaleString()} LINES RECEIVED`; }
+
+/* notes panel */
+const heads = { tell: ['Notes', '1 · Connect'], paste: ['Notes', '1 · Connect · paste'], watch: ['Notes', '1 · Connect · proof'], tune: ['Notes', '2 · Logging'], done: ['Notes', '3 · Issued'] };
+const views = {
+  tell: s => `<div class="view"><h1>Connect a router</h1><p class="sub">Entered by the operator. Everything else is drawn from the router.</p>
+    <label class="f"><span class="l">Router name</span><input data-field="name" value="${esc(s.name)}" autocomplete="off" spellcheck="false"></label>
+    <label class="f"><span class="l">Router address</span><input data-field="addr" value="${esc(s.addr)}" autocomplete="off" spellcheck="false"><span class="h">The log port opens for this address only, until its first line arrives.</span></label>
+    <label class="f"><span class="l">MikroView address <em>as the router reaches it</em></span><input value="${story.mv}" readonly></label>
+    <label class="f"><span class="l">Password</span><input data-field="pass" type="password" value="${esc(s.pass)}"><span class="h">Opens the port. Not kept.</span></label>
+    <div class="row"><button type="button" class="sw" role="switch" aria-checked="${s.backup}" data-act="backup" aria-label="Nightly backup"></button>Nightly backup<span class="r">key present</span></div>
+    <div class="acts"><button type="button" class="btn p" data-act="go-paste">Continue</button></div>
+    <p class="note">MikroView never connects to the router.</p></div>`,
+  paste: s => `<div class="view"><h1>Paste</h1><p class="sub">One block · certificate · stream · push${s.backup ? ' · backup' : ''}</p>
+    <pre class="block ${s.open ? 'open' : ''}">${esc(MV.pasteBlock())}</pre>
+    <div class="fold"><button type="button" class="link" data-act="fold">${s.open ? 'first line only' : `all ${MV.pasteLines()} lines`}</button></div>
+    <div class="acts"><button type="button" class="btn p" data-act="copy">${s.copied ? 'Copied' : 'Copy'}</button>${s.copied ? '<span class="note" style="margin:0">watching the sheet</span>' : '<button type="button" class="link" data-act="back-tell">back</button>'}</div>
+    <p class="note"><b>Router terminal only</b> (WinBox › New Terminal · WebFig › Terminal). Token valid until ${story.tokenUntil}.</p></div>`,
+  watch: s => {
+    const done = has('push');
+    const rows = s.evidence.map((e, i) => `<li><span class="n">${i + 1}</span><span class="t">${e.t}</span><span>${esc(e.h)}${e.k === 'push' ? `<span class="d">RouterOS <b>${s.version}</b> ${s.standing === 'reviewed' ? 'reviewed' : '<span class="warn">ahead of review · 1 warning</span>'} · <b>${story.rules}</b> rules · <b>${story.ifaces.length}</b> interfaces${s.standing === 'ahead' ? `<br><button type="button" class="link" data-act="warn">${s.showWarning ? 'hide' : 'show'} warning</button>${s.showWarning ? '<br>7.25 renamed log-prefix in print as-value. If prefixes vanish after an upgrade, re-run the paste from this router\'s page.' : ''}` : ''}</span>` : ''}</span></li>`).join('');
+    const bad = s.refused && !s.useOther ? `<li class="bad"><span class="n">!</span><span class="t">${MV.hms(MV.now())}</span><span>Lines from ${story.other} refused<span class="d">If that is ${esc(s.name)}: <button type="button" class="link" data-act="use-other">use ${story.other}</button></span></span></li>` : '';
+    const wait = done ? '' : `<li class="wait"><span class="n">${s.evidence.length + 1}</span><span class="t"></span><span>${!has('cert') ? 'certificate fetch' : !has('enrol') ? 'enrol line' : 'first push'} <span class="cursor">_</span></span></li>`;
+    return `<div class="view"><h1>${done ? 'Connected' : 'Awaiting proof'}</h1><p class="sub">${done ? 'drawn from the router' : `balloons ink as ${esc(s.name)} answers`}</p><ul class="ev">${rows}${bad}${wait}</ul>
+      ${done ? `<div class="acts"><button type="button" class="btn p" data-act="to-tune">Continue</button></div>` : `<div class="acts"><button type="button" class="link" data-act="checks">${s.checks ? 'hide checks' : 'checks'}</button></div>${s.checks ? checks(s) : ''}`}</div>`;
+  },
+  tune: s => `<div class="view"><h1>Logging</h1><p class="sub">${story.rules} rules · ${story.alreadyLog.length} log · ${s.chosen.size} proposed</p>
+    <table class="rules"><thead><tr><th></th><th>Rule</th><th>Prefix</th></tr></thead><tbody>${story.suggestions.map((r, i) => `<tr class="${s.chosen.has(i) ? '' : 'off'}"><td><button type="button" class="chk" data-act="toggle" data-i="${i}" aria-pressed="${s.chosen.has(i)}" aria-label="Log ${r.comment}">${s.chosen.has(i) ? '✓' : ''}</button></td><td>${r.chain} ${r.action} · ${esc(r.comment)}<div class="why">${r.why}</div></td><td>${r.prefix}</td></tr>`).join('')}</tbody></table>
+    ${s.tagged ? `<ul class="ev"><li><span class="n">✓</span><span class="t">${s.tunedAt}</span><span>${s.chosen.size} rules logging</span></li></ul><div class="acts"><button type="button" class="btn p" data-act="to-done">Continue</button></div>`
+      : s.tuneCopied ? `<ul class="ev"><li class="wait"><span class="n">·</span><span class="t"></span><span>first tagged line <span class="cursor">_</span></span></li></ul>`
+      : `<pre class="block">${esc(MV.tagBlock()) || '(none)'}</pre><div class="acts" style="margin-top:10px"><button type="button" class="btn p" data-act="tune-copy" ${s.chosen.size ? '' : 'disabled'}>Copy</button><button type="button" class="link" data-act="tune-skip">skip</button></div><p class="note">One <b>set</b> per rule, by chain, action and comment.</p>`}</div>`,
+  done: s => {
+    const rows = [
+      { k: 'connect', h: 'Connect', e: `cert ${ev('cert').t} · enrol ${ev('enrol').t}` },
+      { k: 'push', h: 'State push', e: `first ${ev('push').t} · every ${story.interval} · RouterOS ${s.version}` },
+      s.tuneSkipped ? { k: null, h: 'Logging', e: 'skipped' } : { k: 'tune', h: 'Logging', e: `${s.chosen.size} rules · ${s.tunedAt}` },
+      s.backup ? { k: 'backup', h: 'Backup', e: 'nightly 03:00' } : { k: null, h: 'Backup', e: 'off' },
+    ];
+    return `<div class="view"><h1>${esc(s.name)}</h1><p class="sub">issued · ${MV.hm(MV.now())}</p>
+      <ul class="ledger">${rows.map(r => `<li><div class="h">${r.h}${r.k ? `<button type="button" class="uu" data-act="undo" data-u="${r.k}">${s.undoOpen === r.k ? 'close' : 'undo…'}</button>` : ''}</div><div class="e">${r.e}</div>${r.k && s.undoOpen === r.k ? undo(r.k, s) : ''}</li>`).join('')}</ul>
+      <div class="acts"><button type="button" class="btn p" data-act="fall">Open the fall</button><button type="button" class="btn" data-act="another">Add a router</button></div>
+      <p class="note"><button type="button" class="link" data-act="reset">reset setup…</button> — forgets ${esc(s.name)} on MikroView; prints the router's undo lines.</p></div>`;
+  },
+};
+const checks = s => `<div class="checks"><h4>MikroView checked</h4><ul><li><span class="m">✓</span><span>certificate covers <code>${story.mvHost}</code></span></li><li><span class="m">✓</span><span>log port open for <code>${esc(s.addr)}</code> until ${story.tokenUntil}</span></li>${s.refused ? `<li class="bad"><span class="m">✗</span><span>lines from <code>${story.other}</code> refused</span></li>` : '<li><span class="m">✓</span><span>no other address knocking</span></li>'}</ul><h4>Only you can</h4><ul><li><span class="m">?</span><span>pasted into the terminal, not System › Scripts</span></li><li><span class="m">?</span><span>the paste ended with <code>/log info "mikroview-enrol …"</code></span></li><li><span class="m">?</span><span>token valid until ${story.tokenUntil} · <button type="button" class="link" data-act="reroll">reroll</button></span></li></ul></div>`;
+const undo = (k, s) => { const mv = { connect: `Forgets ${esc(s.name)}'s enrolment; logs refused until it enrols again. Name, tokens, tables stay.`, push: 'Drops the pushed tables until the next push.', backup: 'Stops accepting backups; kept ones stay.', tune: null }[k]; const lines = typeof MV.undoLines[k] === 'function' ? MV.undoLines[k]() : MV.undoLines[k]; return `<div class="undo">${mv ? `<h5>On MikroView</h5><p>${mv}</p><div class="r"><button type="button" class="btn danger">Undo</button></div>` : ''}<h5>On the router</h5><pre>${lines.join('\n')}</pre><div class="r"><button type="button" class="btn">Copy</button><p class="note">${mv ? 'Optional — MikroView cannot tell whether it ran.' : 'Nothing to undo on MikroView.'}</p></div></div>`; };
+function render(s) { $('#bd').innerHTML = views[s.stage](s); $('#hd-l').textContent = heads[s.stage][0]; $('#hd-r').textContent = heads[s.stage][1]; }
+MV.boot({ render, paint, tick });
+</script>
+</body>
+</html>
