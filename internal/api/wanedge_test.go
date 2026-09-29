@@ -215,3 +215,83 @@ func TestWANDoorsSeenArrivingMark(t *testing.T) {
 		t.Fatal("nothing arrived on 8443 -- door #10 must carry no last-seen mark")
 	}
 }
+
+// A real router's input chain is full of `accept connection-state=
+// established,related` -- reply traffic on an already-open connection,
+// never a fresh one arriving from the internet. Drawing it as a door
+// would be exactly the false claim this panel must never make.
+func TestWANDoorsConnectionStateAcceptIsNotADoor(t *testing.T) {
+	s, _ := newTestServer(t)
+	if err := s.RouterState.Apply("core", ingest.Payload{
+		Kind: ingest.KindFilterRule, Page: 1, Pages: 1,
+		FilterRules: []ingest.FilterRule{
+			{Ordinal: 1, Chain: "input", Action: "accept", ConnectionState: ingest.RouterOSList{"established", "related"}},
+		},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+
+	got := getWANDoors(t, ts, "?device=core&wan=ether1")
+	if len(got.Devices[0].Doors) != 0 {
+		t.Fatalf("a connection-state accept answers only already-open traffic, not a door, got %+v", got.Devices[0].Doors)
+	}
+}
+
+// A rule that restricts who may use it (src-address or its list form)
+// cannot be read as "from the internet" -- this endpoint has no way to
+// tell whether the restriction names the internet or the operator's own
+// LAN (src-address-list=LAN is the worked example), and the panel's
+// fixed caveat already says the list here may be incomplete, never that
+// it may be wrong. Covers both fields on the filter table, and the one
+// field NATRule carries, on a dst-nat rule.
+func TestWANDoorsSenderRestrictedRuleIsNotADoor(t *testing.T) {
+	s, _ := newTestServer(t)
+	if err := s.RouterState.Apply("core", ingest.Payload{
+		Kind: ingest.KindFilterRule, Page: 1, Pages: 1,
+		FilterRules: []ingest.FilterRule{
+			{Ordinal: 1, Chain: "input", Action: "accept", SrcAddress: "10.0.0.0/24"},
+			{Ordinal: 2, Chain: "input", Action: "accept", SrcAddressList: "LAN"},
+		},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RouterState.Apply("core", ingest.Payload{
+		Kind: ingest.KindNATRule, Page: 1, Pages: 1,
+		NATRules: []ingest.NATRule{
+			{Ordinal: 3, Chain: "dstnat", Action: "dst-nat", SrcAddress: "10.0.0.0/24", ToAddresses: "192.168.1.5"},
+		},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+
+	got := getWANDoors(t, ts, "?device=core&wan=ether1")
+	if len(got.Devices[0].Doors) != 0 {
+		t.Fatalf("a sender-restricted rule's own restriction is not knowably the internet, got %+v", got.Devices[0].Doors)
+	}
+}
+
+// A rule naming no dst-port at all covers every port, not none -- it is
+// still a door, and the frontend is what turns its empty DstPort into
+// "any port" rather than a blank.
+func TestWANDoorsNoDstPortIsStillADoor(t *testing.T) {
+	s, _ := newTestServer(t)
+	if err := s.RouterState.Apply("core", ingest.Payload{
+		Kind: ingest.KindFilterRule, Page: 1, Pages: 1,
+		FilterRules: []ingest.FilterRule{
+			{Ordinal: 1, Chain: "input", Action: "accept", InInterface: "ether1"},
+		},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.mux())
+	t.Cleanup(ts.Close)
+
+	got := getWANDoors(t, ts, "?device=core&wan=ether1")
+	if len(got.Devices[0].Doors) != 1 || got.Devices[0].Doors[0].DstPort != "" {
+		t.Fatalf("a rule with no dst-port is still a door, with an empty DstPort for the frontend to say 'any port', got %+v", got.Devices[0].Doors)
+	}
+}

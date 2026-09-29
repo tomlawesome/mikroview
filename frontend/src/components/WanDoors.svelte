@@ -49,7 +49,11 @@
     return door.to.name ? `${door.to.ip} · ${door.to.name}` : door.to.ip
   }
 
+  // A rule that names no dst-port at all is still a door -- it covers
+  // every port, not none -- so the row says so in words rather than
+  // rendering the field's own empty string.
   function portText(door: WanDoor): string {
+    if (!door.dstPort) return 'any port'
     return door.proto ? `${door.dstPort}/${door.proto}` : door.dstPort
   }
 
