@@ -35,6 +35,7 @@
   import CopyButton from './CopyButton.svelte'
   import GhostRows from './GhostRows.svelte'
   import type { DossierPeer } from '../lib/types'
+  import { servingState } from '../lib/serving.svelte'
 
   const titleId = 'host-dossier-title'
 
@@ -43,6 +44,19 @@
   let headEditEl: HTMLButtonElement | undefined = $state()
 
   const d = $derived(dossierState.data)
+
+  /**
+   * The ports list, reordered while the serving lens (#1320) is on: the
+   * "+N more" chip it opens is about what this host answered, so those
+   * rows -- `reached on it` -- surface first. Each side keeps the
+   * backend's own busiest-first order otherwise; the lens changes what
+   * leads, not how either half is sorted.
+   */
+  const sortedPorts = $derived.by(() => {
+    const ports = d?.traffic.ports
+    if (!ports || !servingState.open) return ports
+    return [...ports].sort((a, b) => (a.direction === b.direction ? 0 : a.direction === 'in' ? -1 : 1))
+  })
   // One clock read per assembled card. The dossier is a snapshot with
   // its own generatedAt, not a live view, so a ticking "12m ago" that
   // kept moving under a static card would imply a freshness it does not
@@ -291,10 +305,10 @@
               </ul>
               {#if d.traffic.moreTalkers}<p class="from">and {d.traffic.moreTalkers} more</p>{/if}
             {/if}
-            {#if d.traffic.ports && d.traffic.ports.length > 0}
+            {#if sortedPorts && sortedPorts.length > 0}
               <p class="sub">ports</p>
               <ul class="ports">
-                {#each d.traffic.ports as p (p.direction + p.protocol + p.port)}
+                {#each sortedPorts as p (p.direction + p.protocol + p.port)}
                   <li>
                     <span class="peer">{p.port}{p.protocol ? '/' + p.protocol : ''}{p.name ? ` ${p.name}` : ''}</span>
                     <span class="from">{p.direction === 'in' ? 'reached on it' : 'reached out'} · {p.events} events</span>

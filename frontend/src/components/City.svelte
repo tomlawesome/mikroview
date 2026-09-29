@@ -83,6 +83,11 @@
   import { mapTraceState } from '../lib/mapTrace.svelte'
   import { doorAccepts, doorHalf, emptyNote, litRibs, plaqueTally } from '../lib/portFilter'
   import type { PortDoor } from '../lib/api'
+  // The "seen serving" lens (#1320): the same dimming rule the port
+  // filter draws above, over the same ground -- no door vocabulary and
+  // no plaque tally of its own; #1320 is explicit that City gets no
+  // treatment beyond the same dimming.
+  import { servingState } from '../lib/serving.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { HOST_QUIET_AFTER_MS, hostsState, presenceOf } from '../lib/hosts.svelte'
@@ -767,11 +772,13 @@
     const savedS = stand ? stand.savedS : S
     const savedCentre = stand ? stand.savedCentre : centre
     stand = { ...subject, savedS, savedCentre }
-    // Standing clears the port filter, exactly as it does on the flat
-    // map (#1018's own rule, kept here by #1055). Two answers layered on
-    // one city would stack their dimming on each other and leave nobody
-    // able to say which of them a grey road was grey because of.
+    // Standing clears the port filter and the serving lens, exactly as
+    // it does on the flat map (#1018's own rule, kept here by #1055;
+    // #1320 joins it). Two answers layered on one city would stack their
+    // dimming on each other and leave nobody able to say which of them a
+    // grey road was grey because of.
     portFilterState.clear()
+    servingState.clear()
     // Each reach starts from the drawing: the last building's draft does
     // not follow you to the next one.
     composerOpen = false
@@ -822,13 +829,15 @@
     // comes off before where they are standing -- the flat map reads the
     // ladder in the same order. It is this handler's rung while the city
     // is the surface being read: Topography stands its own down for a
-    // city stop so one press can never take two. The trace (#1050) is
-    // the same rung as the port filter -- the two are mutually exclusive
-    // already, so at most one of them is ever open to clear.
-    if (portFilterState.active || portFilterState.open || mapTraceState.active) {
+    // city stop so one press can never take two. The trace (#1050) and
+    // the serving lens (#1320) are the same rung as the port filter --
+    // all three are mutually exclusive already, so at most one of them
+    // is ever open to clear.
+    if (portFilterState.active || portFilterState.open || mapTraceState.active || servingState.open) {
       e.preventDefault()
       portFilterState.clear()
       mapTraceState.clear()
+      servingState.clear()
       return
     }
     if (stand) {
@@ -1569,9 +1578,10 @@
   /* ---------------- the event trace (#1050, rounds 54 & 56) ---------------- */
 
   // Round 53's other tool (#1018) on this surface, drawn as rounds 54
-  // and 56 draw it. Mutually exclusive with the port filter by
-  // construction -- Topography's openTrace/openPortPicker each clear
-  // the other -- so at most one of portOverlay/traceOverlay is ever
+  // and 56 draw it. Mutually exclusive with the port filter and #1320's
+  // serving lens by construction -- Topography's
+  // openTrace/openPortPicker/toggleServing each clear the other two --
+  // so at most one of portOverlay/traceOverlay/servingOverlay is ever
   // non-null.
   const traceOn = $derived(mapTraceState.active)
 
@@ -1633,6 +1643,40 @@
       }
     }
     return { litRoadIds, litBuildingIds, tallies }
+  })
+
+  /* ---------------- the "seen serving" lens (#1320) ---------------- */
+
+  // Sibling to the port filter above, drawn the same way: nothing new on
+  // the ground, the map dims to the answer. Mutually exclusive with both
+  // the port filter and the trace by construction (Topography's
+  // toggleServing/openPortPicker/openTrace each clear the other two).
+  const servingOn = $derived(servingState.open && servingState.settled)
+
+  interface ServingOverlay {
+    litBuildingIds: Set<string>
+  }
+
+  /**
+   * What the serving lens dims the city to: buildings only.
+   *
+   * The answer is host-level, not per-crossing (#1320's backend has no
+   * ribs to ask, unlike the port filter's), so there is no honest way to
+   * say which road a served host was reached over -- lighting one from
+   * district membership alone would be a claim about that boundary's
+   * traffic the lens cannot actually back. Roads keep their ordinary,
+   * unfiltered look while this lens is on; only a building itself dims
+   * or not, the same fact a dot states on the flat map. No door
+   * vocabulary either: the lens makes no claim about policy, only about
+   * traffic seen.
+   */
+  const servingOverlay = $derived.by((): ServingOverlay | null => {
+    if (!servingOn) return null
+    const litBuildingIds = new Set<string>()
+    for (const b of allBuildings) {
+      if (b.ip && servingState.hosts.has(b.ip)) litBuildingIds.add(b.id)
+    }
+    return { litBuildingIds }
   })
 
   interface TraceMark {
@@ -2161,6 +2205,13 @@
       // the rest recede. Nothing is taken off the map -- the answer is
       // read against the whole city. The two are mutually exclusive
       // (opening one clears the other), so at most one is ever active.
+      //
+      // The serving lens (#1320) is deliberately absent from this
+      // question: its answer has no road for a rule to ask about, so a
+      // road lit from district membership alone would claim traffic on
+      // that boundary the lens cannot back. Roads keep their ordinary
+      // look while it is on -- only a building itself dims or not,
+      // exactly as its dot does on the flat map.
       const onPort = !portOverlay || portOverlay.litRoadIds.has(r.id)
       const onTrace = traceOverlay !== null && traceOverlay.litRoadIds.has(r.id)
       const onFilter = portOverlay ? onPort : traceOverlay ? onTrace : true
@@ -2315,7 +2366,8 @@
         (d?.dark ?? false) ||
         (reachOverlay ? !reachOverlay.litBuildingIds.has(b.id) : false) ||
         (portOverlay && b.host ? !portOverlay.litBuildingIds.has(b.id) : false) ||
-        (traceOverlay && b.host ? !traceOverlay.litBuildingIds.has(b.id) : false)
+        (traceOverlay && b.host ? !traceOverlay.litBuildingIds.has(b.id) : false) ||
+        (servingOverlay && b.host ? !servingOverlay.litBuildingIds.has(b.id) : false)
       // Presence is the building's own ink (round 49, #1016): a host not
       // heard for the quiet window goes grey with a dashed footprint, one
       // marked quiet on purpose goes white and translucent. Both stay on

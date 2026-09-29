@@ -617,6 +617,10 @@ func (s *Server) coreRoutes() []route {
 		// event buffer and RouterState; nothing here touches the network.
 		{http.MethodGet, "/api/ports", s.handlePorts},
 		{http.MethodGet, "/api/trace", s.handleTrace},
+		// #1320's "seen serving" lens: every host the window saw actually
+		// answer, and what -- traffic only, no doors, the same read shape
+		// as the two routes above.
+		{http.MethodGet, "/api/ports/serving", s.handleServing},
 		// Ingest-loss "Clear all" (#1015): zeroes the four monotonic
 		// syslog-listener loss counters /api/stats' "syslog.loss" field
 		// reads, so a transient loss stops permanently marking the
