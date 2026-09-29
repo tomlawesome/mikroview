@@ -772,13 +772,17 @@
     const savedS = stand ? stand.savedS : S
     const savedCentre = stand ? stand.savedCentre : centre
     stand = { ...subject, savedS, savedCentre }
-    // Standing clears the port filter and the serving lens, exactly as
-    // it does on the flat map (#1018's own rule, kept here by #1055;
-    // #1320 joins it). Two answers layered on one city would stack their
-    // dimming on each other and leave nobody able to say which of them a
-    // grey road was grey because of.
+    // Standing clears the port filter, exactly as it does on the flat
+    // map (#1018's own rule, kept here by #1055). Two answers layered on
+    // one city would stack their dimming on each other and leave nobody
+    // able to say which of them a grey road was grey because of.
+    //
+    // #1320's serving lens deliberately does not clear here (#1396, the
+    // same fix Topography's clearMapFilters got): it lights no road and
+    // dims no district whole, so there is no crumb of its own to clash
+    // with standing on something -- and it still clears, and still
+    // clears the other two, wherever it is the one being turned on.
     portFilterState.clear()
-    servingState.clear()
     // Each reach starts from the drawing: the last building's draft does
     // not follow you to the next one.
     composerOpen = false
@@ -829,15 +833,19 @@
     // comes off before where they are standing -- the flat map reads the
     // ladder in the same order. It is this handler's rung while the city
     // is the surface being read: Topography stands its own down for a
-    // city stop so one press can never take two. The trace (#1050) and
-    // the serving lens (#1320) are the same rung as the port filter --
-    // all three are mutually exclusive already, so at most one of them
-    // is ever open to clear.
-    if (portFilterState.active || portFilterState.open || mapTraceState.active || servingState.open) {
+    // city stop so one press can never take two. The trace (#1050) is
+    // the same rung as the port filter -- the two are mutually exclusive
+    // already, so at most one of them is ever open to clear.
+    //
+    // #1320's serving lens is deliberately absent from this rung (#1396):
+    // it lights no road and dims no district whole, so there is nothing
+    // here for it to clash with, and clearing it on Escape would undo the
+    // same survival open() now gives it for no reason Escape has of its
+    // own. Its own ✕ and pill still turn it off.
+    if (portFilterState.active || portFilterState.open || mapTraceState.active) {
       e.preventDefault()
       portFilterState.clear()
       mapTraceState.clear()
-      servingState.clear()
       return
     }
     if (stand) {
