@@ -600,6 +600,10 @@ func (s *Server) coreRoutes() []route {
 		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
+		// The pushed /ip/service table (issue #1329): the router's own
+		// management services, same session-gated read-only shape as the
+		// three routes above.
+		{http.MethodGet, "/api/routeros/{device}/services", s.handleRouterOSServices},
 		// Per-tunnel state (issue #874, City 9's ingest side): WireGuard
 		// handshake-derived up/down and the /ppp/active table backing
 		// L2TP/PPTP/SSTP/OVPN alike. Same session-gated, read-only shape
