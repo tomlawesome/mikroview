@@ -24,6 +24,7 @@ import {
   type RunAnswers,
   type Stage,
 } from './wizardRun'
+import type { TuneRule } from './wizardTune'
 
 // The token's expiry as the paste step's line shows it (14:17).
 function hm(iso: string): string {
@@ -49,6 +50,9 @@ class WizardRun {
   tuneSkipped = $state(false)
   chosenCount = $state(0)
   tunedAt = $state('')
+  // The rules the tagging block was copied for (#1384): what the rail's
+  // receipt counts, and what the ledger's Undo for tagged rules lists.
+  tuneChosen = $state<TuneRule[]>([])
   undoOpen = $state<string | null>(null)
   showUndoAll = $state(false)
 
@@ -158,6 +162,7 @@ class WizardRun {
 
   reset() {
     Object.assign(this, freshAnswers())
+    this.tuneChosen = []
     this.undoOpen = null
     this.showUndoAll = false
     this.decodedAtCopy = 0
