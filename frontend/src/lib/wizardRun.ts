@@ -396,3 +396,115 @@ export function announce(rows: RailRow[]): string {
   const tail = row.state.receipt ? ` — ${row.state.receipt}` : ''
   return row.id === 'stand' ? `${n}${tail}` : `${n} — ${row.title}${tail}`
 }
+
+// --- The router's turn: the track (ported from track.js's stations) ---
+//
+// One wire, a station per proof. The track "stays green" (DESIGN.md,
+// "One ink per thing", round 9's note) -- every station's ink is the
+// same accept green once it lands, so a station only needs its state,
+// not its own ink. Set-aside stations (push/backup answered No) are
+// 'skip': dashed and struck. A station this run has not reached yet
+// is 'later' rather than 'wait' -- the same distinction track.js's own
+// stations() makes, just without a per-station ink lookup.
+//
+// The rules station (tuneBody's tagging, and the compact track on
+// ✓ Where setup stands) is not built here: it never appears while this
+// step's stage is 'watch', and belongs with whichever issue builds
+// that ledger's own track (#1385).
+export type TrackState = 'wait' | 'done' | 'skip' | 'alarm' | 'later'
+
+export interface TrackStation {
+  id: 'copy' | 'cert' | 'enrol' | 'push' | 'backup'
+  lab: string
+  st: string
+  state: TrackState
+}
+
+export function trackStations(s: RunAnswers, ev: Evidence, copiedAt: string): TrackStation[] {
+  const stations: TrackStation[] = []
+  stations.push({
+    id: 'copy',
+    lab: 'copied',
+    st: s.copied ? hms(copiedAt) : 'not yet',
+    state: s.copied ? 'done' : 'wait',
+  })
+  stations.push({
+    id: 'cert',
+    lab: 'certificate',
+    st: ev.cert ? hms(ev.cert) : 'fetches /ca.crt',
+    state: ev.cert ? 'done' : s.copied ? 'wait' : 'later',
+  })
+  if (ev.refused) {
+    stations.push({ id: 'enrol', lab: 'refused', st: `lines from ${ev.refused}`, state: 'alarm' })
+  } else {
+    stations.push({
+      id: 'enrol',
+      lab: 'logs',
+      st: ev.enrol ? `${hms(ev.enrol)} · ${ev.lines.toLocaleString()} lines` : `enrol line from ${s.addr}`,
+      state: ev.enrol ? 'done' : ev.cert ? 'wait' : 'later',
+    })
+  }
+  if (s.push === false) {
+    stations.push({ id: 'push', lab: 'push', st: 'not now · address-only', state: 'skip' })
+  } else {
+    stations.push({
+      id: 'push',
+      lab: 'push',
+      st: ev.push ? `${hms(ev.push)} · v${ev.version}` : 'end of the block',
+      state: ev.push ? 'done' : ev.enrol ? 'wait' : 'later',
+    })
+  }
+  if (s.backup === false) {
+    stations.push({ id: 'backup', lab: 'backup', st: 'not now · none kept here', state: 'skip' })
+  } else {
+    stations.push({
+      id: 'backup',
+      lab: 'backup',
+      st: ev.backup ? `${hms(ev.backup)} · 03:00` : 'after the push',
+      state: ev.backup ? 'done' : ev.push || (s.push === false && !!ev.enrol) ? 'wait' : 'later',
+    })
+  }
+  return stations
+}
+
+// latestArrivalHeadline is the observation line's own sentence once
+// something beyond Copy has landed (watchBody's `latest`): the last
+// station in wire order whose state is 'done', in the full sentence its
+// own arrival earns -- not just the track's short label.
+export interface LatestArrival {
+  text: string
+  small: string
+}
+
+export function latestArrivalHeadline(stations: TrackStation[], ev: Evidence, name: string): LatestArrival | null {
+  const done = stations.filter((x) => x.state === 'done')
+  const last = done[done.length - 1]
+  if (!last || last.id === 'copy') return null
+  const text =
+    last.id === 'cert'
+      ? `Certificate fetched by ${ev.from}`
+      : last.id === 'enrol'
+        ? `Enrol line from ${ev.from}`
+        : last.id === 'push'
+          ? `First push from ${name}`
+          : 'Nightly backup scheduled'
+  return { text, small: last.st.split(' · ')[0] }
+}
+
+// refusedFixBlock is the refused-sender warning box's copyable fix
+// (DESIGN.md, "Refused sender"): the syslog step's own guarded action
+// line -- which sets src-address back to 0.0.0.0, "let the router
+// pick" (internal/routeros/commands.go's SyslogCommands, #1370) -- and
+// the enrol line last, skipping the topics guard in between since that
+// line never needed re-pasting. Built from the server's own rendered
+// syslog block rather than a hand-written RouterOS line (AGENTS.md);
+// falls back to the whole block if it is not the shape this expects
+// (e.g. no token minted yet, so there is no enrol line to keep last).
+export function refusedFixBlock(syslogCommands: string): string {
+  const lines = syslogCommands.split('\n').filter(Boolean)
+  if (lines.length === 0) return ''
+  const first = lines[0]
+  const last = lines[lines.length - 1]
+  if (lines.length > 1 && last.startsWith('/log info "mikroview-enrol')) return `${first}\n${last}`
+  return first
+}
