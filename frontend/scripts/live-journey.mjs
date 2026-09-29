@@ -9,8 +9,8 @@
 // brand-new, zero-account instance is what Attach, Connecting, the
 // glass and the tour choreograph across, and every scenario in this
 // suite runs against one already-provisioned instance shared with
-// everything that ran before it -- the same reason live-setup-wizard.mjs
-// tests the modal's *relaunch* door rather than its first auto-launch.
+// everything that ran before it -- the same reason the wizard's own
+// scenarios test the *relaunch* door rather than its first auto-launch.
 // Those beats, and the tour's advance/skip/leave mechanics, are covered
 // by component tests instead (lib/journey.svelte.test.ts,
 // JourneyAttach/JourneyGlass/JourneyTour.svelte.test.ts). #750 B1's
@@ -23,14 +23,33 @@
 // hold the buffer empty and watch the clock not move the beat on.
 //
 // What a real browser against a real server *can* still prove here: the
-// one piece of #646 that is not gated on instance freshness -- the full
-// wizard ends by taking the operator back to the fall (SetupWizard.svelte's
-// leaveToLanding), on this instance exactly as it would on a fresh one.
-// And that the journey's own chrome never leaks into an ordinary,
-// already-provisioned session.
+// one piece of #646 that is not gated on instance freshness -- the wizard
+// ends by taking the operator back to the fall, on this instance exactly
+// as it would on a fresh one. And that the journey's own chrome never
+// leaks into an ordinary, already-provisioned session.
+//
+// The full-screen wizard (#1381) moved that finish from SetupWizard.svelte's
+// leaveToLanding to wizardRun.finish() (wizardRun.svelte.ts):
+// `appState.view = wizardState.finishTo === 'fleet' ? 'fleet' : 'fall'`,
+// then `wizardState.close()`. Run setup… is the door that sets finishTo
+// to 'fall' (wizardState.launch()) -- Add a router and Re-enrol… lead to
+// the fleet instead, which is not what this scenario is proving.
+//
+// Reaching Finish needs the run at the 'done' stage, and wizardRun.ts's
+// footSpec offers it nowhere else. Paste once and Tag firewall rules
+// (StepPaste.svelte, StepTune.svelte) are still stubs under #1382/#1384,
+// with no Copy button yet to drive a walk through them -- but
+// wizardRun.begin() reads the ledger from evidence alone (the same
+// evidence a real walk leaves), so this reaches 'done' the way *reopening*
+// an already-provisioned instance would, without needing that UI: a
+// syslog source on record and a certificate fetch on record are the only
+// two things a bare "Run setup…" reads for the fleet as a whole
+// (wizardRun.svelte.ts's evidence getter, the `!id` branch -- there is no
+// specific router named, so this cannot also check a receipt naming one;
+// the wizard's own router-mint scenario proves that for a walk that does).
+import { session, check, done, goTo, feedSyslog } from './live-browser.mjs'
 
-import { session, check, done, goTo } from './live-browser.mjs'
-
+const URL_BASE = process.env.MV_URL
 const { page, consoleErrors } = await session({ dismissSetup: false, landing: 'fall' })
 
 // --- No journey chrome on an ordinary, already-provisioned session -----
@@ -40,20 +59,21 @@ check(
 )
 
 // --- The wizard's finish leads back to the fall, whichever door opened it ---
-const modal = page.locator('.setup-wizard')
-if (await modal.count()) {
-  await page.keyboard.press('Escape')
-  await modal.waitFor({ state: 'detached' })
-}
+// Driven directly rather than assumed from the suite's baseline feed
+// (run-scenarios.sh's `live-baseline`), which does not run when this
+// script is invoked on its own (the live-check skill's `node
+// scripts/live-smoke.mjs`-style usage).
+feedSyslog(1, 'live-journey-finish')
+await page.request.get(`${URL_BASE}/ca.crt`)
 
 await goTo(page, 'Run setup…')
-await modal.waitFor({ state: 'visible' })
+const wizard = page.locator('.page.wiz')
+await wizard.waitFor({ state: 'visible' })
 
-await page.locator('.setup-wizard .steps .finish-row').click()
-await page.locator('.setup-wizard .readback').waitFor({ state: 'visible' })
-
-await page.click('.setup-wizard footer button:text-is("Take me to the fall")')
-await modal.waitFor({ state: 'detached' })
+const finish = page.locator('.wiz .foot button.primary:text-is("Finish")')
+await finish.waitFor({ state: 'visible', timeout: 15000 })
+await finish.click()
+await wizard.waitFor({ state: 'detached' })
 
 await page.waitForFunction(() => {
   const deck = document.querySelector('.deck')
