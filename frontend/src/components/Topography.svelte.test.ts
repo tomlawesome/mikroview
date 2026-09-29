@@ -5590,6 +5590,36 @@ describe('the "seen serving" lens (#1320)', () => {
     flushSync()
     expect(servingState.open).toBe(false)
   })
+
+  // #1396: descendFromHost -> clearMapFilters used to clear the serving
+  // lens along with the port filter and the trace, so the very reach the
+  // lens exists to drill into could never show its own answer. The lens
+  // lights no rib and dims no lane whole, so unlike the other two it has
+  // no crumb left on the map to clash with the reach -- it survives.
+  it('survives a descend into a lit host, so the reach shows its served-port chips', () => {
+    seedMap()
+    serveHosts([{ ip: '10.0.10.21', name: 'tom-desktop', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }])
+    const { container } = render(Topography)
+    flushSync()
+    showTheMap(container)
+
+    const pillText = () => container.querySelector('.pill.p.on')?.textContent?.replace(/\s+/g, ' ').trim()
+    expect(pillText()).toBe('⌕ serving · 1 of 2 hosts answer in the window')
+
+    // tom-desktop's dot sorts first (laneHostRow's own key order,
+    // "bridge1|10.0.10.21" before "...10.0.10.34") -- the same lit host
+    // the tally above counts.
+    container.querySelector<SVGGElement>('.hostrow .hot')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    expect(servingState.open).toBe(true)
+    const chips = [...container.querySelectorAll('.serve-chip')]
+    expect(chips.length).toBeGreaterThan(0)
+    expect(chips.some((c) => c.textContent?.includes('445/tcp'))).toBe(true)
+    // The pill reads exactly as it did before the descend -- the lens's
+    // own answer never moved, only the map's focus did.
+    expect(pillText()).toBe('⌕ serving · 1 of 2 hosts answer in the window')
+  })
 })
 
 describe('the event trace (#1018, round 53)', () => {
