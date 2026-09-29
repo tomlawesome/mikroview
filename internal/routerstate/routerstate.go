@@ -648,6 +648,28 @@ func (s *Store) PPPActive(device string) (sessions []ingest.PPPActiveSession, up
 	return sessions, ks.updatedAt, true
 }
 
+// IPServices returns device's pushed /ip/service table (issue #1329):
+// the router's own management services -- telnet, ftp, www, www-ssl,
+// ssh, api, api-ssl, winbox -- observed from what it pushed rather than
+// inferred from traffic. Sorted by name, since RouterOS gives this table
+// no ordinal of its own. ok is false when nothing has been pushed for
+// that device+kind yet, the same "no data yet" convention every other
+// accessor here uses.
+func (s *Store) IPServices(device string) (services []ingest.IPServiceEntry, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindIPService)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		services = append(services, p.IPServices...)
+	}
+	sort.SliceStable(services, func(i, j int) bool { return services[i].Name < services[j].Name })
+	return services, ks.updatedAt, true
+}
+
 // Devices returns every device with at least one pushed page, sorted by
 // name -- the enumeration FilterRules/DHCPLeases/etc need a caller to
 // already have a device name, this is how a caller (e.g. the suggestions

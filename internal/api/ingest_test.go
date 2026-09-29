@@ -519,6 +519,54 @@ func TestIngestPushedIPAddressesAreReadableFromTheTableEndpoint(t *testing.T) {
 	}
 }
 
+// TestIngestPushedIPServicesAreReadableFromTheTableEndpoint is issue
+// #1329's own acceptance case: a pushed /ip/service table lands in
+// RouterState and is readable back through the services endpoint,
+// including a row with no address restriction -- the case that matters
+// most downstream, since it means "reachable from anywhere" rather than
+// an omitted field being confused with a real restriction.
+func TestIngestPushedIPServicesAreReadableFromTheTableEndpoint(t *testing.T) {
+	ts, _, raw := ingestTestServer(t, "router-7")
+
+	push := `{"kind":"ip-service","page":1,"pages":1,"records":[` +
+		`{"name":"winbox","disabled":false,"port":8291,"certificate":""},` +
+		`{"name":"api","disabled":true,"port":8728,"address":"10.0.0.0/8","certificate":""}]}`
+	resp := postIngest(t, ts, raw, push)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: status = %d, want 200", resp.StatusCode)
+	}
+
+	adminClient := loggedInClient(t, ts.URL, "admin", "password123")
+	res, err := adminClient.Get(ts.URL + "/api/routeros/router-7/services")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET services: status = %d, want 200", res.StatusCode)
+	}
+	var got routerTableResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Available || got.UpdatedAt == nil {
+		t.Fatalf("services table = %+v, want available with an updatedAt", got)
+	}
+	services, ok := got.Rules.([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("services = %#v, want 2 entries", got.Rules)
+	}
+	first, _ := services[0].(map[string]any)
+	if first["name"] != "api" {
+		t.Errorf("first service = %+v, want api first (sorted by name)", first)
+	}
+	second, _ := services[1].(map[string]any)
+	if addr, ok := second["address"].([]any); !ok || len(addr) != 0 {
+		t.Errorf("winbox address = %#v, want an empty list (no restriction)", second["address"])
+	}
+}
+
 // TestIngestOversizedStateIsRefused drives internal/routerstate's
 // per-kind record cap through the real endpoint: the page that would
 // cross it comes back 400, and the state already held stays intact.

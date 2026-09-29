@@ -140,6 +140,7 @@ type Payload struct {
 	IPAddresses         []IPAddressEntry
 	PPPActive           []PPPActiveSession
 	Logging             []LoggingEntry
+	IPServices          []IPServiceEntry
 }
 
 // RecordCount returns how many records are in whichever slice matches
@@ -170,6 +171,8 @@ func (p Payload) RecordCount() int {
 		return len(p.PPPActive)
 	case KindLogging:
 		return len(p.Logging)
+	case KindIPService:
+		return len(p.IPServices)
 	default:
 		return 0
 	}
@@ -251,6 +254,8 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		out.PPPActive, err = decodeRecords[PPPActiveSession](wire.Records)
 	case KindLogging:
 		out.Logging, err = decodeRecords[LoggingEntry](wire.Records)
+	case KindIPService:
+		out.IPServices, err = decodeRecords[IPServiceEntry](wire.Records)
 	default:
 		return Payload{}, ErrUnknownKind
 	}
@@ -539,4 +544,14 @@ func (e LoggingEntry) validate() error {
 		return err
 	}
 	return validateFieldText("disabled", string(e.Disabled))
+}
+
+func (e IPServiceEntry) validate() error {
+	if err := validateFieldText("name", e.Name); err != nil {
+		return err
+	}
+	if err := validateFieldList("address", e.Address); err != nil {
+		return err
+	}
+	return validateFieldText("certificate", e.Certificate)
 }
