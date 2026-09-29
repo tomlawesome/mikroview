@@ -84,6 +84,33 @@ function totpCode(base32Secret, atMs = Date.now()) {
   return String(code % 1_000_000).padStart(6, '0')
 }
 
+// A locator screenshot crops exactly to the element's own box, so when the
+// box ends flush with its text (#people's does: PEOPLE, the names and
+// "+ let someone in" sit right at the left edge, console-only and remove
+// at the right -- #1339) the words touch the image edge. Legible, but it
+// reads as a cut, not a framed shot. Pad a modest, even margin around the
+// box instead, clamped to the viewport so the clip never runs off the page.
+const CLIP_MARGIN = 24
+async function paddedClip(page, locator, margin = CLIP_MARGIN) {
+  // boundingBox() reports coordinates against the current scroll
+  // position, so the section must actually be scrolled into view first
+  // -- locator.screenshot() (what this replaces) did that implicitly.
+  await locator.scrollIntoViewIfNeeded()
+  const box = await locator.boundingBox()
+  if (!box) throw new Error('paddedClip: locator has no box (not visible?)')
+  const viewport = page.viewportSize()
+  // Padding above the box, unlike the other three sides, pulls in
+  // whatever precedes #people on the page -- its divider and the tail of
+  // the previous section's text ended up in the shot (#1339 follow-up).
+  // The top of the box is already this section's own edge, so the clip
+  // starts there with no extra margin; left/right/bottom keep theirs.
+  const x = Math.max(0, box.x - margin)
+  const y = Math.max(0, box.y)
+  const right = Math.min(viewport.width, box.x + box.width + margin)
+  const bottom = Math.min(viewport.height, box.y + box.height + margin)
+  return { x, y, width: right - x, height: bottom - y }
+}
+
 const SHOTS = path.join(REPO, 'docs', 'screenshots')
 const BUILT = path.join(REPO, 'docs', 'design', 'screens', 'settings', 'round-2', 'built')
 fs.mkdirSync(BUILT, { recursive: true })
@@ -202,7 +229,8 @@ for (const scheme of ['light', 'dark']) {
   console.log(`captured built/ac-s1-${scheme}.png`)
 
   if (scheme === 'light') {
-    await page.locator(PEOPLE).screenshot({ path: path.join(SHOTS, 'engine-room-people-door.png') })
+    const clip = await paddedClip(page, page.locator(PEOPLE))
+    await page.screenshot({ path: path.join(SHOTS, 'engine-room-people-door.png'), clip })
     console.log('captured engine-room-people-door.png')
   }
 
