@@ -27,8 +27,9 @@ rewritten.
   The listener starts and stops with no restart; an upload already under
   way finishes even if the drop box is closed mid-transfer. Every change
   is audited, emailed to `notify.smtp.to` when configured, and shown as a
-  banner to every admin for seven days. The setup wizard's backup step
-  offers the same control directly when the drop box is still closed.
+  banner to every admin for seven days. The setup wizard shows a closed
+  drop box under its Back up nightly choice, with the same dialog to open
+  it there; a router's own Yes / No never opens or closes it.
   The port (`47022/tcp`) is now published unconditionally by `install.sh`
   and `deploy/docker-compose.yml`, since a container's port mapping
   cannot follow a switch that moves at runtime -- nothing answers on it

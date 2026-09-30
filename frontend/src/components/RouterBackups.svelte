@@ -64,6 +64,7 @@
   import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
   import { portOf } from '../lib/setupsteps'
+  import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
   import type {
     RouterBackupDiffLine,
     RouterBackupGeneration,
@@ -227,38 +228,28 @@
   // backupRuntime (SetupInstance.BackupPortNow), not a separate fetch --
   // so there is nothing here to poll: EngineRoom's own refresh, and the
   // optimistic onswitchchanged below, are what keep it current.
+  //
+  // Opening is RouterBackupOpenDialog's -- the password, the caveat and
+  // the call live there once, shared with the wizard's Back up nightly
+  // choice (StepRouter.svelte) as the ratified design asks.
   const dropBoxOpen = $derived(!!resp.port)
 
   let switchAsking = $state(false)
-  let switchPassword = $state('')
   let switchSubmitting = $state(false)
   let switchError = $state<string | null>(null)
 
   function openSwitchDialog() {
     switchAsking = true
-    switchPassword = ''
     switchError = null
   }
 
   function cancelSwitchDialog() {
     switchAsking = false
-    switchPassword = ''
-    switchError = null
   }
 
-  async function submitOpenSwitch() {
-    if (!switchPassword || switchSubmitting) return
-    switchSubmitting = true
-    switchError = null
-    const result = await setRouterBackupSwitch(true, switchPassword)
-    switchSubmitting = false
-    if (typeof result === 'string') {
-      switchError = result
-      return
-    }
+  function dropBoxOpened(state: RouterBackupSwitchState) {
     switchAsking = false
-    switchPassword = ''
-    onswitchchanged?.(result)
+    onswitchchanged?.(state)
   }
 
   // Closing is the safe direction (owner's ruling 3a): no password, no
@@ -986,40 +977,12 @@
 {/if}
 
 {#if switchAsking}
-  <!-- Opening the drop box (#1361): a password re-check (owner's
-       ruling 3a -- closing needs none, see closeDropBox above), the
-       trust caveat every SFTP push already carries (the "path" row
-       above), and the HTTPS-only alternative that needs no open port at
-       all (docs/routeros-setup.md, 7c-ii). Its own block, not folded
-       into the pform above: that one is gated on resp.enabled (the
-       vault *key*'s state), and this control has to work with no key
-       mounted at all. -->
-  <div class="pform">
-    <p class="oghint pnote">
-      RouterOS never checks who it is sending to — anyone on the path between your router and mikroview could read
-      the backup and the ingest token. Only open this on a network you trust, or use the HTTPS-only alternative
-      (docs/routeros-setup.md, section 7c-ii), which needs no open port at all.
-    </p>
-    <label class="lab">
-      your password
-      <input
-        type="password"
-        autocomplete="current-password"
-        disabled={switchSubmitting}
-        bind:value={switchPassword}
-        onkeydown={(e) => {
-          if (e.key === 'Enter') submitOpenSwitch()
-        }}
-      />
-    </label>
-    {#if switchError}<p class="oghint err" role="alert">{switchError}</p>{/if}
-    <span class="acts">
-      <button type="button" class="olink" disabled={switchSubmitting} onclick={cancelSwitchDialog}>cancel</button>
-      <button type="button" class="olink" disabled={switchSubmitting || !switchPassword} onclick={submitOpenSwitch}>
-        {switchSubmitting ? 'opening…' : 'open'}
-      </button>
-    </span>
-  </div>
+  <!-- Opening the drop box (#1361): the shared dialog -- password,
+       caveat, HTTPS alternative -- in Settings' own form grammar. Its
+       own block, not folded into the pform above: that one is gated on
+       resp.enabled (the vault *key*'s state), and this control has to
+       work with no key mounted at all. -->
+  <RouterBackupOpenDialog look="settings" onopened={dropBoxOpened} oncancel={cancelSwitchDialog} />
 {/if}
 
 <style>
