@@ -797,6 +797,15 @@ class WizardState {
   // open" instead would re-arm the moment the operator closed the modal,
   // and reopen it under them -- an explicit close that undoes itself is
   // worse than no close at all.
+  // wouldAutoLaunch is maybeAutoLaunch's test without its side effects:
+  // the journey (#1386) asks it under the held door, and then spends the
+  // slot and launches itself, or lets the door down.
+  wouldAutoLaunch(hasDevices: boolean): boolean {
+    if (this.autoLaunched) return false
+    if (!this.status) return false
+    return !hasDevices && this.marks.length === 0
+  }
+
   maybeAutoLaunch(hasDevices: boolean) {
     if (this.autoLaunched) return
     // No ledger yet means no answer yet, not an answer of "no".

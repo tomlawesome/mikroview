@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 // AuthLogin is a thin wrapper: it renders AuthScreen and wires its
 // onsubmit straight to authState.login. Mocking lib/api.ts (rather than
@@ -35,6 +35,7 @@ import {
   submitPasskeyLoginAssertion,
 } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
+import { wizardJourney } from '../lib/wizardJourney.svelte'
 import AuthLogin from './AuthLogin.svelte'
 
 // The browser ceremony's own JSON helpers -- jsdom has neither by
@@ -70,6 +71,7 @@ beforeEach(() => {
   authState.mustChangePassword = false
   authState.pendingSecondFactor = []
   authState.pendingPasskeyOrigin = undefined
+  wizardJourney.end()
 })
 
 async function fillAndSubmit(username: string, password: string) {
@@ -282,6 +284,49 @@ describe('AuthLogin at the pending-factor step', () => {
 
     expect(submitLoginFactor).toHaveBeenCalledWith('123456')
     expect(authState.state).toBe('authenticated')
+  })
+
+  // #1386: the way in is armed where the session actually lands. With a
+  // second factor owed, the password step leaves 'pending-factor' and
+  // the role unknown, so arming there alone never fired for an admin
+  // holding a factor -- the journey never played and the plain
+  // auto-launch opened the wizard instead.
+  it('starts the way in for an admin who finishes with a second factor', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'tom',
+      role: 'admin',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(wizardJourney.pending).toBe(true))
+    expect(wizardJourney.holdDoor).toBe(true)
+  })
+
+  it('does not start the way in for a viewer who finishes with a second factor', async () => {
+    vi.mocked(submitLoginFactor).mockResolvedValue(null)
+    vi.mocked(fetchAuthSession).mockResolvedValue({
+      setupRequired: false,
+      authenticated: true,
+      username: 'sam',
+      role: 'viewer',
+      ssoAvailable: false,
+    })
+
+    render(AuthLogin)
+
+    await fireEvent.input(screen.getByLabelText('code'), { target: { value: '123456' } })
+    await fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(authState.state).toBe('authenticated'))
+    expect(wizardJourney.pending).toBe(false)
   })
 
   it('shows the server refusal on a wrong code without opening the app', async () => {

@@ -18,6 +18,7 @@ vi.mock('../lib/api', () => ({
 import { fetchAuthSession, register, startSSOLink } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
 import { journeyState } from '../lib/journey.svelte'
+import { wizardJourney } from '../lib/wizardJourney.svelte'
 import AuthSetup from './AuthSetup.svelte'
 
 // The SSO route ends in a real top-level navigation, which jsdom cannot
@@ -30,6 +31,7 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   journeyState.phase = 'idle'
+  wizardJourney.end()
 })
 
 afterEach(() => {
@@ -61,9 +63,11 @@ describe('AuthSetup', () => {
     expect(screen.getByRole('button', { name: /create account/i })).toBeTruthy()
   })
 
-  // #646's trigger: a successful register() -- and only that -- starts
-  // the journey at its Attach beat.
-  it('starts the journey once the admin account is actually created', async () => {
+  // #1386, owner 2026-09-30 ("1a"): on a brand-new install the way in
+  // plays straight after the admin account is made -- armed when the
+  // confirmation's Continue opens the app -- and #646's pre-wizard walk
+  // (attach, connecting, the glass) no longer starts.
+  it('starts the way in, not the #646 walk, once the admin account is made', async () => {
     vi.mocked(register).mockResolvedValue(null)
     vi.mocked(fetchAuthSession).mockResolvedValue({
       setupRequired: false,
@@ -74,18 +78,11 @@ describe('AuthSetup', () => {
     })
 
     render(AuthSetup)
-    await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
-    await fireEvent.input(screen.getByLabelText('account'), { target: { value: 'tom' } })
-    await fireEvent.input(screen.getByLabelText('password'), { target: { value: 'hunter2222' } })
-    await fireEvent.input(screen.getByLabelText('confirm password'), { target: { value: 'hunter2222' } })
-    await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
+    await createTheAdmin()
+    await fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
 
-    // Three sequential awaits sit between the click and the journey
-    // starting (authState.register -> its own check() -> fetchAuthSession),
-    // one more hop than a plain login -- waitFor rather than assuming a
-    // single fireEvent tick flushes all of them.
-    await waitFor(() => expect(register).toHaveBeenCalledWith('tom', 'hunter2222'))
-    await waitFor(() => expect(journeyState.phase).toBe('attach'))
+    await waitFor(() => expect(wizardJourney.pending).toBe(true))
+    expect(journeyState.phase).toBe('idle')
   })
 
   // #1252, owner's ruling: first run always creates a local admin, so
@@ -193,5 +190,6 @@ describe('AuthSetup', () => {
 
     expect(await screen.findByText('username already taken')).toBeTruthy()
     expect(journeyState.phase).toBe('idle')
+    expect(wizardJourney.pending).toBe(false)
   })
 })

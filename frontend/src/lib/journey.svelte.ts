@@ -7,7 +7,12 @@
 // handing off to the full wizard, which itself ends back at the fall
 // (see SetupWizard.svelte's leaveToLanding).
 //
-// Triggered exactly once, by AuthSetup.svelte right after a brand-new
+// No longer triggered: owner, 2026-09-30 (#1386), a brand-new install
+// plays the wizard's way in instead, and the attach/connecting/glass
+// beats are retired. Kept only until the owner has said where the tour
+// goes; then this module goes, or shrinks to the tour.
+//
+// Was triggered exactly once, by AuthSetup.svelte right after a brand-new
 // instance's admin account is created -- never by an ordinary sign-in.
 // A returning admin with no router attached yet still gets the wizard
 // offered (wizard.svelte.ts's own maybeAutoLaunch), just without this
