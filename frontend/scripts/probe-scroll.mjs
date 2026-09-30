@@ -31,14 +31,18 @@ await page.click('button[type="submit"]')
 await page.waitForSelector('#main-content', { timeout: 15000 })
 await page.setViewportSize({ width: 1280, height: 720 })
 
-// Close the setup wizard if it auto-opened (first-run modal) -- harmless
-// read of /api/devices, no writes.
+// Warn if the setup wizard auto-opened (first-run instance, no devices
+// declared) -- harmless read of /api/devices, no writes. The full-screen
+// wizard that replaced the old first-run modal (#1381) has no ✕ or
+// Escape to close it by any more (DESIGN.md, "Superseded: the wizard as
+// a modal"), so there is nothing to do here but say so: every number
+// this probe prints afterwards would be measuring the wizard's own
+// full-screen layout, not the deck underneath it.
 const devices = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
 if (!(Array.isArray(devices) && devices.length > 0)) {
-  const modal = page.locator('.setup-wizard')
-  if (await modal.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false)) {
-    await page.keyboard.press('Escape')
-    await modal.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
+  const wizard = page.locator('.page.wiz')
+  if (await wizard.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false)) {
+    console.error('the setup wizard auto-opened and cannot be dismissed -- point this probe at an instance with a device already declared')
   }
 }
 

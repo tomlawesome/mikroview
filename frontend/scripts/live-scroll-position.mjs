@@ -28,7 +28,10 @@
 
 import { session, check, done, goTo, feedSyslog, waitForStreamRows } from './live-browser.mjs'
 
-const { page, consoleErrors } = await session()
+// mocksApi: true, for the #383 section below, which needs to land on
+// the wizard's first step regardless of this shared instance's own
+// history of syslog traffic -- see that section's own comment.
+const { page, consoleErrors } = await session({ mocksApi: true })
 // Its own traffic: the instance is reset before every scenario (#1064),
 // so nothing a sibling fed is there to count.
 feedSyslog(60, 'live-scroll-position')
@@ -37,153 +40,6 @@ await waitForStreamRows(page, 60)
 // The viewport both defects were reported at. Fixed rather than
 // inherited: a scroll assertion that runs at whatever size the harness
 // defaults to is a scroll assertion that can silently stop overflowing.
-await page.setViewportSize({ width: 1280, height: 720 })
-
-// --- #383: every wizard step is reachable -------------------------------
-// #app is height: 100vh; overflow: hidden, so anything that declares no
-// scroll container of its own has its overflow clipped and unreachable.
-// The wizard page was the only view missing the flex/min-height/
-// overflow-y trio, which made the guided setup -- the first-run
-// experience specifically -- impossible to read past the fold.
-//
-// #487 replaced that page with a modal, and the defect can recur in the
-// same shape: a modal taller than the viewport, or a body that does not
-// scroll, hides the bottom of a step just as effectively. So this now
-// measures the modal, on the step whose body is genuinely long (step 4
-// carries the whole push script).
-//
-// The modal caps itself at 92vh, so at 720px its body still fits the
-// longest step and there would be nothing to scroll -- an assertion
-// that cannot fail is worse than none. A shorter window is not a
-// contrived condition either: it is a laptop with browser chrome, or a
-// window that is not full height, and it is exactly where a clipped
-// step body would bite. Restored to 1280x720 before the #384 half
-// below, which is the viewport that defect was reported at.
-await page.setViewportSize({ width: 1280, height: 460 })
-
-await goTo(page, 'Run setup…')
-const wizard = page.locator('.setup-wizard')
-await wizard.waitFor({ state: 'visible' })
-
-// The push step, which is where the mint form and a long command block
-// live. It is the fifth row since #1284 inserted "Name your router"
-// second: the walking order is ca, name, syslog, rules, push, backup
-// (SETUP_STEPS in lib/setupsteps.ts), while the numbers stored against
-// a step are the server's own and deliberately do not match it.
-await page.locator('.setup-wizard .steps li:nth-child(5) .step-row').click()
-// SetupWizard.svelte renders two identical .mint blocks: step 4's own
-// (line 649, gated on `wizardState.status` as well as the step) and a
-// fallback in a later step for when step 4 was skipped (line 719).
-// `page.click` is not strict -- it takes the first match in DOM order --
-// so when step 4's block has not rendered yet, the old form here clicked
-// at the fallback and waited the full 30s for an element in a step that
-// was never opened (#1009). Address the visible block instead, and keep
-// the locator strict so an ambiguous match fails loudly and at once
-// rather than hanging.
-const mint = page.locator('.setup-wizard .mint:visible')
-// `wizardState.status` may not have arrived when the step row was
-// clicked, so give step 4's block a moment to appear. Absence is still
-// allowed: a token may already exist, in which case nothing is offered
-// and there is nothing to mint.
-await mint.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
-if (await mint.count()) {
-  const { devices } = await page.request.get(`${process.env.MV_URL}/api/devices`).then((r) => r.json())
-  const withEvents = devices.find((d) => d.eventCount > 0) ?? devices[0]
-  if (withEvents) {
-    // #1041: driving this form is best-effort, because the wizard may
-    // already have minted without being asked. SetupWizard's step-4
-    // effect mints on entry when it knows exactly one router -- the
-    // picker only stands in for "entry" when there are several -- and
-    // the devices it reads are polled, so that can fire before this
-    // block runs or while it is running. Either way the button is
-    // disabled and reads "Creating…", and the whole .mint form is
-    // inside `{#if !token}`, so it is torn out of the DOM the moment
-    // the token lands. Insisting the click connects turned that
-    // success into a TimeoutError ("element is not enabled", then
-    // "element was detached"). So only drive the form while it is
-    // still present and idle, and swallow a control that goes away
-    // underneath: what this step actually wants is a minted token, and
-    // the pre.script wait below is the one thing that can tell.
-    const button = mint.locator('button.primary')
-    const idle = await button
-      .waitFor({ state: 'visible', timeout: 5000 })
-      .then(() => button.isEnabled())
-      .catch(() => false)
-    if (idle) {
-      try {
-        await mint.locator('select').selectOption(withEvents.id)
-        await button.click({ timeout: 10000 })
-      } catch {
-        // Disabled or detached between the check and the click: the
-        // mint got there first, which is the outcome, not a failure.
-      }
-    }
-  }
-}
-await page.locator('.setup-wizard pre.script').waitFor({ state: 'visible' })
-
-const modalBox = await page.$eval('.setup-wizard', (el) => {
-  const r = el.getBoundingClientRect()
-  return { top: r.top, bottom: r.bottom, viewportHeight: window.innerHeight }
-})
-check(
-  modalBox.top >= -1 && modalBox.bottom <= modalBox.viewportHeight + 1,
-  `the modal fits the viewport rather than running off it (${Math.round(modalBox.top)}px..${Math.round(modalBox.bottom)}px in ${modalBox.viewportHeight}px)`,
-)
-
-const body = await page.$eval('.setup-wizard .body', (el) => ({
-  scrollHeight: el.scrollHeight,
-  clientHeight: el.clientHeight,
-  overflowY: getComputedStyle(el).overflowY,
-}))
-check(
-  body.scrollHeight > body.clientHeight,
-  `the step body overflows this viewport, so scrolling it is a real question (content ${body.scrollHeight}px in ${body.clientHeight}px)`,
-)
-check(
-  body.overflowY === 'auto' || body.overflowY === 'scroll',
-  `the step body declares its own scroll container (overflow-y: ${body.overflowY})`,
-)
-
-await page.$eval('.setup-wizard .body', (el) => el.scrollTo(0, el.scrollHeight))
-const reached = await page.$eval('.setup-wizard .body', (el) => ({
-  scrollTop: el.scrollTop,
-  atBottom: el.scrollTop >= el.scrollHeight - el.clientHeight - 2,
-}))
-// Both halves, because either alone passes while the defect is present:
-// with overflow clipped, scrollHeight === clientHeight, so "at the
-// bottom" is vacuously true at scrollTop 0.
-check(
-  reached.atBottom && reached.scrollTop > 0,
-  `the step body scrolls, and reaches its bottom (scrollTop ${reached.scrollTop})`,
-)
-
-// The assertion #383 actually asked for: not "a scrollbar exists" but
-// "the last element of the longest step is reachable".
-//
-// Measured against the browser viewport, never against the body's own
-// box. When the overflow is clipped, that box is its full unclipped
-// height, so a rect comparison against it says the last element is
-// "inside" while the operator cannot see or reach it -- the assertion
-// would pass on exactly the build it exists to catch. window.innerHeight
-// is what the operator actually has.
-const lastVisible = await page.evaluate(() => {
-  const children = document.querySelectorAll('.setup-wizard .body > *')
-  const last = children[children.length - 1]
-  if (!last) return null
-  const r = last.getBoundingClientRect()
-  return { top: r.top, bottom: r.bottom, viewportHeight: window.innerHeight }
-})
-check(lastVisible !== null, 'the wizard renders a step body')
-check(
-  lastVisible.bottom <= lastVisible.viewportHeight + 2 && lastVisible.bottom > 0,
-  `the bottom of the step is on screen once scrolled to it -- not clipped past the fold (bottom ${Math.round(lastVisible.bottom)}px, viewport ${lastVisible.viewportHeight}px)`,
-)
-
-// Explicit close, so the rest of this scenario is not driving the page
-// through a focus trap.
-await page.keyboard.press('Escape')
-await wizard.waitFor({ state: 'detached' })
 await page.setViewportSize({ width: 1280, height: 720 })
 
 // --- #384: naming an entity leaves the operator where they were ---------
@@ -319,6 +175,116 @@ for (const label of [
     `${label}: the document never scrolls past the viewport (scrollHeight ${doc.scrollHeight} vs ${doc.innerHeight})`,
   )
 }
+
+// --- #383: every wizard step is reachable -------------------------------
+// #app is height: 100vh; overflow: hidden, so anything that declares no
+// scroll container of its own has its overflow clipped and unreachable.
+// The wizard page was the only view missing the flex/min-height/
+// overflow-y trio, which made the guided setup -- the first-run
+// experience specifically -- impossible to read past the fold.
+//
+// #487 moved that page into a modal capped at 92vh; #1381 replaced the
+// modal with a full screen (`.wiz.page`, wizard.css) that was built with
+// the same trio from the start -- `.wiz .main { display: grid;
+// grid-template-rows: 1fr auto }`, `.wiz .body { min-height: 0;
+// overflow-y: auto }` -- so this still measures it, on whichever step is
+// reachable without walking the whole run.
+//
+// The step with genuinely long content -- Paste once, the terminal
+// block, which is where the old modal's push-script step carried this
+// check -- is still a stub under #1382 (StepPaste.svelte renders a
+// couple of lines today, nothing to overflow). So this measures The
+// router (StepRouter.svelte) instead, at a viewport short enough to
+// force *any* step's content past the fold rather than one sized to a
+// specific step's height -- an assertion that cannot fail is worse than
+// none. Retarget this to Paste once, at a viewport sized to its real
+// content, once that step carries its block (#1382).
+//
+// Run last in this scenario, not restored to 1280x720 afterwards: the
+// full-screen wizard has no ✕ or Escape to leave it by any more
+// (DESIGN.md, "Superseded: the wizard as a modal") and nothing here
+// needs `page` again once it opens.
+//
+// A bare "Run setup…" reads the whole fleet's evidence when no router is
+// named yet (wizardRun.svelte.ts's evidence getter, the `!id` branch),
+// and this instance has been shared with everything that ran before it
+// in this shard -- so by now some source has almost always sent syslog,
+// which would open past The router (on 'watch' or later) rather than on
+// it. Stripped from /api/setup/status's response here for the same
+// reason the wizard's own router-mint scenario does it: not a fake shape,
+// just the one field ("sources not yet heard from") this instance
+// cannot otherwise be made to show on demand.
+await page.route('**/api/setup/status', async (route) => {
+  const res = await route.fetch()
+  const body = await res.json()
+  body.sources = (body.sources ?? []).map(({ syslogFirstSeenAt, caFetchedAt, ...s }) => s)
+  await route.fulfill({ response: res, body: JSON.stringify(body) })
+})
+
+await page.setViewportSize({ width: 1280, height: 260 })
+
+await goTo(page, 'Run setup…')
+const wizard = page.locator('.page.wiz')
+await wizard.waitFor({ state: 'visible' })
+await page.locator('.wiz .body h3').waitFor({ state: 'visible' })
+
+const wizardBox = await page.$eval('.page.wiz', (el) => {
+  const r = el.getBoundingClientRect()
+  return { top: r.top, bottom: r.bottom, viewportHeight: window.innerHeight }
+})
+check(
+  wizardBox.top >= -1 && wizardBox.bottom <= wizardBox.viewportHeight + 1,
+  `the wizard fits the viewport rather than running off it (${Math.round(wizardBox.top)}px..${Math.round(wizardBox.bottom)}px in ${wizardBox.viewportHeight}px)`,
+)
+
+const body = await page.$eval('.wiz .body', (el) => ({
+  scrollHeight: el.scrollHeight,
+  clientHeight: el.clientHeight,
+  overflowY: getComputedStyle(el).overflowY,
+}))
+check(
+  body.scrollHeight > body.clientHeight,
+  `the step body overflows this viewport, so scrolling it is a real question (content ${body.scrollHeight}px in ${body.clientHeight}px)`,
+)
+check(
+  body.overflowY === 'auto' || body.overflowY === 'scroll',
+  `the step body declares its own scroll container (overflow-y: ${body.overflowY})`,
+)
+
+await page.$eval('.wiz .body', (el) => el.scrollTo(0, el.scrollHeight))
+const reached = await page.$eval('.wiz .body', (el) => ({
+  scrollTop: el.scrollTop,
+  atBottom: el.scrollTop >= el.scrollHeight - el.clientHeight - 2,
+}))
+// Both halves, because either alone passes while the defect is present:
+// with overflow clipped, scrollHeight === clientHeight, so "at the
+// bottom" is vacuously true at scrollTop 0.
+check(
+  reached.atBottom && reached.scrollTop > 0,
+  `the step body scrolls, and reaches its bottom (scrollTop ${reached.scrollTop})`,
+)
+
+// The assertion #383 actually asked for: not "a scrollbar exists" but
+// "the last element of the step is reachable".
+//
+// Measured against the browser viewport, never against the body's own
+// box. When the overflow is clipped, that box is its full unclipped
+// height, so a rect comparison against it says the last element is
+// "inside" while the operator cannot see or reach it -- the assertion
+// would pass on exactly the build it exists to catch. window.innerHeight
+// is what the operator actually has.
+const lastVisible = await page.evaluate(() => {
+  const children = document.querySelectorAll('.wiz .body > *')
+  const last = children[children.length - 1]
+  if (!last) return null
+  const r = last.getBoundingClientRect()
+  return { top: r.top, bottom: r.bottom, viewportHeight: window.innerHeight }
+})
+check(lastVisible !== null, 'the wizard renders a step body')
+check(
+  lastVisible.bottom <= lastVisible.viewportHeight + 2 && lastVisible.bottom > 0,
+  `the bottom of the step is on screen once scrolled to it -- not clipped past the fold (bottom ${Math.round(lastVisible.bottom)}px, viewport ${lastVisible.viewportHeight}px)`,
+)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()

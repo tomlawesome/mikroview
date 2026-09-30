@@ -1,0 +1,74 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
+/* The way in, and the way out (#1386): round-15's an.css ported as
+   drawn, its selectors moved onto the app's own elements. A neon sign
+   in the rain: the wordmark's box stays, moves to the centre, grows by
+   half, wobbles, takes the rain's colours, grows a line from each side
+   that catches the rain and wipes the screen up and away. The wizard
+   then arrives in groups. Finish plays it again, onto the fall.
+
+   Global rather than scoped because the groups it choreographs live in
+   three components (the door, the wizard, the fall) and the cue is one
+   set of classes on <body>: `journey` while a journey runs, `am` for
+   the strike grammar, `ak-bar` / `ak-strip` / `ak-fb` as each group
+   arrives. */
+
+/* width/height explicit: a canvas with only inset keeps its bitmap size,
+   and at any device pixel ratio but 1 everything drawn lands off by that
+   ratio (round 12's trap). Above the wizard (z 40) and the held door
+   (z 45); the riding box sits above the canvas. */
+.journey-fx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 60; pointer-events: none; }
+
+/* the door: the welcome stack slides away; the box leaves it and rides on its own */
+.door-hold { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column; }
+.door-hold .screen { flex: 1; }
+.screen.in .stack { will-change: transform; }
+/* the fields and welcome drop away first, in every direction (door.css) */
+.screen.in .stack > :not(.wm-box) { transition: opacity 320ms ease, transform 420ms cubic-bezier(.35, 0, .2, 1); opacity: 0; transform: translateY(18px); }
+.screen.in .fullfall { transition: opacity 450ms ease; opacity: 0; }
+.screen .wm-box.gone { visibility: hidden; }
+
+/* the riding box: the letters live in the DOM above the rain; its border
+   is drawn on the canvas, where it can wobble */
+.ride { position: fixed; left: 0; top: 0; z-index: 61; margin: 0; padding: 12px 30px; border-radius: 4px; background: var(--bg); transform-origin: 50% 50%; will-change: transform; pointer-events: none; }
+.ride .wm { display: block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); font-family: var(--font-sans); white-space: nowrap; line-height: 1.2; }
+.ride .wm em { color: var(--accent); font-style: normal; }
+/* a lit letter glows in its ink; a dark one is the tube gone out. No
+   transition, so a stutter is a stutter. */
+.ride .wm .l { transition: none; }
+.ride .wm .l.lit { color: var(--ink); text-shadow: 0 0 5px var(--ink), 0 0 14px var(--ink); }
+.ride .wm .l.dark { color: rgba(233, 238, 251, 0.12); text-shadow: none; }
+.ride.landed { transition: opacity 300ms ease; opacity: 0; }
+
+/* the wizard arrives in groups: bar, strip, steps one by one, the
+   heading, the form row by row, the foot. Chips and strip fade; rows,
+   blocks and the footer strike (round 14's verdict). */
+body.journey .wiz .chips, body.journey .wiz .right, body.journey .wiz .striprow { opacity: 0; transition: opacity 500ms ease; }
+body.journey.ak-bar .wiz .chips, body.journey.ak-bar .wiz .right { opacity: 1; }
+body.journey.ak-strip .wiz .striprow { opacity: 1; }
+body.journey .wiz .body > * { opacity: 0; transform: translateY(12px); }
+body.journey .wiz .main { will-change: transform; }
+
+/* and the fall arrives in groups: its columns, then its body and axis,
+   then the side rail (which appears without transition) */
+body.journey .fall .bar, body.journey .fall .attention, body.journey .fall .fall-foot { opacity: 0; transition: opacity 600ms ease; }
+body.journey.ak-fb .fall .bar, body.journey.ak-fb .fall .attention, body.journey.ak-fb .fall .fall-foot { opacity: 1; }
+body.journey .fall .rig g.band { opacity: 0; }
+
+/* every group strikes on like a tube: dark, a flash, a dip, then
+   steady. The stagger is an animation-delay written through the CSSOM. */
+@keyframes journey-strike { 0% { opacity: 0; transform: translateY(10px); } 18% { opacity: 0.85; transform: none; } 26% { opacity: 0.12; } 40% { opacity: 1; } 52% { opacity: 0.45; } 62% { opacity: 1; } 100% { opacity: 1; transform: none; } }
+body.am .wiz .rail li { transition: none; opacity: 0; }
+body.am .wiz .body > * { transition: none; }
+body.am .wiz .foot { transition: none; }
+body.am .wiz .rail, body.am .wiz .body, body.am .wiz .foot { transition: none; }
+body.am .strike { animation: journey-strike 420ms linear both; }
+body.am .fall .rig g.band { transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-fx, .ride { display: none !important; }
+  body.journey .wiz .body > *, body.journey .wiz .chips, body.journey .wiz .right, body.journey .wiz .striprow,
+  body.journey .fall .bar, body.journey .fall .attention, body.journey .fall .fall-foot, body.journey .fall .rig g.band { opacity: 1; transform: none; transition: none; }
+  body.am .strike { animation: none; opacity: 1; transform: none; }
+  body.am .wiz .rail li { opacity: 1; }
+}

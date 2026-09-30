@@ -125,6 +125,29 @@ func TestDeviceCreateReportsAFailedSaveAndChangesNothing(t *testing.T) {
 	}
 }
 
+// TestDeviceDeleteRequiresAdmin pins the "forget" act's own gate
+// (#1385): a viewer or ordinary user must not be able to remove a
+// router's record, token and enrolment from the ledger's Undo-everything
+// panel, same tier as every other device-identity write in this file.
+func TestDeviceDeleteRequiresAdmin(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	seedFactor(t, s, ts, "viewer")
+
+	resp := deleteNoBody(t, viewerClient, ts.URL+"/api/devices/hap-ax3")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a non-admin to be forbidden from deleting a device, got %d", resp.StatusCode)
+	}
+	if len(s.Devices.List()) != 1 {
+		t.Errorf("List() = %+v, want the device untouched by the refused delete", s.Devices.List())
+	}
+}
+
 func TestDeviceDeleteClearsItAndRefusesAConfiguredOne(t *testing.T) {
 	s, ts, admin := deviceTestServer(t)
 	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
@@ -185,6 +208,131 @@ func TestDeviceDeleteRecordsAnAuditEntry(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatalf("no device.removed audit entry for hap-ax3 in %+v", entries)
+	}
+}
+
+// TestDeviceDeleteRevokesItsIngestTokenAndSaysSoInTheAudit is the setup
+// wizard ledger's "forget <name> on MikroView -- its token, its
+// enrolment and its record" (#1385): Delete alone (proven above) clears
+// the record and any pending enrolment token, but a persistent ingest
+// bearer token lives in a separate store keyed by its own id, not the
+// device's -- left alone it would keep authenticating pushes for a
+// router this registry no longer has any record of. One audit line
+// either way, naming whichever of the three this call actually forgot.
+func TestDeviceDeleteRevokesItsIngestTokenAndSaysSoInTheAudit(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	adminUser, ok := s.Auth.ByUsername("admin")
+	if !ok {
+		t.Fatal("the admin account was not created")
+	}
+	raw, tok, err := s.Tokens.Create("setup-hap-ax3", auth.TokenKindIngest, "hap-ax3", adminUser, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); !valid {
+		t.Fatal("the minted ingest token does not authenticate before delete")
+	}
+
+	resp := deleteNoBody(t, admin, ts.URL+"/api/devices/hap-ax3")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); valid {
+		t.Error("the device's ingest token still authenticates after it was forgotten")
+	}
+	for _, other := range s.Tokens.ByKind(auth.TokenKindIngest) {
+		if other.ID == tok.ID {
+			t.Errorf("the deleted device's token %q is still listed", other.ID)
+		}
+	}
+
+	entries := s.Audit.Query(audit.Query{}).Entries
+	var found *audit.Entry
+	for i := range entries {
+		if entries[i].Action == "device.removed" && entries[i].Target == "hap-ax3" {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("no device.removed audit entry for hap-ax3")
+	}
+	if found.Detail != "its token, its enrolment and its record" {
+		t.Errorf("audit detail = %q, want it to name the token, the enrolment and the record", found.Detail)
+	}
+}
+
+// TestDeviceDeleteSaysSoWhenItsTokenCannotBeRevoked: forgetting a router
+// whose ingest token cannot be durably revoked must not answer 204. The
+// token still authenticates pushes and SFTP backups for that name, so
+// "forgotten" would be a false all-clear; the operator is told to revoke
+// it under Tokens instead, and the audit line says the same.
+func TestDeviceDeleteSaysSoWhenItsTokenCannotBeRevoked(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	budget := &recoveryCodesSaveBudgetBackend{left: 1} // Create saves once; Revoke's save fails
+	tokens, err := auth.OpenTokenStoreWithBackend(budget)
+	if err != nil {
+		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+	}
+	s.Tokens = tokens
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	raw, _, err := s.Tokens.Create("setup-hap-ax3", auth.TokenKindIngest, "hap-ax3", nil, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	resp := deleteNoBody(t, admin, ts.URL+"/api/devices/hap-ax3")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when the token could not be revoked", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "Tokens") {
+		t.Errorf("body = %q, want it to send the operator to Tokens to revoke it", body)
+	}
+	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); !valid {
+		t.Error("the token stopped authenticating, but its revoke was never saved")
+	}
+	var detail string
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "device.removed" && e.Target == "hap-ax3" {
+			detail = e.Detail
+		}
+	}
+	if !strings.Contains(detail, "not revoked") {
+		t.Errorf("audit detail = %q, want it to say the token was not revoked", detail)
+	}
+}
+
+// TestDeviceDeleteWithNoTokenNamesOnlyTheEnrolmentAndRecord is the other
+// half of the audit line's own contract: a router that was named and
+// enrolled but never had a persistent ingest token minted (push and
+// backup both left No) must not have its audit line claim a token was
+// forgotten that never existed.
+func TestDeviceDeleteWithNoTokenNamesOnlyTheEnrolmentAndRecord(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+
+	resp := deleteNoBody(t, admin, ts.URL+"/api/devices/hap-ax3")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	entries := s.Audit.Query(audit.Query{}).Entries
+	var found *audit.Entry
+	for i := range entries {
+		if entries[i].Action == "device.removed" && entries[i].Target == "hap-ax3" {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("no device.removed audit entry for hap-ax3")
+	}
+	if found.Detail != "its enrolment and its record" {
+		t.Errorf("audit detail = %q, want it to name only the enrolment and the record (no token was ever minted)", found.Detail)
 	}
 }
 

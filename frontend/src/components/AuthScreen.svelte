@@ -19,6 +19,12 @@
   import { authState } from '../lib/auth.svelte'
   import { passkeysUsableAt } from '../lib/passkeys.svelte'
   import Fullfall from './Fullfall.svelte'
+  import { wizardJourney } from '../lib/wizardJourney.svelte'
+
+  // The way in (#1386): while the journey plays, the door is held over
+  // the shell and its stack slides away (journey.css, .screen.in); the
+  // rain fades and the wordmark's box gives way to the riding copy.
+  const wayIn = $derived(wizardJourney.phase === 'in')
 
   let {
     title = '',
@@ -210,7 +216,7 @@
      whose job is that identity: night outside, the operator's own view
      once they enter. app.css's [data-void] rule re-declares the dark
      token block on this subtree. -->
-<div class="screen" class:reverse={reverseBeat} data-void>
+<div class="screen" class:reverse={reverseBeat} class:in={wayIn} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
        over the login elements: the shared layer's `door` mask carves
        the centre out entirely (round 5 fourth batch). Fullfall.svelte
@@ -219,12 +225,12 @@
        same weather rather than going flat after this screen. -->
   <Fullfall mask="door" />
 
-  <div class="stack">
+  <div class="stack" style:transform={wayIn ? `translateY(${-wizardJourney.slideY}px)` : null}>
     <!-- The amber 1.5px box framing the wordmark (round 5 third batch,
          "v2 accepted... the amber draws as a thin box... instead of the
          underline"). Replaces the pre-door top-left corner lockup --
          this page is the door, not a scene carrying SceneBar's chrome. -->
-    <div class="wm-box"><span class="wm">MIKRO<em>VIEW</em></span></div>
+    <div class="wm-box" class:gone={wayIn}><span class="wm">MIKRO<em>VIEW</em></span></div>
 
     {#if gate}
       <div class="col">

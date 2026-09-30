@@ -11,10 +11,10 @@
   // (identical look, label "enter"). Clicking it reveals the account
   // creation form below, unchanged from before this issue.
   //
-  // A successful register() is also the journey's own trigger (#646):
-  // journeyState.begin() starts the Attach beat the moment the account
-  // exists, and only from here -- an ordinary later sign-in never calls
-  // this, so a returning admin gets the plain app, not the walk.
+  // What follows creation is the wizard's way in (#1386; owner,
+  // 2026-09-30, retiring #646's attach/connecting/glass beats): the
+  // confirmation's Continue opens the app and arms the journey, which
+  // plays and lands on the wizard.
   //
   // #1252, owner's ruling: first run always creates a local admin, with
   // a username and a password. SSO is never offered as an alternative
@@ -36,7 +36,7 @@
   // deployment always has a way in that does not need the provider.
   import { register, startSSOLink } from '../lib/api'
   import { authState } from '../lib/auth.svelte'
-  import { journeyState } from '../lib/journey.svelte'
+  import { wizardJourney } from '../lib/wizardJourney.svelte'
   import AuthScreen from './AuthScreen.svelte'
 
   let entered = $state(false)
@@ -68,7 +68,6 @@
   async function createAdmin(username: string, password: string): Promise<string | null> {
     const err = await register(username, password)
     if (err) return err
-    journeyState.begin()
 
     if (authState.ssoAvailable) {
       // The account already exists by this point (register() above
@@ -89,9 +88,9 @@
       }
       if (typeof result !== 'string') {
         // A real top-level navigation, not a fetch: the provider has to
-        // see the browser to show its own sign-in page. The journey
-        // begun above goes with the page, which is the cost of the
-        // round trip -- the admin comes back to the ordinary app.
+        // see the browser to show its own sign-in page. The admin comes
+        // back to the ordinary app, where the wizard's plain auto-launch
+        // opens it without the way in -- the cost of the round trip.
         location.href = result.url
         return null
       }
@@ -105,8 +104,9 @@
   // Nothing here has re-read the session yet, so AuthSetup is still the
   // view -- which is what keeps the confirmation on screen. Continuing
   // is the re-read, and that is what opens the app.
-  function enterApp() {
-    void authState.check()
+  async function enterApp() {
+    await authState.check()
+    wizardJourney.signedIn()
   }
 </script>
 

@@ -132,37 +132,10 @@ for (const gone of ['Users', 'Tokens', 'Detectors']) {
   )
 }
 
-// --- Run setup… opens the modal, and is not a page (#487) --------------
-// The row before this one left the app on Entities, and it must still be
-// there underneath: an action does not navigate. Checked against the roll
-// rail's own current-scene marker rather than the account menu's
-// button.row.on -- #647 emptied that menu down to Run setup… alone, which
-// carries no `view` of its own (AccountMenu.svelte's operate table), so
-// `.row.on` can never match any row any more and would always read as
-// "nothing is current" regardless of what is actually showing.
-
-await goTo(page, 'Run setup…')
-const wizard = page.locator('.setup-wizard')
-await wizard.waitFor({ state: 'visible', timeout: 5000 })
-check(true, 'Run setup… opens the setup modal')
-await page.keyboard.press('Escape') // the wizard modal owns Escape; close it before reading the rail
-await wizard.waitFor({ state: 'detached', timeout: 5000 })
-const stillCurrent = await page
-  .$eval('.roll-rail button.rail-name[aria-current="page"]', (e) => e.textContent.trim())
-  .catch(() => null)
-check(
-  stillCurrent === 'Entities',
-  `the page underneath is still the one the operator was on -- an action does not navigate (got ${JSON.stringify(stillCurrent)})`,
-)
-check(
-  !(await page.locator('main .setup').count()),
-  'no wizard page route survives -- the view was removed wholesale, not aliased',
-)
-
-// Explicit close, so the rest of this scenario is not driving the page
-// through a focus trap.
-await page.keyboard.press('Escape')
-await wizard.waitFor({ state: 'detached', timeout: 5000 })
+// The old "Run setup… opens the modal, and is not a page" check (#487)
+// ran here, then pressed Escape to keep driving `page`. It now runs at
+// the very end of this scenario instead -- see the comment down there
+// for why.
 
 // --- A real viewer account, created the way an admin actually would ----
 // Through the engine room's people group now (round 32/#767 mounted it
@@ -258,6 +231,42 @@ await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
+
+// --- Run setup… opens the wizard, and is not a page (#487, #1381) -------
+// Last in this scenario, deliberately: SetupWizard.svelte's ✕/Esc close
+// retired with the modal (DESIGN.md, "Superseded: the wizard as a
+// modal"), and the full-screen wizard that replaced it (Wizard.svelte)
+// offers no way to leave before the router has actually answered
+// (wizardRun.ts's footSpec reaches Finish only at the 'done' stage) --
+// there is nothing here to click to get back to driving `page`. So this
+// runs once nothing after it needs the page again, rather than
+// pretending a close exists.
+//
+// Checked against the roll rail's own current-scene marker rather than
+// the account menu's button.row.on -- #647 emptied that menu down to Run
+// setup… alone, which carries no `view` of its own (AccountMenu.svelte's
+// operate table), so `.row.on` can never match any row any more and
+// would always read as "nothing is current" regardless of what is
+// actually showing. That still works with the wizard open: it is a
+// fixed full-screen overlay (wizard.css's `.wiz.page`, z-index 40), not a
+// route, so the shell -- and the roll rail's own DOM -- stays mounted
+// underneath it.
+await openAndCheck('Entities')
+await goTo(page, 'Run setup…')
+const wizard = page.locator('.page.wiz')
+await wizard.waitFor({ state: 'visible', timeout: 5000 })
+check(true, 'Run setup… opens the full-screen wizard, not the retired modal')
+const stillCurrent = await page
+  .$eval('.roll-rail button.rail-name[aria-current="page"]', (e) => e.textContent.trim())
+  .catch(() => null)
+check(
+  stillCurrent === 'Entities',
+  `the page underneath is still the one the operator was on -- an action does not navigate (got ${JSON.stringify(stillCurrent)})`,
+)
+check(
+  !(await page.locator('main .setup').count()),
+  'no wizard page route survives -- the view was removed wholesale, not aliased',
+)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
 done()
