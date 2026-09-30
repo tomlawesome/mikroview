@@ -392,6 +392,13 @@ class WizardRun {
       this.push = !!ev.push
       this.backup = !!ev.backup
       this.copied = true
+      // No router record (fleet-wide evidence placed the walk here
+      // outright, #1404): name stays unset above, so Where setup stands
+      // would read " is sending." Fall back to the evidence's own
+      // sending address. Add a router and Re-enrol… always have a
+      // record of their own (the `if (dev)` block above, or the early
+      // return just above this one), so neither is touched.
+      if (!dev) this.name = ev.from
       this.stage = this.arrivedAll ? 'done' : 'watch'
       return
     }
