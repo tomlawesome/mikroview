@@ -23,13 +23,16 @@
 .door-hold { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column; }
 .door-hold .screen { flex: 1; }
 .screen.in .stack { will-change: transform; }
+/* the fields and welcome drop away first, in every direction (door.css) */
+.screen.in .stack > :not(.wm-box) { transition: opacity 320ms ease, transform 420ms cubic-bezier(.35, 0, .2, 1); opacity: 0; transform: translateY(18px); }
 .screen.in .fullfall { transition: opacity 450ms ease; opacity: 0; }
 .screen .wm-box.gone { visibility: hidden; }
 
 /* the riding box: the letters live in the DOM above the rain; its border
    is drawn on the canvas, where it can wobble */
 .ride { position: fixed; left: 0; top: 0; z-index: 61; margin: 0; padding: 12px 30px; border-radius: 4px; background: var(--bg); transform-origin: 50% 50%; will-change: transform; pointer-events: none; }
-.ride .wm { display: block; font-size: 34px; white-space: nowrap; line-height: 1.2; }
+.ride .wm { display: block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); font-family: var(--font-sans); white-space: nowrap; line-height: 1.2; }
+.ride .wm em { color: var(--accent); font-style: normal; }
 /* a lit letter glows in its ink; a dark one is the tube gone out. No
    transition, so a stutter is a stutter. */
 .ride .wm .l { transition: none; }
