@@ -189,16 +189,28 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, deviceErrorText(err), status)
 		return
 	}
-	revokedTokens := 0
+	// Revoked after the delete, not before: a refused delete (a
+	// config.yaml device, an unknown id) must leave its tokens alone.
+	// A revoke that cannot be saved is said out loud rather than
+	// swallowed -- the token would still open pushes and SFTP backups
+	// for this name, and a 204 would tell the operator it had not.
+	revokedTokens, failedTokens := 0, 0
 	if s.Tokens != nil {
 		for _, tok := range s.Tokens.ByKind(auth.TokenKindIngest) {
 			if tok.Device != id {
 				continue
 			}
-			if err := s.Tokens.Revoke(tok.ID); err == nil {
-				revokedTokens++
+			if err := s.Tokens.Revoke(tok.ID); err != nil {
+				failedTokens++
+				continue
 			}
+			revokedTokens++
 		}
+	}
+	if failedTokens > 0 {
+		s.Audit.Record(auditActor(r), "device.removed", id, "its enrolment and its record; its token was not revoked")
+		http.Error(w, "The router is forgotten, but its token could not be revoked and still works. Revoke it under Tokens.", http.StatusInternalServerError)
+		return
 	}
 	detail := "its enrolment and its record"
 	if revokedTokens > 0 {

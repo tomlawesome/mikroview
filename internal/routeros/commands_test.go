@@ -67,7 +67,8 @@ func TestCaTrustCommands(t *testing.T) {
 // would be caught here rather than by a router that pastes an undo
 // matching nothing.
 func TestUndoBuildersMatchTheirForwardResourceNames(t *testing.T) {
-	if got := UndoCaTrustCommands("a"); got != "/certificate remove [find name=mikroview-ca.crt]" {
+	wantCa := "/certificate remove [find where name~\"^mikroview-ca.crt\"]\n/file remove [find name=mikroview-ca.crt]"
+	if got := UndoCaTrustCommands("a"); got != wantCa {
 		t.Errorf("UndoCaTrustCommands = %q", got)
 	}
 	if placeholders.MatchString(UndoCaTrustCommands("a")) {
