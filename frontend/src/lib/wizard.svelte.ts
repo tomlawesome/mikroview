@@ -75,6 +75,11 @@ class WizardState {
   // must not mint a second one.
   enrolment = $state<EnrolmentToken | null>(null)
   enrolmentMintedAt = $state('')
+  // walkMintedAt is this walk's first mint, kept through any re-mint the
+  // walk makes (the wrong-address recovery mints again, but the block
+  // it pasted -- and the certificate it fetched -- came after the
+  // first). The walk's evidence is read from here (#1400, #1401).
+  walkMintedAt = $state('')
   enrolmentError = $state<string | null>(null)
 
   // enrolExpectedAddress is the router's own address, asked for before
@@ -478,6 +483,7 @@ class WizardState {
     this.tokenDevice = ''
     this.token = ''
     this.clearEnrolment()
+    this.walkMintedAt = ''
     this.clearRegister()
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
@@ -557,6 +563,7 @@ class WizardState {
     this.addingRouter = true
     this.tokenDevice = ''
     this.clearEnrolment()
+    this.walkMintedAt = ''
     this.clearRegister()
     this.pane = 1
     this.showStepList = false
@@ -667,6 +674,7 @@ class WizardState {
     }
     this.enrolment = result
     this.enrolmentMintedAt = new Date().toISOString()
+    if (!this.walkMintedAt) this.walkMintedAt = this.enrolmentMintedAt
     // Re-render the block so its last line carries the token just
     // minted -- the server writes that line, and this is the only call
     // that tells it which token to write.
@@ -772,6 +780,7 @@ class WizardState {
     // goes with the walk it was typed in, rather than waiting to
     // pre-fill the next router's.
     this.clearEnrolment()
+    this.walkMintedAt = ''
     // ...and whatever the Register step was told on this walk goes with
     // it too -- a refusal here must not sit and wait for the next
     // router's Register pane to open under it.
@@ -870,6 +879,7 @@ class WizardState {
     this.ledgerDevice = ''
     this.addingRouter = false
     this.clearEnrolment()
+    this.walkMintedAt = ''
     this.clearRegister()
     this.refused = []
     this.pane = 1

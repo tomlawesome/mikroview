@@ -266,6 +266,7 @@ describe('Wizard: the full-screen shell', () => {
     wizardState.openAddRouter()
     render(Wizard)
     await tick()
+    wizardState.walkMintedAt = '2026-09-27T14:01:00Z'
     wizardState.enrolmentMintedAt = '2026-09-27T14:01:00Z'
     expect(wizardRun.evidence.cert).toBe('')
 
@@ -275,6 +276,11 @@ describe('Wizard: the full-screen shell', () => {
         { source: '10.0.0.7', caFetchedAt: '2026-09-27T14:02:58Z' },
       ],
     })
+    expect(wizardRun.evidence.cert).toBe('2026-09-27T14:02:58Z')
+
+    // #1401: the wrong-address recovery mints again after the fetch; the
+    // fetch this walk's paste made still counts.
+    wizardState.enrolmentMintedAt = '2026-09-27T14:04:00Z'
     expect(wizardRun.evidence.cert).toBe('2026-09-27T14:02:58Z')
   })
 
