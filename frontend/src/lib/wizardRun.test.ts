@@ -8,6 +8,7 @@ import {
   footSpec,
   freshAnswers,
   latestArrivalHeadline,
+  ledgerRows,
   NO_EVIDENCE,
   railRows,
   reachedIdx,
@@ -16,6 +17,7 @@ import {
   stageOf,
   stripFor,
   trackStations,
+  undoOrder,
   type Evidence,
   type RunAnswers,
 } from './wizardRun'
@@ -287,6 +289,75 @@ describe('the router’s turn: the track', () => {
     expect(latestArrivalHeadline(trackStations(answered({ copied: true }), backup, 't'), backup, 'rb5009')?.text).toBe(
       'Nightly backup scheduled',
     )
+  })
+
+  // #1385: the rules station only joins the wire once push was said yes
+  // to and there is something to say about it -- never during the paste
+  // step's own 'watch' stage, which is what StepPaste's track already
+  // relies on by never reaching tagged/tuneSkipped/stage-tune-or-done.
+  it('adds no rules station while the router is still answering', () => {
+    const st = trackStations(answered({ copied: true, stage: 'watch' }), ev({ cert: 'c', enrol: 'e' }), 't')
+    expect(st.map((x) => x.id)).not.toContain('rules')
+  })
+
+  it('adds the rules station done, in its own ink’s state, once tagged', () => {
+    const s = answered({ stage: 'done', chosenCount: 3, tunedAt: '14:05:00' })
+    const st = trackStations(s, ev({ cert: 'c', enrol: 'e', tagged: true }), 't')
+    expect(st.at(-1)).toEqual({ id: 'rules', lab: '3 rules', st: 'lit since 14:05:00', state: 'done' })
+  })
+
+  it('adds the rules station as skip, dashed and struck, once left dark', () => {
+    const s = answered({ stage: 'done', tuneSkipped: true })
+    const st = trackStations(s, ev({ cert: 'c', enrol: 'e' }), 't')
+    expect(st.at(-1)).toEqual({ id: 'rules', lab: 'rules', st: 'left dark', state: 'skip' })
+  })
+})
+
+describe('✓ · Where setup stands: the ledger (#1385)', () => {
+  it('reads certificate and logs as always done, in their own ink, with Undo', () => {
+    const rows = ledgerRows(answered(), ev({ cert: '2026-09-27T14:02:58Z', enrol: '2026-09-27T14:03:04Z', from: '192.168.13.1', lines: 69 }))
+    expect(rows[0]).toMatchObject({ done: true, t: 'Certificate trusted', ink: 'cert', u: 'cert' })
+    expect(rows[0].r).toBe('fetched by 192.168.13.1 · 14:02:58')
+    expect(rows[1]).toMatchObject({ done: true, t: 'Logs flowing', ink: 'logs', u: 'logs' })
+    expect(rows[1].r).toBe('enrolled at 192.168.13.1 · 14:03:04 · 69 lines')
+  })
+
+  it('reads router state and backup as dashed and struck, no Undo, exactly as the design words it, when set aside', () => {
+    const rows = ledgerRows(answered({ push: false, backup: false }), ev())
+    const push = rows.find((r) => r.t === 'Router state')!
+    expect(push).toMatchObject({ done: false, r: 'not now · the fall stays address-only', ink: '', u: '' })
+    const backup = rows.find((r) => r.t === 'Backup')!
+    expect(backup).toMatchObject({ done: false, r: 'not now · no backups kept here', ink: '', u: '' })
+    // Rules is left off entirely when push itself was never taken --
+    // there is nothing to propose tagging from.
+    expect(rows.some((r) => r.t.startsWith('Rules'))).toBe(false)
+  })
+
+  it('reads router state, backup and rules as done with a receipt in their own ink, when they stand', () => {
+    const rows = ledgerRows(
+      answered({ push: true, backup: true, chosenCount: 4, tunedAt: '14:06:00' }),
+      ev({ push: '2026-09-27T14:03:31Z', version: '7.24.4', backup: '2026-09-27T14:03:32Z', tagged: true }),
+    )
+    expect(rows.find((r) => r.t === 'Router state pushed')).toMatchObject({ done: true, ink: 'push', u: 'push' })
+    expect(rows.find((r) => r.t === 'Nightly backup')).toMatchObject({ done: true, ink: 'backup', u: 'backup' })
+    const rules = rows.find((r) => r.t === 'Rules tagged')!
+    expect(rules).toMatchObject({ done: true, ink: 'rules', u: 'tune', r: '4 rules log · since 14:06:00' })
+  })
+
+  it('names how many boundaries log nothing when rules were left dark', () => {
+    const rows = ledgerRows(
+      answered({ push: true }),
+      ev({ boundaries: [{ lane: '', watched: false, dark: true }, { lane: '', watched: false, dark: true }, { lane: 'x', watched: true, dark: false }] }),
+    )
+    expect(rows.find((r) => r.t === 'Rules')).toMatchObject({ done: false, r: 'left dark · 2 boundaries log nothing', u: '' })
+  })
+
+  it('orders undo-everything as cert, logs, then whichever of push/backup/tune stand', () => {
+    const all = ledgerRows(answered({ push: true, backup: true }), ev({ tagged: true }))
+    expect(undoOrder(all)).toEqual(['cert', 'logs', 'push', 'backup', 'tune'])
+
+    const partial = ledgerRows(answered({ push: false, backup: true }), ev())
+    expect(undoOrder(partial)).toEqual(['cert', 'logs', 'backup'])
   })
 })
 

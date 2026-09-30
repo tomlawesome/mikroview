@@ -133,6 +133,16 @@ class WizardState {
   // offers it on its own). Null in every ordinary launch.
   lostRouterDevice = $state<string | null>(null)
 
+  // reEnrolling is Re-enrol…'s own signal (#1385, "Adding a router,
+  // re-enrolling") to the full-screen wizard's run (wizardRun.begin()):
+  // land on Mint the token for ledgerDevice even though that router's
+  // logs already stand as evidence, rather than reopening the ledger
+  // where an ordinary revisit would -- because a fresh token, not the
+  // existing one, is the whole point of this door. A one-shot flag,
+  // consumed and cleared by begin() the moment it reads it, so a later
+  // Admin ▸ Run setup… on the same router does not keep forcing Mint.
+  reEnrolling = $state(false)
+
   // pickedVersion (#436) is the operator's choice from the "Your
   // RouterOS version" pick-list -- '' means the first option, "Not
   // sure", which omits `version` from the request entirely rather than
@@ -542,6 +552,7 @@ class WizardState {
     this.pane = 1
     this.showStepList = false
     this.lostRouterDevice = null
+    this.reEnrolling = false
     this.open = true
   }
 
@@ -554,6 +565,7 @@ class WizardState {
     this.ledgerDevice = device
     this.tokenDevice = device
     this.pane = this.steps.indexOf('syslog') + 1
+    this.reEnrolling = true
   }
 
   // openRegister is a router row's Finish registering… (#1291's other
@@ -755,6 +767,9 @@ class WizardState {
     // it too -- a refusal here must not sit and wait for the next
     // router's Register pane to open under it.
     this.clearRegister()
+    // A closed-without-minting Re-enrol… walk must not force Mint on
+    // whatever this router's next, unrelated open turns out to be.
+    this.reEnrolling = false
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in
@@ -844,6 +859,7 @@ class WizardState {
     this.error = null
     this.showStepList = false
     this.lostRouterDevice = null
+    this.reEnrolling = false
     this.pickedVersion = ''
     this.token = ''
     this.tokenDevice = ''

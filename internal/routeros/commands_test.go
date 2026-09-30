@@ -61,6 +61,50 @@ func TestCaTrustCommands(t *testing.T) {
 	}
 }
 
+// TestUndoBuildersMatchTheirForwardResourceNames (#1385) pins the setup
+// wizard ledger's Undo per row to the exact resource names their forward
+// counterparts create, so a name changed on one side without the other
+// would be caught here rather than by a router that pastes an undo
+// matching nothing.
+func TestUndoBuildersMatchTheirForwardResourceNames(t *testing.T) {
+	if got := UndoCaTrustCommands("a"); got != "/certificate remove [find name=mikroview-ca.crt]" {
+		t.Errorf("UndoCaTrustCommands = %q", got)
+	}
+	if placeholders.MatchString(UndoCaTrustCommands("a")) {
+		t.Errorf("UndoCaTrustCommands leaked a placeholder")
+	}
+
+	wantSyslog := "/system logging remove [find action=mikroview]\n/system logging action remove [find name=mikroview]"
+	if got := UndoSyslogCommands("a"); got != wantSyslog {
+		t.Errorf("UndoSyslogCommands =\n%s\nwant\n%s", got, wantSyslog)
+	}
+
+	wantSchedule := "/system scheduler remove [find name=mv-push]\n/system script remove [find name=mv-push]"
+	if got := UndoScheduleCommands("a"); got != wantSchedule {
+		t.Errorf("UndoScheduleCommands =\n%s\nwant\n%s", got, wantSchedule)
+	}
+	if !strings.Contains(ScheduleCommands("body", "a"), "mv-push") || !strings.Contains(UndoScheduleCommands("a"), "mv-push") {
+		t.Error("ScheduleCommands and UndoScheduleCommands disagree about the script's name")
+	}
+
+	wantBackup := "/system scheduler remove [find name=mv-backup]\n/system script remove [find name=mv-backup]"
+	if got := UndoBackupScheduleCommands("a"); got != wantBackup {
+		t.Errorf("UndoBackupScheduleCommands =\n%s\nwant\n%s", got, wantBackup)
+	}
+	if !strings.Contains(BackupScript("mikroview.lan", "47022", "rb5009", "tok", "a"), "mv-backup") {
+		t.Error("BackupScript no longer names its script mv-backup -- UndoBackupScheduleCommands would remove nothing")
+	}
+
+	wantBackupHTTPS := "/system scheduler remove [find name=mv-backup-https]\n/system script remove [find name=mv-backup-https]"
+	if got := UndoBackupPushScheduleCommands("a"); got != wantBackupHTTPS {
+		t.Errorf("UndoBackupPushScheduleCommands =\n%s\nwant\n%s", got, wantBackupHTTPS)
+	}
+	pushBody := BackupPushScript("mikroview.lan", "tok", "a")
+	if !strings.Contains(BackupPushScheduleCommands(pushBody, "a"), "mv-backup-https") {
+		t.Error("BackupPushScheduleCommands no longer names its script mv-backup-https -- UndoBackupPushScheduleCommands would remove nothing")
+	}
+}
+
 func TestSyslogCommandsUsesConfiguredPort(t *testing.T) {
 	if got := SyslogCommands("192.0.2.10:8080", ":16514", "a", ""); !strings.Contains(got, "remote-port=16514") {
 		t.Errorf("syslogCommands did not honour the configured port: %s", got)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/device"
 )
 
@@ -147,6 +148,23 @@ func deviceErrorText(err error) string {
 // it would simply reappear on the next boot. Clears the device's
 // enrolled address and any pending enrolment token along with it
 // (issue #1281's "deleting a device clears its address").
+//
+// This is also the setup wizard ledger's "forget <name> on MikroView"
+// act (#1385, DESIGN.md's "✓ · Where setup stands"): the same endpoint,
+// not a second one, because forgetting a router is exactly this delete
+// with nothing left half-done. Registry.Delete above already accounts
+// for two of the three things the ledger promises to forget -- the
+// record itself and the pending enrolment token -- but it does not
+// reach into internal/auth's token store, where a persistent ingest
+// bearer token (POST /api/tokens, auth.TokenKindIngest, minted for the
+// push and backup scripts to authenticate with) lives in a separate
+// store keyed by its own id, not the device's. Left alone, that token
+// would keep authenticating pushes for a router this registry no
+// longer has any record of -- Authenticate checks only the token's own
+// kind, hash and revoked flag, never whether its device still exists.
+// So this revokes every ingest token scoped to id as part of the same
+// delete, and the one audit line below names whichever of the three
+// this call actually forgot.
 func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -171,7 +189,22 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, deviceErrorText(err), status)
 		return
 	}
-	s.Audit.Record(auditActor(r), "device.removed", id, "")
+	revokedTokens := 0
+	if s.Tokens != nil {
+		for _, tok := range s.Tokens.ByKind(auth.TokenKindIngest) {
+			if tok.Device != id {
+				continue
+			}
+			if err := s.Tokens.Revoke(tok.ID); err == nil {
+				revokedTokens++
+			}
+		}
+	}
+	detail := "its enrolment and its record"
+	if revokedTokens > 0 {
+		detail = "its token, its enrolment and its record"
+	}
+	s.Audit.Record(auditActor(r), "device.removed", id, detail)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -408,13 +408,14 @@ export function announce(rows: RailRow[]): string {
 // stations() makes, just without a per-station ink lookup.
 //
 // The rules station (tuneBody's tagging, and the compact track on
-// ✓ Where setup stands) is not built here: it never appears while this
-// step's stage is 'watch', and belongs with whichever issue builds
-// that ledger's own track (#1385).
+// ✓ Where setup stands, #1385) only ever appears once push was said
+// yes to and the run has reached the rules step or beyond -- never
+// while stage is still 'watch', so the paste step's own track
+// (StepPaste.svelte) is unaffected by its addition below.
 export type TrackState = 'wait' | 'done' | 'skip' | 'alarm' | 'later'
 
 export interface TrackStation {
-  id: 'copy' | 'cert' | 'enrol' | 'push' | 'backup'
+  id: 'copy' | 'cert' | 'enrol' | 'push' | 'backup' | 'rules'
   lab: string
   st: string
   state: TrackState
@@ -464,7 +465,104 @@ export function trackStations(s: RunAnswers, ev: Evidence, copiedAt: string): Tr
       state: ev.backup ? 'done' : ev.push || (s.push === false && !!ev.enrol) ? 'wait' : 'later',
     })
   }
+  // The rules station: only once push was said yes to, and only once
+  // there is something to say about it -- tagged, skipped, or the run
+  // has actually reached the rules step (track.js's own stations()
+  // gate, ported: `s.push !== false && (stage tune/done || tagged ||
+  // skipped)`). Never present during the paste step's own 'watch'
+  // stage, since none of tagged/tuneSkipped/stage-tune-or-done can hold
+  // yet there.
+  if (s.push !== false && (s.stage === 'tune' || s.stage === 'done' || ev.tagged || s.tuneSkipped)) {
+    if (ev.tagged) {
+      stations.push({ id: 'rules', lab: `${s.chosenCount} rules`, st: `lit since ${s.tunedAt}`, state: 'done' })
+    } else if (s.tuneSkipped) {
+      stations.push({ id: 'rules', lab: 'rules', st: 'left dark', state: 'skip' })
+    } else {
+      stations.push({
+        id: 'rules',
+        lab: 'rules',
+        st: s.tuneCopied ? 'waiting for the first new line' : 'touch a dark column',
+        state: s.tuneCopied ? 'wait' : 'later',
+      })
+    }
+  }
   return stations
+}
+
+// --- ✓ · Where setup stands: the ledger (#1385) -----------------------
+//
+// A row per thing the wizard sets up -- certificate, logs, router state,
+// backup, rules -- ported from the prototype's doneBody. Certificate and
+// logs are always 'done': the ledger only ever shows once arrivedAll has
+// been true (Wizard.svelte's own stageOf/footSpec gating), so there is
+// nothing left to be dashed about for either of them. Router state,
+// backup and rules are each either done with a receipt, or dashed and
+// struck with "not now · <consequence>" in the design's own words
+// (DESIGN.md, "✓ · Where setup stands").
+export type LedgerRowId = 'cert' | 'logs' | 'push' | 'backup' | 'tune'
+
+export interface LedgerRow {
+  done: boolean
+  // The ledger's own row title, distinct from the step's title.
+  t: string
+  // The receipt or the "not now" line underneath it.
+  r: string
+  ink: Ink
+  // u names which Undo this row has, '' for a row with none -- a
+  // dashed, set-aside row is never offered Undo, since there is nothing
+  // on the router to undo.
+  u: LedgerRowId | ''
+}
+
+export function ledgerRows(s: RunAnswers, ev: Evidence): LedgerRow[] {
+  const rows: LedgerRow[] = [
+    { done: true, t: 'Certificate trusted', r: `fetched by ${ev.from} · ${hms(ev.cert)}`, ink: 'cert', u: 'cert' },
+    {
+      done: true,
+      t: 'Logs flowing',
+      r: `enrolled at ${ev.from} · ${hms(ev.enrol)} · ${ev.lines.toLocaleString()} lines`,
+      ink: 'logs',
+      u: 'logs',
+    },
+  ]
+  if (s.push) {
+    rows.push({
+      done: true,
+      t: 'Router state pushed',
+      r: `every 20 minutes · first ${hms(ev.push)} · RouterOS ${ev.version}`,
+      ink: 'push',
+      u: 'push',
+    })
+  } else {
+    rows.push({ done: false, t: 'Router state', r: 'not now · the fall stays address-only', ink: '', u: '' })
+  }
+  if (s.backup) {
+    rows.push({ done: true, t: 'Nightly backup', r: `03:00 · scheduled ${hms(ev.backup)}`, ink: 'backup', u: 'backup' })
+  } else {
+    rows.push({ done: false, t: 'Backup', r: 'not now · no backups kept here', ink: '', u: '' })
+  }
+  if (s.push) {
+    if (ev.tagged) {
+      rows.push({
+        done: true,
+        t: 'Rules tagged',
+        r: `${s.chosenCount} rules log · since ${s.tunedAt}`,
+        ink: 'rules',
+        u: 'tune',
+      })
+    } else {
+      const dark = ev.boundaries.filter((b) => b.dark).length
+      rows.push({ done: false, t: 'Rules', r: `left dark · ${dark} boundaries log nothing`, ink: '', u: '' })
+    }
+  }
+  return rows
+}
+
+// undoOrder is "undo everything on the router first" (DESIGN.md): every
+// green row's Undo id, in the same order the ledger lists them -- cert,
+// logs, then push/backup/tune only where each one stands.
+export function undoOrder(rows: readonly LedgerRow[]): LedgerRowId[] {
+  return rows.filter((r) => r.done && r.u).map((r) => r.u as LedgerRowId)
 }
 
 // latestArrivalHeadline is the observation line's own sentence once

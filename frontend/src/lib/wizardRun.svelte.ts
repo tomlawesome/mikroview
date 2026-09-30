@@ -12,7 +12,7 @@
 // Nothing here connects to a router (the AGENTS.md invariant): every
 // field of `evidence` is a reading of what has arrived.
 
-import { createToken } from './api'
+import { createToken, deleteDevice } from './api'
 import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
 import { TITLES } from './setupsteps'
@@ -22,11 +22,15 @@ import {
   arrivedAll,
   freshAnswers,
   latestArrivalHeadline,
+  ledgerRows,
   refusedFixBlock,
   routerDone,
   trackStations,
+  undoOrder,
   type Evidence,
   type LatestArrival,
+  type LedgerRow,
+  type LedgerRowId,
   type RunAnswers,
   type Stage,
   type TrackStation,
@@ -241,6 +245,82 @@ class WizardRun {
     return refusedFixBlock(wizardState.commands?.steps.syslog.commands ?? '')
   }
 
+  // ledgerRows is ✓ · Where setup stands' own ledger (#1385): a row per
+  // thing, in the ink of what it records, with Undo where it stands.
+  get ledgerRows(): LedgerRow[] {
+    return ledgerRows(this.answers, this.evidence)
+  }
+
+  // undoTextFor is one row's Undo (DESIGN.md: "the lines to paste on the
+  // router"), sourced from POST /api/setup/commands' own Undo builders
+  // (internal/routeros/commands.go's Undo* functions) -- never
+  // hand-written here (AGENTS.md). 'tune' is not answered from here: its
+  // lines depend on which rules this walk actually tagged, which needs
+  // the pushed rule table StepStand reads for itself the same way
+  // StepTune does (wizardTune.undoBlock), so that one row's text is
+  // built in the component and passed straight through by StepStand.
+  undoTextFor(id: Exclude<LedgerRowId, 'tune'>): string {
+    const undo = wizardState.commands?.steps.undo
+    if (!undo) return ''
+    return { cert: undo.caTrust, logs: undo.syslog, push: undo.schedule, backup: undo.backup }[id]
+  }
+
+  // undoOrder is "undo everything on the router first"'s own order: cert,
+  // logs, then whichever of push/backup/tune this run actually has.
+  get undoOrder(): LedgerRowId[] {
+    return undoOrder(this.ledgerRows)
+  }
+
+  // toggleUndo is a green row's own Undo/Hide (doneBody's data-act=
+  // "undo"): at most one row open at a time, the same single-flag shape
+  // the prototype's s.undoOpen has.
+  toggleUndo(id: LedgerRowId) {
+    this.undoOpen = this.undoOpen === id ? null : id
+  }
+
+  // toggleUndoAll is "undo everything on the router first" / "hide the
+  // undo lines" (doneBody's data-act="undo-all").
+  toggleUndoAll() {
+    this.showUndoAll = !this.showUndoAll
+  }
+
+  // forget is the ledger's "forget <name> on MikroView -- its token, its
+  // enrolment and its record" (DESIGN.md's "start again"): one call to
+  // the same DELETE /api/devices/{id} Entities' own Remove… uses
+  // (internal/api/devices.go's handleDeviceDelete, extended by #1385 to
+  // also revoke the device's ingest token) -- never a second endpoint.
+  // On success the wizard reopens at The router, the same door Add
+  // another router uses, since forgetting a router is exactly "start
+  // this router over from nothing." Returns an error string to show
+  // beside the button, or null once forgotten.
+  private forgetting = false
+  async forget(): Promise<string | null> {
+    const device = wizardState.ledgerDevice
+    if (!device || this.forgetting) return null
+    this.forgetting = true
+    try {
+      const err = await deleteDevice(device)
+      if (err) return err
+      // Without this, openAddRouter()/begin() below would place the walk
+      // against wizardState's last poll, which still shows this router
+      // (and the fleet's ambient "first open syslog source" fallback
+      // evidence() reads for a walk with no router chosen yet, DESIGN.md's
+      // own long-standing behaviour for Add another router) exactly as it
+      // stood before the delete just forgot it.
+      await wizardState.refresh()
+      wizardState.openAddRouter()
+      this.begin()
+      return null
+    } catch (e) {
+      // Same "a dropped connection arrives the same way" reasoning as
+      // wizardState.saveAddress: deleteDevice's own null-or-message
+      // contract does not cover a fetch that never returned at all.
+      return e instanceof Error ? e.message : String(e)
+    } finally {
+      this.forgetting = false
+    }
+  }
+
   reset() {
     Object.assign(this, freshAnswers())
     this.copiedAt = ''
@@ -258,7 +338,12 @@ class WizardRun {
   // reopening shows the ledger as it stands. A router the door named
   // (Re-enrol…, Finish registering…) fills the name and the address; a
   // router already sending lands on the router's turn, or on the
-  // ledger once everything that stands has arrived.
+  // ledger once everything that stands has arrived -- unless the door
+  // was Re-enrol… (wizardState.reEnrolling), which lands on Mint the
+  // token instead (DESIGN.md, "Adding a router, re-enrolling"): that
+  // door exists precisely to mint a fresh token for a router whose logs
+  // already stand as evidence, so reading ev.enrol first would send it
+  // straight back to the ledger it was asked to leave.
   begin() {
     this.reset()
     const dev = wizardState.ledgerDevice
@@ -269,6 +354,16 @@ class WizardRun {
       this.addr = dev.acceptedIp ?? ''
     }
     const ev = this.evidence
+    if (wizardState.reEnrolling && dev) {
+      wizardState.reEnrolling = false
+      // What stood before still stands until a fresh paste says
+      // otherwise -- Re-enrol… only replaces the token, not the
+      // router's other answers.
+      this.push = !!ev.push
+      this.backup = !!ev.backup
+      this.q = 4
+      return
+    }
     if (ev.enrol) {
       // What stands is what was chosen: a push or a backup that never
       // arrived is not waited for on a reopen.
