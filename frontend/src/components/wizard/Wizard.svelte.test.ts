@@ -300,6 +300,34 @@ describe('Wizard: the full-screen shell', () => {
     expect(wizardRun.q).toBe(4)
   })
 
+  // #1404: Run setup… places the run on the server's evidence as it
+  // stands when the door opens, not on the read taken at sign-in.
+  it('places Run setup… on a fresh read of the evidence, not the one held since sign-in', async () => {
+    wizardState.open = false
+    vi.mocked(fetchSetupStatus).mockResolvedValue(
+      status({ sources: [{ source: '192.168.13.1', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }] }),
+    )
+    wizardState.launch()
+    render(Wizard)
+    await waitFor(() => expect(wizardRun.evidence.enrol).toBe('2026-09-27T14:03:04Z'))
+    await waitFor(() => expect(wizardRun.stage).not.toBe('ask'))
+  })
+
+  it('keeps what was typed before the fresh read lands', async () => {
+    wizardState.open = false
+    let land: (s: SetupStatus) => void = () => {}
+    vi.mocked(fetchSetupStatus).mockReturnValue(new Promise((r) => (land = r)))
+    wizardState.launch()
+    render(Wizard)
+    await tick()
+    await fireEvent.input(screen.getByLabelText(/^Name/), { target: { value: 'rb5009' } })
+    land(status({ sources: [{ source: '192.168.13.1', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }] }))
+    await waitFor(() => expect(wizardRun.evidence.enrol).toBe('2026-09-27T14:03:04Z'))
+    await tick()
+    expect(wizardRun.stage).toBe('ask')
+    expect(wizardRun.name).toBe('rb5009')
+  })
+
   it('is not in the tree while closed', async () => {
     wizardState.open = false
     render(Wizard)

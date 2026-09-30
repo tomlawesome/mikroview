@@ -112,6 +112,13 @@ class WizardRun {
     }
   }
 
+  // placement is the run's answers as one comparable value: Wizard.svelte
+  // re-places the run on a fresh ledger read only while this still
+  // matches what begin() left (#1404).
+  get placement(): string {
+    return JSON.stringify(this.answers)
+  }
+
   get addrProblem(): string {
     return addrProblem(this.addr)
   }
