@@ -12,19 +12,37 @@
 // Nothing here connects to a router (the AGENTS.md invariant): every
 // field of `evidence` is a reading of what has arrived.
 
+import { createToken } from './api'
 import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
+import { TITLES } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import {
   addrProblem,
   arrivedAll,
   freshAnswers,
+  latestArrivalHeadline,
+  refusedFixBlock,
   routerDone,
+  trackStations,
   type Evidence,
+  type LatestArrival,
   type RunAnswers,
   type Stage,
+  type TrackStation,
 } from './wizardRun'
 import type { TuneRule } from './wizardTune'
+
+// blockSection is one numbered, titled part of the paste-once block
+// (DESIGN.md, "3 · Paste once"): a title from TITLES (the same
+// vocabulary the rail and the fleet ledger already use) and the
+// commands the server rendered for it. Built, never hand-written --
+// see WizardRun.blockSections' own comment.
+export interface BlockSection {
+  id: 'ca' | 'push' | 'backup' | 'syslog'
+  title: string
+  commands: string
+}
 
 // The token's expiry as the paste step's line shows it (14:17).
 function hm(iso: string): string {
@@ -46,6 +64,10 @@ class WizardRun {
   push = $state<boolean | null>(null)
   backup = $state<boolean | null>(null)
   copied = $state(false)
+  // copiedAt is the track's own "copied" station timestamp (#1383): a
+  // client-side moment, not a server receipt, because Copy itself is
+  // never something the server witnesses.
+  copiedAt = $state('')
   tuneCopied = $state(false)
   tuneSkipped = $state(false)
   chosenCount = $state(0)
@@ -160,8 +182,68 @@ class WizardRun {
     return arrivedAll(this.answers, this.evidence)
   }
 
+  // blockSections is the paste-once block (DESIGN.md, "3 · Paste
+  // once"): the certificate, the push and the backup where they were
+  // said yes to, and the logging step last -- last because its own
+  // commands (SyslogCommands, internal/routeros/commands.go) are the
+  // ones ending in the enrol line, so keeping it last is what makes
+  // "the enrol line last" true without slicing the server's own text
+  // apart. push's section is the schedule step's commands, not push's
+  // own -- schedule has carried the whole hand-over (script, scheduler,
+  // one run now) as a single block since #1131; push stays the bare
+  // script body for the Engine Room's re-key affordance, which nothing
+  // here needs. backup's section joins backup and backupSchedule, the
+  // one place this build concatenates two of the server's blocks
+  // itself -- both are rendered text already, so this is not writing
+  // RouterOS, only laying two blocks under one heading.
+  //
+  // A section with no commands yet (still loading, or its own
+  // precondition unmet) is left out rather than shown half-formed,
+  // the same contract every blank CommandStep already keeps.
+  get blockSections(): BlockSection[] {
+    const steps = wizardState.commands?.steps
+    if (!steps) return []
+    const sections: BlockSection[] = [{ id: 'ca', title: TITLES.ca, commands: steps.caTrust.commands }]
+    if (this.push === true) sections.push({ id: 'push', title: TITLES.push, commands: steps.schedule.commands })
+    if (this.backup === true) {
+      const commands = [steps.backup.commands, steps.backupSchedule.commands].filter(Boolean).join('\n')
+      sections.push({ id: 'backup', title: TITLES.backup, commands })
+    }
+    sections.push({ id: 'syslog', title: TITLES.syslog, commands: steps.syslog.commands })
+    return sections.filter((s) => s.commands)
+  }
+
+  // blockText is what Copy puts on the clipboard and the folded `pre`
+  // shows: every section numbered and titled, in order.
+  get blockText(): string {
+    return this.blockSections.map((s, i) => `# ${i + 1} · ${s.title}\n${s.commands}`).join('\n')
+  }
+
+  get trackStations(): TrackStation[] {
+    return trackStations(this.answers, this.evidence, this.copiedAt)
+  }
+
+  get latestArrival(): LatestArrival | null {
+    return latestArrivalHeadline(this.trackStations, this.evidence, this.name)
+  }
+
+  // reviewedVersion is the dialect table's own "last checked against"
+  // bound (SetupCommandsResponse.routeros.newest) -- the (a.b) the
+  // ahead-of-review caution box quotes.
+  get reviewedVersion(): string {
+    return wizardState.commands?.routeros.newest ?? ''
+  }
+
+  // refusedFixWithEnrol is the refused-sender box's copyable fix: the
+  // syslog step's own guarded action line plus the enrol line, read
+  // from whatever the server most recently rendered.
+  get refusedFixWithEnrol(): string {
+    return refusedFixBlock(wizardState.commands?.steps.syslog.commands ?? '')
+  }
+
   reset() {
     Object.assign(this, freshAnswers())
+    this.copiedAt = ''
     this.tuneChosen = []
     this.undoOpen = null
     this.showUndoAll = false
@@ -241,16 +323,89 @@ class WizardRun {
       wizardState.enrolPassword = this.pass
       this.pass = ''
       await wizardState.mintEnrolmentToken()
-      if (wizardState.enrolment) this.stage = 'paste'
+      if (wizardState.enrolment) {
+        await this.ensureIngestToken()
+        this.stage = 'paste'
+      }
     } finally {
       this.minting = false
+    }
+  }
+
+  // ensureIngestToken mints the persistent ingest token
+  // (internal/api/ingest.go's bearer, distinct from the one-shot
+  // enrolment marker mintEnrolmentToken makes) that the paste block's
+  // push and backup sections need to authenticate the router's own
+  // posts -- see routeros.PushScript/BackupScript, embedded in
+  // steps.schedule/steps.backup by POST /api/setup/commands.
+  //
+  // Called only from inside Mint and Reroll -- the password-checked
+  // act -- never from a form toggle on The router: an API credential
+  // must not be created by ticking Yes before the password step even
+  // runs. If push and backup were both No at the moment of minting and
+  // the operator later goes Back and answers one Yes, the rail lets
+  // The router be revisited until the paste lands (railRows' `can`),
+  // and reaching Mint again calls this again -- so no separate path is
+  // needed for that case, only that Back-and-forward keep landing on
+  // Mint rather than skipping it (StepMint's own Enter/click always
+  // call mint() afresh, whatever wizardState.enrolment already holds).
+  // A no-op once a token already stands for this device; POST
+  // /api/tokens writes its own audit line, so nothing else is recorded
+  // here. Best-effort: a failure here leaves the push/backup sections
+  // blank rather than failing the mint that already succeeded.
+  private async ensureIngestToken(): Promise<void> {
+    if (this.push !== true && this.backup !== true) return
+    const device = wizardState.ledgerDevice
+    if (!device) return
+    if (wizardState.token && wizardState.tokenDevice === device) return
+    try {
+      const result = await createToken(`setup-${device}`, 'ingest', device)
+      if (typeof result === 'string' || !result.value) return
+      wizardState.token = result.value
+      wizardState.tokenDevice = device
+      await wizardState.refreshCommands({ device, token: result.value })
+    } catch {
+      // See the doc comment above: best-effort.
     }
   }
 
   // Copy on the paste step: the router's turn begins.
   markCopied() {
     this.copied = true
+    this.copiedAt = new Date().toISOString()
     this.stage = 'watch'
+  }
+
+  // Reroll is Mint again for the same router and address (#1291: it
+  // asks for the password every time, because minting is what opens
+  // the port). Only reachable before Copy -- the paste step's own
+  // copyrow is what offers it -- so this never touches `stage`. Also
+  // ensures the ingest token, the same as Mint: a first attempt that
+  // failed or was skipped (push/backup answered after the fact is not
+  // reachable here, but a transient failure is) gets another chance.
+  async reroll(password: string): Promise<void> {
+    wizardState.enrolExpectedAddress = this.addr
+    wizardState.enrolPassword = password
+    await wizardState.mintEnrolmentToken()
+    if (wizardState.enrolment) await this.ensureIngestToken()
+  }
+
+  // "enrol at <other> instead" (DESIGN.md, "Refused sender"; #1370,
+  // #1373) is the same act as Mint and Reroll above, pointed at the
+  // address that actually sent -- not a new endpoint: mintEnrolment
+  // (POST /api/devices/{id}/enrolment) re-checks the password every
+  // time, writes the one audit line every mint does, and never sets an
+  // accepted address itself -- that still only happens when a router
+  // presents the fresh token it mints here. Once it succeeds,
+  // evidence.refused reads empty on its own: refusedSince keeps only
+  // addresses first seen after enrolmentMintedAt, which this call just
+  // moved to now.
+  async enrolAtOther(password: string): Promise<void> {
+    const other = this.evidence.refused
+    if (!other) return
+    wizardState.enrolExpectedAddress = other
+    wizardState.enrolPassword = password
+    await wizardState.mintEnrolmentToken()
   }
 
   toTune() {

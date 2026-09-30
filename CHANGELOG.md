@@ -35,6 +35,13 @@ rewritten.
   signed-in user), and `geoSource` on `/api/healthz`. See
   docs/configuration.md's "GeoIP country flags".
 
+- **The setup wizard's "Paste once" step** (#1383): one block, its
+  sections numbered and titled and the enrol line last, one Copy, and
+  the router's turn -- a track lighting station by station from the
+  server's own receipts, with the refused-sender and ahead-of-review
+  recoveries (`enrol at <other> instead` re-mints for that address,
+  asking for the password again, the same act as Mint).
+
 ### Removed
 
 - **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,

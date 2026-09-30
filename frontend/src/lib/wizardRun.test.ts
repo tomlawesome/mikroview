@@ -7,12 +7,15 @@ import {
   chipsFor,
   footSpec,
   freshAnswers,
+  latestArrivalHeadline,
   NO_EVIDENCE,
   railRows,
   reachedIdx,
+  refusedFixBlock,
   rowState,
   stageOf,
   stripFor,
+  trackStations,
   type Evidence,
   type RunAnswers,
 } from './wizardRun'
@@ -236,5 +239,74 @@ describe('the bar and the strip', () => {
       { lane: '#3987e5', on: true, dark: false },
       { lane: '', on: false, dark: true },
     ])
+  })
+})
+
+describe('the router’s turn: the track', () => {
+  it('has a station per proof, later before Copy’s own proof lands, waiting once it can', () => {
+    const st = trackStations(answered({ copied: true }), ev(), '2026-09-27T14:00:05Z')
+    expect(st.map((x) => x.id)).toEqual(['copy', 'cert', 'enrol', 'push', 'backup'])
+    expect(st.map((x) => x.state)).toEqual(['done', 'wait', 'later', 'later', 'later'])
+    expect(st[0].st).toBe('14:00:05')
+  })
+
+  it('lights each station as its own evidence lands, in wire order', () => {
+    const full = ev({ cert: '2026-09-27T14:02:58Z', enrol: '2026-09-27T14:03:04Z', lines: 69, push: '2026-09-27T14:03:31Z', version: '7.24.4', backup: '2026-09-27T14:03:32Z' })
+    const st = trackStations(answered({ copied: true }), full, '2026-09-27T14:00:05Z')
+    expect(st.map((x) => x.state)).toEqual(['done', 'done', 'done', 'done', 'done'])
+    expect(st[2].st).toBe('14:03:04 · 69 lines')
+    expect(st[3].st).toBe('14:03:31 · v7.24.4')
+    expect(st[4].st).toBe('14:03:32 · 03:00')
+  })
+
+  it('marks a station set aside as skip, dashed and struck by the CSS that reads it', () => {
+    const st = trackStations(answered({ push: false, backup: false, copied: true }), ev({ cert: 'c', enrol: 'e' }), 't')
+    expect(st[3]).toMatchObject({ id: 'push', state: 'skip', st: 'not now · address-only' })
+    expect(st[4]).toMatchObject({ id: 'backup', state: 'skip', st: 'not now · none kept here' })
+  })
+
+  it('reads a refusal as the enrol station’s own alarm, not a second station', () => {
+    const st = trackStations(answered({ copied: true }), ev({ cert: 'c', refused: '192.168.13.99' }), 't')
+    expect(st).toHaveLength(5)
+    expect(st[2]).toEqual({ id: 'enrol', lab: 'refused', st: 'lines from 192.168.13.99', state: 'alarm' })
+  })
+
+  it('reads the latest arrival’s own sentence, last in wire order, and nothing before Copy', () => {
+    expect(latestArrivalHeadline(trackStations(answered({ copied: true }), ev(), 't'), ev(), 'rb5009')).toBeNull()
+    const cert = ev({ cert: '2026-09-27T14:02:58Z' })
+    expect(latestArrivalHeadline(trackStations(answered({ copied: true }), cert, 't'), cert, 'rb5009')).toEqual({
+      text: 'Certificate fetched by ',
+      small: '14:02:58',
+    })
+    const push = ev({ cert: 'c', enrol: 'e', from: '192.168.13.1', push: '2026-09-27T14:03:31Z' })
+    expect(latestArrivalHeadline(trackStations(answered({ copied: true }), push, 't'), push, 'rb5009')).toEqual({
+      text: 'First push from rb5009',
+      small: '14:03:31',
+    })
+    const backup = ev({ cert: 'c', enrol: 'e', backup: '2026-09-27T14:03:32Z' })
+    expect(latestArrivalHeadline(trackStations(answered({ copied: true }), backup, 't'), backup, 'rb5009')?.text).toBe(
+      'Nightly backup scheduled',
+    )
+  })
+})
+
+describe('the refused-sender fix', () => {
+  const syslog =
+    ':if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview }\n' +
+    '/system logging add topics=firewall action=mikroview\n' +
+    '/log info "mikroview-enrol demo0000demo0000demo"'
+
+  it('keeps the guarded action line (which resets src-address) and the enrol line, dropping the topics guard between them', () => {
+    expect(refusedFixBlock(syslog).split('\n')).toEqual([
+      ':if ([:len [/system logging action find name=mikroview]] = 0) do={ /system logging action add name=mikroview }',
+      '/log info "mikroview-enrol demo0000demo0000demo"',
+    ])
+  })
+
+  it('falls back to the whole thing when there is no enrol line to keep last', () => {
+    expect(refusedFixBlock(':if ([:len [/system logging action find name=mikroview]] = 0) do={ add }')).toBe(
+      ':if ([:len [/system logging action find name=mikroview]] = 0) do={ add }',
+    )
+    expect(refusedFixBlock('')).toBe('')
   })
 })
