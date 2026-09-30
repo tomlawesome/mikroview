@@ -112,46 +112,71 @@
   // journey is done and the fall stands: the tour's offer (#1386) waits
   // on it rather than on a clock of its own.
   export function wayOut(swap: () => void, after: () => void): boolean {
+    // Only a bar to leave from is needed up front -- canvas and ride are
+    // bound inside {#if wizardJourney.active}, so they do not exist
+    // until begin('out') below mounts them (#1386). Reading them before
+    // that always failed and Finish snapped straight to the fall.
+    if (wizardJourney.active) return false
     const bar = document.querySelector<HTMLElement>('.wiz .bar .wm')
-    if (!bar || !canvas || !ride || wizardJourney.active) return false
-    const from = bar.getBoundingClientRect()
+    if (!bar) return false
     wizardJourney.begin('out')
     body().classList.add('journey', 'am')
-    return journey({
-      canvas,
-      ride,
-      from,
-      to: from,
-      D: window.innerHeight,
-      scale: 0.78,
-      slide: (y) => {
-        wizardJourney.slideY = y
-      },
-      swap: () => {
-        swap()
-        body().classList.add('ak-strip')
-      },
-      groups: [
-        [4350, () => body().classList.add('ak-bar')],
-        [4450, () => strike([...document.querySelectorAll<HTMLElement>('.fall .rig g.band')] as unknown as HTMLElement[], 90)],
-        [4800, () => body().classList.add('ak-fb')],
-        [
-          5300,
-          () => {
-            body().classList.remove('journey', 'am', 'ak-bar', 'ak-strip', 'ak-fb')
-            document.querySelectorAll('.strike').forEach((el) => el.classList.remove('strike'))
-          },
-        ],
-      ],
-      landed: () => {
-        wizardJourney.landed = true
-      },
-      done: () => {
-        body().classList.remove('journey', 'am', 'ak-bar', 'ak-strip', 'ak-fb')
+    // The canvas and ride mount this frame; two frames on, as wayIn
+    // waits, both are in the DOM and the bar's rect is settled.
+    raf(() => {
+      const from = document.querySelector<HTMLElement>('.wiz .bar .wm')?.getBoundingClientRect()
+      if (!from || !canvas || !ride) {
+        body().classList.remove('journey', 'am')
         wizardJourney.end()
+        swap()
         after()
-      },
+        return
+      }
+      const ok = journey({
+        canvas,
+        ride,
+        from,
+        to: from,
+        D: window.innerHeight,
+        scale: 0.78,
+        slide: (y) => {
+          wizardJourney.slideY = y
+        },
+        swap: () => {
+          swap()
+          body().classList.add('ak-strip')
+        },
+        groups: [
+          [4350, () => body().classList.add('ak-bar')],
+          [4450, () => strike([...document.querySelectorAll<HTMLElement>('.fall .rig g.band')] as unknown as HTMLElement[], 90)],
+          [4800, () => body().classList.add('ak-fb')],
+          [
+            5300,
+            () => {
+              body().classList.remove('journey', 'am', 'ak-bar', 'ak-strip', 'ak-fb')
+              document.querySelectorAll('.strike').forEach((el) => el.classList.remove('strike'))
+            },
+          ],
+        ],
+        landed: () => {
+          wizardJourney.landed = true
+        },
+        done: () => {
+          body().classList.remove('journey', 'am', 'ak-bar', 'ak-strip', 'ak-fb')
+          wizardJourney.end()
+          after()
+        },
+      })
+      if (!ok) {
+        // No canvas context (jsdom outside the test's stand-in): the
+        // reduced path -- hand over outright, same as wayIn's own !ok.
+        body().classList.remove('journey', 'am')
+        wizardJourney.end()
+        swap()
+        after()
+      }
     })
+    return true
   }
 
   // finish() asks for the way out through the state module rather than
