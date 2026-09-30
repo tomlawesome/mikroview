@@ -148,9 +148,21 @@ class WizardRun {
       }
     }
     const sources = st?.sources ?? []
+    // The certificate is fetched over plain HTTPS, so its source is
+    // whatever address the router's route to MikroView leaves from --
+    // not always the one it sends logs from (a second interface, NAT).
+    // An add-a-router walk takes a fetch from its own address, or any
+    // fetch since its token was minted: the block carrying the fetch is
+    // only pasted after that, so an older fetch is another router's
+    // (#1397) and a newer one is this paste's (#1400).
+    const mintedAt = wizardState.enrolmentMintedAt ? Date.parse(wizardState.enrolmentMintedAt) : NaN
     const certSrc =
       sources.find((s) => s.caFetchedAt && (s.source === from || s.source === this.addr)) ??
-      (fleetWide ? sources.find((s) => s.caFetchedAt) : undefined)
+      (fleetWide
+        ? sources.find((s) => s.caFetchedAt)
+        : Number.isNaN(mintedAt)
+          ? undefined
+          : sources.find((s) => s.caFetchedAt && Date.parse(s.caFetchedAt) >= mintedAt))
     let push = ''
     let lines = 0
     for (const d of st?.devices ?? []) {

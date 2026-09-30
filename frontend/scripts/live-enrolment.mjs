@@ -257,11 +257,11 @@ check(true, 'Copy starts the router’s turn')
 // pasted command would have hit.
 await page.request.get(`${URL_BASE}/ca.crt`)
 const track = wiz.locator('.track')
-await waitForCondition(async () => {
+const certLit = await waitForCondition(async () => {
   const cls = (await track.locator('.stn').nth(1).getAttribute('class')) ?? ''
   return /\bdone\b/.test(cls) ? cls : null
 }, 10000)
-check(true, 'the certificate station lights once /ca.crt is fetched')
+check(!!certLit, 'the certificate station lights once /ca.crt is fetched')
 
 // --- g. Wrong sender: refused, and the box names it ---------------------
 
