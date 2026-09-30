@@ -524,12 +524,15 @@ func TestIngestPushedIPAddressesAreReadableFromTheTableEndpoint(t *testing.T) {
 // RouterState and is readable back through the services endpoint,
 // including a row with no address restriction -- the case that matters
 // most downstream, since it means "reachable from anywhere" rather than
-// an omitted field being confused with a real restriction.
+// an omitted field being confused with a real restriction. winbox
+// carries an explicit "address":[] here, the shape a real static service
+// actually sends (#1405); an address key entirely absent instead marks
+// one of RouterOS's own dynamic rows, which the endpoint now leaves out.
 func TestIngestPushedIPServicesAreReadableFromTheTableEndpoint(t *testing.T) {
 	ts, _, raw := ingestTestServer(t, "router-7")
 
 	push := `{"kind":"ip-service","page":1,"pages":1,"records":[` +
-		`{"name":"winbox","disabled":false,"port":8291,"certificate":""},` +
+		`{"name":"winbox","disabled":false,"port":8291,"address":[],"certificate":""},` +
 		`{"name":"api","disabled":true,"port":8728,"address":"10.0.0.0/8","certificate":""}]}`
 	resp := postIngest(t, ts, raw, push)
 	resp.Body.Close()
