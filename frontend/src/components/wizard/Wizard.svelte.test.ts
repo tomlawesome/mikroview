@@ -236,6 +236,41 @@ describe('Wizard: the full-screen shell', () => {
     expect(row('The router').querySelector('.step-receipt')?.textContent).toMatch(/^rb5009 · enrolled 192\.168\.13\.1 · /)
   })
 
+  // #1397: '+ add a router' is a walk for a router not yet named, so
+  // another address's traffic is not its evidence. It borrowed the
+  // fleet's first syslog source (right only for the first-run ledger),
+  // placed the walk past The router, and never showed the form.
+  it('starts an add-a-router walk at The router whatever else is sending', async () => {
+    wizardState.status = status({
+      sources: [{ source: '10.9.9.9', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'other', configured: true, sourceIp: '10.9.9.9', events: 300, decodedActions: 0 }],
+    })
+    wizardState.openAddRouter()
+    render(Wizard)
+    await tick()
+    expect(screen.getByLabelText(/^Name/)).toBeTruthy()
+    expect(row('The router').classList.contains('done')).toBe(false)
+    expect(wizardRun.evidence.enrol).toBe('')
+    expect(wizardRun.evidence.cert).toBe('')
+    expect(wizardRun.evidence.lines).toBe(0)
+  })
+
+  // #1398: Re-enrol… on a router whose logs already stand lands on Mint
+  // the token for it, not on the ledger its evidence would otherwise
+  // place the walk at.
+  it('lands Re-enrol… on Mint the token even with the router already sending', async () => {
+    wizardState.devices = [device({ acceptedIp: '192.168.13.1', enrolledAt: '2026-09-27T14:03:04Z' })]
+    wizardState.status = status({
+      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+      devices: [{ device: 'rb5009', configured: true, sourceIp: '192.168.13.1', events: 69, decodedActions: 12 }],
+    })
+    wizardState.openReEnrol('rb5009')
+    render(Wizard)
+    await tick()
+    expect(wizardRun.stage).toBe('ask')
+    expect(wizardRun.q).toBe(4)
+  })
+
   it('is not in the tree while closed', async () => {
     wizardState.open = false
     render(Wizard)

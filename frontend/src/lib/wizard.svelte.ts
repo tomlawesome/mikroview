@@ -143,6 +143,13 @@ class WizardState {
   // Admin ▸ Run setup… on the same router does not keep forcing Mint.
   reEnrolling = $state(false)
 
+  // addingRouter is true for a walk about one router, opened by a door
+  // that names it or will (+ add a router, Re-enrol…, Finish
+  // registering…, the ledger's forget): the fleet's other traffic is not
+  // its evidence (#1397). Only the first-run ledger (launch) reads the
+  // fleet as a whole while no router is named.
+  addingRouter = $state(false)
+
   // pickedVersion (#436) is the operator's choice from the "Your
   // RouterOS version" pick-list -- '' means the first option, "Not
   // sure", which omits `version` from the request entirely rather than
@@ -467,6 +474,7 @@ class WizardState {
     // Name your router already done, and Send logs would offer that
     // other router's live token to reroll (#1284).
     this.ledgerDevice = ''
+    this.addingRouter = false
     this.tokenDevice = ''
     this.token = ''
     this.clearEnrolment()
@@ -546,6 +554,7 @@ class WizardState {
     this.steps = ROUTER_STEPS
     this.finishTo = 'fleet'
     this.ledgerDevice = ''
+    this.addingRouter = true
     this.tokenDevice = ''
     this.clearEnrolment()
     this.clearRegister()
@@ -850,6 +859,7 @@ class WizardState {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'
     this.ledgerDevice = ''
+    this.addingRouter = false
     this.clearEnrolment()
     this.clearRegister()
     this.refused = []
