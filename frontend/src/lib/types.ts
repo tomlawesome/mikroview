@@ -2059,6 +2059,20 @@ export interface SetupCommandsResponse {
     // the same convention every other step's blank block already uses.
     backup: CommandStep
     backupSchedule: CommandStep
+    // undo is the ledger's own Undo per row (#1385, "✓ · Where setup
+    // stands"): the RouterOS lines that remove what caTrust/syslog/
+    // schedule/backup(Schedule) above set up, read from the server's own
+    // builders (internal/routeros/commands.go's Undo* functions) rather
+    // than hand-written here. Unlike every block above, none of these
+    // embed the address or a token, so they render unconditionally --
+    // optional only so a test fixture built before #1385 still
+    // typechecks; a real response always carries it.
+    undo?: {
+      caTrust: string
+      syslog: string
+      schedule: string
+      backup: string
+    }
   }
 }
 

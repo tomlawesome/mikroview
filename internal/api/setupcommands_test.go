@@ -612,6 +612,40 @@ func TestHandleSetupCommandsHTTPSTransport(t *testing.T) {
 	}
 }
 
+// TestHandleSetupCommandsUndoRendersRegardlessOfAddressAndFollowsTransport
+// covers #1385's ledger: every Undo line embeds a fixed resource name,
+// never the address or a token, so all four render even with nothing
+// else answered -- and Backup's follows the stored transport the same
+// way the forward pair does (TestHandleSetupCommandsHTTPSTransport).
+func TestHandleSetupCommandsUndoRendersRegardlessOfAddressAndFollowsTransport(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Setup = setup.New()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	bare := postSetupCommands(t, ts.URL, setupCommandsRequest{})
+	if bare.Steps.Undo.CaTrust != "/certificate remove [find name=mikroview-ca.crt]" {
+		t.Errorf("Undo.CaTrust = %q", bare.Steps.Undo.CaTrust)
+	}
+	if !strings.Contains(bare.Steps.Undo.Syslog, "mikroview") {
+		t.Errorf("Undo.Syslog = %q, want it to name the mikroview action", bare.Steps.Undo.Syslog)
+	}
+	if !strings.Contains(bare.Steps.Undo.Schedule, "mv-push") {
+		t.Errorf("Undo.Schedule = %q, want it to name mv-push", bare.Steps.Undo.Schedule)
+	}
+	if !strings.Contains(bare.Steps.Undo.Backup, "mv-backup") || strings.Contains(bare.Steps.Undo.Backup, "mv-backup-https") {
+		t.Errorf("Undo.Backup on the default (SFTP) transport = %q, want mv-backup and not mv-backup-https", bare.Steps.Undo.Backup)
+	}
+
+	if ok, err := s.Setup.SetBackupTransport(setup.BackupTransportHTTPS); err != nil || !ok {
+		t.Fatalf("SetBackupTransport refused https: ok=%v err=%v", ok, err)
+	}
+	https := postSetupCommands(t, ts.URL, setupCommandsRequest{})
+	if !strings.Contains(https.Steps.Undo.Backup, "mv-backup-https") {
+		t.Errorf("Undo.Backup on the https transport = %q, want mv-backup-https", https.Steps.Undo.Backup)
+	}
+}
+
 func slicesEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

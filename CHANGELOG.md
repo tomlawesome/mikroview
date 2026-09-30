@@ -42,6 +42,16 @@ rewritten.
   recoveries (`enrol at <other> instead` re-mints for that address,
   asking for the password again, the same act as Mint).
 
+- **The setup wizard's "Where setup stands" ledger** (#1385): a row per
+  thing -- certificate, logs, router state, backup, tagged rules --
+  green with its receipt or dashed and struck where set aside, Undo per
+  row revealing the exact lines to paste back, and "undo everything on
+  the router first" then **forget `<name>` on MikroView**, which now
+  also revokes that router's ingest token (`DELETE /api/devices/{id}`)
+  and reopens the wizard at The router. The fleet's `+ add a router`
+  berth and a router card's `Re-enrol…` both open this same ledger, the
+  latter straight at Mint the token with a fresh one.
+
 ### Removed
 
 - **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
