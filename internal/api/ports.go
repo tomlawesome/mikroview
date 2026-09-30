@@ -165,6 +165,34 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// servingResponse is #1320's whole answer: every host the window saw
+// actually answer, and what. Traffic only, the same seen/policy split
+// portsResponse keeps -- there is no door here, because the lens makes
+// no claim about what a pushed rule permits, only about what was seen.
+type servingResponse struct {
+	GeneratedAt int64 `json:"generatedAt"`
+	// WindowSeconds is the same "in the window" the pill and the port
+	// filter both read from.
+	WindowSeconds int                 `json:"windowSeconds"`
+	Hosts         []store.ServingHost `json:"hosts"`
+}
+
+// handleServing serves the "seen serving" lens's whole answer (#1320).
+//
+// Viewer tier, deliberately not on readOnlyRoutes -- same reasoning as
+// handlePorts directly above: this is a partial inventory of the
+// operator's own address space with the ports each host answered on,
+// which no bearer token has ever been able to read.
+func (s *Server) handleServing(w http.ResponseWriter, r *http.Request) {
+	qs := r.URL.Query()
+	summary := s.Store.Serving(store.ServingQuery{Device: qs.Get("device")})
+	writeJSON(w, http.StatusOK, servingResponse{
+		GeneratedAt:   time.Now().Unix(),
+		WindowSeconds: int(s.Store.Stats().Window.Seconds()),
+		Hosts:         summary.Hosts,
+	})
+}
+
 // parsePortSelection reads the `port` parameter: a comma-separated list
 // of ports and ranges, exactly the shape RouterOS itself accepts in a
 // dst-port and the shape the picker's own text field takes.

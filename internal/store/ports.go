@@ -3,6 +3,7 @@
 package store
 
 import (
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -326,6 +327,165 @@ func (s *Store) Ports(q PortQuery) PortSummary {
 	return out
 }
 
+// maxServedPorts caps how many ports one host's badge carries (#1320).
+// About four to six is what the issue asks the map to show beside a
+// host, and the drill-down's `+N more` is where the rest live -- the
+// same "shortlist, not an inventory" reasoning maxPortCandidates gives.
+const maxServedPorts = 6
+
+// ServingQuery selects the traffic a ServingSummary is about.
+type ServingQuery struct {
+	// Device restricts the scan to one device's events; "" is every
+	// device, the same convention PortQuery.Device uses.
+	Device string
+	// Since bounds the scan; zero means the whole held window.
+	Since time.Time
+}
+
+// ServedPort is one port a host was seen answering on, in the window.
+type ServedPort struct {
+	Port   int    `json:"port"`
+	Proto  string `json:"proto"`
+	Events uint64 `json:"events"`
+}
+
+// ServingHost is one address seen serving in the window: what it
+// answered on, busiest first, capped at maxServedPorts with More
+// carrying the rest.
+type ServingHost struct {
+	IP    string       `json:"ip"`
+	Name  string       `json:"name,omitempty"`
+	Ports []ServedPort `json:"ports"`
+	// More is how many further ports the window carried beyond the six
+	// shown, so a busy host's badge never reads as its whole inventory.
+	More int `json:"more"`
+}
+
+// ServingSummary is #1320's answer: every host the window saw actually
+// answer something, and what.
+type ServingSummary struct {
+	Hosts []ServingHost `json:"hosts"`
+}
+
+// servingLineCap bounds the distinct host×port×proto combinations the
+// scan will tally, the same maxPortLines figure Ports uses and for the
+// same reason: a summary is a shortlist of servers, and past this many
+// distinct lines the map has long since made its point.
+const servingLineCap = maxPortLines
+
+// Serving answers "which hosts have I seen answer, and on what"
+// (#1320), over the whole held window.
+//
+// Direction in only: a host is the destination of the event that
+// reaches it, which is internal/dossier/traffic.go's own reading of
+// "in" -- a host reaching out to port 445 has never served it, so an
+// event only counts here when e.DstIP is the host and e.DstPort is what
+// it was reached on.
+//
+// Accepted only, unlike Ports' own tally: a refused packet never
+// reached the host, so it cannot have answered on a port the router
+// stopped it from receiving. Counting drops here would be exactly the
+// false "open port" claim #1320 exists to refuse -- a host merely
+// scanned or knocked at would light up as a server it never was.
+func (s *Store) Serving(q ServingQuery) ServingSummary {
+	out := ServingSummary{Hosts: []ServingHost{}}
+
+	type hostAgg struct {
+		name  string
+		ports map[string]*ServedPort
+	}
+	hosts := map[string]*hostAgg{}
+	lines := map[string]struct{}{}
+	linesFull := false
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.count == 0 {
+		return out
+	}
+	idx := s.head - 1
+	if idx < 0 {
+		idx = s.capacity - 1
+	}
+	for i := 0; i < s.count; i++ {
+		e := s.buf[idx]
+		idx--
+		if idx < 0 {
+			idx = s.capacity - 1
+		}
+		if !q.Since.IsZero() && e.ReceivedAt.Before(q.Since) {
+			break
+		}
+		if q.Device != "" && e.DeviceID != q.Device {
+			continue
+		}
+		if e.DstIP == "" || e.DstPort <= 0 {
+			continue
+		}
+		if e.Action != ActionAccept {
+			continue
+		}
+		p := strings.ToLower(e.Protocol)
+		if p != "tcp" && p != "udp" {
+			continue
+		}
+
+		lineKey := e.DstIP + "/" + strconv.Itoa(e.DstPort) + "/" + p
+		if _, known := lines[lineKey]; !known {
+			if linesFull {
+				continue
+			}
+			lines[lineKey] = struct{}{}
+			if len(lines) >= servingLineCap {
+				linesFull = true
+			}
+		}
+
+		h := hosts[e.DstIP]
+		if h == nil {
+			h = &hostAgg{ports: map[string]*ServedPort{}}
+			hosts[e.DstIP] = h
+		}
+		if h.name == "" {
+			h.name = e.DstHostName
+		}
+		portKey := strconv.Itoa(e.DstPort) + "/" + p
+		sp := h.ports[portKey]
+		if sp == nil {
+			sp = &ServedPort{Port: e.DstPort, Proto: p}
+			h.ports[portKey] = sp
+		}
+		sp.Events++
+	}
+
+	for ip, h := range hosts {
+		ports := make([]ServedPort, 0, len(h.ports))
+		for _, sp := range h.ports {
+			ports = append(ports, *sp)
+		}
+		sort.Slice(ports, func(i, j int) bool {
+			if ports[i].Events != ports[j].Events {
+				return ports[i].Events > ports[j].Events
+			}
+			if ports[i].Port != ports[j].Port {
+				return ports[i].Port < ports[j].Port
+			}
+			return ports[i].Proto < ports[j].Proto
+		})
+		more := 0
+		if len(ports) > maxServedPorts {
+			more = len(ports) - maxServedPorts
+			ports = ports[:maxServedPorts]
+		}
+		out.Hosts = append(out.Hosts, ServingHost{IP: ip, Name: h.name, Ports: ports, More: more})
+	}
+	sort.Slice(out.Hosts, func(i, j int) bool {
+		return out.Hosts[i].IP < out.Hosts[j].IP
+	})
+	return out
+}
+
 // TraceQuery names the one line to trace: an event by id, or -- for a
 // caller holding a pair and a port rather than an id, which is what the
 // map's own unplanned callout has -- the most recent line matching the
@@ -504,6 +664,84 @@ func (s *Store) Trace(q TraceQuery) TraceResult {
 			if len(out.SameMinute) < maxTraceRelated {
 				out.SameMinute = append(out.SameMinute, *e)
 			}
+		}
+	}
+	return out
+}
+
+// DoorPort is one (port, proto) pair issue #1319's doors panel asks
+// "seen arriving" about. Proto "" matches either tcp or udp, the same
+// unset-means-any reading doorsFor gives a rule that names no protocol.
+type DoorPort struct {
+	Port  int
+	Proto string
+}
+
+// DoorLastSeen answers, for each of ports, the most recent time the
+// held window carried an inbound event from a public source arriving on
+// device's wan interface for that port -- the "seen arriving" mark
+// beside a pushed rule or service that "allowed through" it. A port
+// absent from the returned map arrived never in the window.
+//
+// This is deliberately not the same fact as PortRib/PortHost above: a
+// door is drawn "allowed through" from the pushed table alone, whether
+// or not anything ever knocked, and never from whether the event that
+// arrived was itself accepted or dropped -- MikroView's evidence here is
+// what arrived at the edge, not what the router then did with it.
+//
+// Cap like Ports: a bounded, whole-window scan walking backward from
+// the newest event exactly as Ports does, holding one RLock for the
+// whole pass -- and it stops the moment every asked-for door has its
+// answer, since anything further back can only be older.
+func (s *Store) DoorLastSeen(device, wan string, ports []DoorPort) map[DoorPort]time.Time {
+	out := map[DoorPort]time.Time{}
+	if device == "" || wan == "" {
+		return out
+	}
+	want := make(map[DoorPort]struct{}, len(ports))
+	for _, p := range ports {
+		if p.Port > 0 {
+			want[p] = struct{}{}
+		}
+	}
+	if len(want) == 0 {
+		return out
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.count == 0 {
+		return out
+	}
+	idx := s.head - 1
+	if idx < 0 {
+		idx = s.capacity - 1
+	}
+	remaining := len(want)
+	for i := 0; i < s.count && remaining > 0; i++ {
+		e := s.buf[idx]
+		idx--
+		if idx < 0 {
+			idx = s.capacity - 1
+		}
+		if e.DeviceID != device || e.InInterface != wan || e.DstPort <= 0 {
+			continue
+		}
+		ip := net.ParseIP(e.SrcIP)
+		if ip == nil || !isPublicIP(ip) {
+			continue
+		}
+		proto := strings.ToLower(e.Protocol)
+		for _, key := range [2]DoorPort{{e.DstPort, proto}, {e.DstPort, ""}} {
+			if _, asked := want[key]; !asked {
+				continue
+			}
+			if _, already := out[key]; already {
+				continue
+			}
+			out[key] = e.ReceivedAt
+			remaining--
 		}
 	}
 	return out

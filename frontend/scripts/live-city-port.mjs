@@ -207,8 +207,12 @@ await page.waitForSelector(`${CARD} .pills .pill.p`, { timeout: 10000 })
 // live-topography-port-trace.mjs already exercises on the flat map. What
 // this scenario is actually here to prove is what happens once it
 // collapses: does the city read the same settled answer.
+//
+// #1320 added a sibling lens pill (⌕ serving) beside the port pill, so
+// `.pill.p` alone now matches two buttons -- scope to the port pill by
+// its own data-pill attribute.
 
-const idle = page.locator(`${CARD} .pills .pill.p`)
+const idle = page.locator(`${CARD} .pills .pill.p[data-pill="port"]`)
 check((await idle.textContent())?.trim() === '⌕ port', 'the port pill sits idle bottom-left at the city stop too')
 
 await idle.click()

@@ -24,6 +24,7 @@ import { EMPTY_OFF_BASELINE, type OffBaselineLine } from '../lib/baseline'
 import type { ClientEvent, Device, FirewallEvent } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import { portFilterState } from '../lib/portFilter.svelte'
+import { servingState } from '../lib/serving.svelte'
 import { mapTraceState } from '../lib/mapTrace.svelte'
 import type { TraceResponse } from '../lib/api'
 import City from './City.svelte'
@@ -2351,6 +2352,33 @@ describe('the port filter on the city (#1055, round 54)', () => {
     key(document.body, 'Escape')
     expect(portFilterState.active).toBe(false)
     expect(container.querySelector('.plate[data-cid="vlan-iot"]')).not.toBeNull()
+  })
+})
+
+// #1396: standing on a building used to clear the serving lens along
+// with the port filter, the same bug Topography.svelte.test.ts's own
+// #1396 test covers on the flat map -- the lens lights no road and dims
+// no district whole, so there was never a crumb of its own for standing
+// to clash with.
+describe('the "seen serving" lens on the city (#1320, #1396)', () => {
+  afterEach(() => servingState.clear())
+
+  it('survives standing on a building', async () => {
+    servingState.open = true
+    servingState.answer = {
+      generatedAt: 1,
+      windowSeconds: 3600,
+      hosts: [{ ip: '10.10.0.10', name: 'lan-1', ports: [{ port: 445, proto: 'tcp', events: 2 }], more: 0 }],
+    }
+    servingState.settled = true
+
+    const { container } = render(City, { props: { stop: 'district', ground } })
+    flushSync()
+    expect(servingState.open).toBe(true)
+
+    await fireEvent.click(container.querySelector('.plate[data-cid="bridge-lan"]') as Element)
+    flushSync()
+    expect(servingState.open).toBe(true)
   })
 })
 
