@@ -143,6 +143,22 @@ own line already says what each does (owner, round 15: "You don't need
 to time/interval as it's already in the description"). Footer hint "All
 four, then Next".
 
+*The drop box, when closed* (#1361, Fable, 2026-10-01 — the one
+instance-wide fact on this per-router form). Under Back up nightly's
+Yes / No, only while the drop box is known to be closed (the backups
+read has landed with no port, on an SFTP install): a caution in the
+caution ink, "**The drop box is closed** — a backup would have nowhere
+to arrive. Open it now, or later from Settings → router backups." "Open
+it now" unfolds Settings' own dialog in the wizard's grammar — the
+trust caveat, the password (owner, 3a), open / cancel — and on success
+the caution gives way to "The drop box is open on port N — the router
+must be able to reach this host there." Yes and No stay per-router
+answers: a No never closes the drop box, a Yes never opens it, and a
+Yes with it still closed is allowed (the caution stays). Not on Paste
+once: the choice is made here, and the block is built from it after the
+mint; opening from here after Back re-renders the block so its backup
+part appears. Nothing is said before the read has landed.
+
 **2 · Mint the token.** Lead: "Your password, to mint <name>'s token.
 Minting opens the log port for <address>, for 15 minutes, so it asks for
 your password at that moment. The token goes at the end of the block."
