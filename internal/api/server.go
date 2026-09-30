@@ -621,6 +621,16 @@ func (s *Server) coreRoutes() []route {
 		// event buffer and RouterState; nothing here touches the network.
 		{http.MethodGet, "/api/ports", s.handlePorts},
 		{http.MethodGet, "/api/trace", s.handleTrace},
+		// #1320's "seen serving" lens: every host the window saw actually
+		// answer, and what -- traffic only, no doors, the same read shape
+		// as the two routes above.
+		{http.MethodGet, "/api/ports/serving", s.handleServing},
+		// #1319's doors panel: what the pushed input-chain and dst-nat
+		// tables let the internet reach, and the pushed /ip/service rows
+		// beside them -- policy from the pushed tables, "seen arriving"
+		// from the event buffer, kept apart the same way the two routes
+		// above already keep doors and traffic apart. See wanedge.go.
+		{http.MethodGet, "/api/doors/internet", s.handleWANDoors},
 		// Ingest-loss "Clear all" (#1015): zeroes the four monotonic
 		// syslog-listener loss counters /api/stats' "syslog.loss" field
 		// reads, so a transient loss stops permanently marking the

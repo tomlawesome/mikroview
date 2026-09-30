@@ -330,7 +330,10 @@ await waitForSettle(page, `${CARD} .camera`)
 const lanesBefore = await page.locator(`${CARD} .zone`).count()
 check(lanesBefore > 0, `the map draws lanes to filter (${lanesBefore})`)
 
-const idle = page.locator(`${CARD} .pills .pill.p`)
+// #1320 added a second, sibling lens pill (⌕ serving) beside this one,
+// so `.pill.p` alone now matches two buttons -- scope to the port pill
+// by its own data-pill attribute.
+const idle = page.locator(`${CARD} .pills .pill.p[data-pill="port"]`)
 check((await idle.textContent())?.trim() === '⌕ port', 'the port pill sits idle bottom-left, where round 49\'s pills were')
 
 await idle.click()
