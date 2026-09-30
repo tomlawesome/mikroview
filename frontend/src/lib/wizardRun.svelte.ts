@@ -17,6 +17,7 @@ import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
 import { TITLES } from './setupsteps'
 import { wizardState } from './wizard.svelte'
+import { wizardJourney } from './wizardJourney.svelte'
 import {
   addrProblem,
   arrivedAll,
@@ -532,8 +533,15 @@ class WizardRun {
   // Finish leads out: to the fleet when the walk was opened from
   // there, to the fall when it was opened from setup (the record's rule).
   finish() {
-    appState.view = wizardState.finishTo === 'fleet' ? 'fleet' : 'fall'
-    wizardState.close()
+    // The way out (#1386): Finish plays the journey onto the fall, and
+    // the hand-over -- show the landing, close the wizard -- happens under
+    // its cover. Where it cannot play (reduced motion, no canvas), the
+    // hand-over happens outright.
+    const swap = () => {
+      appState.view = wizardState.finishTo === 'fleet' ? 'fleet' : 'fall'
+      wizardState.close()
+    }
+    if (!wizardJourney.wayOut(swap)) swap()
   }
 
   // poll is the per-tick bookkeeping: the live rate, and the moment the

@@ -32,8 +32,9 @@
   import AuthEnrolFactor from './components/AuthEnrolFactor.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   // The journey (#646): choreography over the shell below, not a page of
-  // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
-  // outside it these three never render.
+  // its own. Nothing starts it any more: its pre-wizard beats were
+  // retired for #1386's way in (owner, 2026-09-30), and these three are
+  // removed once the owner has said where the tour goes (#1386).
   import { journeyState } from './lib/journey.svelte'
   import JourneyAttach from './components/JourneyAttach.svelte'
   import JourneyGlass from './components/JourneyGlass.svelte'
@@ -48,6 +49,11 @@
   // setup…" row lives in the account menu (desktop) and the bottom bar
   // (mobile), both of which call wizardState.launch() directly.
   import Wizard from './components/wizard/Wizard.svelte'
+  // The wizard's way in and way out (#1386): the canvas and the riding
+  // wordmark, mounted beside the wizard. While a sign-in's journey is
+  // deciding or playing, the door itself is held over the shell below.
+  import WizardJourney from './components/wizard/WizardJourney.svelte'
+  import { wizardJourney } from './lib/wizardJourney.svelte'
   // The config editor (#1347) is a full-screen document over the shell,
   // mounted here like the wizard and opened from Settings' Config card
   // through configEditorState. In setup-only mode (a refused config) it
@@ -370,6 +376,14 @@
   <ConfigEditor setupOnly />
   <Toast />
 {:else}
+  {#if wizardJourney.holdDoor}
+    <!-- The door, held over the shell for the way in (#1386): the real
+         AuthScreen, so the journey's box leaves the real wordmark. It
+         comes down at the swap, or at once if no wizard is launching. -->
+    <div class="door-hold">
+      <AuthLogin />
+    </div>
+  {/if}
   <!-- First in tab order: rendered ahead of BottomBar and every scene's
        own bar, so a keyboard user reaches it before any navigation
        chrome rather than having to tab past it. -->
@@ -420,6 +434,7 @@
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <Wizard />
+  <WizardJourney />
   {#if configEditorState.visible}
     <ConfigEditor />
   {/if}
