@@ -35,13 +35,22 @@ const URL_BASE = process.env.MV_URL
 const ROUTER_NAME = 'rb-wizard-1382'
 const ROUTER_ADDR = '127.0.0.82'
 
-const { page, consoleErrors } = await session({ mocksApi: true })
-
-await page.route('**/api/setup/status', async (route) => {
-  const res = await route.fetch()
-  const body = await res.json()
-  body.sources = (body.sources ?? []).map(({ syslogFirstSeenAt, ...s }) => s)
-  await route.fulfill({ response: res, body: JSON.stringify(body) })
+// Registered before sign-in (session()'s `routes`): the run is placed
+// from the status read at sign-in, so a mock added afterwards never
+// reaches it.
+const { page, consoleErrors } = await session({
+  mocksApi: true,
+  routes: [
+    [
+      '**/api/setup/status',
+      async (route) => {
+        const res = await route.fetch()
+        const body = await res.json()
+        body.sources = (body.sources ?? []).map(({ syslogFirstSeenAt, ...s }) => s)
+        await route.fulfill({ response: res, body: JSON.stringify(body) })
+      },
+    ],
+  ],
 })
 
 const text = async (sel) => ((await page.locator(sel).textContent()) ?? '').replace(/\s+/g, ' ').trim()

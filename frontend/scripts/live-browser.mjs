@@ -950,6 +950,12 @@ export async function enrolFactorAndSignIn(page, urlBase = URL_BASE) {
  * exactly where those scenarios already assume they start. Pass
  * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
  * instead of being moved off it.
+ *
+ * `routes` is [pattern, handler] pairs for page.route, registered before
+ * the first load: the app reads some endpoints once at sign-in and keeps
+ * what it got (wizardState.refresh() for /api/setup/status is the worked
+ * example), so a mock registered after session() returns is too late for
+ * that read. Pair it with `mocksApi` so the service worker stays out.
  */
 export async function session({
   dismissSetup = true,
@@ -958,6 +964,7 @@ export async function session({
   keep = false,
   viewport = undefined,
   mocksApi = false,
+  routes = [],
 } = {}) {
   browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
@@ -1011,6 +1018,8 @@ export async function session({
   page.on('console', (m) => {
     if (m.type() === 'error') record(m.text())
   })
+
+  for (const [pattern, handler] of routes) await page.route(pattern, handler)
 
   await page.goto(URL_BASE, { waitUntil: 'networkidle' })
   await page.fill('input[autocomplete="username"]', USER)
