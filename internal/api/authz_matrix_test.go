@@ -274,6 +274,12 @@ var authzMatrix = []routeExpectation{
 			"evidence destruction available anywhere in mikroview, so admin-only and behind a password re-check " +
 			"on top of the session"},
 
+	{http.MethodPut, "/api/settings/router-backups", accessAdmin,
+		"opens or closes the router-backup SFTP drop box (#1361) -- a second listening port a stolen session " +
+			"could otherwise open, so admin-only and password-gated on the way open (closing needs no password: " +
+			"it is the safe direction). Same tier as the history switch above, for the same reason: an on/off " +
+			"control with an instance-wide, hard-to-undo cost"},
+
 	{http.MethodGet, "/api/settings/geo", accessAdmin,
 		"the Engine Room's \"Country and network owner\" card (#1352): which country source is live and each " +
 			"source's fetch state, plus whether an API key is set and by whom -- never the key itself. Admin for " +

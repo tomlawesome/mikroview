@@ -87,6 +87,74 @@ func (n *SMTPNotifier) Send(batch []flags.Flag) error {
 	return client.Quit()
 }
 
+// SendNotice delivers a one-off plain-text operational notice over the
+// same relay and credentials as Send's flag batches -- not a flag, so it
+// never goes through Dispatcher's batching window. The router-backup
+// switch (#1361) is the first caller: every open or close is announced
+// to notify.smtp.to the moment it happens, same as the audit line and the
+// admin banner it accompanies, never held for BatchWindow to elapse.
+//
+// A no-op when cfg.To is empty: the caller decides whether notify.smtp is
+// configured at all, and an empty recipient list here would otherwise
+// dial out only to fail on an empty RCPT TO.
+func (n *SMTPNotifier) SendNotice(subject, body string) error {
+	if len(n.cfg.To) == 0 {
+		return nil
+	}
+	addr := fmt.Sprintf("%s:%d", n.cfg.Host, n.cfg.Port)
+
+	client, err := n.dial(addr)
+	if err != nil {
+		return fmt.Errorf("notify/smtp: dial %s: %w", addr, err)
+	}
+	defer client.Close()
+
+	if n.cfg.Username != "" {
+		auth := smtp.PlainAuth("", n.cfg.Username, n.cfg.Password, n.cfg.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("notify/smtp: auth: %w", err)
+		}
+	}
+
+	if err := client.Mail(n.cfg.From); err != nil {
+		return fmt.Errorf("notify/smtp: MAIL FROM: %w", err)
+	}
+	for _, to := range n.cfg.To {
+		if err := client.Rcpt(to); err != nil {
+			return fmt.Errorf("notify/smtp: RCPT TO %s: %w", to, err)
+		}
+	}
+
+	wc, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("notify/smtp: DATA: %w", err)
+	}
+	if _, err := wc.Write([]byte(n.noticeMessage(subject, body))); err != nil {
+		wc.Close()
+		return fmt.Errorf("notify/smtp: writing message: %w", err)
+	}
+	if err := wc.Close(); err != nil {
+		return fmt.Errorf("notify/smtp: closing message: %w", err)
+	}
+
+	return client.Quit()
+}
+
+// noticeMessage builds a minimal RFC 5322 email around a one-off subject
+// and body, the same envelope shape message (below) builds around a
+// batch of flags.
+func (n *SMTPNotifier) noticeMessage(subject, body string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", n.cfg.From)
+	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(n.cfg.To, ", "))
+	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
+	b.WriteString("\r\n")
+	b.WriteString(body)
+	b.WriteString("\r\n")
+	return b.String()
+}
+
 // dial establishes the client connection for cfg.TLSMode -- StartTLS is
 // requested only for TLSStartTLS; TLSImplicit needs a TLS connection
 // established before smtp.NewClient ever sees it, since net/smtp itself
