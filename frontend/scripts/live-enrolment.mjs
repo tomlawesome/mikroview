@@ -20,7 +20,8 @@
 //     rendering guarantee only a real refused connection can trigger.
 //
 // Ported for the full-screen wizard (#1381-#1384; DESIGN.md, "3 · Paste
-// once" and "The router's turn"), replacing the retired modal's
+// once", "The router's turn" and "Adding a router, re-enrolling"),
+// replacing the retired modal's
 // `.setup-wizard`/`.mint-ask`/`.token-life`/`.observation.shortfall.refused`
 // markup this scenario used to drive. The walk: name and address a
 // router -> Mint the token -> the paste-once block, with Copy -> a
@@ -29,7 +30,9 @@
 // act again) re-mints for that address -> lines from it arrive for real
 // and the track's logs station lights -> with the window spent, a third
 // address is refused for having no token pending at all (the "closed
-// port" case) and the mistyped original address stays refused too.
+// port" case) and the mistyped original address stays refused too ->
+// back on Entities, Re-enrol… reopens the ledger straight at Mint the
+// token and moves the router to a fresh address for real.
 //
 // One router, walked end to end. Every address from 127.0.0.21 up
 // belongs to this scenario alone -- nothing else in the suite mints an
@@ -51,60 +54,30 @@
 //    still driven below (DESIGN.md lists it as part of step 3), just
 //    without a network replay that would only re-prove the address
 //    gate.
-//  - Re-enrolling an *already fully enrolled* router at a new address
-//    via Entities' "Re-enrol..." button, and the old modal's rebind
-//    click that followed a mistyped mint. DESIGN.md ("Adding a router,
-//    re-enrolling") says Re-enrol... "opens it at Mint the token for
-//    that router with a fresh token", but the built step does not: for
-//    a router whose evidence already reads enrolled (acceptedIp and
-//    enrolledAt already set -- exactly the case this scenario would be
-//    in by that point), wizardRun.begin() (frontend/src/lib/
-//    wizardRun.svelte.ts) reads `evidence.enrol` first and returns
-//    early with `stage` set straight to 'watch' or 'done', before ever
-//    looking at wizardState.enrolment or the router-step answers. A
-//    live run confirmed it: clicking Re-enrol... on an enrolled router
-//    lands on "(tick) Where setup stands" (StepStand), the ledger read
-//    as already finished -- not on the password field DESIGN.md
-//    promises, and no fresh token is minted. There is no selector for a
-//    step that never renders, so this scenario only checks that the
-//    button exists on the router's card, and does not click it.
 //
-// A known, currently-unfixed defect this scenario runs straight into
-// under `scripts/run-scenarios.sh`, not merely under this script: The
-// router (StepRouter) never renders -- not "flaky", reproduced every
-// time -- once *any* syslog source, anywhere on the instance, has ever
-// reported (verified live: even one unrelated line from an address no
-// device declares is enough; it need not be this router's own address).
-// run-scenarios.sh feeds 300 such lines before the first scenario runs
-// ("A floor of traffic before the first scenario", this file's own
-// header), so the failure is not specific to this scenario's ordering --
-// any scenario opening "+ add a router" against the shared gate instance
-// would hit it. DESIGN.md ("Adding a router, re-enrolling") says the
-// berth "opens this same wizard at The router" -- unconditionally, not
-// "unless some other router is already sending". The cause:
-// wizardRun.svelte.ts's `evidence` getter (frontend/src/lib/
-// wizardRun.svelte.ts, the `if (!enrol && !id && st)` block) borrows
-// "the fleet's first open syslog source" whenever wizardState.ledgerDevice
-// is empty, with no check for *which* walk is asking -- the first-run
-// ledger (Run setup…, wizardState.launch()) legitimately has no router
-// yet and is meant to read the instance as a whole this way, but
-// openAddRouter() also leaves ledgerDevice empty for a brand-new,
-// not-yet-named router, and begin() cannot tell the two apart. It reads
-// an unrelated router's evidence as this walk's own, and jumps straight
-// to 'watch'/'done' -- exactly the same failure shape as the Re-enrol…
-// gap above, from the same root cause. live-setup-wizard-router-mint.mjs
-// papers over the *first-run* case with a page.route mock on
-// /api/setup/status (its own header explains why); that mock is not
-// used for the add-a-router door here and, more to the point, would be
-// working around a real defect here rather than a harness artefact --
-// on a live multi-router fleet an operator adding a second router would
-// see the same wrong screen. Verified against a live instance both with
-// and without run-scenarios.sh's baseline feed: with no prior syslog
-// traffic at all the whole scenario below passes end to end; with it (or
-// with any single unrelated line fed first) it fails at the very first
-// check, on a `#f-name` that never renders. Not worked around here --
-// see the task's own instruction and AGENTS.md's testing-and-ci rule
-// against lowering the bar to reach green.
+// Re-enrolling an already-enrolled router at a new address, dropped by
+// the initial port (#1398: wizardRun.begin() read `evidence.enrol`
+// before wizardState.reEnrolling, so Entities' "Re-enrol..." landed on
+// the finished ledger, "(tick) Where setup stands", instead of Mint the
+// token), is back. 4facdf82 ("Start '+ add a router' at The router,
+// whatever else is sending") fixed begin() to consult reEnrolling
+// first, exactly as DESIGN.md's "Adding a router, re-enrolling"
+// promises, and pinned it in Wizard.svelte.test.ts ("lands Re-enrol…
+// on Mint the token even with the router already sending"). Driven for
+// real below, reusing REENROL_IP as the address it moves the router to,
+// the way the old (pre-port) scenario did.
+//
+// The same commit also fixed the other defect this port had run
+// straight into (#1397): wizardRun's evidence getter borrowed the
+// fleet's first open syslog source whenever wizardState.ledgerDevice
+// was empty, so The router step could never render for "+ add a
+// router" once any syslog source anywhere had reported -- which
+// run-scenarios.sh's mandatory baseline feed guarantees before this
+// scenario ever runs. wizardState.addingRouter now gates that borrow,
+// so an add-a-router walk reads only its own router's evidence.
+// Verified live both ways: this scenario passes end to end against a
+// freshly booted instance with no prior traffic, and passes the same
+// way after run-scenarios.sh's 300-line baseline feed.
 
 import { session, feedRawFrom, check, done, goTo, waitForEventsTotal, adminPassword } from './live-browser.mjs'
 
@@ -124,6 +97,9 @@ const WRONG_IP = '127.0.0.22'
 // anywhere -- to prove the plain "closed port" refusal independently of
 // the refused-sender recovery above.
 const CLOSED_PORT_IP = '127.0.0.24'
+// Where Re-enrol… moves the router to, for real, at the end (DESIGN.md,
+// "Adding a router, re-enrolling").
+const REENROL_IP = '127.0.0.25'
 
 const { page, consoleErrors } = await session()
 
@@ -432,10 +408,70 @@ check(
 )
 check(
   (await page.locator(`.fcard button.row-action[aria-label^="Re-enrol ${ROUTER_NAME}"]`).count()) === 1,
-  'the router’s own card still offers Re-enrol… (not driven here -- see the header comment on why)',
+  'the router’s own card offers Re-enrol…',
 )
 
-// --- m. Clean up: leave the fleet the way every other scenario finds it -
+// --- m. Re-enrol: move the router to a new address -----------------------
+
+// Entities' own Re-enrol… (DESIGN.md, "Adding a router, re-enrolling"):
+// the ledger reopens at Mint the token for this router, with a fresh
+// token -- #1398, fixed by wizardRun.begin() consulting
+// wizardState.reEnrolling before evidence.enrol (see the header
+// comment).
+await page.click(`.fcard button.row-action[aria-label^="Re-enrol ${ROUTER_NAME}"]`)
+await wiz.waitFor({ state: 'visible', timeout: 10000 })
+check((await page.locator('#f-name').count()) === 0, 'Re-enrol… skips The router -- there is nothing left to name')
+check(
+  (await text(body.locator('h3'))) === `Your password, to mint ${ROUTER_NAME}’s token.`,
+  'and lands straight on Mint the token, not the finished ledger (#1398)',
+)
+
+// Back still reaches The router: Mint's own 'ask' stage is not the
+// watch/tune/done a first-time walk reaches once its own paste has
+// landed (railRows' `can`), so the run is still the operator's to
+// change -- move the router to a new address before minting, the way
+// an operator whose router changed address would.
+await foot.locator('button:text-is("Back")').click()
+await page.locator('#f-addr').waitFor({ timeout: 5000 })
+check((await page.locator('#f-addr').inputValue()) === WRONG_IP, `The router remembers where it stands (${WRONG_IP})`)
+await page.fill('#f-addr', REENROL_IP)
+await foot.locator('button.primary:text-is("Next")').click()
+await body.locator('input[type="password"]').waitFor({ timeout: 10000 })
+check((await text(body.locator('.hint'))).includes(REENROL_IP), `Mint now names the new address (${REENROL_IP})`)
+
+await body.locator('input[type="password"]').fill(adminPassword)
+const [reenrolMinted] = await Promise.all([
+  page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
+  foot.locator('button.primary:text-is("Mint the token")').click(),
+])
+check(reenrolMinted.status() === 201, `Re-enrol…’s Mint the token is the same call (${reenrolMinted.status()})`)
+const reenrolMintBody = await reenrolMinted.request().postDataJSON()
+check(reenrolMintBody.expectedAddress === REENROL_IP, `bound to the new address (${reenrolMintBody.expectedAddress})`)
+const { token: reenrolToken } = await reenrolMinted.json()
+check(typeof reenrolToken === 'string' && reenrolToken.length > 0, 'and a fresh token comes back')
+
+try {
+  feedRawFrom(REENROL_IP, enrolLine(reenrolToken))
+} catch (e) {
+  check(false, `the enrol line from ${REENROL_IP} should be accepted at connect: ${e}`)
+}
+
+const reenrolled = await waitForCondition(async () => {
+  const d = (await devicesList()).find((dv) => dv.id === deviceId)
+  return d?.acceptedIp === REENROL_IP ? d : null
+})
+check(!!reenrolled, `the device's acceptedIp becomes ${REENROL_IP} within a few seconds`)
+
+let movedFromRefused = false
+try {
+  feedRawFrom(WRONG_IP, plainLine('live-enrolment-moved'))
+} catch {
+  movedFromRefused = true
+}
+if (!movedFromRefused) movedFromRefused = (await refusedList()).some((r) => r.ip === WRONG_IP)
+check(movedFromRefused, `${WRONG_IP}'s lines are refused now that the router has moved to ${REENROL_IP}`)
+
+// --- n. Clean up: leave the fleet the way every other scenario finds it -
 
 const del = await api('DELETE', `/api/devices/${encodeURIComponent(deviceId)}`)
 check(del.status === 204, `the scenario's device is deleted (${del.status})`)
