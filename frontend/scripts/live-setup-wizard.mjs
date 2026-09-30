@@ -54,27 +54,32 @@ import { session, feedSyslog, check, done, goTo, waitForStreamRows } from './liv
 // Auto-launch will not have fired: it is gated on the instance having no
 // devices, and the harness declares a router the reset keeps -- so the
 // door under test here is the relaunch one, which is the same door.
-const { page, consoleErrors } = await session({ dismissSetup: false, mocksApi: true })
-
-// Its own traffic, so the shell is not empty when the wizard opens over
-// it -- but not read by anything below, so it is fed after the mock is
-// registered rather than before: see that mock's own comment for why an
-// earlier feed would otherwise change which step the run opens on.
-await page.route('**/api/setup/status', async (route) => {
+// A bare "Run setup…" reads the whole fleet's evidence when no router
+// is named yet (wizardRun.svelte.ts's evidence getter, the `!id`
+// branch), and this instance is shared with every scenario that ran
+// before it in this shard -- so by now some source has almost always
+// sent syslog or fetched /ca.crt, which would open the run past The
+// router (on a later step) rather than on it. Stripped here for the
+// same reason the wizard's own router-mint scenario overrides this same
+// endpoint: not a fake shape, just the one field this shared instance
+// cannot otherwise be made to show reliably on demand. Registered
+// through session(), before sign-in: the run is placed from the status
+// read at sign-in, so a mock added afterwards never reaches it.
+const stripArrivals = async (route) => {
   const res = await route.fetch()
   const body = await res.json()
-  // A bare "Run setup…" reads the whole fleet's evidence when no router
-  // is named yet (wizardRun.svelte.ts's evidence getter, the `!id`
-  // branch), and this instance is shared with every scenario that ran
-  // before it in this shard -- so by now some source has almost always
-  // sent syslog or fetched /ca.crt, which would open the run past The
-  // router (on a later step) rather than on it. Stripped here for the
-  // same reason the wizard's own router-mint scenario overrides this same
-  // endpoint: not a fake shape, just the one field this shared instance
-  // cannot otherwise be made to show reliably on demand.
   body.sources = (body.sources ?? []).map(({ syslogFirstSeenAt, caFetchedAt, ...s }) => s)
   await route.fulfill({ response: res, body: JSON.stringify(body) })
+}
+const { page, consoleErrors } = await session({
+  dismissSetup: false,
+  mocksApi: true,
+  routes: [['**/api/setup/status', stripArrivals]],
 })
+
+// Its own traffic, so the shell is not empty when the wizard opens over
+// it -- but not read by anything below: the mock above hides whichever
+// source it arrives from.
 feedSyslog(20, 'live-wizard-rail-gate')
 await waitForStreamRows(page, 20)
 
