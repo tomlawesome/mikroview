@@ -19,6 +19,7 @@
   import { authState } from '../lib/auth.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { copyToClipboard } from '../lib/clipboard'
+  import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { registerPasskey } from '../lib/passkeys.svelte'
   import { ApiError, fetchPasskeys, renamePasskey, disablePasskey } from '../lib/api'
   import { appState } from '../lib/state.svelte'
@@ -88,19 +89,16 @@
     if (open && !unavailableReason) void loadList()
   })
 
-  function onBeforeUnload(e: BeforeUnloadEvent) {
-    e.preventDefault()
-    e.returnValue = ''
-  }
-
   // X4-F1: the ten codes exist in clear nowhere else, and a reload before
-  // "I have saved these" loses them for good -- same guard as
-  // LogEveryRule's own beforeunload, on while this screen is the one
-  // showing them, off the instant it isn't.
+  // "I have saved these" loses them for good -- held the same way
+  // LogEveryRule's own guard is, on while this screen is the one
+  // showing them, off the instant it isn't. leaveGuard (#1363) is what
+  // actually prompts on beforeunload now; this just says whether that
+  // prompt should fire.
   $effect(() => {
     if (step !== 'codes') return
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+    leaveGuard.hold('passkeys-codes')
+    return () => leaveGuard.release('passkeys-codes')
   })
 
   function resetFields() {

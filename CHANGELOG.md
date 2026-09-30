@@ -18,6 +18,20 @@ rewritten.
 
 ### Added
 
+- **An open tab notices a server upgrade by itself** (#1363, owner
+  decision 2026-09-30). Before this, an already-open page kept running
+  the app it loaded with even after the server behind it was upgraded,
+  and a normal reload did not fix it -- only a forced refresh did. Now
+  the page checks the running server's version -- every 60 seconds, when
+  the tab is looked at again, when the live connection reconnects, and
+  once after a request fails in a way that could mean an upgrade -- and
+  compares it against the version it was loaded with. If nothing would
+  be lost (no dialog open, no unsaved edit, no field mid-typed, and the
+  live view isn't held), it reloads itself, making sure the new app is
+  what actually loads. If something would be lost, it shows a line
+  instead -- "mikroview has been upgraded to a newer version" -- that
+  waits for a click; once shown it stays until reloaded and never
+  reloads on its own after that.
 - **The deck tour is offered once after setup, and lives in the account
   menu** (#1386, owner decision 2026-09-30). When the wizard's Finish
   has landed on the fall, a small panel rises over it: "Take the tour?"

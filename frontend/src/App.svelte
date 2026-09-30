@@ -16,6 +16,10 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import IngestLossDrawer from './components/IngestLossDrawer.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
+  // The freshness banner (#1363): directly above the upgrade notice in
+  // the same stack, for every role -- see the component.
+  import FreshnessBanner from './components/FreshnessBanner.svelte'
+  import { freshnessState } from './lib/freshness.svelte'
   // The upgrade notice (#1240): directly under the config-problem banner
   // in the same stack, and admin-only like it -- see the component.
   import UpgradeNotice from './components/UpgradeNotice.svelte'
@@ -175,6 +179,23 @@
   // load() never rejects.
   $effect(() => {
     serverModeState.load().then(() => authState.check())
+  })
+
+  // #1363: independent of sign-in state -- even the login screen is "an
+  // open page" that should notice a server upgrade. start() runs the
+  // 60-second poll; the visibility subscription reuses the same signal
+  // the stats/watchlist polling effect below reacts to, so a tab that
+  // was backgrounded through the upgrade checks the moment it is looked
+  // at again rather than waiting out the rest of its minute.
+  $effect(() => {
+    freshnessState.start()
+    const stopWatchingFreshnessVisibility = subscribeVisibility((hidden) => {
+      if (!hidden) void freshnessState.checkNow()
+    })
+    return () => {
+      stopWatchingFreshnessVisibility()
+      freshnessState.stop()
+    }
   })
 
   $effect(() => {
@@ -413,6 +434,7 @@
       <ConnectionBanner />
       <IngestLossDrawer />
       <ConfigProblemBanner />
+      <FreshnessBanner />
       <UpgradeNotice />
       <main id="main-content" class:bare={inDeck}>
         {#if inDeck}

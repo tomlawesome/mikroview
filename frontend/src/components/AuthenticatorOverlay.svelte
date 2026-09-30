@@ -20,6 +20,7 @@
   import { ApiError, confirmTOTP, disableTOTP, enrolTOTP } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { trapFocus } from '../lib/focusTrap'
+  import { leaveGuard } from '../lib/leaveGuard.svelte'
   import { qrCode } from '../lib/qrcode'
 
   // Bound to the caller's local state (#1332): AccountMenu mounts one
@@ -197,19 +198,16 @@
     }
   }
 
-  function onBeforeUnload(e: BeforeUnloadEvent) {
-    e.preventDefault()
-    e.returnValue = ''
-  }
-
   // X4-F1: the ten codes exist in clear nowhere else, and a reload before
-  // "I have saved these" loses them for good -- same guard as
-  // LogEveryRule's own beforeunload, on while this screen is the one
-  // showing them, off the instant it isn't.
+  // "I have saved these" loses them for good -- held the same way
+  // LogEveryRule's own guard is, on while this screen is the one
+  // showing them, off the instant it isn't. leaveGuard (#1363) is what
+  // actually prompts on beforeunload now; this just says whether that
+  // prompt should fire.
   $effect(() => {
     if (step !== 'codes') return
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+    leaveGuard.hold('authenticator-codes')
+    return () => leaveGuard.release('authenticator-codes')
   })
 </script>
 
