@@ -30,7 +30,10 @@ function fakeContext(): CanvasRenderingContext2D {
   }) as unknown as CanvasRenderingContext2D
 }
 
-describe('WizardJourney: the way out actually plays', () => {
+// Nine seconds of real frames on a fake clock: like wizardJourney.test.ts's
+// "six beats" suite, slow under coverage instrumentation (over 5s in CI's
+// full run, 3.5s alone), so it carries the same time limit.
+describe('WizardJourney: the way out actually plays', { timeout: 30000 }, () => {
   beforeEach(() => {
     wizardJourney.end()
     window.matchMedia = vi.fn().mockReturnValue({ matches: false }) as unknown as typeof window.matchMedia
