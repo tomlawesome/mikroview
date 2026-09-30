@@ -22,17 +22,20 @@ vi.hoisted(() => {
 // Only the network boundary is faked: the step's own markup, the run
 // and wizardState are real, so what is checked is the calls the modal
 // used to make -- POST /api/devices for the record, then POST
-// /api/devices/{id}/enrolment with the password and the address.
+// /api/devices/{id}/enrolment with the password and the address, and
+// (#1383) POST /api/tokens for the ingest token push/backup need,
+// minted inside this same act.
 vi.mock('../../lib/api', async (orig) => ({
   ...(await orig<typeof import('../../lib/api')>()),
   fetchSetupStatus: vi.fn(),
   fetchDevices: vi.fn(),
   fetchSetupCommands: vi.fn(),
   createDevice: vi.fn(),
+  createToken: vi.fn(),
   mintEnrolment: vi.fn(),
 }))
 
-import { createDevice, fetchDevices, fetchSetupCommands, fetchSetupStatus, mintEnrolment } from '../../lib/api'
+import { createDevice, createToken, fetchDevices, fetchSetupCommands, fetchSetupStatus, mintEnrolment } from '../../lib/api'
 import { wizardState } from '../../lib/wizard.svelte'
 import { wizardRun } from '../../lib/wizardRun.svelte'
 import { rowState } from '../../lib/wizardRun'
@@ -92,6 +95,14 @@ describe('StepMint: your password, to mint the token', () => {
     vi.mocked(fetchSetupCommands).mockResolvedValue(null as never)
     vi.mocked(createDevice).mockResolvedValue(device())
     vi.mocked(mintEnrolment).mockResolvedValue({ token: 'demo0000demo0000demo', expiresAt: '2026-09-27T14:17:00Z' })
+    vi.mocked(createToken).mockResolvedValue({
+      id: 't1',
+      name: 'setup-rb5009',
+      kind: 'ingest',
+      device: 'rb5009',
+      createdAt: '2026-09-27T14:00:00Z',
+      value: 'ingest0000ingest0000',
+    })
     wizardState.reset()
     wizardRun.reset()
     wizardState.status = status()
@@ -196,5 +207,72 @@ describe('StepMint: your password, to mint the token', () => {
     await tick()
     expect(createDevice).not.toHaveBeenCalled()
     expect(mintEnrolment).not.toHaveBeenCalled()
+  })
+
+  // #1383: the paste block's push and backup sections need a second,
+  // persistent ingest token -- distinct from the enrolment marker
+  // above -- and it is minted inside this same password-checked act,
+  // never from a form toggle on The router.
+  it('also mints the ingest token when push (or backup) was answered yes', async () => {
+    render(StepMint)
+    await tick()
+    await fireEvent.input(password(), { target: { value: 'correct horse' } })
+    await fireEvent.keyDown(password(), { key: 'Enter' })
+    await waitFor(() => expect(wizardRun.stage).toBe('paste'))
+    expect(createToken).toHaveBeenCalledWith('setup-rb5009', 'ingest', 'rb5009')
+    expect(wizardState.token).toBe('ingest0000ingest0000')
+    expect(wizardState.tokenDevice).toBe('rb5009')
+  })
+
+  it('mints only the enrolment token when both push and backup are answered no', async () => {
+    wizardRun.push = false
+    wizardRun.backup = false
+    render(StepMint)
+    await tick()
+    await fireEvent.input(password(), { target: { value: 'correct horse' } })
+    await fireEvent.keyDown(password(), { key: 'Enter' })
+    await waitFor(() => expect(wizardRun.stage).toBe('paste'))
+    expect(mintEnrolment).toHaveBeenCalledTimes(1)
+    expect(createToken).not.toHaveBeenCalled()
+    expect(wizardState.token).toBe('')
+  })
+
+  it('creates no token by itself when The router’s Yes/No toggle changes -- only Mint does that', async () => {
+    render(StepMint)
+    await tick()
+    // Simulates ticking Yes on The router, without going through Mint.
+    wizardRun.push = true
+    wizardRun.backup = true
+    await tick()
+    expect(createToken).not.toHaveBeenCalled()
+    expect(mintEnrolment).not.toHaveBeenCalled()
+  })
+
+  it('going Back to The router and forward again re-enters Mint, which mints the ingest token a newly-answered Yes needs', async () => {
+    wizardRun.push = false
+    wizardRun.backup = false
+    render(StepMint)
+    await tick()
+    await fireEvent.input(password(), { target: { value: 'correct horse' } })
+    await fireEvent.keyDown(password(), { key: 'Enter' })
+    await waitFor(() => expect(wizardRun.stage).toBe('paste'))
+    expect(createToken).not.toHaveBeenCalled()
+    // Back to The router (the rail lets it, before the paste lands),
+    // answer push Yes this time, and forward to Mint again.
+    wizardRun.gotoStep(0)
+    expect(wizardRun.stage).toBe('ask')
+    wizardRun.push = true
+    wizardRun.routerNext()
+    expect(wizardRun.q).toBe(4)
+    // StepMint's own body does not gate on wizardRun.stage/q -- that is
+    // Wizard.svelte's job -- so the same rendered instance still shows
+    // the password field here, exactly as it would inside the shell.
+    await tick()
+    await fireEvent.input(password(), { target: { value: 'correct horse' } })
+    await fireEvent.keyDown(password(), { key: 'Enter' })
+    await waitFor(() => expect(wizardRun.stage).toBe('paste'))
+    expect(mintEnrolment).toHaveBeenCalledTimes(2)
+    expect(createToken).toHaveBeenCalledWith('setup-rb5009', 'ingest', 'rb5009')
+    expect(wizardState.token).toBe('ingest0000ingest0000')
   })
 })

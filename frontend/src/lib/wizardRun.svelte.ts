@@ -12,6 +12,7 @@
 // Nothing here connects to a router (the AGENTS.md invariant): every
 // field of `evidence` is a reading of what has arrived.
 
+import { createToken } from './api'
 import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
 import { TITLES } from './setupsteps'
@@ -322,9 +323,49 @@ class WizardRun {
       wizardState.enrolPassword = this.pass
       this.pass = ''
       await wizardState.mintEnrolmentToken()
-      if (wizardState.enrolment) this.stage = 'paste'
+      if (wizardState.enrolment) {
+        await this.ensureIngestToken()
+        this.stage = 'paste'
+      }
     } finally {
       this.minting = false
+    }
+  }
+
+  // ensureIngestToken mints the persistent ingest token
+  // (internal/api/ingest.go's bearer, distinct from the one-shot
+  // enrolment marker mintEnrolmentToken makes) that the paste block's
+  // push and backup sections need to authenticate the router's own
+  // posts -- see routeros.PushScript/BackupScript, embedded in
+  // steps.schedule/steps.backup by POST /api/setup/commands.
+  //
+  // Called only from inside Mint and Reroll -- the password-checked
+  // act -- never from a form toggle on The router: an API credential
+  // must not be created by ticking Yes before the password step even
+  // runs. If push and backup were both No at the moment of minting and
+  // the operator later goes Back and answers one Yes, the rail lets
+  // The router be revisited until the paste lands (railRows' `can`),
+  // and reaching Mint again calls this again -- so no separate path is
+  // needed for that case, only that Back-and-forward keep landing on
+  // Mint rather than skipping it (StepMint's own Enter/click always
+  // call mint() afresh, whatever wizardState.enrolment already holds).
+  // A no-op once a token already stands for this device; POST
+  // /api/tokens writes its own audit line, so nothing else is recorded
+  // here. Best-effort: a failure here leaves the push/backup sections
+  // blank rather than failing the mint that already succeeded.
+  private async ensureIngestToken(): Promise<void> {
+    if (this.push !== true && this.backup !== true) return
+    const device = wizardState.ledgerDevice
+    if (!device) return
+    if (wizardState.token && wizardState.tokenDevice === device) return
+    try {
+      const result = await createToken(`setup-${device}`, 'ingest', device)
+      if (typeof result === 'string' || !result.value) return
+      wizardState.token = result.value
+      wizardState.tokenDevice = device
+      await wizardState.refreshCommands({ device, token: result.value })
+    } catch {
+      // See the doc comment above: best-effort.
     }
   }
 
@@ -338,11 +379,15 @@ class WizardRun {
   // Reroll is Mint again for the same router and address (#1291: it
   // asks for the password every time, because minting is what opens
   // the port). Only reachable before Copy -- the paste step's own
-  // copyrow is what offers it -- so this never touches `stage`.
+  // copyrow is what offers it -- so this never touches `stage`. Also
+  // ensures the ingest token, the same as Mint: a first attempt that
+  // failed or was skipped (push/backup answered after the fact is not
+  // reachable here, but a transient failure is) gets another chance.
   async reroll(password: string): Promise<void> {
     wizardState.enrolExpectedAddress = this.addr
     wizardState.enrolPassword = password
     await wizardState.mintEnrolmentToken()
+    if (wizardState.enrolment) await this.ensureIngestToken()
   }
 
   // "enrol at <other> instead" (DESIGN.md, "Refused sender"; #1370,
