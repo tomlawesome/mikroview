@@ -180,6 +180,13 @@ rewritten.
   removal now says so and points to Tokens instead of reporting success.
   Tokens left behind by routers removed before this release are #1399.
 
+- **A startup sweep now catches upload tokens the previous fix missed**
+  (#1399). Removing a router before #1385 shipped left its ingest token
+  live, with nothing to revoke it after the fact. MikroView now checks,
+  once on every restart, for a token whose router is both gone from the
+  registry and recorded in the audit log as removed after the token was
+  issued, and revokes it then.
+
 - `VerifyPassword` now refuses, before hashing, a stored hash whose
   cost settings or lengths are outside what this module writes (with
   4x headroom) (#1388). A corrupt or tampered hash could previously

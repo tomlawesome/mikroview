@@ -739,6 +739,18 @@ func (r *Registry) SetNames(names NameLookup) {
 	r.names = names
 }
 
+// Has reports whether id currently names a known device -- declared,
+// pushed-and-created or admin-created alike, the same population List
+// returns. Added for issue #1399's startup sweep, which only needs a
+// yes/no existence check and would otherwise pay for List's full
+// name-resolved, sorted copy just to look one id up.
+func (r *Registry) Has(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.byID[id]
+	return ok
+}
+
 // List returns a snapshot of every device -- declared in config.yaml
 // and named by an ingest token alike -- with each Name resolved through
 // NameLookup (issue #600) so a stored rename is what every reader sees.
