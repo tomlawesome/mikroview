@@ -18,6 +18,16 @@ rewritten.
 
 ### Added
 
+- **The router's own management services join the pushed tables**
+  (#1329, owner decision 2026-09-22). A new `ip-service` push carries
+  one row per `/ip/service` entry (`telnet`, `ftp`, `www`, `www-ssl`,
+  `ssh`, `api`, `api-ssl`, `winbox`) -- disabled, listen port, address
+  restriction and, for the TLS services, the certificate name -- so
+  MikroView shows what the router itself listens on rather than
+  inferring it from traffic. No passwords or key material. Sent by
+  default alongside the other wizard-generated tables, and the setup
+  report's push-drift check now expects it too. See
+  `docs/routeros-setup.md`'s `ip-service` row for its field mapping.
 - **Country flags work with no setup, and IPinfo adds the network owner**
   (#1352, owner decision 2026-09-27). MikroView now downloads its own
   country data at runtime and caches it under `geoip.cachePath`
@@ -34,6 +44,23 @@ rewritten.
   `/api/settings/geo/maxmind` (admin), `GET /api/geo/lookup?ip=` (any
   signed-in user), and `geoSource` on `/api/healthz`. See
   docs/configuration.md's "GeoIP country flags".
+- **The fall's unmatched lane explains itself without a hover** (#1255).
+  Its attention row now carries a chip naming the lane and the exact
+  reason -- "other traffic -- events whose boundary is not in a pushed
+  rule table yet", or the narrower "other traffic -- their chain is in a
+  pushed table, but no rule there names these interfaces" -- whenever
+  that lane has any traffic. Dim ink, like the window-cap chip; a real
+  button, like the dark-boundary chip, opening Stream on that lane.
+- **A "seen serving" lens shows which hosts answer, and on what** (#1320).
+  A new `⌕ serving` pill sits beside `⌕ port` on Topography and City,
+  collapsing to `7 of 41 hosts answer in the window` once turned on.
+  Every host seen actually answering something in the window stays lit
+  and gets a hollow ring; every other host dims, same as the port
+  filter. One click into a lit host's reach shows the ports it answered
+  as chips, with `+N more` opening its dossier. Traffic only, never a
+  scan: a quiet listener stays invisible, and the wording never says
+  "open" or "listening". Turning the lens on clears the port filter and
+  vice versa -- one lens at a time. New API: `GET /api/ports/serving`.
 
 - **The setup wizard's "Paste once" step** (#1383): one block, its
   sections numbered and titled and the enrol line last, one Copy, and

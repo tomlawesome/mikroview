@@ -74,6 +74,9 @@ func TestNoDataIsDistinctFromEmpty(t *testing.T) {
 	if _, _, ok := s.IPAddresses("router-1"); ok {
 		t.Error("IPAddresses reported ok for a device that never pushed")
 	}
+	if _, _, ok := s.IPServices("router-1"); ok {
+		t.Error("IPServices reported ok for a device that never pushed")
+	}
 }
 
 // TestDHCPLeasesARPAddressListsSortedAndAccessible is issue #243 slice
@@ -119,6 +122,36 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	}
 	if len(addrs) != 2 || addrs[0].Address != "192.168.1.1/24" || addrs[1].Address != "192.168.1.9/24" {
 		t.Errorf("IPAddresses = %+v, want sorted by address", addrs)
+	}
+}
+
+// TestIPServicesSortedAndAccessibleWithNoAddressRestriction is issue
+// #1329's reproducer: the pushed /ip/service table is stored and
+// readable back sorted by name, and a service with no address
+// restriction at all -- the case that matters most downstream, since it
+// means "reachable from anywhere" -- comes back with an empty Address
+// rather than nil vs. empty ever being confused with each other.
+func TestIPServicesSortedAndAccessibleWithNoAddressRestriction(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"ip-service","page":1,"pages":1,"records":[`+
+		`{"name":"winbox","disabled":false,"port":8291,"certificate":""},`+
+		`{"name":"api","disabled":true,"port":8728,"address":"10.0.0.0/8","certificate":""}]}`)
+
+	services, updatedAt, ok := s.IPServices("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	if len(services) != 2 || services[0].Name != "api" || services[1].Name != "winbox" {
+		t.Fatalf("IPServices = %+v, want sorted by name", services)
+	}
+	if !services[0].Disabled {
+		t.Errorf("services[0] (api) Disabled = false, want true")
+	}
+	if len(services[0].Address) != 1 || services[0].Address[0] != "10.0.0.0/8" {
+		t.Errorf("services[0] (api) Address = %+v, want [10.0.0.0/8]", services[0].Address)
+	}
+	if len(services[1].Address) != 0 {
+		t.Errorf("services[1] (winbox) Address = %+v, want empty -- no restriction", services[1].Address)
 	}
 }
 

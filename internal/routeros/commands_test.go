@@ -364,6 +364,25 @@ func TestPushBlockRenamesIPAddressFields(t *testing.T) {
 	}
 }
 
+// #1329: the pushed /ip/service table, same renaming contract as the
+// filter-rule and ip-address cases above.
+func TestPushBlockRenamesIPServiceFields(t *testing.T) {
+	block := PushBlock("h", "t", "ip-service", "a")
+	for _, want := range []string{
+		"/ip/service print as-value",
+		`"name"=($v->"name")`,
+		`"disabled"=($v->"disabled")`,
+		`"port"=($v->"port")`,
+		`"address"=($v->"address")`,
+		`"certificate"=($v->"certificate")`,
+		`{$rec}`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("pushBlock(ip-service) missing %q:\n%s", want, block)
+		}
+	}
+}
+
 func TestRuleTaggingCommandsIsFilterOnly(t *testing.T) {
 	cmd := RuleTaggingCommands("a")
 	want := "/ip firewall filter set [find where !dynamic action=drop] log=yes log-prefix=\"D|drop|\"\n" +

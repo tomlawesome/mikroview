@@ -27,6 +27,7 @@
   // The device dossier card (#410), one instance for the whole app --
   // every surface that opens one calls lib/dossier.svelte.ts.
   import HostDossier from './components/HostDossier.svelte'
+  import WanDoors from './components/WanDoors.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import AuthEnrolFactor from './components/AuthEnrolFactor.svelte'
@@ -431,6 +432,7 @@
   <RouterLookupPopover />
   <NameEditorPopover />
   <HostDossier />
+  <WanDoors />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <Wizard />

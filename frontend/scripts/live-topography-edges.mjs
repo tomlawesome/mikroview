@@ -329,11 +329,12 @@ if (mine && waist.name === mine.name) {
 // recorded on its own issue.
 //
 // What the row carries now: no lens row at all, no toggle of any kind,
-// and one filter -- the port pill, which does not switch a layer on and
-// off, it redraws the map to an answer and goes away with its own ✕.
-// Beside it, only when there is something to report, sits the
-// off-baseline tally (`⟡ off-baseline today · N`, #1016/round 49) -- a
-// count drawn by the data, not a control, so it is read as text below
+// and two filters, sibling pills, one active at a time (#1320) -- the
+// port pill, and beside it ⌕ serving, neither of which switches a layer
+// on and off; each redraws the map to its own answer and goes away with
+// its own ✕. Beside them, only when there is something to report, sits
+// the off-baseline tally (`⟡ off-baseline today · N`, #1016/round 49) --
+// a count drawn by the data, not a control, so it is read as text below
 // rather than counted among the row's buttons.
 await open2D()
 const row = await page.evaluate(() => {
@@ -351,9 +352,13 @@ const row = await page.evaluate(() => {
   }
 })
 check(row.lensRows === 0, `no lens row is drawn at all (${row.lensRows})`)
-check(row.ovs.length === 1, `one control in the row and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
-check(row.ovs[0]?.text === '⌕ port', `and it is the port filter (${row.ovs[0]?.text})`)
-check(row.ovs[0]?.pressed === 'false', `which arrives unset, filtering nothing (${row.ovs[0]?.pressed})`)
+check(row.ovs.length === 2, `two controls in the row and no more (${row.ovs.map((o) => o.text).join(' · ')})`)
+check(row.ovs[0]?.text === '⌕ port', `the first is the port filter (${row.ovs[0]?.text})`)
+check(row.ovs[1]?.text === '⌕ serving', `and beside it, the serving lens (${row.ovs[1]?.text})`)
+check(
+  row.ovs[0]?.pressed === 'false' && row.ovs[1]?.pressed === 'false',
+  `both arrive unset, filtering and lighting nothing (${row.ovs.map((o) => o.pressed).join(' · ')})`,
+)
 check(
   row.tally === null || /off-baseline/.test(row.tally),
   `and the off-baseline tally, when there is one, still reads as a tally and not a control (${JSON.stringify(row.tally)})`,
@@ -369,11 +374,16 @@ const opened = await page.evaluate(() => {
   const card = document.querySelector('[data-card="topography"]')
   return {
     bar: !!card?.querySelector('.pill.p.edit'),
-    idle: !!card?.querySelector('.pills .pill.p:not(.edit)'),
+    idle: !!card?.querySelector('.pills .pill.p[data-pill="port"]:not(.edit)'),
+    // #1320: opening the port picker clears the serving lens (the two
+    // are mutually exclusive), but its pill is a sibling, not a second
+    // shape of the port pill's own -- it stays in the row, idle.
+    servingIdle: !!card?.querySelector('.pills .pill.p[data-pill="serving"]:not(.on)'),
   }
 })
 check(opened.bar, 'clicking it opens the picker as a bar of the same shape')
 check(!opened.idle, 'which takes the pill\'s place rather than sitting beside it')
+check(opened.servingIdle, 'the serving pill stays beside it, idle rather than removed')
 await page.keyboard.press('Escape')
 await page.waitForSelector('[data-card="topography"] .pill.p.edit', { state: 'detached', timeout: 2000 }).catch(() => {})
 check(
