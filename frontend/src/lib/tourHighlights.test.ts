@@ -63,13 +63,14 @@ describe('fitRing (#1215)', () => {
 // a margin), which is the safer default for something that is not
 // visibly a box.
 describe('TOUR_HIGHLIGHTS box classification (#1215 item 3)', () => {
-  it('marks the topography waist and the log-every-rule drop zone -- each paints its own fill and stroke -- as boxes, and nothing else', () => {
+  it('marks the topography waist, the log-every-rule drop zone and the fleet router card -- each paints its own fill and stroke -- as boxes, and nothing else', () => {
     const boxed = Object.entries(TOUR_HIGHLIGHTS).flatMap(([cardKey, list]) =>
       list.filter((h) => h.box === true).map((h) => `${cardKey}: ${h.label}`),
     )
     expect(boxed).toEqual([
       'topography: the router as the waist — subnets below, the internet above',
       'log-every-rule: one drop zone — drop, click or paste the router export',
+      'fleet: each router — live, or quiet since when',
     ])
   })
 })
@@ -85,6 +86,31 @@ describe('TOUR_HIGHLIGHTS box classification (#1215 item 3)', () => {
 describe('TOUR_HIGHLIGHTS covers every deck card (#1271)', () => {
   it('has a non-empty entry for every admin deck card', () => {
     const cards = deckCards(true)
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
+      const highlights = TOUR_HIGHLIGHTS[card.key]
+      expect(highlights, card.key).toBeDefined()
+      expect(highlights?.length, card.key).toBeGreaterThan(0)
+    }
+  })
+
+  // #1402: a viewer's deck swaps in the standalone `fleet` card
+  // (deckCards.ts) in place of Entities/Settings/Log every rule, and a
+  // user's (non-admin, edit-tier) deck carries the same `entities`/
+  // `engineroom`/`log-every-rule` cards an admin's does -- both decks
+  // need every one of their cards covered, not just the admin's.
+  it('has a non-empty entry for every viewer deck card', () => {
+    const cards = deckCards(false, false)
+    expect(cards.length).toBeGreaterThan(0)
+    for (const card of cards) {
+      const highlights = TOUR_HIGHLIGHTS[card.key]
+      expect(highlights, card.key).toBeDefined()
+      expect(highlights?.length, card.key).toBeGreaterThan(0)
+    }
+  })
+
+  it('has a non-empty entry for every user deck card', () => {
+    const cards = deckCards(false, true)
     expect(cards.length).toBeGreaterThan(0)
     for (const card of cards) {
       const highlights = TOUR_HIGHLIGHTS[card.key]
