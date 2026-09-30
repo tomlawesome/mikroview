@@ -110,6 +110,7 @@ check(typeof shippedThreshold === 'number', `the row starts from a known thresho
 
 await row.locator('.row-knob').click()
 await row.locator('.panel').waitFor({ state: 'visible' })
+// safe: waitFor above throws on timeout
 check(true, 'the row expands downward into its editing panel')
 
 check(
@@ -282,6 +283,7 @@ await shippedClone.click()
 
 const shippedCopyRow = page.locator('.bench li.row:has-text("Port scan (copy)")')
 await shippedCopyRow.waitFor({ state: 'visible', timeout: 15000 })
+// safe: waitFor above throws on timeout
 check(true, 'pressing Clone on a shipped row produces the copy with no prompt in between')
 check(
   await drawerOpens(shippedCopyRow),
@@ -348,6 +350,7 @@ check(
 await custom.locator('.drawer .acts button:has-text("clone")').click()
 const copyRow = page.locator(`.bench li.row:has-text("${SEED_NAME} (copy)")`)
 await copyRow.waitFor({ state: 'visible', timeout: 15000 })
+// safe: waitFor above throws on timeout
 check(true, 'pressing clone produces the copy with no prompt in between')
 check(
   await drawerOpens(copyRow),

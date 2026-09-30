@@ -123,6 +123,7 @@ while (Date.now() < deadline) {
 }
 check(!!arrived, `the test event reached the server (rule=${RULE})`)
 if (!arrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- token interactions cannot be exercised on a row that never arrived')
   done()
 }
@@ -154,6 +155,7 @@ try {
 }
 check(rowFound, `a row showing "${HOST_LABEL}" rendered (srcHostName was "${arrived.srcHostName ?? '(none)'}")`)
 if (!rowFound) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- token interactions cannot be exercised on a row that never rendered')
   done()
 }
@@ -242,6 +244,7 @@ check(
 
 // The toast is transient -- it must go away on its own rather than linger.
 await page.waitForSelector('.toast', { state: 'detached', timeout: 4000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the "copied" toast auto-dismisses')
 
 // Clicking the copy glyph must not also have applied the filter.

@@ -177,6 +177,7 @@ await page.waitForSelector(`[data-card="topography"] [data-ghost="${GHOST_CIDR}"
   state: 'attached',
   timeout: 10000,
 })
+// safe: waitForSelector above throws on timeout
 check(true, 'saying yes leaves the segment on the map as a ghost with its watch holding')
 
 const laneText = (await ghostLane.first().textContent()) ?? ''
@@ -227,6 +228,7 @@ check(await go.first().isDisabled(), 'and refuses to act until the override has 
 await ghostCard.locator('input').first().fill('the rack is gone; the range is not coming back')
 await go.first().click()
 await page.waitForSelector(`[data-card="topography"] [data-ghost="${GHOST_CIDR}"]`, { state: 'detached', timeout: 10000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the ghost leaves the map at once')
 
 const after = await page.request.get(`${URL_BASE}/api/decommission`)

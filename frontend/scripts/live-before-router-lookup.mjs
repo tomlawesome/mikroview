@@ -186,6 +186,7 @@ await page.keyboard.press('Escape')
 
 syslog(5, 'live-lookup-rule')
 await page.waitForSelector('.addr-btn:has-text("camera.lan")', { timeout: 15000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'a router-pushed DNS name labels the address in new event rows (RouterOS wins)')
 
 await page.click('button[title="Look up rule for prefix live-lookup-rule"] >> nth=0')

@@ -135,6 +135,7 @@ function openDrawer() {
 }
 
 await rowFor(NAME).waitFor({ timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'start watching creates a real entry and the draft closes')
 
 const created = await api(page, 'GET', '/api/definitions')
@@ -245,6 +246,7 @@ const RENAMED = 'live manage cam (renamed)'
 await page.fill('.wt-drawer input[aria-label="Watch name"]', RENAMED)
 await page.click('.wt-drawer button:has-text("save")')
 await rowFor(RENAMED).waitFor({ timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'edit saves the rename onto the real entry')
 
 // The drawer is already open from before the rename -- saving swaps its
@@ -258,6 +260,7 @@ check(
 )
 await openDrawer().getByRole('button', { name: /confirm/ }).click()
 await rowFor(RENAMED).waitFor({ state: 'detached', timeout: 10000 })
+// safe: waitFor above throws on timeout
 check(true, 'the second click actually removes the watch')
 
 const afterDelete = await api(page, 'GET', '/api/definitions')

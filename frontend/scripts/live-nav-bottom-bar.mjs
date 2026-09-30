@@ -114,6 +114,7 @@ check(
 // --- Esc closes it -----------------------------------------------------------
 await page.keyboard.press('Escape')
 await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+// safe: waitForFunction above throws on timeout
 check(true, 'Esc closes the half-sheet')
 check(await page.isVisible('.bottom-bar'), 'closing via Esc leaves the bar itself in place')
 
@@ -122,6 +123,7 @@ await page.click('.bottom-bar .group-btn .label:text-is("Investigate")')
 await page.waitForSelector('[role="dialog"]', { timeout: 5000 })
 await page.goBack()
 await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
+// safe: waitForFunction above throws on timeout
 check(true, 'the browser back button also closes the half-sheet')
 check(await page.isVisible('.bottom-bar'), 'closing via back leaves the app in place, not a real navigation away')
 

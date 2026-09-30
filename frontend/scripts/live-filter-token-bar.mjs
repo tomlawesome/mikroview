@@ -80,6 +80,7 @@ const otherLine =
 const arrived = (await waitForArrival(RULE, line)) && (await waitForArrival(OTHER_RULE, otherLine))
 check(arrived, `the ${RULE} and ${OTHER_RULE} test events reached the server`)
 if (!arrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped the rest -- the token menu cannot be exercised over rows that never arrived')
   done()
 }

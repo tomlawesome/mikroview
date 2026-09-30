@@ -220,6 +220,7 @@ if (scanFlag) {
     'five pushes naming the exact same address left the flag completely unchanged -- pushed data cannot clear, lower, or otherwise touch it',
   )
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, `skipped -- five pushes cannot be checked against a flag that never arrived (${raised.message})`)
 }
 
