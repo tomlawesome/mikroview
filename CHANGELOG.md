@@ -62,6 +62,17 @@ rewritten.
   "open" or "listening". Turning the lens on clears the port filter and
   vice versa -- one lens at a time. New API: `GET /api/ports/serving`.
 
+- **The setup wizard is a full-screen page** (#1381, #1382, #1384,
+  #1386). A bar and an evidence strip across the top, a step rail that
+  only opens steps you have reached, and five steps: The router (one
+  form -- name, address, push and backup as Yes/No), Mint the token,
+  Paste once, Tag firewall rules (the rule list proposed from the
+  router's own pushed rules), and Where setup stands. Signing in as an
+  admin with no router yet plays the way in -- the wordmark's box lets
+  go of the door, strikes like a neon sign and lands as the wizard's
+  bar -- and Finish plays it back out onto the live fall. Under reduced
+  motion both are a short crossfade.
+
 - **The setup wizard's "Paste once" step** (#1383): one block, its
   sections numbered and titled and the enrol line last, one Copy, and
   the router's turn -- a track lighting station by station from the
@@ -80,6 +91,12 @@ rewritten.
   latter straight at Mint the token with a fresh one.
 
 ### Removed
+
+- **The first-run walk before the wizard is gone** (#1386, owner
+  decision 2026-09-30). A brand-new install no longer shows the attach,
+  connecting and "skip or tour" screens after the admin account is
+  made: the wizard's way in plays straight away, and the wizard asks
+  for the router lines once, in Paste once.
 
 - **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
   `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
@@ -144,6 +161,12 @@ rewritten.
   old trie's tie-break.
 
 ### Security
+
+- **Removing a router revokes its upload token** (#1385). Until now a
+  removed router's ingest token still authenticated log pushes and SFTP
+  backups under that router's name. If the revoke cannot be saved, the
+  removal now says so and points to Tokens instead of reporting success.
+  Tokens left behind by routers removed before this release are #1399.
 
 - `VerifyPassword` now refuses, before hashing, a stored hash whose
   cost settings or lengths are outside what this module writes (with
