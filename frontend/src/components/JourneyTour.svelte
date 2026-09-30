@@ -1,16 +1,18 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // #646 beat 6, "The tour": deck by deck, ringing key controls and info
-  // in accent hairline with a concise label each -- round 29's ratified
-  // shape ("58, yes but it should highlight key handles/inputs/outputs
-  // and label/explain concisely"), walking "THE FALL · 1 OF 6 · NEXT ▸"
-  // as the design demonstrates it. The count is never hardcoded: it is
-  // journeyState.cards.length, the deck's own real card list (#647 grew
-  // it to seven for an admin).
+  // #646 beat 6, "The tour", kept by #1386: deck by deck, ringing key
+  // controls and info in accent hairline with a concise label each --
+  // round 29's ratified shape ("58, yes but it should highlight key
+  // handles/inputs/outputs and label/explain concisely"), walking "THE
+  // FALL · 1 OF 6 · NEXT ▸" as the design demonstrates it. The count is
+  // never hardcoded: it is tourState.cards.length, the deck's own real
+  // card list (#647 grew it to seven for an admin). Started from the
+  // offer after the wizard's Finish, or from the account menu's "Take
+  // the tour" (lib/tour.svelte.ts has both, and where it ends).
   //
   // The deck itself (App.svelte) stays mounted underneath and does the
-  // actual rolling -- journeyState.nextCard() only ever sets appState.view,
+  // actual rolling -- tourState.nextCard() only ever sets appState.view,
   // exactly like clicking the roll rail. This overlay draws the rings and
   // the progress bar on top of it.
   //
@@ -22,13 +24,13 @@
   // rather than beside its ring, where a line of prose would cover the
   // very thing it names. Several rings on one card are explained
   // together, as their rings already are (#1215 item 7).
-  import { journeyState } from '../lib/journey.svelte'
+  import { tourState } from '../lib/tour.svelte'
   import { TOUR_HIGHLIGHTS, fitRing } from '../lib/tourHighlights'
 
-  const total = $derived(journeyState.cards.length)
-  const card = $derived(journeyState.cards[journeyState.cardIndex])
+  const total = $derived(tourState.cards.length)
+  const card = $derived(tourState.cards[tourState.cardIndex])
   const highlights = $derived(card ? (TOUR_HIGHLIGHTS[card.key] ?? []) : [])
-  const isLast = $derived(journeyState.cardIndex >= total - 1)
+  const isLast = $derived(tourState.cardIndex >= total - 1)
 
   // A ring that names an element is measured off the live render rather
   // than drawn at a hand-placed percentage (#750). Measured every frame
@@ -128,7 +130,7 @@
 </script>
 
 {#if card}
-  <div class="tour" role="group" aria-label="The tour: {card.name}, {journeyState.cardIndex + 1} of {total}">
+  <div class="tour" role="group" aria-label="The tour: {card.name}, {tourState.cardIndex + 1} of {total}">
     {#if veilClip}
       <div class="veil" aria-hidden="true" style:clip-path={veilClip}></div>
     {/if}
@@ -154,12 +156,12 @@
       {/if}
       <div class="controls">
         <span class="progress">
-          {card.name.toUpperCase()} · {journeyState.cardIndex + 1} OF {total}
+          {card.name.toUpperCase()} · {tourState.cardIndex + 1} OF {total}
         </span>
-        <button type="button" class="next" onclick={() => journeyState.nextCard()}>
+        <button type="button" class="next" onclick={() => tourState.nextCard()}>
           {isLast ? 'finish ▸' : 'next ▸'}
         </button>
-        <button type="button" class="leave" onclick={() => journeyState.leaveTour()}>leave the tour</button>
+        <button type="button" class="leave" onclick={() => tourState.leave()}>leave the tour</button>
       </div>
     </div>
   </div>

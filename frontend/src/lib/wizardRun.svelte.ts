@@ -18,6 +18,7 @@ import { fallState, laneColors } from './fall.svelte'
 import { TITLES } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import { wizardJourney } from './wizardJourney.svelte'
+import { tourState } from './tour.svelte'
 import {
   addrProblem,
   arrivedAll,
@@ -550,11 +551,25 @@ class WizardRun {
     // the hand-over -- show the landing, close the wizard -- happens under
     // its cover. Where it cannot play (reduced motion, no canvas), the
     // hand-over happens outright.
+    //
+    // Once it has landed on the fall, the tour is offered (once per
+    // account; lib/tour.svelte.ts). A walk that lands on the fleet --
+    // adding a router -- is not a first run, and the tour's first stop
+    // is the fall it just left, so it gets no offer. Read once, up
+    // front: `after` runs seconds later, once the way out has landed,
+    // and finishTo by then belongs to whichever walk is open next.
+    const toFall = wizardState.finishTo !== 'fleet'
     const swap = () => {
-      appState.view = wizardState.finishTo === 'fleet' ? 'fleet' : 'fall'
+      appState.view = toFall ? 'fall' : 'fleet'
       wizardState.close()
     }
-    if (!wizardJourney.wayOut(swap)) swap()
+    const after = () => {
+      if (toFall) tourState.offerAfterFinish()
+    }
+    if (!wizardJourney.wayOut(swap, after)) {
+      swap()
+      after()
+    }
   }
 
   // poll is the per-tick bookkeeping: the live rate, and the moment the

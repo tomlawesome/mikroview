@@ -163,8 +163,10 @@ describe("the way out", () => {
     wizardJourney.end();
     wizardJourney.wayOutHandler = null;
     const swap = vi.fn();
-    expect(wizardJourney.wayOut(swap)).toBe(false);
+    const after = vi.fn();
+    expect(wizardJourney.wayOut(swap, after)).toBe(false);
     expect(swap).not.toHaveBeenCalled();
+    expect(after).not.toHaveBeenCalled();
   });
 
   it("defers to the mounted handler when there is one", () => {
@@ -177,8 +179,9 @@ describe("the way out", () => {
     const handler = vi.fn().mockReturnValue(true);
     wizardJourney.wayOutHandler = handler;
     const swap = vi.fn();
-    expect(wizardJourney.wayOut(swap)).toBe(true);
-    expect(handler).toHaveBeenCalledWith(swap);
+    const after = vi.fn();
+    expect(wizardJourney.wayOut(swap, after)).toBe(true);
+    expect(handler).toHaveBeenCalledWith(swap, after);
     wizardJourney.wayOutHandler = null;
   });
 });

@@ -18,7 +18,6 @@
   import { untrack } from 'svelte'
   import { authState } from '../../lib/auth.svelte'
   import { appState } from '../../lib/state.svelte'
-  import { journeyState } from '../../lib/journey.svelte'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardJourney } from '../../lib/wizardJourney.svelte'
   import { journey, strike } from '../../lib/wizardJourney'
@@ -33,16 +32,12 @@
   // The way in decides once the shell has loaded under the held door:
   // the ledger (wizardState.status, read on sign-in by Wizard.svelte) and
   // the device list (appState.initialLoadDone) are what "would the
-  // wizard auto-launch" needs. The #646 walk owns its own path.
+  // wizard auto-launch" needs.
   $effect(() => {
     if (!wizardJourney.pending) return
     if (authState.state !== 'authenticated') return
     if (!appState.initialLoadDone) return
     if (!wizardState.status) return
-    if (journeyState.active) {
-      untrack(() => wizardJourney.end())
-      return
-    }
     untrack(() => {
       if (wizardJourney.decide() === 'play') wayIn()
     })
@@ -113,8 +108,10 @@
 
   // The way out: Finish plays the same journey at three-quarters speed.
   // `swap` is what finish() used to do outright -- show the fall and
-  // close the wizard -- now done under the cover.
-  export function wayOut(swap: () => void): boolean {
+  // close the wizard -- now done under the cover. `after` runs once the
+  // journey is done and the fall stands: the tour's offer (#1386) waits
+  // on it rather than on a clock of its own.
+  export function wayOut(swap: () => void, after: () => void): boolean {
     const bar = document.querySelector<HTMLElement>('.wiz .bar .wm')
     if (!bar || !canvas || !ride || wizardJourney.active) return false
     const from = bar.getBoundingClientRect()
@@ -152,6 +149,7 @@
       done: () => {
         body().classList.remove('journey', 'am', 'ak-bar', 'ak-strip', 'ak-fb')
         wizardJourney.end()
+        after()
       },
     })
   }

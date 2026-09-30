@@ -26,7 +26,6 @@
   import { authState } from '../../lib/auth.svelte'
   import { appState } from '../../lib/state.svelte'
   import { fallState } from '../../lib/fall.svelte'
-  import { journeyState } from '../../lib/journey.svelte'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardJourney } from '../../lib/wizardJourney.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
@@ -55,12 +54,9 @@
 
   // The record's auto-launch: first admin sign-in with no router
   // sending, after the shell has painted (appState.initialLoadDone).
-  // The journey (#646) owns first-run launch timing on the path it
-  // covers, so this defers to it.
   $effect(() => {
     if (!isAdmin) return
     if (!appState.initialLoadDone) return
-    if (journeyState.active) return
     // A sign-in's way in (#1386) decides the launch itself while it is
     // pending or playing; this rule resumes once it has let the door down.
     if (wizardJourney.pending || wizardJourney.active) return

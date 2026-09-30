@@ -108,6 +108,17 @@ chips as the record.
 **Reduced motion**: both journeys are a short crossfade; the door's rain
 hangs still as the real one does; the groups appear without the strike.
 
+**Then the tour** (owner, 2026-09-30, on #1386): once the way out has
+landed on the fall and its groups have struck on, a beat later a small
+panel rises at the foot of the screen — the retired glass's own shape
+(round 27: one glass over the live fall, never a modal maze) — "Take
+the tour?", the deck's count and length, `begin the tour`, and the
+quiet "not now — it stays in the account menu". Once per account,
+taken or declined. Only a Finish that lands on the fall offers it;
+adding a router lands on the fleet and does not. The tour (#646's
+beat 6, unchanged) ends back on the card it started from, and the
+account menu's "Take the tour" starts it any time, for every role.
+
 ## The bar and the strip
 
 The bar carries the wordmark, then **chips** as proofs arrive — the
