@@ -27,6 +27,13 @@ data_vol="${name}-data"
 etc_vol="${name}-etc"
 https_port="${MIKROVIEW_HTTPS_PORT:-443}"
 syslog_port="${MIKROVIEW_SYSLOG_PORT:-6514}"
+# The router-backup drop box's port (#1361): always published, same as
+# deploy/docker-compose.yml, since the switch that actually opens the
+# listener lives in Settings now and moves at runtime with no restart --
+# a container's own port mapping cannot follow that. Undocumented for
+# users deliberately: change backup.listen in config.yaml first if you
+# need a different port, and change this to match.
+backup_port="${MIKROVIEW_BACKUP_PORT:-47022}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "install.sh: docker is not installed. Get it from https://docs.docker.com/engine/install/ and run this again." >&2
@@ -118,7 +125,7 @@ fi
 # their deployment) is the right place to choose one.
 set -- run -d --name "$name" --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
-  -p "${syslog_port}:6514" -p "${https_port}:8080" \
+  -p "${syslog_port}:6514" -p "${https_port}:8080" -p "${backup_port}:47022" \
   -v "${data_vol}:/var/lib/mikroview" -v "${etc_vol}:/etc/mikroview:ro" \
   "$image"
 echo "docker $*"
@@ -162,4 +169,5 @@ port_suffix=""
 [ "$https_port" = "443" ] || port_suffix=":${https_port}"
 echo "install.sh: open https://${addr}${port_suffix} and create the admin account -- the setup wizard then writes the router commands for you."
 echo "install.sh: both ports are open to every network this host is on, and until that first account exists anyone who reaches the page can create it -- do it now, and firewall ${https_port} and ${syslog_port} to the router and your own machines."
+echo "install.sh: the router-backup drop box's port (${backup_port}) is published too, but nothing answers on it until an admin opens the drop box from Settings -- see docs/configuration.md."
 echo "install.sh: data lives in the ${data_vol} and ${etc_vol} named volumes."
