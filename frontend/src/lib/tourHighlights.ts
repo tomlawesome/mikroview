@@ -95,6 +95,18 @@ export const TOUR_HIGHLIGHTS: Record<string, TourHighlight[]> = {
     // #1134's ruling, here as on the page.
     { label: 'one drop zone — drop, click or paste the router export', says: 'the export comes back with logging switched on for every rule not logging yet.', selector: '.card[data-card="log-every-rule"] button.drop', box: true, top: '34%', left: '28%', width: '44%', height: '16%' },
   ],
+  fleet: [
+    // #1402: a viewer's deck swaps this card in for Entities/Settings
+    // (deckCards.ts), and #657's ruling is that Fleet earns its place by
+    // being the router's pulse -- "a stale router is why the log looks
+    // wrong". The first router card carries the status mark and the
+    // "last heard…" line (Fleet.svelte:134,153), so the ring goes round
+    // the card, not the .og h3 header above it: the header rings a
+    // label, the card is the fact. .fcard paints its own border
+    // (Fleet.svelte's style block), so this is a `box: true` ring,
+    // traced exactly, same as the topography waist.
+    { label: 'each router — live, or quiet since when', says: 'every router that pushes here, live or quiet — a quiet one is why the log looks wrong.', selector: '.card[data-card="fleet"] .fcard:first-of-type', box: true, top: '10%', left: '6%', width: '30%', height: '28%' },
+  ],
 }
 
 // ── ring geometry (#1215) ────────────────────────────────────────────
