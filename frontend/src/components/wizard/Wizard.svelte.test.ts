@@ -328,6 +328,21 @@ describe('Wizard: the full-screen shell', () => {
     expect(wizardRun.name).toBe('rb5009')
   })
 
+  // #1406: a run placed from fleet-wide evidence (no router record --
+  // '+ add a router' and Re-enrol… both name the run themselves) used
+  // to leave wizardRun.name empty, so Where setup stands read " is
+  // sending." Falling back to the evidence's own sending address reads
+  // sensibly instead, and never touches a walk that names itself.
+  it('names the run for the sending address when fleet-wide evidence places it with no router record', async () => {
+    wizardState.status = status({
+      sources: [{ source: '192.168.13.1', caFetchedAt: '2026-09-27T14:02:58Z', syslogFirstSeenAt: '2026-09-27T14:03:04Z' }],
+    })
+    render(Wizard)
+    await tick()
+    expect(wizardRun.name).toBe('192.168.13.1')
+    expect(screen.getByText('192.168.13.1 is sending.')).toBeTruthy()
+  })
+
   it('is not in the tree while closed', async () => {
     wizardState.open = false
     render(Wizard)
