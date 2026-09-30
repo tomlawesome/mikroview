@@ -342,6 +342,19 @@ export const SYSLOG_ADDRESS_CHANGED_NOTE =
 // the operator edits config.yaml and restarts -- then the ones the
 // wizard itself can still fix, in the order it asks them (the header
 // field before either step-4/6 pick).
+//
+// Not currently rendered anywhere (#1361 gap, flagged rather than wired):
+// the round-15 wizard rewrite (#1382/#1383, StepRouter.svelte/
+// StepPaste.svelte) dropped the screen that used to show this -- a
+// blocked backup section is now just left out of wizardRun.svelte.ts's
+// blockSections with no message at all. Wiring "the wizard's backup step
+// can turn the drop box on directly" (#1361's ratified design) back in
+// needs a UX call this file cannot make on its own: where in the new
+// StepRouter/StepPaste flow the blocked state and its "Open the drop
+// box" button belong, given the wizard no longer knows whether the drop
+// box is open before minting (SetupStatus carries no such field). Kept
+// here, corrected rather than left actively wrong, until that call is
+// made.
 export const BACKUP_BLOCKED_ORDER = [
   'backups-off',
   'retention-key-unreadable',
@@ -352,7 +365,7 @@ export const BACKUP_BLOCKED_ORDER = [
 ] as const
 
 const BACKUP_BLOCKED_COPY: Record<string, string> = {
-  'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
+  'backups-off': 'the drop box is closed. Open it from Settings → router backups, or from this step once that control is wired in here.',
   // #1264 finding 5: a configured retention key that could not be read
   // is not the same fact as no-retention-key below, and must never read
   // like it -- "set history.keyFile" tells the operator to mint a fresh

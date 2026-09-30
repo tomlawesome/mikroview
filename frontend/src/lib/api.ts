@@ -48,6 +48,7 @@ import type {
   RouterBackupDiff,
   RouterBackupRouter,
   RouterBackupsResponse,
+  RouterBackupSwitchState,
   RouterBackupText,
   PasskeySummary,
   RuleUsage,
@@ -2150,6 +2151,19 @@ export async function fetchRouterBackups(): Promise<RouterBackupsResponse> {
   const res = await fetch('/api/router-backups')
   if (!res.ok) throw new ApiError(`fetchRouterBackups: ${res.status}`, res.status)
   return res.json()
+}
+
+// setRouterBackupSwitch opens or closes the router-backup SFTP drop box
+// (#1361). Password is only sent, and only required, when opening --
+// opening a second listening port from a browser is exactly the action a
+// stolen session should not be able to take unattended; closing needs an
+// admin but no password, the deleteHistoryFiles/setHistorySettings
+// shape: the server's own words on refusal (wrong password, port
+// already in use), the server's new state on success.
+export async function setRouterBackupSwitch(open: boolean, password?: string): Promise<RouterBackupSwitchState | string> {
+  const res = await putJSON('/api/settings/router-backups', open ? { open, password } : { open })
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `setRouterBackupSwitch: ${res.status}`
 }
 
 // routerBackupDownloadUrl is the admin download link for one half of a
