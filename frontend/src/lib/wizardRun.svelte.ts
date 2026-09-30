@@ -124,6 +124,7 @@ class WizardRun {
     const st = wizardState.status
     if (!st) return 0
     const id = wizardState.ledgerDevice
+    if (!id && wizardState.addingRouter) return 0
     return st.devices.filter((d) => !id || d.device === id).reduce((n, d) => n + d.decodedActions, 0)
   }
 
@@ -131,12 +132,14 @@ class WizardRun {
     const st = wizardState.status
     const id = wizardState.ledgerDevice
     const dev = id ? wizardState.devices.find((x) => x.id === id) : undefined
-    // The enrol line is this router's own arrival (#1281); a walk that
-    // has no router record yet reads the fleet's first open syslog
-    // source, as the ledger always did.
+    // The enrol line is this router's own arrival (#1281); a first-run
+    // walk that has no router record yet reads the fleet's first open
+    // syslog source, as the ledger always did. An add-a-router walk
+    // never does: another router's traffic is not this one's (#1397).
+    const fleetWide = !id && !wizardState.addingRouter
     let enrol = dev?.acceptedIp ? (dev.enrolledAt ?? '') : ''
     let from = dev?.acceptedIp ?? ''
-    if (!enrol && !id && st) {
+    if (!enrol && fleetWide && st) {
       const seen = st.sources.find((s) => s.syslogFirstSeenAt)
       if (seen) {
         enrol = seen.syslogFirstSeenAt ?? ''
@@ -146,17 +149,17 @@ class WizardRun {
     const sources = st?.sources ?? []
     const certSrc =
       sources.find((s) => s.caFetchedAt && (s.source === from || s.source === this.addr)) ??
-      sources.find((s) => s.caFetchedAt)
+      (fleetWide ? sources.find((s) => s.caFetchedAt) : undefined)
     let push = ''
     let lines = 0
     for (const d of st?.devices ?? []) {
-      if (id && d.device !== id) continue
+      if (id ? d.device !== id : !fleetWide) continue
       lines += d.events
       for (const at of Object.values(d.pushedKinds ?? {})) if (at > push) push = at
     }
     let backup = ''
     for (const r of wizardState.backups?.routers ?? []) {
-      if (id && r.device !== id) continue
+      if (id ? r.device !== id : !fleetWide) continue
       const g = r.generations[r.generations.length - 1]
       const at = r.lastArrival || g?.backupArrivedAt || g?.rscArrivedAt || ''
       if (at > backup) backup = at
@@ -303,10 +306,7 @@ class WizardRun {
       if (err) return err
       // Without this, openAddRouter()/begin() below would place the walk
       // against wizardState's last poll, which still shows this router
-      // (and the fleet's ambient "first open syslog source" fallback
-      // evidence() reads for a walk with no router chosen yet, DESIGN.md's
-      // own long-standing behaviour for Add another router) exactly as it
-      // stood before the delete just forgot it.
+      // exactly as it stood before the delete just forgot it.
       await wizardState.refresh()
       wizardState.openAddRouter()
       this.begin()
