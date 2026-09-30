@@ -12,6 +12,18 @@
   // mount, matching AuthState's other consume-once URL flags.
   const reverseBeat = authState.consumeJustSignedOut()
 
+  // Enter at the door starts the way in (#1386) -- for an admin, and
+  // only if the wizard turns out to be launching; the journey decides
+  // once the shell has loaded, and otherwise just lets the door down.
+  // Every step that can finish signing in goes through here, not only
+  // the password: an account holding a factor is signed in by the
+  // factor step, and arming on the password alone never played it.
+  async function armed(step: Promise<string | null>): Promise<string | null> {
+    const result = await step
+    if (result === null) wizardJourney.signedIn()
+    return result
+  }
+
   // #1251: after signing in with the one-time code an administrator read
   // out, the door does not open -- it asks for a password of your own
   // first, and there is nothing else on the screen until it has one. The
@@ -63,22 +75,15 @@
     subtitle={factorSubtitle}
     submitLabel="Continue"
     factorOnly
-    onSubmitFactor={(code) => authState.submitFactor(code)}
-    onLoginWithPasskey={() => authState.loginWithPasskey()}
+    onSubmitFactor={(code) => armed(authState.submitFactor(code))}
+    onLoginWithPasskey={() => armed(authState.loginWithPasskey())}
   />
 {:else}
   <!-- No title: on the door the framed wordmark is the title, and the
        submit is the scene's own "Enter" (round-29 door, #645). -->
   <AuthScreen
     submitLabel="Enter"
-    onsubmit={async (username, password) => {
-      const result = await authState.login(username, password)
-      // Enter at the door starts the way in (#1386) -- for an admin, and
-      // only if the wizard turns out to be launching; the journey decides
-      // once the shell has loaded, and otherwise just lets the door down.
-      if (result === null && authState.isAdmin) wizardJourney.enter()
-      return result
-    }}
+    onsubmit={(username, password) => armed(authState.login(username, password))}
     ssoAvailable={authState.ssoAvailable}
     {reverseBeat}
   />
