@@ -51,6 +51,7 @@
   import { fetchTuneLoggingAnalyse, fetchTuneLoggingRender } from '../lib/api'
   import { copyToClipboard } from '../lib/clipboard'
   import { downloadText } from '../lib/export'
+  import { leaveGuard } from '../lib/leaveGuard.svelte'
   import {
     countFilterRules,
     counterText,
@@ -325,20 +326,16 @@
     }
   }
 
-  function onBeforeUnload(e: BeforeUnloadEvent) {
-    e.preventDefault()
-    e.returnValue = ''
-  }
-
-  // The guard (issue's own invariant list, "Warn on leave"): set only
+  // The guard (issue's own invariant list, "Warn on leave"): held only
   // while a rendered result exists that has been neither downloaded nor
-  // copied, cleared the instant either happens. No `beforeunload` guard
-  // existed anywhere in the frontend before this -- see lib/export.ts's
+  // copied, released the instant either happens -- see lib/export.ts's
   // download-a-blob precedent this page's own download() reuses.
+  // leaveGuard (#1363) is what actually prompts on beforeunload now;
+  // this just says whether that prompt should fire.
   $effect(() => {
     if (!work.renderResult || work.resultSaved) return
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+    leaveGuard.hold('log-every-rule-export')
+    return () => leaveGuard.release('log-every-rule-export')
   })
 </script>
 

@@ -119,6 +119,16 @@ export function onForcedAuthGate(handler: (gate: ForcedAuthGate, session: AuthSe
   forcedAuthGateHandler = handler
 }
 
+// #1363: registered once by main.ts wiring freshnessState -- same
+// one-way reasoning as forcedAuthGateHandler above, so this file never
+// has to import freshness.svelte.ts (which itself imports fetchHealthz
+// from here).
+let freshnessSignalHandler: (() => void) | null = null
+
+export function onFreshnessSignal(handler: () => void): void {
+  freshnessSignalHandler = handler
+}
+
 // De-dupes a burst of calls that all hit the gate in the same tick (a
 // poll and a load firing together) into a single re-check, rather than
 // one GET /api/auth/session per failed call.
@@ -159,6 +169,15 @@ async function fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
     if (gate === 'must-change-password' || gate === 'must-enrol-factor') {
       triggerForcedAuthGateRecheck(gate)
     }
+  }
+  // #1363: any of these can mean the server was upgraded mid-session --
+  // a route the new build dropped or renamed (404), a session the
+  // reshuffle invalidated (401/403), or the new process still coming up
+  // (5xx). freshnessSignalHandler itself only ever acts on this once
+  // per tab; called unconditionally here so this file does not have to
+  // track that.
+  if (res.status === 401 || res.status === 403 || res.status === 404 || res.status >= 500) {
+    freshnessSignalHandler?.()
   }
   return res
 }
