@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-setup-wizard: the forced click on a locked rail row lands outside the viewport
+
+- 2026-09-30 · 0f1fe102 (feature/m25-backend-followups, !1125) · pipeline 1874, `gate:scenarios 3/4` (job 27584) · `locator.click: Element is outside of the viewport` at `live-setup-wizard.mjs:133`, the `force: true` click on row 4 -- every earlier check passed, including the row being locked. The branch is backend-only (upload-token sweep, `/ip service` decoding) and cannot reach the wizard rail's layout on a fresh run; dev passed the same scenario in pipeline 1865, and the retried job 27704 passed on the same commit.
+
 ## coverage-floor: internal/baseline's coverage drops under full-suite load
 
 - 2026-09-27 · dee367fa (fix/1290-postgres-coverage, local `go test ./... -coverprofile`, no -race, host busy with other agents) · `internal/baseline: got 88.6%, floor 90%`; `go test ./internal/baseline/...` alone read 90.7% three times running. Coverage that moves with load means a timing-dependent path in its tests; the ratchet can go red on it.
