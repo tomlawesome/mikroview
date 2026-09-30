@@ -27,6 +27,17 @@
 // are the only two things a bare "Run setup…" reads for the fleet as a
 // whole (wizardRun.svelte.ts's evidence getter, the `!id` branch).
 //
+// begin() only lands straight on 'done', though, if the browser's own
+// cached evidence already carries that cert fetch and syslog arrival --
+// true once some earlier scenario has already touched /ca.crt on this
+// instance, but not on a freshly booted one where this script is the
+// first to (a lone run, or this family's own slice under sharding,
+// #1004: shards start on an empty instance beyond the baseline feed).
+// There the reopened ledger lands on 'watch' instead, and reaching
+// Finish needs walking forward the way every other door does -- see
+// reachFinish() below, which takes the same route live-enrolment.mjs
+// does through Tag firewall rules.
+//
 // MV_SHOT=<path> saves a screenshot of the offer over the fall, for
 // looking at it against the fall's design.
 import { session, check, done, goTo, feedSyslog, openAccountMenu } from './live-browser.mjs'
@@ -51,9 +62,24 @@ await page.request.get(`${URL_BASE}/ca.crt`)
 await goTo(page, 'Run setup…')
 const wizard = page.locator('.page.wiz')
 await wizard.waitFor({ state: 'visible' })
+const foot = wizard.locator('.foot')
+const finish = foot.locator('button.primary:text-is("Finish")')
 
-const finish = page.locator('.wiz .foot button.primary:text-is("Finish")')
-await finish.waitFor({ state: 'visible', timeout: 15000 })
+// reachFinish walks the reopened ledger the rest of the way to Finish
+// when it has not already landed there (see the header comment above):
+// Next past Paste once -- arrivedAll's own wait, since the evidence is
+// polled in rather than pushed -- then Skip this step at Tag firewall
+// rules (this walk tags nothing), the same route live-enrolment.mjs
+// takes to reach its own Finish.
+async function reachFinish() {
+  if (!(await finish.count())) {
+    await foot.locator('button.primary:text-is("Next")').click()
+    await foot.locator('button:text-is("Skip this step")').click()
+  }
+  await finish.waitFor({ state: 'visible', timeout: 15000 })
+}
+
+await reachFinish()
 await finish.click()
 await wizard.waitFor({ state: 'detached' })
 
@@ -64,7 +90,7 @@ const fallCentred = () => {
   return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
 }
 await page.waitForFunction(fallCentred, { timeout: 10000 })
-check(true, 'the finish lands on the fall, centred in the deck')
+check(await page.evaluate(fallCentred), 'the finish lands on the fall, centred in the deck')
 
 // --- The offer rises once the way out has landed -------------------------
 // The way out plays ~6.5s at three-quarters speed, then a beat
@@ -76,17 +102,17 @@ check(
   /^Eight cards\. About three minutes\. It ends back here, on the fall\.$/.test(await page.locator('.offer .story').innerText()),
   'the offer sizes the promise to the admin\'s eight cards',
 )
-check(fallCentred, 'the fall is still under it')
+check(await page.evaluate(fallCentred), 'the fall is still under it')
 if (process.env.MV_SHOT) await page.screenshot({ path: process.env.MV_SHOT })
 
 await page.locator('.offer button.later').click()
 await offer.waitFor({ state: 'detached' })
-check(true, '"not now" takes the offer down')
+check((await offer.count()) === 0, '"not now" takes the offer down')
 
 // --- Once: a second Finish lands on the fall with no offer ---------------
 await goTo(page, 'Run setup…')
 await wizard.waitFor({ state: 'visible' })
-await finish.waitFor({ state: 'visible', timeout: 15000 })
+await reachFinish()
 await finish.click()
 await wizard.waitFor({ state: 'detached' })
 await page.waitForFunction(fallCentred, { timeout: 10000 })
@@ -101,15 +127,16 @@ await page.locator('.account .menu button.row:text-is("Take the tour")').click()
 const bar = page.locator('.tour .bar')
 await bar.waitFor({ state: 'visible', timeout: 5000 })
 check(/THE FALL · 1 OF 8/.test(await bar.locator('.progress').innerText()), 'the tour opens on the fall, 1 of the admin\'s 8')
-await bar.locator('button.leave').click()
-await bar.waitFor({ state: 'detached' })
-await page.waitForFunction(() => {
+const metricsCentred = () => {
   const deck = document.querySelector('.deck')
   const el = deck?.querySelector('.card[data-card="metrics"]')
   if (!el) return false
   return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
-}, { timeout: 10000 })
-check(true, 'leaving the tour rolls back to the card it was started from')
+}
+await bar.locator('button.leave').click()
+await bar.waitFor({ state: 'detached' })
+await page.waitForFunction(metricsCentred, { timeout: 10000 })
+check(await page.evaluate(metricsCentred), 'leaving the tour rolls back to the card it was started from')
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
 done()
