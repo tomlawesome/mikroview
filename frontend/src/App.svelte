@@ -32,8 +32,9 @@
   import AuthEnrolFactor from './components/AuthEnrolFactor.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   // The journey (#646): choreography over the shell below, not a page of
-  // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
-  // outside it these three never render.
+  // its own. Nothing starts it any more: its pre-wizard beats were
+  // retired for #1386's way in (owner, 2026-09-30), and these three are
+  // removed once the owner has said where the tour goes (#1386).
   import { journeyState } from './lib/journey.svelte'
   import JourneyAttach from './components/JourneyAttach.svelte'
   import JourneyGlass from './components/JourneyGlass.svelte'

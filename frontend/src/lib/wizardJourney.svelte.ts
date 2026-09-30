@@ -5,15 +5,14 @@
 // journey, played in on Enter at the door and again on Finish, onto the
 // fall; both a short crossfade under reduced motion.
 //
-// Not to be confused with lib/journey.svelte.ts (#646): that is the
-// brand-new-instance walk (attach, connecting, the glass, the tour),
-// triggered by AuthSetup. This one belongs to the sign-in door and the
-// wizard's Finish. Where both could apply the #646 walk still has the
-// path it owns; the question of retiring its pre-wizard beats is on
-// #1386 for the owner.
+// Not to be confused with lib/journey.svelte.ts (#646), the older
+// brand-new-instance walk. Its pre-wizard beats are retired (owner,
+// 2026-09-30, on #1386): a brand-new install now plays this way in
+// straight after the admin account is made (AuthSetup's Continue).
 //
-// The sequence on the way in: AuthLogin's successful submit calls
-// enter(); the door stays mounted (holdDoor) while the shell loads
+// The sequence on the way in: a sign-in that lands a session -- the
+// password alone, or the second factor after it, or AuthSetup's
+// Continue -- calls signedIn(); the door stays mounted (holdDoor) while the shell loads
 // underneath; once the ledger and the device list are known,
 // WizardJourney.svelte asks decide(): if the wizard would auto-launch,
 // the journey launches it and plays (the wizard mounts under the door,
@@ -21,6 +20,7 @@
 // shell being already there.
 
 import { appState } from './state.svelte'
+import { authState } from './auth.svelte'
 import { wizardState } from './wizard.svelte'
 import { reducedMotion } from './wizardJourney'
 
@@ -57,6 +57,14 @@ class WizardJourneyState {
     if (this.active) return
     this.pending = true
     this.holdDoor = true
+  }
+
+  /** signedIn arms the way in once a sign-in step has settled, if it
+   * actually landed an admin session. Called after every step that can
+   * finish signing in, not only the password: with a second factor
+   * owed the password step leaves 'pending-factor' and no role yet. */
+  signedIn(): void {
+    if (authState.state === 'authenticated' && authState.isAdmin) this.enter()
   }
 
   /** decide is called once the shell has loaded under the held door.
