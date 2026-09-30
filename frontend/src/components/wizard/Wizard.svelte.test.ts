@@ -255,6 +255,29 @@ describe('Wizard: the full-screen shell', () => {
     expect(wizardRun.evidence.lines).toBe(0)
   })
 
+  // #1400: the certificate fetch leaves from whatever address routes to
+  // MikroView, not always the one the router logs from. An add-a-router
+  // walk counts a fetch made since its token was minted, and still not
+  // one made before (#1397).
+  it('counts a certificate fetched since the mint, from any address, and not one from before', async () => {
+    wizardState.status = status({
+      sources: [{ source: '10.9.9.9', caFetchedAt: '2026-09-27T14:00:00Z' }],
+    })
+    wizardState.openAddRouter()
+    render(Wizard)
+    await tick()
+    wizardState.enrolmentMintedAt = '2026-09-27T14:01:00Z'
+    expect(wizardRun.evidence.cert).toBe('')
+
+    wizardState.status = status({
+      sources: [
+        { source: '10.9.9.9', caFetchedAt: '2026-09-27T14:00:00Z' },
+        { source: '10.0.0.7', caFetchedAt: '2026-09-27T14:02:58Z' },
+      ],
+    })
+    expect(wizardRun.evidence.cert).toBe('2026-09-27T14:02:58Z')
+  })
+
   // #1398: Re-enrol… on a router whose logs already stand lands on Mint
   // the token for it, not on the ledger its evidence would otherwise
   // place the walk at.
