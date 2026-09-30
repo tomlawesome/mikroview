@@ -154,8 +154,9 @@ class WizardRun {
     // An add-a-router walk takes a fetch from its own address, or any
     // fetch since its token was minted: the block carrying the fetch is
     // only pasted after that, so an older fetch is another router's
-    // (#1397) and a newer one is this paste's (#1400).
-    const mintedAt = wizardState.enrolmentMintedAt ? Date.parse(wizardState.enrolmentMintedAt) : NaN
+    // (#1397) and a newer one is this paste's (#1400). The walk's first
+    // mint, not its latest: a re-mint does not re-fetch (#1401).
+    const mintedAt = wizardState.walkMintedAt ? Date.parse(wizardState.walkMintedAt) : NaN
     const certSrc =
       sources.find((s) => s.caFetchedAt && (s.source === from || s.source === this.addr)) ??
       (fleetWide
