@@ -64,7 +64,7 @@ func postSetupCommands(t *testing.T, base string, req setupCommandsRequest) setu
 // renders regardless, and the request itself still succeeds.
 func TestHandleSetupCommandsBlanksEveryAddressDependentBlockWithNoAddress(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	key := testRetentionKey(t)
 	v, err := backupvault.Open(t.TempDir(), key, nil)
 	if err != nil {
@@ -426,7 +426,7 @@ func TestHandleSetupCommandsOmitsTheEnrolLineWithoutAVerifiedToken(t *testing.T)
 // its "no key" state.
 func TestHandleSetupCommandsBackupRendersOnlyWhenReady(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
@@ -502,7 +502,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Vault = v
-	s.SetupInstance.BackupPort = ""
+	s.SetupInstance.BackupPort = func() string { return "" }
 	onlyBackupsOff := postSetupCommands(t, ts.URL, setupCommandsRequest{
 		Address: "10.0.40.5", Token: "tok-123", Device: "rb5009",
 	})
@@ -510,7 +510,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 		t.Errorf("Backup.Blocked = %v, want just [backups-off]", onlyBackupsOff.Steps.Backup.Blocked)
 	}
 
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	onlyNoDevice := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(onlyNoDevice.Steps.Backup.Blocked, []string{"no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want just [no-device]", onlyNoDevice.Steps.Backup.Blocked)
@@ -524,7 +524,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 	// Several missing at once -- the owner's instance actually hit this:
 	// two preconditions unmet together, and both keys must come back,
 	// not just the first one found.
-	s.SetupInstance.BackupPort = ""
+	s.SetupInstance.BackupPort = func() string { return "" }
 	several := postSetupCommands(t, ts.URL, setupCommandsRequest{Address: "10.0.40.5", Token: "tok-123"})
 	if !slicesEqual(several.Steps.Backup.Blocked, []string{"backups-off", "no-device"}) {
 		t.Errorf("Backup.Blocked = %v, want [backups-off no-device]", several.Steps.Backup.Blocked)
@@ -541,7 +541,7 @@ func TestHandleSetupCommandsBackupBlockedKeys(t *testing.T) {
 // encrypted under the old one.
 func TestHandleSetupCommandsBackupBlockedRetentionKeyUnreadable(t *testing.T) {
 	s, _ := newTestServer(t)
-	s.SetupInstance.BackupPort = "47022"
+	s.SetupInstance.BackupPort = func() string { return "47022" }
 	s.SetupInstance.BackupKeyUnreadable = true
 	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
