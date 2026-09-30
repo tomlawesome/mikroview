@@ -101,6 +101,20 @@ rewritten.
   berth and a router card's `Re-enrol…` both open this same ledger, the
   latter straight at Mint the token with a fresh one.
 
+### Fixed
+
+- **A router's own management services no longer come mixed in with
+  four of RouterOS's own runtime services** (#1405). A real router's
+  `/ip/service` table also returns `dhcpclient`, `btest`, `discover` and
+  `reverse-proxy` -- entries RouterOS runs itself, not things an
+  operator turns on or off -- and these used to show up in a router's
+  services list next to `telnet`, `ssh`, `www` and the rest. The push
+  script now marks each row so MikroView can tell them apart, and a
+  router still running the previous script is still handled correctly,
+  since MikroView falls back to a check of its own. A TLS service with
+  no certificate set, which a router reports as the literal word `none`,
+  now reads as no certificate rather than showing that word.
+
 ### Removed
 
 - **The first-run walk before the wizard is gone** (#1386, owner

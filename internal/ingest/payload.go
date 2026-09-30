@@ -13,6 +13,7 @@
 package ingest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -431,22 +432,31 @@ const (
 // IPServiceEntry mirrors one /ip/service row -- issue #1329: the
 // router's own management services (telnet, ftp, www, www-ssl, ssh,
 // api, api-ssl, winbox), pushed so mikroview shows what the router
-// itself listens on rather than inferring it from traffic. Exactly
-// eight of these exist on any RouterOS install and none is ever added
-// or removed, only enabled, disabled or reconfigured -- unlike
-// FilterRule and NATRule, there is no Ordinal or Dynamic here, and
-// nothing to page: eight rows never approaches maxRecordsPerPage.
+// itself listens on rather than inferring it from traffic.
 //
-// Deliberately narrow, matching the owner-ratified scope on #1329: only
-// what tells an operator "is this exposed, on what port, from where" --
-// Name identifies which of the eight this is, Disabled and Port are
-// self-explanatory, Address is RouterOS's own comma-separated allow-list
-// (empty meaning no restriction -- reachable from anywhere, the case
-// that matters most downstream), and Certificate is the certificate's
-// *name* for the two TLS services (www-ssl, api-ssl) -- never key
-// material, which a read-policy script's view of this menu never
-// carries in the first place, the same guarantee WireguardPeer's own
-// comment already documents for private keys.
+// A real router returns twelve /ip/service rows, not eight -- confirmed
+// against a live CHR 7.23.3 router, #1405. The other four (dhcpclient,
+// btest, discover, reverse-proxy) are RouterOS's own runtime services,
+// never added, removed or reconfigured by an operator, and mikroview
+// was never meant to show them beside the eight above. Dynamic and
+// IsDynamic (below) are what tell the two apart; an earlier version of
+// this comment said "exactly eight ... none is ever added or removed",
+// which was never actually true, only unobserved. Paging still doesn't
+// matter either way: twelve rows never approaches maxRecordsPerPage.
+//
+// Deliberately narrow otherwise, matching the owner-ratified scope on
+// #1329: only what tells an operator "is this exposed, on what port,
+// from where" -- Name identifies which service this is, Disabled and
+// Port are self-explanatory, Address is RouterOS's own comma-separated
+// allow-list (empty meaning no restriction -- reachable from anywhere,
+// the case that matters most downstream), and Certificate is the
+// certificate's *name* for the TLS services (www-ssl, api-ssl,
+// reverse-proxy) -- never key material, which a read-policy script's
+// view of this menu never carries in the first place, the same
+// guarantee WireguardPeer's own comment already documents for private
+// keys. A router reports "none" for a TLS service with no certificate
+// set; UnmarshalJSON reads that as "", the same empty value a non-TLS
+// service's absent certificate key decodes to.
 //
 // Address is RouterOSList rather than a plain string for the same
 // shape-depends-on-content reason WireguardPeer.AllowedAddress is: a
@@ -456,14 +466,14 @@ const (
 // decodes to nil/no entries, which this schema (like RouterOSList
 // everywhere else) reads as "unset" -- here that reads as "no
 // restriction", not "restricted to nothing", matching RouterOS's own
-// behaviour for an empty address property.
+// behaviour for an empty address property on one of the eight
+// configurable services. On a real router the *dynamic* four never
+// carry an address property at all -- see IsDynamic.
 //
-// Field names are RouterOS 7's documented /ip/service properties
-// (name, port, address, certificate, disabled), taken from the
-// documentation, not yet observed on a live router: the weekly CHR
-// exercise is what confirms them (#1329's follow-up issue tracks that
-// check). tls-version and vrf exist
-// on a real router too; neither is carried here, since nothing #1329
+// Field names are RouterOS 7's documented /ip/service properties (name,
+// port, address, certificate, disabled, dynamic), confirmed against a
+// live CHR 7.23.3 router (#1405). tls-version and vrf exist on a real
+// router too; neither is carried here, since nothing #1329 or #1405
 // asks for reads them.
 type IPServiceEntry struct {
 	Name        string       `json:"name"`
@@ -471,6 +481,84 @@ type IPServiceEntry struct {
 	Port        RouterOSInt  `json:"port"`
 	Address     RouterOSList `json:"address"`
 	Certificate string       `json:"certificate"`
+	// Dynamic mirrors AddressListEntry.Dynamic: RouterOS's own "dynamic"
+	// flag on the row, true for its own four runtime services rather
+	// than something an operator configured -- #1405. Only present when
+	// the pushed script requests it (blockSpecs["ip-service"]'s
+	// "dynamic" mapping); a caller wanting the actual answer, including
+	// on a router still running a script pasted before this field
+	// existed, wants IsDynamic below, not this field directly.
+	Dynamic bool `json:"dynamic"`
+
+	// dynamicKeyAbsent and addressKeyAbsent are decode-time bookkeeping
+	// for IsDynamic, set by UnmarshalJSON only when that decode
+	// positively determined the named key was missing from the pushed
+	// JSON. Left false (the zero value) for an entry built any other
+	// way -- e.g. a struct literal in a test -- so IsDynamic then reads
+	// Dynamic/Address at face value, the same "assume the current,
+	// fully-specified shape" default every other zero-valued field here
+	// already gets.
+	dynamicKeyAbsent bool
+	addressKeyAbsent bool
+}
+
+// UnmarshalJSON decodes one /ip/service record, on top of what the
+// struct tags alone would give it: it records whether the pushed JSON
+// carried a "dynamic" or "address" key at all (see the unexported fields
+// above and IsDynamic below), and reads a certificate of the literal
+// string "none" -- what a router reports for a TLS service with no
+// certificate set -- as "", the same empty value an absent certificate
+// already decodes to (#1405).
+//
+// Delegates to an identical alias type to avoid recursing back into this
+// method, but keeps its own strict decoder (DisallowUnknownFields)
+// rather than relying on decodeRecords' outer one: once a type
+// implements json.Unmarshaler, encoding/json hands it the raw bytes for
+// the whole record and no longer enforces that option itself.
+func (e *IPServiceEntry) UnmarshalJSON(data []byte) error {
+	type ipServiceEntryAlias IPServiceEntry
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode((*ipServiceEntryAlias)(e)); err != nil {
+		return err
+	}
+
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if _, ok := probe["dynamic"]; !ok {
+		e.dynamicKeyAbsent = true
+	}
+	if _, ok := probe["address"]; !ok {
+		e.addressKeyAbsent = true
+	}
+
+	if e.Certificate == "none" {
+		e.Certificate = ""
+	}
+	return nil
+}
+
+// IsDynamic reports whether e is one of RouterOS's own dynamic
+// /ip/service rows -- dhcpclient, btest, discover, reverse-proxy -- so a
+// caller can leave them out of what it calls a router's management
+// services (#1405).
+//
+// A router running the current wizard script says so directly: the
+// pushed record carries a "dynamic" key, true for the four and false for
+// the other eight. A router still running a script pasted before that
+// field existed sends no "dynamic" key on any record, so this falls back
+// to RouterOS's own distinction instead -- a static, configurable
+// service always carries an "address" key (an empty list when
+// unrestricted), while a dynamic one carries none at all, a property of
+// what /ip/service itself returns rather than something the wizard
+// script adds.
+func (e IPServiceEntry) IsDynamic() bool {
+	if !e.dynamicKeyAbsent {
+		return e.Dynamic
+	}
+	return e.addressKeyAbsent
 }
 
 // RouterOSFlag decodes a yes/no field that :serialize to=json may emit

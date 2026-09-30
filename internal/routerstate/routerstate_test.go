@@ -130,11 +130,15 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 // readable back sorted by name, and a service with no address
 // restriction at all -- the case that matters most downstream, since it
 // means "reachable from anywhere" -- comes back with an empty Address
-// rather than nil vs. empty ever being confused with each other.
+// rather than nil vs. empty ever being confused with each other. winbox
+// carries an explicit "address":[] here, the shape a real static service
+// actually sends (#1405) -- an address key entirely absent instead marks
+// one of RouterOS's own dynamic rows, which IPServices leaves out (see
+// the dynamic-services tests below).
 func TestIPServicesSortedAndAccessibleWithNoAddressRestriction(t *testing.T) {
 	s := New()
 	apply(t, s, "router-1", `{"kind":"ip-service","page":1,"pages":1,"records":[`+
-		`{"name":"winbox","disabled":false,"port":8291,"certificate":""},`+
+		`{"name":"winbox","disabled":false,"port":8291,"address":[],"certificate":""},`+
 		`{"name":"api","disabled":true,"port":8728,"address":"10.0.0.0/8","certificate":""}]}`)
 
 	services, updatedAt, ok := s.IPServices("router-1")
@@ -152,6 +156,125 @@ func TestIPServicesSortedAndAccessibleWithNoAddressRestriction(t *testing.T) {
 	}
 	if len(services[1].Address) != 0 {
 		t.Errorf("services[1] (winbox) Address = %+v, want empty -- no restriction", services[1].Address)
+	}
+}
+
+// ipServiceFixture builds the ip-service payload's records array for
+// issue #1405's 12-entry acceptance fixture -- a real CHR 7.23.3
+// /ip/service push, captured 2026-09-30: the eight configurable services
+// (ftp, ssh, telnet, www, www-ssl, winbox, api, api-ssl) and RouterOS's
+// own four dynamic ones (dhcpclient, btest, discover, reverse-proxy).
+// withDynamic controls whether each record also carries the "dynamic"
+// key the current wizard script requests -- false reproduces a router
+// still running the script from before that field existed, where the
+// only signal left is which records carry no "address" key at all (the
+// dynamic four never do, on any script version).
+func ipServiceFixture(withDynamic bool) string {
+	dyn := func(v bool) string {
+		if !withDynamic {
+			return ""
+		}
+		if v {
+			return `,"dynamic":true`
+		}
+		return `,"dynamic":false`
+	}
+	records := []string{
+		`{"name":"ftp","disabled":false,"port":21,"address":[]` + dyn(false) + `}`,
+		`{"name":"ssh","disabled":false,"port":22,"address":[]` + dyn(false) + `}`,
+		`{"name":"telnet","disabled":false,"port":23,"address":[]` + dyn(false) + `}`,
+		`{"name":"dhcpclient","disabled":false,"port":68` + dyn(true) + `}`,
+		`{"name":"www","disabled":false,"port":80,"address":[]` + dyn(false) + `}`,
+		`{"name":"www-ssl","disabled":true,"port":443,"address":[],"certificate":"none"` + dyn(false) + `}`,
+		`{"name":"reverse-proxy","disabled":false,"certificate":"none"` + dyn(true) + `}`,
+		`{"name":"btest","disabled":false,"port":2000` + dyn(true) + `}`,
+		`{"name":"discover","disabled":false,"port":5678` + dyn(true) + `}`,
+		`{"name":"winbox","disabled":false,"port":8291,"address":[]` + dyn(false) + `}`,
+		`{"name":"api","disabled":false,"port":8728,"address":[]` + dyn(false) + `}`,
+		`{"name":"api-ssl","disabled":false,"port":8729,"address":[],"certificate":"none"` + dyn(false) + `}`,
+	}
+	return `{"kind":"ip-service","page":1,"pages":1,"records":[` + strings.Join(records, ",") + `]}`
+}
+
+// dynamicServiceNames are RouterOS's own four -- never something an
+// operator configures, and never something IPServices should return.
+var dynamicServiceNames = map[string]bool{
+	"dhcpclient": true, "btest": true, "discover": true, "reverse-proxy": true,
+}
+
+// TestIPServicesDropsRouterOSOwnDynamicRows is issue #1405: a real
+// router's /ip/service table carries twelve rows, not eight. The other
+// four (dhcpclient, btest, discover, reverse-proxy) are RouterOS's own
+// runtime services, marked "dynamic":true by a router running the
+// current wizard script, and IPServices must leave them out entirely so
+// a caller only ever sees what an operator can actually configure.
+func TestIPServicesDropsRouterOSOwnDynamicRows(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", ipServiceFixture(true))
+
+	services, _, ok := s.IPServices("router-1")
+	if !ok {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	if len(services) != 8 {
+		t.Fatalf("len(IPServices) = %d, want 8 (the four dynamic rows dropped): %+v", len(services), services)
+	}
+	for _, svc := range services {
+		if dynamicServiceNames[svc.Name] {
+			t.Errorf("IPServices kept a dynamic row: %+v", svc)
+		}
+	}
+}
+
+// TestIPServicesDropsDynamicRowsOnAnUnpatchedRouter is #1405's fallback
+// case: a router still running a script pasted before "dynamic" existed
+// sends no "dynamic" key on any record, so IPServices must fall back to
+// RouterOS's own distinction -- a static, configurable service always
+// carries an "address" key (even an empty one), a dynamic one never does
+// -- and still drop exactly the same four rows.
+func TestIPServicesDropsDynamicRowsOnAnUnpatchedRouter(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", ipServiceFixture(false))
+
+	services, _, ok := s.IPServices("router-1")
+	if !ok {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	if len(services) != 8 {
+		t.Fatalf("len(IPServices) = %d, want 8 (the four dynamic rows dropped via the address-key fallback): %+v", len(services), services)
+	}
+	for _, svc := range services {
+		if dynamicServiceNames[svc.Name] {
+			t.Errorf("IPServices kept a dynamic row: %+v", svc)
+		}
+	}
+}
+
+// TestIPServicesCertificateNoneReadsAsEmpty is #1405: a TLS service with
+// no certificate set reports the literal string "none", which must read
+// as no certificate (""), the same value an absent certificate key
+// already decodes to -- not the literal word passed straight through to
+// an operator.
+func TestIPServicesCertificateNoneReadsAsEmpty(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", ipServiceFixture(true))
+
+	services, _, ok := s.IPServices("router-1")
+	if !ok {
+		t.Fatal("IPServices reported no data after an applied page")
+	}
+	checked := 0
+	for _, svc := range services {
+		if svc.Name != "www-ssl" && svc.Name != "api-ssl" {
+			continue
+		}
+		checked++
+		if svc.Certificate != "" {
+			t.Errorf("%s Certificate = %q, want \"\" (a literal \"none\" reads as no certificate)", svc.Name, svc.Certificate)
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("checked %d TLS services, want 2 (www-ssl, api-ssl)", checked)
 	}
 }
 
