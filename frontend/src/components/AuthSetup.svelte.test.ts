@@ -5,7 +5,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
 
 // Same approach as AuthLogin.svelte.test.ts: only the network boundary is
 // faked, so this exercises the real AuthState logic, the real AuthScreen
-// gate/form markup, and the real journeyState transition together.
+// gate/form markup, and the real way-in arming together.
 vi.mock('../lib/api', () => ({
   createUser: vi.fn(),
   fetchAuthSession: vi.fn(),
@@ -17,7 +17,6 @@ vi.mock('../lib/api', () => ({
 
 import { fetchAuthSession, register, startSSOLink } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
-import { journeyState } from '../lib/journey.svelte'
 import { wizardJourney } from '../lib/wizardJourney.svelte'
 import AuthSetup from './AuthSetup.svelte'
 
@@ -30,7 +29,6 @@ beforeEach(() => {
   authState.username = ''
   authState.role = ''
   authState.ssoAvailable = false
-  journeyState.phase = 'idle'
   wizardJourney.end()
 })
 
@@ -67,7 +65,7 @@ describe('AuthSetup', () => {
   // plays straight after the admin account is made -- armed when the
   // confirmation's Continue opens the app -- and #646's pre-wizard walk
   // (attach, connecting, the glass) no longer starts.
-  it('starts the way in, not the #646 walk, once the admin account is made', async () => {
+  it('starts the way in once the admin account is made', async () => {
     vi.mocked(register).mockResolvedValue(null)
     vi.mocked(fetchAuthSession).mockResolvedValue({
       setupRequired: false,
@@ -82,7 +80,6 @@ describe('AuthSetup', () => {
     await fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
 
     await waitFor(() => expect(wizardJourney.pending).toBe(true))
-    expect(journeyState.phase).toBe('idle')
   })
 
   // #1252, owner's ruling: first run always creates a local admin, so
@@ -178,7 +175,7 @@ describe('AuthSetup', () => {
     await waitFor(() => expect(fetchAuthSession).toHaveBeenCalledOnce())
   })
 
-  it('never starts the journey when registration fails', async () => {
+  it('never arms the way in when registration fails', async () => {
     vi.mocked(register).mockResolvedValue('username already taken')
 
     render(AuthSetup)
@@ -189,7 +186,6 @@ describe('AuthSetup', () => {
     await fireEvent.click(screen.getByRole('button', { name: /create account/i }))
 
     expect(await screen.findByText('username already taken')).toBeTruthy()
-    expect(journeyState.phase).toBe('idle')
     expect(wizardJourney.pending).toBe(false)
   })
 })

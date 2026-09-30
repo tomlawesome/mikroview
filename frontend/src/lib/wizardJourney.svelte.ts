@@ -5,10 +5,11 @@
 // journey, played in on Enter at the door and again on Finish, onto the
 // fall; both a short crossfade under reduced motion.
 //
-// Not to be confused with lib/journey.svelte.ts (#646), the older
-// brand-new-instance walk. Its pre-wizard beats are retired (owner,
-// 2026-09-30, on #1386): a brand-new install now plays this way in
-// straight after the admin account is made (AuthSetup's Continue).
+// Not to be confused with lib/tour.svelte.ts, the deck tour (#646's
+// last beat). The walk that used to come before the wizard on a
+// brand-new install is retired (owner, 2026-09-30, on #1386): the
+// install plays this way in straight after the admin account is made
+// (AuthSetup's Continue), and the tour is offered after Finish instead.
 //
 // The sequence on the way in: a sign-in that lands a session -- the
 // password alone, or the second factor after it, or AuthSetup's
@@ -46,7 +47,7 @@ class WizardJourneyState {
 
   /** WizardJourney.svelte registers the way out here while mounted, so
    * wizardRun.finish() can ask for it without importing a component. */
-  wayOutHandler: ((swap: () => void) => boolean) | null = null
+  wayOutHandler: ((swap: () => void, after: () => void) => boolean) | null = null
 
   get active(): boolean {
     return this.phase !== 'idle'
@@ -93,11 +94,12 @@ class WizardJourneyState {
   }
 
   /** wayOut plays Finish's journey; `swap` (show the fall, close the
-   * wizard) runs under its cover. Returns false -- and does nothing --
-   * where the journey cannot play, so the caller swaps outright. */
-  wayOut(swap: () => void): boolean {
+   * wizard) runs under its cover, and `after` once it has landed.
+   * Returns false -- and does nothing -- where the journey cannot play,
+   * so the caller swaps outright (and runs `after` itself). */
+  wayOut(swap: () => void, after: () => void): boolean {
     if (reducedMotion() || !this.wayOutHandler) return false
-    return this.wayOutHandler(swap)
+    return this.wayOutHandler(swap, after)
   }
 
   /** begin marks the journey running in a direction; end clears it. */

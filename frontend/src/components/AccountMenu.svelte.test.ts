@@ -4,7 +4,8 @@
 // Entities left for cards of their own on the deck (Fleet folded into
 // Entities' own card), and Audit log has lived on the docket's tab since
 // rounds 17-19 -- so the menu carries no page links at all now, only
-// Run setup… (admin-gated), the account actions, and About & licence.
+// Run setup… (admin-gated), Take the tour (#1386, every role), the
+// account actions, and About & licence.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
@@ -20,7 +21,9 @@ vi.mock('../lib/api', () => ({
   fetchHealthz: vi.fn(async () => ({ version: '0.9', uptimeSeconds: 12 * 86_400 + 4 * 3600 })),
 }))
 
+import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
+import { tourState } from '../lib/tour.svelte'
 
 const { default: AccountMenu } = await import('./AccountMenu.svelte')
 
@@ -30,6 +33,8 @@ async function openMenu() {
 }
 
 beforeEach(() => {
+  tourState.reset()
+  appState.view = 'metrics'
   authState.username = 'tom'
   authState.hasLocalPassword = true
   authState.ssoConnected = false
@@ -357,5 +362,37 @@ describe("the menu's foot carries the build line (#804)", () => {
     flushSync()
 
     expect(container.querySelector('.ver')?.textContent?.trim()).toBe('0.9 · AGPL-3.0 · up 12 d 4 h')
+  })
+})
+
+// #1386, owner decision 2026-09-30: the deck tour is "always available
+// from" this menu, for every signed-in role -- the tour walks whatever
+// deck the tier can see, so there is no tier it makes no sense for.
+describe('the Take the tour row (#1386)', () => {
+  it('starts the tour on the deck\'s first card and closes the menu', async () => {
+    authState.role = 'admin'
+    render(AccountMenu)
+    await openMenu()
+
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Take the tour' }))
+    flushSync()
+
+    expect(tourState.active).toBe(true)
+    expect(tourState.cardIndex).toBe(0)
+    expect(appState.view).toBe('fall')
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('is offered to a viewer, whose tour is their own six cards', async () => {
+    authState.role = 'viewer'
+    render(AccountMenu)
+    await openMenu()
+
+    // Run setup… is the admin's alone; the tour is not.
+    expect(screen.queryByRole('menuitem', { name: /run setup/i })).toBeNull()
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Take the tour' }))
+
+    expect(tourState.active).toBe(true)
+    expect(tourState.cards.length).toBe(6)
   })
 })

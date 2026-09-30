@@ -18,6 +18,17 @@ rewritten.
 
 ### Added
 
+- **The deck tour is offered once after setup, and lives in the account
+  menu** (#1386, owner decision 2026-09-30). When the wizard's Finish
+  has landed on the fall, a small panel rises over it: "Take the tour?"
+  with the deck's card count and length, "begin the tour", and "not now
+  -- it stays in the account menu". Taken or declined, it is not offered
+  again to that account, on any browser. Adding a router (which finishes
+  on the fleet) never offers it. The tour itself -- card by card, ringing
+  key controls with a label -- is unchanged, except that it now ends back
+  on the card it was started from rather than opening the wizard, and
+  "Take the tour" sits in every signed-in role's account menu, under Run
+  setup…; a viewer's tour walks the viewer's own six cards.
 - **The router's own management services join the pushed tables**
   (#1329, owner decision 2026-09-22). A new `ip-service` push carries
   one row per `/ip/service` entry (`telnet`, `ftp`, `www`, `www-ssl`,
@@ -96,7 +107,8 @@ rewritten.
   decision 2026-09-30). A brand-new install no longer shows the attach,
   connecting and "skip or tour" screens after the admin account is
   made: the wizard's way in plays straight away, and the wizard asks
-  for the router lines once, in Paste once.
+  for the router lines once, in Paste once. The tour those screens led
+  to is kept -- see Added above for where it is offered now.
 
 - **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
   `MIKROVIEW_GEOIP_DB_PATH` and the app folder's

@@ -32,13 +32,11 @@
   import AuthLogin from './components/AuthLogin.svelte'
   import AuthEnrolFactor from './components/AuthEnrolFactor.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
-  // The journey (#646): choreography over the shell below, not a page of
-  // its own. Nothing starts it any more: its pre-wizard beats were
-  // retired for #1386's way in (owner, 2026-09-30), and these three are
-  // removed once the owner has said where the tour goes (#1386).
-  import { journeyState } from './lib/journey.svelte'
-  import JourneyAttach from './components/JourneyAttach.svelte'
-  import JourneyGlass from './components/JourneyGlass.svelte'
+  // The deck tour (#646's beat 6, kept by #1386): offered once over the
+  // fall after the wizard's Finish, and in the account menu any time.
+  // Choreography over the shell below, not a page of its own.
+  import { tourState } from './lib/tour.svelte'
+  import TourOffer from './components/TourOffer.svelte'
   import JourneyTour from './components/JourneyTour.svelte'
   // Mounted here, not in the account menu that triggers it: the menu is
   // scoped to whichever scene's own bar renders it, and this overlay
@@ -50,6 +48,7 @@
   // setup…" row lives in the account menu (desktop) and the bottom bar
   // (mobile), both of which call wizardState.launch() directly.
   import Wizard from './components/wizard/Wizard.svelte'
+  import { wizardState } from './lib/wizard.svelte'
   // The wizard's way in and way out (#1386): the canvas and the riding
   // wordmark, mounted beside the wizard. While a sign-in's journey is
   // deciding or playing, the door itself is held over the shell below.
@@ -415,10 +414,8 @@
       <IngestLossDrawer />
       <ConfigProblemBanner />
       <UpgradeNotice />
-      <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
-        {#if journeyState.phase === 'attach'}
-          <JourneyAttach />
-        {:else if inDeck}
+      <main id="main-content" class:bare={inDeck}>
+        {#if inDeck}
           <Deck />
         {:else}
           <SceneBar />
@@ -440,14 +437,15 @@
   {#if configEditorState.visible}
     <ConfigEditor />
   {/if}
-  <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
-       beat 6 (the tour) rings the deck's own cards -- both stay mounted
-       alongside the shell above rather than replacing it, since the
-       whole point is that it plays out over the real, filling app. -->
-  {#if journeyState.phase === 'connecting' || journeyState.phase === 'glass'}
-    <JourneyGlass />
+  <!-- The tour's offer floats over the live fall; the tour rings the
+       deck's own cards -- both stay mounted alongside the shell above
+       rather than replacing it, since the whole point is that it plays
+       out over the real, filling app. The offer steps aside while the
+       wizard is open over it and is back once that Finish lands. -->
+  {#if tourState.offering && !wizardState.open}
+    <TourOffer />
   {/if}
-  {#if journeyState.phase === 'touring'}
+  {#if tourState.active}
     <JourneyTour />
   {/if}
   <Toast />
