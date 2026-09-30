@@ -18,6 +18,21 @@ rewritten.
 
 ### Added
 
+- **The router-backup drop box is switched on and off from Settings, not
+  config.yaml** (#1361, owner decision 2026-09-30). Settings → router
+  backups has a "drop box: closed / open on port N" row: opening it
+  re-checks your password and shows the trust caveat (RouterOS never
+  verifies MikroView's host key) and the HTTPS-only alternative; closing
+  needs an admin but no password, since closing is the safe direction.
+  The listener starts and stops with no restart; an upload already under
+  way finishes even if the drop box is closed mid-transfer. Every change
+  is audited, emailed to `notify.smtp.to` when configured, and shown as a
+  banner to every admin for seven days. The setup wizard's backup step
+  offers the same control directly when the drop box is still closed.
+  The port (`47022/tcp`) is now published unconditionally by `install.sh`
+  and `deploy/docker-compose.yml`, since a container's port mapping
+  cannot follow a switch that moves at runtime -- nothing answers on it
+  while the drop box is closed.
 - **The deck tour is offered once after setup, and lives in the account
   menu** (#1386, owner decision 2026-09-30). When the wizard's Finish
   has landed on the fall, a small panel rises over it: "Take the tour?"
@@ -102,6 +117,15 @@ rewritten.
   latter straight at Mint the token with a fresh one.
 
 ### Removed
+
+- **`backup.enabled` and `MIKROVIEW_BACKUP_ENABLED` are gone** (#1361):
+  the router-backup drop box's switch moved to Settings → router backups
+  (see Added above). A `config.yaml` that still sets `backup.enabled`
+  keeps loading -- that value seeds the switch's starting position the
+  first time this version runs with nothing stored yet, logged when it
+  does, and is never read again after that. Delete the key whenever
+  convenient; leaving it in place is harmless. `backup.listen` and
+  `backup.vaultDir` are unaffected and stay config-only.
 
 - **The first-run walk before the wizard is gone** (#1386, owner
   decision 2026-09-30). A brand-new install no longer shows the attach,
