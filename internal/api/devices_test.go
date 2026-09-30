@@ -264,6 +264,48 @@ func TestDeviceDeleteRevokesItsIngestTokenAndSaysSoInTheAudit(t *testing.T) {
 	}
 }
 
+// TestDeviceDeleteSaysSoWhenItsTokenCannotBeRevoked: forgetting a router
+// whose ingest token cannot be durably revoked must not answer 204. The
+// token still authenticates pushes and SFTP backups for that name, so
+// "forgotten" would be a false all-clear; the operator is told to revoke
+// it under Tokens instead, and the audit line says the same.
+func TestDeviceDeleteSaysSoWhenItsTokenCannotBeRevoked(t *testing.T) {
+	s, ts, admin := deviceTestServer(t)
+	budget := &recoveryCodesSaveBudgetBackend{left: 1} // Create saves once; Revoke's save fails
+	tokens, err := auth.OpenTokenStoreWithBackend(budget)
+	if err != nil {
+		t.Fatalf("OpenTokenStoreWithBackend: %v", err)
+	}
+	s.Tokens = tokens
+	postJSON(t, admin, ts.URL+"/api/devices", deviceCreateRequest{Name: "hap-ax3"}).Body.Close()
+	raw, _, err := s.Tokens.Create("setup-hap-ax3", auth.TokenKindIngest, "hap-ax3", nil, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	resp := deleteNoBody(t, admin, ts.URL+"/api/devices/hap-ax3")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when the token could not be revoked", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "Tokens") {
+		t.Errorf("body = %q, want it to send the operator to Tokens to revoke it", body)
+	}
+	if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); !valid {
+		t.Error("the token stopped authenticating, but its revoke was never saved")
+	}
+	var detail string
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "device.removed" && e.Target == "hap-ax3" {
+			detail = e.Detail
+		}
+	}
+	if !strings.Contains(detail, "not revoked") {
+		t.Errorf("audit detail = %q, want it to say the token was not revoked", detail)
+	}
+}
+
 // TestDeviceDeleteWithNoTokenNamesOnlyTheEnrolmentAndRecord is the other
 // half of the audit line's own contract: a router that was named and
 // enrolled but never had a persistent ingest token minted (push and

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte'
+import { render, screen, fireEvent, waitFor, getDefaultNormalizer } from '@testing-library/svelte'
 import { tick } from 'svelte'
 
 // jsdom has no matchMedia, which lib/viewport.svelte.ts reads at module
@@ -86,8 +86,10 @@ function device(over: Partial<Device> = {}): Device {
   }
 }
 
+const keepLines = getDefaultNormalizer({ collapseWhitespace: false })
+
 const UNDO = {
-  caTrust: '/certificate remove [find name=mikroview-ca.crt]',
+  caTrust: '/certificate remove [find where name~"^mikroview-ca.crt"]\n/file remove [find name=mikroview-ca.crt]',
   syslog: '/system logging remove [find action=mikroview]\n/system logging action remove [find name=mikroview]',
   schedule: '/system scheduler remove [find name=mv-push]\n/system script remove [find name=mv-push]',
   backup: '/system scheduler remove [find name=mv-backup]\n/system script remove [find name=mv-backup]',
@@ -245,12 +247,13 @@ describe('StepStand: the ledger (#1385)', () => {
 
     await fireEvent.click(screen.getAllByRole('button', { name: 'Undo' })[0])
     await tick()
-    expect(screen.getByText(UNDO.caTrust)).toBeTruthy()
+    // Two lines: compared as the <pre> shows them, newline and all.
+    expect(screen.getByText(UNDO.caTrust, { normalizer: keepLines })).toBeTruthy()
     expect(screen.getByText(/MikroView notices when the lines stop/)).toBeTruthy()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
     await tick()
-    expect(screen.queryByText(UNDO.caTrust)).toBeNull()
+    expect(screen.queryByText(UNDO.caTrust, { normalizer: keepLines })).toBeNull()
   })
 
   it('sources the tagged-rules Undo from the pushed table, not a hand-written line', async () => {

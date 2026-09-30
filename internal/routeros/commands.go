@@ -147,12 +147,19 @@ func CaTrustCommands(address, dialect string) string {
 }
 
 // UndoCaTrustCommands is the ledger's Undo for "Certificate trusted"
-// (#1385): remove the certificate CaTrustCommands imported. Embeds no
-// address, so unlike its forward counterpart it renders unconditionally.
-// dialect is unused today -- the same seam every builder in this package
-// carries (see the file's own doc comment).
+// (#1385): remove the certificate CaTrustCommands imported, and the file
+// it was fetched into. Matched by prefix, not by exact name: RouterOS
+// names an imported certificate after its file with an index appended
+// ("mikroview-ca.crt_0"), so an exact-name find would remove nothing and
+// say nothing. Not observed on a router yet; the CHR exercise (#1395)
+// confirms it. Embeds no address, so unlike its forward counterpart it
+// renders unconditionally. dialect is unused today -- the same seam
+// every builder in this package carries (see the file's own doc comment).
 func UndoCaTrustCommands(dialect string) string {
-	return `/certificate remove [find name=mikroview-ca.crt]`
+	return strings.Join([]string{
+		`/certificate remove [find where name~"^mikroview-ca.crt"]`,
+		`/file remove [find name=mikroview-ca.crt]`,
+	}, "\n")
 }
 
 // WizardVersion stamps every push block with which wizard wrote the

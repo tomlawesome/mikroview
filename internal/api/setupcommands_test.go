@@ -624,7 +624,7 @@ func TestHandleSetupCommandsUndoRendersRegardlessOfAddressAndFollowsTransport(t 
 	defer ts.Close()
 
 	bare := postSetupCommands(t, ts.URL, setupCommandsRequest{})
-	if bare.Steps.Undo.CaTrust != "/certificate remove [find name=mikroview-ca.crt]" {
+	if bare.Steps.Undo.CaTrust != routeros.UndoCaTrustCommands("") {
 		t.Errorf("Undo.CaTrust = %q", bare.Steps.Undo.CaTrust)
 	}
 	if !strings.Contains(bare.Steps.Undo.Syslog, "mikroview") {
