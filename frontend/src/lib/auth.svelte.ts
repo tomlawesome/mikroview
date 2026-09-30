@@ -27,6 +27,7 @@ import { configUpgradeState } from "./configUpgrade.svelte";
 import { configEditorState } from "./configEditor.svelte";
 import { serverModeState } from "./serverMode.svelte";
 import { preferencesState } from "./preferences.svelte";
+import { tourState } from "./tour.svelte";
 import type { AuthSession } from "./types";
 
 // 2a of the v0.6.0 audit's #1083 follow-up: after a sign-out or a 401
@@ -97,6 +98,8 @@ function clearSessionState() {
   // snapshot list -- admin-only, and the secrets are the last thing the
   // next person on this tab should be handed.
   configEditorState.reset();
+  // The deck tour's pending offer, or a tour in progress (#1386).
+  tourState.reset();
   // #1283: the shared per-user preferences record (presets, top-talker
   // widgets, and the rest of the modules that used to
   // read/write localStorage directly). logout() below has already

@@ -18,6 +18,17 @@ rewritten.
 
 ### Added
 
+- **The deck tour is offered once after setup, and lives in the account
+  menu** (#1386, owner decision 2026-09-30). When the wizard's Finish
+  has landed on the fall, a small panel rises over it: "Take the tour?"
+  with the deck's card count and length, "begin the tour", and "not now
+  -- it stays in the account menu". Taken or declined, it is not offered
+  again to that account, on any browser. Adding a router (which finishes
+  on the fleet) never offers it. The tour itself -- card by card, ringing
+  key controls with a label -- is unchanged, except that it now ends back
+  on the card it was started from rather than opening the wizard, and
+  "Take the tour" sits in every signed-in role's account menu, under Run
+  setup…; a viewer's tour walks the viewer's own six cards.
 - **The router's own management services join the pushed tables**
   (#1329, owner decision 2026-09-22). A new `ip-service` push carries
   one row per `/ip/service` entry (`telnet`, `ftp`, `www`, `www-ssl`,
@@ -62,7 +73,42 @@ rewritten.
   "open" or "listening". Turning the lens on clears the port filter and
   vice versa -- one lens at a time. New API: `GET /api/ports/serving`.
 
+- **The setup wizard is a full-screen page** (#1381, #1382, #1384,
+  #1386). A bar and an evidence strip across the top, a step rail that
+  only opens steps you have reached, and five steps: The router (one
+  form -- name, address, push and backup as Yes/No), Mint the token,
+  Paste once, Tag firewall rules (the rule list proposed from the
+  router's own pushed rules), and Where setup stands. Signing in as an
+  admin with no router yet plays the way in -- the wordmark's box lets
+  go of the door, strikes like a neon sign and lands as the wizard's
+  bar -- and Finish plays it back out onto the live fall. Under reduced
+  motion both are a short crossfade.
+
+- **The setup wizard's "Paste once" step** (#1383): one block, its
+  sections numbered and titled and the enrol line last, one Copy, and
+  the router's turn -- a track lighting station by station from the
+  server's own receipts, with the refused-sender and ahead-of-review
+  recoveries (`enrol at <other> instead` re-mints for that address,
+  asking for the password again, the same act as Mint).
+
+- **The setup wizard's "Where setup stands" ledger** (#1385): a row per
+  thing -- certificate, logs, router state, backup, tagged rules --
+  green with its receipt or dashed and struck where set aside, Undo per
+  row revealing the exact lines to paste back, and "undo everything on
+  the router first" then **forget `<name>` on MikroView**, which now
+  also revokes that router's ingest token (`DELETE /api/devices/{id}`)
+  and reopens the wizard at The router. The fleet's `+ add a router`
+  berth and a router card's `Re-enrol…` both open this same ledger, the
+  latter straight at Mint the token with a fresh one.
+
 ### Removed
+
+- **The first-run walk before the wizard is gone** (#1386, owner
+  decision 2026-09-30). A brand-new install no longer shows the attach,
+  connecting and "skip or tour" screens after the admin account is
+  made: the wizard's way in plays straight away, and the wizard asks
+  for the router lines once, in Paste once. The tour those screens led
+  to is kept -- see Added above for where it is offered now.
 
 - **`geoip.dbPath` is gone** (#1352), along with the `-geoip-db` flag,
   `MIKROVIEW_GEOIP_DB_PATH` and the app folder's
@@ -127,6 +173,12 @@ rewritten.
   old trie's tie-break.
 
 ### Security
+
+- **Removing a router revokes its upload token** (#1385). Until now a
+  removed router's ingest token still authenticated log pushes and SFTP
+  backups under that router's name. If the revoke cannot be saved, the
+  removal now says so and points to Tokens instead of reporting success.
+  Tokens left behind by routers removed before this release are #1399.
 
 - `VerifyPassword` now refuses, before hashing, a stored hash whose
   cost settings or lengths are outside what this module writes (with

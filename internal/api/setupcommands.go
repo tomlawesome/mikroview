@@ -120,6 +120,22 @@ type setupCommandsSteps struct {
 	// with no token or kinds.
 	Backup         commandStep `json:"backup"`
 	BackupSchedule commandStep `json:"backupSchedule"`
+	// Undo is the setup wizard ledger's own Undo per row (#1385): unlike
+	// every block above, none of these embed the address or a token --
+	// they only remove a fixed resource name -- so they render
+	// unconditionally rather than going blank on a precondition.
+	Undo setupCommandsUndo `json:"undo"`
+}
+
+// setupCommandsUndo is the RouterOS lines the ledger's Undo reveals per
+// row (DESIGN.md, "✓ · Where setup stands"): the same builders the
+// forward blocks above use, read backwards. Backup alone depends on the
+// stored transport -- see where this is populated below.
+type setupCommandsUndo struct {
+	CaTrust  string `json:"caTrust"`
+	Syslog   string `json:"syslog"`
+	Schedule string `json:"schedule"`
+	Backup   string `json:"backup"`
 }
 
 type setupCommandsResponse struct {
@@ -350,6 +366,14 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The ledger's Backup Undo follows the same transport switch as the
+	// forward pair above: whichever script is actually on the router is
+	// the one whose scheduler entry and script name Undo must remove.
+	backupUndo := routeros.UndoBackupScheduleCommands(dialect)
+	if httpsTransport {
+		backupUndo = routeros.UndoBackupPushScheduleCommands(dialect)
+	}
+
 	writeJSON(w, http.StatusOK, setupCommandsResponse{
 		RouterOS: routerosTable{
 			Minimum:  routeros.MinimumVersion,
@@ -369,6 +393,12 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			Schedule:       commandStep{Commands: scheduleCommands, Blocked: addressBlocked},
 			Backup:         commandStep{Commands: backupCommands, Blocked: backupBlockedKeys},
 			BackupSchedule: commandStep{Commands: backupScheduleCommands, Blocked: backupBlockedKeys},
+			Undo: setupCommandsUndo{
+				CaTrust:  routeros.UndoCaTrustCommands(dialect),
+				Syslog:   routeros.UndoSyslogCommands(dialect),
+				Schedule: routeros.UndoScheduleCommands(dialect),
+				Backup:   backupUndo,
+			},
 		},
 	})
 }

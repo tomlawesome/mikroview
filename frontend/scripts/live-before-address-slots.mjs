@@ -137,14 +137,14 @@ check(
 // --- the way in is real, not just named -------------------------------------
 
 await clickSvgText(page, page.locator(`${topo} .deg-go`))
-await page.waitForSelector('.setup-wizard', { timeout: 5000 })
-check(true, 'the statement\'s "Run setup… ▸" opens the setup wizard')
-// Escape drives the same dismiss() the ✕ does. It may leave for the
-// landing card if nothing is waiting (the finish pane's own dismiss),
-// but the scenario re-navigates to Topography next, so where it lands
-// here does not matter -- only that the modal is gone.
-await page.keyboard.press('Escape')
-await page.waitForSelector('.setup-wizard', { state: 'hidden', timeout: 10000 })
+await page.waitForSelector('.page.wiz', { timeout: 5000 })
+check(true, 'the statement\'s "Run setup… ▸" opens the wizard')
+// No explicit close any more -- the full-screen wizard has none (DESIGN.md,
+// "Superseded: the wizard as a modal"). Nothing between here and the
+// reload below needs `page` interactive (the pushes and the preferences
+// read are both plain fetches), and the reload it already does to pick
+// up the pushed table also clears the wizard: `hasDevices` is true by
+// then, so it does not auto-launch again.
 
 // --- with a table pushed, the card returns to its normal state --------------
 

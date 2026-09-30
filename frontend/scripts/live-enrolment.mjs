@@ -1,63 +1,105 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #1281 (the syslog enrolment gate) and #1284 (the router ledger
-// wizard), driven together: since #1281, a router earns a place on the
-// fleet only by presenting a token minted for it, and the ledger
-// (SetupWizard's router steps) is the only place that token is ever
-// shown. What needs a real browser and a real listener rather than a
-// unit test:
+// #1281 (the syslog enrolment gate) and #1284/#1382/#1383 (the
+// full-screen setup wizard's router steps), driven together: since
+// #1281, a router earns a place on the fleet only by presenting a token
+// minted for it, and the wizard's "Mint the token" / "Paste once" steps
+// are the only place that token is ever shown. What needs a real
+// browser and a real listener rather than a unit test:
 //
-//  1. The token has to be read off the rendered page, not the API --
-//     proving the exact block an operator would paste carries a token
-//     TryEnrol actually accepts.
+//  1. The token has to be read off the rendered page (or the mint's own
+//     network response), not guessed -- proving the exact block an
+//     operator would paste carries a token TryEnrol actually accepts.
 //  2. The "closed port" refusal is a real TCP accept being refused
 //     before any line, and before TLS -- device.Registry.AcceptsUnknown
 //     and syslog.EnrolmentGate can be unit-tested in isolation, but
 //     only a real connection attempt proves the listener wires them
 //     together correctly.
-//  3. The wizard's own warning box -- present only once a line has
+//  3. The wizard's refused-sender box -- present only once a line has
 //     actually been refused since the current token was minted -- is a
 //     rendering guarantee only a real refused connection can trigger.
 //
-// A note on where the ledger actually opens from, and what this
-// deliberately does not exercise. deckCards.ts (#785, pinned by its own
-// test "the entities card answers for the fleet view too") gives an
-// admin's deck an "Entities" card that answers for both the entities
-// and fleet views -- an admin's deck never carries a 'fleet'-keyed card
-// at all, so Fleet.svelte itself only ever mounts for the viewer tier.
-// That is why this scenario opens the ledger from Entities' own berth
-// ("+ add a router"), not from a "Fleet" rail button an admin's deck
-// does not have.
+// Ported for the full-screen wizard (#1381-#1384; DESIGN.md, "3 · Paste
+// once", "The router's turn" and "Adding a router, re-enrolling"),
+// replacing the retired modal's
+// `.setup-wizard`/`.mint-ask`/`.token-life`/`.observation.shortfall.refused`
+// markup this scenario used to drive. The walk: name and address a
+// router -> Mint the token -> the paste-once block, with Copy -> a
+// sender from the address the operator typed is refused and the
+// refused-sender box names it -> "enrol at <other> instead" (the Mint
+// act again) re-mints for that address -> lines from it arrive for real
+// and the track's logs station lights -> with the window spent, a third
+// address is refused for having no token pending at all (the "closed
+// port" case) and the mistyped original address stays refused too ->
+// back on Entities, Re-enrol… reopens the ledger straight at Mint the
+// token and moves the router to a fresh address for real.
 //
-// That same reading is why Re-enrol… and the refused senders now live
-// on Entities rather than Fleet: #1284 first built both into
-// Fleet.svelte, where no admin session ever mounts them and the
-// admin-only refused endpoint 403s for the one tier that does. Both are
-// checked below on Entities' own routers row, where an admin meets
-// them.
+// One router, walked end to end. Every address from 127.0.0.21 up
+// belongs to this scenario alone -- nothing else in the suite mints an
+// enrolment token -- so "no token is pending anywhere" (the closed-port
+// assertion's own premise) can be trusted rather than merely hoped for.
 //
-// One router, walked end to end: name it, read its token, misdirect a
-// stranger at it, reroll, misdirect the stale token, enrol it for
-// real, hit the now-closed port, re-enrol it at a new address. Every
-// address from 127.0.0.21 up belongs to this scenario alone -- nothing
-// else in the suite mints an enrolment token -- so "no token is pending
-// anywhere" (the closed-port assertion's own premise) can be trusted
-// rather than merely hoped for.
+// Dropped from the old (modal-era) scenario, with no equivalent in the
+// new design:
+//
+//  - The "Send logs asks before it mints" pair (entering the step shows
+//    a mint-ask form, the block carries no token until asked). Minting
+//    is now its own step (StepMint, before the block is ever shown), so
+//    by the time the paste step renders there is always already a
+//    token -- there is no "ask first" state left inside it to prove.
+//  - Reroll invalidating the old token when replayed from a stray
+//    address (the old STALE_TOKEN_IP check). That address mismatch is
+//    exactly the same refusal the wrong-sender step already proves;
+//    it never actually exercised token invalidation. Reroll itself is
+//    still driven below (DESIGN.md lists it as part of step 3), just
+//    without a network replay that would only re-prove the address
+//    gate.
+//
+// Re-enrolling an already-enrolled router at a new address, dropped by
+// the initial port (#1398: wizardRun.begin() read `evidence.enrol`
+// before wizardState.reEnrolling, so Entities' "Re-enrol..." landed on
+// the finished ledger, "(tick) Where setup stands", instead of Mint the
+// token), is back. 4facdf82 ("Start '+ add a router' at The router,
+// whatever else is sending") fixed begin() to consult reEnrolling
+// first, exactly as DESIGN.md's "Adding a router, re-enrolling"
+// promises, and pinned it in Wizard.svelte.test.ts ("lands Re-enrol…
+// on Mint the token even with the router already sending"). Driven for
+// real below, reusing REENROL_IP as the address it moves the router to,
+// the way the old (pre-port) scenario did.
+//
+// The same commit also fixed the other defect this port had run
+// straight into (#1397): wizardRun's evidence getter borrowed the
+// fleet's first open syslog source whenever wizardState.ledgerDevice
+// was empty, so The router step could never render for "+ add a
+// router" once any syslog source anywhere had reported -- which
+// run-scenarios.sh's mandatory baseline feed guarantees before this
+// scenario ever runs. wizardState.addingRouter now gates that borrow,
+// so an add-a-router walk reads only its own router's evidence.
+// Verified live both ways: this scenario passes end to end against a
+// freshly booted instance with no prior traffic, and passes the same
+// way after run-scenarios.sh's 300-line baseline feed.
 
-import { session, feedRawFrom, check, done, goTo, eventsTotal, waitForEventsTotal, adminPassword } from './live-browser.mjs'
+import { session, feedRawFrom, check, done, goTo, waitForEventsTotal, adminPassword } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
 const ROUTER_NAME = 'live-enrolment-router'
-const WRONG_IP = '127.0.0.22'
-const STALE_TOKEN_IP = '127.0.0.23'
+// The address the operator types into The router step -- mistyped, in
+// the sense that the router never actually sends from it, so it stays
+// refused for the whole scenario (DESIGN.md's "if that is this router,
+// its logging action is sending from another address" case).
 const ENROL_IP = '127.0.0.21'
+// Where the router actually sends from: refused at first (a stranger to
+// the window bound to ENROL_IP), then the address the recovery re-mints
+// for and the router really enrols at.
+const WRONG_IP = '127.0.0.22'
+// Fed only once the enrolment window has been spent -- no token pending
+// anywhere -- to prove the plain "closed port" refusal independently of
+// the refused-sender recovery above.
 const CLOSED_PORT_IP = '127.0.0.24'
+// Where Re-enrol… moves the router to, for real, at the end (DESIGN.md,
+// "Adding a router, re-enrolling").
 const REENROL_IP = '127.0.0.25'
-// #1291: an address the router is deliberately NOT at, used to mint a
-// window at the wrong place so the rebind recovery can be driven for
-// real (ruling 23a).
-const MISTYPED_IP = '127.0.0.26'
 
 const { page, consoleErrors } = await session()
 
@@ -89,22 +131,16 @@ const plainLine = (rule, dst = '192.168.1.10') =>
 // would.
 const enrolLine = (token) => `<14>Jan  1 00:00:00 ${ROUTER_NAME} mikroview-enrol ${token}`
 
-// tokenFromBlock reads the enrolment token straight off the rendered
-// Send logs block -- never off the API -- because the thing under test
-// is that the block an operator actually pastes carries a token TryEnrol
-// accepts. Returns the exact last line too, in case a check wants to
-// show what was read.
-function tokenFromBlock(text) {
-  const lines = text.trim().split('\n')
-  const last = lines[lines.length - 1] ?? ''
-  const m = last.match(/mikroview-enrol ([a-z0-9]{20})/)
-  return { line: last, token: m ? m[1] : null }
-}
+// text reads a locator's content collapsed to one line, the way every
+// other full-screen-wizard scenario (live-setup-wizard-router-mint.mjs)
+// reads its own strings: the template's line breaks are not part of
+// what is being asserted.
+const text = async (loc) => ((await loc.textContent()) ?? '').replace(/\s+/g, ' ').trim()
 
 // waitForCondition polls `read` until it returns something truthy or the
 // deadline passes. Needed throughout: the wizard's own refused-box
-// updates on its own poll tick (5s), not on the syslog line that will
-// eventually be reflected in it.
+// updates on its own poll tick (5s, Wizard.svelte's POLL_MS), not on the
+// syslog line that will eventually be reflected in it.
 async function waitForCondition(read, timeoutMs = 16000, intervalMs = 500) {
   const deadline = Date.now() + timeoutMs
   let last
@@ -116,96 +152,128 @@ async function waitForCondition(read, timeoutMs = 16000, intervalMs = 500) {
   return last
 }
 
-const wizard = page.locator('.setup-wizard')
-// The Send logs block, queried once and reused across the whole
-// scenario: every step below (b through f) stays on the syslog pane, so
-// this locator keeps resolving to the same step's rendered block.
-const block = wizard.locator('.body pre').first()
+const wiz = page.locator('.page.wiz')
+const body = wiz.locator('.body')
+const foot = wiz.locator('.foot')
 
-// --- a. Entities' berth -> Add a router -> the ledger opens at Name --
+// --- a. Entities' berth -> Add a router -> the ledger opens at The router
 
 await goTo(page, 'Entities')
 await page.click('button.berth-trigger[aria-label="Add a router"]')
-await wizard.waitFor({ timeout: 10000 })
-check((await wizard.locator('#router-name').count()) === 1, 'the ledger opens at Name your router')
+await wiz.waitFor({ state: 'visible', timeout: 10000 })
+check((await page.locator('#f-name').count()) === 1, 'the ledger opens at The router')
+check((await text(body.locator('h3'))) === 'Your first router.', 'with the record’s own lead')
 
-await page.fill('#router-name', ROUTER_NAME)
-await page.click('.setup-wizard footer button.primary:text-is("Next")')
+// --- b. The router: name, address, push/backup No -- naming alone
 
-const created = await waitForCondition(async () => (await devicesList()).find((d) => d.name === ROUTER_NAME) ?? null)
-check(!!created, `Next creates the device (${ROUTER_NAME})`)
-check(created?.acceptedIp === '', `the new device has no acceptedIp yet (got ${JSON.stringify(created?.acceptedIp)})`)
-if (!created) {
-  check(true, 'skipped -- the rest of the scenario needs the created device')
-  done()
-}
+// creates nothing yet (#1382: the record is made at the moment of
+// minting, on the next step, not here).
+await page.fill('#f-name', ROUTER_NAME)
+await page.fill('#f-addr', ENROL_IP)
+const groups = wiz.locator('.form .seg[role="radiogroup"]')
+await groups.nth(0).locator('button:text-is("No")').click()
+await groups.nth(1).locator('button:text-is("No")').click()
+check(
+  !(await devicesList()).some((d) => d.name === ROUTER_NAME),
+  'naming and addressing the router creates no record yet',
+)
+await foot.locator('button.primary:text-is("Next")').click()
+
+// --- c. Mint the token: the password is spent on the one call, and
+
+// that call is what creates the device record (#1382's mint()).
+await body.locator('input[type="password"]').waitFor({ timeout: 10000 })
+check(
+  (await text(body.locator('h3'))) === `Your password, to mint ${ROUTER_NAME}’s token.`,
+  'the mint step names the router',
+)
+await body.locator('input[type="password"]').fill(adminPassword)
+const [minted] = await Promise.all([
+  page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
+  foot.locator('button.primary:text-is("Mint the token")').click(),
+])
+check(minted.status() === 201, `Mint the token is POST /api/devices/{id}/enrolment (${minted.status()})`)
+let { token } = await minted.json()
+check(typeof token === 'string' && token.length > 0, 'the server answers with a fresh token')
+
+const created = (await devicesList()).find((d) => d.name === ROUTER_NAME)
+check(!!created, `the record was made on the server first (${ROUTER_NAME})`)
+check(created?.acceptedIp === '', `and has no acceptedIp yet (got ${JSON.stringify(created?.acceptedIp)})`)
 const deviceId = created.id
 
-// mintFor drives the Send logs step's mint form as an operator would
-// (#1291): the router's own address, which the enrolment window binds
-// to, and the admin's password, because minting is what opens the port.
-async function mintFor(address, previousLine = '') {
-  await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
-  await page.fill('#setup-wizard-enrol-address', address)
-  await page.fill('#setup-wizard-enrol-password', adminPassword)
-  await page.click('.setup-wizard .mint-ask button:text-is("Mint the token")')
-  return waitForCondition(async () => {
-    const t = tokenFromBlock((await block.textContent()) ?? '')
-    return t.token && t.line !== previousLine ? t : null
-  }, 20000)
-}
+// --- d. Paste once: the block, sections numbered, the enrol line last,
 
-// --- b. Send logs: it asks before it mints, and the token comes off
-//        the page, not the API ---------------------------------------
-
+// and the token on the page matches the one the mint call returned --
+// proving the block an operator would paste carries a token TryEnrol
+// actually accepts.
+const block = wiz.locator('pre[aria-label="The block to paste"]')
 await block.waitFor({ timeout: 10000 })
-
-// #1291: entering the step mints nothing. The two fields are the point
-// -- the window binds to the address, and the password is asked for
-// because minting is what opens the port.
-await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
-check(true, 'entering Send logs shows the mint form rather than a token')
+const blockText = (await block.textContent()) ?? ''
+const blockLines = blockText.trim().split('\n')
+check(blockLines[0] === '# 1 · Trust the certificate', 'the certificate section is numbered first')
+check(blockLines.at(-1) === `/log info "mikroview-enrol ${token}"`, 'and the enrol line, with the minted token, is last')
 check(
-  tokenFromBlock((await block.textContent()) ?? '').token === null,
-  'and the block carries no token until the operator asks for one',
+  (await text(body.locator('.hint'))) ===
+    '2 parts, in order — trust the certificate, send logs — and the enrol line last. Into the router’s terminal (WinBox ▸ New Terminal, or ssh), not a script.',
+  'push and backup both No leaves a 2-part block, and it is never called a script',
 )
 
-let read = await mintFor(ENROL_IP)
-check(!!read?.token, `the block's last line carries a fresh token once minted ("${read?.line}")`)
-
-const tokenLife = wizard.locator('.token-life')
-await tokenLife.waitFor({ timeout: 5000 })
-const lifeText = ((await tokenLife.textContent()) ?? '').trim()
+const tokenLife = wiz.locator('.token-life')
 check(
-  /^Token good until \d\d:\d\d \(\d{1,2} minutes?\) · Reroll$/.test(lifeText),
-  `the "good until" line reads plainly (got "${lifeText}")`,
+  /^Token good until \d\d:\d\d \(15 minutes\) · Reroll$/.test(await text(tokenLife)),
+  `the token-life line reads plainly (got "${await text(tokenLife)}")`,
 )
-check((await tokenLife.locator('button:text-is("Reroll")').count()) === 1, 'a Reroll control sits beside it')
 
-// --- c. Wrong sender: refused, and offered no accept anywhere --------
+// --- e. Reroll: still the mint act, still before Copy -- the page's
 
-// Before #1291 a pending token anywhere left the port open to every
-// unknown address, so this connection was accepted and the line dropped.
-// The window now binds to the one address the token was minted for, so
-// a stranger is turned away at accept -- before TLS, before a byte.
+// own token changes, still readable from the block (DESIGN.md, step 3).
+await tokenLife.locator('button:text-is("Reroll")').click()
+const rerollPass = body.locator('input[aria-label="Your password, to reroll the token"]')
+await rerollPass.waitFor({ timeout: 5000 })
+await rerollPass.fill(adminPassword)
+const [rerolled] = await Promise.all([
+  page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
+  rerollPass.press('Enter'),
+])
+token = (await rerolled.json()).token
+const rerolledLine = await waitForCondition(async () => {
+  const last = ((await block.textContent()) ?? '').trim().split('\n').at(-1)
+  return last?.includes(token) ? last : null
+}, 10000)
+check(!!rerolledLine, `Reroll changes the token on the page (now ends in "${token}")`)
+
+// --- f. Copy: the router's turn begins ---------------------------------
+
+await body.locator('button.primary:text-is("Copy")').click()
+await waitForCondition(async () => ((await text(body.locator('h3'))) === 'The router’s turn.' ? true : null), 5000)
+check(true, 'Copy starts the router’s turn')
+
+// Standing in for the router's own `/tool fetch` of the first section of
+// the block: this harness drives a real browser and a real listener but
+// not a real RouterOS device (the AGENTS.md invariant -- MikroView never
+// connects to a router, and nothing here can make one connect to
+// MikroView either), so the certificate leg is exercised the same way
+// live-journey.mjs already does, a plain GET of the public endpoint the
+// pasted command would have hit.
+await page.request.get(`${URL_BASE}/ca.crt`)
+const track = wiz.locator('.track')
+const certLit = await waitForCondition(async () => {
+  const cls = (await track.locator('.stn').nth(1).getAttribute('class')) ?? ''
+  return /\bdone\b/.test(cls) ? cls : null
+}, 10000)
+check(!!certLit, 'the certificate station lights once /ca.crt is fetched')
+
+// --- g. Wrong sender: refused, and the box names it ---------------------
+
+// The window bound to ENROL_IP, so a line from WRONG_IP is turned away
+// at accept -- before TLS, before a byte reaches the parser.
 let wrongRefusedAtConnect = false
 try {
   feedRawFrom(WRONG_IP, plainLine('live-enrolment-wrong'))
 } catch {
   wrongRefusedAtConnect = true
 }
-check(
-  wrongRefusedAtConnect,
-  `while a token is pending for ${ENROL_IP}, a connection from ${WRONG_IP} is refused at accept (#1291)`,
-)
-
-const warningBox = wizard.locator('.observation.shortfall.refused')
-const warningText = await waitForCondition(async () => {
-  if ((await warningBox.count()) === 0) return null
-  const t = (await warningBox.textContent()) ?? ''
-  return t.includes(WRONG_IP) ? t : null
-}, 25000)
-check(!!warningText, `the wizard's warning box lists the wrong sender (${WRONG_IP}) -- got "${warningText}"`)
+check(wrongRefusedAtConnect, `while the window is bound to ${ENROL_IP}, a connection from ${WRONG_IP} is refused at accept`)
 
 const refusedAfterWrong = await waitForCondition(async () => {
   const list = await refusedList()
@@ -213,90 +281,80 @@ const refusedAfterWrong = await waitForCondition(async () => {
 })
 check(!!refusedAfterWrong, `GET /api/devices/refused carries ${WRONG_IP}`)
 
-
-// --- d. Reroll: the token changes; the old one no longer enrols ------
-
-const staleLine = read.line
-await page.click('.setup-wizard .token-life button:text-is("Reroll")')
-// Reroll mints too, so it asks again -- that is the feature working.
-await wizard.locator('.mint-ask').waitFor({ timeout: 10000 })
-check(true, 'Reroll reopens the ask rather than minting on the click (#1291)')
-read = await mintFor(ENROL_IP, staleLine)
-check(!!read?.token, `Reroll changes the token on the page (was "${staleLine}", now "${read?.line}")`)
-
-// The stale token's own address is a stranger to the new window, so it
-// is turned away at accept rather than reaching TryEnrol at all.
-let staleRefusedAtConnect = false
-try {
-  feedRawFrom(STALE_TOKEN_IP, staleLine)
-} catch {
-  staleRefusedAtConnect = true
-}
+const warnbox = wiz.locator('.warnbox')
+const warnboxText = await waitForCondition(async () => {
+  if ((await warnbox.count()) === 0) return null
+  const t = await text(warnbox)
+  return t.includes(WRONG_IP) ? t : null
+}, 25000)
+check(!!warnboxText, `the refused-sender box names ${WRONG_IP} -- got "${warnboxText}"`)
 check(
-  staleRefusedAtConnect,
-  `a rerolled-away token replayed from ${STALE_TOKEN_IP} never reaches the listener -- refused at accept`,
+  (warnboxText ?? '').includes(`Lines from ${WRONG_IP} arrived without the enrol line and were refused.`),
+  'in the record’s own wording',
+)
+const fixLine = ((await warnbox.locator('pre').textContent()) ?? '').trim().split('\n').at(-1)
+check(/^\/log info "mikroview-enrol [a-z0-9]{20}"$/.test(fixLine ?? ''), `the box's fix block ends with a fresh enrol line (got "${fixLine}")`)
+check(
+  (await text(wiz.locator('.bar .chips .att.alarm'))) === `refused · ${WRONG_IP}`,
+  'and the bar wears a refused chip for it',
 )
 
-const refusedAfterStale = await waitForCondition(async () => {
-  const list = await refusedList()
-  return list.some((r) => r.ip === STALE_TOKEN_IP) ? list : null
-})
-check(!!refusedAfterStale, `the rerolled-away token from ${STALE_TOKEN_IP} is refused, not honoured`)
+// --- h. "enrol at <other> instead": the Mint act again, for WRONG_IP ----
 
-const afterStale = (await devicesList()).find((d) => d.id === deviceId)
-check(
-  afterStale?.acceptedIp === '',
-  `the device still has no acceptedIp after the stale-token attempt (got ${JSON.stringify(afterStale?.acceptedIp)})`,
-)
+await warnbox.locator(`button:text-is("enrol at ${WRONG_IP} instead")`).click()
+const useOtherPass = body.locator(`input[aria-label="Your password, to enrol at ${WRONG_IP} instead"]`)
+await useOtherPass.waitFor({ timeout: 5000 })
+await useOtherPass.fill(adminPassword)
+const [reminted] = await Promise.all([
+  page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
+  useOtherPass.press('Enter'),
+])
+check(reminted.status() === 201, `"enrol at ${WRONG_IP} instead" is the same mint call (${reminted.status()})`)
+const remintBody = await reminted.request().postDataJSON()
+check(remintBody.expectedAddress === WRONG_IP, `re-minted for the address that actually sent (${remintBody.expectedAddress})`)
+token = (await reminted.json()).token
+check(typeof token === 'string' && token.length > 0, 'and a fresh token comes back')
 
-// --- e. Enrol: the new token from the right address enrols for real --
+await warnbox.waitFor({ state: 'detached', timeout: 10000 }).catch(() => {})
+check((await warnbox.count()) === 0, 'the refused-sender box clears once the walk’s own "since" moves to now')
 
-const before = await eventsTotal(page)
+// --- i. Lines from the new address arrive for real -----------------------
+
+const before = await (async () => (await api('GET', '/api/stats')).body?.total ?? 0)()
 try {
-  feedRawFrom(ENROL_IP, read.line)
+  feedRawFrom(WRONG_IP, enrolLine(token))
 } catch (e) {
-  check(false, `the enrol line from ${ENROL_IP} should be accepted at connect: ${e}`)
+  check(false, `the enrol line from ${WRONG_IP} should be accepted at connect: ${e}`)
 }
 
 const enrolled = await waitForCondition(async () => {
   const d = (await devicesList()).find((dv) => dv.id === deviceId)
-  return d?.acceptedIp === ENROL_IP ? d : null
+  return d?.acceptedIp === WRONG_IP ? d : null
 })
-check(!!enrolled, `the device's acceptedIp becomes ${ENROL_IP} within a few seconds`)
+check(!!enrolled, `the device's acceptedIp becomes ${WRONG_IP} within a few seconds`)
 
-// TryEnrol drops the address from the refused list as it enrols it: the
-// router's own logging-action change is logged before its enrol line
-// reaches the listener, so its first line or two are refused, and
-// leaving the address in the list would show the router just enrolled
-// as a wrong sender beside the "enrolled at" line saying the opposite.
-// Strangers stay refused -- only the address that just proved itself
-// comes off the list.
-const stillRefusedAfterEnrol = await refusedList()
-check(
-  !stillRefusedAfterEnrol.some((r) => r.ip === ENROL_IP),
-  `${ENROL_IP} comes off the refused list once it enrols (list now: ${stillRefusedAfterEnrol.map((r) => r.ip).join(', ') || '(empty)'})`,
-)
-check(
-  stillRefusedAfterEnrol.some((r) => r.ip === WRONG_IP) && stillRefusedAfterEnrol.some((r) => r.ip === STALE_TOKEN_IP),
-  `while the actual strangers (${WRONG_IP}, ${STALE_TOKEN_IP}) stay on it`,
-)
+const logsStationDone = await waitForCondition(async () => {
+  const cls = (await track.locator('.stn').nth(2).getAttribute('class')) ?? ''
+  const lab = (await track.locator('.stn').nth(2).locator('.lab').textContent()) ?? ''
+  return /\bdone\b/.test(cls) && lab === 'logs' ? cls : null
+}, 15000)
+check(!!logsStationDone, `the track's logs station lights once the enrol line lands (class="${logsStationDone}")`)
 
-const syslogRow = wizard.locator('nav.steps .step-row').nth(1)
-const syslogDone = await waitForCondition(async () => {
-  const cls = (await syslogRow.getAttribute('class')) ?? ''
-  return /\bdone\b/.test(cls) ? cls : null
-})
-check(!!syslogDone, `the Send logs step reads as done once enrolled (class="${syslogDone}")`)
+const stillRefused = await refusedList()
+check(!stillRefused.some((r) => r.ip === WRONG_IP), `${WRONG_IP} comes off the refused list once it enrols`)
 
 try {
-  feedRawFrom(ENROL_IP, plainLine('live-enrolment-accepted'))
+  feedRawFrom(WRONG_IP, plainLine('live-enrolment-accepted'))
   const after = await waitForEventsTotal(page, before + 1)
-  check(after >= before + 1, `a plain line from the now-enrolled ${ENROL_IP} is accepted (events ${before} -> ${after})`)
+  check(after >= before + 1, `a plain line from the now-enrolled ${WRONG_IP} is accepted (events ${before} -> ${after})`)
 } catch (e) {
-  check(false, `a plain line from ${ENROL_IP} should now be accepted: ${e}`)
+  check(false, `a plain line from ${WRONG_IP} should now be accepted: ${e}`)
 }
 
-// --- f. Closed port: no token pending, so the connection is refused --
+await waitForCondition(async () => ((await text(body.locator('h3'))) === `${ROUTER_NAME} is sending.` ? true : null), 10000)
+check(true, 'everything chosen (cert, logs; push and backup both left dark) has arrived')
+
+// --- j. Closed port: the window is spent, so a stranger is refused too --
 
 let closedAtConnect = false
 try {
@@ -304,115 +362,116 @@ try {
 } catch {
   closedAtConnect = true
 }
-check(closedAtConnect, `with no token pending, a connection from ${CLOSED_PORT_IP} is refused at accept`)
+check(closedAtConnect, `with no token pending anywhere, a connection from ${CLOSED_PORT_IP} is refused at accept`)
 
-const refusedClosed = await waitForCondition(async () => {
-  const list = await refusedList()
-  return list.some((r) => r.ip === CLOSED_PORT_IP) ? list : null
-})
-check(!!refusedClosed, `${CLOSED_PORT_IP} appears in the refused list`)
-
-// --- g. Re-enrol: move the router to a new address --------------------
-//
-// Re-enrol… on the router's own card on Entities: the ledger reopens at
-// Send logs for this router with a freshly minted token, and the router
-// moves to its new address while the old one stops being trusted. The
-// control lives here rather than on Fleet because an admin's deck never
-// draws Fleet at all (deckCards.ts, #785).
-
-await page.click('.setup-wizard button.close')
-await wizard.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {})
-
-// The refused senders on the same screen: a card per address, and
-// nothing on it that would accept one.
-const refusedCard = page.locator('.fcard.refused', { hasText: WRONG_IP })
-const refusedCardText = await waitForCondition(async () => {
-  if ((await refusedCard.count()) === 0) return null
-  return (await refusedCard.first().textContent()) ?? null
-}, 20000)
-check(!!refusedCardText, `Entities draws a refused card for ${WRONG_IP} -- got "${refusedCardText}"`)
-check(
-  (refusedCardText ?? '').includes('no router is enrolled at'),
-  'the card says what it is rather than diagnosing whose it is',
-)
-check(
-  (await refusedCard.first().locator('button').count()) === 0,
-  'and carries no control that would accept it, by ruling',
-)
-check(
-  !(await page.locator('.fcard.refused', { hasText: ENROL_IP }).count()),
-  `and none for ${ENROL_IP}, which enrolled`,
-)
-
-await page.click(`.fcard button.row-action[aria-label^="Re-enrol ${ROUTER_NAME}"]`)
-await wizard.waitFor({ timeout: 10000 })
-
-// #1291, ruling 23a: the operator names the router's address before
-// minting, so getting it wrong is the case worth driving for real.
-// Mint the window at an address the router is not at, then let the
-// router try from where it really is.
-const remintedLine = await mintFor(MISTYPED_IP, read.line)
-check(!!remintedLine?.token, `Re-enrol… reopens the ledger with a fresh token ("${remintedLine?.line}")`)
-
-let reenrolRefusedAtConnect = false
+let oldAddressRefused = false
 try {
-  feedRawFrom(REENROL_IP, enrolLine(remintedLine?.token ?? ''))
+  feedRawFrom(ENROL_IP, plainLine('live-enrolment-mistyped'))
 } catch {
-  reenrolRefusedAtConnect = true
+  oldAddressRefused = true
+}
+check(oldAddressRefused, `and the originally-typed ${ENROL_IP}, which the router never actually sent from, stays refused too`)
+
+const refusedFinal = await waitForCondition(async () => {
+  const list = await refusedList()
+  return list.some((r) => r.ip === CLOSED_PORT_IP) && list.some((r) => r.ip === ENROL_IP) ? list : null
+})
+check(!!refusedFinal, `GET /api/devices/refused carries both ${CLOSED_PORT_IP} and ${ENROL_IP}`)
+
+// --- k. Leave the wizard the only way it offers: forward, to Finish ------
+
+// The full-screen wizard has no close button (DESIGN.md's modal was
+// retired with it): the way out is Next once everything chosen has
+// arrived, Skip the rules step (this scenario tags nothing), Finish.
+await foot.locator('button.primary:text-is("Next")').click()
+await foot.locator('button:text-is("Skip this step")').click()
+await foot.locator('button.primary:text-is("Finish")').click()
+await wiz.waitFor({ state: 'hidden', timeout: 10000 })
+check(true, 'Finish leaves the wizard (admin lands back on Entities -- deckCards.ts’s shared card)')
+
+// --- l. Entities: the refused cards, and no accept control on them ------
+
+await goTo(page, 'Entities')
+for (const ip of [CLOSED_PORT_IP, ENROL_IP]) {
+  const refusedCard = page.locator('.fcard.refused', { hasText: ip })
+  const refusedCardText = await waitForCondition(async () => {
+    if ((await refusedCard.count()) === 0) return null
+    return (await refusedCard.first().textContent()) ?? null
+  }, 20000)
+  check(!!refusedCardText, `Entities draws a refused card for ${ip} -- got "${refusedCardText}"`)
+  check((refusedCardText ?? '').includes('no router is enrolled at'), 'the card says what it is rather than diagnosing whose it is')
+  check((await refusedCard.first().locator('button').count()) === 0, 'and carries no control that would accept it, by ruling')
 }
 check(
-  reenrolRefusedAtConnect,
-  `with the window bound to ${MISTYPED_IP}, the router at ${REENROL_IP} is turned away at accept`,
+  !(await page.locator('.fcard.refused', { hasText: WRONG_IP }).count()),
+  `and none for ${WRONG_IP}, which enrolled`,
+)
+check(
+  (await page.locator(`.fcard button.row-action[aria-label^="Re-enrol ${ROUTER_NAME}"]`).count()) === 1,
+  'the router’s own card offers Re-enrol…',
 )
 
-// It was turned away before a byte was read, so nothing here knows the
-// connection carried a token -- only that an address was refused. The
-// operator is standing at the router and knows which one is theirs, so
-// the step offers each refused address as one click.
-const rebindOffer = wizard.locator('.observation.shortfall.refused ~ p.note button.addr-candidate', {
-  hasText: REENROL_IP,
-})
-const rebindReady = await waitForCondition(async () => ((await rebindOffer.count()) > 0 ? true : null), 25000)
-check(!!rebindReady, `the step offers ${REENROL_IP} to point the enrolment window at`)
+// --- m. Re-enrol: move the router to a new address -----------------------
 
-if (rebindReady) {
-  const lineBeforeRebind = tokenFromBlock((await block.textContent()) ?? '').line
-  await rebindOffer.first().click()
-  // The token is untouched -- nothing is pasted into the router again.
-  const lineAfterRebind = await waitForCondition(async () => {
-    const t = tokenFromBlock((await block.textContent()) ?? '')
-    return t.token ? t.line : null
-  }, 10000)
-  check(
-    lineAfterRebind === lineBeforeRebind,
-    `rebinding keeps the same token (was "${lineBeforeRebind}", now "${lineAfterRebind}")`,
-  )
+// Entities' own Re-enrol… (DESIGN.md, "Adding a router, re-enrolling"):
+// the ledger reopens at Mint the token for this router, with a fresh
+// token -- #1398, fixed by wizardRun.begin() consulting
+// wizardState.reEnrolling before evidence.enrol (see the header
+// comment).
+await page.click(`.fcard button.row-action[aria-label^="Re-enrol ${ROUTER_NAME}"]`)
+await wiz.waitFor({ state: 'visible', timeout: 10000 })
+check((await page.locator('#f-name').count()) === 0, 'Re-enrol… skips The router -- there is nothing left to name')
+check(
+  (await text(body.locator('h3'))) === `Your password, to mint ${ROUTER_NAME}’s token.`,
+  'and lands straight on Mint the token, not the finished ledger (#1398)',
+)
 
-  try {
-    feedRawFrom(REENROL_IP, enrolLine(remintedLine?.token ?? ''))
-  } catch (e) {
-    check(false, `after rebinding, the enrol line from ${REENROL_IP} should be accepted at connect: ${e}`)
-  }
+// Back still reaches The router: Mint's own 'ask' stage is not the
+// watch/tune/done a first-time walk reaches once its own paste has
+// landed (railRows' `can`), so the run is still the operator's to
+// change -- move the router to a new address before minting, the way
+// an operator whose router changed address would.
+await foot.locator('button:text-is("Back")').click()
+await page.locator('#f-addr').waitFor({ timeout: 5000 })
+check((await page.locator('#f-addr').inputValue()) === WRONG_IP, `The router remembers where it stands (${WRONG_IP})`)
+await page.fill('#f-addr', REENROL_IP)
+await foot.locator('button.primary:text-is("Next")').click()
+await body.locator('input[type="password"]').waitFor({ timeout: 10000 })
+check((await text(body.locator('.hint'))).includes(REENROL_IP), `Mint now names the new address (${REENROL_IP})`)
+
+await body.locator('input[type="password"]').fill(adminPassword)
+const [reenrolMinted] = await Promise.all([
+  page.waitForResponse((r) => /\/api\/devices\/[^/]+\/enrolment$/.test(r.url()) && r.request().method() === 'POST'),
+  foot.locator('button.primary:text-is("Mint the token")').click(),
+])
+check(reenrolMinted.status() === 201, `Re-enrol…’s Mint the token is the same call (${reenrolMinted.status()})`)
+const reenrolMintBody = await reenrolMinted.request().postDataJSON()
+check(reenrolMintBody.expectedAddress === REENROL_IP, `bound to the new address (${reenrolMintBody.expectedAddress})`)
+const { token: reenrolToken } = await reenrolMinted.json()
+check(typeof reenrolToken === 'string' && reenrolToken.length > 0, 'and a fresh token comes back')
+
+try {
+  feedRawFrom(REENROL_IP, enrolLine(reenrolToken))
+} catch (e) {
+  check(false, `the enrol line from ${REENROL_IP} should be accepted at connect: ${e}`)
 }
 
 const reenrolled = await waitForCondition(async () => {
   const d = (await devicesList()).find((dv) => dv.id === deviceId)
   return d?.acceptedIp === REENROL_IP ? d : null
 })
-check(!!reenrolled, `after re-enrolling, acceptedIp becomes ${REENROL_IP}`)
+check(!!reenrolled, `the device's acceptedIp becomes ${REENROL_IP} within a few seconds`)
 
-let oldAddressRefused = false
+let movedFromRefused = false
 try {
-  feedRawFrom(ENROL_IP, plainLine('live-enrolment-old'))
+  feedRawFrom(WRONG_IP, plainLine('live-enrolment-moved'))
 } catch {
-  oldAddressRefused = true
+  movedFromRefused = true
 }
-if (!oldAddressRefused) {
-  oldAddressRefused = (await refusedList()).some((r) => r.ip === ENROL_IP)
-}
-check(oldAddressRefused, `${ENROL_IP}'s lines are refused now that the router has moved to ${REENROL_IP}`)
+if (!movedFromRefused) movedFromRefused = (await refusedList()).some((r) => r.ip === WRONG_IP)
+check(movedFromRefused, `${WRONG_IP}'s lines are refused now that the router has moved to ${REENROL_IP}`)
 
-// --- h. Clean up: leave the fleet the way every other scenario finds it
+// --- n. Clean up: leave the fleet the way every other scenario finds it -
 
 const del = await api('DELETE', `/api/devices/${encodeURIComponent(deviceId)}`)
 check(del.status === 204, `the scenario's device is deleted (${del.status})`)

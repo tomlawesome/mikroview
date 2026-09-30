@@ -1,0 +1,234 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
+/* The full-screen setup wizard (#1381), ported from the ratified
+   prototype (docs/design/screens/wizard/round-15): wizard.css as drawn,
+   plus the rules the wizard's own markup needs from shell.css (the step
+   disc, the observation line, the warning boxes, the copy row),
+   inks.css (one ink per thing) and fall.css (.wm, .att, .ovstrip --
+   the fall's own grammar, which Fall.svelte keeps in its own scoped
+   sheet, so the wizard carries the same values here).
+
+   One global sheet rather than five scoped ones because the body rules
+   (.body h3, .hint, .form, .obs, pre, buttons, inputs) reach the step
+   components too. Every selector is scoped under .wiz, the wizard's
+   root, so nothing here reaches the app behind it. No colour is new:
+   every value is an app.css token. */
+
+/* ---- one ink per thing (inks.css) ---- */
+:root {
+  --ink-cert: var(--accent);           /* trust: the router now trusts MikroView */
+  --ink-logs: var(--accept);           /* logs flowing -- the one green */
+  --ink-push: var(--fall-nat);         /* router state -- the fall's "the router rewrote it" purple */
+  --ink-backup: var(--now);            /* a clock thing -- amber is time */
+  --ink-token: var(--log);             /* a decision you made -- decision blue */
+  --ink-rules: var(--lane-guest);      /* tagged rules -- the lane family */
+  --ink-off: var(--fg-dim);            /* not yet, not now, set aside */
+}
+.wiz .ink-cert { color: var(--ink-cert); }
+.wiz .ink-logs { color: var(--ink-logs); }
+.wiz .ink-push { color: var(--ink-push); }
+.wiz .ink-backup { color: var(--ink-backup); }
+.wiz .ink-token { color: var(--ink-token); }
+.wiz .ink-rules { color: var(--ink-rules); }
+.wiz .ink-off { color: var(--ink-off); }
+
+/* ---- the page frame, shared by the wizard and the fall (wizard.css) ---- */
+.wiz.page { position: fixed; inset: 0; display: grid; grid-template-rows: 48px 14px 1fr; grid-template-columns: 236px 1fr 40px; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-sans); z-index: 40; }
+.wiz .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 20px; }
+.wiz .bar .wm { opacity: 0; transition: opacity 400ms; }
+.wiz.page.live .bar .wm { opacity: 1; }
+.wiz .bar .chips { display: flex; gap: 8px; margin-left: 18px; overflow: hidden; }
+.wiz .bar .right { margin-left: auto; display: flex; gap: 10px; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); }
+.wiz .striprow { grid-column: 1 / 3; padding: 0 20px 0 20px; }
+.wiz .striprow .ovstrip { transition: gap 500ms; }
+.wiz .striprow .ovtick { transition: background 400ms, opacity 400ms, flex 500ms; }
+
+/* the wordmark and the chips (fall.css, from Fall.svelte) */
+.wiz .wm { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); font-family: var(--font-sans); }
+.wiz .wm em { color: var(--accent); font-style: normal; }
+.wiz .att { display: inline-flex; align-items: center; gap: 7px; border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent); border-radius: 12px; padding: 3px 12px; font: 600 10.5px/1.5 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-muted); background: transparent; white-space: nowrap; }
+.wiz .att i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim); flex: none; }
+.wiz .att.alarm i { background: var(--fall-drop); animation: wiz-pulse 1.4s ease-in-out infinite; }
+.wiz .att.alarm { color: var(--fall-drop); border-color: color-mix(in srgb, var(--fall-drop) 40%, transparent); }
+.wiz .att.dark i { background: transparent; border: 1px solid var(--fg-dim); }
+.wiz .att.dec i { background: var(--log); }
+.wiz .att.dec { color: var(--log); }
+.wiz .att.wait i { background: var(--fg-dim); animation: wiz-pulse 1.6s ease-in-out infinite; }
+.wiz .att.now i { background: var(--now); }
+.wiz .att.now { color: var(--now); }
+.wiz .att b { font-weight: 800; color: inherit; }
+/* chips in each ink (inks.css) */
+.wiz .att.cert { color: var(--ink-cert); border-color: color-mix(in srgb, var(--ink-cert) 40%, transparent); }
+.wiz .att.cert i { background: var(--ink-cert); }
+.wiz .att.logs { color: var(--ink-logs); border-color: color-mix(in srgb, var(--ink-logs) 40%, transparent); }
+.wiz .att.logs i { background: var(--ink-logs); }
+.wiz .att.push { color: var(--ink-push); border-color: color-mix(in srgb, var(--ink-push) 45%, transparent); }
+.wiz .att.push i { background: var(--ink-push); }
+.wiz .att.backup { color: var(--ink-backup); border-color: color-mix(in srgb, var(--ink-backup) 40%, transparent); }
+.wiz .att.backup i { background: var(--ink-backup); }
+.wiz .att.token { color: var(--ink-token); border-color: color-mix(in srgb, var(--ink-token) 40%, transparent); }
+.wiz .att.token i { background: var(--ink-token); }
+.wiz .att.rules { color: var(--ink-rules); border-color: color-mix(in srgb, var(--ink-rules) 40%, transparent); }
+.wiz .att.rules i { background: var(--ink-rules); }
+.wiz .att.off { color: var(--ink-off); border-style: dashed; }
+.wiz .att.off i { background: transparent; border: 1px solid var(--ink-off); }
+.wiz .att.off s { text-decoration-color: var(--ink-off); }
+
+/* the strip (fall.css) */
+.wiz .ovstrip { display: flex; gap: 3px; height: 6px; }
+.wiz .ovstrip .ovtick { flex: 1; border-radius: 2px; background: var(--fg-dim); opacity: 0.32; transition: background 300ms, opacity 300ms; }
+.wiz .ovstrip .ovtick.on { opacity: 1; }
+.wiz .ovstrip .ovtick.dark { background: transparent; border: 1px dashed color-mix(in srgb, var(--fg) 15%, transparent); opacity: 0.8; }
+
+/* the step rail */
+.wiz .rail { grid-column: 1; grid-row: 3; border-right: 1px solid var(--border); padding: 14px 8px; overflow-y: auto; transition: transform 600ms cubic-bezier(.35,0,.2,1), opacity 500ms; }
+.wiz .rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.wiz .rail li { transition: opacity 350ms, transform 350ms; }
+.wiz .step-row { width: 100%; display: flex; align-items: flex-start; gap: 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; color: var(--fg-muted); font: inherit; cursor: pointer; }
+.wiz .step-row:hover:not(:disabled) { background: var(--bg-hover); }
+.wiz .step-row:disabled { opacity: 1; cursor: default; }
+.wiz .step-row.locked { color: var(--fg-dim); }
+.wiz .step-row.locked .step-n { border-style: dashed; color: var(--fg-dim); }
+.wiz .step-row.current { background: var(--bg-elevated); border-color: var(--border); color: var(--fg); }
+.wiz .step-row.done .step-n { border-color: var(--accept); color: var(--accept); }
+.wiz .step-row.done .step-receipt { color: var(--accept); }
+.wiz .step-row.chosen .step-n { border-color: var(--log); color: var(--log); }
+.wiz .step-row.chosen .step-receipt { color: var(--log); }
+/* the step disc and text (shell.css, from SetupWizard.svelte) */
+.wiz .step-n { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); font-size: 11px; }
+.wiz .step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wiz .step-title { font-size: 13px; }
+.wiz .step-receipt { font-size: 11px; line-height: 1.4; color: var(--accept); word-break: break-word; }
+/* the step list wears the same inks (inks.css): a done row in the ink
+   of what it records, set per row as --ink */
+.wiz .step-row.done .step-n, .wiz .step-row.done .step-receipt { border-color: var(--ink, var(--accept)); color: var(--ink, var(--accept)); }
+
+/* the body */
+.wiz .main { grid-column: 2 / 4; grid-row: 3; position: relative; min-height: 0; display: grid; grid-template-rows: 1fr auto; }
+.wiz .body { min-height: 0; overflow-y: auto; padding: 26px 40px 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 860px; }
+.wiz .body h3 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.3; color: var(--fg); }
+.wiz .body .hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--fg-muted); max-width: 640px; }
+.wiz .foot { display: flex; align-items: center; gap: 12px; padding: 12px 40px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.wiz .foot .fhint { margin-left: auto; font-size: 12.5px; color: var(--fg-muted); }
+.wiz.page button:not(.step-row) { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: transparent; border: 1px solid var(--border); color: var(--fg-muted); font-family: inherit; cursor: pointer; }
+.wiz.page button:not(.step-row):hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
+.wiz.page button:disabled { cursor: not-allowed; opacity: 0.5; }
+.wiz.page button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+.wiz.page button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; }
+.wiz.page input[type=text], .wiz.page input[type=password] { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--fg); border-radius: 5px; padding: 9px 12px; font-family: var(--font-mono); font-size: 14px; min-width: 0; }
+.wiz.page input:focus { outline: none; border-color: var(--accent); }
+.wiz.page input.bad { border-color: var(--warn); }
+.wiz.page pre { margin: 0; align-self: stretch; padding: 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); user-select: all; }
+.wiz.page pre.script { max-height: calc(14 * 1.6em + 24px); overflow-y: auto; flex-shrink: 0; }
+.wiz .sec { color: var(--fg-dim); user-select: none; }
+/* step 1: the router, one form */
+.wiz .form { align-self: stretch; display: grid; grid-template-columns: 180px 1fr; gap: 14px 18px; align-items: start; max-width: 720px; margin-top: 6px; }
+.wiz .form.single { grid-template-columns: auto; }
+.wiz .form .k { padding-top: 9px; font-size: 13.5px; color: var(--fg); }
+.wiz .form .k small { display: block; font-size: 12px; color: var(--fg-dim); line-height: 1.4; margin-top: 2px; }
+.wiz .form .v { display: flex; flex-direction: column; gap: 4px; }
+.wiz .form .v input { width: 320px; }
+.wiz .form .problem { margin: 0; min-height: 1.3em; font-size: 12.5px; color: var(--warn); }
+.wiz .seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.wiz.page .seg button { border: 0; border-radius: 0; padding: 8px 14px; background: transparent; color: var(--fg-muted); }
+.wiz.page .seg button + button { border-left: 1px solid var(--border); }
+.wiz.page .seg button.on { background: var(--accent-bg); color: var(--fg); }
+.wiz.page .seg button.on.no { background: transparent; color: var(--log); border-color: var(--log); }
+/* the observation line, four flavours (shell.css) */
+.wiz .obs { align-self: stretch; max-width: 720px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
+.wiz .obs::before { content: ''; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.wiz .obs.waiting { border: 1px dashed var(--hair-2); color: var(--fg-muted); }
+.wiz .obs.waiting::before { background: var(--fg-dim); animation: wiz-pulse 1.6s ease-in-out infinite; }
+.wiz .obs.arrived { border: 1px solid var(--accept); background: var(--accept-bg); color: var(--accept); }
+.wiz .obs.arrived::before { background: var(--accept); }
+.wiz .obs.counting { border: 1px solid var(--accept); background: var(--accept-bg); color: var(--accept); }
+.wiz .obs.counting::before { background: var(--accept); }
+.wiz .obs.quiet { border: 1px solid var(--border); color: var(--fg-muted); }
+.wiz .obs.quiet::before { background: var(--fg-dim); }
+.wiz .obs small { margin-left: auto; font-size: 12px; color: var(--fg-muted); }
+/* the partial-step warning box (#1132) and the caution (shell.css) */
+.wiz .warnbox { align-self: stretch; max-width: 720px; border: 1px solid var(--warn); border-left-width: 3px; background: color-mix(in srgb, var(--warn) 8%, transparent); color: var(--fg); padding: 10px 12px; border-radius: 6px; font-size: 13px; line-height: 1.55; display: flex; flex-direction: column; gap: 8px; }
+.wiz .warnbox b { color: var(--warn); font-weight: 600; }
+.wiz .warnbox pre { font-size: 12px; }
+.wiz .cautionbox { align-self: stretch; max-width: 720px; border-left: 3px solid var(--caution); padding: 8px 12px; color: var(--fg-muted); font-size: 12.5px; line-height: 1.55; }
+.wiz .cautionbox b { color: var(--caution); font-weight: 600; }
+.wiz .copyrow { display: flex; align-items: center; gap: 12px; align-self: stretch; }
+.wiz .token-life { font-size: 12.5px; color: var(--fg-muted); }
+.wiz .note { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--fg-muted); }
+.wiz .mono { font-family: var(--font-mono); font-size: 12.5px; }
+/* the router's turn */
+.wiz .stream { align-self: stretch; max-width: 720px; margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; max-height: 120px; overflow: hidden; }
+.wiz .stream .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wiz .stream .l b { font-weight: 500; color: var(--log); }
+/* rules list */
+.wiz .rules { align-self: stretch; max-width: 760px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.wiz .rules label, .wiz .rules .h { display: grid; grid-template-columns: 22px 70px 60px 1fr 1fr 90px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--border); font-size: 12.5px; cursor: pointer; }
+.wiz .rules label:first-child, .wiz .rules .h:first-child { border-top: 0; }
+.wiz .rules label:hover { background: var(--bg-hover); }
+.wiz .rules .h { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; cursor: default; }
+.wiz .rules .h:hover { background: none; }
+.wiz .rules .why { color: var(--fg-muted); }
+.wiz .rules .pre { font-family: var(--font-mono); color: var(--log); }
+.wiz .rules .act.drop { color: var(--drop); }
+.wiz .rules .act.accept { color: var(--accept); }
+.wiz .rules label.lit .pre { color: var(--accept); }
+/* the tagging block (tuneBody's pre.script, its width the prototype's own) */
+.wiz.page pre.script.tagblock { max-width: 760px; }
+/* the ledger */
+.wiz .ledger { align-self: stretch; max-width: 720px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.wiz .ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.wiz .ledger .row:first-child { border-top: 0; }
+.wiz .ledger .row .r { font-size: 12px; }
+.wiz .ledger .undo { grid-column: 1 / -1; }
+.wiz .ledger .undo pre { font-size: 12px; }
+/* ledger rows wear the same inks (inks.css) */
+.wiz .ledger .row .step-n.done { border-color: var(--ink, var(--accept)); color: var(--ink, var(--accept)); }
+.wiz .ledger .row .r.done { color: var(--ink, var(--accept)); }
+.wiz .ledger .row .step-n.skip { border-style: dashed; border-color: var(--ink-off); color: var(--ink-off); }
+.wiz .ledger .row .r.skip { color: var(--ink-off); }
+.wiz .ledger .row.skip > span:nth-child(2) { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: var(--ink-off); }
+.wiz .ledger .row.skip .r { text-decoration: none; }
+
+/* The track (inks.css): one wire from Copy to Done, a station per
+   proof. The track alone stays green (owner, round 9): a done station
+   wears --accept, whatever its thing's ink is elsewhere. */
+.wiz .track { position: relative; align-self: stretch; max-width: 720px; display: flex; padding: 22px 0 6px; }
+.wiz .track .wire { position: absolute; left: 0; right: 0; top: 30px; height: 2px; background: var(--hair-2); opacity: 0.5; }
+.wiz .track .seg { position: absolute; top: 30px; height: 2px; background: var(--accept); transition: width 400ms; }
+.wiz .track .stn { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 0 4px; }
+.wiz .track .stn .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--ink-off); background: var(--bg); box-sizing: border-box; position: relative; z-index: 1; margin-top: 1px; }
+.wiz .track .stn.done .dot { background: var(--accept); border-color: var(--accept); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accept) 22%, transparent); }
+.wiz .track .stn.wait .dot { animation: wiz-pulse 1.6s ease-in-out infinite; border-color: var(--fg-muted); }
+.wiz .track .stn.skip .dot { border-style: dashed; }
+.wiz .track .stn.alarm .dot { border-color: var(--alarm); background: var(--alarm); animation: wiz-pulse 1.4s ease-in-out infinite; }
+.wiz .track .stn .lab { font: 700 11px/1.3 var(--font-mono); letter-spacing: 0.04em; color: var(--ink-off); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.wiz .track .stn.done .lab { color: var(--accept); }
+.wiz .track .stn.wait .lab { color: var(--fg-muted); font-weight: 400; }
+.wiz .track .stn.skip .lab { text-decoration: line-through; text-decoration-color: var(--ink-off); }
+.wiz .track .stn.alarm .lab { color: var(--alarm); }
+.wiz .track .stn .st { font: 400 11px/1.3 var(--font-mono); color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.wiz .track .stn.done .st { color: var(--fg-muted); }
+.wiz .track .stn .sub { display: none; }
+.wiz .track .stn .u { font: 11px var(--font-sans); }
+.wiz .track .now { position: absolute; top: 18px; width: 2px; height: 26px; background: var(--now); transition: left 250ms linear; z-index: 2; }
+.wiz .track .now::after { content: 'NOW'; position: absolute; top: -14px; left: 4px; font: 700 9.5px var(--font-mono); color: var(--now); letter-spacing: 0.1em; }
+.wiz .track.compact { padding-top: 18px; }
+.wiz .track.compact .stn .st { display: none; }
+
+/* the wizard's own entrances: taken off at the journey's beats */
+.wiz .rail.away { transform: translateX(-100%); opacity: 0; }
+.wiz .rail.away li { opacity: 0; transform: translateX(-12px); }
+.wiz .body.away { opacity: 0; transform: translateY(10px); }
+.wiz .body, .wiz .foot { transition: opacity 400ms ease, transform 400ms cubic-bezier(.2,.26,.35,1); }
+.wiz .foot.away { opacity: 0; }
+
+/* the step announcement, for screen readers only */
+.wiz-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+@keyframes wiz-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .wiz .rail, .wiz .rail li, .wiz .body, .wiz .foot, .wiz .striprow .ovtick, .wiz .striprow .ovstrip { transition: opacity 300ms ease !important; transform: none !important; }
+  .wiz .track .seg, .wiz .track .now { transition: none; }
+  .wiz .att i, .wiz .obs::before, .wiz .track .stn .dot { animation: none !important; }
+}

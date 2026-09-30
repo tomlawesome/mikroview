@@ -8,11 +8,16 @@
   // menu once each had somewhere better to live -- Settings and
   // Entities joined the deck as cards of their own, and Audit log has
   // lived on the docket's own tab since rounds 17-19 -- so the menu's
-  // only remaining page-shaped action is the one thing that opens a
-  // modal rather than going anywhere: Run setup….
+  // only remaining page-shaped actions are the two that open something
+  // over the deck rather than going anywhere: Run setup…, and Take the
+  // tour (#1386, owner: the tour is "always available from" this menu).
+  // The tour row is every role's -- the tour walks whatever deck the
+  // signed-in tier can see -- and carries no ellipsis: it starts at
+  // once, nothing is asked first.
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { tourState } from '../lib/tour.svelte'
   import { versionState } from '../lib/version.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import AuthenticatorOverlay from './AuthenticatorOverlay.svelte'
@@ -61,11 +66,15 @@
     if (open) versionState.ensureLoaded().catch(() => {})
   }
 
-  type Row = { label: string; view?: View; action?: 'run-setup'; admin?: boolean }
-  const operate: Row[] = [{ label: 'Run setup…', action: 'run-setup', admin: true }]
+  type Row = { label: string; view?: View; action?: 'run-setup' | 'tour'; admin?: boolean }
+  const operate: Row[] = [
+    { label: 'Run setup…', action: 'run-setup', admin: true },
+    { label: 'Take the tour', action: 'tour' },
+  ]
 
   function go(row: Row) {
     if (row.action === 'run-setup') wizardState.launch()
+    else if (row.action === 'tour') tourState.begin()
     else if (row.view) appState.view = row.view
     open = false
   }

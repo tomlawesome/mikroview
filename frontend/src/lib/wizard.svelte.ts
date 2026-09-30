@@ -75,6 +75,11 @@ class WizardState {
   // must not mint a second one.
   enrolment = $state<EnrolmentToken | null>(null)
   enrolmentMintedAt = $state('')
+  // walkMintedAt is this walk's first mint, kept through any re-mint the
+  // walk makes (the wrong-address recovery mints again, but the block
+  // it pasted -- and the certificate it fetched -- came after the
+  // first). The walk's evidence is read from here (#1400, #1401).
+  walkMintedAt = $state('')
   enrolmentError = $state<string | null>(null)
 
   // enrolExpectedAddress is the router's own address, asked for before
@@ -132,6 +137,23 @@ class WizardState {
   // note 10572: this is the only door into that shape; the wizard never
   // offers it on its own). Null in every ordinary launch.
   lostRouterDevice = $state<string | null>(null)
+
+  // reEnrolling is Re-enrol…'s own signal (#1385, "Adding a router,
+  // re-enrolling") to the full-screen wizard's run (wizardRun.begin()):
+  // land on Mint the token for ledgerDevice even though that router's
+  // logs already stand as evidence, rather than reopening the ledger
+  // where an ordinary revisit would -- because a fresh token, not the
+  // existing one, is the whole point of this door. A one-shot flag,
+  // consumed and cleared by begin() the moment it reads it, so a later
+  // Admin ▸ Run setup… on the same router does not keep forcing Mint.
+  reEnrolling = $state(false)
+
+  // addingRouter is true for a walk about one router, opened by a door
+  // that names it or will (+ add a router, Re-enrol…, Finish
+  // registering…, the ledger's forget): the fleet's other traffic is not
+  // its evidence (#1397). Only the first-run ledger (launch) reads the
+  // fleet as a whole while no router is named.
+  addingRouter = $state(false)
 
   // pickedVersion (#436) is the operator's choice from the "Your
   // RouterOS version" pick-list -- '' means the first option, "Not
@@ -457,9 +479,11 @@ class WizardState {
     // Name your router already done, and Send logs would offer that
     // other router's live token to reroll (#1284).
     this.ledgerDevice = ''
+    this.addingRouter = false
     this.tokenDevice = ''
     this.token = ''
     this.clearEnrolment()
+    this.walkMintedAt = ''
     this.clearRegister()
     this.pane = firstOpenStep(this.ledger)
     this.showStepList = false
@@ -536,12 +560,15 @@ class WizardState {
     this.steps = ROUTER_STEPS
     this.finishTo = 'fleet'
     this.ledgerDevice = ''
+    this.addingRouter = true
     this.tokenDevice = ''
     this.clearEnrolment()
+    this.walkMintedAt = ''
     this.clearRegister()
     this.pane = 1
     this.showStepList = false
     this.lostRouterDevice = null
+    this.reEnrolling = false
     this.open = true
   }
 
@@ -554,6 +581,7 @@ class WizardState {
     this.ledgerDevice = device
     this.tokenDevice = device
     this.pane = this.steps.indexOf('syslog') + 1
+    this.reEnrolling = true
   }
 
   // openRegister is a router row's Finish registering… (#1291's other
@@ -646,6 +674,7 @@ class WizardState {
     }
     this.enrolment = result
     this.enrolmentMintedAt = new Date().toISOString()
+    if (!this.walkMintedAt) this.walkMintedAt = this.enrolmentMintedAt
     // Re-render the block so its last line carries the token just
     // minted -- the server writes that line, and this is the only call
     // that tells it which token to write.
@@ -751,10 +780,14 @@ class WizardState {
     // goes with the walk it was typed in, rather than waiting to
     // pre-fill the next router's.
     this.clearEnrolment()
+    this.walkMintedAt = ''
     // ...and whatever the Register step was told on this walk goes with
     // it too -- a refusal here must not sit and wait for the next
     // router's Register pane to open under it.
     this.clearRegister()
+    // A closed-without-minting Re-enrol… walk must not force Mint on
+    // whatever this router's next, unrelated open turns out to be.
+    this.reEnrolling = false
   }
 
   // maybeAutoLaunch is the record's first-run rule: first admin sign-in
@@ -773,6 +806,15 @@ class WizardState {
   // open" instead would re-arm the moment the operator closed the modal,
   // and reopen it under them -- an explicit close that undoes itself is
   // worse than no close at all.
+  // wouldAutoLaunch is maybeAutoLaunch's test without its side effects:
+  // the journey (#1386) asks it under the held door, and then spends the
+  // slot and launches itself, or lets the door down.
+  wouldAutoLaunch(hasDevices: boolean): boolean {
+    if (this.autoLaunched) return false
+    if (!this.status) return false
+    return !hasDevices && this.marks.length === 0
+  }
+
   maybeAutoLaunch(hasDevices: boolean) {
     if (this.autoLaunched) return
     // No ledger yet means no answer yet, not an answer of "no".
@@ -835,7 +877,9 @@ class WizardState {
     this.steps = SETUP_STEPS
     this.finishTo = 'fall'
     this.ledgerDevice = ''
+    this.addingRouter = false
     this.clearEnrolment()
+    this.walkMintedAt = ''
     this.clearRegister()
     this.refused = []
     this.pane = 1
@@ -844,6 +888,7 @@ class WizardState {
     this.error = null
     this.showStepList = false
     this.lostRouterDevice = null
+    this.reEnrolling = false
     this.pickedVersion = ''
     this.token = ''
     this.tokenDevice = ''

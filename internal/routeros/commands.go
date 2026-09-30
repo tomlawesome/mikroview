@@ -146,6 +146,22 @@ func CaTrustCommands(address, dialect string) string {
 	}, "\n")
 }
 
+// UndoCaTrustCommands is the ledger's Undo for "Certificate trusted"
+// (#1385): remove the certificate CaTrustCommands imported, and the file
+// it was fetched into. Matched by prefix, not by exact name: RouterOS
+// names an imported certificate after its file with an index appended
+// ("mikroview-ca.crt_0"), so an exact-name find would remove nothing and
+// say nothing. Not observed on a router yet; the CHR exercise (#1395)
+// confirms it. Embeds no address, so unlike its forward counterpart it
+// renders unconditionally. dialect is unused today -- the same seam
+// every builder in this package carries (see the file's own doc comment).
+func UndoCaTrustCommands(dialect string) string {
+	return strings.Join([]string{
+		`/certificate remove [find where name~"^mikroview-ca.crt"]`,
+		`/file remove [find name=mikroview-ca.crt]`,
+	}, "\n")
+}
+
 // WizardVersion stamps every push block with which wizard wrote the
 // script a router is running (#1241). **Bump it whenever any block this
 // package pastes changes** -- a line added, removed or reworded in
@@ -284,6 +300,14 @@ func SyslogCommands(address, syslogPort, dialect, enrolToken string) string {
 		lines = append(lines, fmt.Sprintf(`/log info "mikroview-enrol %s"`, quote(enrolToken)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// UndoSyslogCommands is the ledger's Undo for "Logs flowing" (#1385):
+// the same two lines RemoveLoggingActionCommands already gives for a
+// leftover "mikroview" action (#1373), joined into the ledger's one
+// pre block. Embeds no address, so it renders unconditionally.
+func UndoSyslogCommands(dialect string) string {
+	return strings.Join(RemoveLoggingActionCommands("mikroview"), "\n")
 }
 
 // RuleTaggingCommands bulk-tags existing rules by action, which is the
@@ -612,6 +636,16 @@ func ScheduleCommands(body, dialect string) string {
 	}, "\n")
 }
 
+// UndoScheduleCommands is the ledger's Undo for "Router state pushed"
+// (#1385): remove the scheduler entry and the script ScheduleCommands
+// saved. Embeds no address or token, so it renders unconditionally.
+func UndoScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		`/system scheduler remove [find name=mv-push]`,
+		`/system script remove [find name=mv-push]`,
+	}, "\n")
+}
+
 // BackupScriptPolicy is the RouterOS script/scheduler policy list the
 // wizard's step 6 script is printed with -- round 45's drawn
 // read,write,test,sensitive, run end to end against a real CHR (7.23.3,
@@ -698,6 +732,17 @@ func BackupScheduleCommands(dialect string) string {
 	return strings.Join([]string{
 		SchedulerAdd("mv-backup", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup"`, BackupScriptPolicy)),
 		`/system script run mv-backup`,
+	}, "\n")
+}
+
+// UndoBackupScheduleCommands is the ledger's Undo for "Nightly backup"
+// (#1385) on the SFTP transport: remove the scheduler entry and the
+// script BackupScript/BackupScheduleCommands saved. Embeds no address or
+// token, so it renders unconditionally.
+func UndoBackupScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		`/system scheduler remove [find name=mv-backup]`,
+		`/system script remove [find name=mv-backup]`,
 	}, "\n")
 }
 
@@ -816,6 +861,17 @@ func BackupPushScheduleCommands(body, dialect string) string {
 		scriptAdd("mv-backup-https", BackupScriptPolicy, body),
 		SchedulerAdd("mv-backup-https", fmt.Sprintf(`interval=1d start-time=03:00:00 policy=%s on-event="/system script run mv-backup-https"`, BackupScriptPolicy)),
 		`/system script run mv-backup-https`,
+	}, "\n")
+}
+
+// UndoBackupPushScheduleCommands is the ledger's Undo for "Nightly
+// backup" (#1385) on the HTTPS transport (#955): remove the scheduler
+// entry and the script BackupPushScript/BackupPushScheduleCommands
+// saved. Embeds no address or token, so it renders unconditionally.
+func UndoBackupPushScheduleCommands(dialect string) string {
+	return strings.Join([]string{
+		`/system scheduler remove [find name=mv-backup-https]`,
+		`/system script remove [find name=mv-backup-https]`,
 	}, "\n")
 }
 
