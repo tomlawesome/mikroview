@@ -28,6 +28,7 @@
   import { fallState } from '../../lib/fall.svelte'
   import { journeyState } from '../../lib/journey.svelte'
   import { wizardState } from '../../lib/wizard.svelte'
+  import { wizardJourney } from '../../lib/wizardJourney.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
   import { announce, chipsFor, footSpec, railRows, stageOf, stripFor, type FootAction } from '../../lib/wizardRun'
   import StepRouter from './StepRouter.svelte'
@@ -60,12 +61,16 @@
     if (!isAdmin) return
     if (!appState.initialLoadDone) return
     if (journeyState.active) return
+    // A sign-in's way in (#1386) decides the launch itself while it is
+    // pending or playing; this rule resumes once it has let the door down.
+    if (wizardJourney.pending || wizardJourney.active) return
     wizardState.maybeAutoLaunch(appState.devices.length > 0)
   })
 
   // The entrance: the rail, the body and the footer arrive by their own
-  // transitions once the page stands (wizard.js's showWizard). The
-  // journey (DESIGN.md, "The way in") will drive these beats itself.
+  // transitions once the page stands (wizard.js's showWizard) -- unless
+  // the way in (#1386) is driving: then the rows strike on when the
+  // journey says so, and the bar's wordmark appears as the ride lands.
   let away = $state(true)
   let live = $state(false)
 
@@ -80,12 +85,23 @@
     // untrack: begin() reads the evidence to place the run, and this
     // effect must not re-run (and re-reset the answers) on every poll.
     untrack(() => wizardRun.begin())
+    if (untrack(() => wizardJourney.phase === 'in')) return
     const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 0)
     raf(() => raf(() => {
       away = false
       live = true
     }))
   })
+
+  // The way in's beats: the rail stands as its rows strike (4.55s), the
+  // wordmark takes over as the ride lands (4.8s). The way out slides the
+  // main away and takes the rail with it.
+  $effect(() => {
+    if (wizardJourney.phase !== 'in') return
+    if (wizardJourney.rows) away = false
+    if (wizardJourney.landed) live = true
+  })
+  const goingOut = $derived(wizardJourney.phase === 'out')
 
   // While open: the ledger, the backups and the refused senders on one
   // cadence, then the run's own bookkeeping (the live rate).
@@ -195,7 +211,7 @@
          is still yours to change; once the router is answering nothing
          goes back. Each row carries its receipt in the ink of what it
          records (--ink, read by the done rules in wizard.css). -->
-    <nav class="rail" class:away aria-label="Setup steps">
+    <nav class="rail" class:away={away || goingOut} aria-label="Setup steps">
       <ol>
         {#each rows as r (r.id)}
           <li>
@@ -223,7 +239,7 @@
         {/each}
       </ol>
     </nav>
-    <div class="main">
+    <div class="main" style:transform={goingOut ? `translateY(${-wizardJourney.slideY}px)` : null}>
       <div class="body" class:away>
         {#if step === 'router'}
           <StepRouter />

@@ -2,6 +2,7 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import { authState } from '../lib/auth.svelte'
   import AuthScreen from './AuthScreen.svelte'
+  import { wizardJourney } from '../lib/wizardJourney.svelte'
   import { passkeysUsableAt } from '../lib/passkeys.svelte'
 
   // The way out (#645, round 5): a sign-out plays the door's beat in
@@ -70,7 +71,14 @@
        submit is the scene's own "Enter" (round-29 door, #645). -->
   <AuthScreen
     submitLabel="Enter"
-    onsubmit={(username, password) => authState.login(username, password)}
+    onsubmit={async (username, password) => {
+      const result = await authState.login(username, password)
+      // Enter at the door starts the way in (#1386) -- for an admin, and
+      // only if the wizard turns out to be launching; the journey decides
+      // once the shell has loaded, and otherwise just lets the door down.
+      if (result === null && authState.isAdmin) wizardJourney.enter()
+      return result
+    }}
     ssoAvailable={authState.ssoAvailable}
     {reverseBeat}
   />
