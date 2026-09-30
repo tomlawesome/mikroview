@@ -106,6 +106,7 @@ while (Date.now() < deadline) {
 }
 check(!!arrived, `the test event reached the server (rule=${RULE})`)
 if (!arrived) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the editor cannot be exercised on a row that never arrived')
   done()
 }
@@ -132,6 +133,7 @@ try {
 }
 check(rowFound, `a row showing "${LEASE_NAME}" rendered`)
 if (!rowFound) {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the editor cannot be exercised on a row that never rendered')
   done()
 }
@@ -206,6 +208,7 @@ check(
 
 await page.keyboard.press('Escape')
 await editor.waitFor({ state: 'detached', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Escape closes the editor')
 
 // --- The gate opens as readily as it shuts -------------------------------
@@ -215,6 +218,7 @@ await editor.waitFor({ timeout: 5000 })
 
 const input = editor.locator('input')
 await input.waitFor({ timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, `a token the router does not name offers a field (${FREE_IP})`)
 check(
   ((await editor.textContent()) ?? '').includes('Display only'),

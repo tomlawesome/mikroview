@@ -86,6 +86,7 @@ if (counts.length > 0) {
 } else {
   // Honest rather than silently passing: with no repeats in the feed
   // there is nothing to collapse, and that is a real state.
+  // safe: real state branch (no repeats to group), not a swallowed failure
   check(true, 'no repeated connections in this run, so nothing collapsed (not a failure)')
 }
 

@@ -218,6 +218,7 @@ await page.waitForFunction(
   null,
   { timeout: 10000 },
 )
+// safe: waitForFunction above throws on timeout
 check(true, 'clicking the ring rolls the docket to centre, on its watchlist tab')
 
 // Back to Stream, so the small-screen leg and the clearing below stay

@@ -217,6 +217,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
   await offer.click()
   const draft = page.locator('.wt-drawer.wt-draft')
   await draft.waitFor({ timeout: 10000 })
+  // safe: waitFor above throws on timeout
   check(true, 'taking the offer opens the watchlist entry form')
 
   const who = await draft.locator('input[aria-label="Who this watch scopes to"]').inputValue()
@@ -267,6 +268,7 @@ if (raised.ok && resolveRaised.ok && undoRaised.ok) {
     'and saving returns the operator to the flags inbox too',
   )
 } else {
+  // safe: skip-marker -- the failure was already recorded above
   check(true, 'skipped -- the watchlist verdict flow cannot run without all three internal_recon flags')
 }
 

@@ -126,6 +126,7 @@ if (raised.every((r) => r.ok)) {
     .filter((r) => !r.ok)
     .map((r) => r.message)
     .join('; ')
+  // safe: skip-marker -- the failure was already recorded above
   check(true, `skipped -- the Clear all flow cannot run without all three scan flags (${reasons})`)
 }
 

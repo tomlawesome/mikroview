@@ -105,6 +105,7 @@ const mainTopConnected = await settledMainTop()
 await dropConnection()
 
 const bannerHandle = await page.waitForSelector('.banner-closed', { timeout: 15000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the banner appears once the connection is actually lost')
 
 // Measure from the handle waitForSelector just returned, and take the
@@ -128,6 +129,7 @@ await page.waitForFunction(
   CONN,
   { timeout: 15000 },
 )
+// safe: waitForFunction above throws on timeout
 check(true, 'the scene bar indicator turns Disconnected with it')
 
 // "Tops the content column and pushes content -- never overlays." An
@@ -144,6 +146,7 @@ check(
 
 // --- Nav stays operable while disconnected ---------------------------------
 await goTo(page, 'Metrics')
+// safe: goTo above throws if navigation fails
 check(true, 'clicking a roll-rail name still rolls the deck while disconnected')
 // Same backoff flip as above: wait for the settled count rather than
 // sampling once, or a reconnect attempt mid-poll reads as 0 or 2.
@@ -152,9 +155,11 @@ await page.waitForFunction(
   `${CONN}.conn-closed`,
   { timeout: 15000 },
 )
+// safe: waitForFunction above throws on timeout
 check(true, "and the Metrics card's own bar carries the same disconnected state -- no scene is blind to it")
 await goTo(page, 'Stream')
 await page.waitForSelector('input.rule', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'and switching back works too')
 
 // The roll rail itself is still fully rendered, not degraded.
@@ -163,8 +168,10 @@ check((await page.$$('.roll-rail .rail-name')).length > 0, 'the roll rail is sti
 // --- Recovery ----------------------------------------------------------------
 restoreConnection()
 await page.waitForSelector('.banner-closed', { state: 'detached', timeout: 15000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the banner clears once the connection actually recovers')
 await page.waitForSelector(`${CONN}.conn-open`, { timeout: 15000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'the scene bar indicator clears with it')
 
 // The drawer folds away over a 180ms transition (IngestLossDrawer's

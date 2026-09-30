@@ -39,6 +39,7 @@ await page.fill(`${PEOPLE} .pform input[aria-label="username"]`, PEER_USER)
 await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, PEER_PASS)
 await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${PEER_USER}")`)
+// safe: waitForSelector above throws on timeout
 check(true, `a second account "${PEER_USER}" is created from the people door`)
 
 // --- User A (the admin session() signed in as) saves a preset ----------
@@ -55,6 +56,7 @@ await page.click(`${BOX} .fsaved`)
 await page.waitForSelector(`${BOX} .fpmenu .fpsave`, { timeout: 5000 })
 await page.click(`${BOX} .fpmenu .fpsave`)
 await page.waitForSelector(`${BOX} .fpmenu`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, `user A saves a preset named "${PRESET_NAME}"`)
 
 async function signOut(p) {
@@ -101,9 +103,11 @@ async function savedPresetNames(p) {
 // --- Sign out, sign in as user B on the same tab: no preset -----------
 
 await signOut(page)
+// safe: signOut throws on failure
 check(true, 'user A signs out')
 
 await signInHere(page, PEER_USER, PEER_PASS, { enrol: true })
+// safe: signInHere throws on failure
 check(true, 'user B signs in, on the same tab user A just used')
 
 const peerPresets = await savedPresetNames(page)
@@ -115,9 +119,11 @@ check(
 // --- Sign back in as user A: the preset followed the account ----------
 
 await signOut(page)
+// safe: signOut throws on failure
 check(true, 'user B signs out')
 
 await signInHere(page, ADMIN_USER, ADMIN_PASS)
+// safe: signInHere throws on failure
 check(true, 'user A signs back in, on the same tab')
 
 const aPresetsAgain = await savedPresetNames(page)
@@ -138,6 +144,7 @@ const remove = page.locator(`${PEOPLE} .prow:has-text("${PEER_USER}") .remove`)
 await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${PEER_USER}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, `the peer account "${PEER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

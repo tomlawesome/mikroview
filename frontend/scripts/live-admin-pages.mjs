@@ -43,6 +43,7 @@ const { page, consoleErrors } = await session({ mocksApi: true })
  * proves arrival now; it is specific to the destination because each deck card carries a different `data-card`. */
 async function openAndCheck(label) {
   await goTo(page, label)
+  // safe: goTo above throws if navigation fails
   check(true, `${label} is reachable and opens`)
 }
 
@@ -161,6 +162,7 @@ await page.fill(`${PEOPLE} .pform input[aria-label="password"]`, VIEWER_PASS)
 await page.click(`${PEOPLE} .pform button:has-text("can only look")`)
 await page.click(`${PEOPLE} .pform button:has-text("let them in")`)
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`)
+// safe: waitForSelector above throws on timeout
 check(true, `the viewer account "${VIEWER_USER}" is created from the people group`)
 
 // --- Viewer: absent, never disabled -------------------------------------
@@ -230,6 +232,7 @@ const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`
 await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
 // --- Run setup… opens the wizard, and is not a page (#487, #1381) -------
@@ -255,6 +258,7 @@ await openAndCheck('Entities')
 await goTo(page, 'Run setup…')
 const wizard = page.locator('.page.wiz')
 await wizard.waitFor({ state: 'visible', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Run setup… opens the full-screen wizard, not the retired modal')
 const stillCurrent = await page
   .$eval('.roll-rail button.rail-name[aria-current="page"]', (e) => e.textContent.trim())

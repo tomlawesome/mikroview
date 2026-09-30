@@ -227,6 +227,7 @@ check(
 
 await page.click('.olink:has-text("close the bench")')
 await page.waitForSelector('.bench', { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, 'closing the bench folds it away and the page is whole again')
 
 // --- Claim 3: the viewer grammar ----------------------------------------
@@ -294,6 +295,7 @@ const remove = page.locator(`${PEOPLE} .prow:has-text("${VIEWER_USER}") .remove`
 await remove.click()
 await remove.click()
 await page.waitForSelector(`${PEOPLE} .prow:has-text("${VIEWER_USER}")`, { state: 'detached' })
+// safe: waitForSelector above throws on timeout
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
