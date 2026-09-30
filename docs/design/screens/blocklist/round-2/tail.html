@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MikroView — the first-run tail: block known-bad addresses after the wizard (#1360, round 2)</title>
+<style>
+/* Tokens: frontend/src/app.css (Atlas II). The frame, rail, ledger and track are the ratified wizard's
+   (screens/wizard/round-15: shell.css, wizard.css, inks.css, fall.css), ported; the builder's body is
+   round-2/builder.html's, carried verbatim. */
+:root {
+  --bg: #06080e; --bg-elevated: #0f1422; --bg-hover: rgba(160, 185, 230, 0.08);
+  --border: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26); --o-grid2: rgba(160, 185, 230, 0.26);
+  --fg: #e9eefb; --fg-muted: #97a4c4; --fg-dim: #55628a; --accent: #9db8e8;
+  --alarm: #ff5470; --now: #e8b05a;
+  --accept: #3ecf7e; --drop: #f5a623; --reject: #ef4444; --log: #38bdf8;
+  --warn: #f28a1e; --caution: #e8e04d; --marked: #a78bfa; --natted: #2dd4bf;
+  --fall-nat: #9b3fc9; --lane-guest: #d76a9e; --lane-iot: #b59f2a;
+  --accent-bg: color-mix(in srgb, var(--accent) 12%, transparent);
+  --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --ink-spamhaus: var(--drop); --ink-et: var(--marked); --ink-cins: var(--natted); --ink-own: var(--log);
+  --ink-push: var(--fall-nat); --ink-off: var(--fg-dim);
+  --ink-token: var(--accept); --ink-cert: var(--accept); --ink-logs: var(--accept); --ink-backup: var(--accept); --ink-rules: var(--accept); --ink-lists: var(--accept);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.mono { font-family: var(--font-mono); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---- the wizard's frame (wizard.css) ---- */
+.page { position: fixed; inset: 0; display: grid; grid-template-rows: 48px 14px 1fr; grid-template-columns: 236px 1fr 40px; }
+.bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 20px; }
+.wm { font-size: 15px; font-weight: 800; letter-spacing: 0.04em; color: var(--fg); }
+.wm em { color: var(--accent); font-style: normal; }
+.bar .chips { display: flex; gap: 8px; margin-left: 18px; overflow: hidden; }
+.att { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--o-grid2); border-radius: 12px; padding: 3px 12px; font: 600 10.5px/1.5 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-muted); white-space: nowrap; }
+.att i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-dim); flex: none; }
+.att.ok i { background: var(--accept); } .att.ok { color: var(--accept); }
+.att.dec i { background: var(--log); } .att.dec { color: var(--log); }
+.att.dark i { background: transparent; border: 1px solid var(--fg-dim); }
+.bar .right { margin-left: auto; display: flex; gap: 10px; align-items: center; font: 12px var(--font-mono); color: var(--fg-dim); }
+.striprow { grid-column: 1 / 3; padding: 0 20px; }
+.ovstrip { display: flex; gap: 3px; height: 6px; }
+.ovstrip .ovtick { flex: 1; border-radius: 2px; background: var(--fg-dim); opacity: 0.32; }
+.ovstrip .ovtick.on { opacity: 1; }
+.ovstrip .ovtick.dark { background: transparent; border: 1px dashed var(--o-grid2); opacity: 0.8; }
+/* the step rail (shell.css, wizard.css) */
+.rail { grid-column: 1; grid-row: 3; border-right: 1px solid var(--border); padding: 14px 8px; overflow-y: auto; }
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.step-row { width: 100%; display: flex; align-items: flex-start; gap: 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; color: var(--fg-muted); white-space: normal; }
+.step-row:hover:not(:disabled) { background: var(--bg-hover); }
+.step-row:disabled { opacity: 1; cursor: default; }
+.step-row.current { background: var(--bg-elevated); border-color: var(--border); color: var(--fg); }
+.step-n { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); font-size: 11px; }
+.step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.step-title { font-size: 13px; }
+.step-receipt { font-size: 11px; line-height: 1.4; color: var(--accept); word-break: break-word; }
+.step-row.done .step-n { border-color: var(--accept); color: var(--accept); }
+/* round 2: the offered tail row — a "+" in a dashed ring; its receipt is a fact, not a proof, so it is muted */
+.step-row.offer .step-n { border-style: dashed; color: var(--fg-muted); }
+.step-row.offer .step-receipt { color: var(--fg-dim); }
+.step-row.offer.current .step-n { border-style: solid; color: var(--fg); }
+/* the body (wizard.css) */
+.main { grid-column: 2 / 4; grid-row: 3; position: relative; min-height: 0; display: grid; grid-template-rows: 1fr auto; }
+.body { min-height: 0; overflow-y: auto; padding: 26px 40px 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 860px; }
+.body h3 { margin: 0; font-size: 22px; font-weight: 600; line-height: 1.3; color: var(--fg); }
+.body .hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--fg-muted); max-width: 640px; }
+.body .hint b { color: var(--fg); font-weight: 500; }
+.foot { display: flex; align-items: center; gap: 12px; padding: 12px 40px; border-top: 1px solid var(--border); background: var(--bg-elevated); }
+.foot .fhint { margin-left: auto; font-size: 12.5px; color: var(--fg-muted); text-align: right; }
+.page button:not(.step-row):not(.linkish):not(.primary):not(.seg button) { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: transparent; border: 1px solid var(--border); color: var(--fg-muted); white-space: nowrap; }
+.page button:not(.step-row):hover:not(:disabled) { color: var(--fg); border-color: var(--fg-muted); }
+.page button.primary { border-radius: 5px; padding: 7px 13px; font-size: 13px; background: var(--accent); border: 1px solid var(--accent); color: var(--bg); font-weight: 600; white-space: nowrap; }
+.page button.linkish { background: none; border: 0; padding: 0; color: var(--log); text-decoration: underline; font-size: inherit; }
+.page pre { margin: 0; align-self: stretch; padding: 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; text-indent: 1.1em hanging each-line; color: var(--fg); }
+.note { font-size: 12.5px; color: var(--fg-muted); margin: 0; }
+/* the track (inks.css) */
+.track { position: relative; align-self: stretch; display: flex; padding: 22px 0 6px; max-width: 720px; }
+.track .wire { position: absolute; left: 0; right: 0; top: 30px; height: 2px; background: var(--hair-2); opacity: 0.5; }
+.track .seg { position: absolute; top: 30px; height: 2px; }
+.track .stn { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 0 4px; }
+.track .stn .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--ink-off); background: var(--bg); box-sizing: border-box; position: relative; z-index: 1; margin-top: 1px; }
+.track .stn.done .dot { background: var(--ink); border-color: var(--ink); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ink) 22%, transparent); }
+.track .stn .lab { font: 700 11px/1.3 var(--font-mono); letter-spacing: 0.04em; color: var(--ink-off); white-space: nowrap; }
+.track .stn.done .lab { color: var(--accept); }
+.track.compact { padding-top: 18px; }
+/* the ledger (wizard.css) */
+.ledger { align-self: stretch; max-width: 720px; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: baseline; padding: 9px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.ledger .row:first-child { border-top: 0; }
+.ledger .row .r { font-size: 12px; }
+.ledger .undo { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+.ledger .undo pre { font-size: 12px; }
+.ledger .row .step-n.done { border-color: var(--accept); color: var(--accept); }
+.ledger .row .r.done { color: var(--accept); }
+.ledger .row .step-n.skip { border-style: dashed; color: var(--fg-dim); }
+.ledger .row .r.skip { color: var(--fg-dim); }
+.ledger .row .skip s { text-decoration-color: var(--fg-dim); }
+/* round 2: the offered row — the one thing on the ledger that is neither a proof nor set aside */
+.ledger .row .step-n.offer { border-style: dashed; color: var(--fg-muted); }
+.ledger .row .r.offer { color: var(--fg-muted); }
+
+/* ---- the builder's body, carried from builder.html (its .body becomes .body.wide here) ---- */
+.body.wide { max-width: none; align-self: stretch; overflow: hidden; padding: 20px 32px 16px 36px; display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: 30px; row-gap: 10px; align-items: stretch; }
+.body.wide .head { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.body.wide .hint { max-width: 900px; }
+.body .vline { margin: 0; font: 11.5px var(--font-mono); color: var(--fg-dim); }
+.body .vline b { color: var(--fg-muted); font-weight: 500; }
+.col { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.col.left { overflow-y: auto; padding-right: 4px; gap: 8px; }
+.col.right { overflow-y: auto; gap: 7px; }
+.lcard { border: 1px solid var(--border); border-radius: 8px; background: transparent; padding: 10px 14px 11px; display: flex; flex-direction: column; gap: 6px; flex: none; }
+.lcard.on { border-color: color-mix(in srgb, var(--ink) 45%, transparent); }
+.lcard.off { padding-bottom: 10px; }
+.lcard .top { display: flex; align-items: center; gap: 10px; }
+.lcard .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink); flex: none; }
+.lcard.off .dot { background: transparent; border: 1px dashed var(--ink-off); }
+.lcard h4 { margin: 0; font-size: 14.5px; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.lcard.off h4 { color: var(--fg-muted); font-weight: 500; }
+.lcard .top .seg { margin-left: auto; }
+.lcard .factsrow { font: 11.5px var(--font-mono); color: var(--fg-dim); margin-top: -3px; }
+.lcard .factsrow b { color: var(--fg-muted); font-weight: 500; }
+.lcard .guide { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); }
+.lcard .guide b { color: var(--fg); font-weight: 500; }
+.lcard.off .guide { color: var(--fg-dim); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
+.seg button { border: 0; border-radius: 0; padding: 5px 11px; background: transparent; color: var(--fg-muted); font-size: 12.5px; white-space: nowrap; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent-bg); color: var(--fg); }
+.seg button.on.no { background: transparent; color: var(--log); }
+.seg.sm button { padding: 3px 9px; font-size: 12px; }
+.seg button small { font-size: 10px; color: var(--fg-dim); margin-left: 4px; font-family: var(--font-mono); }
+.choices { display: grid; grid-template-columns: 92px auto 1fr; gap: 6px 12px; align-items: center; padding-top: 8px; border-top: 1px solid var(--border); }
+.ch { display: contents; }
+.ch .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.ch small { font-size: 11.5px; line-height: 1.35; color: var(--fg-dim); min-width: 0; }
+.ch small b { color: var(--fg-muted); font-weight: 500; }
+.ch .seg { justify-self: start; }
+details.more { flex: none; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px; }
+details.more summary { cursor: pointer; font-size: 12.5px; color: var(--fg-muted); list-style: none; display: flex; gap: 8px; align-items: baseline; }
+details.more summary::before { content: '▸'; color: var(--fg-dim); font-size: 11px; }
+details.more summary .cat { margin-left: auto; font: 11px var(--font-mono); color: var(--fg-dim); }
+.blockhead { display: flex; align-items: baseline; gap: 10px; }
+.blockhead h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
+.blockhead .n { font-size: 12px; color: var(--fg-muted); }
+.blockhead .live { margin-left: auto; font: 11px var(--font-mono); color: var(--now); white-space: nowrap; }
+.body.wide pre { font-size: 11.5px; line-height: 1.55; }
+.page pre.script { max-height: 198px; overflow-y: auto; flex-shrink: 0; }
+.sec { color: var(--fg-dim); user-select: none; }
+.sec b { font-weight: 600; color: var(--ink, var(--fg-muted)); }
+pre .k { color: var(--log); }
+pre .fold { color: var(--fg-dim); font-style: italic; }
+pre .v { color: var(--now); }
+.copyrow { display: flex; align-items: center; gap: 12px; }
+.copyrow .note { font-size: 12px; color: var(--fg-muted); }
+.obs { font-size: 12.5px; line-height: 1.5; padding: 8px 12px; border-left: 2px solid var(--fg-dim); color: var(--fg-muted); border-radius: 0 4px 4px 0; background: var(--bg-hover); }
+.obs.quiet { border-left-color: var(--fg-dim); }
+.obs b { color: var(--fg); font-weight: 500; }
+.ledgerh { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
+.ledgerh h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
+.ledgerh span { font-size: 12px; color: var(--fg-muted); }
+.body.wide .ledger { max-width: none; }
+.body.wide .ledger .row { padding: 7px 12px; font-size: 12.5px; gap: 8px 10px; }
+.body.wide .ledger .row .r { font-size: 11.5px; color: var(--fg-muted); }
+.body.wide .ledger .row .step-n.done { border-color: var(--ink); color: var(--ink); }
+.body.wide .ledger .row .r.done { color: var(--ink); }
+.body.wide .ledger .row .step-n.wait { border-color: var(--now); color: var(--now); }
+.body.wide .ledger .row .r.wait { color: var(--now); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="page" id="page"></div>
+<script>
+/* The wizard's data story (screens/wizard/round-15/engine.js, happy path): rb5009, enrolled 192.168.13.1,
+   certificate 14:02:58, logs 14:03:04 (69 lines), push every 20 min from 14:03:21 on RouterOS 7.24.4,
+   backup 03:00 scheduled 14:03:22, 4 rules tagged 14:03:57. Round 2 adds the tail:
+   ?scene=stand (default) — Where setup stands, with the tail offered
+   ?scene=build — the tail's stage: the builder in the wizard's frame
+   ?scene=after — Where setup stands once the paste landed (loaded 14:07, confirmed by the push at 14:23) */
+const q = new URLSearchParams(location.search);
+const SCENE = q.get('scene') || 'stand';
+const AFTER = SCENE === 'after';
+const ROS = '7.24.4';
+
+function seg(opts, on, small) {
+  return `<div class="seg ${small ? 'sm' : ''}">${opts.map(o => `<button type="button" class="${o.v === on ? 'on' : ''} ${o.v === on && o.no ? 'no' : ''}">${o.l}${o.tag ? `<small>${o.tag}</small>` : ''}</button>`).join('')}</div>`;
+}
+const yesno = on => seg([{ v: 'yes', l: 'Yes' }, { v: 'no', l: 'Not now', no: true }], on);
+const choice = (k, s, hint) => `<div class="ch"><span class="k">${k}</span>${s}<small>${hint}</small></div>`;
+
+function bar() {
+  const chips = [
+    `<span class="att dec"><i></i>rb5009</span>`,
+    `<span class="att ok"><i></i>cert · 14:02:58</span>`,
+    `<span class="att ok"><i></i>logs · 14:03:04</span>`,
+    `<span class="att ok"><i></i>push · 20 min</span>`,
+    `<span class="att dark"><i></i>1 dark</span>`,
+    `<span class="att ok"><i></i>backup · 03:00</span>`,
+    `<span class="att ok"><i></i>4 rules</span>`,
+  ];
+  if (AFTER) chips.push(`<span class="att ok"><i></i>2 lists</span>`);
+  return `<div class="bar"><span class="wm">MIKRO<em>VIEW</em></span><div class="chips" aria-label="Proofs so far">${chips.join('')}</div>
+    <div class="right"><span class="att ok"><i></i>live · 7/s</span><span>${AFTER ? '1,412' : '69'} lines</span></div></div>
+    <div class="striprow"><div class="ovstrip" aria-hidden="true"><div class="ovtick on" style="background:var(--accent)"></div><div class="ovtick on" style="background:var(--accept)"></div><div class="ovtick on" style="background:var(--now)"></div><div class="ovtick dark"></div><div class="ovtick on" style="background:var(--lane-iot)"></div><div class="ovtick on" style="background:var(--accent)"></div></div></div>`;
+}
+
+function rail() {
+  const steps = [
+    ['1', 'The router', 'rb5009 · enrolled 192.168.13.1 · 14:03:04'],
+    ['2', 'Mint the token', 'token good until 14:17'],
+    ['3', 'Paste once', 'everything arrived · 69 lines'],
+    ['4', 'Tag firewall rules', '4 rules tagged · 14:03:57'],
+    ['✓', 'Where setup stands', ''],
+  ];
+  const rows = steps.map(([n, t, r]) => `<li><button type="button" class="step-row ${n === '✓' ? '' : 'done'} ${SCENE !== 'build' && n === '✓' ? 'current' : ''}" ${n === '✓' && SCENE === 'build' ? 'data-act="goto-stand"' : 'disabled'} aria-current="${SCENE !== 'build' && n === '✓' ? 'step' : 'false'}"><span class="step-n">${n}</span><span class="step-text"><span class="step-title">${t}</span>${r ? `<span class="step-receipt">${r}</span>` : ''}</span></button></li>`).join('');
+  // round 2: the tail, first run only — offered until taken or set aside, then a proof like the others
+  let tail;
+  if (AFTER) tail = `<li><button type="button" class="step-row done" disabled><span class="step-n">✓</span><span class="step-text"><span class="step-title">Block known-bad addresses</span><span class="step-receipt">2 lists · loaded 14:07 · confirmed 14:23</span></span></button></li>`;
+  else tail = `<li><button type="button" class="step-row offer ${SCENE === 'build' ? 'current' : ''}" aria-current="${SCENE === 'build' ? 'step' : 'false'}" title="Optional · first run only"><span class="step-n">+</span><span class="step-text"><span class="step-title">Block known-bad addresses</span><span class="step-receipt">optional · first run only</span></span></button></li>`;
+  return `<nav class="rail" aria-label="Setup steps"><ol>${rows}${tail}</ol></nav>`;
+}
+
+function track() {
+  const st = ['copied', 'certificate', 'logs', 'push', 'backup', '4 rules'];
+  if (AFTER) st.push('2 lists');
+  const n = st.length, centre = i => ((i + 0.5) / n) * 100;
+  let segs = '';
+  for (let i = 0; i < n - 1; i++) segs += `<div class="seg" style="left:${centre(i)}%;width:${centre(i + 1) - centre(i)}%;background:var(--accept)"></div>`;
+  return `<div class="track compact" aria-label="What has arrived"><div class="wire"></div>${segs}${st.map(l => `<div class="stn done" style="--ink:var(--accept)"><div class="dot"></div><div class="lab">${l}</div></div>`).join('')}</div>`;
+}
+
+function standBody() {
+  const rows = [
+    ['Certificate trusted', 'fetched by 192.168.13.1 · 14:02:58'],
+    ['Logs flowing', `enrolled at 192.168.13.1 · 14:03:04 · ${AFTER ? '1,412' : '69'} lines`],
+    ['Router state pushed', `every 20 minutes · first 14:03:21 · RouterOS ${ROS}`],
+    ['Nightly backup', '03:00 · scheduled 14:03:22'],
+    ['Rules tagged', '4 rules log · since 14:03:57'],
+  ].map(([t, r]) => `<div class="row"><span class="step-n done">✓</span><span>${t}<div class="r done">${r}</div></span><button type="button" class="linkish">Undo</button></div>`).join('');
+  // round 2: the sixth row
+  const tail = AFTER
+    ? `<div class="row"><span class="step-n done">✓</span><span>Known-bad addresses dropped<div class="r done">Spamhaus DROP 1,692 held · Emerging Threats 633 held · loaded 14:07 · confirmed by the push 14:23 · rules fired 3</div></span><button type="button" class="linkish">Undo</button></div>`
+    : `<div class="row"><span class="step-n offer">+</span><span>Known-bad addresses<div class="r offer">not blocked yet — rb5009 lets them in, and MikroView flags them from Spamhaus DROP and Emerging Threats · optional, and offered here on first run only</div></span><button type="button" class="linkish" data-act="tail">Set it up</button></div>`;
+  const n = AFTER ? 6 : 5;
+  return `<h3>rb5009 is sending.</h3><p class="hint">${n} things stand on evidence. Finish takes you to the fall, with rb5009 already flowing.</p>${track()}
+    <div class="ledger">${rows}${tail}</div>
+    <p class="note">Admin ▸ Run setup… reopens this ledger any time. To start again from nothing, <button type="button" class="linkish">undo everything on the router first</button>.</p>`;
+}
+function standFoot() {
+  const tail = AFTER ? '' : `<button type="button" data-act="tail">Block known-bad addresses</button>`;
+  const hint = AFTER ? '' : `Optional, first run only — later it lives in Settings ▸ drop list`;
+  return `<button type="button">Add another router</button><span class="fhint">${hint}</span>${tail}<button type="button" class="primary">Finish</button>`;
+}
+
+/* ---- the stage: builder.html's body, in the wizard's frame ---- */
+function cardSpamhaus() {
+  return `<section class="lcard on" style="--ink: var(--ink-spamhaus)" aria-label="Spamhaus DROP">
+    <div class="top"><span class="dot"></span><h4>Spamhaus DROP</h4>${yesno('yes')}</div>
+    <div class="factsrow"><b>1,692</b> ranges + 91 IPv6 · 100 KB · barely moves · false positives <b>rare</b> · spamhaus.org · credited</div>
+    <p class="guide">Whole netblocks Spamhaus says carry <b>no legitimate traffic</b> — hijacked space and criminal hosting. MikroView already flags from it, so what the router drops and what MikroView flags stay the same.</p>
+    <div class="choices">
+      ${choice('block', seg([{ v: 'from', l: 'from them' }, { v: 'both', l: 'both ways' }], 'from', true), 'Inbound is enough — nothing on your LAN talks to hijacked space on purpose.')}
+      ${choice('ipv6 too', seg([{ v: 'yes', l: 'yes' }, { v: 'no', l: 'no' }], 'yes', true), 'DROPv6, 91 ranges, the same terms. Harmless on an IPv4-only router: nothing matches.')}
+      ${choice('log the drops', seg([{ v: 'yes', l: 'yes' }, { v: 'no', l: 'no' }], 'yes', true), 'Each drop reaches MikroView as a line naming the list; a home WAN sees a few an hour.')}
+      ${choice('refresh', seg([{ v: '6h', l: '6 h' }, { v: 'daily', l: 'daily' }, { v: 'weekly', l: 'weekly' }], 'daily', true), 'Spamhaus asks for at least an hour apart; daily is plenty for a list that barely moves.')}
+    </div></section>`;
+}
+function cardET() {
+  return `<section class="lcard on" style="--ink: var(--ink-et)" aria-label="Emerging Threats compromised IPs">
+    <div class="top"><span class="dot"></span><h4>Emerging Threats compromised IPs</h4>${yesno('yes')}</div>
+    <div class="factsrow"><b>633</b> hosts · 9 KB · rebuilt on weekdays · false positives <b>some</b> · emergingthreats.net · BSD</div>
+    <p class="guide">Single hosts seen attacking in the last few days. Churns, and a cleaned-up host stays listed a while, so a <b>drop is occasionally an innocent server</b> — MikroView shows each one. It flags from this list already.</p>
+    <div class="choices">
+      ${choice('block', seg([{ v: 'from', l: 'from them' }, { v: 'both', l: 'both ways' }], 'both', true), '<b>Both ways</b> here: a LAN device talking <em>to</em> one of these is the finding.')}
+      ${choice('log the drops', seg([{ v: 'yes', l: 'yes' }, { v: 'no', l: 'no' }], 'yes', true), 'Keep it on here: an outbound drop is the line you want to see.')}
+      ${choice('refresh', seg([{ v: 'daily', l: 'daily' }, { v: 'weekdays', l: 'weekdays', tag: '7.24' }, { v: 'weekly', l: 'weekly' }], 'weekdays', true), 'The list is rebuilt once a day on weekdays, so <b>weekdays</b> fetches when there is something new.')}
+    </div></section>`;
+}
+function cardCINS() {
+  return `<section class="lcard off" style="--ink: var(--ink-cins)" aria-label="CINS Army">
+    <div class="top"><span class="dot"></span><h4>CINS Army</h4>${yesno('no')}</div>
+    <div class="factsrow"><b>15,000</b> hosts · 213 KB · changes hourly · false positives <b>some</b> · cinsscore.com · free</div>
+    <p class="guide">Hosts their sensors saw scanning or attacking, kept to addresses <b>not already on other lists</b>. Big — a minute or more to load on a small router — and worth it only if rb5009 exposes SSH, a VPN or a web service; with nothing exposed, the default firewall drops these anyway. MikroView does not flag from it.</p>
+  </section>`;
+}
+const more = `<details class="more"><summary>Considered and left out — fourteen lists<span class="cat">catalogue reviewed 2026-09-30</span></summary></details>`;
+const block = `<span class="sec" style="--ink: var(--ink-push)"># 1 · <b>The push</b> — updated once for every list: raw rules join the rule table it sends; lists named mv-bl-* are sent as a count (guarded: sets the script the wizard made)</span>
+/system script set [find name=mikroview-push] source="<span class="k">…</span>"
+<span class="fold">   4 lines changed of 61: /ip/firewall/raw joins the rule kinds · address lists matching mv-bl-* become {"list","count","changed"} · wizardVersion 5</span>
+<span class="sec" style="--ink: var(--ink-spamhaus)"># 2 · <b>Spamhaus DROP</b> — the fetch-and-load script (guarded: adds once, then sets)</span>
+:if ([:len [/system script find name=mv-bl-spamhaus]] = 0) do={ /system script add name=mv-bl-spamhaus policy=read,write,test,ftp source="<span class="k">…</span>" } else={ /system script set [find name=mv-bl-spamhaus] policy=read,write,test,ftp source="<span class="k">…</span>" }
+<span class="fold">   the source, 24 lines: /tool fetch https://www.spamhaus.org/drop/drop_v4.json (and drop_v6.json) to a file · read in 32 KiB chunks with /file read · each line through <span class="v">:deserialize from=json</span>, a bad line skipped with <span class="v">:continue</span> · refuse wider than /8 · the SBL id and "© The Spamhaus Project" kept in each entry's comment · built as mv-bl-spamhaus-next, swapped in only if the fetch and the parse both succeeded</span>
+<span class="sec" style="--ink: var(--ink-spamhaus)"># 3 · <b>Spamhaus DROP</b> — the schedule: daily, 04:17</span>
+:if ([:len [/system scheduler find name=mv-bl-spamhaus]] = 0) do={ /system scheduler add name=mv-bl-spamhaus interval=1d start-time=04:17:00 policy=read,write,test,ftp on-event="/system script run mv-bl-spamhaus" } else={ … }
+<span class="sec" style="--ink: var(--ink-spamhaus)"># 4 · <b>Spamhaus DROP</b> — the drop rules: raw, first, logged · IPv4 and IPv6</span>
+:if ([:len [/ip firewall raw find comment="mikroview blocklist: spamhaus drop"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus action=drop log=yes log-prefix="D|drop|spamhaus" comment="mikroview blocklist: spamhaus drop" place-before=0 } else={ … }
+:if ([:len [/ipv6 firewall raw find comment="mikroview blocklist: spamhaus drop"]] = 0) do={ /ipv6 firewall raw add chain=prerouting src-address-list=mv-bl-spamhaus6 action=drop log=yes log-prefix="D|drop|spamhaus" comment="mikroview blocklist: spamhaus drop" place-before=0 } else={ … }
+<span class="sec" style="--ink: var(--ink-et)"># 5 · <b>Emerging Threats</b> — the fetch-and-load script</span>
+:if ([:len [/system script find name=mv-bl-et]] = 0) do={ /system script add name=mv-bl-et policy=read,write,test,ftp source="<span class="k">…</span>" } else={ … }
+<span class="fold">   the source, 19 lines: fetch https://rules.emergingthreats.net/blockrules/compromised-ips.txt · one address per line, "#" lines skipped · the same chunked read and staging swap</span>
+<span class="sec" style="--ink: var(--ink-et)"># 6 · <b>Emerging Threats</b> — the schedule: weekdays, 04:31</span>
+:if ([:len [/system scheduler find name=mv-bl-et]] = 0) do={ /system scheduler add name=mv-bl-et interval=1d <span class="v">days=mon,tue,wed,thu,fri</span> start-time=04:31:00 policy=read,write,test,ftp on-event="/system script run mv-bl-et" } else={ … }
+<span class="sec" style="--ink: var(--ink-et)"># 7 · <b>Emerging Threats</b> — two drop rules: from them, and to them (one prefix; MikroView reads the direction from the line)</span>
+:if ([:len [/ip firewall raw find comment="mikroview blocklist: et compromised (from)"]] = 0) do={ /ip firewall raw add chain=prerouting src-address-list=mv-bl-et action=drop log=yes log-prefix="D|drop|et" comment="mikroview blocklist: et compromised (from)" place-before=0 } else={ … }
+:if ([:len [/ip firewall raw find comment="mikroview blocklist: et compromised (to)"]] = 0) do={ /ip firewall raw add chain=prerouting dst-address-list=mv-bl-et action=drop log=yes log-prefix="D|drop|et" comment="mikroview blocklist: et compromised (to)" place-before=0 } else={ … }
+<span class="sec"># 8 · Run both now, rather than waiting for 04:17</span>
+/system script run mv-bl-spamhaus; /system script run mv-bl-et`;
+
+function buildBody() {
+  return `<div class="head">
+      <h3>Block known-bad addresses on rb5009.</h3>
+      <p class="hint">Optional, and offered here on first run only. Pick the lists; MikroView builds one block that makes the router fetch each list itself, straight from its source, and drop what is on it — in <b>raw, before anything else</b>. Paste it once into the router's <b>terminal</b>, like the block before. Safe to paste again: it sets, never adds.</p>
+      <p class="vline">written for <b>RouterOS ${ROS}</b> — what rb5009 reported at 14:03 · the choices below are the ones this version offers · reviewed on ${ROS}</p>
+    </div>
+    <div class="col left">${cardSpamhaus()}${cardET()}${cardCINS()}${more}</div>
+    <div class="col right">
+      <div class="blockhead"><h5>The block</h5><span class="n">8 parts, in order — the push, Spamhaus DROP, Emerging Threats, run now</span><span class="live">rebuilt as you click</span></div>
+      <pre class="script" aria-label="RouterOS block to paste">${block}</pre>
+      <div class="copyrow"><button type="button" class="primary">Copy — 2 lists · 8 parts</button><span class="note">All 8 parts are new on rb5009.</span></div>
+      <div class="obs quiet"><b>Nothing to wait for until you paste.</b> After it, the router runs both scripts at once; the push at 14:23 says what rb5009 holds and how often each rule has fired.</div>
+      <div class="ledgerh"><h5>Where it stands</h5><span>what rb5009 holds, from its own push</span></div>
+      <div class="ledger">
+        <div class="row" style="--ink: var(--ink-spamhaus)"><span class="step-n wait">1</span><span>Spamhaus DROP<div class="r wait">in the block · not on the router yet</div></span><span></span></div>
+        <div class="row" style="--ink: var(--ink-et)"><span class="step-n wait">2</span><span>Emerging Threats compromised<div class="r wait">in the block · not on the router yet</div></span><span></span></div>
+        <div class="row"><span class="step-n skip">–</span><span class="skip"><s>CINS Army</s><div class="r skip">not now</div></span><span></span></div>
+      </div>
+    </div>`;
+}
+function buildFoot() {
+  return `<button type="button" data-act="goto-stand">Back</button><button type="button">Not now</button><span class="fhint">Not now leaves it in Settings ▸ drop list · Finish any time — the ledger keeps watching the router</span><button type="button" class="primary">Copy — 2 lists · 8 parts</button><button type="button">Finish</button>`;
+}
+
+const build = SCENE === 'build';
+document.getElementById('page').innerHTML = bar() + rail() + `<div class="main"><div class="body ${build ? 'wide' : ''}">${build ? buildBody() : standBody()}</div><div class="foot">${build ? buildFoot() : standFoot()}</div></div>`;
+</script>
+</body>
+</html>
