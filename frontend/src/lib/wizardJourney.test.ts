@@ -4,8 +4,8 @@
 // jsdom can prove. The six beats themselves are canvas frames, checked
 // by eye against round-15's shots and by the live check.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mix, patterns, reducedMotion, rgb, strike } from "./wizardJourney";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { journey, mix, patterns, reducedMotion, rgb, strike } from "./wizardJourney";
 import { wizardJourney } from "./wizardJourney.svelte";
 import { wizardState } from "./wizard.svelte";
 import { appState } from "./state.svelte";
@@ -180,5 +180,123 @@ describe("the way out", () => {
     expect(wizardJourney.wayOut(swap)).toBe(true);
     expect(handler).toHaveBeenCalledWith(swap);
     wizardJourney.wayOutHandler = null;
+  });
+});
+
+// A 2D context that accepts every call and every property, so the six
+// beats can run their real frame loop under jsdom. What is asserted is
+// the clock the design fixes, not the pixels: the page swaps once under
+// the cover, the box lands after it, the letters strike during the
+// swell, the groups arrive on time, and the way out is 3/4 speed.
+function fakeContext(): CanvasRenderingContext2D {
+  const store: Record<string | symbol, unknown> = {};
+  const gradient = { addColorStop: () => {} };
+  return new Proxy(store, {
+    get: (t, p) => (p in t ? t[p] : p === "createLinearGradient" || p === "createRadialGradient" ? () => gradient : () => {}),
+    set: (t, p, v) => {
+      t[p] = v;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+}
+
+function rideEl(): HTMLElement {
+  const letter = (c: string) => {
+    const l = document.createElement("span");
+    l.className = "l";
+    l.textContent = c;
+    return l;
+  };
+  const el = document.createElement("div");
+  const wm = document.createElement("span");
+  wm.className = "wm";
+  const em = document.createElement("em");
+  em.append(letter("V"));
+  wm.append(letter("M"), letter("I"), em);
+  el.append(wm);
+  document.body.appendChild(el);
+  return el;
+}
+
+// Thousands of real frames on a fake clock: slow under coverage
+// instrumentation, so these carry their own time limit.
+describe("the six beats run on one clock", { timeout: 30000 }, () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "requestAnimationFrame", "performance"] });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => fakeContext() as never);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
+  });
+
+  function play(scale?: number) {
+    const log: [string, number][] = [];
+    const at = (name: string) => () => log.push([name, performance.now()]);
+    const ride = rideEl();
+    const rect = (x: number, y: number) => ({ left: x, top: y, width: 120, height: 30, right: x + 120, bottom: y + 30, x, y, toJSON() {} }) as DOMRect;
+    const started = journey({
+      canvas: document.createElement("canvas"),
+      ride,
+      from: rect(400, 300),
+      to: rect(20, 10),
+      D: 600,
+      scale,
+      slide: () => {},
+      swap: at("swap"),
+      groups: [
+        [4350, at("bar")],
+        [5350, at("rows")],
+      ],
+      landed: at("landed"),
+      done: at("done"),
+    });
+    return { started, log, ride };
+  }
+
+  it("swaps the page under the cover, lands the box, then finishes", () => {
+    const { started, log, ride } = play();
+    expect(started).toBe(true);
+
+    // The sign strikes during the swell (1.1-2.6s): stepped frame by
+    // frame, since a struck letter flickers back to plain at random.
+    let struck = false;
+    for (let t = 0; t < 2600; t += 16) {
+      vi.advanceTimersByTime(16);
+      if (t > 1100 && ride.querySelector(".l.lit")) struck = true;
+    }
+    expect(struck).toBe(true);
+
+    vi.advanceTimersByTime(9000);
+    const names = log.map(([n]) => n);
+    expect(names.filter((n) => n === "swap")).toHaveLength(1);
+    expect(names.filter((n) => n === "landed")).toHaveLength(1);
+    expect(names.filter((n) => n === "done")).toHaveLength(1);
+    expect(names.indexOf("swap")).toBeLessThan(names.indexOf("landed"));
+    expect(ride.classList.contains("landed")).toBe(true);
+    expect(ride.style.transform).toMatch(/^translate\(/);
+
+    const when = Object.fromEntries(log);
+    expect(when.swap).toBeGreaterThanOrEqual(2200);
+    expect(when.landed).toBeGreaterThanOrEqual(4800);
+    expect(when.bar).toBe(4350);
+    expect(when.rows).toBe(5350);
+  });
+
+  it("plays the way out at three-quarters speed", () => {
+    const { log } = play(0.75);
+    vi.advanceTimersByTime(12000);
+    const when = Object.fromEntries(log);
+    expect(when.bar).toBeCloseTo(4350 * 0.75, -1);
+    expect(when.landed).toBeGreaterThanOrEqual(4800 * 0.75);
+    expect(when.landed).toBeLessThan(4800);
+    expect(when.done).toBeDefined();
+  });
+
+  it("reports it cannot play where there is no 2D context", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => null);
+    expect(play().started).toBe(false);
   });
 });
