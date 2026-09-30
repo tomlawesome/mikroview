@@ -16,7 +16,7 @@
   // the track and the observation line read; the footer's Next is
   // disabled until everything chosen has arrived (wizardRun.arrivedAll).
 
-  import { createToken, fetchEvents } from '../../lib/api'
+  import { fetchEvents } from '../../lib/api'
   import { copyToClipboard } from '../../lib/clipboard'
   import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
@@ -33,28 +33,12 @@
   // (internal/api/ingest.go's bearer, distinct from the one-shot
   // enrolment marker Mint minted) to authenticate the router's own
   // posts -- see routeros.PushScript/BackupScript, embedded in
-  // steps.schedule/steps.backup by POST /api/setup/commands. Minted
-  // once per open walk and silently: it needs no password of its own,
-  // the same way the retired modal's "Create token & script" button
-  // never asked for one -- #1291's re-check belongs to the enrolment
-  // token alone.
-  $effect(() => {
-    if (wizardRun.stage !== 'paste') return
-    if (wizardRun.push !== true && wizardRun.backup !== true) return
-    const device = wizardState.ledgerDevice
-    if (!device) return
-    if (wizardState.token && wizardState.tokenDevice === device) return
-    let stale = false
-    createToken(`setup-${device}`, 'ingest', device).then((result) => {
-      if (stale || typeof result === 'string' || !result.value) return
-      wizardState.token = result.value
-      wizardState.tokenDevice = device
-      wizardState.refreshCommands({ device, token: result.value })
-    })
-    return () => {
-      stale = true
-    }
-  })
+  // steps.schedule/steps.backup by POST /api/setup/commands. That
+  // token is minted inside wizardRun.mint()/reroll() -- the
+  // password-checked act -- never from a form toggle here: an API
+  // credential must not be created by ticking Yes on The router before
+  // the password step even runs. This step only reads what Mint
+  // already put in wizardState.commands.
 
   // The stream of arriving lines (watchBody's own `stream`): the same
   // events endpoint the live view reads, narrowed to this router, never

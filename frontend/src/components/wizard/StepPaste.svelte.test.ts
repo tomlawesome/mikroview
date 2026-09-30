@@ -31,12 +31,10 @@ vi.mock('../../lib/api', async (orig) => ({
   fetchRouterBackups: vi.fn(),
   fetchSetupCommands: vi.fn(),
   fetchEvents: vi.fn(),
-  createToken: vi.fn(),
   mintEnrolment: vi.fn(),
 }))
 
 import {
-  createToken,
   fetchDevices,
   fetchEvents,
   fetchRefusedSenders,
@@ -424,52 +422,5 @@ describe('StepPaste: the refused-sender recovery', () => {
     // Never an accept by itself: only the mint happened, and the walk's
     // own "since" moved to now, so the old refusal drops out on its own.
     await waitFor(() => expect(document.querySelector('.warnbox')).toBeNull())
-  })
-})
-
-describe('StepPaste: minting the ingest token push and backup need', () => {
-  beforeEach(() => {
-    vi.mocked(fetchSetupStatus).mockResolvedValue(status())
-    vi.mocked(fetchDevices).mockResolvedValue([device()])
-    vi.mocked(fetchRefusedSenders).mockResolvedValue([])
-    vi.mocked(fetchRouterBackups).mockResolvedValue({
-      enabled: true,
-      keyUnreadable: false,
-      routers: [],
-      totalGenerations: 0,
-      totalRouters: 0,
-      totalBytes: 0,
-      lock: 'open',
-    } as never)
-    vi.mocked(fetchEvents).mockResolvedValue({ events: [], hasMore: false, windowStart: '', serverTime: '' })
-    wizardState.reset()
-    wizardRun.reset()
-    wizardState.open = true
-  })
-
-  afterEach(() => {
-    wizardState.reset()
-    wizardRun.reset()
-    vi.clearAllMocks()
-  })
-
-  it('mints one the first time the block needs push or backup commands, and re-renders with it', async () => {
-    landOnPaste()
-    // No ingest token yet, unlike every other test above.
-    wizardState.token = ''
-    wizardState.tokenDevice = ''
-    vi.mocked(createToken).mockResolvedValue({
-      id: 't1',
-      name: 'setup-rb5009',
-      kind: 'ingest',
-      device: 'rb5009',
-      createdAt: '2026-09-27T14:00:00Z',
-      value: 'ingest0000ingest0000',
-    })
-    vi.mocked(fetchSetupCommands).mockResolvedValue(commands({ schedule: { commands: '/system script add name=mv-push ...', note: '', blocked: [] } }))
-    render(StepPaste)
-    await waitFor(() => expect(createToken).toHaveBeenCalledWith('setup-rb5009', 'ingest', 'rb5009'))
-    expect(wizardState.token).toBe('ingest0000ingest0000')
-    await waitFor(() => expect(fetchSetupCommands).toHaveBeenCalledWith(expect.objectContaining({ token: 'ingest0000ingest0000', device: 'rb5009' })))
   })
 })
