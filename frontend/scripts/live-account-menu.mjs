@@ -98,6 +98,7 @@ if (upMatch) {
 // --- Escape closes it ------------------------------------------------------
 await page.keyboard.press('Escape')
 await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'Escape closes the menu')
 
 // --- Click-away closes it too ----------------------------------------------
@@ -113,6 +114,7 @@ await openAccountMenu(page)
 // death rather than a failed check.
 await page.click('.card[aria-hidden="false"] .scene-bar .wm')
 await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'clicking away closes the menu')
 
 // --- About & licence opens, and the licence is really in it ----------------
@@ -120,6 +122,7 @@ await openAccountMenu(page)
 await page.click('.account .menu button.row:has-text("About & licence")')
 const about = page.locator('[role="dialog"][aria-label="About MikroView"]')
 await about.waitFor({ state: 'visible', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'About & licence opens the about overlay')
 // The overlay spells the licence out in full; the short form "AGPL" only
 // ever appeared in the commercial-licence paragraph, gone since #1229.
@@ -129,6 +132,7 @@ check(
 )
 await page.keyboard.press('Escape')
 await about.waitFor({ state: 'detached', timeout: 5000 })
+// safe: waitFor above throws on timeout
 check(true, 'Escape closes the overlay again')
 
 // --- A viewer's menu: admin rows absent, never disabled --------------------

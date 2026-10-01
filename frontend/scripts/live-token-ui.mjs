@@ -35,6 +35,7 @@ const DOOR = '#keys'
 // this used to also wait for `.page-header h2`, but #700 unmounted PageHeader from EngineRoom.svelte entirely, so
 // that selector no longer exists anywhere on the page (#667 group E).
 await goTo(page, 'Settings')
+// safe: goTo above throws if navigation fails
 check(true, "the rail's engine room row opens the engine room")
 check((await page.$$('.modal')).length === 0, 'no modal renders -- keys is part of the page')
 check(

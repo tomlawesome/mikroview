@@ -112,6 +112,7 @@ check(rowText.includes('since '), `the row states when the expectation was made 
 
 await row.locator('button.forget').click()
 await row.waitFor({ state: 'detached', timeout: 15000 })
+// safe: waitFor above throws on timeout
 check(true, 'Forget removes the row from the ledger')
 
 // The row vanishing is not the claim -- the expectation being gone is.

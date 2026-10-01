@@ -109,12 +109,14 @@ if (raised.ok) {
       null,
       { timeout: 10000 },
     )
+    // safe: waitForFunction above throws on timeout
     check(true, 'clicking the badge rolls the docket to centre, on its flags tab')
     check(
       (await page.$eval('.roll-rail .rail-name.on', (el) => el.textContent.trim())) === 'The docket',
       'and the roll rail agrees the docket is where we are',
     )
     await page.waitForSelector('.flags-page', { timeout: 10000 })
+    // safe: waitForSelector above throws on timeout
     check(true, 'with the Flags scene actually mounted under it')
   }
 }

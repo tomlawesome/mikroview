@@ -81,6 +81,18 @@
     // untrack: begin() reads the evidence to place the run, and this
     // effect must not re-run (and re-reset the answers) on every poll.
     untrack(() => wizardRun.begin())
+    // The ledger it placed the run from may be the one read at sign-in,
+    // or when the wizard last closed (#1404): read it again, and place
+    // the run once more on what it says -- unless the operator has
+    // already answered something, which a re-place would throw away.
+    // Only the bare Run setup… door: Add a router, Re-enrol… and Finish
+    // registering… place their walk on the door, not on the evidence.
+    if (untrack(() => !wizardState.ledgerDevice && !wizardState.addingRouter)) {
+      const placed = untrack(() => wizardRun.placement)
+      wizardState.refresh().then(() => {
+        if (wizardState.open && wizardRun.placement === placed) wizardRun.begin()
+      })
+    }
     if (untrack(() => wizardJourney.phase === 'in')) return
     const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 0)
     raf(() => raf(() => {

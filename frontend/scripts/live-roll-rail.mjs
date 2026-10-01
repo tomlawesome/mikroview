@@ -102,8 +102,10 @@ await page.waitForFunction(
   null,
   { timeout: 10000 },
 )
+// safe: waitForFunction above throws on timeout
 check(true, "and the Stream card is the one at the deck's scroll position")
 await page.waitForFunction(() => document.querySelectorAll('.grid .row').length >= 1, null, { timeout: 20000 })
+// safe: waitForFunction above throws on timeout
 check(true, 'with the live table rendering real events')
 
 await page.click('.roll-rail .rail-name:text-is("Metrics")')
