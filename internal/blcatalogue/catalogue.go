@@ -143,6 +143,10 @@ type List struct {
 	// Facts is the card's facts line and Guide its sentence of guidance.
 	// The counts in Facts are the measured samples' (catalogue.md for the
 	// three, the package comment above for the four), not live numbers.
+	// A **phrase** is the one the drawn card sets bold (BUILD.md,
+	// "Catalogue copy and defaults"): the page renders it so and shows
+	// the asterisks nowhere. A labelled list's Facts ends on its Caveat,
+	// verbatim, in the slot the three carry their terms word.
 	Facts string
 	Guide string
 	// FlaggedByMikroView is true where internal/blocklist also flags from
@@ -155,6 +159,12 @@ type LeftOut struct {
 	Name string
 	Why  string
 }
+
+// Reviewed is the day the catalogue was last read against its sources:
+// catalogue.md's research on 2026-09-30, and the four admitted lists read
+// at their sources on 2026-10-01 (the package comment). The page quotes
+// it beside the considered-and-left-out record.
+const Reviewed = "2026-10-01"
 
 // listPrefix is what every address list, script and scheduler the
 // builder writes is named under.
@@ -178,8 +188,8 @@ var lists = []List{
 		IPv6:               true,
 		Refresh:            []Refresh{RefreshSixHours, RefreshDaily, RefreshWeekly},
 		RefreshDefault:     RefreshDaily,
-		Facts:              "1,692 ranges + 91 IPv6 · 100 KB · barely moves · false positives rare · spamhaus.org · credited",
-		Guide:              "Whole netblocks Spamhaus says carry no legitimate traffic — hijacked space and criminal hosting. MikroView already flags from it, so what the router drops and what MikroView flags stay the same.",
+		Facts:              "**1,692** ranges + 91 IPv6 · 100 KB · barely moves · false positives **rare** · spamhaus.org · credited",
+		Guide:              "Whole netblocks Spamhaus says carry **no legitimate traffic** — hijacked space and criminal hosting. MikroView already flags from it, so what the router drops and what MikroView flags stay the same.",
 		FlaggedByMikroView: true,
 	},
 	{
@@ -193,8 +203,8 @@ var lists = []List{
 		DefaultDirection:   DirectionBoth, // owner, 17a
 		Refresh:            []Refresh{RefreshDaily, RefreshWeekdays, RefreshWeekly},
 		RefreshDefault:     RefreshWeekdays,
-		Facts:              "633 hosts · 9 KB · rebuilt on weekdays · false positives some · emergingthreats.net · BSD",
-		Guide:              "Single hosts seen attacking in the last few days. Churns, and a cleaned-up host stays listed a while, so a drop is occasionally an innocent server — MikroView shows each one. It flags from this list already.",
+		Facts:              "**633** hosts · 9 KB · rebuilt on weekdays · false positives **some** · emergingthreats.net · BSD",
+		Guide:              "Single hosts seen attacking in the last few days. Churns, and a cleaned-up host stays listed a while, so a **drop is occasionally an innocent server** — MikroView shows each one. It flags from this list already.",
 		FlaggedByMikroView: true,
 	},
 	{
@@ -207,16 +217,16 @@ var lists = []List{
 		// Off by default: 15,000 hosts, worth it only on a router that
 		// exposes a service (catalogue.md).
 		Default: false,
-		// Neither the drawing nor BUILD.md names CINS's direction or
-		// refresh default. "from" because the card offers it for routers
-		// that expose a service, which is inbound traffic; 6 h by
-		// BUILD.md's call for blocklist.de, whose choices (hourly, 6 h,
-		// daily) and hourly-or-faster source are the same.
+		// "from", 6 h: confirmed by BUILD.md's "Catalogue copy and
+		// defaults" (2026-10-01). From, because CINS lists scanners
+		// knocking on exposed ports, so inbound is the whole point; 6 h,
+		// because the list changes hourly while each load is a minute of
+		// adds on a small router.
 		DefaultDirection: DirectionFrom,
 		Refresh:          []Refresh{RefreshHourly, RefreshSixHours, RefreshDaily},
 		RefreshDefault:   RefreshSixHours,
-		Facts:            "15,000 hosts · 213 KB · changes hourly · false positives some · cinsscore.com · free",
-		Guide:            "Hosts their sensors saw scanning or attacking, kept to addresses not already on other lists. Big — a minute or more to load on a small router — and worth it only if the router exposes SSH, a VPN or a web service; with nothing exposed, the default firewall drops these anyway. MikroView does not flag from it.",
+		Facts:            "**15,000** hosts · 213 KB · changes hourly · false positives **some** · cinsscore.com · free",
+		Guide:            "Hosts their sensors saw scanning or attacking, kept to addresses **not already on other lists**. Big — a minute or more to load on a small router — and worth it only if the router exposes SSH, a VPN or a web service; with nothing exposed, the default firewall drops these anyway. MikroView does not flag from it.",
 	},
 	{
 		Key:              "blde",
@@ -229,7 +239,8 @@ var lists = []List{
 		DefaultDirection: DirectionFrom,
 		Refresh:          []Refresh{RefreshHourly, RefreshSixHours, RefreshDaily},
 		RefreshDefault:   RefreshSixHours,
-		Facts:            "385 hosts · 5 KB · refreshed every 30 minutes · blocklist.de · no licence stated",
+		Facts:            "**385** hosts · 5 KB · refreshed every 30 minutes · blocklist.de · no licence stated",
+		Guide:            "Hosts that fail2ban on many servers reported in the last 48 hours — the small, high-confidence cut of blocklist.de. **No licence stated**: the site says nothing about who may use it, only that it comes \"at your own risk\", so whether that is enough is your call. MikroView does not flag from it.",
 	},
 	{
 		Key:              "greensnow",
@@ -242,7 +253,8 @@ var lists = []List{
 		DefaultDirection: DirectionFrom,
 		Refresh:          []Refresh{RefreshSixHours, RefreshDaily, RefreshWeekly},
 		RefreshDefault:   RefreshDaily,
-		Facts:            "4,935 hosts · 70 KB · greensnow.co · no licence stated",
+		Facts:            "**4,935** hosts · 70 KB · greensnow.co · no licence stated",
+		Guide:            "Attacking hosts tracked by one company; about half are on blocklist.de too. **No licence stated**: the site says nothing about who may use the list and forbids republishing it — a router fetching it for itself is neither, but nobody has said yes, so that is your call. MikroView does not flag from it.",
 	},
 	{
 		Key:              "dshield",
@@ -255,7 +267,11 @@ var lists = []List{
 		DefaultDirection: DirectionFrom,
 		Refresh:          []Refresh{RefreshSixHours, RefreshDaily, RefreshWeekly},
 		RefreshDefault:   RefreshDaily,
-		Facts:            "20 /24 networks · 2 KB · the last three days · dshield.org · CC BY-NC-SA",
+		// "false positives likely": whole /24s, and one in the sample was
+		// Google Cloud -- the one new list the research supports a rating
+		// for (BUILD.md, "Catalogue copy and defaults").
+		Facts: "**20** /24 networks · 2 KB · the last three days · false positives **likely** · dshield.org · not for business use",
+		Guide: "The twenty /24 networks that attacked DShield's sensors most over the last three days — whole networks, so an attacker's neighbours are dropped with it. **Not for business use**: the licence is non-commercial, fine on a home router and not on one a business runs, and MikroView cannot tell which this is. It does not flag from it.",
 	},
 	{
 		Key:              "bindef",
@@ -268,7 +284,8 @@ var lists = []List{
 		DefaultDirection: DirectionFrom,
 		Refresh:          []Refresh{RefreshDaily, RefreshWeekly},
 		RefreshDefault:   RefreshDaily,
-		Facts:            "1,514 hosts · 22 KB · binarydefense.com · non-commercial",
+		Facts:            "**1,514** hosts · 22 KB · binarydefense.com · not for business use",
+		Guide:            "Attacking hosts on Binary Defense's own ban list. **Not for business use**: the header allows public use only, not commercial — take it on a home router, leave it off one a business runs; MikroView cannot tell which this is. It does not flag from it.",
 	},
 }
 
