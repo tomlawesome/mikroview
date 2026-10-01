@@ -20,9 +20,9 @@ way-in run is a fresh `up`.
 
 | Done when | Verdict |
 |---|---|
-| Enter at the door plays the way in and lands on the wizard with the name field focused; Finish plays the way out and lands on the live fall — in the real app, driven by real state | **Yes.** The way in starts 28 ms after Enter, ends at 7150 ms, and lands with the name field focused (`shots/live-notes.txt`). The way out starts 16 ms after Finish, ends at 5350 ms, and lands on the fall; the offer rises at 6450 ms. |
+| Enter at the door plays the way in and lands on the wizard with the name field focused; Finish plays the way out and lands on the live fall — in the real app, driven by real state | **Yes.** The way in starts 28 ms after Enter, ends at 7150 ms, and lands with the name field focused (`shots/live-notes.md`). The way out starts 16 ms after Finish, ends at 5350 ms, and lands on the fall; the offer rises at 6450 ms. |
 | Frame-by-frame screenshots at true times against round-15's shots show the same beats at the same times, with no sparks | **Yes, after four fixes** (below). All six beats land on the prototype's clock in both directions; no sparks anywhere. Four things in the groups beat were built differently from the drawing and are fixed on this branch. |
-| `prefers-reduced-motion` gives the crossfade; the CSP is unchanged; no console errors | **Crossfade: no, now fixed.** Both journeys were a cut, not a fade (`pairs/reduced-in-before.png`, `pairs/reduced-out-before.png`: the door gone and the wizard standing in the first frame; the fall standing in the first frame). Now the held door fades over the wizard and the wizard fades over the fall, 300 ms each, the prototype's `beat()` cap — `shots/reduced-notes.txt` has the DOM timelines: the door held with `journey-fade` from 50 ms and down at 300 ms; the wizard page under `journey-fade` at 0 ms and gone at 250 ms. The fade itself is a CSS transition, which runs on real time under the stepped clock, so the frames show its ends, not its middle (the prototype's own caveat for the strike). CSP unchanged (the fix is classes on `<body>` and CSS). No console errors in any run. |
+| `prefers-reduced-motion` gives the crossfade; the CSP is unchanged; no console errors | **Crossfade: no, now fixed.** Both journeys were a cut, not a fade (`pairs/reduced-in-before.png`, `pairs/reduced-out-before.png`: the door gone and the wizard standing in the first frame; the fall standing in the first frame). Now the held door fades over the wizard and the wizard fades over the fall, 300 ms each, the prototype's `beat()` cap — `shots/reduced-notes.md` has the DOM timelines: the door held with `journey-fade` from 50 ms and down at 300 ms; the wizard page under `journey-fade` at 0 ms and gone at 250 ms. The fade itself is a CSS transition, which runs on real time under the stepped clock, so the frames show its ends, not its middle (the prototype's own caveat for the strike). CSP unchanged (the fix is classes on `<body>` and CSS). No console errors in any run. |
 | After Finish the tour is offered once; the account menu opens it any time; #646's attach/connecting/glass code is removed | **Yes.** Offered once after a real Finish (`pairs/24-offer.png`), not after a second; "Take the tour" in the account menu starts it (`pairs/25-menu.png`, `pairs/26-tour.png`). Of #646's pre-wizard walk only `Fullfall`'s unused `attach` mask and three comments were left; removed here. |
 
 ## Beat by beat
@@ -57,7 +57,7 @@ The way in (`pairs/in-*.png`, 16 frames) and the way out
   1). On the way out the columns strike, then the axis and the body;
   the fall is live with the router's line flowing. Matches after fix 3.
 
-Timings read off the DOM (`shots/live-notes.txt`, both runs of the way
+Timings read off the DOM (`shots/live-notes.md`, both runs of the way
 out): the box is placed 16–28 ms after Enter or Finish; the way in ends
 at 7150 ms and the way out at 5350 ms, where `an.js` ends at 6500 ms
 and the rain's tail, and 5300 ms (the way out's last group) — the same
