@@ -259,9 +259,9 @@ if (PHASE === 'in') {
   }
 }
 
-fs.appendFileSync(path.join(SHOTS, `${PREFIX}-times.txt`), times.join('\n') + '\n')
-fs.appendFileSync(path.join(SHOTS, `${PREFIX}-notes.txt`), notes.join('\n') + '\n')
+fs.appendFileSync(path.join(SHOTS, `${PREFIX}-times.md`), times.join('\n') + '\n')
+fs.appendFileSync(path.join(SHOTS, `${PREFIX}-notes.md`), notes.join('\n') + '\n')
 console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no console errors')
-fs.appendFileSync(path.join(SHOTS, `${PREFIX}-notes.txt`), (errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no console errors') + '\n')
+fs.appendFileSync(path.join(SHOTS, `${PREFIX}-notes.md`), (errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no console errors') + '\n')
 await page.close()
 await browser.close()
