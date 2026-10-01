@@ -391,12 +391,17 @@ func TestPushBlockRenamesIPAddressFields(t *testing.T) {
 // filter-rule and ip-address cases above. "dynamic" was added by #1405
 // so the server can tell RouterOS's own dhcpclient/btest/discover/
 // reverse-proxy rows apart from the eight an operator configures.
+// disabled is read back by the row's own id (#1410): 7.18.2's print
+// as-value leaves it out even for a disabled service.
 func TestPushBlockRenamesIPServiceFields(t *testing.T) {
 	block := PushBlock("h", "t", "ip-service", "a")
+	if strings.Contains(block, `($v->"disabled")`) {
+		t.Errorf("pushBlock(ip-service) reads disabled off print as-value, which 7.18.2 leaves out:\n%s", block)
+	}
 	for _, want := range []string{
 		"/ip/service print as-value",
 		`"name"=($v->"name")`,
-		`"disabled"=($v->"disabled")`,
+		`"disabled"=[/ip/service get ($v->".id") disabled]`,
 		`"port"=($v->"port")`,
 		`"address"=($v->"address")`,
 		`"certificate"=($v->"certificate")`,

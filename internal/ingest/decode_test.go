@@ -635,6 +635,61 @@ func TestIPServiceWithNoAddressRestrictionDecodesToAnEmptyList(t *testing.T) {
 	}
 }
 
+// TestDecodeRealIPServiceDisabled is #1410's: the ip-service page a real
+// RouterOS 7.18.2 CHR produced on 2026-10-01 from blockSpecs["ip-service"],
+// saved as a script under the push policy and run with its fetch swapped
+// for :put (docs/routeros-verification-logs/7.18.2-push-ip-service.log).
+// telnet was disabled by hand and www-ssl is disabled out of the box.
+// disabled is read with get, so both arrive true -- where the script
+// before #1410, reading it off print as-value, sent null on every row and
+// both decoded as enabled (the "before" body, same transcript).
+func TestDecodeRealIPServiceDisabled(t *testing.T) {
+	const body = `{"kind":"ip-service","page":1,"pages":1,"records":[
+	  {"address":[],"certificate":null,"disabled":true,"dynamic":null,"name":"telnet","port":23},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ftp","port":21},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"www","port":80},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"ssh","port":22},
+	  {"address":[],"certificate":"none","disabled":true,"dynamic":null,"name":"www-ssl","port":443},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"api","port":8728},
+	  {"address":[],"certificate":null,"disabled":false,"dynamic":null,"name":"winbox","port":8291},
+	  {"address":[],"certificate":"none","disabled":false,"dynamic":null,"name":"api-ssl","port":8729}
+	],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`
+	p := decodeOK(t, body)
+	disabled := map[string]bool{}
+	for _, s := range p.IPServices {
+		disabled[s.Name] = s.Disabled
+	}
+	if len(disabled) != 8 {
+		t.Fatalf("decoded %d services, want 8: %v", len(disabled), disabled)
+	}
+	for name, want := range map[string]bool{
+		"telnet": true, "www-ssl": true,
+		"ftp": false, "www": false, "ssh": false, "api": false, "winbox": false, "api-ssl": false,
+	} {
+		if got, ok := disabled[name]; !ok || got != want {
+			t.Errorf("%s: disabled = %v (present %v), want %v", name, got, ok, want)
+		}
+	}
+
+	// The defect, from the same transcript: the old script's page decodes
+	// with telnet looking enabled.
+	before := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"telnet","port":23},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"ftp","port":21},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"www","port":80},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"ssh","port":22},
+	  {"address":[],"certificate":"none","disabled":null,"dynamic":null,"name":"www-ssl","port":443},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"api","port":8728},
+	  {"address":[],"certificate":null,"disabled":null,"dynamic":null,"name":"winbox","port":8291},
+	  {"address":[],"certificate":"none","disabled":null,"dynamic":null,"name":"api-ssl","port":8729}
+	],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`)
+	for _, s := range before.IPServices {
+		if s.Name == "telnet" && s.Disabled {
+			t.Error("the pre-#1410 7.18.2 body decoded telnet as disabled -- this test no longer pins what was wrong")
+		}
+	}
+}
+
 // TestIPServiceRejectsUnknownRecordField pins the same strict-decoding
 // contract every other kind in this file gets: a field this schema does
 // not know about refuses the whole page rather than being silently
