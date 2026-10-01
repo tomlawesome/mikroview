@@ -48,6 +48,7 @@
   // setup…" row lives in the account menu (desktop) and the bottom bar
   // (mobile), both of which call wizardState.launch() directly.
   import Wizard from './components/wizard/Wizard.svelte'
+  import Builder from './components/blocklist/Builder.svelte'
   import { wizardState } from './lib/wizard.svelte'
   // The wizard's way in and way out (#1386): the canvas and the riding
   // wordmark, mounted beside the wizard. While a sign-in's journey is
@@ -433,6 +434,7 @@
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <Wizard />
+  <Builder />
   <WizardJourney />
   {#if configEditorState.visible}
     <ConfigEditor />
