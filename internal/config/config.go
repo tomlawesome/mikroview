@@ -1188,10 +1188,16 @@ const (
 // `-backup`/`-restore` CLI flags which back up mikroview's own state
 // (and, per #394, this vault along with it).
 type Backup struct {
-	// Enabled turns the SFTP listener on. Off by default: this is a
-	// second listening port, opened only once an operator has actually
-	// decided to use it -- the wizard's step 6 is what flips it on in
-	// practice.
+	// Enabled is retired (#1361): the drop box's switch moved into the
+	// settings store, beside history.enabled, so it can be moved from
+	// Settings or the wizard with no restart. This field, and
+	// MIKROVIEW_BACKUP_ENABLED, are read exactly once -- at the first
+	// startup that finds nothing stored yet, to seed that store's
+	// starting position from whatever an existing deployment already had
+	// here, logged when it does anything (see main.newBackupRuntime).
+	// Never read again after that: a leftover true or false in an old
+	// config.yaml is harmless and does not need to be removed, though it
+	// may be.
 	Enabled bool `yaml:"enabled"`
 	// Listen is the drop box's bind address. Fixed default port 47022
 	// (owner decision, #394, deliberately not a conventional SFTP port
@@ -1510,10 +1516,11 @@ func defaults() Config {
 			MaxBytes: defaultRetentionMaxBytes,
 		},
 		Backup: Backup{
-			// Enabled stays false on purpose, same reasoning as
-			// History.Enabled above. Listen is set even though the
-			// listener does not start until Enabled is true, so turning
-			// it on needs no second decision about the port.
+			// Enabled's default no longer matters (#1361: retired, see
+			// its own doc comment) -- a fresh install has nothing stored
+			// either, so it starts closed regardless. Listen is set
+			// unconditionally so opening the drop box from Settings needs
+			// no second decision about the port.
 			Listen: ":47022",
 		},
 		Notify: Notify{

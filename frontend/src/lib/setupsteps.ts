@@ -330,61 +330,6 @@ export const NO_ADDRESS_LINE =
 export const SYSLOG_ADDRESS_CHANGED_NOTE =
   'The address changed since you copied this block — paste it again on the router.'
 
-// --- The backup step's no-script state (#1217) --------------------------
-//
-// commandStep.blocked (internal/api/setupcommands.go's handleSetupCommands)
-// names every precondition the backup block came back blank for, as
-// machine-readable keys. The server states which keys apply; every
-// operator-facing sentence lives here instead, same split #436 already
-// draws for the RouterOS commands themselves.
-//
-// Order matters (owner's ruling, 2026-09-14): config problems first --
-// the operator edits config.yaml and restarts -- then the ones the
-// wizard itself can still fix, in the order it asks them (the header
-// field before either step-4/6 pick).
-export const BACKUP_BLOCKED_ORDER = [
-  'backups-off',
-  'retention-key-unreadable',
-  'no-retention-key',
-  NO_ADDRESS_KEY,
-  'no-device',
-  'no-token',
-] as const
-
-const BACKUP_BLOCKED_COPY: Record<string, string> = {
-  'backups-off': 'backups are switched off. Set backup.enabled: true in config.yaml and restart mikroview.',
-  // #1264 finding 5: a configured retention key that could not be read
-  // is not the same fact as no-retention-key below, and must never read
-  // like it -- "set history.keyFile" tells the operator to mint a fresh
-  // one, and a fresh key cannot decrypt what the old, now-unreadable one
-  // already wrote. This line says what actually happened and warns off
-  // the one action that would make it permanent.
-  'retention-key-unreadable':
-    'the retention key at history.keyFile is set but could not be read (missing, unreadable, or too short) — ' +
-    'check the server logs and fix that file in place. Do not replace it with a new one: every backup already ' +
-    'stored under the old key would become unrecoverable.',
-  'no-retention-key':
-    'no retention key is mounted, so there is nowhere safe to keep a backup. Set history.keyFile in ' +
-    'config.yaml and restart mikroview.',
-  [NO_ADDRESS_KEY]: NO_ADDRESS_LINE,
-  'no-device': 'this router has no name yet. Name it in the step above; the script files each backup under that name.',
-  'no-token': 'no token has been minted for this router yet. The step above mints it.',
-}
-
-// BACKUP_NO_SCRIPT_HEADING is the heading over the lines above -- the
-// no-script state entirely replaces the input boxes and Copy buttons
-// the step would otherwise show (#1217).
-export const BACKUP_NO_SCRIPT_HEADING = 'no script yet'
-
-// backupBlockedLines turns commandStep.blocked's keys into the sentences
-// the wizard shows, in the ratified order, regardless of what order the
-// server happened to list them in.
-export function backupBlockedLines(blocked: string[] | undefined): string[] {
-  if (!blocked || blocked.length === 0) return []
-  const set = new Set(blocked)
-  return BACKUP_BLOCKED_ORDER.filter((key) => set.has(key)).map((key) => BACKUP_BLOCKED_COPY[key])
-}
-
 // backupReceipt is the newest pair to have arrived, across every
 // router -- "today 03:00 · rb5009.backup 412 KiB + rb5009.rsc 38 KiB ·
 // kept under the key" (round 45's observation line). Empty when

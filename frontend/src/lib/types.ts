@@ -1712,8 +1712,9 @@ export interface RouterBackupsResponse {
   totalGenerations: number
   totalRouters: number
   totalBytes: number
-  // The SFTP drop box's own listening port ("arrive by"), absent when
-  // backup.enabled is false.
+  // The SFTP drop box's own listening port ("arrive by"), a live read
+  // (#1361): absent while the drop box is closed, present the moment an
+  // admin opens it from Settings, with no reload needed.
   port?: string
   lock: VaultLock
   // True while the vault's own filesystem is nearly full (#1125): every
@@ -1721,6 +1722,16 @@ export interface RouterBackupsResponse {
   // Nothing is refused while it is true -- releasing a kept backup is
   // the one thing an admin can do here to free space (#1126).
   lowSpace?: boolean
+}
+
+// RouterBackupSwitchState is PUT /api/settings/router-backups' answer
+// (#1361): the drop box's on/off control. Read back from the server's
+// own state rather than from which call was made -- the same rule every
+// other settings write in this file follows.
+export interface RouterBackupSwitchState {
+  open: boolean
+  /** The port it is listening on, "" while closed. */
+  port?: string
 }
 
 // One router's block (round 44's per-router strip). IntervalSeconds/
