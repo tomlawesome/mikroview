@@ -612,10 +612,12 @@ func TestIPServiceRoundTripsFields(t *testing.T) {
 // that matters most downstream (#1329): a service RouterOS reports with
 // no address restriction at all -- reachable from anywhere -- must
 // decode to an empty/nil Address, never to a restriction of zero
-// entries being confused with "restricted to nothing." Exercised both
-// as an absent key (a router whose script never sends it) and as an
-// explicit empty string (RouterOS's own rendering of an unset address
-// property).
+// entries being confused with "restricted to nothing." This is purely
+// about RouterOSList's own decode shape; it is exercised both as an
+// absent key and as an explicit empty string, but an address key
+// genuinely absent from a real router's push is #1405's dynamic-fallback
+// signal, not "no restriction" -- see IsDynamic and the routerstate
+// tests that cover what that does to the served list.
 func TestIPServiceWithNoAddressRestrictionDecodesToAnEmptyList(t *testing.T) {
 	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"winbox","disabled":false,"port":8291,"certificate":""}]}`)
 	if len(p.IPServices) != 1 {
@@ -645,6 +647,52 @@ func TestIPServiceRejectsUnknownRecordField(t *testing.T) {
 func TestIPServiceRejectsControlAndFormatCharacters(t *testing.T) {
 	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"evil\u0007bell","disabled":false,"port":22,"address":"","certificate":""}]}`)
 	decodeErr(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":"","certificate":"cert\u202e"}]}`)
+}
+
+// TestIPServiceCertificateNoneDecodesAsEmpty is #1405: RouterOS reports
+// "none" -- the literal word, not an absent key -- for a TLS service
+// with no certificate set. That must decode the same way an absent
+// certificate key already does: "", never the word itself.
+func TestIPServiceCertificateNoneDecodesAsEmpty(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":[],"certificate":"none"}]}`)
+	if got := p.IPServices[0].Certificate; got != "" {
+		t.Errorf("Certificate = %q, want \"\" (\"none\" means no certificate)", got)
+	}
+}
+
+// TestIPServiceIsDynamicUsesTheDynamicKeyWhenPresent is #1405: a router
+// running the current wizard script marks each row directly, both ways
+// -- true for one of RouterOS's own four, false for one of the eight an
+// operator configures -- and IsDynamic must trust that key over anything
+// else once it's there.
+func TestIPServiceIsDynamicUsesTheDynamicKeyWhenPresent(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[`+
+		`{"name":"btest","disabled":false,"port":2000,"dynamic":true},`+
+		`{"name":"ssh","disabled":false,"port":22,"address":[],"dynamic":false}]}`)
+	if !p.IPServices[0].IsDynamic() {
+		t.Errorf("btest (dynamic:true) IsDynamic() = false, want true")
+	}
+	if p.IPServices[1].IsDynamic() {
+		t.Errorf("ssh (dynamic:false) IsDynamic() = true, want false")
+	}
+}
+
+// TestIPServiceIsDynamicFallsBackToAddressAbsenceWithoutTheDynamicKey is
+// #1405's fallback: a router still running a script pasted before
+// "dynamic" existed sends no "dynamic" key on any record at all, so
+// IsDynamic must fall back to RouterOS's own distinction -- a static,
+// configurable service always carries an "address" key (even an empty
+// one), a dynamic one never does.
+func TestIPServiceIsDynamicFallsBackToAddressAbsenceWithoutTheDynamicKey(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[`+
+		`{"name":"btest","disabled":false,"port":2000},`+
+		`{"name":"ssh","disabled":false,"port":22,"address":[]}]}`)
+	if !p.IPServices[0].IsDynamic() {
+		t.Errorf("btest (no dynamic key, no address key) IsDynamic() = false, want true")
+	}
+	if p.IPServices[1].IsDynamic() {
+		t.Errorf("ssh (no dynamic key, address key present) IsDynamic() = true, want false")
+	}
 }
 
 // TestDecodeRealFilterRulePush decodes a payload captured verbatim from a
