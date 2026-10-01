@@ -381,3 +381,84 @@ describe('the refused-sender fix', () => {
     expect(refusedFixBlock('')).toBe('')
   })
 })
+
+// #1360's first-run tail (round 2, tail.html; owner, 2a): a sixth rail
+// row and ledger row on the launch walk's ledger, an offer beside Finish
+// that stays secondary, the builder as its own stage, and a proof once
+// the router's push holds a list.
+describe('the first-run tail', () => {
+  const offer = { state: 'offer' as const, lists: 0, rail: '', ledger: '', flaggedFrom: 'Spamhaus DROP and Emerging Threats compromised IPs' }
+  const held = {
+    state: 'done' as const,
+    lists: 2,
+    rail: '2 lists · loaded 14:07 · confirmed 14:23',
+    ledger: 'Spamhaus DROP 1,692 held · Emerging Threats 633 held · loaded 14:07 · confirmed by the push 14:23 · rules fired 3',
+    flaggedFrom: '',
+  }
+  const done = answered({ stage: 'done', copied: true })
+
+  it('adds nothing on a walk that does not offer it', () => {
+    expect(railRows(done, ev()).length).toBe(5)
+    expect(ledgerRows(done, ev()).some((r) => r.t.startsWith('Known-bad'))).toBe(false)
+    expect(footSpec(done, ev()).right.map((b) => b.label)).toEqual(['Finish'])
+  })
+
+  it('offers a sixth rail row, a plus in a dashed ring, only from the ledger on', () => {
+    expect(railRows(answered({ stage: 'watch', copied: true }), ev({ tail: offer })).length).toBe(5)
+    const rows = railRows(done, ev({ tail: offer }))
+    expect(rows.length).toBe(6)
+    expect(rows[5]).toMatchObject({ id: 'block', n: '+', locked: false, can: true, current: false })
+    expect(rows[5].state).toEqual({ cls: 'offer', receipt: 'optional · first run only', ink: '' })
+    expect(railRows(answered({ stage: 'block', copied: true }), ev({ tail: offer }))[5].current).toBe(true)
+    expect(stageOf(answered({ stage: 'block' }))).toBe('block')
+  })
+
+  it('offers the ledger row with Set it up, naming the lists MikroView flags from', () => {
+    const rows = ledgerRows(done, ev({ tail: offer }))
+    const last = rows[rows.length - 1]
+    expect(last).toMatchObject({ done: false, offer: true, t: 'Known-bad addresses', u: '' })
+    expect(last.r).toBe('not blocked yet — rb5009 lets them in, and MikroView flags them from Spamhaus DROP and Emerging Threats compromised IPs · optional, and offered here on first run only')
+  })
+
+  it('puts Block known-bad addresses beside Finish, and Finish stays the primary', () => {
+    const f = footSpec(done, ev({ tail: offer }))
+    expect(f.right.map((b) => [b.label, b.primary, b.action])).toEqual([
+      ['Block known-bad addresses', false, 'to-block'],
+      ['Finish', true, 'finish'],
+    ])
+    expect(f.hint).toBe('Optional, first run only — later it lives in Settings ▸ drop list')
+  })
+
+  it('gives the stage Back · Not now · Copy · Finish', () => {
+    const f = footSpec(answered({ stage: 'block', copied: true }), ev({ tail: offer }), 'Copy — 2 lists · 8 parts')
+    expect([f.left?.label, ...(f.leftMore ?? []).map((b) => b.label), ...f.right.map((b) => b.label)]).toEqual([
+      'Back',
+      'Not now',
+      'Copy — 2 lists · 8 parts',
+      'Finish',
+    ])
+    expect(f.right[0]).toMatchObject({ action: 'block-copy', primary: true, disabled: false })
+    expect(f.leftMore?.[0].action).toBe('block-not-now')
+    expect(footSpec(answered({ stage: 'block' }), ev({ tail: offer })).right[0].disabled).toBe(true)
+  })
+
+  it('reads set aside after Not now', () => {
+    const t = { ...offer, state: 'skipped' as const }
+    const rows = ledgerRows(done, ev({ tail: t }))
+    expect(rows[rows.length - 1]).toMatchObject({ done: false, t: 'Known-bad addresses', r: 'not now · Settings ▸ drop list' })
+    expect(rows[rows.length - 1].offer).toBeFalsy()
+    expect(railRows(done, ev({ tail: t }))[5].state.receipt).toBe('not now · Settings ▸ drop list')
+    expect(footSpec(done, ev({ tail: t })).right.map((b) => b.label)).toEqual(['Finish'])
+  })
+
+  it('turns into a proof once the push holds a list: the row, the rail, the track and the bar', () => {
+    const rows = ledgerRows(done, ev({ tail: held }))
+    expect(rows[rows.length - 1]).toEqual({ done: true, t: 'Known-bad addresses dropped', r: held.ledger, ink: 'logs', u: 'block' })
+    expect(undoOrder(rows)).toContain('block')
+    const rail = railRows(done, ev({ tail: held }))[5]
+    expect(rail).toMatchObject({ n: '✓', can: false })
+    expect(rail.state).toEqual({ cls: 'done', receipt: '2 lists · loaded 14:07 · confirmed 14:23', ink: 'logs' })
+    expect(trackStations(done, ev({ tail: held }), '').map((s) => s.lab)).toContain('2 lists')
+    expect(chipsFor(done, ev({ tail: held })).map((c) => c.text)).toContain('2 lists')
+  })
+})

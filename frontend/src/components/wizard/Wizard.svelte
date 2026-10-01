@@ -35,7 +35,11 @@
   import StepPaste from './StepPaste.svelte'
   import StepTune from './StepTune.svelte'
   import StepStand from './StepStand.svelte'
+  import BuilderBody from '../blocklist/BuilderBody.svelte'
+  import { blocklistState } from '../../lib/blocklist.svelte'
+  import { partsSummary } from '../../lib/blocklistBuild'
   import './wizard.css'
+  import '../blocklist/builder.css'
 
   // Steps land seconds to minutes apart (the push scheduler runs every
   // 20 minutes), so this polls rather than streaming -- and only while
@@ -146,11 +150,30 @@
   const rows = $derived(railRows(answers, evidence))
   const chips = $derived(chipsFor(answers, evidence))
   const ticks = $derived(stripFor(evidence))
-  const foot = $derived(footSpec(answers, evidence))
+  // The tail's Copy counts the builder's block, as the page's does.
+  const copyLabel = $derived.by(() => {
+    const d = blocklistState.data
+    const parts = blocklistState.block?.parts.length ?? 0
+    if (!d || !parts) return ''
+    return partsSummary(d.catalogue.filter((e) => blocklistState.choices[e.key]?.on).length, parts)
+  })
+  const foot = $derived(footSpec(answers, evidence, copyLabel))
   const announcement = $derived(announce(rows))
 
   function act(a: FootAction) {
     switch (a) {
+      case 'to-block':
+        wizardRun.toBlock()
+        break
+      case 'block-back':
+        wizardRun.blockBack()
+        break
+      case 'block-not-now':
+        wizardRun.blockNotNow()
+        break
+      case 'block-copy':
+        wizardRun.blockCopy()
+        break
       case 'router-next':
         wizardRun.routerNext()
         break
@@ -231,9 +254,9 @@
               disabled={!r.can}
               aria-current={r.current ? 'step' : 'false'}
               aria-disabled={r.locked ? 'true' : undefined}
-              title={r.locked ? 'After the step before it' : undefined}
               style:--ink={r.state.cls === 'done' && r.state.ink ? `var(--ink-${r.state.ink})` : null}
-              onclick={() => wizardRun.gotoStep(rows.indexOf(r))}
+              title={r.id === 'block' && !r.state.cls.includes('done') ? 'Optional · first run only' : r.locked ? 'After the step before it' : undefined}
+              onclick={() => (r.id === 'block' ? wizardRun.toBlock() : wizardRun.gotoStep(rows.indexOf(r)))}
             >
               <span class="step-n">{r.n}</span>
               <span class="step-text">
@@ -248,6 +271,11 @@
       </ol>
     </nav>
     <div class="main" style:transform={goingOut ? `translateY(${-wizardJourney.slideY}px)` : null}>
+      {#if step === 'block'}
+        <!-- The first-run tail's stage (#1360): the builder's own body in
+             the wizard's frame, as round 2's tail.html draws it. -->
+        <BuilderBody variant="tail" />
+      {:else}
       <div class="body" class:away>
         {#if step === 'router'}
           <StepRouter />
@@ -261,12 +289,18 @@
           <StepStand />
         {/if}
       </div>
+      {/if}
       <div class="foot" class:away>
         {#if foot.left}
           <button type="button" class:primary={foot.left.primary} disabled={foot.left.disabled} onclick={() => act(foot.left!.action)}>
             {foot.left.label}
           </button>
         {/if}
+        {#each foot.leftMore ?? [] as b (b.action)}
+          <button type="button" class:primary={b.primary} disabled={b.disabled} onclick={() => act(b.action)}>
+            {b.label}
+          </button>
+        {/each}
         <span class="fhint">{foot.hint}</span>
         {#each foot.right as b (b.action + b.label)}
           <button type="button" class:primary={b.primary} disabled={b.disabled} onclick={() => act(b.action)}>

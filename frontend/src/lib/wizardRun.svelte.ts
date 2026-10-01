@@ -12,10 +12,12 @@
 // Nothing here connects to a router (the AGENTS.md invariant): every
 // field of `evidence` is a reading of what has arrived.
 
-import { createToken, deleteDevice } from './api'
+import { createToken, deleteDevice, markSetupStep } from './api'
+import { blocklistState } from './blocklist.svelte'
+import { hm as routerHm, hmLocal, num } from './blocklistBuild'
 import { appState } from './state.svelte'
 import { fallState, laneColors } from './fall.svelte'
-import { TITLES } from './setupsteps'
+import { RECORD_NUMBERS, SETUP_STEPS, TITLES } from './setupsteps'
 import { wizardState } from './wizard.svelte'
 import { wizardJourney } from './wizardJourney.svelte'
 import { tourState } from './tour.svelte'
@@ -23,6 +25,7 @@ import {
   addrProblem,
   arrivedAll,
   freshAnswers,
+  NO_TAIL,
   latestArrivalHeadline,
   ledgerRows,
   refusedFixBlock,
@@ -35,6 +38,7 @@ import {
   type LedgerRowId,
   type RunAnswers,
   type Stage,
+  type Tail,
   type TrackStation,
 } from './wizardRun'
 import type { TuneRule } from './wizardTune'
@@ -57,6 +61,10 @@ function hm(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit' })
 }
+
+// BLOCK_RECORD is the first-run tail's record (setupsteps.ts's
+// RECORD_NUMBERS.block, internal/setup.StepBlocklist).
+const BLOCK_RECORD = RECORD_NUMBERS.block
 
 class WizardRun {
   stage = $state<Stage>('ask')
@@ -83,6 +91,11 @@ class WizardRun {
   tuneChosen = $state<TuneRule[]>([])
   undoOpen = $state<string | null>(null)
   showUndoAll = $state(false)
+  // The first-run tail (#1360): offered is decided once, when the walk
+  // begins -- a launch walk whose record 8 holds no mark or witness --
+  // and tailSkipped is this walk's Not now.
+  tailOffered = $state(false)
+  tailSkipped = $state(false)
 
   // decodedAtCopy is how many lines carried a decoded action when the
   // tagging block was copied: the rules step counts upward from there,
@@ -199,12 +212,50 @@ class WizardRun {
       ahead: dev?.routerosStanding === 'ahead-of-review',
       tagged: this.tuneCopied && this.decoded > this.decodedAtCopy,
       tokenUntil: hm(wizardState.enrolment?.expiresAt ?? ''),
+      tail: this.tail,
       boundaries: fallState.boundaries.map((b) => ({
         lane: lanes.get(b.key) ?? '',
         watched: b.coverage === 'observed',
         dark: b.coverage === 'dark',
       })),
     }
+  }
+
+  // tailDevice is the router the tail builds for: the walk's own, or on
+  // a bare Run setup… the instance's only router. With several and none
+  // named there is no one router to write a block for, and no tail.
+  get tailDevice(): string {
+    if (wizardState.ledgerDevice) return wizardState.ledgerDevice
+    return wizardState.devices.length === 1 ? wizardState.devices[0].id : ''
+  }
+
+  // tail is the first-run tail's standing, from the builder's own read of
+  // this router (GET /api/blocklist/builder): done once its push holds a
+  // list, with the receipts round 2's tail.html draws.
+  get tail(): Tail {
+    if (!this.tailOffered) return NO_TAIL
+    const data = blocklistState.data
+    const mine = data && data.device === this.tailDevice ? data : null
+    const flaggedFrom = (mine?.catalogue ?? [])
+      .filter((e) => e.flaggedByMikroView)
+      .map((e) => e.short)
+      .join(' and ')
+    const held = (mine?.lists ?? []).filter((l) => l.state === 'held')
+    if (mine && held.length > 0) {
+      const loaded = held.map((l) => l.loadedAt ?? '').filter(Boolean).sort()[0] ?? ''
+      const fired = held.reduce((n, l) => n + (l.firedToday ?? 0), 0)
+      const names = held.map((l) => `${mine.catalogue.find((e) => e.key === l.key)?.short ?? l.key} ${num(l.count)} held`)
+      const n = held.length
+      const confirmed = hmLocal(mine.reportedAt)
+      return {
+        state: 'done',
+        lists: n,
+        rail: `${n} ${n === 1 ? 'list' : 'lists'} · loaded ${routerHm(loaded)} · confirmed ${confirmed}`,
+        ledger: `${names.join(' · ')} · loaded ${routerHm(loaded)} · confirmed by the push ${confirmed} · rules fired ${num(fired)}`,
+        flaggedFrom,
+      }
+    }
+    return { ...NO_TAIL, state: this.tailSkipped ? 'skipped' : 'offer', flaggedFrom }
   }
 
   get arrivedAll(): boolean {
@@ -285,6 +336,9 @@ class WizardRun {
   // StepTune does (wizardTune.undoBlock), so that one row's text is
   // built in the component and passed straight through by StepStand.
   undoTextFor(id: Exclude<LedgerRowId, 'tune'>): string {
+    // The tail's row: everything the blocklist block made, the builder's
+    // own "undo everything" (internal/routeros.BlocklistUndoAll).
+    if (id === 'block') return blocklistState.data?.undoAll ?? ''
     const undo = wizardState.commands?.steps.undo
     if (!undo) return ''
     return { cert: undo.caTrust, logs: undo.syslog, push: undo.schedule, backup: undo.backup }[id]
@@ -346,6 +400,8 @@ class WizardRun {
   reset() {
     Object.assign(this, freshAnswers())
     this.copiedAt = ''
+    this.tailOffered = false
+    this.tailSkipped = false
     this.tuneChosen = []
     this.undoOpen = null
     this.showUndoAll = false
@@ -368,6 +424,17 @@ class WizardRun {
   // straight back to the ledger it was asked to leave.
   begin() {
     this.reset()
+    // The tail is offered on the launch walk alone (owner, 2a): not on
+    // Add another router or Re-enrol…, and not once record 8 holds a mark
+    // or a witness -- Run setup… after either shows no sixth row.
+    const record8 =
+      wizardState.marks.some((m) => m.step === BLOCK_RECORD) ||
+      (wizardState.status?.witnesses ?? []).some((w) => w.step === BLOCK_RECORD)
+    // steps is a $state proxy, never the SETUP_STEPS array itself, so
+    // the first-run ledger is recognised by its contents.
+    const firstRun = wizardState.steps.length === SETUP_STEPS.length && SETUP_STEPS.every((k, i) => wizardState.steps[i] === k)
+    this.tailOffered = !wizardState.addingRouter && firstRun && !record8 && !!this.tailDevice
+    if (this.tailOffered) void blocklistState.peek(this.tailDevice)
     const dev = wizardState.ledgerDevice
       ? wizardState.devices.find((x) => x.id === wizardState.ledgerDevice)
       : undefined
@@ -532,6 +599,33 @@ class WizardRun {
     await wizardState.mintEnrolmentToken()
   }
 
+  // ---- the first-run tail (#1360) ----
+
+  // The tail's stage: the builder's body in the wizard's frame, for this
+  // walk's router. Reuses the walk's ingest token when it is for the
+  // same router (blocklistState.token).
+  toBlock() {
+    if (!this.tailOffered || !this.tailDevice) return
+    this.stage = 'block'
+    void blocklistState.load(this.tailDevice, true)
+  }
+
+  blockBack() {
+    if (this.stage === 'block') this.stage = 'done'
+  }
+
+  // Not now sets the tail aside under record 8; the ledger row reads
+  // "not now · Settings ▸ drop list" for the rest of this walk.
+  async blockNotNow() {
+    await markSetupStep(BLOCK_RECORD, 'skipped', 'not now · Settings ▸ drop list').catch(() => '')
+    this.tailSkipped = true
+    this.stage = 'done'
+  }
+
+  async blockCopy() {
+    await blocklistState.copy()
+  }
+
   toTune() {
     if (this.arrivedAll) this.stage = 'tune'
   }
@@ -589,6 +683,7 @@ class WizardRun {
   // poll is the per-tick bookkeeping: the live rate, and the moment the
   // first tagged line lands.
   poll() {
+    if (this.tailOffered) void blocklistState.peek(this.tailDevice)
     const ev = this.evidence
     const now = Date.now()
     if (this.rateLines >= 0 && now > this.rateAt) {

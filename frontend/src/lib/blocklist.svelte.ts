@@ -91,6 +91,30 @@ class BlocklistState {
     await this.render()
   }
 
+  // peek reads the page's data for device without minting a token or
+  // rendering a block: the wizard's ledger offers the tail, and names
+  // the lists MikroView flags from, before the operator has asked for
+  // anything -- no credential is made for an offer nobody took.
+  async peek(device: string): Promise<void> {
+    if (!device) return
+    if (device !== this.device || !this.data) {
+      this.device = device
+      this.block = null
+      try {
+        const data = await fetchBlocklistBuilder(device)
+        if (this.device !== device) return
+        this.data = data
+        this.error = null
+        this.choices = defaultChoices(data)
+        this.current = data.catalogue[0]?.key ?? ''
+      } catch (e) {
+        this.error = e instanceof Error ? e.message : String(e)
+      }
+      return
+    }
+    await this.refresh()
+  }
+
   // refresh re-reads what the router holds without touching the clicks.
   async refresh(): Promise<void> {
     if (!this.device) return

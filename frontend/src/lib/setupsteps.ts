@@ -519,7 +519,11 @@ export const SETUP_STEPS: readonly StepKey[] = [
 // step 4 when the first push arrives), and ledgers written before
 // #1284 moved "Name your router" forward hold marks under them. Walking
 // order can change; this cannot, or every stored mark changes meaning.
-const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
+//
+// block is #1360's first-run tail, recorded as 8 (internal/setup's
+// StepBlocklist) without joining SETUP_STEPS: an offer after the steps,
+// not one of them.
+export const RECORD_NUMBERS: Readonly<Record<StepKey | 'block', number>> = {
   ca: 1,
   syslog: 2,
   rules: 3,
@@ -529,6 +533,7 @@ const RECORD_NUMBERS: Readonly<Record<StepKey, number>> = {
   // 7 is new with #1291 and has no history to preserve; it is last
   // because nothing was ever recorded under it before.
   register: 7,
+  block: 8,
 }
 
 // ROUTER_STEPS is the router ledger (#1284): the same six router-side
@@ -1125,8 +1130,11 @@ function count(n: number): string {
 // no decision behind it is simply empty, and inventing a cause for it
 // would be the opposite of this feature.
 export function silenceExplanation(marks: SetupMark[]): string | null {
-  const forced = marks.filter((m) => m.outcome === 'forced')
-  const skipped = marks.filter((m) => m.outcome === 'skipped')
+  // The first-run tail's Not now (record 8, #1360) sets aside an offer,
+  // not a step: blocking lists on the router silences nothing here.
+  const steps = marks.filter((m) => m.step !== RECORD_NUMBERS.block)
+  const forced = steps.filter((m) => m.outcome === 'forced')
+  const skipped = steps.filter((m) => m.outcome === 'skipped')
   const first = forced[0] ?? skipped[0]
   if (!first) return null
   const verb = first.outcome === 'forced' ? 'forced past' : 'skipped'
