@@ -94,6 +94,12 @@
 .wiz .step-row.done .step-receipt { color: var(--accept); }
 .wiz .step-row.chosen .step-n { border-color: var(--log); color: var(--log); }
 .wiz .step-row.chosen .step-receipt { color: var(--log); }
+/* round 2's first-run tail (#1360, tail.html): the offered row is a plus
+   in a dashed ring, not a number -- an offer rather than a step -- and
+   its receipt is a fact rather than a proof, so it is muted */
+.wiz .step-row.offer .step-n { border-style: dashed; color: var(--fg-muted); }
+.wiz .step-row.offer .step-receipt { color: var(--fg-dim); }
+.wiz .step-row.offer.current .step-n { border-style: solid; color: var(--fg); }
 /* the step disc and text (shell.css, from SetupWizard.svelte) */
 .wiz .step-n { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--bg); border: 1px solid var(--border); font-size: 11px; }
 .wiz .step-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -191,6 +197,9 @@
 .wiz .ledger .row .r.skip { color: var(--ink-off); }
 .wiz .ledger .row.skip > span:nth-child(2) { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: var(--ink-off); }
 .wiz .ledger .row.skip .r { text-decoration: none; }
+/* the tail's offered ledger row: neither a proof nor set aside (tail.html) */
+.wiz .ledger .row .step-n.offer { border-style: dashed; color: var(--fg-muted); }
+.wiz .ledger .row .r.offer { color: var(--fg-muted); }
 
 /* The track (inks.css): one wire from Copy to Done, a station per
    proof. The track alone stays green (owner, round 9): a done station

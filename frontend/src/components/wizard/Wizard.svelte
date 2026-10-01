@@ -35,11 +35,9 @@
   import StepPaste from './StepPaste.svelte'
   import StepTune from './StepTune.svelte'
   import StepStand from './StepStand.svelte'
-  import BuilderBody from '../blocklist/BuilderBody.svelte'
   import { blocklistState } from '../../lib/blocklist.svelte'
   import { partsSummary } from '../../lib/blocklistBuild'
   import './wizard.css'
-  import '../blocklist/builder.css'
 
   // Steps land seconds to minutes apart (the push scheduler runs every
   // 20 minutes), so this polls rather than streaming -- and only while
@@ -158,6 +156,16 @@
     return partsSummary(d.catalogue.filter((e) => blocklistState.choices[e.key]?.on).length, parts)
   })
   const foot = $derived(footSpec(answers, evidence, copyLabel))
+
+  // The tail's stage is the blocklist builder's body, fetched as its own
+  // chunk the first time a walk opens it: most walks never do, and the
+  // entry bundle stays inside its budget (check-bundle-budget.mjs).
+  type BodyModule = typeof import('../blocklist/lazy')
+  let bodyModule = $state<BodyModule | undefined>(undefined)
+  $effect(() => {
+    if (step !== 'block' || bodyModule) return
+    import('../blocklist/lazy').then((m) => (bodyModule = m)).catch(() => {})
+  })
   const announcement = $derived(announce(rows))
 
   function act(a: FootAction) {
@@ -274,7 +282,10 @@
       {#if step === 'block'}
         <!-- The first-run tail's stage (#1360): the builder's own body in
              the wizard's frame, as round 2's tail.html draws it. -->
-        <BuilderBody variant="tail" />
+        {#if bodyModule}
+          {@const BuilderBody = bodyModule.BuilderBody}
+          <BuilderBody variant="tail" />
+        {/if}
       {:else}
       <div class="body" class:away>
         {#if step === 'router'}

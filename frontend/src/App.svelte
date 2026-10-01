@@ -48,7 +48,7 @@
   // setup…" row lives in the account menu (desktop) and the bottom bar
   // (mobile), both of which call wizardState.launch() directly.
   import Wizard from './components/wizard/Wizard.svelte'
-  import Builder from './components/blocklist/Builder.svelte'
+  import { blocklistState } from './lib/blocklist.svelte'
   import { wizardState } from './lib/wizard.svelte'
   // The wizard's way in and way out (#1386): the canvas and the riding
   // wordmark, mounted beside the wizard. While a sign-in's journey is
@@ -65,6 +65,14 @@
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
+
+  // The blocklist builder's page (#1360) loads on first open.
+  type BuilderModule = typeof import('./components/blocklist/lazy')
+  let builderModule = $state<BuilderModule | undefined>(undefined)
+  $effect(() => {
+    if (!blocklistState.open || builderModule) return
+    import('./components/blocklist/lazy').then((m) => (builderModule = m)).catch(() => {})
+  })
 
   // The deck's scenes (#633). Entities and Settings joined the deck in
   // #647 (round 23), folding Fleet's own table into Entities' leading
@@ -434,7 +442,12 @@
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <Wizard />
-  <Builder />
+  <!-- The blocklist builder (#1360), its own chunk, fetched the first
+       time it is opened: most sessions never do. -->
+  {#if builderModule}
+    {@const Builder = builderModule.Builder}
+    <Builder />
+  {/if}
   <WizardJourney />
   {#if configEditorState.visible}
     <ConfigEditor />

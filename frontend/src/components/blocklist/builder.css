@@ -42,13 +42,6 @@
 .wiz .rail.bl .step-row.off .step-n { border-style: dashed; color: var(--fg-dim); }
 .wiz .rail.bl .step-row.off .step-receipt { color: var(--fg-dim); }
 .wiz .rail.bl .foot-note { margin: 14px 10px 0; font-size: 11.5px; line-height: 1.5; color: var(--fg-dim); }
-/* the wizard's tail row: an offer, not a step -- a plus in a dashed ring,
-   its receipt a fact rather than a proof (tail.html .step-row.offer) */
-.wiz .step-row.offer .step-n { border-style: dashed; color: var(--fg-muted); }
-.wiz .step-row.offer .step-receipt { color: var(--fg-dim); }
-.wiz .step-row.offer.current .step-n { border-style: solid; color: var(--fg); }
-.wiz .ledger .row .step-n.offer { border-style: dashed; color: var(--fg-muted); }
-.wiz .ledger .row .r.offer { color: var(--fg-muted); }
 
 /* the page's foot sits on the body's 36px gutter (builder.html .foot) */
 .wiz.bl-page .foot { padding: 12px 36px; }
