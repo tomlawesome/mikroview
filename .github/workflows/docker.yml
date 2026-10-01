@@ -198,7 +198,20 @@ jobs:
       - name: Move latest to the tested release
         run: |
           src="$IMAGE:$VERSION"
-          docker buildx imagetools create --tag "$IMAGE:latest" "$src"
+          dst="$IMAGE:latest"
+          # $src is built with provenance: mode=max and sbom: true above,
+          # so it is already an OCI index -- --prefer-index=false is a
+          # no-op there, confirmed locally against a throwaway registry.
+          # It stays on in case that ever changes (#1407): without it,
+          # a single-manifest source gets wrapped in a new index under a
+          # different digest.
+          docker buildx imagetools create --prefer-index=false --tag "$dst" "$src"
+          src_digest="$(docker buildx imagetools inspect "$src" --format '{{.Manifest.Digest}}')"
+          got_digest="$(docker buildx imagetools inspect "$dst" --format '{{.Manifest.Digest}}')"
+          if [ "$got_digest" != "$src_digest" ]; then
+            echo "::error::retag moved the digest: $dst is $got_digest, expected $src_digest from $src"
+            exit 1
+          fi
 
       # Keyless signing used to happen here, automatically. Two
       # signatures made by the same workflow are one signature -- anyone
@@ -248,4 +261,16 @@ jobs:
           src="ghcr.io/${{ github.repository }}:preview-${{ steps.source.outputs.short }}"
           dst="ghcr.io/${{ github.repository }}:latest"
           echo "Promoting $src -> $dst (no rebuild)"
-          docker buildx imagetools create --tag "$dst" "$src"
+          # $src is built with provenance: mode=max and sbom: true, so it
+          # is already an OCI index -- --prefer-index=false is a no-op
+          # there, confirmed locally against a throwaway registry. It
+          # stays on in case that ever changes (#1407): without it, a
+          # single-manifest source gets wrapped in a new index under a
+          # different digest.
+          docker buildx imagetools create --prefer-index=false --tag "$dst" "$src"
+          src_digest="$(docker buildx imagetools inspect "$src" --format '{{.Manifest.Digest}}')"
+          got_digest="$(docker buildx imagetools inspect "$dst" --format '{{.Manifest.Digest}}')"
+          if [ "$got_digest" != "$src_digest" ]; then
+            echo "::error::retag moved the digest: $dst is $got_digest, expected $src_digest from $src"
+            exit 1
+          fi
