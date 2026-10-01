@@ -6,6 +6,10 @@ symptom`. The third sighting under a heading gets an issue, linked from
 the heading; fixing the cause deletes the heading. Rule and format:
 testing-and-ci skill (owner, 2026-09-08).
 
+## live-nav-bottom-bar: the docked handle renders beside the bottom bar
+
+- 2026-10-01 · b30f3aec (chore/deps-2026-10-01, !1128) · pipeline 1901, `gate:scenarios 3/4` (job 28163) · `the docked handle does not render either -- the bar replaces both` failed; the rest of the scenario passed. The branch changes only jsdom (unit tests) and GitHub Actions pins, nothing a real browser loads; dev passed it in pipeline 1898 and the retried job 28310 passed on the same commit.
+
 ## coverage-floor: internal/baseline's coverage drops under full-suite load
 
 - 2026-09-27 · dee367fa (fix/1290-postgres-coverage, local `go test ./... -coverprofile`, no -race, host busy with other agents) · `internal/baseline: got 88.6%, floor 90%`; `go test ./internal/baseline/...` alone read 90.7% three times running. Coverage that moves with load means a timing-dependent path in its tests; the ratchet can go red on it.

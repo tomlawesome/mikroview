@@ -1,6 +1,15 @@
 # --- frontend build -------------------------------------------------------
 FROM node:26-alpine AS frontend
 WORKDIR /src/frontend
+# VERSION (#1363): the same short commit SHA/tag passed to the backend
+# stage below, redeclared here because a Docker ARG only reaches the
+# stage that declares it. Exported as an env var so vite.config.ts's
+# `define` (a plain Node process, not a build-arg-aware tool) can read
+# it via process.env.VERSION and bake it into the bundle -- see
+# frontend/src/lib/freshness.svelte.ts, which needs a fixed build-time
+# baseline to compare against /api/healthz.
+ARG VERSION=dev:local
+ENV VERSION=${VERSION}
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./

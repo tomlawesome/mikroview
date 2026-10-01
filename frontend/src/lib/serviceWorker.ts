@@ -55,13 +55,91 @@ export type LoadListener = Pick<Window, 'addEventListener'>
  * no operator action to prompt and nothing to say. docs/configuration.md
  * already covers the one case an operator can act on, a certificate the
  * browser does not trust.
+ *
+ * Resolves with the registration on success, or `undefined` either where
+ * there is nothing to register or the registration itself failed --
+ * #1363's freshness check holds onto it (main.ts) so a later upgrade can
+ * ask the waiting worker to take over before reloading into it. The
+ * `.then(_, _)` below is the one place that has to touch the raw
+ * registration promise directly: it is both this function's success
+ * path and the rejection handler the comment above swallows failure
+ * with, so a caller here never has two independent listeners racing to
+ * decide whether Firefox's mid-flight rejection was ever reported.
  */
 export function registerServiceWorker(
   container: Registrar | undefined = typeof navigator === 'undefined' ? undefined : navigator.serviceWorker,
   scope: LoadListener | undefined = typeof window === 'undefined' ? undefined : window,
-): void {
-  if (!container || !scope) return
-  scope.addEventListener('load', () => {
-    void container.register(SERVICE_WORKER_URL, { scope: SERVICE_WORKER_SCOPE }).catch(() => {})
+): Promise<ServiceWorkerRegistration | undefined> {
+  if (!container || !scope) return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    scope.addEventListener('load', () => {
+      container.register(SERVICE_WORKER_URL, { scope: SERVICE_WORKER_SCOPE }).then(
+        (registration) => resolve(registration),
+        () => resolve(undefined),
+      )
+    })
+  })
+}
+
+/** Just the part of ServiceWorkerContainer #1363's handover needs, so a test can pass a stub. */
+export type ControllerWatcher = Pick<ServiceWorkerContainer, 'addEventListener' | 'removeEventListener'>
+
+/**
+ * activateWaitingWorker is the handover the design calls for before a
+ * safe reload: `registration.update()` first, so a worker this tab's
+ * registration has not polled for yet (the freshness check can fire long
+ * before the browser's own 24-hour update cycle would) is actually found,
+ * then ask whatever is waiting (or still installing) to take over, and
+ * resolve once it actually has -- so the reload that follows is served
+ * by the new worker rather than the one this tab loaded with.
+ *
+ * Resolves anyway after `timeoutMs` if no worker ever takes control --
+ * `update()` found nothing new, the worker never reaches `installed`,
+ * or a browser that never fires `controllerchange` for a case this
+ * hasn't seen -- so a real version mismatch still reloads rather than
+ * hanging the one automatic attempt forever on a promise that will
+ * never settle. `update()` rejecting (offline, a mid-flight navigation)
+ * is swallowed the same way -- the handover is a best effort, not a
+ * precondition for the reload that follows it.
+ */
+export async function activateWaitingWorker(
+  registration: ServiceWorkerRegistration | undefined,
+  container: ControllerWatcher | undefined = typeof navigator === 'undefined' ? undefined : navigator.serviceWorker,
+  timeoutMs = 3000,
+): Promise<void> {
+  if (!registration || !container) return
+
+  try {
+    await registration.update?.()
+  } catch {
+    // Best effort -- see the doc comment above.
+  }
+
+  const worker = registration.waiting ?? registration.installing
+  if (!worker) return
+
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      container.removeEventListener('controllerchange', onControllerChange)
+      resolve()
+    }
+    const onControllerChange = () => finish()
+    const timer = setTimeout(finish, timeoutMs)
+    container.addEventListener('controllerchange', onControllerChange)
+
+    const skipWaiting = () => worker.postMessage({ type: 'SKIP_WAITING' })
+    if (worker.state === 'installed') {
+      skipWaiting()
+    } else {
+      worker.addEventListener('statechange', function onStateChange() {
+        if (worker.state !== 'installed') return
+        worker.removeEventListener('statechange', onStateChange)
+        skipWaiting()
+      })
+    }
   })
 }

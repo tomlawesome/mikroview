@@ -17,9 +17,11 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  activateWaitingWorker,
   registerServiceWorker,
   SERVICE_WORKER_SCOPE,
   SERVICE_WORKER_URL,
+  type ControllerWatcher,
   type LoadListener,
   type Registrar,
 } from './serviceWorker'
@@ -118,5 +120,176 @@ describe('registerServiceWorker (#1314)', () => {
     const win = fakeWindow()
     expect(() => registerServiceWorker(undefined, win)).not.toThrow()
     expect(() => win.fireLoad()).not.toThrow()
+  })
+
+  // #1363: main.ts hands this to freshnessState so a later upgrade can
+  // ask the worker to take over before reloading.
+  it('resolves with the registration once one lands', async () => {
+    const registration = {} as ServiceWorkerRegistration
+    const win = fakeWindow()
+
+    const result = registerServiceWorker({ register: () => Promise.resolve(registration) } as Registrar, win)
+    win.fireLoad()
+
+    expect(await result).toBe(registration)
+  })
+
+  it('resolves with undefined where registration failed', async () => {
+    const watched = watchedRejection(new Error('nope'))
+    const win = fakeWindow()
+
+    const result = registerServiceWorker({ register: () => watched.promise } as Registrar, win)
+    win.fireLoad()
+
+    expect(await result).toBeUndefined()
+  })
+})
+
+/** A worker whose `state` can be driven, remembering the one message
+ * handler activateWaitingWorker cares about. */
+function fakeWorker(initialState: ServiceWorkerState): ServiceWorker & { setState: (s: ServiceWorkerState) => void } {
+  let state = initialState
+  let onStateChange: (() => void) | null = null
+  return {
+    get state() {
+      return state
+    },
+    postMessage: vi.fn(),
+    addEventListener: ((type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'statechange') onStateChange = listener as () => void
+    }) as ServiceWorker['addEventListener'],
+    removeEventListener: vi.fn(),
+    setState(s: ServiceWorkerState) {
+      state = s
+      onStateChange?.()
+    },
+  } as unknown as ServiceWorker & { setState: (s: ServiceWorkerState) => void }
+}
+
+/** A container that remembers the `controllerchange` listener and can fire it. */
+function fakeContainer(): ControllerWatcher & { fireControllerChange: () => void } {
+  const listeners = new Set<EventListenerOrEventListenerObject>()
+  return {
+    addEventListener: ((_type: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.add(listener)
+    }) as ControllerWatcher['addEventListener'],
+    removeEventListener: ((_type: string, listener: EventListenerOrEventListenerObject) => {
+      listeners.delete(listener)
+    }) as ControllerWatcher['removeEventListener'],
+    fireControllerChange: () => {
+      for (const l of listeners) (l as () => void)()
+    },
+  }
+}
+
+describe('activateWaitingWorker (#1363)', () => {
+  it('resolves straightaway where nothing is waiting or installing', async () => {
+    const container = fakeContainer()
+    await expect(activateWaitingWorker(undefined, container)).resolves.toBeUndefined()
+    await expect(
+      activateWaitingWorker({ waiting: null, installing: null } as unknown as ServiceWorkerRegistration, container),
+    ).resolves.toBeUndefined()
+  })
+
+  it('calls registration.update() before looking for a worker, per the ratified design', async () => {
+    const container = fakeContainer()
+    const registration = {
+      waiting: null,
+      installing: null,
+      update: vi.fn(() => Promise.resolve()),
+    } as unknown as ServiceWorkerRegistration
+
+    await activateWaitingWorker(registration, container)
+
+    expect(registration.update).toHaveBeenCalledOnce()
+  })
+
+  it('finds a worker that only registration.update() turns up -- not just whatever was already waiting or installing', async () => {
+    const worker = fakeWorker('installed')
+    const container = fakeContainer()
+    const registration = {
+      waiting: null,
+      installing: null,
+      // Simulates the real update() algorithm: the browser only starts
+      // installing a new worker as a side effect of the update check
+      // this call performs, so `installing` is unset until it resolves.
+      update: vi.fn(() => {
+        ;(registration as unknown as { installing: unknown }).installing = worker
+        return Promise.resolve()
+      }),
+    } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
+
+    container.fireControllerChange()
+    await settled
+  })
+
+  it('does not reject when registration.update() itself rejects (offline, a mid-flight navigation)', async () => {
+    const container = fakeContainer()
+    const registration = {
+      waiting: null,
+      installing: null,
+      update: vi.fn(() => Promise.reject(new Error('offline'))),
+    } as unknown as ServiceWorkerRegistration
+
+    await expect(activateWaitingWorker(registration, container)).resolves.toBeUndefined()
+  })
+
+  it('asks an already-installed waiting worker to skip waiting, and resolves once it takes control', async () => {
+    const worker = fakeWorker('installed')
+    const container = fakeContainer()
+    const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    let resolved = false
+    void settled.then(() => (resolved = true))
+    await Promise.resolve()
+
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
+    expect(resolved).toBe(false)
+
+    container.fireControllerChange()
+    await settled
+    expect(resolved).toBe(true)
+  })
+
+  it('waits for an installing worker to reach installed before asking it to skip waiting', async () => {
+    const worker = fakeWorker('installing')
+    const container = fakeContainer()
+    const registration = { waiting: null, installing: worker } as unknown as ServiceWorkerRegistration
+
+    const settled = activateWaitingWorker(registration, container)
+    await Promise.resolve()
+    expect(worker.postMessage).not.toHaveBeenCalled()
+
+    worker.setState('installed')
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
+
+    container.fireControllerChange()
+    await settled
+  })
+
+  it('resolves anyway if no worker ever takes control, rather than hanging the one automatic reload forever', async () => {
+    vi.useFakeTimers()
+    try {
+      const worker = fakeWorker('installed')
+      const container = fakeContainer()
+      const registration = { waiting: worker, installing: null } as unknown as ServiceWorkerRegistration
+
+      const settled = activateWaitingWorker(registration, container, 3000)
+      let resolved = false
+      void settled.then(() => (resolved = true))
+
+      await vi.advanceTimersByTimeAsync(2999)
+      expect(resolved).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(resolved).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

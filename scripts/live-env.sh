@@ -203,6 +203,25 @@ with socket.create_connection((host, port), timeout=10, source_address=(src, 0) 
 }
 
 build() {
+  # #1363: computed here, before the frontend build below, and exported
+  # as VERSION so vite.config.ts's `define` bakes the exact same string
+  # into the bundle that the Go binary is stamped with a few lines down.
+  # Without this the frontend always built as "dev:local" (its own
+  # un-stamped default) while the server carried this real, unique-per-
+  # build stamp -- a permanent mismatch that would have made every live
+  # scenario either reload or show the freshness banner the instant it
+  # opened a page, having nothing to do with what that scenario was
+  # trying to check.
+  #
+  # -buildvcs=false further down stays: it is what stops `go build`
+  # dying in a linked worktree (#348), and the sha below is read from git
+  # explicitly instead.
+  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  mv_dirty=""
+  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
+  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  export VERSION="$mv_stamp"
+
   # No /dev/null here, and the exit code is checked explicitly. `set -e`
   # alone already aborted `up` here on a fresh checkout (no
   # frontend/node_modules) -- but silently, because npm's own error was
@@ -282,13 +301,8 @@ build() {
   # the browser from one built after it -- which is how round 30 lost a
   # day to the owner reviewing a stale build and finding faults that were
   # already fixed in the tree. AGENTS.md carries the rule; this is what
-  # makes it true. -buildvcs=false stays: it is what stops `go build`
-  # dying in a linked worktree (#348), and the sha below is read from git
-  # explicitly instead.
-  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-  mv_dirty=""
-  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
-  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  # makes it true. Same $mv_stamp the frontend build above was given, not
+  # recomputed -- see this function's own top.
   go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "${1:-$MV_DIR/mikroview}" .
   echo "live-env: built $mv_stamp" >&2
 }
@@ -618,6 +632,45 @@ down() {
   rm -rf "$MV_DIR"
 }
 
+# upgrade -- rebuild and restart the running instance *in place*: same
+# $MV_DIR data, same cfg.yaml, same admin session cookies, only a new
+# VERSION and the binary/frontend bundle it stamps. `up` always boots a
+# fresh instance, which cannot exercise #1363 at all -- the whole defect
+# is what an *already-open tab* does when the server behind it changes
+# out from under it, #1362's own case. This is what lets
+# live-freshness-reload.mjs watch that happen for real, with a real
+# service worker, rather than asserting on freshness.svelte.ts in
+# isolation the way the vitest suite already does.
+#
+# Requires `up` to have stood one up already -- refuses rather than
+# silently starting a fresh instance nothing has signed into yet.
+upgrade() {
+  if [ ! -f "$MV_DIR/pid" ]; then
+    echo "live-env: no running instance in $MV_DIR -- run 'up' first." >&2
+    exit 1
+  fi
+  local old_pid
+  old_pid="$(cat "$MV_DIR/pid")"
+  kill "$old_pid" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    kill -0 "$old_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  # build()'s own $mv_stamp is timestamped to the second
+  # (date -u +%Y%m%dT%H%M%SZ) -- sleep past the second the instance's
+  # first build landed in, so a rebuild moments later is provably a
+  # different VERSION rather than betting on the rebuild itself (npm
+  # plus go, normally several seconds) taking that long on every host.
+  sleep 1.1
+  build "$MV_DIR/mikroview"
+  MV_TEST_HOOKS=1 MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
+  echo $! > "$MV_DIR/pid"
+  for _ in $(seq 1 40); do
+    if curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi
+    sleep 0.25
+  done
+}
+
 case "${1:-}" in
   up) up ;;
   # build PATH -- build the binary (and the UI it embeds) to PATH without
@@ -629,6 +682,7 @@ case "${1:-}" in
   perfseed) shift; perfseed "$@" ;;
   portscan) shift; portscan "$@" ;;
   recon) shift; recon "$@" ;;
+  upgrade) upgrade ;;
   down) down ;;
-  *) echo "usage: $0 {up|build PATH|syslog N [label]|perfseed [SCANS] [EVENTS]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|build PATH|syslog N [label]|perfseed [SCANS] [EVENTS]|raw LINE...|rawfrom SRC-IP LINE...|portscan N [src-ip]|recon N [src-ip] [port]|upgrade|down}" >&2; exit 2 ;;
 esac

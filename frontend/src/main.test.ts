@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const registerServiceWorker = vi.fn()
+const registerServiceWorker = vi.fn(() => Promise.resolve(undefined))
 
 vi.mock('svelte', async (importOriginal) => ({
   ...(await importOriginal<typeof import('svelte')>()),

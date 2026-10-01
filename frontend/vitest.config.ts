@@ -22,6 +22,13 @@ import { svelteTesting } from '@testing-library/svelte/vite'
 // in, not its SSR runtime), registers an afterEach DOM-cleanup hook, and
 // marks @testing-library/svelte as non-external for SSR-style bundling.
 export default defineConfig({
+  // Standalone from vite.config.ts (see above), so its own `define` for
+  // #1363's baked-in build id needs repeating here -- tests never set
+  // VERSION, so this is always "dev:local", the same default a plain
+  // `npm run build` gets.
+  define: {
+    __MIKROVIEW_VERSION__: JSON.stringify('dev:local'),
+  },
   plugins: [svelte(), svelteTesting()],
   test: {
     environment: 'jsdom',
