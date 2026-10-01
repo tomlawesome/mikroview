@@ -79,9 +79,10 @@ type routerBackupsResponse struct {
 	// present so the group can render "locked" without a second call.
 	Lock vaultLockStatusResponse `json:"lock"`
 	// Port is the SFTP drop box's own listening port (round 44's "arrive
-	// by" row), empty when backup.enabled is false -- the same
-	// SetupInstance.BackupPort the wizard's step 6 already reads, not a
-	// second copy of the configured value.
+	// by" row, and the Settings row's "drop box: closed / open on port
+	// N", #1361), empty while the drop box is closed -- a live read of
+	// the same SetupInstance.BackupPortNow() the wizard's step 6 already
+	// reads, not a second copy of anything.
 	Port string `json:"port,omitempty"`
 }
 
@@ -146,7 +147,7 @@ func (s *Server) handleRouterBackupsList(w http.ResponseWriter, r *http.Request)
 		Enabled:       s.Vault.Enabled(),
 		KeyUnreadable: s.SetupInstance.BackupKeyUnreadable,
 		Routers:       []routerBackupRouter{},
-		Port:          s.SetupInstance.BackupPort,
+		Port:          s.SetupInstance.BackupPortNow(),
 		LowSpace:      s.Vault.LowSpace(),
 	}
 	resp.Lock = s.vaultLockStatus(r, time.Now())

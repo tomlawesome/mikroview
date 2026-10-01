@@ -16,7 +16,12 @@
   // has no one control for a label to point at -- named by
   // aria-labelledby instead.
 
+  import { configProblemsState } from '../../lib/configProblems.svelte'
+  import { portOf } from '../../lib/setupsteps'
+  import type { RouterBackupSwitchState } from '../../lib/types'
+  import { wizardState } from '../../lib/wizard.svelte'
   import { wizardRun } from '../../lib/wizardRun.svelte'
+  import RouterBackupOpenDialog from '../RouterBackupOpenDialog.svelte'
 
   const problem = $derived(wizardRun.addrProblem)
 
@@ -26,6 +31,36 @@
   $effect(() => {
     nameEl?.focus()
   })
+
+  // The drop box, when it is closed (#1361; DESIGN.md, "1 · The
+  // router"): the one instance-wide fact this per-router form has to
+  // show, because a Yes here prints a script whose backup would have
+  // nowhere to arrive. It sits under the Back up nightly choice -- where
+  // backups are chosen -- as a caution with one act, "Open it now",
+  // which unfolds the same dialog and endpoint Settings → router backups
+  // uses (RouterBackupOpenDialog). Yes and No stay what they are: a
+  // per-router answer never closes the drop box for the whole instance,
+  // and a Yes with the box still closed is allowed -- the operator can
+  // open it later from Settings, and this caution stays until then.
+  //
+  // wizardState.dropBoxClosed is read off the backups poll the wizard
+  // already runs (GET /api/router-backups' live port), so nothing new is
+  // fetched here, and nothing is said before that read has landed.
+  const dropBoxClosed = $derived(wizardState.dropBoxClosed)
+  let opening = $state(false)
+  // openedPort is the receipt for an open made from here: shown in the
+  // caution's place until the step is left, so the act reads as done.
+  let openedPort = $state('')
+
+  async function dropBoxOpened(state: RouterBackupSwitchState) {
+    opening = false
+    openedPort = state.port ?? ''
+    await wizardState.dropBoxSwitched(state)
+    // The admin banner (configProblems.svelte.ts) carries every switch
+    // change for seven days; ask for it now, the way EngineRoom does,
+    // so it stands when the wizard lets the shell back in.
+    configProblemsState.refresh()
+  }
 </script>
 
 <h3>Your first router.</h3>
@@ -75,5 +110,23 @@
       <button type="button" class:on={wizardRun.backup === true} role="radio" aria-checked={wizardRun.backup === true} onclick={() => (wizardRun.backup = true)}>Yes</button>
       <button type="button" class:on={wizardRun.backup === false} class:no={wizardRun.backup === false} role="radio" aria-checked={wizardRun.backup === false} onclick={() => (wizardRun.backup = false)}>No</button>
     </div>
+    {#if dropBoxClosed}
+      <div class="cautionbox dropbox" aria-live="polite">
+        <b>The drop box is closed</b> — a backup would have nowhere to arrive.
+        {#if !opening}
+          <button type="button" class="linkish" onclick={() => (opening = true)}>Open it now</button>, or later from
+          Settings → router backups.
+        {:else}
+          Opening it listens on a new port for the routers to send to.
+        {/if}
+      </div>
+      {#if opening}
+        <RouterBackupOpenDialog look="wizard" onopened={dropBoxOpened} oncancel={() => (opening = false)} />
+      {/if}
+    {:else if openedPort}
+      <p class="opened" aria-live="polite">
+        The drop box is open on port {portOf(openedPort)} — the router must be able to reach this host there.
+      </p>
+    {/if}
   </div>
 </div>

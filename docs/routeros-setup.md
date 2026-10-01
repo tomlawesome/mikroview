@@ -991,21 +991,20 @@ and once by MikroView as it arrives, so the readable copy has never
 held a password.
 **MikroView is the place you turn to when the router is gone**, so this
 is worth setting up before that day, not after. See
-[configuration.md](configuration.md#router-backups-over-sftp-optional-off-by-default)
-for the server side (`backup.enabled`, the retention and quota rules,
-the missed-push receipt in Settings) and [SECURITY.md](../SECURITY.md)
-for the trust caveat below.
+[configuration.md](configuration.md#router-backups-over-sftp-issue-394)
+for the server side (the retention and quota rules, the missed-push
+receipt in Settings) and [SECURITY.md](../SECURITY.md) for the trust
+caveat below.
 
 ### 7a. Turn the drop box on
 
-Set `backup.enabled: true` in `config.yaml` and restart — this opens a
-second listening port (`backup.listen`, default `:47022`), only once
-you have decided to use it. Skip this section entirely if you are
-taking the HTTPS-only path in 7c-ii: it needs no second port, and so
-nothing to turn on here. Nothing here needs the wizard, but the
-wizard's Back up the router step is what actually prints the script
-below with your own values filled in, which is the easier path for
-most people.
+Settings → router backups has a "drop box: closed / open on port N" row
+(#1361) — opening it re-checks your password and shows the trust caveat
+below; closing needs no password, since closing is the safe direction.
+The setup wizard's Back up the router step offers the same control
+directly if the drop box is still closed when you get there. Skip this
+section entirely if you are taking the HTTPS-only path in 7c-ii: it
+needs no second port, and so nothing to turn on here.
 
 ### 7b. The token
 

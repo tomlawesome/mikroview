@@ -1436,8 +1436,15 @@ func main() {
 	// one Dispatcher/BatchWindow. No dispatcher goroutine is started at
 	// all if nothing is configured.
 	var notifiers []notify.Notifier
+	// routerBackupSMTP is the same SMTP relay, held separately from
+	// notifiers above (#1361): the router-backup switch's "every change"
+	// email goes out the moment the switch moves, through
+	// api.Server.RouterBackupNotifier, never through Dispatcher's
+	// BatchWindow -- a security-relevant switch flip is not a flag to
+	// hold for a batching window.
+	var routerBackupSMTP *notify.SMTPNotifier
 	if cfg.Notify.SMTP.Host != "" {
-		notifiers = append(notifiers, notify.NewSMTPNotifier(notify.SMTPConfig{
+		routerBackupSMTP = notify.NewSMTPNotifier(notify.SMTPConfig{
 			Host:     cfg.Notify.SMTP.Host,
 			Port:     cfg.Notify.SMTP.Port,
 			Username: cfg.Notify.SMTP.Username,
@@ -1445,7 +1452,17 @@ func main() {
 			TLSMode:  notify.TLSMode(cfg.Notify.SMTP.TLSMode),
 			From:     cfg.Notify.SMTP.From,
 			To:       cfg.Notify.SMTP.To,
-		}))
+		})
+		notifiers = append(notifiers, routerBackupSMTP)
+	}
+	// A nil *notify.SMTPNotifier assigned straight into an api.Server
+	// field typed as the RouterBackupNotifier interface would be a
+	// non-nil interface wrapping a nil pointer -- the classic Go trap --
+	// so this is left as the api.RouterBackupNotifier interface's own
+	// nil unless routerBackupSMTP actually exists.
+	var routerBackupNotifier api.RouterBackupNotifier
+	if routerBackupSMTP != nil {
+		routerBackupNotifier = routerBackupSMTP
 	}
 	if cfg.Notify.Pushover.Token != "" {
 		notifiers = append(notifiers, notify.NewPushoverNotifier(notify.PushoverConfig{
@@ -1560,6 +1577,13 @@ func main() {
 	// so something has to own opening, purging and re-capping while the
 	// process runs. See history_runtime.go.
 	hist := newHistoryRuntime(logging.New("history"), cfg, settingsStore, st)
+
+	// The router-backup SFTP drop box's own runtime (#1361): the switch
+	// beside history's above, moved into the settings store and off the
+	// config file. Built here, once settingsStore, routerBackupVault and
+	// tokenStore all exist, and tied to ctx so an ordinary shutdown closes
+	// it exactly like syslog.ListenTLS above -- see backups.go.
+	backups := newBackupRuntime(ctx, logging.New("backupsftp"), cfg, settingsStore, routerBackupVault, tokenStore)
 
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore, hist, hostRegister, baselineRegister, seenRegister)
 	go eng.Run(ctx)
@@ -1922,11 +1946,16 @@ func main() {
 		RouterState:             routerState,
 		Vault:                   routerBackupVault,
 		BackupSlices:            routerBackupSlices,
+		RouterBackupSwitch:      backups,
+		RouterBackupNotifier:    routerBackupNotifier,
 		SetupInstance: api.SetupInstance{
-			TLSEnabled:          cfg.TLS.Enabled,
-			Hosts:               cfg.TLS.Hosts,
-			SyslogPort:          cfg.Listen.SyslogTLS,
-			BackupPort:          routerBackupPort(cfg),
+			TLSEnabled: cfg.TLS.Enabled,
+			Hosts:      cfg.TLS.Hosts,
+			SyslogPort: cfg.Listen.SyslogTLS,
+			BackupPort: func() string {
+				_, port := backups.State()
+				return port
+			},
 			BackupKeyUnreadable: routerBackupKeyUnreadable,
 			Candidates:          setupAddressCandidates(cfg.Listen.HTTP),
 		},
@@ -2158,11 +2187,11 @@ func main() {
 		}()
 	}
 
-	// Router-backup SFTP drop box (#394): its own listener, its own
-	// generated host key, started independently of the TLS block above
-	// -- it is not an HTTPS/syslog concern, and off entirely unless
-	// backup.enabled is true.
-	startRouterBackupServer(ctx, cfg, routerBackupVault, tokenStore)
+	// Router-backup SFTP drop box (#394, #1361): backups above already
+	// started it, or not, as the stored switch position (or a seeded
+	// legacy config value) left it -- see newBackupRuntime. Nothing left
+	// to do here; it is not an HTTPS/syslog concern and was never tied to
+	// this block.
 
 	joinOnShutdown(&shutdownWG, ctx, httpServer.Shutdown)
 
