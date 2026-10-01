@@ -522,10 +522,15 @@ var blockSpecs = map[string]blockSpec{
 	// discover, reverse-proxy), and this is what lets mikroview tell
 	// those apart from the eight above -- see
 	// internal/ingest.IPServiceEntry.IsDynamic.
+	//
+	// disabled is read with `get` by the row's .id (#1410): on 7.18.2
+	// `print as-value` leaves it out even for a disabled service, so a
+	// disabled telnet arrived enabled -- the fault #1409 fixed in the
+	// filter-rule block.
 	"ip-service": {
 		varName: "svc",
 		source:  "/ip/service",
-		record:  `{"name"=($v->"name"); "disabled"=($v->"disabled"); "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}`,
+		record:  `{"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}`,
 	},
 }
 
