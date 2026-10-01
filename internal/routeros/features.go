@@ -24,7 +24,17 @@ const (
 	fetchFollowsRedirectsVersion = "7.22"
 	// schedulerDaysVersion: 7.24 "added days to scheduler".
 	schedulerDaysVersion = "7.24"
+	// fetchTrustsBuiltinRootsVersion: 7.19 "certificate - added built-in
+	// root certificate authorities store". From it a loader fetches with
+	// check-certificate=yes and needs nothing imported; before it the
+	// router has no roots to check a list's server against, so the fetch
+	// goes unchecked rather than failing every time.
+	fetchTrustsBuiltinRootsVersion = "7.19"
 )
+
+// SchedulerDaysSince is the release that brought the scheduler's days=,
+// which the builder's page tags its "weekdays" choice with.
+const SchedulerDaysSince = schedulerDaysVersion
 
 // Features is what a RouterOS version offers the blocklist builder.
 type Features struct {
@@ -35,6 +45,10 @@ type Features struct {
 	FetchFollowsRedirects bool
 	// SchedulerDays: `/system scheduler` takes `days=`.
 	SchedulerDays bool
+	// FetchTrustsBuiltinRoots: the router carries a built-in root CA
+	// store, so `/tool fetch check-certificate=yes` can verify a public
+	// HTTPS server out of the box.
+	FetchTrustsBuiltinRoots bool
 }
 
 // FeaturesFor reports what the reported version offers. ok is false when the
@@ -47,9 +61,10 @@ func FeaturesFor(version string) (Features, bool) {
 		return Features{}, false
 	}
 	return Features{
-		LoopContinue:          atLeast(got, loopContinueVersion),
-		FetchFollowsRedirects: atLeast(got, fetchFollowsRedirectsVersion),
-		SchedulerDays:         atLeast(got, schedulerDaysVersion),
+		LoopContinue:            atLeast(got, loopContinueVersion),
+		FetchFollowsRedirects:   atLeast(got, fetchFollowsRedirectsVersion),
+		SchedulerDays:           atLeast(got, schedulerDaysVersion),
+		FetchTrustsBuiltinRoots: atLeast(got, fetchTrustsBuiltinRootsVersion),
 	}, true
 }
 

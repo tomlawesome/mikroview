@@ -24,16 +24,18 @@ func TestFeaturesFor(t *testing.T) {
 		{"the floor", "7.18", Features{}, true},
 		// The exact string a real router sends on a push.
 		{"the floor as a router reports it", "7.18.2 (stable)", Features{}, true},
-		{"the drawn older router", "7.19.4", Features{}, true},
-		{"last line before :continue and the redirect default", "7.21.3", Features{}, true},
+		{"last patch before the built-in roots", "7.18.9", Features{}, true},
+		{"the built-in roots arrive", "7.19", Features{FetchTrustsBuiltinRoots: true}, true},
+		{"the drawn older router", "7.19.4", Features{FetchTrustsBuiltinRoots: true}, true},
+		{"last line before :continue and the redirect default", "7.21.3", Features{FetchTrustsBuiltinRoots: true}, true},
 
-		{":continue and the redirect default arrive", "7.22", Features{LoopContinue: true, FetchFollowsRedirects: true}, true},
-		{"7.22 as a beta is still 7.22", "7.22beta1", Features{LoopContinue: true, FetchFollowsRedirects: true}, true},
-		{"last line before scheduler days", "7.23.3 (stable)", Features{LoopContinue: true, FetchFollowsRedirects: true}, true},
+		{":continue and the redirect default arrive", "7.22", Features{LoopContinue: true, FetchFollowsRedirects: true, FetchTrustsBuiltinRoots: true}, true},
+		{"7.22 as a beta is still 7.22", "7.22beta1", Features{LoopContinue: true, FetchFollowsRedirects: true, FetchTrustsBuiltinRoots: true}, true},
+		{"last line before scheduler days", "7.23.3 (stable)", Features{LoopContinue: true, FetchFollowsRedirects: true, FetchTrustsBuiltinRoots: true}, true},
 
-		{"scheduler days arrive", "7.24", Features{LoopContinue: true, FetchFollowsRedirects: true, SchedulerDays: true}, true},
-		{"the drawn newer router", "7.24.4", Features{LoopContinue: true, FetchFollowsRedirects: true, SchedulerDays: true}, true},
-		{"far ahead of review", "9.99.99", Features{LoopContinue: true, FetchFollowsRedirects: true, SchedulerDays: true}, true},
+		{"scheduler days arrive", "7.24", Features{LoopContinue: true, FetchFollowsRedirects: true, SchedulerDays: true, FetchTrustsBuiltinRoots: true}, true},
+		{"the drawn newer router", "7.24.4", Features{LoopContinue: true, FetchFollowsRedirects: true, SchedulerDays: true, FetchTrustsBuiltinRoots: true}, true},
+		{"far ahead of review", "9.99.99", Features{LoopContinue: true, FetchFollowsRedirects: true, SchedulerDays: true, FetchTrustsBuiltinRoots: true}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := FeaturesFor(tc.reported)
@@ -55,7 +57,7 @@ func TestFeatureThresholdsParse(t *testing.T) {
 	if !ok {
 		t.Fatalf("MinimumVersion %q does not parse", MinimumVersion)
 	}
-	for _, v := range []string{loopContinueVersion, fetchFollowsRedirectsVersion, schedulerDaysVersion} {
+	for _, v := range []string{loopContinueVersion, fetchFollowsRedirectsVersion, schedulerDaysVersion, fetchTrustsBuiltinRootsVersion} {
 		got, ok := parseVersion(v)
 		if !ok {
 			t.Errorf("threshold %q does not parse", v)
