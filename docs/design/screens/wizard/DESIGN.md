@@ -102,8 +102,10 @@ Six beats on one clock (≈6.5s in; the way out at three-quarters speed):
 centre and grows; the wizard's body slides up; the swell, the line, the
 catch, the wipe; what stands bare under it is the fall's frame, and its
 groups are the columns one by one, then the axis and the body, then the
-side rail — and the fall is live, with the router flowing and the bar's
-chips as the record.
+side rail — and the fall is live, with the router flowing, under the
+fall's own scene bar (range, LIVE, the account). The wizard's chips and
+strip stay through the way out and go with the wizard; they do not carry
+onto the fall (owner, 2026-10-01, #1386).
 
 **Reduced motion**: both journeys are a short crossfade; the door's rain
 hangs still as the real one does; the groups appear without the strike.
@@ -127,8 +129,8 @@ router's name (decision blue), refused sender (alarm), cert, logs, push,
 backup, "N rules" — and on the right the live rate and the line count
 ("no router yet" until the enrol line). Under it the **strip**: one grey
 tick until the router speaks; green when logs flow; one tick per
-boundary once the push names them. It is the same strip the fall wears,
-so the way out makes it the top of the fall.
+boundary once the push names them. The bar and the strip are the
+wizard's; the fall keeps its own scene bar (owner, 2026-10-01, #1386).
 
 ## The steps, in detail
 

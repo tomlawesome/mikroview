@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { journey, mix, patterns, reducedMotion, rgb, strike } from "./wizardJourney";
-import { wizardJourney } from "./wizardJourney.svelte";
+import { CROSSFADE_MS, wizardJourney } from "./wizardJourney.svelte";
 import { wizardState } from "./wizard.svelte";
 import { appState } from "./state.svelte";
 import type { SetupStatus } from "./types";
@@ -136,7 +136,12 @@ describe("the way in decides once the shell has loaded", () => {
     expect(wizardState.open).toBe(false);
   });
 
-  it("under reduced motion launches without the journey and lets the door down", () => {
+  it("under reduced motion launches without the journey and crossfades the door down", () => {
+    // DESIGN.md: "both journeys are a short crossfade". The wizard
+    // mounts under the held door, the door fades over it for
+    // CROSSFADE_MS (journey.css reads `journey-fade` off <body>), then
+    // comes down. It used to come down outright -- a cut, not a fade.
+    vi.useFakeTimers();
     window.matchMedia = vi
       .fn()
       .mockReturnValue({
@@ -145,9 +150,16 @@ describe("the way in decides once the shell has loaded", () => {
     wizardJourney.enter();
     wizardState.status = status();
     expect(wizardJourney.decide()).toBe("release");
-    expect(wizardJourney.holdDoor).toBe(false);
     expect(wizardJourney.active).toBe(false);
     expect(wizardState.open).toBe(true);
+    expect(wizardJourney.holdDoor).toBe(true);
+    expect(document.body.classList.contains("journey-fade")).toBe(true);
+    vi.advanceTimersByTime(CROSSFADE_MS - 1);
+    expect(wizardJourney.holdDoor).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(wizardJourney.holdDoor).toBe(false);
+    expect(document.body.classList.contains("journey-fade")).toBe(false);
+    vi.useRealTimers();
   });
 
   it("a second Enter while a journey runs is ignored", () => {
@@ -183,6 +195,34 @@ describe("the way out", () => {
     expect(wizardJourney.wayOut(swap, after)).toBe(true);
     expect(handler).toHaveBeenCalledWith(swap, after);
     wizardJourney.wayOutHandler = null;
+  });
+
+  it("under reduced motion crossfades the wizard over the fall, then hands over", () => {
+    // The same short crossfade as the way in: the wizard page fades
+    // (journey.css, `journey-fade`) for CROSSFADE_MS, then the swap and
+    // the tour's offer. It used to return false, and Finish cut
+    // straight to the fall.
+    vi.useFakeTimers();
+    wizardJourney.end();
+    window.matchMedia = vi
+      .fn()
+      .mockReturnValue({
+        matches: true,
+      }) as unknown as typeof window.matchMedia;
+    const handler = vi.fn().mockReturnValue(true);
+    wizardJourney.wayOutHandler = handler;
+    const swap = vi.fn();
+    const after = vi.fn();
+    expect(wizardJourney.wayOut(swap, after)).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+    expect(document.body.classList.contains("journey-fade")).toBe(true);
+    expect(swap).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(CROSSFADE_MS);
+    expect(document.body.classList.contains("journey-fade")).toBe(false);
+    expect(swap).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+    wizardJourney.wayOutHandler = null;
+    vi.useRealTimers();
   });
 });
 

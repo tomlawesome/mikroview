@@ -221,8 +221,8 @@
        over the login elements: the shared layer's `door` mask carves
        the centre out entirely (round 5 fourth batch). Fullfall.svelte
        carries the strokes, the CSP lesson and the reduced-motion rule
-       -- extracted under #1214 so the journey's attach beat rains the
-       same weather rather than going flat after this screen. -->
+       (extracted under #1214; the enrolment door rains the same
+       weather). -->
   <Fullfall mask="door" />
 
   <div class="stack" style:transform={wayIn ? `translateY(${-wizardJourney.slideY}px)` : null}>

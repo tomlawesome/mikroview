@@ -76,6 +76,12 @@ describe('WizardJourney: the way out actually plays', { timeout: 30000 }, () => 
     // frame -- before the two animation frames wayIn also waits out.
     expect(wizardJourney.phase).toBe('out')
     expect(document.body.classList.contains('journey')).toBe(true)
+    // The bar's chips and the strip are the record and stay as the box
+    // leaves: ak-bar and ak-strip are on from the start, as an.js had
+    // them (left over from its way in). Without them journey.css fades
+    // the chips to nothing the moment Finish is pressed.
+    expect(document.body.classList.contains('ak-bar')).toBe(true)
+    expect(document.body.classList.contains('ak-strip')).toBe(true)
     await tick()
     expect(document.querySelector('canvas.journey-fx')).not.toBeNull()
     expect(document.querySelector('.ride')).not.toBeNull()

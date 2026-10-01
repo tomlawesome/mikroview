@@ -27,6 +27,22 @@ import { reducedMotion } from './wizardJourney'
 
 export type JourneyPhase = 'idle' | 'in' | 'out'
 
+/** The reduced-motion crossfade's length: round-15's door.css fades the
+ * door over 300ms and wizard.js's beat() caps every wait at 300ms. */
+export const CROSSFADE_MS = 300
+
+/** crossfade puts `journey-fade` on <body> (journey.css: the held door,
+ * or the wizard page, fades to nothing over CROSSFADE_MS), then takes it
+ * off and runs the hand-over. */
+function crossfade(then: () => void): void {
+  const body = typeof document === 'undefined' ? null : document.body
+  body?.classList.add('journey-fade')
+  setTimeout(() => {
+    body?.classList.remove('journey-fade')
+    then()
+  }, CROSSFADE_MS)
+}
+
 class WizardJourneyState {
   phase = $state<JourneyPhase>('idle')
   /** the sign-in door stays mounted over the shell while this is true */
@@ -42,6 +58,9 @@ class WizardJourneyState {
   fallBody = $state(false)
   /** the step rows have struck; the rail stands (the way in) */
   rows = $state(false)
+  /** the footer's own beat (5.35s on the way in): it strikes last, after
+   * the form's rows, and stays away until then (an.js's wayIn groups) */
+  foot = $state(false)
   /** the ride has landed on the bar; the bar's own wordmark takes over */
   landed = $state(false)
 
@@ -80,10 +99,15 @@ class WizardJourneyState {
     }
     wizardState.markAutoLaunchSpent()
     if (reducedMotion()) {
-      // The short crossfade: the door comes down and the wizard's own
-      // entrance (Wizard.svelte's away -> live) is all that plays.
-      this.holdDoor = false
+      // The short crossfade (DESIGN.md, "Reduced motion"): the wizard
+      // mounts under the held door and plays its own opacity-only
+      // entrance (wizard.css's reduced rule) while the door fades over
+      // it; then the door comes down. Letting the door down outright
+      // was a cut, not a crossfade.
       wizardState.launch()
+      crossfade(() => {
+        this.holdDoor = false
+      })
       return 'release'
     }
     // The phase is set before the launch so Wizard.svelte mounts already
@@ -98,7 +122,16 @@ class WizardJourneyState {
    * Returns false -- and does nothing -- where the journey cannot play,
    * so the caller swaps outright (and runs `after` itself). */
   wayOut(swap: () => void, after: () => void): boolean {
-    if (reducedMotion() || !this.wayOutHandler) return false
+    if (reducedMotion()) {
+      // The short crossfade: the wizard fades over the fall standing
+      // behind it (the deck is already there), then the hand-over.
+      crossfade(() => {
+        swap()
+        after()
+      })
+      return true
+    }
+    if (!this.wayOutHandler) return false
     return this.wayOutHandler(swap, after)
   }
 
@@ -110,6 +143,7 @@ class WizardJourneyState {
     this.strip = false
     this.fallBody = false
     this.rows = false
+    this.foot = false
     this.landed = false
   }
 
@@ -122,6 +156,7 @@ class WizardJourneyState {
     this.strip = false
     this.fallBody = false
     this.rows = false
+    this.foot = false
     this.landed = false
   }
 
