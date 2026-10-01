@@ -146,3 +146,5 @@ Each with a test that failed on 09363519:
   the fall's bar the chips and the strip as the record; (c) chips only.
 
 Written by Fable 5.1, 2026-10-01.
+
+**Answered:** owner, 2026-10-01: **A(a)**. The fall keeps its own scene bar, and DESIGN.md is updated to match.
