@@ -150,6 +150,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## live-city-river: wg0's bridge chip is not there on first read
 
 - 2026-09-20 · 36494631 (fix/v060-audit, !1069) · pipeline 1308, gate:scenarios 1/4 (job 17205) · `FAIL wg0's bridge says its state was never pushed (chips: )` -- an empty chip list, every check before it passed. `live-city-river.mjs:87` reads `.city text.chip-t` with no wait after the river checks. The commit changed one advice string in fleet.ts and two comments. Pipeline 1309 on a later head is the re-run. First sighting.
+- 2026-10-01 · ac7de401 (dev, after merging !1127) · pipeline 1927, `gate:scenarios 1/4` (job 28727) · same check, same empty chip list. !1127 changes the upgrade-reload path and sign-out handling, nothing the city's chips read; !1127's own pipeline 1919 passed this scenario on 38fb2389. Second sighting.
 
 ## live-sw-navigation: Firefox reports the service worker failed on favicon.svg
 
