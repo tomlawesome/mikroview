@@ -491,3 +491,18 @@ func TestRetiredEdropIsNotOnTheMenu(t *testing.T) {
 		}
 	}
 }
+
+// FlagLabel names a feed for exactly the catalogue lists marked
+// FlaggedByMikroView, and by the label a known_bad_ip flag's detail
+// carries (#1360's ledger counts flags by it).
+func TestFlagLabelMatchesTheCatalogue(t *testing.T) {
+	for _, l := range blcatalogue.Lists() {
+		label, ok := FlagLabel(l.Key)
+		if ok != l.FlaggedByMikroView {
+			t.Errorf("%s: FlagLabel ok = %v, FlaggedByMikroView = %v", l.Key, ok, l.FlaggedByMikroView)
+		}
+		if ok && label != l.Name {
+			t.Errorf("%s: flag label %q, catalogue name %q", l.Key, label, l.Name)
+		}
+	}
+}

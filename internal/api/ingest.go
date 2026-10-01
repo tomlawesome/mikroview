@@ -235,6 +235,10 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		s.Setup.NoteLoggingReport(tok.Device, payload, now)
 	}
 
+	// #1360's record 8: the first push reporting a blocklist list with
+	// entries in it witnesses the first-run tail.
+	s.noteBlocklistWitness(tok.Device, payload, now)
+
 	// #186 step 5: never persist a raw payload wholesale. RouterState
 	// above is in-memory only by design, and nothing here logs the
 	// decoded records themselves either -- only their shape -- for the
