@@ -125,6 +125,26 @@ var registryBySource = func() map[Source]feedDef {
 // two packages.
 var DefaultSources = []string{string(SourceSpamhausDROP), string(SourceEmergingThreatsCompromised)}
 
+// catalogueKeys pairs each feed with the blocklist builder's catalogue
+// entry for the same list (#1360), so the builder can tell which of a
+// router's lists MikroView also flags from, and by what label its flags
+// name it.
+var catalogueKeys = map[string]Source{
+	"spamhaus": SourceSpamhausDROP,
+	"et":       SourceEmergingThreatsCompromised,
+}
+
+// FlagLabel is the label known_bad_ip flags name the feed by ("matches
+// <label> (<range>)") for the builder's catalogue key, and whether
+// MikroView flags from that list at all.
+func FlagLabel(catalogueKey string) (string, bool) {
+	src, ok := catalogueKeys[catalogueKey]
+	if !ok {
+		return "", false
+	}
+	return registryBySource[src].Label, true
+}
+
 // KnownSources returns every Source on the menu, in registry order --
 // for config validation error messages and docs/tests, not consulted on
 // any hot path.
