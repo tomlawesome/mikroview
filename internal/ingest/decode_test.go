@@ -5,6 +5,7 @@ package ingest
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -687,6 +688,130 @@ func TestDecodeRealIPServiceDisabled(t *testing.T) {
 		if s.Name == "telnet" && s.Disabled {
 			t.Error("the pre-#1410 7.18.2 body decoded telnet as disabled -- this test no longer pins what was wrong")
 		}
+	}
+}
+
+// TestDecodeRealIPServiceAddressRestriction is #1411's: the ip-service
+// page real CHRs produced on 2026-10-01 from blockSpecs["ip-service"],
+// saved as a script under the push policy and run with its fetch swapped
+// for :put (docs/routeros-verification-logs/<version>-push-ip-service-address.log),
+// with ssh restricted to two prefixes, winbox to one and telnet open.
+// Up to 7.23.3 the router fills "address"; from 7.24 it fills
+// "availableFrom" (RouterOS's available-from) and sends address null.
+// Either way Address carries the restriction.
+func TestDecodeRealIPServiceAddressRestriction(t *testing.T) {
+	bodies := map[string]string{
+		"7.18.2": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"telnet","port":23},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"ftp","port":21},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"www","port":80},
+		  {"address":["192.168.88.0/24","10.0.0.1/32"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"ssh","port":22},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":true,"dynamic":null,"name":"www-ssl","port":443},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"api","port":8728},
+		  {"address":["192.168.88.0/24"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":null,"name":"winbox","port":8291},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":false,"dynamic":null,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`,
+		"7.23.3": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+		  {"address":["192.168.88.0/24","10.0.0.1/32"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+		  {"address":["192.168.88.0/24"],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+		  {"address":[],"availableFrom":null,"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+		  {"address":[],"availableFrom":null,"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.23.3 (stable)","wizardVersion":6}`,
+		"7.24": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+		  {"address":null,"availableFrom":["192.168.88.0/24","10.0.0.1/32"],"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+		  {"address":null,"availableFrom":["192.168.88.0/24"],"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.24 (stable)","wizardVersion":6}`,
+		"7.24.4": `{"kind":"ip-service","page":1,"pages":1,"records":[
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+		  {"address":null,"availableFrom":["192.168.88.0/24","10.0.0.1/32"],"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+		  {"address":null,"availableFrom":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+		  {"address":null,"availableFrom":["192.168.88.0/24"],"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+		  {"address":null,"availableFrom":[],"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+		  {"address":null,"availableFrom":[],"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+		],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`,
+	}
+	want := map[string][]string{
+		"ssh":    {"192.168.88.0/24", "10.0.0.1/32"},
+		"winbox": {"192.168.88.0/24"},
+		"telnet": nil,
+	}
+	for version, body := range bodies {
+		p := decodeOK(t, body)
+		if p.RouterOSVersion != version+" (stable)" {
+			t.Fatalf("decoded version %q, want %s (stable)", p.RouterOSVersion, version)
+		}
+		seen := 0
+		for _, s := range p.IPServices {
+			w, ok := want[s.Name]
+			if !ok {
+				continue
+			}
+			seen++
+			if !slices.Equal([]string(s.Address), w) {
+				t.Errorf("%s %s: Address = %q, want %q", version, s.Name, s.Address, w)
+			}
+			if s.IsDynamic() {
+				t.Errorf("%s %s: IsDynamic = true for a configurable service", version, s.Name)
+			}
+		}
+		if seen != len(want) {
+			t.Errorf("%s: found %d of the %d fixture services", version, seen, len(want))
+		}
+	}
+
+	// The defect, from the 7.24.4 transcript: the script before #1411
+	// sent address null, so the restricted ssh decoded as open.
+	before := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ftp","port":21},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"ssh","port":22},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"telnet","port":23},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"dhcpclient","port":68},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"www","port":80},
+	  {"address":null,"certificate":"none","disabled":true,"dynamic":false,"name":"www-ssl","port":443},
+	  {"address":null,"certificate":"none","disabled":false,"dynamic":false,"name":"reverse-proxy","port":443},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"btest","port":2000},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":true,"name":"discover","port":5678},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"winbox","port":8291},
+	  {"address":null,"certificate":null,"disabled":false,"dynamic":false,"name":"api","port":8728},
+	  {"address":null,"certificate":"none","disabled":false,"dynamic":false,"name":"api-ssl","port":8729}
+	],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`)
+	for _, s := range before.IPServices {
+		if s.Name == "ssh" && len(s.Address) != 0 {
+			t.Errorf("the pre-#1411 7.24.4 body decoded ssh with Address %q -- this test no longer pins what was wrong", s.Address)
+		}
+	}
+}
+
+// A body carrying a restriction under both names is not something a
+// router sends; address wins, as the name every release before 7.24 uses.
+func TestIPServiceAddressWinsOverAvailableFrom(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"ssh","disabled":false,"port":22,"address":["10.0.0.0/8"],"availableFrom":["192.0.2.0/24"],"certificate":null,"dynamic":false}]}`)
+	if got := p.IPServices[0].Address; !slices.Equal([]string(got), []string{"10.0.0.0/8"}) {
+		t.Errorf("Address = %q, want [10.0.0.0/8]", got)
 	}
 }
 
