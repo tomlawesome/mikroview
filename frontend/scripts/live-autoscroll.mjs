@@ -125,6 +125,7 @@ feedSyslog(20, 'resumed')
 await page.waitForFunction(() => document.querySelector('.row[title*="resumed"]') !== null, {
   timeout: 5000,
 }).then(
+  // safe: the reject branch below records check(false) for the same message
   () => check(true, 'following again resumes following new events'),
   () => check(false, 'following again resumes following new events'),
 )

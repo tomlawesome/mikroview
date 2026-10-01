@@ -412,6 +412,16 @@ type Server struct {
 	// in slices (#955). Nil where no vault is configured -- the handler
 	// refuses rather than accepting a file it has nowhere to put.
 	BackupSlices *backupslice.Receiver
+	// RouterBackupSwitch is the drop box's own on/off control (#1361),
+	// PUT /api/settings/router-backups' backing: nil in tests that do not
+	// exercise it and on any instance built without one, same
+	// nil-means-unavailable convention as HistoryControl above.
+	RouterBackupSwitch RouterBackupSwitch
+	// RouterBackupNotifier sends the switch's change email to
+	// notify.smtp.to (#1361). Nil when notify.smtp is not configured, the
+	// same "empty means off" convention every other notify channel uses
+	// -- the handler skips the email rather than failing the request.
+	RouterBackupNotifier RouterBackupNotifier
 	// vaultUnlock is which session, if any, currently holds the vault's
 	// optional passphrase open (#956, routerbackupslock.go).
 	vaultUnlock vaultUnlockState
@@ -664,6 +674,9 @@ func (s *Server) coreRoutes() []route {
 		// Deleting what an off history left on disk (#1354): the only
 		// way retained history is ever deleted wholesale, password-gated.
 		{http.MethodDelete, "/api/settings/history/files", s.handleHistoryFilesDelete},
+		// The router-backup drop box's own switch (#1361): password-gated
+		// on open only, same reasoning as the pair just above it.
+		{http.MethodPut, "/api/settings/router-backups", s.handleRouterBackupSwitchUpdate},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},

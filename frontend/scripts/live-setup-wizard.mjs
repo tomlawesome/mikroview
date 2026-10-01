@@ -125,6 +125,19 @@ for (const n of [3, 4, 5]) {
   )
 }
 
+// The rail slides in from off-screen whenever the wizard opens
+// (wizard.css: `.wiz .rail.away { transform: translateX(-100%) }`, a
+// 600ms transition once Wizard.svelte clears `away` two frames after
+// open). The attribute checks above pass mid-slide; the forced click
+// below does not, because force: true also skips Playwright's "stopped
+// moving" wait. Fired mid-slide, row 4 still sits off-screen and the
+// click is refused with "Element is outside of the viewport" -- the
+// intermittent gate:scenarios 3/4 failure in pipelines 1874 and 1879.
+// Wait for the rail to come to rest (no transform: the resting state,
+// and reduced motion's) rather than a sleep or a transitionend, which
+// the rail's own li transitions would also bubble.
+await page.waitForFunction(() => getComputedStyle(document.querySelector('.wiz .rail')).transform === 'none')
+
 const titleBefore = await page.locator('.wiz .body h3').textContent()
 // force: true skips Playwright's own actionability check (which would
 // otherwise refuse the click here for the same reason a real pointer

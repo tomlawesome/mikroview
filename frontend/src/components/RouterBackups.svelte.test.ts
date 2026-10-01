@@ -26,6 +26,7 @@ vi.mock('../lib/api', () => ({
   keepRouterBackup: vi.fn(),
   releaseRouterBackup: vi.fn(),
   setRouterBackupComment: vi.fn(),
+  setRouterBackupSwitch: vi.fn(),
 }))
 
 // Blob/URL.createObjectURL are unreliable in jsdom -- faked at the
@@ -48,6 +49,7 @@ import {
   removeRouterBackupPassphrase,
   setRouterBackupComment,
   setRouterBackupPassphrase,
+  setRouterBackupSwitch,
   unlockRouterBackupVault,
 } from '../lib/api'
 import { authState } from '../lib/auth.svelte'
@@ -132,6 +134,84 @@ describe('nothing pushed yet', () => {
     render(RouterBackups, { props: { resp: resp({ routers: [] }), fetchedAt: 0, onopenlost: vi.fn() } })
     expect(screen.getByText(/no router has pushed one yet/)).toBeTruthy()
     expect(screen.getByText(/the wizard's step 6 prints the script/)).toBeTruthy()
+  })
+})
+
+// #1361: the drop box's own on/off switch. Opening asks for the admin's
+// password (owner's ruling 3a); closing does not.
+describe('the drop box switch (#1361)', () => {
+  beforeEach(() => {
+    vi.mocked(setRouterBackupSwitch).mockReset()
+  })
+
+  it('shows closed with an "open…" link when nothing is listening', () => {
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    expect(screen.getByText(/^closed/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'open…' })).toBeTruthy()
+  })
+
+  it('shows open on its port with a "close" link when the drop box is listening', () => {
+    render(RouterBackups, { props: { resp: resp({ port: ':47022' }), fetchedAt: 0, onopenlost: vi.fn() } })
+    expect(screen.getByText(/open on port 47022/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'close' })).toBeTruthy()
+  })
+
+  it('opening asks for the password and carries the trust caveat and the HTTPS alternative', async () => {
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    expect(screen.getByLabelText('your password')).toBeTruthy()
+    expect(screen.getByText(/RouterOS never checks who it is sending to/)).toBeTruthy()
+    expect(screen.getByText(/HTTPS-only alternative/)).toBeTruthy()
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalled()
+  })
+
+  it('cancelling the open dialog calls nothing', async () => {
+    render(RouterBackups, { props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn() } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'cancel' }))
+    expect(screen.queryByLabelText('your password')).toBeNull()
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalled()
+  })
+
+  it('submits the password and reports the new state up on success', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue({ open: true, port: '47022' })
+    const onswitchchanged = vi.fn()
+    render(RouterBackups, {
+      props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn(), onswitchchanged },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'hunter2' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open' }))
+    await waitFor(() => expect(onswitchchanged).toHaveBeenCalledWith({ open: true, port: '47022' }))
+    expect(vi.mocked(setRouterBackupSwitch)).toHaveBeenCalledWith(true, 'hunter2')
+    // The dialog closes on success -- the password field is gone.
+    expect(screen.queryByLabelText('your password')).toBeNull()
+  })
+
+  it('a wrong password shows the refusal and leaves the dialog open', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue('incorrect password')
+    const onswitchchanged = vi.fn()
+    render(RouterBackups, {
+      props: { resp: resp({ port: undefined }), fetchedAt: 0, onopenlost: vi.fn(), onswitchchanged },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'open…' }))
+    await fireEvent.input(screen.getByLabelText('your password'), { target: { value: 'wrong' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'open' }))
+    await waitFor(() => expect(screen.getByText('incorrect password')).toBeTruthy())
+    expect(screen.getByLabelText('your password')).toBeTruthy()
+    expect(onswitchchanged).not.toHaveBeenCalled()
+  })
+
+  it('closing needs no password and reports the new state up', async () => {
+    vi.mocked(setRouterBackupSwitch).mockResolvedValue({ open: false })
+    const onswitchchanged = vi.fn()
+    render(RouterBackups, {
+      props: { resp: resp({ port: ':47022' }), fetchedAt: 0, onopenlost: vi.fn(), onswitchchanged },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'close' }))
+    await waitFor(() => expect(onswitchchanged).toHaveBeenCalledWith({ open: false }))
+    expect(vi.mocked(setRouterBackupSwitch)).toHaveBeenCalledWith(false)
+    expect(vi.mocked(setRouterBackupSwitch)).not.toHaveBeenCalledWith(false, expect.anything())
   })
 })
 

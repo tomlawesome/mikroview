@@ -289,11 +289,12 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// The backup script only means something with a device to name, a
 	// token to authenticate it, and somewhere for it to land: a
 	// retention key configured (s.Vault.Enabled()) and the drop box
-	// actually turned on (SetupInstance.BackupPort set at startup from
-	// cfg.Backup.Enabled -- see main.go). Any missing piece leaves both
-	// blocks blank, same "blank rather than half-formed" contract Push
-	// already has above; the wizard reads a blank Backup block as its
-	// wnokey state (round 45).
+	// actually open right now (SetupInstance.BackupPortNow() -- a live read
+	// of main's backupRuntime, #1361, not a value fixed at startup: the
+	// switch can move at any moment from Settings). Any missing piece
+	// leaves both blocks blank, same "blank rather than half-formed"
+	// contract Push already has above; the wizard reads a blank Backup
+	// block as its wnokey state (round 45).
 	//
 	// backupBlockedKeys names every missing piece, all that apply rather
 	// than just the first (#1217, the owner's "cover all possibilities"
@@ -322,7 +323,7 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 	// waits on beyond the address is the token -- the same precondition
 	// step 4 has.
 	if !httpsTransport {
-		if s.SetupInstance.BackupPort == "" {
+		if s.SetupInstance.BackupPortNow() == "" {
 			backupBlockedKeys = append(backupBlockedKeys, "backups-off")
 		}
 		// #1264 finding 5: Vault.Enabled() alone cannot tell "no key
@@ -361,7 +362,7 @@ func (s *Server) handleSetupCommands(w http.ResponseWriter, r *http.Request) {
 			// req.Address carries -- same reasoning SyslogCommands' Hostname
 			// call gives for stripping the web port off before pairing it
 			// with the syslog port.
-			backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPort, req.Device, req.Token, dialect)
+			backupCommands = routeros.BackupScript(routeros.Hostname(req.Address), s.SetupInstance.BackupPortNow(), req.Device, req.Token, dialect)
 			backupScheduleCommands = routeros.BackupScheduleCommands(dialect)
 		}
 	}

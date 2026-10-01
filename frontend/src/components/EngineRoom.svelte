@@ -81,6 +81,7 @@
     Device,
     HistorySettings,
     RouterBackupsResponse,
+    RouterBackupSwitchState,
     DroplistResponse,
     PasswordResetCode,
     GeoSettings,
@@ -357,6 +358,20 @@
     // Turning history off or on, or deleting its files, adds or clears
     // the banner's "files still on disk" entry (#1354): ask again now
     // rather than leaving it until a reload.
+    configProblemsState.refresh()
+  }
+
+  // routerBackupSwitchChanged folds the drop box's own switch (#1361)
+  // straight into this tab's copy of the group -- the same "show the
+  // write's own answer, don't wait for the next poll" rule
+  // historyChanged keeps above -- and asks for the admin banner again,
+  // since opening or closing adds or clears the live
+  // router-backup-switch-changed entry the same way history's own
+  // change does.
+  function routerBackupSwitchChanged(next: RouterBackupSwitchState) {
+    if (!routerBackups) return
+    routerBackups = { ...routerBackups, port: next.open ? next.port : undefined }
+    routerBackupsFetchedAt = Date.now()
     configProblemsState.refresh()
   }
 
@@ -1615,7 +1630,12 @@
             class:dnodiagram={!routerBackups.enabled || routerBackups.routers.length === 0}
           >
             <h3>router backups</h3>
-            <RouterBackups resp={routerBackups} fetchedAt={routerBackupsFetchedAt} onopenlost={openLostRouter} />
+            <RouterBackups
+              resp={routerBackups}
+              fetchedAt={routerBackupsFetchedAt}
+              onopenlost={openLostRouter}
+              onswitchchanged={routerBackupSwitchChanged}
+            />
           </div>
         {:else if routerBackupsUnanswered}
           <!-- The disk group's own `dfail` idiom: one row, no control,

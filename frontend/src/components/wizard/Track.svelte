@@ -15,9 +15,9 @@
   // places the cursor a fixed, small step past the last arrival instead
   // of animating a fraction it cannot honestly compute.
 
-  import type { TrackStation } from '../../lib/wizardRun'
+  import type { Stage, TrackStation } from '../../lib/wizardRun'
 
-  const { stations, compact = false }: { stations: TrackStation[]; compact?: boolean } = $props()
+  const { stations, stage, compact = false }: { stations: TrackStation[]; stage?: Stage; compact?: boolean } = $props()
 
   const n = $derived(stations.length)
   const lastDone = $derived(stations.reduce((a, x, i) => (x.state === 'done' ? i : a), -1))
@@ -28,8 +28,12 @@
       width: centre(i + 1) - centre(i),
     })),
   )
+  // round-15's track.js hides the cursor once the stage is done (#1406):
+  // there is nothing left to point past.
   const nowLeft = $derived(
-    lastDone >= 0 && lastDone < n - 1 ? centre(lastDone) + (centre(lastDone + 1) - centre(lastDone)) * 0.12 : null,
+    stage !== 'done' && lastDone >= 0 && lastDone < n - 1
+      ? centre(lastDone) + (centre(lastDone + 1) - centre(lastDone)) * 0.12
+      : null,
   )
 </script>
 

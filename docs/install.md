@@ -183,6 +183,14 @@ the container — a container cannot firewall its own host:
   line from anything that can reach it — TLS proves MikroView's identity
   to the router, not the router's to MikroView — so restrict it on the
   host to your routers' addresses.
+- **The router-backup drop box's port (`47022/tcp`) is published but not
+  listening yet.** It is always mapped, because a container's own port
+  mapping can't be flipped on and off the way the switch that actually
+  opens it can — see
+  [docs/configuration.md](configuration.md#router-backups-over-sftp-issue-394).
+  Nothing answers on it until an admin opens the drop box from
+  Settings → router backups; firewall it to your routers' addresses the
+  same way as the syslog port once it is on.
 
 You can also limit which addresses reach the web UI from MikroView's own
 side, with `ui.allow` in `config.yaml`; it is a file-only setting, and

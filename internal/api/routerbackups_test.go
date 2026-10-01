@@ -95,7 +95,7 @@ func TestRouterBackupsListReportsKeyUnreadable(t *testing.T) {
 func TestRouterBackupsListReportsTheDropBoxPort(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Vault = vaultWithOnePush(t)
-	s.SetupInstance.BackupPort = ":47022"
+	s.SetupInstance.BackupPort = func() string { return ":47022" }
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 	client := setUpAdmin(t, s, ts)

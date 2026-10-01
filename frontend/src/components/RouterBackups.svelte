@@ -46,6 +46,7 @@
     routerBackupDownloadUrl,
     setRouterBackupComment,
     setRouterBackupPassphrase,
+    setRouterBackupSwitch,
     unlockRouterBackupVault,
   } from '../lib/api'
   import { authState } from '../lib/auth.svelte'
@@ -63,11 +64,13 @@
   import { formatDayMonth, formatHM } from '../lib/format'
   import { formatSize } from '../lib/memory'
   import { portOf } from '../lib/setupsteps'
+  import RouterBackupOpenDialog from './RouterBackupOpenDialog.svelte'
   import type {
     RouterBackupDiffLine,
     RouterBackupGeneration,
     RouterBackupRouter,
     RouterBackupsResponse,
+    RouterBackupSwitchState,
     VaultLock,
   } from '../lib/types'
 
@@ -75,6 +78,7 @@
     resp,
     fetchedAt,
     onopenlost,
+    onswitchchanged,
   }: {
     resp: RouterBackupsResponse
     /** When the request behind `resp` was issued (EngineRoom's own
@@ -84,6 +88,11 @@
     /** Round 44's "is it gone?" link: opens the wizard's step 6 in its
      * lost-router shape (round 45), reached only from here. */
     onopenlost: (device: string) => void
+    /** The drop box's own switch (#1361) answered: EngineRoom folds the
+     * new open/port into its own copy of `resp` and refreshes the admin
+     * banner (configProblemsState), which this component has no access
+     * to on its own. */
+    onswitchchanged?: (state: RouterBackupSwitchState) => void
   } = $props()
 
   // A keep/release/comment control answers with the router's whole
@@ -205,6 +214,58 @@
   const passphraseState = $derived(passState(lock))
 
   const gated = $derived(vaultGated(lock))
+
+  // --- the drop box's own switch (#1361) -----------------------------
+  //
+  // Independent of the passphrase forms below (openKind/FormKind):
+  // resp.enabled there is the vault *key*'s state, gating the whole
+  // right-hand column, while the switch row must show and work whether
+  // or not a key is mounted -- an admin can open the port with no key
+  // yet configured, same as backup.listen already lived in config.yaml
+  // whether or not backup.enabled did.
+  //
+  // open/port read straight off resp.port -- a live read of main's
+  // backupRuntime (SetupInstance.BackupPortNow), not a separate fetch --
+  // so there is nothing here to poll: EngineRoom's own refresh, and the
+  // optimistic onswitchchanged below, are what keep it current.
+  //
+  // Opening is RouterBackupOpenDialog's -- the password, the caveat and
+  // the call live there once, shared with the wizard's Back up nightly
+  // choice (StepRouter.svelte) as the ratified design asks.
+  const dropBoxOpen = $derived(!!resp.port)
+
+  let switchAsking = $state(false)
+  let switchSubmitting = $state(false)
+  let switchError = $state<string | null>(null)
+
+  function openSwitchDialog() {
+    switchAsking = true
+    switchError = null
+  }
+
+  function cancelSwitchDialog() {
+    switchAsking = false
+  }
+
+  function dropBoxOpened(state: RouterBackupSwitchState) {
+    switchAsking = false
+    onswitchchanged?.(state)
+  }
+
+  // Closing is the safe direction (owner's ruling 3a): no password, no
+  // dialog -- one click, same as history's own "turn off".
+  async function closeDropBox() {
+    if (switchSubmitting) return
+    switchSubmitting = true
+    switchError = null
+    const result = await setRouterBackupSwitch(false)
+    switchSubmitting = false
+    if (typeof result === 'string') {
+      switchError = result
+      return
+    }
+    onswitchchanged?.(result)
+  }
 
   // 'keep' and 'edit' are the same one-field form (#1126): keeping a
   // backup and rewriting why it is kept are the same sentence, typed
@@ -527,6 +588,25 @@
   {/if}
 {/snippet}
 
+{#snippet dropBoxRow()}
+  <div class="orow">
+    <span>drop box</span>
+    <span class="ov">
+      {#if dropBoxOpen}
+        open on port {portOf(resp.port ?? '')}
+        · <button type="button" class="olink" disabled={switchSubmitting} onclick={closeDropBox}>close</button>
+      {:else}
+        closed
+        · <button type="button" class="olink" onclick={openSwitchDialog}>open…</button>
+      {/if}
+    </span>
+  </div>
+  <!-- Only a *close* failure shows here -- an open failure shows inside
+       the dialog below instead, which stays open on a refusal so it is
+       never shown in both places at once. -->
+  {#if switchError && !switchAsking}<p class="oghint err" role="alert">{switchError}</p>{/if}
+{/snippet}
+
 {#snippet passphraseRow()}
   <div class="orow">
     <span>passphrase</span>
@@ -547,6 +627,7 @@
 
 {#if !resp.enabled}
   <div class="wrows">
+    {@render dropBoxRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov dim">nothing</span>
@@ -569,6 +650,7 @@
   </div>
 {:else if resp.routers.length === 0}
   <div class="wrows">
+    {@render dropBoxRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov dim">nothing — no router has pushed one yet · the wizard's step 6 prints the script</span>
@@ -791,6 +873,7 @@
   </div>
 
   <div class="wrows">
+    {@render dropBoxRow()}
     <div class="orow">
       <span>kept</span>
       <span class="ov">
@@ -891,6 +974,15 @@
       {/if}
     </span>
   </div>
+{/if}
+
+{#if switchAsking}
+  <!-- Opening the drop box (#1361): the shared dialog -- password,
+       caveat, HTTPS alternative -- in Settings' own form grammar. Its
+       own block, not folded into the pform above: that one is gated on
+       resp.enabled (the vault *key*'s state), and this control has to
+       work with no key mounted at all. -->
+  <RouterBackupOpenDialog look="settings" onopened={dropBoxOpened} oncancel={cancelSwitchDialog} />
 {/if}
 
 <style>

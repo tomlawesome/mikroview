@@ -225,6 +225,7 @@ if (token) {
   await page.click('#people .pform button:has-text("can only look")')
   await page.click('#people .pform button:has-text("let them in")')
   await page.waitForSelector(`#people .prow:has-text("${VIEWER_USER}")`)
+  // safe: waitForSelector above throws on timeout
   check(true, `the viewer account "${VIEWER_USER}" is created from the people door`)
 
   let cardChecked = false

@@ -217,6 +217,7 @@ await page.click(`${CARD} .form .go`)
 // The edge repaints quiet -- white, not grey dashed -- without a
 // reload: the acknowledgement is immediate.
 await page.waitForSelector('[data-card="topography"] .cedge.quiet', { timeout: 5000 })
+// safe: waitForSelector above throws on timeout
 check(true, 'declaring the gap repaints the boundary, without a reload')
 
 // White solid, not grey dashed: the two gaps are different facts and
