@@ -31,7 +31,9 @@ rewritten.
   what actually loads. If something would be lost, it shows a line
   instead -- "mikroview has been upgraded to a newer version" -- that
   waits for a click; once shown it stays until reloaded and never
-  reloads on its own after that.
+  reloads on its own after that. The restart an upgrade involves also
+  signs every open tab out; that sign-out now gets the same treatment
+  rather than reloading a busy page straight to the sign-in screen.
 - **The deck tour is offered once after setup, and lives in the account
   menu** (#1386, owner decision 2026-09-30). When the wizard's Finish
   has landed on the fall, a small panel rises over it: "Take the tour?"

@@ -9,9 +9,9 @@
 // each busy source, the one-reload-per-version sessionStorage rule, and
 // 7a's "manual once shown".
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { authState } from './auth.svelte'
+import { authState, onUnauthorizedClaim } from './auth.svelte'
 import * as authModule from './auth.svelte'
 import { configEditorState } from './configEditor.svelte'
 import { dossierState } from './dossier.svelte'
@@ -154,6 +154,7 @@ beforeEach(() => {
   sessionStorage.clear()
   ;(freshnessState as unknown as { banner: boolean }).banner = false
   ;(freshnessState as unknown as { erroredCheckSpent: boolean }).erroredCheckSpent = false
+  ;(freshnessState as unknown as { inflight: unknown }).inflight = null
   freshnessState.setRegistration(undefined)
 })
 
@@ -249,5 +250,104 @@ describe('the fetch-error signal (api.ts, 401/403/404/5xx)', () => {
     await Promise.resolve()
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+// What actually happens to an open tab across a real upgrade, caught by
+// scripts/live-freshness-reload.sh in CI (pipeline 1896): the restart
+// ends every session, the tab's next poll answers 401 within five
+// seconds, and handleUnauthorized reloaded the page at once -- a busy
+// one included, typing and all -- before any freshness check had
+// answered. Wired here exactly as main.ts wires it.
+describe('a 401 from the restart itself (authState.handleUnauthorized)', () => {
+  /** Lets the claim's healthz round-trip and everything chained on it run. */
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0))
+  }
+
+  beforeEach(() => {
+    onUnauthorizedClaim(() => freshnessState.claimUnauthorized())
+    authState.state = 'authenticated'
+    authState.username = 'tom'
+  })
+
+  afterEach(() => {
+    onUnauthorizedClaim(null)
+    authState.state = 'unauthenticated'
+    authState.username = ''
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    document.querySelectorAll('input').forEach((el) => el.remove())
+  })
+
+  it('leaves a busy tab alone on an upgrade: the banner, no reload, the typing kept (7a)', async () => {
+    const input = document.createElement('input')
+    input.value = 'freshness-busy'
+    document.body.appendChild(input)
+    input.focus()
+    serveHealthz('v0.6.1')
+
+    // A burst, the way several polls answer together.
+    authState.handleUnauthorized()
+    authState.handleUnauthorized()
+    await settle()
+    authState.handleUnauthorized()
+    await settle()
+
+    expect(freshnessState.banner).toBe(true)
+    expect(authModule.pageReload.now).not.toHaveBeenCalled()
+    expect(authState.state).toBe('authenticated')
+    expect(input.isConnected).toBe(true)
+    expect(input.value).toBe('freshness-busy')
+  })
+
+  it('lets a quiet tab take the safe reload once, not the 401 bounce on top of it', async () => {
+    serveHealthz('v0.6.1')
+
+    authState.handleUnauthorized()
+    authState.handleUnauthorized()
+    await settle()
+
+    expect(authModule.pageReload.now).toHaveBeenCalledOnce()
+    expect(sessionStorage.getItem(RELOADED_FOR_KEY)).toBe('v0.6.1')
+    expect(freshnessState.banner).toBe(false)
+  })
+
+  it('still bounces a genuine expiry (same build) to sign-in, as before', async () => {
+    serveHealthz('dev:local')
+
+    authState.handleUnauthorized()
+    await settle()
+
+    expect(authState.state).toBe('unauthenticated')
+    expect(authState.username).toBe('')
+    expect(authModule.pageReload.now).toHaveBeenCalledOnce()
+  })
+
+  it('still bounces when healthz cannot say', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+
+    authState.handleUnauthorized()
+    await settle()
+
+    expect(authState.state).toBe('unauthenticated')
+    expect(authModule.pageReload.now).toHaveBeenCalledOnce()
+  })
+
+  it('shares one healthz answer with a check already in flight', async () => {
+    serveHealthz('v0.6.1')
+    leaveGuard.hold('test-guard')
+    try {
+      // api.ts fires the error signal on the same 401, just before the
+      // poll's own catch reaches handleUnauthorized.
+      freshnessState.checkOnErrorSignal()
+      authState.handleUnauthorized()
+      await settle()
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+      expect(freshnessState.banner).toBe(true)
+      expect(authModule.pageReload.now).not.toHaveBeenCalled()
+    } finally {
+      leaveGuard.release('test-guard')
+    }
   })
 })

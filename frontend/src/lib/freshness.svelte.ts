@@ -45,6 +45,11 @@ function focusedFieldHasContent(doc: Pick<Document, 'activeElement'> = document)
   return false
 }
 
+/** What one check concluded: the server runs this tab's own build,
+ * a mismatch was found and dealt with (banner or reload), or healthz
+ * could not be read. */
+type Outcome = 'current' | 'handled' | 'unknown'
+
 class FreshnessState {
   // The line, once shown, is the end state (owner, 2026-09-30, "7a"):
   // it waits for a click and never reloads on its own after that,
@@ -57,7 +62,11 @@ class FreshnessState {
 
   private started = false
   private interval: ReturnType<typeof setInterval> | null = null
-  private checking = false
+  // One decision at a time, shared: every trigger that lands while a
+  // check is already in flight -- the poll, the socket, the fetch-error
+  // signal, a 401 asking claimUnauthorized() -- waits on that same
+  // answer rather than starting its own or walking away empty-handed.
+  private inflight: Promise<Outcome> | null = null
   // The fetch-error trigger fires at most once per tab (build notes:
   // "once, without repeats") -- an outage's burst of failing requests
   // must not turn into one healthz call per request.
@@ -90,18 +99,50 @@ class FreshnessState {
   }
 
   async checkNow(): Promise<void> {
-    if (this.banner) return
-    if (this.checking) return
-    this.checking = true
-    try {
-      const healthz = await fetchHealthz()
-      await this.handle(healthz.version)
-    } catch {
-      // healthz unreachable says nothing about freshness either way --
-      // leave it for the next trigger (the 60s poll if nothing else).
-    } finally {
-      this.checking = false
-    }
+    await this.decide()
+  }
+
+  /**
+   * authState.handleUnauthorized's question (wired from main.ts): is
+   * this 401 the upgrade's doing? A restart -- and every upgrade is one
+   * -- drops every in-memory session (internal/api/auth.go's
+   * SessionStore), so the first thing an open tab hears after an
+   * upgrade is usually a 401 from its next 5-second poll, well before
+   * anything else asks for the version. The 401 path's own answer is an
+   * unconditional reload, which on a busy tab is exactly what 7a
+   * forbids: it reloads the page out from under the operator's typing.
+   *
+   * Resolves true when the server is on a different build and this has
+   * taken the 401 over -- the banner on a busy page, the safe reload on
+   * a quiet one -- so the caller must not reload on top of it. False
+   * when the server is the build this tab already runs (a genuine
+   * expiry) or healthz cannot say: the ordinary 401 bounce goes ahead.
+   */
+  async claimUnauthorized(): Promise<boolean> {
+    return (await this.decide()) === 'handled'
+  }
+
+  private decide(): Promise<Outcome> {
+    if (this.banner) return Promise.resolve('handled')
+    if (this.inflight) return this.inflight
+    const run = (async (): Promise<Outcome> => {
+      try {
+        const healthz = await fetchHealthz()
+        return await this.handle(healthz.version)
+      } catch {
+        // healthz unreachable says nothing about freshness either way --
+        // leave it for the next trigger (the 60s poll if nothing else).
+        return 'unknown'
+      }
+    })()
+    this.inflight = run
+    // Cleared once settled, never from inside the body above: a body
+    // that settled without ever awaiting would clear it before this
+    // assignment and leave a finished answer cached forever.
+    void run.then(() => {
+      if (this.inflight === run) this.inflight = null
+    })
+    return run
   }
 
   /** Every "busy" source the ratified design lists, ORed together. The
@@ -122,23 +163,24 @@ class FreshnessState {
     )
   }
 
-  private async handle(serverVersion: string): Promise<void> {
-    if (serverVersion === __MIKROVIEW_VERSION__) return
+  private async handle(serverVersion: string): Promise<Outcome> {
+    if (serverVersion === __MIKROVIEW_VERSION__) return 'current'
 
     if (this.busy()) {
       this.banner = true
-      return
+      return 'handled'
     }
 
     if (sessionStorage.getItem(RELOADED_FOR_KEY) === serverVersion) {
       // Already spent the one automatic reload for this version and
       // came back still mismatched -- banner only from here.
       this.banner = true
-      return
+      return 'handled'
     }
 
     sessionStorage.setItem(RELOADED_FOR_KEY, serverVersion)
     await this.reloadNow()
+    return 'handled'
   }
 
   /** The safe-reload mechanics: let the new worker take over, then
