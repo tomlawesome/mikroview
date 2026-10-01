@@ -65,6 +65,23 @@ func TestEveryURLIsHTTPS(t *testing.T) {
 	}
 }
 
+// Every card has a guide sentence with one bold phrase, and a facts
+// line whose bold marks pair up (BUILD.md, "Catalogue copy and
+// defaults": the drawn cards set one phrase bold).
+func TestCardCopyIsComplete(t *testing.T) {
+	for _, l := range Lists() {
+		if l.Guide == "" || l.Facts == "" {
+			t.Errorf("%s: guide %q, facts %q", l.Key, l.Guide, l.Facts)
+		}
+		if n := strings.Count(l.Guide, "**"); n != 2 {
+			t.Errorf("%s: the guide has %d bold marks, want one bold phrase", l.Key, n)
+		}
+		if n := strings.Count(l.Facts, "**"); n == 0 || n%2 != 0 {
+			t.Errorf("%s: the facts line's bold marks do not pair up (%d)", l.Key, n)
+		}
+	}
+}
+
 // The three that passed the strict bar state their terms and carry no
 // caveat; the four the owner admitted carry exactly the label their
 // answer named (1b: no licence stated, 1c: not for business use).
@@ -84,6 +101,21 @@ func TestTermsAndCaveats(t *testing.T) {
 		}
 		if l.Terms == "" {
 			t.Errorf("%s has no terms text", l.Key)
+		}
+	}
+	// The labelled four end their facts line on the owner's label,
+	// verbatim, where the three carry their terms word; their guide
+	// sentence bolds it.
+	for _, l := range Lists() {
+		if l.Caveat == "" {
+			continue
+		}
+		if !strings.HasSuffix(l.Facts, " · "+l.Caveat) {
+			t.Errorf("%s: facts %q do not end on the caveat %q", l.Key, l.Facts, l.Caveat)
+		}
+		label := strings.ToUpper(l.Caveat[:1]) + l.Caveat[1:]
+		if !strings.Contains(l.Guide, "**"+label+"**") {
+			t.Errorf("%s: the guide does not bold %q", l.Key, label)
 		}
 	}
 	if CaveatNoLicence != "no licence stated" || CaveatNotBusiness != "not for business use" {
