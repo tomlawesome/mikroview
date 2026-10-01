@@ -6,18 +6,19 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
+	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/backupsftp"
 	"github.com/tomlawesome/mikroview/internal/backupvault"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
-	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/retention"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/settings"
 )
 
 // This file is main's half of #394: internal/backupvault knows how to
@@ -112,45 +113,142 @@ func openRouterBackupVault(log *slog.Logger, cfg config.Config, tokens *auth.Tok
 	return vault, keyUnreadable
 }
 
-// routerBackupPort is the drop box's port, for SetupInstance.BackupPort
-// -- "" when backups are switched off, so the wizard's step 6 knows not
-// to render a script pointing at a listener that is not running. Pure
-// and cheap: it does not need the listener to actually be up, only the
-// config to say what port it would be on.
-func routerBackupPort(cfg config.Config) string {
-	if !cfg.Backup.Enabled {
-		return ""
-	}
-	return routeros.PortOf(cfg.Backup.Listen)
-}
-
-// startRouterBackupServer starts the SFTP drop box when backups are
-// switched on. Tied to ctx exactly like syslog.ListenTLS just above it
-// in run() -- no separate shutdown join, since ListenAndServe already
-// returns once ctx is cancelled.
+// backupRuntime owns the router-backup SFTP drop box's lifecycle: whether
+// it is listening, on which port, and what happens the moment an admin
+// moves the switch (#1361, "Settings -> router backups").
 //
-// The host key lives beside the TLS material (cfg.TLS.StorePath), not
-// the data directory: both are generated-on-first-run secrets a restore
+// Simpler than historyRuntime beside it in history_runtime.go: there is
+// no ring to backfill and no seam to protect, only a listener to open or
+// close. Start's net.Listen runs synchronously and its error is returned
+// straight to the caller, so the one failure mode worth telling an admin
+// about -- the configured port is already taken by something else --
+// reaches handleRouterBackupSwitchUpdate as a plain error it turns into a
+// 409, never merely a log line from a goroutine nobody asked to watch.
+//
+// The host key lives beside the TLS material (cfg.TLS.StorePath), not the
+// data directory: both are generated-on-first-run secrets a restore
 // should not carry, and TLS.StorePath is already excluded from -backup
 // for exactly that reason (see excludedFromBackup in backup_cli.go) --
 // putting the SFTP host key there means it inherits that exclusion for
 // free rather than needing one of its own.
-func startRouterBackupServer(ctx context.Context, cfg config.Config, vault *backupvault.Vault, tokens *auth.TokenStore) {
-	log := logging.New("backupsftp")
-	if !cfg.Backup.Enabled {
-		log.Info("router backups: off (backup.enabled is false)")
-		return
+type backupRuntime struct {
+	log         *slog.Logger
+	ctx         context.Context
+	vault       *backupvault.Vault
+	tokens      *auth.TokenStore
+	set         *settings.Store
+	hostKeyPath string
+	addr        string
+
+	mu     sync.Mutex
+	ln     net.Listener
+	cancel context.CancelFunc
+}
+
+// newBackupRuntime brings the drop box up as this instance's stored
+// switch position leaves it. ctx is main's own shutdown context: a
+// listener this opens is tied to it exactly like syslog.ListenTLS is, so
+// it closes on an ordinary shutdown with no separate join needed, on top
+// of whatever an admin's own Stop does later.
+//
+// backup.enabled and MIKROVIEW_BACKUP_ENABLED are retired (#1361): the
+// switch lives in the settings store now, beside history.enabled. Read
+// here only once, to seed that store's starting position the first time
+// an instance runs with nothing stored yet -- logged so an operator who
+// never opens Settings still sees why the drop box came up open. Never
+// consulted again after that: a leftover value in an old config.yaml is
+// harmless, and a fresh install has none, so it starts closed.
+func newBackupRuntime(ctx context.Context, log *slog.Logger, cfg config.Config, set *settings.Store, vault *backupvault.Vault, tokens *auth.TokenStore) *backupRuntime {
+	r := &backupRuntime{
+		log:         log,
+		ctx:         ctx,
+		vault:       vault,
+		tokens:      tokens,
+		set:         set,
+		hostKeyPath: cfg.TLS.StorePath,
+		addr:        cfg.Backup.Listen,
 	}
-	hostKey, err := backupsftp.LoadOrGenerateHostKey(cfg.TLS.StorePath)
+
+	pos, ok := set.Backup()
+	if !ok {
+		if cfg.Backup.Enabled {
+			log.Info("router backups: no stored switch position -- seeding it open from the retired backup.enabled/MIKROVIEW_BACKUP_ENABLED config value; that key is not read again after this")
+		}
+		pos = settings.Backup{Enabled: cfg.Backup.Enabled}
+		if err := set.SetBackup(pos); err != nil {
+			log.Warn(fmt.Sprintf("router backups: could not store the seeded switch position -- it will be seeded again at the next restart: %v", err))
+		}
+	}
+
+	if pos.Enabled {
+		if err := r.Start(); err != nil {
+			log.Error(fmt.Sprintf("router backups: could not open the drop box on %s at startup: %v", r.addr, err))
+		}
+	} else {
+		log.Info("router backups: closed")
+	}
+	return r
+}
+
+// Start opens the drop box, binding the port synchronously so a caller
+// gets "already in use" back as an error from this call rather than a log
+// line nobody is watching. Idempotent: calling it while already open is a
+// no-op.
+func (r *backupRuntime) Start() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ln != nil {
+		return nil
+	}
+	hostKey, err := backupsftp.LoadOrGenerateHostKey(r.hostKeyPath)
 	if err != nil {
-		log.Error(fmt.Sprintf("router backups: could not prepare the SFTP host key, the drop box is not starting: %v", err))
-		return
+		return fmt.Errorf("preparing the SFTP host key: %w", err)
 	}
-	srv := backupsftp.New(vault, tokens, hostKey)
+	ln, err := net.Listen("tcp", r.addr)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	srv := backupsftp.New(r.vault, r.tokens, hostKey)
+	r.ln = ln
+	r.cancel = cancel
 	go func() {
-		if err := srv.ListenAndServe(ctx, cfg.Backup.Listen); err != nil && ctx.Err() == nil {
-			log.Error(err.Error())
-			os.Exit(1)
+		if err := srv.Serve(ctx, ln); err != nil && ctx.Err() == nil {
+			r.log.Error(err.Error())
 		}
 	}()
+	return nil
+}
+
+// Stop closes the drop box. Closing only stops new connections -- an
+// upload already under way keeps writing on its own already-accepted
+// connection until it finishes or drops (internal/backupsftp's
+// pendingWrite: an interrupted transfer commits nothing, exactly as if
+// the router's own end had dropped it); nothing here waits for that or
+// cuts it short. Idempotent: calling it while already closed is a no-op.
+func (r *backupRuntime) Stop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ln == nil {
+		return
+	}
+	r.cancel()
+	r.ln.Close()
+	r.ln = nil
+	r.cancel = nil
+}
+
+// State reports whether the drop box is listening right now, and on
+// which port -- read from the listener itself, never from the stored
+// setting, so a startup bind failure (the stored position says open, but
+// the port turned out to be taken by something else) is reported as
+// closed rather than repeating a claim that is not true. Port is "" when
+// closed.
+func (r *backupRuntime) State() (open bool, port string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ln == nil {
+		return false, ""
+	}
+	return true, routeros.PortOf(r.addr)
 }

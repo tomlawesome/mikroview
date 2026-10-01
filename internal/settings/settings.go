@@ -58,6 +58,11 @@ var persistLog = logging.New("settings")
 type storeFile struct {
 	Store   storeSection   `json:"store"`
 	History historySection `json:"history"`
+	// Backup is the router-backup drop box's stored switch position
+	// (#1361), sitting beside History for the same reason: an on/off
+	// control an admin moves against live evidence, not a config-file
+	// value.
+	Backup backupSection `json:"backup"`
 	// Geo is the country data sources' sealed API keys (#1352), keyed
 	// by source name ("ipinfo", "maxmind"). Absent until one is set.
 	Geo map[string]geoKeySection `json:"geo,omitempty"`
@@ -110,6 +115,29 @@ type History struct {
 	MaxBytes int64
 }
 
+// backupSection is the router-backup SFTP drop box's stored switch
+// position (#1361). Enabled's zero value (false) is itself a legitimate
+// stored position -- a fresh install starts closed, and an admin closing
+// it again must not read as "nothing was ever set" -- so Set is an
+// explicit marker rather than History's own Days>0 trick: there is no
+// second field here whose positivity could double as one. ChangedAt/
+// ChangedBy are what the 7-day admin banner and the change email both
+// read; they are meaningless while Set is false.
+type backupSection struct {
+	Enabled   bool      `json:"enabled"`
+	Set       bool      `json:"set"`
+	ChangedAt time.Time `json:"changedAt,omitzero"`
+	ChangedBy string    `json:"changedBy,omitempty"`
+}
+
+// Backup is the router-backup drop box's stored switch position: whether
+// it is open, and who last moved it and when.
+type Backup struct {
+	Enabled   bool
+	ChangedAt time.Time
+	ChangedBy string
+}
+
 // Store holds the admin-adjustable settings. The zero value is not
 // usable; construct with Open or OpenWithBackend.
 type Store struct {
@@ -120,6 +148,8 @@ type Store struct {
 	version        int64
 	maxMemoryBytes int64
 	history        History
+	backup         Backup
+	backupSet      bool
 	geo            map[string]GeoKey
 }
 
@@ -173,6 +203,12 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 			Days:     file.History.Days,
 			MaxBytes: file.History.MaxBytes,
 		}
+		s.backup = Backup{
+			Enabled:   file.Backup.Enabled,
+			ChangedAt: file.Backup.ChangedAt,
+			ChangedBy: file.Backup.ChangedBy,
+		}
+		s.backupSet = file.Backup.Set
 		for name, k := range file.Geo {
 			// An entry with no ciphertext is a corrupt document, not an
 			// absent key: refusing is the same call the two checks
@@ -265,6 +301,27 @@ func (s *Store) SetHistory(h History) error {
 	return s.persistLocked()
 }
 
+// Backup returns the stored router-backup switch position, and whether
+// one is stored at all. False means no admin, and no migrated legacy
+// config value, has ever set a position -- the fresh-install case, which
+// the caller reads as closed.
+func (s *Store) Backup() (Backup, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.backup, s.backupSet
+}
+
+// SetBackup records a new switch position along with who moved it and
+// when. Always accepted: unlike history's days and byte cap, there is
+// nothing about an on/off switch this store can refuse.
+func (s *Store) SetBackup(b Backup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backup = b
+	s.backupSet = true
+	return s.persistLocked()
+}
+
 // GeoKey returns the stored key for a country data source, and whether
 // one is stored.
 func (s *Store) GeoKey(source string) (GeoKey, bool) {
@@ -324,6 +381,12 @@ func (s *Store) persistLocked() error {
 			Enabled:  s.history.Enabled,
 			Days:     s.history.Days,
 			MaxBytes: s.history.MaxBytes,
+		},
+		Backup: backupSection{
+			Enabled:   s.backup.Enabled,
+			Set:       s.backupSet,
+			ChangedAt: s.backup.ChangedAt,
+			ChangedBy: s.backup.ChangedBy,
 		},
 		Geo: geo,
 	}, "", "  ")

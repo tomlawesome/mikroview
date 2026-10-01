@@ -167,6 +167,64 @@ func TestStoredOffIsDistinguishableFromNothingStored(t *testing.T) {
 	}
 }
 
+func TestFirstRunHasNoBackupSwitchStored(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Backup(); ok {
+		t.Error("a fresh store reported a stored backup switch position -- a fresh install starts closed with nothing stored")
+	}
+}
+
+func TestSetBackupSurvivesAReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Backup{Enabled: true, ChangedAt: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), ChangedBy: "alice"}
+	if err := s.SetBackup(want); err != nil {
+		t.Fatalf("SetBackup: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.Backup()
+	if !ok || !got.ChangedAt.Equal(want.ChangedAt) || got.Enabled != want.Enabled || got.ChangedBy != want.ChangedBy {
+		t.Errorf("after a reopen: (%+v, %v), want (%+v, true)", got, ok, want)
+	}
+}
+
+// The switch's whole point is that a stored "closed" beats a leftover
+// legacy config value -- so "nothing stored" cannot be read off Enabled,
+// which is false in both cases. Set is what carries that distinction, the
+// same reasoning history.enabled's own test above gives for Days.
+func TestStoredClosedIsDistinguishableFromNothingStored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetBackup(Backup{Enabled: false, ChangedBy: "alice"}); err != nil {
+		t.Fatalf("SetBackup: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.Backup()
+	if !ok {
+		t.Fatal("a stored closed position reads back as nothing stored -- a leftover legacy config value would seed it again on every restart")
+	}
+	if got.Enabled {
+		t.Error("a stored closed position read back as open")
+	}
+}
+
 func TestSetHistoryRefusesWhatItCannotStore(t *testing.T) {
 	s, err := Open("")
 	if err != nil {

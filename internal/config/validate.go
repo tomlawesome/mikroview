@@ -255,17 +255,17 @@ func (c *Config) validateListen(fatal problemFunc) {
 			"list each proxy as an IP or CIDR, or use \"private\" for a proxy on your LAN or docker network")
 	}
 
-	// backup.listen only has to parse once the drop box is actually
-	// turned on -- same reasoning validateHistory gives for checking
-	// history.keyFile only when history.enabled is true: an address
-	// sitting unused in a disabled block is not yet a problem.
-	if c.Backup.Enabled {
-		if c.Backup.Listen == "" {
-			fatal("CFG-0001", "backup.listen", "is empty", "set an address such as \":47022\"")
-		} else if _, _, err := net.SplitHostPort(c.Backup.Listen); err != nil {
-			fatal("CFG-0002", "backup.listen", fmt.Sprintf("%q is not a valid listen address", c.Backup.Listen),
-				"use host:port, or :port to listen on every interface")
-		}
+	// backup.listen is validated unconditionally (#1361): the router-
+	// backup drop box's switch lives in the settings store now, moved
+	// from this file, so this address can be live at any moment an admin
+	// chooses -- not only while a config-file flag says so -- and a bad
+	// one has to be caught before that, not discovered as a startup
+	// failure the moment somebody opens it from Settings.
+	if c.Backup.Listen == "" {
+		fatal("CFG-0001", "backup.listen", "is empty", "set an address such as \":47022\"")
+	} else if _, _, err := net.SplitHostPort(c.Backup.Listen); err != nil {
+		fatal("CFG-0002", "backup.listen", fmt.Sprintf("%q is not a valid listen address", c.Backup.Listen),
+			"use host:port, or :port to listen on every interface")
 	}
 }
 

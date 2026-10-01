@@ -78,6 +78,9 @@ func (s *Server) handleConfigProblems(w http.ResponseWriter, r *http.Request) {
 	if p, ok := s.historyHeldWhileOff(); ok {
 		problems = append(problems, p)
 	}
+	if p, ok := s.routerBackupSwitchChanged(); ok {
+		problems = append(problems, p)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"problems": problems})
 }
 
