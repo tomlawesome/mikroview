@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/blcatalogue"
 )
 
 func TestHostname(t *testing.T) {
@@ -432,7 +434,7 @@ func TestPushBlockRenamesRawRuleFields(t *testing.T) {
 // the block is the same text whatever a router has on.
 func TestPushBlockSendsBlocklistCountsNotEntries(t *testing.T) {
 	block := PushBlock("h", "t", "address-list-count", "a")
-	for _, name := range blocklistListNames {
+	for _, name := range blcatalogue.ListNames() {
 		if !strings.Contains(block, `"`+name+`"`) {
 			t.Errorf("pushBlock(address-list-count) does not count %s:\n%s", name, block)
 		}
@@ -455,6 +457,21 @@ func TestPushBlockSendsBlocklistCountsNotEntries(t *testing.T) {
 	}
 	if again := PushBlock("h", "t", "address-list-count", "a"); again != block {
 		t.Error("pushBlock(address-list-count) is not the same text twice")
+	}
+}
+
+// The address-list block leaves out every list matching the prefix, so
+// a catalogue name outside it would be pushed entry by entry -- the
+// overflow the exclusion exists to prevent.
+func TestBlocklistPrefixCoversEveryCatalogueName(t *testing.T) {
+	names := blcatalogue.ListNames()
+	if len(names) == 0 {
+		t.Fatal("the catalogue names no lists, so this proves nothing")
+	}
+	for _, n := range names {
+		if !strings.HasPrefix(n, blocklistListPrefix) {
+			t.Errorf("catalogue list %q is not under %q, so the address-list block would push its entries", n, blocklistListPrefix)
+		}
 	}
 }
 

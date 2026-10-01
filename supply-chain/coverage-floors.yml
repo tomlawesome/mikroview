@@ -137,6 +137,7 @@ floors:
   internal/backupsftp: 87
   internal/backupslice: 93
   internal/baseline: 90
+  internal/blcatalogue: 100  # new with #1360; 100.0% measured 2026-10-01
   internal/blocklist: 93
   internal/config: 86
   internal/configsnap: 81    # new with #1347; 81.2% measured 2026-09-27
