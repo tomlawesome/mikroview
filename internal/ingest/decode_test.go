@@ -42,6 +42,8 @@ func TestDecodePayloadAcceptsEachKind(t *testing.T) {
 		{"wireguard-peer", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`},
 		{"ip-address", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`},
 		{"ip-service", `{"kind":"ip-service","page":1,"pages":1,"records":[{"name":"www-ssl","disabled":false,"port":443,"address":"10.0.0.0/8","certificate":"mikrotik-ca"}]}`},
+		{"raw-rule", `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","comment":"mikroview blocklist: et (from)","chain":"prerouting","action":"drop","srcAddressList":"mv-bl-et","log":true,"packets":3,"bytes":180}]}`},
+		{"address-list-count", `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":633,"loadedAt":"2026-10-01 04:31:07"}]}`},
 		{"logging", `{"kind":"logging","page":1,"pages":1,"wizardVersion":1,"records":[{"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},{"type":"rule","topics":"firewall,info","action":"mikroview","disabled":"no"}]}`},
 	}
 	for _, c := range cases {
@@ -973,4 +975,132 @@ func TestDecodeWizardVersionIsOptionalAndBounded(t *testing.T) {
 	if err := decodeErr(t, `{"kind":"arp","page":1,"pages":1,"wizardVersion":100000,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`); !errors.Is(err, ErrBadWizardVersion) {
 		t.Errorf("an absurd wizardVersion gave %v, want ErrBadWizardVersion", err)
 	}
+}
+
+// TestDecodeRealRawRulePush is the body a real RouterOS 7.18.2 CHR
+// produced from blockSpecs["raw-rule"] on 2026-10-01, captured with the
+// fetch line swapped for :put (docs/routeros-verification-logs/
+// 7.18.2-push-blocklist.log). Keys are alphabetical, unset properties
+// null -- an unlogged rule's log and logPrefix, a "from" rule's
+// dstAddressList -- and disabled and the counters are whole numbers and
+// booleans because the script reads them with get. 7.18.2 rather than
+// 7.24.4 because it is the release whose print as-value drops disabled:
+// the third rule is the one that would have arrived enabled.
+func TestDecodeRealRawRulePush(t *testing.T) {
+	const body = `{"kind":"raw-rule","page":1,"pages":1,"records":[
+	  {"action":"drop","bytes":224,"chain":"prerouting","comment":"mikroview blocklist: et (from)","disabled":false,"dstAddressList":null,"family":"ip","log":true,"logPrefix":"D|probe|","ordinal":0,"packets":4,"srcAddressList":"mv-bl-et"},
+	  {"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: et (to)","disabled":false,"dstAddressList":"mv-bl-et","family":"ip","log":true,"logPrefix":"D|probe|","ordinal":1,"packets":0,"srcAddressList":null},
+	  {"action":"accept","bytes":0,"chain":"prerouting","comment":"an operator rule, disabled","disabled":true,"dstAddressList":null,"family":"ip","log":null,"logPrefix":null,"ordinal":2,"packets":0,"srcAddressList":"mgmt"},
+	  {"action":"drop","bytes":0,"chain":"prerouting","comment":"mikroview blocklist: spamhaus (from)","disabled":false,"dstAddressList":null,"family":"ipv6","log":null,"logPrefix":null,"ordinal":0,"packets":0,"srcAddressList":"mv-bl-spamhaus6"}
+	],"routerosVersion":"7.18.2 (stable)","wizardVersion":6}`
+
+	p := decodeOK(t, body)
+	if p.Kind != KindRawRule || p.RecordCount() != 4 {
+		t.Fatalf("decoded kind %q with %d records, want raw-rule with 4", p.Kind, p.RecordCount())
+	}
+	want := []RawRule{
+		{Ordinal: 0, Family: FamilyIP, Comment: "mikroview blocklist: et (from)", Chain: "prerouting", Action: "drop", SrcAddressList: "mv-bl-et", LogPrefix: "D|probe|", Log: true, Packets: 4, Bytes: 224},
+		{Ordinal: 1, Family: FamilyIP, Comment: "mikroview blocklist: et (to)", Chain: "prerouting", Action: "drop", DstAddressList: "mv-bl-et", LogPrefix: "D|probe|", Log: true},
+		{Ordinal: 2, Family: FamilyIP, Comment: "an operator rule, disabled", Chain: "prerouting", Action: "accept", SrcAddressList: "mgmt", Disabled: true},
+		{Ordinal: 0, Family: FamilyIPv6, Comment: "mikroview blocklist: spamhaus (from)", Chain: "prerouting", Action: "drop", SrcAddressList: "mv-bl-spamhaus6"},
+	}
+	for i, w := range want {
+		if got := p.RawRules[i]; got != w {
+			t.Errorf("rule %d:\n got  %+v\n want %+v", i, got, w)
+		}
+	}
+	if p.RouterOSVersion != "7.18.2 (stable)" || p.WizardVersion != 6 {
+		t.Errorf("envelope = %q / %d, want 7.18.2 (stable) / 6", p.RouterOSVersion, p.WizardVersion)
+	}
+}
+
+// TestDecodeRealAddressListCountPush is the body a real RouterOS 7.24.4
+// CHR produced from the address-list-count block on 2026-10-01
+// (docs/routeros-verification-logs/7.24.4-push-blocklist.log): every
+// catalogue name on both families, 0 and "" for a list the router does
+// not hold, and the first entry's creation-time in the router's own
+// format for the two it does.
+func TestDecodeRealAddressListCountPush(t *testing.T) {
+	const body = `{"kind":"address-list-count","page":1,"pages":1,"records":[
+	  {"count":0,"family":"ip","list":"mv-bl-spamhaus","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-spamhaus","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-spamhaus6","loadedAt":""},
+	  {"count":1,"family":"ipv6","list":"mv-bl-spamhaus6","loadedAt":"2026-10-01 17:38:02"},
+	  {"count":2,"family":"ip","list":"mv-bl-et","loadedAt":"2026-10-01 17:37:51"},
+	  {"count":0,"family":"ipv6","list":"mv-bl-et","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-cins","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-cins","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-blde","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-blde","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-greensnow","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-greensnow","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-dshield","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-dshield","loadedAt":""},
+	  {"count":0,"family":"ip","list":"mv-bl-bindef","loadedAt":""},
+	  {"count":0,"family":"ipv6","list":"mv-bl-bindef","loadedAt":""}
+	],"routerosVersion":"7.24.4 (stable)","wizardVersion":6}`
+
+	p := decodeOK(t, body)
+	if p.Kind != KindAddressListCount || p.RecordCount() != 16 {
+		t.Fatalf("decoded kind %q with %d records, want address-list-count with 16 (eight names, two families)", p.Kind, p.RecordCount())
+	}
+	held := map[string]AddressListCount{}
+	for _, c := range p.AddressListCounts {
+		if c.Count > 0 {
+			held[c.List+"/"+c.Family] = c
+		} else if c.LoadedAt != "" {
+			t.Errorf("%s/%s holds nothing but carries loadedAt %q", c.List, c.Family, c.LoadedAt)
+		}
+	}
+	for key, w := range map[string]AddressListCount{
+		"mv-bl-et/ip":          {List: "mv-bl-et", Family: FamilyIP, Count: 2, LoadedAt: "2026-10-01 17:37:51"},
+		"mv-bl-spamhaus6/ipv6": {List: "mv-bl-spamhaus6", Family: FamilyIPv6, Count: 1, LoadedAt: "2026-10-01 17:38:02"},
+	} {
+		if got := held[key]; got != w {
+			t.Errorf("%s = %+v, want %+v", key, got, w)
+		}
+	}
+	if len(held) != 2 {
+		t.Errorf("%d lists held, want 2: %+v", len(held), held)
+	}
+}
+
+func TestRawRuleRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":3,"family":"ipv6","comment":"c","chain":"prerouting","action":"drop","srcAddressList":"a","dstAddressList":"b","logPrefix":"D|x|","log":true,"disabled":true,"packets":41000.000000,"bytes":2460000}]}`)
+	want := RawRule{Ordinal: 3, Family: FamilyIPv6, Comment: "c", Chain: "prerouting", Action: "drop", SrcAddressList: "a", DstAddressList: "b", LogPrefix: "D|x|", Log: true, Disabled: true, Packets: 41000, Bytes: 2460000}
+	if len(p.RawRules) != 1 || p.RawRules[0] != want {
+		t.Errorf("RawRules = %+v, want [%+v]", p.RawRules, want)
+	}
+}
+
+func TestRawRuleRejectsUnknownRecordField(t *testing.T) {
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","chain":"prerouting","action":"drop","dstPort":22}]}`)
+}
+
+// family is the script's own literal, so anything but the two menu
+// roots -- including none at all -- is a body MikroView did not write.
+func TestRawRuleAndCountRejectAnUnknownFamily(t *testing.T) {
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"bridge","chain":"prerouting","action":"drop"}]}`)
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"chain":"prerouting","action":"drop"}]}`)
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"IP","count":1,"loadedAt":""}]}`)
+}
+
+func TestRawRuleRejectsControlAndFormatCharacters(t *testing.T) {
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","comment":"evil\u0007bell","chain":"prerouting","action":"drop"}]}`)
+	decodeErr(t, `{"kind":"raw-rule","page":1,"pages":1,"records":[{"ordinal":0,"family":"ip","chain":"prerouting","action":"drop","dstAddressList":"list\u202e"}]}`)
+}
+
+func TestAddressListCountRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-cins","family":"ip","count":15000.000000,"loadedAt":"2026-10-01 04:45:12"}]}`)
+	want := AddressListCount{List: "mv-bl-cins", Family: FamilyIP, Count: 15000, LoadedAt: "2026-10-01 04:45:12"}
+	if len(p.AddressListCounts) != 1 || p.AddressListCounts[0] != want {
+		t.Errorf("AddressListCounts = %+v, want [%+v]", p.AddressListCounts, want)
+	}
+}
+
+func TestAddressListCountRejectsUnknownFieldsAndNegativeCounts(t *testing.T) {
+	// An entry's address is exactly what this kind exists not to carry.
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":1,"loadedAt":"","address":"198.51.100.7"}]}`)
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":-1,"loadedAt":""}]}`)
+	decodeErr(t, `{"kind":"address-list-count","page":1,"pages":1,"records":[{"list":"mv-bl-et","family":"ip","count":1,"loadedAt":"2026\u0007"}]}`)
 }

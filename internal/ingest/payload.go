@@ -63,6 +63,15 @@ const (
 	// rather than inferred from traffic. See IPServiceEntry's own doc
 	// comment for what each row carries and why.
 	KindIPService Kind = "ip-service"
+	// KindRawRule is issue #1360's: /ip/firewall/raw and
+	// /ipv6/firewall/raw in one page, where the blocklist builder's drop
+	// rules sit. See RawRule.
+	KindRawRule Kind = "raw-rule"
+	// KindAddressListCount is issue #1360's other kind: how many entries
+	// each of the blocklist builder's address lists (mv-bl-*) holds, sent
+	// instead of the entries, which would not fit a push. See
+	// AddressListCount.
+	KindAddressListCount Kind = "address-list-count"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -588,6 +597,64 @@ func (f *RouterOSFlag) UnmarshalJSON(data []byte) error {
 		*f = "no"
 	}
 	return nil
+}
+
+// RawRule mirrors one /ip/firewall/raw or /ipv6/firewall/raw rule
+// (#1360). The blocklist builder writes its drop rules here -- raw
+// prerouting, placed first (owner, answer 11a) -- and the ledger reads
+// their counters to say how often each fired. Field types are
+// FilterRule's, for the same properties on a sibling menu; what is new
+// is Family, which menu the rule came from, and DstAddressList, the list
+// a "to" rule matches on.
+//
+// Ordinal is the position within its own family's table: an IPv4 rule
+// and an IPv6 rule can both be 0.
+//
+// Shapes confirmed on a real CHR (TestDecodeRealRawRulePush): an unset
+// property arrives as null rather than absent -- an enabled rule's
+// disabled, an unlogged rule's log and log-prefix, a "from" rule's
+// dst-address-list -- and decodes to the zero value. Packets and Bytes
+// are read with `get` by the push script, since `print as-value` leaves
+// them out (internal/routeros blockSpecs["raw-rule"]).
+type RawRule struct {
+	Ordinal        RouterOSInt `json:"ordinal"`
+	Family         string      `json:"family"`
+	Comment        string      `json:"comment"`
+	Chain          string      `json:"chain"`
+	Action         string      `json:"action"`
+	SrcAddressList string      `json:"srcAddressList"`
+	DstAddressList string      `json:"dstAddressList"`
+	LogPrefix      string      `json:"logPrefix"`
+	Log            bool        `json:"log"`
+	Disabled       bool        `json:"disabled"`
+	Packets        RouterOSInt `json:"packets"`
+	Bytes          RouterOSInt `json:"bytes"`
+}
+
+// Address families a RawRule or AddressListCount may name: the RouterOS
+// menu roots the push script reads, /ip and /ipv6.
+const (
+	FamilyIP   = "ip"
+	FamilyIPv6 = "ipv6"
+)
+
+// AddressListCount is how many entries one of the blocklist builder's
+// address lists holds on one family (#1360) -- the push sends a count
+// for every mv-bl-* name the catalogue knows, on both families, rather
+// than the entries: 15,000 of them would overflow the ~64 KiB body
+// /tool fetch can POST. A name the router does not hold arrives with
+// Count 0.
+//
+// LoadedAt is the router's own creation-time for the list's first entry,
+// in the router's local time and RouterOS's own format ("2026-10-01
+// 12:24:44" on 7.18 and later), or "" when the list is empty. Kept as
+// the router wrote it: the router's clock and timezone are its own, and
+// reading it as an instant is the ledger's call, not the schema's.
+type AddressListCount struct {
+	List     string      `json:"list"`
+	Family   string      `json:"family"`
+	Count    RouterOSInt `json:"count"`
+	LoadedAt string      `json:"loadedAt"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may

@@ -200,7 +200,16 @@ func UndoCaTrustCommands(dialect string) string {
 // server falls back to RouterOS's own address-key distinction), so this
 // bump is a nudge to re-paste for the more direct signal, not a
 // correctness requirement the way earlier bumps were.
-const WizardVersion = 5
+//
+// Bumped to 6 by issue #1360: the address-list block now leaves out the
+// blocklist builder's lists (mv-bl-*), and two kinds join the push --
+// raw-rule (the builder's drop rules and their counters) and
+// address-list-count (how many entries each mv-bl-* list holds). A
+// router on 5 still pushes correctly until it loads a blocklist; then
+// its address-list page outgrows /tool fetch's ~64 KiB body and stops
+// arriving, which is why the builder re-sets the push script as its
+// first part and a re-paste is worth nudging everywhere.
+const WizardVersion = 6
 
 // LoggingSetup is what the current wizard's SyslogCommands leaves on a
 // router, in the router's own vocabulary: the mikroview logging
@@ -387,8 +396,29 @@ func RuleTaggingCommands(dialect string) string {
 type blockSpec struct {
 	varName string
 	source  string
-	record  string
+	// where, when set, narrows source's print to the rows it matches --
+	// the RouterOS predicate itself, without the leading "where".
+	where string
+	// families, when set, replaces source: one loop per address family's
+	// menu into the same record list, each record stamped with that
+	// family ("ip" or "ipv6") ahead of the fields record names. For a
+	// table RouterOS keeps twice, once per family, that MikroView reads
+	// as one (#1360's raw rules).
+	families []familySource
+	record   string
 }
+
+// familySource is one address family's menu for a blockSpec that reads
+// both.
+type familySource struct {
+	family string
+	source string
+}
+
+// familyMenu stands in a families blockSpec's record for the menu of the
+// family being read, for a field the record has to go back to the router
+// for. Replaced before the block is rendered; never reaches a router.
+const familyMenu = "<family-menu>"
 
 // blockSpecs mirrors docs/routeros-setup.md's table, itself verified
 // against a real RouterOS 7.23.3 router -- see dialects.go's Rows, which
@@ -411,10 +441,40 @@ var blockSpecs = map[string]blockSpec{
 			`"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface"); ` +
 			`"disabled"=($v->"disabled"); "packets"=($v->"packets"); "bytes"=($v->"bytes")}`,
 	},
+	// The where is #1360's: the blocklist builder's lists (mv-bl-*) run
+	// to 15,000 entries, which would overflow /tool fetch's ~64 KiB POST
+	// body and stop this whole page arriving. They reach MikroView as a
+	// count instead -- the address-list-count block below.
 	"address-list": {
 		varName: "al",
 		source:  "/ip/firewall/address-list",
+		where:   `!(list~"^` + blocklistListPrefix + `")`,
 		record:  `{"list"=($v->"list"); "address"=($v->"address"); "comment"=($v->"comment"); "dynamic"=($v->"dynamic")}`,
+	},
+	// raw-rule is #1360's: the blocklist builder's drop rules sit in raw
+	// prerouting (owner, answer 11a), on both families, and their
+	// packets/bytes counters are what the ledger's "fired N today" reads.
+	// The same field names as filter-rule's, plus the destination list a
+	// "to" rule matches on.
+	//
+	// disabled and the counters are read with `get` by the row's .id,
+	// not off $v. On a real CHR (7.18.2 and 7.24.4) `print as-value`
+	// leaves packets and bytes out of every row, and `print stats
+	// as-value` has them but drops src-address-list, log and log-prefix
+	// -- neither print alone carries both halves. And on 7.18.2 `print
+	// as-value` leaves disabled out even for a disabled rule, so ($v->
+	// "disabled") would report it enabled; 7.24.4 includes it. `get`
+	// answers all three on both (docs/routeros-setup.md, 4c-iii).
+	"raw-rule": {
+		varName: "raw",
+		families: []familySource{
+			{family: "ip", source: "/ip/firewall/raw"},
+			{family: "ipv6", source: "/ipv6/firewall/raw"},
+		},
+		record: `"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ` +
+			`"srcAddressList"=($v->"src-address-list"); "dstAddressList"=($v->"dst-address-list"); "logPrefix"=($v->"log-prefix"); ` +
+			`"log"=($v->"log"); "disabled"=[` + familyMenu + ` get ($v->".id") disabled]; ` +
+			`"packets"=[` + familyMenu + ` get ($v->".id") packets]; "bytes"=[` + familyMenu + ` get ($v->".id") bytes]}`,
 	},
 	"dhcp-lease": {
 		varName: "lease",
@@ -458,18 +518,43 @@ func PushBlock(address, token, kind, dialect string) string {
 	if kind == string(loggingKind) {
 		return loggingPushBlock(address, token, dialect)
 	}
+	if kind == addressListCountKind {
+		return addressListCountBlock(address, token)
+	}
 	spec, ok := blockSpecs[kind]
 	if !ok {
 		return ""
 	}
 	recs := spec.varName + "Recs"
-	payload := spec.varName + "Payload"
-	return strings.Join([]string{
-		fmt.Sprintf(`:local %s [:toarray ""]`, recs),
-		fmt.Sprintf(`:foreach i,v in=[%s print as-value] do={`, spec.source),
-		fmt.Sprintf(`  :local rec %s`, spec.record),
-		fmt.Sprintf(`  :set %s ($%s, {$rec})`, recs, recs),
-		`}`,
+	lines := []string{fmt.Sprintf(`:local %s [:toarray ""]`, recs)}
+	loop := func(source, record string) {
+		cmd := source + " print as-value"
+		if spec.where != "" {
+			cmd += " where " + spec.where
+		}
+		lines = append(lines,
+			fmt.Sprintf(`:foreach i,v in=[%s] do={`, cmd),
+			fmt.Sprintf(`  :local rec %s`, record),
+			fmt.Sprintf(`  :set %s ($%s, {$rec})`, recs, recs),
+			`}`,
+		)
+	}
+	if len(spec.families) == 0 {
+		loop(spec.source, spec.record)
+	}
+	for _, f := range spec.families {
+		record := strings.ReplaceAll(spec.record, familyMenu, f.source)
+		loop(f.source, fmt.Sprintf(`{"family"="%s"; %s`, f.family, record))
+	}
+	return strings.Join(append(lines, pushEnvelope(address, token, kind, spec.varName)...), "\n")
+}
+
+// pushEnvelope is the two lines that close every table block: serialize
+// the records into the ingest envelope, and POST it.
+func pushEnvelope(address, token, kind, varName string) []string {
+	recs := varName + "Recs"
+	payload := varName + "Payload"
+	return []string{
 		// routerosVersion and wizardVersion ride the payload rather than a
 		// record: both describe the router's own setup, not a row of any
 		// table (#408 carrying #436's derived version source; #1241 the
@@ -484,7 +569,64 @@ func PushBlock(address, token, kind, dialect string) string {
 		// string well-formed, because that validator lives in a
 		// different package and this function has no way to see it.
 		fmt.Sprintf(`/tool fetch url="https://%s/api/ingest/routeros" http-method=post http-data=$%s http-header-field=("Content-Type: application/json,Authorization: Bearer %s") check-certificate=yes output=none`, quote(address), payload, quote(token)),
-	}, "\n")
+	}
+}
+
+// addressListCountKind is #1360's second kind: how many entries each of
+// the blocklist builder's address lists holds, rather than the entries
+// themselves. Spelled here for the same reason loggingKind is.
+const addressListCountKind = "address-list-count"
+
+// blocklistListPrefix is what every address list the blocklist builder
+// writes is named under: mv-bl-<key>, and mv-bl-spamhaus6 for IPv6.
+const blocklistListPrefix = "mv-bl-"
+
+// blocklistListNames is every address list the blocklist builder can
+// write (BUILD.md part 3's catalogue, ListNames). Fixed rather than read
+// off the router, so the count block is the same text whichever lists a
+// router has on: re-pasting the push changes nothing when a list is
+// added or removed.
+var blocklistListNames = []string{
+	"mv-bl-spamhaus", "mv-bl-spamhaus6", "mv-bl-et", "mv-bl-cins",
+	"mv-bl-blde", "mv-bl-greensnow", "mv-bl-dshield", "mv-bl-bindef",
+}
+
+// addressListCountBlock renders #1360's count page: for each blocklist
+// name and each family, one record {list, family, count, loadedAt}. The
+// entries themselves never travel -- 15,000 of them would overflow the
+// ~64 KiB body /tool fetch can POST (the address-list block leaves them
+// out for the same reason).
+//
+// loadedAt is the first entry's creation-time, which the loader's swap
+// (`set [find list=...-next] list=...`) keeps -- checked on a real CHR
+// (docs/routeros-setup.md, 4c-iii). It is "" for a list with no entries,
+// which is also what a router holding none of these lists sends for
+// every record.
+func addressListCountBlock(address, token string) string {
+	quoted := make([]string, len(blocklistListNames))
+	for i, n := range blocklistListNames {
+		quoted[i] = `"` + n + `"`
+	}
+	const varName = "blc"
+	lines := []string{
+		fmt.Sprintf(`:local %sRecs [:toarray ""]`, varName),
+		fmt.Sprintf(`:foreach n in={%s} do={`, strings.Join(quoted, ";")),
+	}
+	// Each family's locals carry its own suffix: the two sit in the same
+	// do={} scope, where a second `:local c` would redeclare the first.
+	for _, f := range []struct{ family, source, v string }{
+		{"ip", "/ip/firewall/address-list", "4"},
+		{"ipv6", "/ipv6/firewall/address-list", "6"},
+	} {
+		lines = append(lines,
+			fmt.Sprintf(`  :local c%s [%s print count-only where list=$n]`, f.v, f.source),
+			fmt.Sprintf(`  :local t%s ""`, f.v),
+			fmt.Sprintf(`  :if ($c%s > 0) do={ :set t%s [%s get ([find where list=$n]->0) creation-time] }`, f.v, f.v, f.source),
+			fmt.Sprintf(`  :set %sRecs ($%sRecs, {{"list"=$n; "family"="%s"; "count"=$c%s; "loadedAt"=$t%s}})`, varName, varName, f.family, f.v, f.v),
+		)
+	}
+	lines = append(lines, `}`)
+	return strings.Join(append(lines, pushEnvelope(address, token, addressListCountKind, varName)...), "\n")
 }
 
 // PushScript builds the whole state-push script with the token and

@@ -145,7 +145,7 @@ func TestUpgradeRouterCountReflectsLoggingLeftovers(t *testing.T) {
 	s.Setup.NoteUpgrade("v0.4.0", "v0.5.0", time.Now())
 	s.Devices.Ensure("core", time.Now())
 
-	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":5,
+	body := `{"kind":"logging","page":1,"pages":1,"routerosVersion":"7.16.1","wizardVersion":6,
  "records":[
   {"type":"action","name":"memory","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"192.168.254.1","remoteProtocol":"tls","remoteLogFormat":"syslog"},
   {"type":"action","name":"mikroview","target":"remote","remote":"10.0.0.5","remotePort":"6514","srcAddress":"0.0.0.0","remoteProtocol":"tls","remoteLogFormat":"syslog","checkCertificate":"yes"},

@@ -106,7 +106,7 @@ func TestEmittedCommandsUseKnownMenus(t *testing.T) {
 		// so the menus inside the saved source are checked here too --
 		// they are the same console paths the router runs when the
 		// scheduler fires.
-		"ScheduleCommands": ScheduleCommands(PushScript(address, "tok", []string{"filter-rule"}, dialect), dialect),
+		"ScheduleCommands": ScheduleCommands(PushScript(address, "tok", []string{"filter-rule", "address-list", "raw-rule", "address-list-count"}, dialect), dialect),
 	}
 
 	checked := 0

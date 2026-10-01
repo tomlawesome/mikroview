@@ -149,3 +149,42 @@ func TestDocSchedulerAndRuleBlocksMatchGenerators(t *testing.T) {
 		}
 	})
 }
+
+// docFence returns the one fenced block in a doc that contains marker,
+// fatal unless there is exactly one.
+func docFence(t *testing.T, path, marker string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var matches []string
+	parts := strings.Split(string(data), "```")
+	// Odd indexes are the insides of fences.
+	for i := 1; i < len(parts); i += 2 {
+		if strings.Contains(parts[i], marker) {
+			matches = append(matches, strings.Trim(parts[i], "\n"))
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("%s: %d fenced blocks contain %q, want exactly one", path, len(matches), marker)
+	}
+	return matches[0]
+}
+
+// #1360: routeros-setup.md 4c-iii prints the raw-rule and
+// address-list-count blocks in full, with the doc's own placeholders --
+// held to the generator byte for byte, so a change to either block that
+// does not update the guide fails here.
+func TestDocBlocklistPushBlocksMatchGenerators(t *testing.T) {
+	setupDoc := filepath.Join("..", "..", "docs", "routeros-setup.md")
+	for _, kind := range []string{"raw-rule", "address-list-count"} {
+		t.Run(kind, func(t *testing.T) {
+			want := routeros.PushBlock("<mikroview-host:port>", "<your ingest token>", kind, "a")
+			got := docFence(t, setupDoc, `"kind"="`+kind+`"`)
+			if got != want {
+				t.Errorf("routeros-setup.md's %s block does not match PushBlock:\n doc:\n%s\n generator:\n%s", kind, got, want)
+			}
+		})
+	}
+}
