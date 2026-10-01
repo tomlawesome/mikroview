@@ -480,6 +480,12 @@ const (
 // configurable services. On a real router the *dynamic* four never
 // carry an address property at all -- see IsDynamic.
 //
+// RouterOS 7.24 renamed address to available-from (#1411; 7.18.2 to
+// 7.23.3 say address, 7.24 and 7.24.4 say available-from, each checked
+// on a real CHR). The push sends both, as "address" and
+// "availableFrom", and UnmarshalJSON puts whichever the router filled
+// into Address, so nothing downstream knows which release it was.
+//
 // Field names are RouterOS 7's documented /ip/service properties (name,
 // port, address, certificate, disabled, dynamic), confirmed against a
 // live CHR 7.23.3 router (#1405). tls-version and vrf exist on a real
@@ -527,10 +533,20 @@ type IPServiceEntry struct {
 // the whole record and no longer enforces that option itself.
 func (e *IPServiceEntry) UnmarshalJSON(data []byte) error {
 	type ipServiceEntryAlias IPServiceEntry
+	// availableFrom is 7.24's name for address (#1411). It lands in
+	// Address when address itself is empty -- a router has one or the
+	// other, never both.
+	wire := struct {
+		*ipServiceEntryAlias
+		AvailableFrom RouterOSList `json:"availableFrom"`
+	}{ipServiceEntryAlias: (*ipServiceEntryAlias)(e)}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode((*ipServiceEntryAlias)(e)); err != nil {
+	if err := dec.Decode(&wire); err != nil {
 		return err
+	}
+	if len(e.Address) == 0 {
+		e.Address = wire.AvailableFrom
 	}
 
 	var probe map[string]json.RawMessage
@@ -540,7 +556,9 @@ func (e *IPServiceEntry) UnmarshalJSON(data []byte) error {
 	if _, ok := probe["dynamic"]; !ok {
 		e.dynamicKeyAbsent = true
 	}
-	if _, ok := probe["address"]; !ok {
+	_, hasAddress := probe["address"]
+	_, hasAvailableFrom := probe["availableFrom"]
+	if !hasAddress && !hasAvailableFrom {
 		e.addressKeyAbsent = true
 	}
 

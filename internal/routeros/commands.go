@@ -527,10 +527,19 @@ var blockSpecs = map[string]blockSpec{
 	// `print as-value` leaves it out even for a disabled service, so a
 	// disabled telnet arrived enabled -- the fault #1409 fixed in the
 	// filter-rule block.
+	//
+	// availableFrom is #1411's: 7.24 renamed the address restriction
+	// from address to available-from, so ($v->"address") arrives null
+	// there. Both are read off $v, and the server takes whichever the
+	// router has (internal/ingest.IPServiceEntry). Not with `get`, as
+	// disabled is: `get` on a property the release does not have is an
+	// error that stops the script on 7.18.2 through 7.23.3, and print
+	// as-value carries whichever name the release uses on every version
+	// checked (docs/routeros-verification-logs/<version>-push-ip-service-address.log).
 	"ip-service": {
 		varName: "svc",
 		source:  "/ip/service",
-		record:  `{"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}`,
+		record:  `{"name"=($v->"name"); "disabled"=[/ip/service get ($v->".id") disabled]; "port"=($v->"port"); "address"=($v->"address"); "availableFrom"=($v->"available-from"); "certificate"=($v->"certificate"); "dynamic"=($v->"dynamic")}`,
 	},
 }
 

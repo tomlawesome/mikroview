@@ -398,12 +398,20 @@ func TestPushBlockRenamesIPServiceFields(t *testing.T) {
 	if strings.Contains(block, `($v->"disabled")`) {
 		t.Errorf("pushBlock(ip-service) reads disabled off print as-value, which 7.18.2 leaves out:\n%s", block)
 	}
+	for _, name := range []string{"address", "available-from"} {
+		if get := `get ($v->".id") ` + name; strings.Contains(block, get) {
+			t.Errorf("pushBlock(ip-service) reads %s with get, which stops the script on a release that lacks it:\n%s", name, block)
+		}
+	}
 	for _, want := range []string{
 		"/ip/service print as-value",
 		`"name"=($v->"name")`,
 		`"disabled"=[/ip/service get ($v->".id") disabled]`,
 		`"port"=($v->"port")`,
 		`"address"=($v->"address")`,
+		// #1411: 7.24's name for the same restriction, read off $v too --
+		// a get of either name errors on the release without it.
+		`"availableFrom"=($v->"available-from")`,
 		`"certificate"=($v->"certificate")`,
 		`"dynamic"=($v->"dynamic")`,
 		`{$rec}`,
