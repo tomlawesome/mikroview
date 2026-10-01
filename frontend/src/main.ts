@@ -5,6 +5,7 @@ import './app.css'
 import App from './App.svelte'
 import { installCancellationGuard } from './lib/cancelled'
 import { onFreshnessSignal } from './lib/api'
+import { onUnauthorizedClaim } from './lib/auth.svelte'
 import { freshnessState } from './lib/freshness.svelte'
 import { registerServiceWorker } from './lib/serviceWorker'
 
@@ -15,6 +16,10 @@ installCancellationGuard()
 // #1363: api.ts cannot import freshness.svelte.ts itself (that file
 // imports fetchHealthz from api.ts), so this is where the two meet.
 onFreshnessSignal(() => freshnessState.checkOnErrorSignal())
+// And auth.svelte.ts cannot either (freshness.svelte.ts imports it): a
+// 401 mid-session asks freshness first whether it is an upgrade's
+// restart, so a busy tab gets the banner rather than a reload (7a).
+onUnauthorizedClaim(() => freshnessState.claimUnauthorized())
 
 // #1314: ours rather than vite-plugin-pwa's injected registerSW.js, so
 // the registration promise has a handler -- see lib/serviceWorker.ts.

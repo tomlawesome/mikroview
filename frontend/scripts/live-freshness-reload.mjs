@@ -152,9 +152,13 @@ upgradeServer()
 const upgradedVersion = await waitForVersionChange(startVersion)
 check(upgradedVersion !== startVersion, `the instance answers a new version after upgrade (was ${startVersion}, now ${upgradedVersion})`)
 
-// No manual nudge: the live socket reconnecting to the just-restarted
-// server is by itself one of the ratified triggers (ws.ts), and does
-// this for real, the same way a genuine upgrade would. Dispatching a
+// No manual nudge: what notices the upgrade here is what notices it
+// for real. The restart ended the session, so the socket cannot get
+// back in (its handshake answers 401, and ws.ts's onopen trigger never
+// fires) -- it is the stats poll's own 401, at most five seconds after
+// the instance is back, that asks the freshness check (api.ts's error
+// signal, and auth.svelte.ts's handleUnauthorized handing the 401 to
+// freshnessState.claimUnauthorized). Dispatching a
 // synthetic visibilitychange here instead -- an earlier draft of this
 // scenario did -- fires App.svelte's *other* visibility subscriber too
 // (the #1088 stats-refresh one), repeatedly, on a tab that was never
@@ -208,16 +212,38 @@ check(
 )
 
 // Same reasoning as the quiet pass: no synthetic visibilitychange here
-// either. The WS reconnect trigger is what notices this mismatch for
-// real, on its own timeline, without disturbing the busy field.
+// either. The poll's 401 is what notices this mismatch for real, on its
+// own timeline, without disturbing the busy field -- and that same 401
+// is the one that, before claimUnauthorized existed, reloaded this tab
+// as a session expiry under the typing, banner never shown (CI
+// pipeline 1896).
 const banner = page.getByText('mikroview has been upgraded to a newer version')
 await banner.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})
 check(await banner.count(), 'the banner shows once a mismatch is found while the field is busy')
 
-check(!(await page.evaluate(() => window.__mvBeforeUpgrade === undefined)), '7a: a busy tab never reloads on its own')
+// Not judged the instant the banner shows: the banner can come first
+// (a 401 from a fetch that does not bounce, /api/stats/tops say) and the
+// next 5-second poll's 401 -- App.svelte's handleApiError, the one that
+// signs a tab out -- land after it. Before claimUnauthorized that poll
+// reloaded the tab a second or so after the banner, after a snapshot
+// taken here had already passed. So wait for that poll to have actually
+// answered 401 since the banner showed, then look.
+const POLL_ROUTE = /^\/api\/(devices|stats|flags)$/
+const pollBouncedAfterBanner = await page
+  .waitForResponse((r) => r.status() === 401 && POLL_ROUTE.test(new URL(r.url()).pathname), { timeout: 15000 })
+  .then(() => true)
+  .catch(() => false)
+check(pollBouncedAfterBanner, "a poll answered 401 after the banner showed -- the restart's sign-out the tab had to sit through")
+
+// A context torn down mid-evaluate is a reload in flight -- the answer, not an error.
+const busyTabReloaded = await page.evaluate(() => window.__mvBeforeUpgrade === undefined).catch(() => true)
+check(!busyTabReloaded, '7a: a busy tab never reloads on its own')
 
 // Still typed, unsaved, and still there -- the whole reason 7a exists.
-check((await page.inputValue('input.rule')) === 'freshness-busy', 'the busy field it would have lost still holds its text')
+// A short wait, failing as a check rather than a 30s throw: if the tab
+// did reload, the field is gone and saying so is the whole finding.
+const busyFieldValue = await page.inputValue('input.rule', { timeout: 5000 }).catch(() => null)
+check(busyFieldValue === 'freshness-busy', `the busy field it would have lost still holds its text (${JSON.stringify(busyFieldValue)})`)
 
 await page.getByRole('button', { name: 'reload' }).click()
 
