@@ -170,3 +170,7 @@ each, recorded together because the cause is shared (#831's contention):
 ## frontend LiveTable.svelte.test.ts: "keeps the flat stripes when events arrive during a round trip through group mode" (#1308)
 
 - 2026-09-30 · fe8d1919 + local test edits (feature/1374-wizard, local `npm test -- --coverage`, host shared with other agents' vitest runs) · timed out at 30s twice under coverage; passed on the same code without coverage locally and in CI with coverage (pipeline 1838, test:frontend). The branch does not touch LiveTable. First sighting.
+
+## frontend: City.svelte.test.ts and perf-compare.test.mjs time out together under full-suite load
+
+- 2026-10-01 · e46f7cf5 base, local lockfile-only change (chore/deps-2026-10-01, local `npm test -- --coverage`, jsdom bumped to 30.1.1 in frontend/package-lock.json, no source change) · three failures in one run: `scripts/perf-compare.test.mjs`'s shared `@testing-library/svelte` `beforeEach` hook hit its 10s timeout, and two `City: brightness by baseline` tests (`throbs the arrived-at building's own outline...`, `writes \`expected\` through the register...`) hit the 20s test timeout. `npx vitest run src/components/City.svelte.test.ts scripts/perf-compare.test.mjs` alone passed all 115 immediately after, and a full second `npm test -- --coverage` run passed all 3558 tests clean. The commit touches only frontend/package-lock.json and THIRD-PARTY-NOTICES.md, neither of which City.svelte, perf-compare.ts or testing-library's setup read. First sighting.
