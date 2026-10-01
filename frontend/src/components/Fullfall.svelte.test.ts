@@ -31,14 +31,19 @@ describe('Fullfall', () => {
     expect(accepts).toBe(26)
   })
 
-  it('carves the door mask by default and the attach mask when asked', () => {
+  it('carves the door mask by default and the enrolment mask when asked; the attach mask is gone with #646', () => {
     const door = render(Fullfall)
     expect(door.container.querySelector('.fullfall.door')).toBeTruthy()
-    expect(door.container.querySelector('.fullfall.attach')).toBeNull()
+    expect(door.container.querySelector('.fullfall.enrol')).toBeNull()
     door.unmount()
 
-    const attach = render(Fullfall, { props: { mask: 'attach' } })
-    expect(attach.container.querySelector('.fullfall.attach')).toBeTruthy()
-    expect(attach.container.querySelector('.fullfall.door')).toBeNull()
+    const enrol = render(Fullfall, { props: { mask: 'enrol' } })
+    expect(enrol.container.querySelector('.fullfall.enrol')).toBeTruthy()
+    expect(enrol.container.querySelector('.fullfall.door')).toBeNull()
+    enrol.unmount()
+
+    // #646's attach beat is retired (#1386): asking for its mask carves nothing.
+    const attach = render(Fullfall, { props: { mask: 'attach' as never } })
+    expect(attach.container.querySelector('.fullfall.attach')).toBeNull()
   })
 })
