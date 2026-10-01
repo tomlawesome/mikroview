@@ -56,12 +56,17 @@ func QuoteScriptString(s string) string {
 // and unescaped, RouterOS would save a script with every variable
 // already substituted away to nothing.
 //
-// Newlines are left as they are: BackupScript's multi-line
-// source="..." is the proven form, run end to end against a real CHR
-// under #394, so a script body keeps its own line breaks rather than
-// being folded into `\n` escapes.
+// Newlines go in as `\n` escapes, so every script add is one console
+// line (#1360). RouterOS before 7.19 drops a line break typed inside a
+// double-quoted argument -- 7.19's CHANGELOG: "console - disallow
+// incomplete double-quoted arguments (allows multiline string
+// pasting)" -- so on 7.18.2 a pasted multi-line source="..." saved as
+// one run-on line and the script did nothing
+// (docs/routeros-verification-logs/7.18.2-blocklist.log). #394 proved
+// the multi-line form on 7.23.3, where it works; the escaped form saves
+// the same script on every release.
 func scriptSource(body string) string {
-	return QuoteScriptString(body)
+	return strings.ReplaceAll(QuoteScriptString(body), "\n", `\n`)
 }
 
 // scriptAdd wraps a script body in the `/system script add` that saves

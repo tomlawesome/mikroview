@@ -655,9 +655,9 @@ func TestRuleTaggingCommandsRepairsAnAlreadyFloodedRouter(t *testing.T) {
 }
 
 // unescapeRouterOS reads a `source="..."` value back the way RouterOS
-// does: a backslash escapes the character after it, and the three
-// escapes scriptSource emits -- \\, \" and \$ -- are the only ones it
-// is ever handed. Anything else is a backslash this package produced by
+// does: a backslash escapes the character after it, and the four
+// escapes scriptSource emits -- \\, \", \$ and \n -- are the only ones
+// it is ever handed. Anything else is a backslash this package produced by
 // accident, which is a failure rather than something to read past.
 //
 // It is deliberately the inverse written independently of scriptSource,
@@ -678,6 +678,8 @@ func unescapeRouterOS(t *testing.T, s string) string {
 		switch s[i+1] {
 		case '\\', '"', '$':
 			b.WriteByte(s[i+1])
+		case 'n':
+			b.WriteByte('\n')
 		default:
 			t.Errorf("escaped source carries \\%c, which RouterOS reads as something else: %q", s[i+1], s)
 			b.WriteByte(s[i+1])
@@ -749,8 +751,8 @@ func extractEscapedValue(t *testing.T, s, marker string) string {
 // TestScriptSourceRoundTrips is the escaping's real contract: whatever
 // body goes in, RouterOS's own un-escaping takes back out. The fixture
 // carries every character the rule is about -- a quote, a backslash, a
-// dollar, and newlines, which pass through as themselves because a
-// saved script keeps its own lines (#394's proven multi-line form).
+// dollar, and newlines, which go in as \n so the add is one console
+// line and come back out as the script's own line breaks.
 func TestScriptSourceRoundTrips(t *testing.T) {
 	bodies := []string{
 		":local v \"quoted\"\n:put $v",
@@ -767,6 +769,28 @@ func TestScriptSourceRoundTrips(t *testing.T) {
 		got := unescapeRouterOS(t, scriptSource(body))
 		if got != body {
 			t.Errorf("scriptSource did not round-trip:\n got %q\nwant %q", got, body)
+		}
+	}
+}
+
+// TestScriptAddIsOneConsoleLine is #1360's finding on a real 7.18.2:
+// RouterOS before 7.19 drops a line break typed inside a quoted
+// argument, so a pasted multi-line source="..." saved as one run-on line
+// and the script did nothing. Every saved script the wizard hands over
+// is therefore one console line, its own line breaks escaped.
+func TestScriptAddIsOneConsoleLine(t *testing.T) {
+	for name, block := range map[string]string{
+		"ScheduleCommands":           ScheduleCommands(PushScript("192.0.2.10:8080", "tok", []string{"filter-rule", "address-list"}, "a"), "a"),
+		"BackupScript":               BackupScript("192.0.2.10", "47022", "rb5009", "tok", "a"),
+		"BackupPushScheduleCommands": BackupPushScheduleCommands(BackupPushScript("192.0.2.10:8080", "tok", "a"), "a"),
+	} {
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, ":if ([:len [/system script find") && !strings.HasSuffix(line, "\" }") {
+				t.Errorf("%s: the script add does not end on its own line:\n%.300s", name, line)
+			}
+			if !strings.HasPrefix(line, ":if (") && !strings.HasPrefix(line, "/") {
+				t.Errorf("%s: a line that is no console command -- a source broken across lines?\n%.200s", name, line)
+			}
 		}
 	}
 }
@@ -790,7 +814,9 @@ func TestScriptSourceLeavesNoBareVariableOrQuote(t *testing.T) {
 // operator to paste into anything.
 func TestScheduleCommands(t *testing.T) {
 	cmd := ScheduleCommands(":local recs [:toarray \"\"]\n:set recs ($recs, 1)", "a")
-	const source = ":local recs [:toarray \\\"\\\"]\n" +
+	// One console line: the body's line break goes in as \n (#1360;
+	// RouterOS before 7.19 drops a literal one inside quotes).
+	const source = ":local recs [:toarray \\\"\\\"]\\n" +
 		":set recs (\\$recs, 1)"
 	want := ":if ([:len [/system script find name=mv-push]] = 0) do={ /system script add name=mv-push policy=read,test source=\"" + source + "\" } else={ /system script set [find name=mv-push] policy=read,test source=\"" + source + "\" }\n" +
 		":if ([:len [/system scheduler find name=mv-push]] = 0) do={ /system scheduler add name=mv-push interval=20m policy=read,test on-event=\"/system script run mv-push\" } else={ /system scheduler set [find name=mv-push] interval=20m policy=read,test on-event=\"/system script run mv-push\" disabled=no }\n" +
@@ -929,16 +955,17 @@ func TestBackupScriptIsIdempotent(t *testing.T) {
 // and the two files' names say which is which.
 func TestBackupScriptMatchesRound45(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", `mvt-8f3a2c…c21e`, "a")
-	const source = "\n" +
-		"  /system backup save name=mv-backup dont-encrypt=yes\n" +
-		"  /export hide-sensitive file=mv-export\n" +
-		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n" +
-		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n" +
-		"  /file remove mv-backup.backup\n" +
-		"  /file remove mv-export.rsc\n"
+	const source = "\\n" +
+		"  /system backup save name=mv-backup dont-encrypt=yes\\n" +
+		"  /export hide-sensitive file=mv-export\\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-backup.backup dst-path=rb5009.backup\\n" +
+		"  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"mvt-8f3a2c…c21e\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\\n" +
+		"  /file remove mv-backup.backup\\n" +
+		"  /file remove mv-export.rsc\\n"
 	// The guard is #1266's plumbing (scriptAdd, same as every other
 	// saved script in this file); the source="..." body between the
-	// quotes is round 45's drawn script, unchanged.
+	// quotes is round 45's drawn script, unchanged but for its line
+	// breaks, which go in as \n so the add is one console line (#1360).
 	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"" + source + "\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"" + source + "\" }"
 	if got != want {
 		t.Errorf("BackupScript =\n%s\nwant\n%s", got, want)
@@ -1204,7 +1231,7 @@ func TestBackupScriptEscapesQuotedToken(t *testing.T) {
 // this is the test that would catch it being anything else.
 func TestBackupScriptNormalTokenIsUnchangedByTheFix(t *testing.T) {
 	got := BackupScript("10.0.40.5", "47022", "rb5009", "tok-123_ABC", "a")
-	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"\n  /system backup save name=mv-backup dont-encrypt=yes\n  /export hide-sensitive file=mv-export\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\n  /file remove mv-backup.backup\n  /file remove mv-export.rsc\n\" }"
+	want := ":if ([:len [/system script find name=mv-backup]] = 0) do={ /system script add name=mv-backup policy=read,write,test,sensitive source=\"\\n  /system backup save name=mv-backup dont-encrypt=yes\\n  /export hide-sensitive file=mv-export\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\\n  /file remove mv-backup.backup\\n  /file remove mv-export.rsc\\n\" } else={ /system script set [find name=mv-backup] policy=read,write,test,sensitive source=\"\\n  /system backup save name=mv-backup dont-encrypt=yes\\n  /export hide-sensitive file=mv-export\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-backup.backup dst-path=rb5009.backup\\n  /tool fetch mode=sftp upload=yes address=10.0.40.5 port=47022 user=rb5009 password=\\\"tok-123_ABC\\\" src-path=mv-export.rsc dst-path=rb5009.rsc\\n  /file remove mv-backup.backup\\n  /file remove mv-export.rsc\\n\" }"
 	if got != want {
 		t.Errorf("BackupScript with a normal token changed:\ngot  %q\nwant %q", got, want)
 	}
