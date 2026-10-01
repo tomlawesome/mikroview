@@ -328,6 +328,85 @@ needed to merge an earlier one.
   list and the flag names its feed; otherwise the fact reads "MikroView
   does not flag from it", as the CINS card already says.
 
+## Catalogue copy and defaults (2026-10-01)
+
+Round 2 drew three cards; the four the owner admitted (1b+1c) and
+CINS's on-state were not drawn. Read against the built
+`internal/blcatalogue` (141f81e2). The `**…**` phrase is the one the
+drawn cards set bold; `Guide` carries no markup, so part 7 must bold
+it some way (a marker in the string is fine) or the drawn emphasis is
+lost on every card.
+
+**The four guide sentences** (the label's meaning for the operator is
+the bold clause):
+
+- **blocklist.de strongips:** Hosts that fail2ban on many servers
+  reported in the last 48 hours — the small, high-confidence cut of
+  blocklist.de. **No licence stated**: the site says nothing about who
+  may use it, only that it comes "at your own risk", so whether that is
+  enough is your call. MikroView does not flag from it.
+- **GreenSnow:** Attacking hosts tracked by one company; about half
+  are on blocklist.de too. **No licence stated**: the site says nothing
+  about who may use the list and forbids republishing it — a router
+  fetching it for itself is neither, but nobody has said yes, so that
+  is your call. MikroView does not flag from it.
+- **DShield top 20:** The twenty /24 networks that attacked DShield's
+  sensors most over the last three days — whole networks, so an
+  attacker's neighbours are dropped with it. **Not for business use**:
+  the licence is non-commercial, fine on a home router and not on one
+  a business runs, and MikroView cannot tell which this is. It does
+  not flag from it.
+- **Binary Defense banlist:** Attacking hosts on Binary Defense's own
+  ban list. **Not for business use**: the header allows public use
+  only, not commercial — take it on a home router, leave it off one a
+  business runs; MikroView cannot tell which this is. It does not flag
+  from it.
+
+**CINS Army: "from", 6 h — confirmed, on its own grounds.** From,
+because CINS lists scanners knocking on exposed ports: inbound is the
+whole point, and a LAN device reaching one is not a finding the way
+it is for Emerging Threats. 6 h, because the list changes hourly (so
+daily leaves it stale most of the day) while each load is a minute of
+address-list adds on a small router (the reason the card is off by
+default) — four loads a day keeps up without hourly churn. The source
+states no floor; hourly stays offered.
+
+**Choice hints** (the drawn on-cards put one under each choice; none
+are in the catalogue — part 7 carries them):
+
+- log the drops, all five: Spamhaus's line ("Each drop reaches
+  MikroView as a line naming the list; a home WAN sees a few an hour.").
+- block, all five: "Inbound is enough — these are attackers and
+  scanners; nothing on your LAN talks to them on purpose." DShield
+  adds: "and blocking *to* a whole /24 would catch its innocent hosts."
+- refresh — CINS: "Changes hourly, but each load is 15,000 adds; 6 h
+  keeps up without doing that every hour." blde: "The source refreshes
+  every half hour; 6 h is current enough for a 48-hour window."
+  GreenSnow and Binary Defense: "The source states no cadence; daily
+  is plenty, and a failed fetch leaves yesterday's list standing."
+  DShield: "A rolling three-day window; daily keeps up with it."
+
+**Where the build departs from the drawing, and the call:**
+
+- CINS's guide says "the router" where the drawing says "rb5009".
+  Accepted: catalogue data cannot hold a device name.
+- The left-out record is ten rows, one per list, where the drawing
+  pairs abuse.ch's four into two rows. Accepted — each gets its own
+  reason — but the summary must read "ten lists", not "fourteen".
+- The four new facts lines lack the "false positives rare/some" slot
+  the three drawn ones carry. Fill it only where the research
+  supports it: DShield **likely** (whole /24s; one in the sample was
+  Google Cloud). The other three leave the slot out rather than
+  invent a rating.
+- The facts line's last slot is the terms word on the drawn cards
+  (credited · BSD · free). On the four it is the owner's label
+  verbatim — "no licence stated" / "not for business use" — so
+  DShield's "CC BY-NC-SA" and Binary Defense's "non-commercial"
+  change to "not for business use". The `Caveat` field is the same
+  text; the page renders it once, in that slot.
+- Counts (385, 4,935, 20, 1,514) are the build day's samples, a day
+  after `catalogue.md`'s; fine, that is what the field is for.
+
 ## For the owner
 
 **1** The ratified log prefix `D|drop|<list>` (12a) cannot be used
@@ -361,4 +440,5 @@ message, and `D|drop|spamhaus|` is 16 characters.
 - IPv6 lists other than Spamhaus's; a per-router "which lists are on"
   on the fleet page (not drawn).
 
-Written by Fable 5.1, 2026-10-01.
+Written by Fable 5.1, 2026-10-01; catalogue copy and defaults added
+the same day.
