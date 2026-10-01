@@ -61,8 +61,8 @@
     },
     {
       "name": "actions/deploy-pages",
-      "commit": "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
-      "version": "v5.0.0",
+      "commit": "368f82528645a54fb793d4d04e342629a3f51346",
+      "version": "v5.0.1",
       "license": "MIT",
       "source": "https://github.com/actions/deploy-pages",
       "locations": [
@@ -110,8 +110,8 @@
     },
     {
       "name": "docker/build-push-action",
-      "commit": "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
-      "version": "v7.3.0",
+      "commit": "c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      "version": "v7.4.0",
       "license": "Apache-2.0",
       "source": "https://github.com/docker/build-push-action",
       "locations": [
@@ -149,8 +149,8 @@
     },
     {
       "name": "docker/setup-buildx-action",
-      "commit": "37fe631027851001ddb9b187196cc803df7f5f0e",
-      "version": "v4.3.0",
+      "commit": "f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      "version": "v4.4.1",
       "license": "Apache-2.0",
       "source": "https://github.com/docker/setup-buildx-action",
       "locations": [
@@ -162,8 +162,8 @@
     },
     {
       "name": "github/codeql-action/analyze",
-      "commit": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
-      "version": "v4.37.9",
+      "commit": "1c5b675653bb5c22dbe9b12b556ec555138e09fd",
+      "version": "v4.38.1",
       "license": "MIT",
       "source": "https://github.com/github/codeql-action",
       "locations": [
@@ -174,8 +174,8 @@
     },
     {
       "name": "github/codeql-action/init",
-      "commit": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
-      "version": "v4.37.9",
+      "commit": "1c5b675653bb5c22dbe9b12b556ec555138e09fd",
+      "version": "v4.38.1",
       "license": "MIT",
       "source": "https://github.com/github/codeql-action",
       "locations": [
