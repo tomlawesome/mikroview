@@ -145,3 +145,5 @@ Each with a test that failed on 09363519:
   is and strike the sentence from DESIGN.md; (b) a new issue to give
   the fall's bar the chips and the strip as the record; (c) chips only.
 
+
+**Answered:** owner, 2026-10-01: **A(a)**. The fall keeps its own scene bar, and DESIGN.md is updated to match.
