@@ -2959,3 +2959,117 @@ export async function deleteConfigSnapshot(id: string): Promise<string | null> {
   if (res.ok) return null
   return serverSaid(res)
 }
+
+// --- The blocklist builder (#1360) ---------------------------------------
+//
+// Admin-only server-side (internal/api/blocklist.go). The page builds a
+// RouterOS block that makes a router fetch known-bad lists straight from
+// their sources; MikroView never serves a list and never connects to the
+// router. Every RouterOS line the page shows comes from these two calls.
+
+export type BlocklistDirection = 'from' | 'both'
+export type BlocklistRefresh = 'hourly' | '6h' | 'daily' | 'weekdays' | 'weekly'
+
+export interface BlocklistRefreshChoice {
+  value: BlocklistRefresh
+  // The release that brought the choice, where the card tags it ("7.24").
+  since?: string
+}
+
+export interface BlocklistCatalogueEntry {
+  key: string
+  name: string
+  short: string
+  url: string
+  url6?: string
+  terms: string
+  caveat?: string
+  default: boolean
+  defaultDirection: BlocklistDirection
+  ipv6: boolean
+  refresh: BlocklistRefreshChoice[]
+  refreshDefault: BlocklistRefresh
+  // A **phrase** is the one the drawn card sets bold.
+  facts: string
+  guide: string
+  flaggedByMikroView: boolean
+  startTime: string
+}
+
+export interface BlocklistLedgerEntry {
+  key: string
+  state: 'off' | 'held' | 'below-floor'
+  count: number
+  count6: number
+  loadedAt?: string
+  firedToday: number | null
+  flags24h: number | null
+  rules?: string[]
+  undo: string
+}
+
+export interface BlocklistBuilder {
+  device: string
+  deviceName: string
+  devices: { id: string; name: string }[]
+  routerosVersion: string
+  reportedAt?: string
+  reviewedVersion: string
+  minimumVersion: string
+  standing: 'ok' | 'below-floor' | 'no-push'
+  pushCurrent: boolean
+  catalogueDate: string
+  catalogue: BlocklistCatalogueEntry[]
+  leftOut: { name: string; why: string }[]
+  lists: BlocklistLedgerEntry[]
+  ownDroplist: { held: number; total: number; confirmedAt?: string; fetchedAt?: string }
+  undoAll: string
+  disableAll: string
+  upgrade?: string
+}
+
+export interface BlocklistChoice {
+  key: string
+  direction: BlocklistDirection
+  ipv6: boolean
+  log: boolean
+  refresh: BlocklistRefresh
+}
+
+export interface BlocklistSpan {
+  text: string
+  mark?: 'elided' | 'version'
+}
+
+export interface BlocklistPart {
+  ordinal: number
+  ink: string
+  title: string
+  note: BlocklistSpan[]
+  shown: BlocklistSpan[][]
+  fold?: BlocklistSpan[]
+  commands: string
+}
+
+export interface BlocklistCommands {
+  parts: BlocklistPart[]
+  copyText: string
+  blocked?: string[]
+}
+
+export async function fetchBlocklistBuilder(device: string): Promise<BlocklistBuilder> {
+  const res = await fetch(`/api/blocklist/builder?device=${encodeURIComponent(device)}`)
+  if (!res.ok) throw new ApiError(await serverSaid(res), res.status)
+  return res.json()
+}
+
+export async function fetchBlocklistCommands(req: {
+  device: string
+  token?: string
+  address?: string
+  lists: BlocklistChoice[]
+}): Promise<BlocklistCommands | string> {
+  const res = await postJSON('/api/blocklist/builder/commands', req)
+  if (res.ok) return res.json()
+  return (await res.text()).trim() || `fetchBlocklistCommands: ${res.status}`
+}

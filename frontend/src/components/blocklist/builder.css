@@ -1,0 +1,151 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
+/* The blocklist builder's body (#1360), ported from the ratified round 2
+   (docs/design/screens/blocklist/round-2/builder.html, and tail.html's
+   .body.wide, which carries the same body into the wizard's frame).
+   The frame -- bar, strip, rail, main, foot -- is the wizard's own
+   (components/wizard/wizard.css); this sheet is builder.html's rules for
+   what sits inside it: the cards, the choices, the block, the copy row,
+   the observation line, the ledger, the warnbox and the folded record.
+   Values as drawn; scoped under .wiz.page .body.wide (and .wiz .rail.bl
+   for the rail's own additions) so they outrank the wizard's generic
+   rules exactly where the drawing differs, and reach nothing else. */
+
+/* one ink per list (builder.html :root): the three round 2 drew, the
+   operator's own drop list, and --ink-list for the four lists admitted
+   after round 2, which have no ink drawn yet */
+:root {
+  --ink-spamhaus: var(--drop);
+  --ink-et: var(--marked);
+  --ink-cins: var(--natted);
+  --ink-own: var(--log);
+  --ink-list: var(--fg-muted);
+}
+
+/* ---- the bar's chips (builder.html .att.router/.own/.warn, and a list's chip in its ink) ---- */
+.wiz .att.router { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.wiz .att.router i { background: var(--accent); }
+.wiz .att.own { color: var(--ink-own); border-color: color-mix(in srgb, var(--ink-own) 40%, transparent); }
+.wiz .att.own i { background: var(--ink-own); }
+.wiz .att.list { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 40%, transparent); }
+.wiz .att.list i { background: var(--ink); }
+.wiz .att.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.wiz .att.warn i { background: var(--warn); }
+
+/* ---- the rail (builder.html .rail .h, .foot-note, .step-row.off, .rail.dim) ---- */
+.wiz .rail.bl.dim { opacity: 0.45; }
+.wiz .rail.bl .h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); padding: 6px 10px 8px; }
+.wiz .rail.bl .step-row .step-receipt { color: var(--fg-muted); }
+.wiz .rail.bl .step-row.done .step-n, .wiz .rail.bl .step-row.done .step-receipt { border-color: var(--ink); color: var(--ink); }
+.wiz .rail.bl .step-row.chosen .step-n { border-color: var(--log); color: var(--log); }
+.wiz .rail.bl .step-row.chosen .step-receipt { color: var(--log); }
+.wiz .rail.bl .step-row.off .step-n { border-style: dashed; color: var(--fg-dim); }
+.wiz .rail.bl .step-row.off .step-receipt { color: var(--fg-dim); }
+.wiz .rail.bl .foot-note { margin: 14px 10px 0; font-size: 11.5px; line-height: 1.5; color: var(--fg-dim); }
+/* the wizard's tail row: an offer, not a step -- a plus in a dashed ring,
+   its receipt a fact rather than a proof (tail.html .step-row.offer) */
+.wiz .step-row.offer .step-n { border-style: dashed; color: var(--fg-muted); }
+.wiz .step-row.offer .step-receipt { color: var(--fg-dim); }
+.wiz .step-row.offer.current .step-n { border-style: solid; color: var(--fg); }
+.wiz .ledger .row .step-n.offer { border-style: dashed; color: var(--fg-muted); }
+.wiz .ledger .row .r.offer { color: var(--fg-muted); }
+
+/* the page's foot sits on the body's 36px gutter (builder.html .foot) */
+.wiz.bl-page .foot { padding: 12px 36px; }
+
+/* ---- the body: two columns under a head (builder.html .body, tail.html .body.wide) ---- */
+.wiz .body.wide { max-width: none; align-self: stretch; overflow: hidden; padding: 20px 32px 16px 36px; display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: 30px; row-gap: 10px; align-items: stretch; }
+.wiz .body.wide.one { grid-template-columns: minmax(0, 720px); }
+.wiz .body.wide .head { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.wiz .body.wide h3 .sel { position: relative; font-size: 15px; font-weight: 500; color: var(--accent); border-bottom: 1px dashed var(--hair-2); margin-left: 6px; }
+.wiz .body.wide h3 .sel select { position: absolute; inset: 0; opacity: 0; cursor: pointer; font: inherit; }
+.wiz .body.wide .hint { max-width: 900px; }
+.wiz .body.wide .hint b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .vline { margin: 0; font: 11.5px var(--font-mono); color: var(--fg-dim); }
+.wiz .body.wide .vline b { color: var(--fg-muted); font-weight: 500; }
+.wiz .body.wide .col { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.wiz .body.wide .col.left { overflow-y: auto; padding-right: 4px; gap: 8px; }
+.wiz .body.wide .col.right { overflow-y: auto; gap: 8px; }
+
+/* ---- the list cards ---- */
+.wiz .body.wide .lcard { border: 1px solid var(--border); border-radius: 8px; background: transparent; padding: 10px 14px 11px; display: flex; flex-direction: column; gap: 6px; flex: none; }
+.wiz .body.wide .lcard.on { border-color: color-mix(in srgb, var(--ink) 45%, transparent); }
+.wiz .body.wide .lcard.off { padding-bottom: 10px; }
+.wiz .body.wide .lcard .top { display: flex; align-items: center; gap: 10px; }
+.wiz .body.wide .lcard .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink); flex: none; }
+.wiz .body.wide .lcard.off .dot { background: transparent; border: 1px dashed var(--ink-off); }
+.wiz .body.wide .lcard h4 { margin: 0; font-size: 14.5px; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.wiz .body.wide .lcard.off h4 { color: var(--fg-muted); font-weight: 500; }
+.wiz .body.wide .lcard .top .seg { margin-left: auto; }
+.wiz .body.wide .lcard .factsrow { font: 11.5px var(--font-mono); color: var(--fg-dim); margin-top: -3px; }
+.wiz .body.wide .lcard .factsrow b { color: var(--fg-muted); font-weight: 500; }
+.wiz .body.wide .lcard .guide { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); }
+.wiz .body.wide .lcard .guide b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .lcard.off .guide { color: var(--fg-dim); }
+.wiz.page .body.wide .seg { display: inline-flex; align-self: auto; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex: none; }
+.wiz.page .body.wide .seg button { border: 0; border-radius: 0; padding: 5px 11px; background: transparent; color: var(--fg-muted); font-size: 12.5px; white-space: nowrap; }
+.wiz.page .body.wide .seg button + button { border-left: 1px solid var(--border); }
+.wiz.page .body.wide .seg button.on { background: var(--accent-bg); color: var(--fg); }
+.wiz.page .body.wide .seg button.on.no { background: transparent; color: var(--log); }
+.wiz.page .body.wide .seg.sm button { padding: 3px 9px; font-size: 12px; }
+.wiz.page .body.wide .seg button small { font-size: 10px; color: var(--fg-dim); margin-left: 4px; font-family: var(--font-mono); }
+.wiz .body.wide .choices { display: grid; grid-template-columns: 92px auto 1fr; gap: 6px 12px; align-items: center; padding-top: 8px; border-top: 1px solid var(--border); }
+.wiz .body.wide .ch { display: contents; }
+.wiz .body.wide .ch .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.wiz .body.wide .ch small { font-size: 11.5px; line-height: 1.35; color: var(--fg-dim); min-width: 0; }
+.wiz .body.wide .ch small b { color: var(--fg-muted); font-weight: 500; }
+.wiz .body.wide .ch .seg { justify-self: start; }
+
+/* the folded "considered and left out" record under the cards */
+.wiz .body.wide details.more { flex: none; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px; }
+.wiz .body.wide details.more summary { cursor: pointer; font-size: 12.5px; color: var(--fg-muted); list-style: none; display: flex; gap: 8px; align-items: baseline; }
+.wiz .body.wide details.more summary::-webkit-details-marker { display: none; }
+.wiz .body.wide details.more summary::before { content: '▸'; color: var(--fg-dim); font-size: 11px; }
+.wiz .body.wide details[open].more summary::before { content: '▾'; }
+.wiz .body.wide details.more summary .cat { margin-left: auto; font: 11px var(--font-mono); color: var(--fg-dim); }
+.wiz .body.wide details.more ul { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.wiz .body.wide details.more li { font-size: 12px; line-height: 1.45; color: var(--fg-dim); display: grid; grid-template-columns: 170px 1fr; gap: 10px; }
+.wiz .body.wide details.more li b { color: var(--fg-muted); font-weight: 500; }
+
+/* ---- the block, the observation, the ledger ---- */
+.wiz .body.wide .blockhead { display: flex; align-items: baseline; gap: 10px; }
+.wiz .body.wide .blockhead h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
+.wiz .body.wide .blockhead .n { font-size: 12px; color: var(--fg-muted); }
+.wiz .body.wide .blockhead .live { margin-left: auto; font: 11px var(--font-mono); color: var(--now); white-space: nowrap; }
+.wiz.page .body.wide pre { font-size: 11.5px; line-height: 1.55; user-select: text; }
+.wiz.page .body.wide pre.script { max-height: 198px; overflow-y: auto; flex-shrink: 0; }
+.wiz .body.wide .sec { color: var(--fg-dim); user-select: none; }
+.wiz .body.wide .sec b { font-weight: 600; color: var(--ink, var(--fg-muted)); }
+.wiz .body.wide pre .k { color: var(--log); }
+.wiz .body.wide pre .fold { color: var(--fg-dim); font-style: italic; }
+.wiz .body.wide pre .v { color: var(--now); }
+.wiz .body.wide .copyrow { display: flex; align-items: center; gap: 12px; }
+.wiz .body.wide .copyrow .note { font-size: 12px; color: var(--fg-muted); }
+.wiz .body.wide .obs { display: block; max-width: none; font-size: 12.5px; line-height: 1.5; padding: 8px 12px; border: 0; border-left: 2px solid var(--fg-dim); color: var(--fg-muted); border-radius: 0 4px 4px 0; background: var(--bg-hover); }
+.wiz .body.wide .obs::before { content: none; }
+.wiz .body.wide .obs.waiting { border-left-color: var(--now); }
+.wiz .body.wide .obs.quiet { border-left-color: var(--fg-dim); }
+.wiz .body.wide .obs b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .warnbox { align-self: stretch; border: 1px solid var(--warn); border-left-width: 3px; background: rgba(242, 138, 30, 0.08); color: var(--fg); padding: 12px 14px; border-radius: 6px; font-size: 13.5px; line-height: 1.6; display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+.wiz .body.wide .warnbox b { color: var(--warn); font-weight: 600; }
+.wiz.page .body.wide .warnbox pre { font-size: 12px; }
+.wiz .body.wide .warnbox p { margin: 0; }
+.wiz .body.wide .ledgerh { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; }
+.wiz .body.wide .ledgerh h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
+.wiz .body.wide .ledgerh span { font-size: 12px; color: var(--fg-muted); }
+.wiz .body.wide .ledger { max-width: none; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 6px; }
+.wiz .body.wide .ledger .row { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px 10px; align-items: baseline; padding: 7px 12px; border-top: 1px solid var(--border); font-size: 12.5px; }
+.wiz .body.wide .ledger .row:first-child { border-top: 0; }
+.wiz .body.wide .ledger .row .r { font-size: 11.5px; color: var(--fg-muted); }
+.wiz .body.wide .ledger .row .step-n.done { border-color: var(--ink); color: var(--ink); }
+.wiz .body.wide .ledger .row .r.done { color: var(--ink); }
+.wiz .body.wide .ledger .row .step-n.wait { border-color: var(--now); color: var(--now); }
+.wiz .body.wide .ledger .row .r.wait { color: var(--now); }
+.wiz .body.wide .ledger .row .step-n.skip { border-style: dashed; color: var(--fg-dim); }
+.wiz .body.wide .ledger .row .r.skip { color: var(--fg-dim); }
+.wiz .body.wide .ledger .row .skip s { text-decoration-color: var(--fg-dim); }
+.wiz .body.wide .ledger .undo { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+.wiz.page .body.wide .ledger .undo pre { font-size: 11px; line-height: 1.5; }
+.wiz .body.wide .ledger .undo .note { margin: 0; font-size: 11.5px; color: var(--fg-muted); }
+.wiz .body.wide .ledger .undo .note b { color: var(--fg); font-weight: 500; }
+.wiz .body.wide .ledger .undo .note .mono { font-size: inherit; }
