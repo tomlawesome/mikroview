@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 
 vi.hoisted(() => {
   window.matchMedia = ((query: string) => ({
@@ -175,7 +175,7 @@ describe('Builder', () => {
     const etRefresh = () => [...card('Emerging Threats compromised IPs').querySelectorAll('.choices .ch')].find((c) => c.textContent?.startsWith('refresh')) as HTMLElement
     expect(etRefresh().textContent).toContain('weekdays7.24')
     blocklistState.reset()
-    document.body.innerHTML = ''
+    cleanup()
     const old = builder({ routerosVersion: '7.19.4' })
     old.catalogue[1] = { ...old.catalogue[1], refresh: [{ value: 'daily' }, { value: 'weekly' }], refreshDefault: 'daily' }
     await openOn(old)

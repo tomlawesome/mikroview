@@ -21,7 +21,12 @@ const ADDR = '127.0.0.61'
 
 const { page } = await session()
 
-await enrolDevice(page.request, URL_BASE, DEVICE, ADDR)
+// A re-run on the same instance finds the router already enrolled (the
+// registry outlives the test reset): enrol only a router not yet known.
+const known = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
+if (!(Array.isArray(known) ? known : known.devices ?? []).some((d) => d.id === DEVICE)) {
+  await enrolDevice(page.request, URL_BASE, DEVICE, ADDR)
+}
 const tokRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
   data: { name: 'live-blocklist', kind: 'ingest', device: DEVICE },
@@ -58,14 +63,17 @@ await builder.waitFor({ timeout: 10000 })
 const picker = builder.locator('select[aria-label="Router"]')
 if (await picker.count()) await picker.selectOption(DEVICE)
 await builder.locator('.vline').filter({ hasText: 'written for RouterOS 7.24.4' }).waitFor({ timeout: 10000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'the version line is the one the router pushed: RouterOS 7.24.4')
 
 const copy = builder.locator('.copyrow button.primary')
 await page.waitForFunction(() => document.querySelector('.bl-page .copyrow button.primary')?.textContent === 'Copy — 2 lists · 8 parts', null, { timeout: 10000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'the two default lists make eight parts: the push, three each, run now')
 
 await builder.getByRole('region', { name: 'Emerging Threats compromised IPs' }).getByRole('button', { name: 'Not now' }).click()
 await page.waitForFunction(() => document.querySelector('.bl-page .copyrow button.primary')?.textContent === 'Copy — 1 list · 5 parts', null, { timeout: 10000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'Not now on Emerging Threats takes its three parts out of the block')
 const block = await builder.locator('pre.script').textContent()
 check(!block.includes('mv-bl-et'), 'the block no longer names mv-bl-et')
@@ -82,6 +90,7 @@ check(receipt.includes('1,692 held (+ 91 IPv6)') && receipt.includes('refreshed 
 
 await builder.getByRole('button', { name: 'Back to the drop list' }).click()
 await builder.waitFor({ state: 'detached', timeout: 5000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'Back to the drop list closes the page')
 
 done()

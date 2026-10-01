@@ -57,7 +57,12 @@ const { page, consoleErrors } = await session({
 
 // The router's own side: enrol over syslog, fetch the certificate from
 // its address, push.
-await enrolDevice(page.request, URL_BASE, DEVICE, ADDR)
+// A re-run on the same instance finds the router already enrolled (the
+// registry outlives the test reset): enrol only a router not yet known.
+const known = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
+if (!(Array.isArray(known) ? known : known.devices ?? []).some((d) => d.id === DEVICE)) {
+  await enrolDevice(page.request, URL_BASE, DEVICE, ADDR)
+}
 const caStatus = await new Promise((resolve, reject) => {
   const url = new URL(`${URL_BASE}/ca.crt`)
   const mod = url.protocol === 'https:' ? https : http
@@ -82,6 +87,7 @@ const wizard = page.locator('.page.wiz')
 await wizard.waitFor({ state: 'visible' })
 const setItUp = wizard.getByRole('button', { name: 'Set it up' })
 await setItUp.waitFor({ timeout: 20000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'Where setup stands offers the tail: a sixth ledger row with Set it up')
 const railTitles = await wizard.locator('.rail .step-title').allTextContents()
 check(railTitles[5] === 'Block known-bad addresses', `the rail gains the sixth row (${JSON.stringify(railTitles)})`)
@@ -94,6 +100,7 @@ check(
 await wizard.locator('.foot button', { hasText: 'Block known-bad addresses' }).click()
 await wizard.locator('.body.wide h3', { hasText: `Block known-bad addresses on ${DEVICE}.` }).waitFor({ timeout: 10000 })
 await page.waitForFunction(() => /^Copy — 2 lists · 8 parts$/.test(document.querySelector('.wiz .foot button.primary')?.textContent?.trim() ?? ''), null, { timeout: 15000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'the stage is the builder in the wizard’s frame, its Copy counting the block')
 
 const marked = page.waitForResponse((r) => r.url().endsWith('/api/setup/mark') && r.request().method() === 'POST')
@@ -102,6 +109,7 @@ const markRes = await marked
 const markBody = await markRes.json().catch(() => ({}))
 check(markRes.status() < 300 && markBody.step === 8 && markBody.outcome === 'skipped', `Not now records record 8 as skipped (${markRes.status()} ${JSON.stringify(markBody)})`)
 await wizard.locator('.ledger .r', { hasText: 'not now · Settings ▸ drop list' }).waitFor({ timeout: 10000 })
+// safe: the wait on the line above throws on timeout, so reaching here proves it
 check(true, 'the row reads not now · Settings ▸ drop list')
 check((await setItUp.count()) === 0, 'Set it up is gone once the tail is set aside')
 
